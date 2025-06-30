@@ -33,7 +33,8 @@
     "npm-run-all": "^4.1.5",
     "ts-jest": "^29.1.2",
     "tsup": "^8.0.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "rimraf": "^6.0.1"
   },
   "types": "./lib/index.d.ts",
   "exports": {
@@ -85,7 +86,7 @@
   "scripts": {
     "check": "tsc",
     "compile": "tsup-node",
-    "build:clean": "rm -rf ./lib",
+    "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
     "build:watch": "tsup-node --watch",
     "test": "jest --coverage"
