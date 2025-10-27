@@ -15,10 +15,12 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func asMap(t *testing.T, v any, label string) map[string]any {
@@ -159,5 +161,81 @@ func TestPrepareToolArguments(t *testing.T) {
 	_, err = prepareToolArguments(tool, nil)
 	if err == nil {
 		t.Fatalf("expected error for nil args with required field")
+	}
+}
+
+// TestToolOutputSchema tests that both input and output schemas are correctly retrieved
+// from the MCP server.
+func TestToolOutputSchema(t *testing.T) {
+	// Start a test MCP server with a tool that has an input and output schema.
+	type inputSchema struct {
+		City string
+	}
+	type outputSchema struct {
+		Weather     string
+		Temperature int
+	}
+	mcpServer := server.NewMCPServer("test", "1.0.0",
+		server.WithToolCapabilities(true),
+	)
+	mcpServer.AddTool(
+		mcp.NewTool("getWeather",
+			mcp.WithInputSchema[inputSchema](),
+			mcp.WithOutputSchema[outputSchema](),
+		),
+		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultStructured(
+				outputSchema{Weather: "Sunny, 25°C", Temperature: 25},
+				"The weather in Paris is Sunny, 25°C.",
+			), nil
+		},
+	)
+	// Start the stdio server
+	sseServer := server.NewTestServer(mcpServer)
+	defer sseServer.Close()
+	client, err := NewGenkitMCPClient(MCPClientOptions{
+		Name: "test",
+		SSE: &SSEConfig{
+			BaseURL: sseServer.URL + "/sse",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Disconnect()
+	// Retrieve tools from the MCP server
+	tools, err := client.GetActiveTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetActiveTools error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+	for _, tool := range tools {
+		if tool.Name() != "test_getWeather" {
+			t.Fatalf("unexpected tool: %s", tool.Name())
+		}
+		inputSchema := tool.Definition().InputSchema
+		assertSchemaProperty(t, inputSchema, "City", "string")
+
+		outputSchema := tool.Definition().OutputSchema
+		assertSchemaProperty(t, outputSchema, "Weather", "string")
+		assertSchemaProperty(t, outputSchema, "Temperature", "integer")
+	}
+}
+
+// assertSchemaProperty asserts that a property in a schema is present and of the expected type.
+func assertSchemaProperty(t *testing.T, schema map[string]any, propName string, propType string) {
+	t.Helper()
+	if schema == nil {
+		t.Fatalf("schema is nil")
+	}
+	if props, ok := schema["properties"].(map[string]any); !ok {
+		t.Fatalf("schema properties is nil")
+	} else if propValue, ok := props[propName].(map[string]any); !ok {
+		t.Fatalf("schema properties %s is nil", propName)
+	} else if propValue["type"] != propType {
+		t.Fatalf("schema property %s type is %s, expected %s",
+			propName, propValue["type"], propType)
 	}
 }
