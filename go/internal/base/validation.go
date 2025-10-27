@@ -21,12 +21,16 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/xeipuuv/gojsonschema"
 )
 
 // ValidateValue will validate any value against the expected schema.
 // It will return an error if it doesn't match the schema, otherwise it will return nil.
 func ValidateValue(data any, schema map[string]any) error {
+	if callToolResult, ok := data.(*mcp.CallToolResult); ok {
+		data = callToolResult.StructuredContent
+	}
 	if schema == nil {
 		return nil
 	}
