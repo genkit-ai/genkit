@@ -379,6 +379,20 @@ func NewToolWithInputSchema[Out any](name, description string, inputSchema map[s
 	return NewTool(name, description, fn, WithInputSchema(inputSchema))
 }
 
+// ToolSchema is a struct that contains the input and output schemas for a tool.
+type ToolSchema struct {
+	Input  map[string]any
+	Output map[string]any
+}
+
+// NewToolWithSchema creates a new [ToolDef] with custom input and output schemas. It can be passed directly to [Generate].
+func NewToolWithSchema[In, Out any](name, description string, schema ToolSchema, fn ToolFunc[In, Out]) *ToolDef[In, Out] {
+	metadata, wrappedFn := wrapToolFunc(name, description, fn)
+	metadata["dynamic"] = true
+	toolAction := core.NewStructuredAction(name, api.ActionTypeTool, metadata, schema.Input, schema.Output, wrappedFn)
+	return &ToolDef[In, Out]{action: toolAction}
+}
+
 // DefineMultipartTool creates a new multipart [ToolDef] and registers it.
 // Multipart tools can return both output data and additional content parts (like media).
 // Use [WithInputSchema] to provide a custom JSON schema instead of inferring from the type parameter.
@@ -426,7 +440,6 @@ func wrapToolFunc[In, Out any](name, description string, fn ToolFunc[In, Out]) (
 	if reflect.TypeOf(o) != nil {
 		originalOutputSchema = core.InferSchemaMap(o)
 	}
-
 	metadata := map[string]any{
 		"type":        api.ActionTypeToolV2,
 		"name":        name,
