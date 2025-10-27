@@ -168,10 +168,10 @@ func TestPrepareToolArguments(t *testing.T) {
 // from the MCP server.
 func TestToolOutputSchema(t *testing.T) {
 	// Start a test MCP server with a tool that has an input and output schema.
-	type inputSchema struct {
+	type InputSchema struct {
 		City string
 	}
-	type outputSchema struct {
+	type OutputSchema struct {
 		Weather     string
 		Temperature int
 	}
@@ -180,13 +180,13 @@ func TestToolOutputSchema(t *testing.T) {
 	)
 	mcpServer.AddTool(
 		mcp.NewTool("getWeather",
-			mcp.WithInputSchema[inputSchema](),
-			mcp.WithOutputSchema[outputSchema](),
+			mcp.WithInputSchema[InputSchema](),
+			mcp.WithOutputSchema[OutputSchema](),
 		),
 		func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultStructured(
-				outputSchema{Weather: "Sunny, 25°C", Temperature: 25},
-				"The weather in Paris is Sunny, 25°C.",
+				OutputSchema{Weather: "Sunny, 25°C", Temperature: 25},
+				"{\"weather\": \"Sunny, 25°C\", \"temperature\": 25}",
 			), nil
 		},
 	)
@@ -221,7 +221,39 @@ func TestToolOutputSchema(t *testing.T) {
 		outputSchema := tool.Definition().OutputSchema
 		assertSchemaProperty(t, outputSchema, "Weather", "string")
 		assertSchemaProperty(t, outputSchema, "Temperature", "integer")
+
+		result, err := tool.RunRaw(t.Context(), InputSchema{
+			City: "Paris",
+		})
+		if err != nil {
+			t.Fatalf("RunRaw error: %v", err)
+		}
+		if result == nil {
+			t.Fatalf("RunRaw result is nil")
+		}
+		toolResult := ParseMapToStruct[mcp.CallToolResult](t, result)
+		toolResultOutput := ParseMapToStruct[OutputSchema](t, toolResult.StructuredContent)
+		if toolResultOutput.Weather != "Sunny, 25°C" {
+			t.Fatalf("unexpected weather: %s", toolResultOutput.Weather)
+		}
+		if toolResultOutput.Temperature != 25 {
+			t.Fatalf("unexpected temperature: %d", toolResultOutput.Temperature)
+		}
 	}
+}
+
+func ParseMapToStruct[T any](t *testing.T, v any) T {
+	t.Helper()
+	var result T
+	jsonBytes, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("failed to marshal map to JSON: %v", err)
+	}
+	err = json.Unmarshal(jsonBytes, &result)
+	if err != nil {
+		t.Fatalf("failed to unmarshal JSON to struct: %v", err)
+	}
+	return result
 }
 
 // assertSchemaProperty asserts that a property in a schema is present and of the expected type.
@@ -233,7 +265,7 @@ func assertSchemaProperty(t *testing.T, schema map[string]any, propName string, 
 	if props, ok := schema["properties"].(map[string]any); !ok {
 		t.Fatalf("schema properties is nil")
 	} else if propValue, ok := props[propName].(map[string]any); !ok {
-		t.Fatalf("schema properties %s is nil", propName)
+		t.Fatalf("schema property %s is nil. schema: %v", propName, schema)
 	} else if propValue["type"] != propType {
 		t.Fatalf("schema property %s type is %s, expected %s",
 			propName, propValue["type"], propType)
