@@ -39,9 +39,9 @@ import (
     "github.com/openai/openai-go/option"
 )
 
-// Initialize the OllamaCloud plugin with your API key
+// Initialize the Ollama Cloud plugin with your API key
 plugin := &ollamacloud.OllamaCloud{
-    APIKey: "your-ollamacloud-api-key", // 또는 환경변수 OLLAMACLOUD_API_KEY 사용
+    APIKey: "your-ollamacloud-api-key", // or use the OLLAMACLOUD_API_KEY environment variable
     Opts: []option.RequestOption{
         option.WithAPIKey("your-ollamacloud-api-key"),
     },
@@ -52,11 +52,11 @@ g := genkit.Init(ctx,
     genkit.WithDefaultModel("ollamacloud/gpt-oss:20b"),
     genkit.WithPlugins(plugin))
 
-// 기본 텍스트 생성
+// Basic text generation
 resp, err := genkit.Generate(ctx, g,
     ai.WithPromptText("Explain quantum computing in simple terms."))
 
-// 멀티모달 모델 사용 (이미지 + 텍스트)
+// Use a multimodal model (image + text)
 resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("ollamacloud/qwen3-vl:235b-instruct"),
     ai.WithMessages(
@@ -66,7 +66,7 @@ resp, err := genkit.Generate(ctx, g,
         ),
     ))
 
-// 도구와 함께 사용
+// Use with tools
 calculator := genkit.DefineTool(g, "calculator", "simple calculator",
     func(ctx *ai.ToolContext, input struct {
         Operation string  `json:"operation"` // "add", "subtract", "multiply", "divide"
@@ -88,7 +88,7 @@ resp, err := genkit.Generate(ctx, g,
     ai.WithPromptText("What is 15 * 23?"),
     ai.WithTools(calculator))
 
-// 스트리밍 응답
+// Streaming responses
 resp, err := genkit.Generate(ctx, g,
     ai.WithPromptText("Write a short story about space exploration."),
     ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
