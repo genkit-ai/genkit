@@ -18,6 +18,7 @@ package ollamacloud
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
@@ -28,9 +29,9 @@ import (
 )
 
 const (
-	provider = "ollamacloud"
-	baseURL  = "https://ollama.com"
-	version  = "/v1"
+	provider   = "ollamacloud"
+	apiBaseURL = "https://ollama.com"
+	apiVersion = "v1"
 )
 
 // supportedModels defines a curated set of Ollama Cloud models.
@@ -122,7 +123,7 @@ func (o *OllamaCloud) Init(ctx context.Context) []api.Action {
 	// Configure OpenAI-compatible client with Ollama Cloud settings
 	o.openAICompatible.Opts = []option.RequestOption{
 		option.WithAPIKey(apiKey),
-		option.WithBaseURL(baseURL + version),
+		option.WithBaseURL(fmt.Sprintf("%s/%s", apiBaseURL, apiVersion)),
 	}
 	if len(o.Opts) > 0 {
 		o.openAICompatible.Opts = append(o.openAICompatible.Opts, o.Opts...)
