@@ -244,6 +244,7 @@ func (g *ModelGenerator) WithOutput(output *ai.ModelOutputConfig) *ModelGenerato
 		OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
 			JSONSchema: openai.ResponseFormatJSONSchemaJSONSchemaParam{
 				Name:   schemaHash(output.Schema),
+				Strict: openai.Bool(true),
 				Schema: output.Schema,
 			},
 		},
