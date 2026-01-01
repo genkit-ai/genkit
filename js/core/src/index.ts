@@ -73,6 +73,8 @@ export {
   type StatusName,
 } from './error.js';
 export {
+  bidiFlow,
+  defineBidiFlow,
   defineFlow,
   flow,
   run,

@@ -15,7 +15,14 @@
  */
 
 import type { z } from 'zod';
-import { ActionFnArg, action, type Action } from './action.js';
+import {
+  ActionFnArg,
+  BidiActionFnArg,
+  JSONSchema7,
+  action,
+  bidiAction,
+  type Action,
+} from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
 
@@ -46,6 +53,16 @@ export interface FlowConfig<
   streamSchema?: S;
   /** Metadata of the flow used by tooling. */
   metadata?: Record<string, any>;
+}
+
+export interface BidiFlowConfig<
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodTypeAny = z.ZodTypeAny,
+  S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
+> extends FlowConfig<I, O, S> {
+  initSchema?: Init;
+  initJsonSchema?: JSONSchema7;
 }
 
 /**
@@ -101,6 +118,50 @@ export function defineFlow<
 
   registry.registerAction('flow', f);
 
+  return f;
+}
+
+/**
+ * Defines a bi-directional flow and registers the flow in the provided registry.
+ */
+export function defineBidiFlow<
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodTypeAny = z.ZodTypeAny,
+  S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  registry: Registry,
+  config: BidiFlowConfig<I, O, S, Init>,
+  fn: (
+    input: BidiActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+  ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
+): Flow<I, O, S> {
+  const flow = bidiFlow(config, fn);
+  registry.registerAction('bidi-flow', flow);
+  return flow;
+}
+
+/**
+ * Defines a bi-directional flow.
+ */
+export function bidiFlow<
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodTypeAny = z.ZodTypeAny,
+  S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  config: BidiFlowConfig<I, O, S, Init>,
+  fn: (
+    input: BidiActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+  ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
+): Flow<I, O, S> {
+  const f = bidiAction(
+    {
+      ...config,
+      actionType: 'bidi-flow',
+    },
+    fn
+  );
   return f;
 }
 
