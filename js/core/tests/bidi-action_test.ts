@@ -103,16 +103,16 @@ describe('bidi action', () => {
         outputSchema: z.string(),
       },
       async function* ({ inputStream }) {
+        const inputs: string[] = [];
         for await (const chunk of inputStream) {
-          // Should receive exactly one chunk
-          yield `echo ${chunk}`;
+          inputs.push(chunk);
         }
-        return 'done';
+        return `done: ${inputs.join(', ')}`;
       }
     );
 
     const result = await act.run('1');
-    assert.strictEqual(result.result, 'done');
+    assert.strictEqual(result.result, 'done: 1');
   });
 
   it('classic run works on bidi action with streaming', async () => {

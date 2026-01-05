@@ -18,7 +18,6 @@ import type { z } from 'zod';
 import {
   ActionFnArg,
   ActionRunOptions,
-  BidiActionFnArg,
   JSONSchema7,
   action,
   bidiAction,
@@ -44,6 +43,7 @@ export interface FlowConfig<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 > {
   /** Name of the flow. */
   name: string;
@@ -55,14 +55,6 @@ export interface FlowConfig<
   streamSchema?: S;
   /** Metadata of the flow used by tooling. */
   metadata?: Record<string, any>;
-}
-
-export interface BidiFlowConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
-> extends FlowConfig<I, O, S> {
   initSchema?: Init;
   initJsonSchema?: JSONSchema7;
 }
@@ -133,9 +125,9 @@ export function defineBidiFlow<
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  config: BidiFlowConfig<I, O, S, Init>,
+  config: FlowConfig<I, O, S, Init>,
   fn: (
-    input: BidiActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
 ): Flow<I, O, S, Init> {
   const flow = bidiFlow(config, fn);
@@ -152,9 +144,9 @@ export function bidiFlow<
   S extends z.ZodTypeAny = z.ZodTypeAny,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  config: BidiFlowConfig<I, O, S, Init>,
+  config: FlowConfig<I, O, S, Init>,
   fn: (
-    input: BidiActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
 ): Flow<I, O, S, Init> {
   const f = bidiAction(

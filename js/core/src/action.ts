@@ -90,7 +90,7 @@ export interface ActionResult<O> {
 /**
  * Options (side channel) data to pass to the model.
  */
-export interface ActionRunOptions<S, I = any> {
+export interface ActionRunOptions<S, I = any, Init = any> {
   /**
    * Streaming callback (optional).
    */
@@ -118,10 +118,7 @@ export interface ActionRunOptions<S, I = any> {
    * Note: This only fires once for the root action span, not for nested spans.
    */
   onTraceStart?: (traceInfo: { traceId: string; spanId: string }) => void;
-}
 
-export interface ActionBidiRunOptions<S, I = any, Init = any>
-  extends ActionRunOptions<S, I> {
   /**
    * Streaming input (optional).
    */
@@ -133,7 +130,7 @@ export interface ActionBidiRunOptions<S, I = any, Init = any>
 /**
  * Options (side channel) data to pass to the model.
  */
-export interface ActionFnArg<S, I = any> {
+export interface ActionFnArg<S, I = any, Init = any> {
   /**
    * Whether the caller of the action requested streaming.
    */
@@ -163,10 +160,7 @@ export interface ActionFnArg<S, I = any> {
   abortSignal: AbortSignal;
 
   registry?: Registry;
-}
 
-export interface BidiActionFnArg<S, I = any, Init = any>
-  extends Omit<ActionFnArg<S, I>, 'inputStream'> {
   /**
    * Streaming input.
    */
@@ -224,7 +218,7 @@ export type Action<
 
   streamBidi(
     input?: AsyncIterable<z.infer<I>>,
-    opts?: ActionBidiRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ): BidiStreamingResponse<O, S, I>;
 };
 
@@ -393,7 +387,7 @@ export function action<
 
   actionFn.run = async (
     input: z.infer<I>,
-    options?: ActionBidiRunOptions<z.infer<S>, z.infer<I>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<I>>
   ): Promise<ActionResult<z.infer<O>>> => {
     if (config.inputSchema || config.inputJsonSchema) {
       if (!options?.inputStream) {
@@ -475,14 +469,15 @@ export function action<
                 !!options?.onChunk &&
                 options.onChunk !== sentinelNoopStreamingCallback,
               sendChunk: options?.onChunk ?? sentinelNoopStreamingCallback,
-              inputStream: options?.inputStream,
+              inputStream:
+                options?.inputStream ?? asyncIteratorFromArray(input),
               trace: {
                 traceId,
                 spanId,
               },
               registry: actionFn.__registry,
               abortSignal: options?.abortSignal ?? makeNoopAbortSignal(),
-            } as BidiActionFnArg<z.infer<S>>);
+            } as ActionFnArg<z.infer<S>>);
           // if context is explicitly passed in, we run action with the provided context,
           // otherwise we let upstream context carry through.
           const output = await runWithContext(options?.context, actFn);
@@ -512,7 +507,7 @@ export function action<
 
   actionFn.stream = (
     input?: z.infer<I>,
-    opts?: ActionBidiRunOptions<z.infer<S>, z.infer<I>>
+    opts?: ActionRunOptions<z.infer<S>, z.infer<I>>
   ): StreamingResponse<O, S> => {
     let chunkStreamController: ReadableStreamController<z.infer<S>>;
     const chunkStream = new ReadableStream<z.infer<S>>({
@@ -539,8 +534,8 @@ export function action<
           inputStream: opts?.inputStream,
           abortSignal: opts?.abortSignal,
           telemetryLabels: opts?.telemetryLabels,
-          init: (opts as BidiActionFnArg<z.infer<S>>)?.init,
-        } as ActionBidiRunOptions<z.infer<S>>
+          init: (opts as ActionFnArg<z.infer<S>>)?.init,
+        } as ActionRunOptions<z.infer<S>>
       )
       .then((s) => s.result)
       .finally(() => {
@@ -567,7 +562,7 @@ export function action<
 
   actionFn.streamBidi = (
     inputStream?: AsyncIterable<z.infer<I>>,
-    opts?: ActionBidiRunOptions<z.infer<S>, z.infer<I>>
+    opts?: ActionRunOptions<z.infer<S>, z.infer<I>>
   ): BidiStreamingResponse<O, S, I> => {
     let channel: Channel<z.infer<I>> | undefined;
     if (!inputStream) {
@@ -578,7 +573,7 @@ export function action<
     const result = actionFn.stream(undefined, {
       ...opts,
       inputStream,
-    } as ActionBidiRunOptions<z.infer<S>>);
+    } as ActionRunOptions<z.infer<S>>);
 
     return {
       ...result,
@@ -649,7 +644,7 @@ export function defineBidiAction<
   registry: Registry,
   config: BidiActionParams<I, O, S, Init>,
   fn: (
-    input: BidiActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
 ): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
   const act = bidiAction(config, fn);
@@ -668,12 +663,12 @@ export function bidiAction<
 >(
   config: BidiActionParams<I, O, S, Init>,
   fn: (
-    input: BidiActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
 ): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
   const meta = { ...config.metadata, bidi: true };
   return action({ ...config, metadata: meta }, async (input, options) => {
-    let stream = (options as BidiActionFnArg<z.infer<S>>).inputStream;
+    let stream = (options as ActionFnArg<z.infer<S>>).inputStream;
     if (!stream) {
       if (input !== undefined) {
         stream = (async function* () {
@@ -801,4 +796,12 @@ export function runInActionRuntimeContext<R>(fn: () => R) {
  */
 export function runOutsideActionRuntimeContext<R>(fn: () => R) {
   return getAsyncContext().run(runtimeContextAslKey, 'outside', fn);
+}
+
+async function* asyncIteratorFromArray<T>(array: T[]): AsyncIterator<T> {
+  for (const item of array) {
+    // Optionally, perform some async operation here
+    await new Promise((resolve) => setTimeout(resolve, 100)); // Example delay
+    yield item;
+  }
 }
