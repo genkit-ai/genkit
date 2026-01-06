@@ -50,7 +50,7 @@ describe('bidi flow', () => {
 
     assert.deepStrictEqual(chunks, ['echo 1', 'echo 2']);
     assert.strictEqual(await session.output, 'done');
-    assert.strictEqual(flow.__action.actionType, 'bidi-flow');
+    assert.strictEqual(flow.__action.actionType, 'flow');
     assert.ok(flow.__action.metadata?.bidi);
   });
 

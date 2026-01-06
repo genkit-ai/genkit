@@ -131,7 +131,7 @@ export function defineBidiFlow<
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
 ): Flow<I, O, S, Init> {
   const flow = bidiFlow(config, fn);
-  registry.registerAction('bidi-flow', flow);
+  registry.registerAction('flow', flow);
   return flow;
 }
 
@@ -152,7 +152,7 @@ export function bidiFlow<
   const f = bidiAction(
     {
       ...config,
-      actionType: 'bidi-flow',
+      actionType: 'flow',
     },
     fn
   );

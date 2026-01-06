@@ -312,3 +312,33 @@ function generateString(length: number) {
   }
   return str.substring(0, length);
 }
+
+export const chatFlow = ai.defineBidiFlow(
+  {
+    name: 'chatFlow',
+    inputSchema: z.string(),
+    outputSchema: z.string(),
+  },
+  async function* ({ inputStream }) {
+    for await (const chunk of inputStream) {
+      yield `echo ${chunk}`;
+    }
+    return 'done';
+  }
+);
+
+export const chatFlowWithInit = ai.defineBidiFlow(
+  {
+    name: 'chatFlowWithInit',
+    inputSchema: z.string(),
+    outputSchema: z.string(),
+    initSchema: z.object({ prefix: z.string() }),
+  },
+  async function* ({ inputStream, init }) {
+    const prefix = init?.prefix || '';
+    for await (const chunk of inputStream) {
+      yield `${prefix}${chunk}`;
+    }
+    return 'done';
+  }
+);

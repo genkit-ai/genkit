@@ -44,7 +44,6 @@ const ACTION_TYPES = [
   'evaluator',
   'executable-prompt',
   'flow',
-  'bidi-flow',
   'indexer',
   'model',
   'bidi-model',
