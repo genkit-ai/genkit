@@ -55,7 +55,9 @@ export interface FlowConfig<
   streamSchema?: S;
   /** Metadata of the flow used by tooling. */
   metadata?: Record<string, any>;
+  /** Schema of the initialization data. */
   initSchema?: Init;
+  /** JSON schema of the initialization data. */
   initJsonSchema?: JSONSchema7;
 }
 

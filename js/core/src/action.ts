@@ -51,45 +51,25 @@ export interface ActionMetadata<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
 > {
-  /**
-   * The type of action (e.g. 'prompt', 'flow').
-   */
+  /** The type of action (e.g. 'prompt', 'flow'). */
   actionType?: ActionType;
-  /**
-   *  Registry key (unique identifier).
-   */
+  /** Registry key (unique identifier). */
   key?: string;
-  /**
-   * The name of the action.
-   */
+  /** The name of the action. */
   name: string;
-  /**
-   * Description of the action.
-   */
+  /** Description of the action. */
   description?: string;
-  /**
-   * Input Zod schema.
-   */
+  /** Input Zod schema. */
   inputSchema?: I;
-  /**
-   * Input JSON schema.
-   */
+  /** Input JSON schema. */
   inputJsonSchema?: JSONSchema7;
-  /**
-   * Output Zod schema.
-   */
+  /** Output Zod schema. */
   outputSchema?: O;
-  /**
-   * Output JSON schema.
-   */
+  /** Output JSON schema. */
   outputJsonSchema?: JSONSchema7;
-  /**
-   * Stream Zod schema.
-   */
+  /** Stream Zod schema. */
   streamSchema?: S;
-  /**
-   * Metadata for the action.
-   */
+  /** Metadata for the action. */
   metadata?: Record<string, any>;
 }
 
