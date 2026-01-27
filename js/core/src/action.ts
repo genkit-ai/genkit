@@ -198,6 +198,9 @@ export interface StreamingResponse<
   output: Promise<z.infer<O>>;
 }
 
+/**
+ * Streaming response from a bi-directional action.
+ */
 export interface BidiStreamingResponse<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
@@ -301,6 +304,9 @@ export type ActionParams<
   actionType: ActionType;
 };
 
+/**
+ * Configuration for a bi-directional action.
+ */
 export interface BidiActionParams<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
@@ -317,6 +323,9 @@ export interface BidiActionParams<
   initJsonSchema?: JSONSchema7;
 }
 
+/**
+ * Configuration for an async action (lazy loaded).
+ */
 export type ActionAsyncParams<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
@@ -328,11 +337,17 @@ export type ActionAsyncParams<
   ) => Promise<z.infer<O>>;
 };
 
+/**
+ * Simple middleware that only modifies request/response.
+ */
 export type SimpleMiddleware<I = any, O = any> = (
   req: I,
   next: (req?: I) => Promise<O>
 ) => Promise<O>;
 
+/**
+ * Middleware that has access to options (including streaming callback).
+ */
 export type MiddlewareWithOptions<I = any, O = any, S = any> = (
   req: I,
   options: ActionRunOptions<S, I> | undefined,

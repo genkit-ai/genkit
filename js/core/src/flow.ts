@@ -194,12 +194,18 @@ function flowAction<
   );
 }
 
+/**
+ * A flow step that executes the provided function.
+ */
 export function run<T>(
   name: string,
   func: () => Promise<T>,
   _?: Registry
 ): Promise<T>;
 
+/**
+ * A flow step that executes the provided function with input.
+ */
 export function run<T>(
   name: string,
   input: any,
