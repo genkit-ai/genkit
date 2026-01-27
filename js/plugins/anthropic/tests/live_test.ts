@@ -570,4 +570,41 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     assert.ok(result.text, 'Should have response text');
     assert.ok(result.text.length > 0, 'Response should not be empty');
   });
+
+  it('should support per-request API key via config when plugin initialized with apiKey: false', async () => {
+    // Initialize plugin with apiKey: false to defer API key to request time
+    const ai = genkit({
+      // @ts-expect-error - apiKey: false is valid
+      plugins: [anthropic({ apiKey: false })],
+    });
+
+    // Pass API key in the request config instead of plugin initialization
+    const result = await ai.generate({
+      model: anthropic.model('claude-haiku-4-5'),
+      prompt: 'Say "hello" and nothing else.',
+      config: {
+        apiKey: API_KEY,
+      },
+    });
+
+    assert.ok(result.text.toLowerCase().includes('hello'));
+  });
+
+  it('should support per-request API key override even when plugin has an API key', async () => {
+    // Initialize plugin with a placeholder key
+    const ai = genkit({
+      plugins: [anthropic({ apiKey: 'placeholder-will-be-overridden' })],
+    });
+
+    // Override with a valid API key in the request config
+    const result = await ai.generate({
+      model: anthropic.model('claude-haiku-4-5'),
+      prompt: 'Say "hello" and nothing else.',
+      config: {
+        apiKey: API_KEY,
+      },
+    });
+
+    assert.ok(result.text.toLowerCase().includes('hello'));
+  });
 });

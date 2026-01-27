@@ -234,6 +234,54 @@ describe('Anthropic Plugin', () => {
   });
 });
 
+describe('Per-request API key support', () => {
+  it('should not throw when initialized with apiKey: false', () => {
+    const originalApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    try {
+      // @ts-expect-error - testing that apiKey: false will be supported
+      const plugin = anthropic({ apiKey: false });
+      assert.ok(plugin, 'Plugin should be created with apiKey: false');
+      assert.strictEqual(plugin.name, 'anthropic');
+    } finally {
+      if (originalApiKey !== undefined) {
+        process.env.ANTHROPIC_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it('should throw when apiKey: false and no config.apiKey provided at request time', async () => {
+    const originalApiKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    try {
+      // @ts-expect-error - testing that apiKey: false will be supported
+      const plugin = anthropic({ apiKey: false });
+      const modelAction = plugin.resolve!('model', 'claude-3-5-haiku') as any;
+
+      await assert.rejects(
+        async () => {
+          await modelAction(
+            { messages: [{ role: 'user', content: [{ text: 'Hi' }] }] },
+            {
+              streamingRequested: false,
+              sendChunk: () => {},
+              abortSignal: new AbortController().signal,
+            }
+          );
+        },
+        /API key/i,
+        'Should throw error about missing API key'
+      );
+    } finally {
+      if (originalApiKey !== undefined) {
+        process.env.ANTHROPIC_API_KEY = originalApiKey;
+      }
+    }
+  });
+});
+
 describe('Anthropic resolve helpers', () => {
   it('should resolve model names without anthropic/ prefix', () => {
     const mockClient = createMockAnthropicClient();
