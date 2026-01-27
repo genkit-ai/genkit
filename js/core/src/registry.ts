@@ -46,7 +46,6 @@ const ACTION_TYPES = [
   'flow',
   'indexer',
   'model',
-  'bidi-model',
   'background-model',
   'check-operation',
   'cancel-operation',

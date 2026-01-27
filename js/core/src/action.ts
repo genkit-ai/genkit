@@ -545,14 +545,14 @@ export function action<
                 options.onChunk !== sentinelNoopStreamingCallback,
               sendChunk: options?.onChunk ?? sentinelNoopStreamingCallback,
               inputStream:
-                options?.inputStream ?? asyncIteratorFromArray([input]),
+                options?.inputStream ?? asyncIterableFromArray([input]),
               trace: {
                 traceId,
                 spanId,
               },
               registry: actionFn.__registry,
               abortSignal: options?.abortSignal ?? makeNoopAbortSignal(),
-            } as ActionFnArg<z.infer<S>>);
+            } as ActionFnArg<z.infer<S>, z.infer<I>>);
           // if context is explicitly passed in, we run action with the provided context,
           // otherwise we let upstream context carry through.
           const output = await runWithContext(options?.context, actFn);
@@ -610,7 +610,7 @@ export function action<
           abortSignal: opts?.abortSignal,
           telemetryLabels: opts?.telemetryLabels,
           init: (opts as ActionFnArg<z.infer<S>>)?.init,
-        } as ActionRunOptions<z.infer<S>>
+        } as ActionRunOptions<z.infer<S>, z.infer<I>>
       )
       .then((s) => s.result)
       .finally(() => {
@@ -648,7 +648,7 @@ export function action<
     const result = actionFn.stream(undefined, {
       ...opts,
       inputStream,
-    } as ActionRunOptions<z.infer<S>>);
+    } as ActionRunOptions<z.infer<S>, z.infer<I>>);
 
     return {
       ...result,
@@ -743,7 +743,7 @@ export function bidiAction<
 ): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
   const meta = { ...config.metadata, bidi: true };
   return action({ ...config, metadata: meta }, async (input, options) => {
-    let stream = (options as ActionFnArg<z.infer<S>>).inputStream;
+    let stream = options.inputStream;
     if (!stream) {
       if (input !== undefined) {
         stream = (async function* () {
@@ -873,7 +873,7 @@ export function runOutsideActionRuntimeContext<R>(fn: () => R) {
   return getAsyncContext().run(runtimeContextAslKey, 'outside', fn);
 }
 
-async function* asyncIteratorFromArray<T>(array: T[]): AsyncIterator<T> {
+async function* asyncIterableFromArray<T>(array: T[]): AsyncIterable<T> {
   for (const item of array) {
     yield item;
   }
