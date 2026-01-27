@@ -51,15 +51,45 @@ export interface ActionMetadata<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
 > {
+  /**
+   * The type of action (e.g. 'prompt', 'flow').
+   */
   actionType?: ActionType;
+  /**
+   *  Registry key (unique identifier).
+   */
   key?: string;
+  /**
+   * The name of the action.
+   */
   name: string;
+  /**
+   * Description of the action.
+   */
   description?: string;
+  /**
+   * Input Zod schema.
+   */
   inputSchema?: I;
+  /**
+   * Input JSON schema.
+   */
   inputJsonSchema?: JSONSchema7;
+  /**
+   * Output Zod schema.
+   */
   outputSchema?: O;
+  /**
+   * Output JSON schema.
+   */
   outputJsonSchema?: JSONSchema7;
+  /**
+   * Stream Zod schema.
+   */
   streamSchema?: S;
+  /**
+   * Metadata for the action.
+   */
   metadata?: Record<string, any>;
 }
 
@@ -124,6 +154,9 @@ export interface ActionRunOptions<S, I = any, Init = any> {
    */
   inputStream?: AsyncIterable<I>;
 
+  /**
+   * Initialization data provided to the action.
+   */
   init?: Init;
 }
 
@@ -166,6 +199,9 @@ export interface ActionFnArg<S, I = any, Init = any> {
    */
   inputStream: AsyncIterable<I>;
 
+  /**
+   * Initialization data provided to the action.
+   */
   init?: Init;
 }
 
@@ -187,7 +223,13 @@ export interface BidiStreamingResponse<
   S extends z.ZodTypeAny = z.ZodTypeAny,
   I extends z.ZodTypeAny = z.ZodTypeAny,
 > extends StreamingResponse<O, S> {
+  /**
+   * Sends a chunk of data to the action (for bi-directional streaming).
+   */
   send(chunk: z.infer<I>): void;
+  /**
+   * Closes the input stream to the action.
+   */
   close(): void;
 }
 
@@ -204,7 +246,9 @@ export type Action<
   > = ActionRunOptions<z.infer<S>, z.infer<I>>,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 > = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
+  /** @hidden */
   __action: ActionMetadata<I, O, S>;
+  /** @hidden */
   __registry?: Registry;
   run(
     input?: z.infer<I>,
@@ -230,20 +274,50 @@ export type ActionParams<
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
+  /**
+   * Name of the action, or an object with pluginId and actionId.
+   */
   name:
     | string
     | {
         pluginId: string;
         actionId: string;
       };
+  /**
+   * Description of the action.
+   */
   description?: string;
+  /**
+   * Input Zod schema.
+   */
   inputSchema?: I;
+  /**
+   * Input JSON schema.
+   */
   inputJsonSchema?: JSONSchema7;
+  /**
+   * Output Zod schema.
+   */
   outputSchema?: O;
+  /**
+   * Output JSON schema.
+   */
   outputJsonSchema?: JSONSchema7;
+  /**
+   * Metadata for the action.
+   */
   metadata?: Record<string, any>;
+  /**
+   * Middleware to apply to the action.
+   */
   use?: Middleware<z.infer<I>, z.infer<O>, z.infer<S>>[];
+  /**
+   * Stream Zod schema.
+   */
   streamSchema?: S;
+  /**
+   * The type of action.
+   */
   actionType: ActionType;
 };
 
@@ -253,7 +327,13 @@ export interface BidiActionParams<
   S extends z.ZodTypeAny = z.ZodTypeAny,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 > extends ActionParams<I, O, S> {
+  /**
+   * Zod schema for the initialization data.
+   */
   initSchema?: Init;
+  /**
+   * JSON schema for the initialization data.
+   */
   initJsonSchema?: JSONSchema7;
 }
 
