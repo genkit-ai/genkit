@@ -21,6 +21,7 @@
     "dev:stable:tools": "genkit start -- npx tsx --watch src/stable/tools.ts",
     "dev:stable:vision": "genkit start -- npx tsx --watch src/stable/vision.ts",
     "dev:stable:prompt-caching": "genkit start -- npx tsx --watch src/stable/prompt_caching.ts",
+    "dev:stable:per-request-api-key": "genkit start -- npx tsx --watch src/stable/per_request_api_key.ts",
     "genkit:dev:stable": "cross-env GENKIT_ENV=dev npm run dev:stable",
     "genkit:dev:beta": "cross-env GENKIT_ENV=dev npm run dev:beta",
     "genkit:start": "cross-env GENKIT_ENV=dev genkit start -- tsx --watch src/stable/basic.ts",

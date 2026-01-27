@@ -574,7 +574,6 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
   it('should support per-request API key via config when plugin initialized with apiKey: false', async () => {
     // Initialize plugin with apiKey: false to defer API key to request time
     const ai = genkit({
-      // @ts-expect-error - apiKey: false is valid
       plugins: [anthropic({ apiKey: false })],
     });
 
@@ -597,6 +596,24 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     // Override with a valid API key in the request config
+    const result = await ai.generate({
+      model: anthropic.model('claude-haiku-4-5'),
+      prompt: 'Say "hello" and nothing else.',
+      config: {
+        apiKey: API_KEY,
+      },
+    });
+
+    assert.ok(result.text.toLowerCase().includes('hello'));
+  });
+
+  it('should support per-request API key with beta API', async () => {
+    // Initialize plugin with apiKey: false and beta API
+    const ai = genkit({
+      plugins: [anthropic({ apiKey: false, apiVersion: 'beta' })],
+    });
+
+    // Pass API key in the request config
     const result = await ai.generate({
       model: anthropic.model('claude-haiku-4-5'),
       prompt: 'Say "hello" and nothing else.',

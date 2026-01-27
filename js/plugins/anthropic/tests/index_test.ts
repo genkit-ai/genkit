@@ -240,7 +240,6 @@ describe('Per-request API key support', () => {
     delete process.env.ANTHROPIC_API_KEY;
 
     try {
-      // @ts-expect-error - testing that apiKey: false will be supported
       const plugin = anthropic({ apiKey: false });
       assert.ok(plugin, 'Plugin should be created with apiKey: false');
       assert.strictEqual(plugin.name, 'anthropic');
@@ -256,7 +255,6 @@ describe('Per-request API key support', () => {
     delete process.env.ANTHROPIC_API_KEY;
 
     try {
-      // @ts-expect-error - testing that apiKey: false will be supported
       const plugin = anthropic({ apiKey: false });
       const modelAction = plugin.resolve!('model', 'claude-3-5-haiku') as any;
 

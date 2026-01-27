@@ -45,7 +45,7 @@ import { logger } from 'genkit/logging';
 import {
   AnthropicConfigSchema,
   type AnthropicDocumentOptions,
-  type ClaudeRunnerParams,
+  type RunnerConstructorParams,
 } from '../types.js';
 import { checkModelName, removeUndefinedProperties } from '../utils.js';
 import { BaseRunner } from './base.js';
@@ -141,7 +141,7 @@ interface BetaRunnerTypes extends RunnerTypes {
  * Runner for the Anthropic Beta API.
  */
 export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
-  constructor(params: ClaudeRunnerParams) {
+  constructor(params: RunnerConstructorParams) {
     super(params);
   }
 

@@ -33,7 +33,13 @@ export const __testClient = Symbol('testClient');
  * Plugin configuration options for the Anthropic plugin.
  */
 export interface PluginOptions {
-  apiKey?: string;
+  /**
+   * The API key for Anthropic. Can be:
+   * - A string: Used as the default API key for all requests
+   * - `false`: Defers API key requirement to request time (must provide via config.apiKey)
+   * - `undefined`: Falls back to ANTHROPIC_API_KEY environment variable
+   */
+  apiKey?: string | false;
   /** Default API surface for all requests unless overridden per-request. */
   apiVersion?: 'stable' | 'beta';
 }
@@ -51,8 +57,19 @@ export interface InternalPluginOptions extends PluginOptions {
  */
 interface ClaudeHelperParamsBase {
   name: string;
-  client: Anthropic;
+  /**
+   * The plugin-level API key. Can be:
+   * - A string: The default API key
+   * - `false`: No plugin-level key, must be provided per-request
+   * - `undefined`: Will use ANTHROPIC_API_KEY env var
+   */
+  pluginApiKey: string | false | undefined;
   defaultApiVersion?: 'stable' | 'beta';
+  /**
+   * Test client for dependency injection in tests.
+   * @internal
+   */
+  testClient?: Anthropic;
 }
 
 /**
@@ -61,9 +78,18 @@ interface ClaudeHelperParamsBase {
 export interface ClaudeModelParams extends ClaudeHelperParamsBase {}
 
 /**
- * Parameters for creating a Claude runner.
+ * Parameters for creating a Claude runner (used by claudeRunner function).
  */
 export interface ClaudeRunnerParams extends ClaudeHelperParamsBase {}
+
+/**
+ * Parameters for constructing a Runner instance (internal use).
+ * @internal
+ */
+export interface RunnerConstructorParams {
+  name: string;
+  client: Anthropic;
+}
 
 export const ThinkingConfigSchema = z
   .object({
@@ -101,6 +127,12 @@ export const ThinkingConfigSchema = z
   });
 
 export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
+  apiKey: z
+    .string()
+    .optional()
+    .describe(
+      'Overrides the plugin-configured API key for this request. Use this for per-request API key authentication.'
+    ),
   tool_choice: z
     .union([
       z
@@ -309,3 +341,39 @@ export type AnthropicCitation =
   | CharLocationCitation
   | PageLocationCitation
   | ContentBlockLocationCitation;
+
+/**
+ * Calculates the API key to use for a request.
+ * Priority:
+ *   1. Request config apiKey (per-request override)
+ *   2. Plugin apiKey (if not false)
+ *   3. ANTHROPIC_API_KEY environment variable
+ *
+ * @throws Error if no API key is available
+ */
+export function calculateApiKey(
+  pluginApiKey: string | false | undefined,
+  requestApiKey: string | undefined
+): string {
+  // Request-level API key takes precedence
+  if (requestApiKey) {
+    return requestApiKey;
+  }
+
+  // Plugin-level API key (if not explicitly false)
+  if (pluginApiKey !== false && pluginApiKey) {
+    return pluginApiKey;
+  }
+
+  // Fall back to environment variable (unless plugin explicitly set to false)
+  if (pluginApiKey !== false) {
+    const envApiKey = process.env.ANTHROPIC_API_KEY;
+    if (envApiKey) {
+      return envApiKey;
+    }
+  }
+
+  throw new Error(
+    'Anthropic API key is required. Provide it via config.apiKey, plugin options, or ANTHROPIC_API_KEY environment variable.'
+  );
+}

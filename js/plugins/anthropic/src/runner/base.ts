@@ -33,7 +33,7 @@ import {
   MediaSchema,
   MediaType,
   MediaTypeSchema,
-  type ClaudeRunnerParams,
+  type RunnerConstructorParams,
   type ThinkingConfig,
 } from '../types.js';
 
@@ -65,7 +65,7 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
    */
   protected readonly DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
-  constructor(params: ClaudeRunnerParams) {
+  constructor(params: RunnerConstructorParams) {
     this.name = params.name;
     this.client = params.client;
   }
