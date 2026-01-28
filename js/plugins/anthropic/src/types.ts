@@ -355,22 +355,28 @@ export function calculateApiKey(
   pluginApiKey: string | false | undefined,
   requestApiKey: string | undefined
 ): string {
-  // Request-level API key takes precedence
+  // 1. Request-level API key (highest priority)
   if (requestApiKey) {
     return requestApiKey;
   }
 
-  // Plugin-level API key (if not explicitly false)
-  if (pluginApiKey !== false && pluginApiKey) {
+  // If apiKey is explicitly false at plugin level, we require it per-request.
+  // Since requestApiKey is not present at this point, we must throw.
+  if (pluginApiKey === false) {
+    throw new Error(
+      'Anthropic API key must be provided via config.apiKey when plugin is initialized with apiKey: false.'
+    );
+  }
+
+  // 2. Plugin-level API key
+  if (pluginApiKey) {
     return pluginApiKey;
   }
 
-  // Fall back to environment variable (unless plugin explicitly set to false)
-  if (pluginApiKey !== false) {
-    const envApiKey = process.env.ANTHROPIC_API_KEY;
-    if (envApiKey) {
-      return envApiKey;
-    }
+  // 3. Environment variable (lowest priority)
+  const envApiKey = process.env.ANTHROPIC_API_KEY;
+  if (envApiKey) {
+    return envApiKey;
   }
 
   throw new Error(

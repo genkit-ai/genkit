@@ -250,7 +250,7 @@ describe('Per-request API key support', () => {
     }
   });
 
-  it('should throw when apiKey: false and no config.apiKey provided at request time', async () => {
+  it('should throw specific error when apiKey: false and no config.apiKey provided at request time', async () => {
     const originalApiKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
 
@@ -269,8 +269,8 @@ describe('Per-request API key support', () => {
             }
           );
         },
-        /API key/i,
-        'Should throw error about missing API key'
+        /API key must be provided via config\.apiKey when plugin is initialized with apiKey: false/,
+        'Should throw specific error about missing per-request API key'
       );
     } finally {
       if (originalApiKey !== undefined) {
