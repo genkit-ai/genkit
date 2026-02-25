@@ -92,7 +92,11 @@ describe('start command', () => {
 
     await serverStartedPromise;
 
-    expect(startManagerSpy).toHaveBeenCalledWith('/mock/root', true);
+    expect(startManagerSpy).toHaveBeenCalledWith({
+      projectRoot: '/mock/root',
+      manageHealth: true,
+      corsOrigin: undefined,
+    });
     expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
     expect(startServerSpy).toHaveBeenCalled();
   });

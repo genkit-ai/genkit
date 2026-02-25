@@ -423,10 +423,7 @@ async def rerank(
 
     # Convert query to DocumentData if it's a string
     query_data: DocumentData
-    if isinstance(params.query, str):
-        query_data = Document.from_text(params.query)
-    else:
-        query_data = params.query
+    query_data = Document.from_text(params.query) if isinstance(params.query, str) else params.query
 
     # Build the request
     request = RerankerRequest(

@@ -1,0 +1,24 @@
+---
+model: googleai/gemini-2.0-flash
+input:
+  schema:
+    code: string
+    language?: string
+output:
+  schema: Analysis
+---
+
+You are a security expert code reviewer. Analyze the following {{language}} code for security vulnerabilities.
+
+Code:
+```{{language}}
+{{code}}
+```
+
+Focus on:
+- SQL injection, XSS, command injection
+- Authentication and authorization issues
+- Cryptographic weaknesses
+- Input validation problems
+
+Return ONLY security issues with HIGH confidence.

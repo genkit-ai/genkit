@@ -104,7 +104,6 @@ from genkit.core.typing import (
     GenerateRequest,
     GenerateResponse,
     GenerateResponseChunk,
-    GenerationCommonConfig,
     GenerationUsage,
     Media,
     MediaPart,
@@ -132,6 +131,7 @@ from genkit.core.typing import (
     ToolResponse,
     ToolResponsePart,
 )
+from genkit.model_types import GenerationCommonConfig, get_effective_api_key, get_request_api_key
 
 __all__ = [
     # Errors
@@ -140,52 +140,54 @@ __all__ = [
     # Action context
     'ActionRunContext',
     # Message and Part types
-    'Message',
-    'Part',
-    'TextPart',
-    'MediaPart',
-    'Media',
-    'Metadata',
     'CustomPart',
     'DataPart',
+    'Media',
+    'MediaPart',
+    'Message',
+    'Metadata',
+    'Part',
     'ReasoningPart',
+    'Role',
+    'TextPart',
     'ToolRequestPart',
     'ToolResponsePart',
-    'Role',
     # Document types
     'Document',
     'DocumentData',
     # Generation types
+    'FinishReason',
+    'GenerateActionOptions',
     'GenerateRequest',
     'GenerateResponse',
     'GenerateResponseChunk',
     'GenerationCommonConfig',
+    'get_request_api_key',
+    'get_effective_api_key',
     'GenerationUsage',
     'OutputConfig',
-    'GenerateActionOptions',
-    'FinishReason',
     'ToolChoice',
     # Tool types
+    'ToolDefinition',
     'ToolRequest',
     'ToolResponse',
-    'ToolDefinition',
     # Embedding types
-    'Embedding',
     'EmbedRequest',
     'EmbedResponse',
+    'Embedding',
     # Retriever types
     'RetrieverRequest',
     'RetrieverResponse',
     # Eval types
     'BaseEvalDataPoint',
+    'EvalFnResponse',
     'EvalRequest',
     'EvalResponse',
-    'EvalFnResponse',
     'EvalStatusEnum',
     'Score',
     # Model info (for plugin authors)
-    'ModelInfo',
-    'Supports',
     'Constrained',
+    'ModelInfo',
     'Stage',
+    'Supports',
 ]

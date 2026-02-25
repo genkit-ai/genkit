@@ -1,0 +1,114 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# ---------------------------------------------------------------------------
+# Conform tool configuration
+# ---------------------------------------------------------------------------
+# This file lives alongside the conformance spec directories and contains
+# all repository-specific settings.  The ``conform`` tool reads it via
+# ``--config`` (or the wrapper script ``py/bin/conform`` passes it
+# automatically).
+#
+# Paths are relative to this file's directory.  The tool resolves them
+# to absolute paths at load time.
+
+[conform]
+concurrency      = 8
+max-retries      = 2
+retry-base-delay = 1.0
+test-concurrency = 3
+
+# Runner type: auto (default), native, reflection, or in-process.
+# auto: uses the per-runtime default-runner (see below).
+runner = "auto"
+
+# Timeouts (seconds).  These are global defaults; override per-plugin
+# or per-model in the sections below.
+action-timeout  = 120.0 # Per LLM action call (model generate request)
+health-timeout  = 5.0   # Health-check request to reflection server
+startup-timeout = 30.0  # Wait for reflection server to start
+
+# Plugins that are model providers but lack ``model_info.py`` (they use
+# dynamic model registration).  The ``check-model`` subcommand verifies
+# that these have conformance specs too.
+additional-model-plugins = ["google-genai", "vertex-ai", "ollama"]
+
+# Required environment variables per plugin.  An empty list means no
+# credentials are needed (e.g. ollama uses a local server).
+[conform.env]
+amazon-bedrock        = ["AWS_REGION"]
+anthropic             = ["ANTHROPIC_API_KEY"]
+cloudflare-workers-ai = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]
+cohere                = ["COHERE_API_KEY"]
+compat-oai            = ["OPENAI_API_KEY"]
+deepseek              = ["DEEPSEEK_API_KEY"]
+google-genai          = ["GEMINI_API_KEY"]
+huggingface           = ["HF_TOKEN"]
+microsoft-foundry     = ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"]
+mistral               = ["MISTRAL_API_KEY"]
+ollama                = []
+vertex-ai             = ["GOOGLE_CLOUD_PROJECT"]
+xai                   = ["XAI_API_KEY"]
+
+# ---------------------------------------------------------------------------
+# Per-plugin overrides
+# ---------------------------------------------------------------------------
+# Override settings for specific plugins.  Currently supports:
+#   test-concurrency — max parallel tests for this plugin (overrides global).
+
+[conform.plugin-overrides.cloudflare-workers-ai]
+action-timeout   = 180.0 # Cloudflare can be slow
+test-concurrency = 1
+
+# ---------------------------------------------------------------------------
+# Per-model overrides
+# ---------------------------------------------------------------------------
+# Override settings for specific models.  Currently supports:
+#   action-timeout — timeout for this model (overrides plugin and global).
+# Model names use the format "provider/model-name".
+
+# [conform.model-overrides."googleai/gemini-2.5-flash"]
+# action-timeout = 60.0
+
+# ---------------------------------------------------------------------------
+# Runtime configurations
+# ---------------------------------------------------------------------------
+# Each runtime defines how to locate specs, plugins, and what command to use
+# for running entry points.  The --runtime CLI flag selects which runtime
+# to use (default: python).
+#
+# Paths are relative to this file's directory.
+
+[conform.runtimes.python]
+cwd            = "../../.."
+default-runner = "in-process"                                 # Python runs in-process by default
+entry-command  = ["uv", "run", "--project", "py", "--active"]
+plugins-dir    = "../../plugins"
+specs-dir      = "."
+
+[conform.runtimes.js]
+cwd            = "../../../js"
+default-runner = "native"              # JS uses native JSONL-over-stdio executor
+entry-command  = ["npx", "tsx"]
+plugins-dir    = "../../../js/plugins"
+specs-dir      = "."
+
+[conform.runtimes.go]
+cwd            = "../../../go"
+default-runner = "native"              # Go uses native JSONL-over-stdio executor
+entry-command  = ["go", "run"]
+plugins-dir    = "../../../go/plugins"
+specs-dir      = "."

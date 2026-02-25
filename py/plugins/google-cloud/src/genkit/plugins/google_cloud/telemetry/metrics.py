@@ -43,6 +43,8 @@ See Also:
     - Workload Metrics: https://cloud.google.com/monitoring/api/metrics_other
 """
 
+import contextlib
+import json
 import re
 
 import structlog
@@ -164,8 +166,6 @@ def record_generate_metrics(span: ReadableSpan) -> None:
     Args:
         span: OpenTelemetry span containing model execution data
     """
-    import json
-
     attrs = span.attributes
     if not attrs:
         return
@@ -219,10 +219,8 @@ def record_generate_metrics(span: ReadableSpan) -> None:
         for key, metric_fn in usage_metrics.items():
             value = usage.get(key)
             if value is not None:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     metric_fn().add(int(value), dimensions)
-                except (ValueError, TypeError):
-                    pass
 
     except Exception as e:
         logger.warning('Error recording metrics', error=str(e))

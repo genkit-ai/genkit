@@ -23,6 +23,7 @@ import {
   defineInterrupt,
   defineTool,
   isDynamicTool,
+  isMultipartTool,
   tool,
 } from '../src/tool.js';
 
@@ -165,6 +166,15 @@ describe('isDynamicTool', () => {
     assert.strictEqual(isDynamicTool(dynamic), true);
   });
 
+  it('should return true for a dynamic multipart tool', () => {
+    const dynamic = tool({
+      name: 'dynamic',
+      description: 'test',
+      multipart: true,
+    });
+    assert.strictEqual(isDynamicTool(dynamic), true);
+  });
+
   it('should remain dynamic after registration', () => {
     const dynamic = tool({ name: 'dynamic', description: 'test' });
     assert.strictEqual(isDynamicTool(dynamic), true);
@@ -195,6 +205,47 @@ describe('isDynamicTool', () => {
     assert.strictEqual(isDynamicTool({}), false);
     assert.strictEqual(isDynamicTool('tool'), false);
     assert.strictEqual(isDynamicTool(123), false);
+  });
+});
+
+describe('isMultipartTool', () => {
+  let registry = new Registry();
+  registry.apiStability = 'beta';
+  afterEach(() => {
+    registry = new Registry();
+    registry.apiStability = 'beta';
+  });
+
+  it('should return true for a multipart tool', () => {
+    const multipart = defineTool(
+      registry,
+      { name: 'multipart', description: 'test', multipart: true },
+      async () => {}
+    );
+    assert.strictEqual(isMultipartTool(multipart), true);
+  });
+
+  it('should return false for a non-multipart tool', () => {
+    const regular = defineTool(
+      registry,
+      { name: 'regular', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(isMultipartTool(regular), false);
+  });
+
+  it('should return false for a non-tool action', () => {
+    const regularAction = action(
+      { actionType: 'util', name: 'regularAction', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(isMultipartTool(regularAction), false);
+  });
+
+  it('should return false for a non-action', () => {
+    assert.strictEqual(isMultipartTool({}), false);
+    assert.strictEqual(isMultipartTool('tool'), false);
+    assert.strictEqual(isMultipartTool(123), false);
   });
 });
 

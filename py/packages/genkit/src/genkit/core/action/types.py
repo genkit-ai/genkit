@@ -68,6 +68,7 @@ class ActionResponse(BaseModel, Generic[ResponseT]):
     Attributes:
         response: The actual response data from the action execution.
         trace_id: A unique identifier for tracing the action execution.
+        span_id: The span ID of the root action span.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
@@ -76,6 +77,7 @@ class ActionResponse(BaseModel, Generic[ResponseT]):
 
     response: ResponseT
     trace_id: str
+    span_id: str = ''
 
 
 class ActionMetadataKey(StrEnum):

@@ -1,0 +1,209 @@
+#!/bin/bash
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Create Release Tag and GitHub Release for Python SDK
+#
+# Usage:
+#   ./bin/create_release <VERSION> [PR_NUMBER]
+#
+# Examples:
+#   ./bin/create_release 0.5.0 4417      # Use PR #4417's description
+#   ./bin/create_release 0.5.0           # Auto-find merged PR for this version
+#
+# This script will:
+#   1. Verify you're on main branch with latest changes
+#   2. Fetch the release PR description from GitHub
+#   3. Create an annotated git tag (py/v<VERSION>)
+#   4. Push the tag to origin
+#   5. Create a GitHub release using the PR description
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Check arguments
+if [ $# -lt 1 ]; then
+    echo -e "${RED}Usage: $0 <VERSION> [PR_NUMBER]${NC}"
+    echo "Examples:"
+    echo "  $0 0.5.0 4417    # Use specific PR"
+    echo "  $0 0.5.0         # Auto-find merged PR"
+    exit 1
+fi
+
+VERSION="$1"
+PR_NUMBER="${2:-}"
+TAG_NAME="py/v${VERSION}"
+
+echo -e "${BLUE}=== Genkit Python SDK Release: v${VERSION} ===${NC}"
+echo ""
+
+# Check we're in the py directory or repo root
+if [ -f "pyproject.toml" ] && [ -d "packages" ]; then
+    # We're in py/
+    cd ..
+elif [ -d "py/packages" ]; then
+    # We're in repo root
+    :
+else
+    echo -e "${RED}Error: Must run from repo root or py/ directory${NC}"
+    exit 1
+fi
+
+# Navigate to py/ for version checks
+cd py
+
+# Step 1: Verify version in packages
+echo -e "${YELLOW}Step 1: Verifying package versions...${NC}"
+GENKIT_VERSION=$(grep "^version = " packages/genkit/pyproject.toml | cut -d'"' -f2)
+if [ "$GENKIT_VERSION" != "$VERSION" ]; then
+    echo -e "${RED}Error: genkit package version is ${GENKIT_VERSION}, expected ${VERSION}${NC}"
+    echo "Update packages/genkit/pyproject.toml before creating release"
+    exit 1
+fi
+echo -e "${GREEN}✓ Package version matches: ${VERSION}${NC}"
+
+# Go back to repo root
+cd ..
+
+# Step 2: Verify git status
+echo ""
+echo -e "${YELLOW}Step 2: Checking git status...${NC}"
+CURRENT_BRANCH=$(git branch --show-current)
+if [ "$CURRENT_BRANCH" != "main" ] && [ "${SKIP_BRANCH_CHECK:-}" != "1" ]; then
+    echo -e "${RED}Error: Not on main branch (currently on: ${CURRENT_BRANCH})${NC}"
+    echo "Switch to main branch: git checkout main"
+    echo "Or set SKIP_BRANCH_CHECK=1 to override (testing only)"
+    exit 1
+fi
+echo -e "${GREEN}✓ On branch: ${CURRENT_BRANCH}${NC}"
+
+# Check for uncommitted changes
+if ! git diff-index --quiet HEAD --; then
+    echo -e "${RED}Error: There are uncommitted changes${NC}"
+    echo "Commit or stash changes before creating release"
+    exit 1
+fi
+echo -e "${GREEN}✓ No uncommitted changes${NC}"
+
+# Step 3: Pull latest
+echo ""
+echo -e "${YELLOW}Step 3: Pulling latest changes...${NC}"
+git pull origin main
+echo -e "${GREEN}✓ Pulled latest from origin/main${NC}"
+
+# Step 4: Find or verify PR
+echo ""
+echo -e "${YELLOW}Step 4: Finding release PR...${NC}"
+if [ -z "$PR_NUMBER" ]; then
+    # Auto-find the merged PR for this version
+    PR_NUMBER=$(gh pr list --repo firebase/genkit --state merged \
+        --search "Python SDK ${VERSION} in:title" \
+        --json number --limit 1 | jq -r '.[0].number // empty')
+    
+    if [ -z "$PR_NUMBER" ]; then
+        # Try searching by version in body
+        PR_NUMBER=$(gh pr list --repo firebase/genkit --state merged \
+            --search "v${VERSION} label:python" \
+            --json number --limit 1 | jq -r '.[0].number // empty')
+    fi
+    
+    if [ -z "$PR_NUMBER" ]; then
+        echo -e "${RED}Error: Could not find merged PR for version ${VERSION}${NC}"
+        echo "Specify PR number manually: $0 ${VERSION} <PR_NUMBER>"
+        exit 1
+    fi
+fi
+
+echo -e "${GREEN}✓ Found PR #${PR_NUMBER}${NC}"
+
+# Fetch PR description
+echo ""
+echo -e "${YELLOW}Step 5: Fetching PR description...${NC}"
+RELEASE_NOTES_FILE=$(mktemp)
+gh pr view "$PR_NUMBER" --repo firebase/genkit --json body --jq '.body' > "$RELEASE_NOTES_FILE"
+
+if [ ! -s "$RELEASE_NOTES_FILE" ]; then
+    echo -e "${RED}Error: PR #${PR_NUMBER} has no description${NC}"
+    rm -f "$RELEASE_NOTES_FILE"
+    exit 1
+fi
+
+LINE_COUNT=$(wc -l < "$RELEASE_NOTES_FILE")
+echo -e "${GREEN}✓ Fetched PR description (${LINE_COUNT} lines)${NC}"
+
+# Step 6: Check if tag already exists
+echo ""
+echo -e "${YELLOW}Step 6: Checking if tag exists...${NC}"
+if git tag -l "$TAG_NAME" | grep -q "$TAG_NAME"; then
+    echo -e "${RED}Error: Tag ${TAG_NAME} already exists${NC}"
+    echo "Delete it first if you need to recreate: git tag -d ${TAG_NAME} && git push origin :refs/tags/${TAG_NAME}"
+    rm -f "$RELEASE_NOTES_FILE"
+    exit 1
+fi
+echo -e "${GREEN}✓ Tag ${TAG_NAME} does not exist${NC}"
+
+# Step 7: Create tag
+echo ""
+echo -e "${YELLOW}Step 7: Creating annotated tag...${NC}"
+git tag -a "$TAG_NAME" -m "Genkit Python SDK v${VERSION}
+
+Release highlights:
+- See py/CHANGELOG.md for full release notes
+- Based on PR #${PR_NUMBER}
+
+Published packages:
+- genkit (core)
+- genkit-plugin-* (22 plugins)"
+
+echo -e "${GREEN}✓ Created tag: ${TAG_NAME}${NC}"
+
+# Step 8: Push tag
+echo ""
+echo -e "${YELLOW}Step 8: Pushing tag to origin...${NC}"
+git push origin "$TAG_NAME"
+echo -e "${GREEN}✓ Pushed tag to origin${NC}"
+
+# Step 9: Create GitHub release
+echo ""
+echo -e "${YELLOW}Step 9: Creating GitHub release...${NC}"
+gh release create "$TAG_NAME" \
+    --title "Genkit Python SDK v${VERSION}" \
+    --notes-file "$RELEASE_NOTES_FILE"
+
+echo -e "${GREEN}✓ Created GitHub release${NC}"
+
+# Cleanup
+rm -f "$RELEASE_NOTES_FILE"
+
+# Summary
+echo ""
+echo -e "${BLUE}=== Release Created Successfully ===${NC}"
+echo ""
+echo "Tag: ${TAG_NAME}"
+echo "Based on PR: #${PR_NUMBER}"
+echo "Release: https://github.com/firebase/genkit/releases/tag/${TAG_NAME}"
+echo ""
+echo -e "${YELLOW}Next steps:${NC}"
+echo "1. Go to Actions → Publish Python Package"
+echo "2. Run workflow with: publish_scope=all"
+echo "3. Monitor the publish workflow"
+echo "4. Verify on PyPI: pip index versions genkit"

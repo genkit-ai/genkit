@@ -18,7 +18,7 @@
 
 from pydantic import BaseModel
 
-from genkit.codec import dump_json
+from genkit.codec import dump_dict, dump_json
 
 
 def test_dump_json_basic() -> None:
@@ -63,3 +63,24 @@ def test_dump_json_pydantic() -> None:
         b: str
 
     assert dump_json(MyModel(a=1, b='test')) == '{"a":1,"b":"test"}'
+
+
+def test_dump_dict_list_of_models() -> None:
+    """Test dump_dict with a list of Pydantic models."""
+
+    class MyModel(BaseModel):
+        a: int
+
+    models = [MyModel(a=1), MyModel(a=2)]
+    # This was failing before the fix because dump_dict didn't recurse into lists
+    assert dump_dict(models) == [{'a': 1}, {'a': 2}]
+
+
+def test_dump_dict_nested_models() -> None:
+    """Test dump_dict with nested structures containing Pydantic models."""
+
+    class MyModel(BaseModel):
+        a: int
+
+    data = {'key': [MyModel(a=1)], 'other': MyModel(a=2)}
+    assert dump_dict(data) == {'key': [{'a': 1}], 'other': {'a': 2}}

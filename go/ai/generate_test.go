@@ -2243,7 +2243,6 @@ func TestGenerateText(t *testing.T) {
 			WithModel(echoModel),
 			WithPrompt("hello"),
 		)
-
 		if err != nil {
 			t.Fatalf("GenerateText error: %v", err)
 		}
@@ -2276,7 +2275,6 @@ func TestGenerateData(t *testing.T) {
 			WithModel(jsonModel),
 			WithPrompt("get value"),
 		)
-
 		if err != nil {
 			t.Fatalf("GenerateData error: %v", err)
 		}
@@ -2412,6 +2410,79 @@ func TestOutputFrom(t *testing.T) {
 		}
 		if output.Count != 5 {
 			t.Errorf("output.Count = %d, want 5", output.Count)
+		}
+	})
+}
+
+func TestGenerateWithMarkdownJSON(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(context.Background(), r)
+
+	// A model that returns JSON wrapped in markdown
+	markdownModel := DefineModel(r, "test/markdownJson", &ModelOptions{
+		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		jsonContent := "{\"name\": \"test\", \"value\": 123}"
+		return &ModelResponse{
+			Request: req,
+			Message: NewModelTextMessage("```json\n" + jsonContent + "\n```"),
+		}, nil
+	})
+
+	// A model that returns JSON wrapped in markdown with loose formatting (spaces)
+	looseMarkdownModel := DefineModel(r, "test/looseMarkdownJson", &ModelOptions{
+		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		jsonContent := "{\"name\": \"test\", \"value\": 123}"
+		return &ModelResponse{
+			Request: req,
+			Message: NewModelTextMessage("Here is your JSON:\n ``` json \n" + jsonContent + "\n```"),
+		}, nil
+	})
+
+	type OutputData struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+
+	t.Run("Standard Markdown JSON", func(t *testing.T) {
+		resp, err := Generate(context.Background(), r,
+			WithModel(markdownModel),
+			WithPrompt("get data"),
+			WithOutputType(OutputData{}),
+		)
+		if err != nil {
+			t.Fatalf("Generate failed: %v", err)
+		}
+
+		var out OutputData
+		if err := resp.Output(&out); err != nil {
+			t.Fatalf("Output unmarshal failed: %v", err)
+		}
+
+		if out.Name != "test" || out.Value != 123 {
+			t.Errorf("Unexpected output: %+v", out)
+		}
+	})
+
+	t.Run("Loose Markdown JSON", func(t *testing.T) {
+		resp, err := Generate(context.Background(), r,
+			WithModel(looseMarkdownModel),
+			WithPrompt("get data"),
+			WithOutputType(OutputData{}),
+		)
+		if err != nil {
+			t.Fatalf("Generate failed: %v", err)
+		}
+
+		var out OutputData
+		if err := resp.Output(&out); err != nil {
+			t.Fatalf("Output unmarshal failed: %v", err)
+		}
+
+		if out.Name != "test" || out.Value != 123 {
+			t.Errorf("Unexpected output: %+v", out)
 		}
 	})
 }

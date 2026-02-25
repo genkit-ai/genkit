@@ -42,6 +42,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 
 from genkit.core import GENKIT_VERSION
 
+from .gcp_logger import gcp_logger
 from .utils import create_common_log_attributes, truncate
 
 logger = structlog.get_logger(__name__)
@@ -130,7 +131,7 @@ class EngagementTelemetry:
         if text_feedback:
             metadata['textFeedback'] = truncate(str(text_feedback))
 
-        logger.info(f'UserFeedback[{name}]', **metadata)
+        gcp_logger.log_structured(f'UserFeedback[{name}]', metadata)
 
     def _write_user_acceptance(
         self,
@@ -154,7 +155,7 @@ class EngagementTelemetry:
             **create_common_log_attributes(span, project_id),
             'acceptanceValue': acceptance_value,
         }
-        logger.info(f'UserAcceptance[{name}]', **metadata)
+        gcp_logger.log_structured(f'UserAcceptance[{name}]', metadata)
 
     def _extract_trace_name(self, attrs: dict[str, Any]) -> str:
         """Extract the trace name from span attributes."""

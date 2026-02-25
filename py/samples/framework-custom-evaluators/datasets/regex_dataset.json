@@ -1,0 +1,102 @@
+[
+  {
+    "testCaseId": "valid_phone_dashes",
+    "input": "input",
+    "output": "123-456-7890"
+  },
+  {
+    "testCaseId": "valid_phone_parens_spaces",
+    "input": "input",
+    "output": "(123) 456 7890"
+  },
+  {
+    "testCaseId": "valid_phone_dots",
+    "input": "input",
+    "output": "123.456.7890"
+  },
+  {
+    "testCaseId": "valid_phone_no_delimiter",
+    "input": "input",
+    "output": "1234567890"
+  },
+  {
+    "testCaseId": "valid_phone_combo",
+    "input": "input",
+    "output": "(555) 123-4567"
+  },
+  {
+    "testCaseId": "invalid_phone_too_short",
+    "input": "input",
+    "output": "1234-5678"
+  },
+  {
+    "testCaseId": "invalid_phone_has_letters",
+    "input": "input",
+    "output": "ABC-456-7890"
+  },
+  {
+    "testCaseId": "invalid_phone_separator",
+    "input": "input",
+    "output": "123 45* 7890"
+  },
+  {
+    "testCaseId": "invalid_phone_too_long",
+    "input": "input",
+    "output": "123-456-78901"
+  },
+  {
+    "testCaseId": "invalid_phone_bad_areacode",
+    "input": "input",
+    "output": "(1234) 567-890"
+  },
+  {
+    "testCaseId": "valid_url_example",
+    "input": "input",
+    "output": "https://www.example.com"
+  },
+  {
+    "testCaseId": "valid_url_dotnet",
+    "input": "input",
+    "output": "http://example.net/"
+  },
+  {
+    "testCaseId": "valid_url_resource_name",
+    "input": "input",
+    "output": "https://www.example.net/products/item123"
+  },
+  {
+    "testCaseId": "valid_url_subdomain",
+    "input": "input",
+    "output": "https://subdomain.example.org/path/with/query?param=value"
+  },
+  {
+    "testCaseId": "valid_url_ip_address",
+    "input": "input",
+    "output": "http://127.0.0.1:5000"
+  },
+  {
+    "testCaseId": "invalid_url_example",
+    "input": "input",
+    "output": "example.com"
+  },
+  {
+    "testCaseId": "invalid_url_@_symbol",
+    "input": "input",
+    "output": "https://www.example@com"
+  },
+  {
+    "testCaseId": "invalid_url_sentence",
+    "input": "input",
+    "output": "this is just a sentence"
+  },
+  {
+    "testCaseId": "invalid_url_bad_slashes",
+    "input": "input",
+    "output": "https:\\\\bad.slashes.com"
+  },
+  {
+    "testCaseId": "invalid_url_spaces",
+    "input": "input",
+    "output": "http://my website is a test"
+  }
+]

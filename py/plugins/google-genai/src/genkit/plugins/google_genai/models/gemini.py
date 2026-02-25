@@ -147,6 +147,7 @@ from typing import Annotated, Any, cast
 
 from google import genai
 from google.genai import types as genai_types
+from google.genai.errors import ClientError
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema
 
 from genkit.ai import (
@@ -154,7 +155,12 @@ from genkit.ai import (
 )
 from genkit.blocks.model import get_basic_usage_stats
 from genkit.codec import dump_dict, dump_json
+from genkit.core.error import GenkitError, StatusName
 from genkit.core.tracing import tracer
+from genkit.core.typing import (
+    Candidate,
+    FinishReason,
+)
 from genkit.lang.deprecations import (
     deprecated_enum_metafactory,
 )
@@ -168,9 +174,11 @@ from genkit.types import (
     GenerationUsage,
     Message,
     ModelInfo,
+    Part,
     Role,
     Stage,
     Supports,
+    TextPart,
     ToolDefinition,
 )
 
@@ -296,6 +304,16 @@ class GeminiConfigSchema(GenerationCommonConfig):
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
 
+    api_key: str | None = Field(
+        None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
+    )
+    base_url: str | None = Field(
+        None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
+    )
+    api_version: str | None = Field(
+        None, description='Overrides the plugin-configured or default apiVersion, if specified.', alias='apiVersion'
+    )
+
     safety_settings: Annotated[
         list[SafetySettingsSchema] | None,
         WithJsonSchema({
@@ -318,50 +336,129 @@ class GeminiConfigSchema(GenerationCommonConfig):
         None,
         alias='safetySettings',
     )
-    # Gemini specific
-    model_config = ConfigDict(extra='allow')
-
-    # inherited from GenerationCommonConfig:
-    # version, temperature, max_output_tokens, top_k, top_p, stop_sequences
-
-    temperature: float | None = Field(
-        default=None,
-        description='Controls the randomness of the output. Values can range over [0.0, 2.0].',
-    )
-
-    top_p: float | None = Field(
-        default=None,
-        alias='topP',
-        description=(
-            'The maximum cumulative probability of tokens to consider when sampling. Values can range over [0.0, 1.0].'
-        ),
-    )
-    top_k: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None,
-        alias='topK',
-        description=('The maximum number of tokens to consider when sampling. Values can range over [1, 40].'),
-    )
-    candidate_count: int | None = Field(
-        default=None, description='Number of generated responses to return.', alias='candidateCount'
-    )
-    max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
-    )
-    stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
-    presence_penalty: float | None = Field(default=None, description='Presence penalty.', alias='presencePenalty')
-    frequency_penalty: float | None = Field(default=None, description='Frequency penalty.', alias='frequencyPenalty')
-    response_mime_type: str | None = Field(default=None, description='Response MIME type.', alias='responseMimeType')
-    response_schema: dict[str, Any] | None = Field(default=None, description='Response schema.', alias='responseSchema')
 
     code_execution: bool | dict[str, Any] | None = Field(
         None, description='Enables the model to generate and run code.', alias='codeExecution'
     )
+
+    context_cache: bool | None = Field(
+        None,
+        description=(
+            'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
+        ),
+        alias='contextCache',
+    )
+
+    function_calling_config: Annotated[
+        FunctionCallingConfig | None,
+        WithJsonSchema({
+            'type': 'object',
+            'properties': {
+                'mode': {'type': 'string', 'enum': [e.value for e in FunctionCallingMode]},
+                'allowedFunctionNames': {'type': 'array', 'items': {'type': 'string'}},
+            },
+            'description': (
+                'Controls how the model uses the provided tools (function declarations). With AUTO (Default) '
+                'mode, the model decides whether to generate a natural language response or suggest a function '
+                'call based on the prompt and context. With ANY, the model is constrained to always predict a '
+                'function call and guarantee function schema adherence. With NONE, the model is prohibited '
+                'from making function calls.'
+            ),
+            'additionalProperties': True,
+        }),
+    ] = Field(
+        None,
+        alias='functionCallingConfig',
+    )
+
     response_modalities: list[str] | None = Field(
         None,
         description=(
             "The modalities to be used in response. Only supported for 'gemini-2.0-flash-exp' model at present."
         ),
         alias='responseModalities',
+    )
+
+    google_search_retrieval: bool | dict[str, Any] | None = Field(
+        None,
+        description=(
+            'Retrieve public web data for grounding, powered by Google Search. '
+            'Note: This feature is not supported on all models. '
+            'If you get an error, use the google_search tool instead.'
+        ),
+        alias='googleSearchRetrieval',
+    )
+
+    file_search: Annotated[
+        FileSearchConfigSchema | None,
+        WithJsonSchema({
+            'type': 'object',
+            'properties': {
+                'fileSearchStoreNames': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': (
+                        'The names of the fileSearchStores to retrieve from. '
+                        'Example: fileSearchStores/my-file-search-store-123'
+                    ),
+                },
+                'metadataFilter': {
+                    'type': 'string',
+                    'description': 'Metadata filter to apply to the semantic retrieval documents and chunks.',
+                },
+                'topK': {
+                    'type': 'integer',
+                    'description': 'The number of semantic retrieval chunks to retrieve.',
+                },
+            },
+            'additionalProperties': True,
+        }),
+    ] = Field(None, alias='fileSearch')
+
+    url_context: bool | dict[str, Any] | None = Field(
+        None, description='Return grounding metadata from links included in the query', alias='urlContext'
+    )
+
+    # inherited from GenerationCommonConfig:
+    # version, temperature, max_output_tokens, top_k, top_p, stop_sequences
+
+    temperature: Annotated[
+        float | None,
+        WithJsonSchema({
+            'type': 'number',
+            'minimum': 0.0,
+            'maximum': 2.0,
+            'description': (
+                'Controls the randomness of the output. Values can range over [0.0, 2.0]. The default value is 1.0.'
+            ),
+        }),
+    ] = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+    )
+
+    top_p: Annotated[
+        float | None,
+        WithJsonSchema({
+            'type': 'number',
+            'minimum': 0.0,
+            'maximum': 1.0,
+            'description': (
+                'The maximum cumulative probability of tokens to consider when sampling. '
+                'Values can range over [0.0, 1.0]. The default value is 0.95.'
+            ),
+        }),
+    ] = Field(
+        default=None,
+        alias='topP',
+        ge=0.0,
+        le=1.0,
+    )
+    top_k: int | None = Field(  # pyrefly: ignore[bad-override]
+        default=None,
+        alias='topK',
+        description=('The maximum number of tokens to consider when sampling.'),
     )
 
     thinking_config: Annotated[
@@ -399,78 +496,10 @@ class GeminiConfigSchema(GenerationCommonConfig):
         }),
     ] = Field(None, alias='thinkingConfig')
 
-    file_search: Annotated[
-        FileSearchConfigSchema | None,
-        WithJsonSchema({
-            'type': 'object',
-            'properties': {
-                'fileSearchStoreNames': {
-                    'type': 'array',
-                    'items': {'type': 'string'},
-                    'description': (
-                        'The names of the fileSearchStores to retrieve from. '
-                        'Example: fileSearchStores/my-file-search-store-123'
-                    ),
-                },
-                'metadataFilter': {
-                    'type': 'string',
-                    'description': 'Metadata filter to apply to the semantic retrieval documents and chunks.',
-                },
-                'topK': {
-                    'type': 'integer',
-                    'description': 'The number of semantic retrieval chunks to retrieve.',
-                },
-            },
-            'additionalProperties': True,
-        }),
-    ] = Field(None, alias='fileSearch')
-
-    url_context: bool | dict[str, Any] | None = Field(
-        None, description='Return grounding metadata from links included in the query', alias='urlContext'
+    max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
+        default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
     )
-    google_search_retrieval: bool | dict[str, Any] | None = Field(
-        None,
-        description='Retrieve public web data for grounding, powered by Google Search.',
-        alias='googleSearchRetrieval',
-    )
-    function_calling_config: Annotated[
-        FunctionCallingConfig | None,
-        WithJsonSchema({
-            'type': 'object',
-            'properties': {
-                'mode': {'type': 'string', 'enum': [e.value for e in FunctionCallingMode]},
-                'allowedFunctionNames': {'type': 'array', 'items': {'type': 'string'}},
-            },
-            'description': (
-                'Controls how the model uses the provided tools (function declarations). With AUTO (Default) '
-                'mode, the model decides whether to generate a natural language response or suggest a function '
-                'call based on the prompt and context. With ANY, the model is constrained to always predict a '
-                'function call and guarantee function schema adherence. With NONE, the model is prohibited '
-                'from making function calls.'
-            ),
-            'additionalProperties': True,
-        }),
-    ] = Field(
-        None,
-        alias='functionCallingConfig',
-    )
-
-    api_version: str | None = Field(
-        None, description='Overrides the plugin-configured or default apiVersion, if specified.', alias='apiVersion'
-    )
-    base_url: str | None = Field(
-        None, description='Overrides the plugin-configured or default baseUrl, if specified.', alias='baseUrl'
-    )
-    api_key: str | None = Field(
-        None, description='Overrides the plugin-configured API key, if specified.', alias='apiKey', exclude=True
-    )
-    context_cache: bool | None = Field(
-        None,
-        description=(
-            'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
-        ),
-        alias='contextCache',
-    )
+    stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
 
 
 class SpeechConfigSchema(BaseModel):
@@ -703,7 +732,7 @@ GENERIC_TTS_MODEL = ModelInfo(
         media=False,
         tools=False,
         tool_choice=False,
-        system_role=False,
+        system_role=True,
         constrained=Constrained.NO_TOOLS,
     ),
 )
@@ -711,13 +740,13 @@ GENERIC_TTS_MODEL = ModelInfo(
 GENERIC_IMAGE_MODEL = ModelInfo(
     label='Google AI - Gemini Image',
     supports=Supports(
-        multiturn=True,
+        multiturn=False,
         media=True,
-        tools=True,
-        tool_choice=True,
+        tools=False,
+        tool_choice=False,
         system_role=True,
         constrained=Constrained.NO_TOOLS,
-        output=['text'],
+        output=['media'],
     ),
 )
 
@@ -1107,7 +1136,12 @@ class GeminiModel:
             schema.required = cast(list[str], input_schema['required'])
 
         if 'type' in input_schema:
-            schema_type = genai_types.Type(cast(str, input_schema['type']))
+            raw_type = input_schema['type']
+            if isinstance(raw_type, list):
+                non_null = [t for t in raw_type if t != 'null']
+                schema.nullable = True
+                raw_type = non_null[0] if non_null else 'string'
+            schema_type = genai_types.Type(cast(str, raw_type))
             schema.type = schema_type
 
             if 'enum' in input_schema:
@@ -1195,7 +1229,7 @@ class GeminiModel:
 
         # TODO(#4361): Do not move - this method mutates `request` by extracting system
         # prompts into configuration object
-        request_cfg = self._genkit_to_googleai_cfg(request=request)
+        request_cfg = await self._genkit_to_googleai_cfg(request=request)
 
         # TTS models require response_modalities: ["AUDIO"]
         if is_tts_model(model_name):
@@ -1217,27 +1251,44 @@ class GeminiModel:
             request_cfg.cached_content = cached_content.name
 
         client = self._client
-        # If config specifies an api_version different from default (e.g. 'v1alpha'),
-        # Create a temporary client with that version, since api_version is a client-level setting.
+        # If config specifies api_key, base_url, or api_version different from default,
+        # create a temporary client with those settings.
         api_version = None
-        if request.config:
-            api_version = getattr(request.config, 'api_version', None)
-            if not api_version and isinstance(request.config, dict):
-                api_version = request.config.get('api_version')
+        api_key_override = None
+        base_url_override = None
 
-        if api_version:
+        if request.config:
+            if isinstance(request.config, dict):
+                api_version = request.config.get('api_version') or request.config.get('apiVersion')
+                api_key_override = request.config.get('api_key') or request.config.get('apiKey')
+                base_url_override = request.config.get('base_url') or request.config.get('baseUrl')
+            else:
+                api_version = getattr(request.config, 'api_version', None)
+                api_key_override = getattr(request.config, 'api_key', None)
+                base_url_override = getattr(request.config, 'base_url', None)
+
+        if api_version or api_key_override or base_url_override:
             # TODO(#4362): Request public API from google-genai maintainers.
             # Currently, there is no public way to access the configured api_key, project, or location
             # from an existing Client instance. We need to access the private _api_client to
-            # clone the configuration when overriding the api_version.
+            # clone the configuration when overriding these settings.
             # This is brittle and relies on internal implementation details of the google-genai library.
             # If the library changes its internal structure (e.g. renames _api_client or _credentials),
             # this code WILL BREAK.
             api_client = self._client._api_client
             kwargs: dict[str, Any] = {
                 'vertexai': api_client.vertexai,
-                'http_options': {'api_version': api_version},
             }
+
+            # Set http_options if we have api_version or base_url
+            http_options = {}
+            if api_version:
+                http_options['api_version'] = api_version
+            if base_url_override:
+                http_options['base_url'] = base_url_override
+            if http_options:
+                kwargs['http_options'] = http_options
+
             if api_client.vertexai:
                 # Vertex AI mode: requires project/location (api_key is optional/unlikely)
                 if api_client.project:
@@ -1249,14 +1300,24 @@ class GeminiModel:
                 # Don't pass api_key if we are in Vertex AI mode with credentials/project
             else:
                 # Google AI mode: primarily uses api_key
-                if api_client.api_key:
+                # Use override if provided, otherwise fall back to existing client's api_key
+                if api_key_override:
+                    kwargs['api_key'] = api_key_override
+                elif api_client.api_key:
                     kwargs['api_key'] = api_client.api_key
                 # Do NOT pass project/location/credentials if in Google AI mode to be safe
                 if api_client._credentials and not kwargs.get('api_key'):
                     # Fallback if no api_key but credentials present (unlikely for pure Google AI but possible)
                     kwargs['credentials'] = api_client._credentials
 
-            client = genai.Client(**kwargs)
+            try:
+                client = genai.Client(**kwargs)
+            except Exception as e:
+                # If client creation fails (e.g., invalid API key format), raise a clear error
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Failed to create Google AI client: {str(e)}',
+                ) from e
 
         if ctx.is_streaming:
             response = await self._streaming_generate(
@@ -1306,20 +1367,102 @@ class GeminiModel:
                 ),
             )
             client = client or self._client
-            response = await client.aio.models.generate_content(
-                model=model_name,
-                contents=cast(genai_types.ContentListUnion, request_contents),
-                config=request_cfg,
-            )
+            try:
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=cast(genai_types.ContentListUnion, request_contents),
+                    config=request_cfg,
+                )
+            except ClientError as e:
+                status: StatusName = 'INTERNAL'
+                if e.code == 400:
+                    status = 'INVALID_ARGUMENT'
+                elif e.code == 401:
+                    status = 'UNAUTHENTICATED'
+                elif e.code == 403:
+                    status = 'PERMISSION_DENIED'
+                elif e.code == 404:
+                    status = 'NOT_FOUND'
+                elif e.code == 429:
+                    status = 'RESOURCE_EXHAUSTED'
+
+                raise GenkitError(
+                    status=status,
+                    message=e.message or 'Unknown error',
+                    cause=e,
+                ) from e
+            except Exception as e:
+                # Catch any other exceptions and provide a clear error message
+                # This helps debug issues like authentication errors that might not be ClientError
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.error(f'Unexpected error during generate_content: {type(e).__name__}: {str(e)}')
+                raise GenkitError(
+                    status='INTERNAL',
+                    message=f'Unexpected error during generation: {type(e).__name__}: {str(e)}',
+                ) from e
             span.set_attribute('genkit:output', dump_json(response))
 
-        content = self._contents_from_response(response)
+        content = await self._contents_from_response(response)
+
+        # Ensure we always have at least one content item to avoid UI errors
+        if not content:
+            content = [Part(root=TextPart(text=''))]
+
+        finish_reason = FinishReason.OTHER
+        candidates = []
+        if response.candidates:
+            for i, c in enumerate(response.candidates):
+                c_content = []
+                if c.content and c.content.parts:
+                    for j, part in enumerate(c.content.parts):
+                        converted = PartConverter.from_gemini(part=part, ref=str(j))
+                        if converted:
+                            c_content.append(converted)
+
+                if not c_content:
+                    c_content = [Part(root=TextPart(text=''))]
+
+                c_finish_reason = FinishReason.OTHER
+                if c.finish_reason:
+                    fr_name = c.finish_reason.name
+                    if fr_name == 'STOP':
+                        c_finish_reason = FinishReason.STOP
+                    elif fr_name == 'MAX_TOKENS':
+                        c_finish_reason = FinishReason.LENGTH
+                    elif fr_name in ['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII']:
+                        c_finish_reason = FinishReason.BLOCKED
+                    elif fr_name == 'OTHER':
+                        c_finish_reason = FinishReason.OTHER
+
+                if i == 0:
+                    finish_reason = c_finish_reason
+
+                candidates.append(
+                    Candidate(
+                        index=float(i),
+                        message=Message(role=Role.MODEL, content=c_content),
+                        finish_reason=c_finish_reason,
+                    )
+                )
 
         return GenerateResponse(
             message=Message(
                 content=content,
                 role=Role.MODEL,
-            )
+            ),
+            finish_reason=finish_reason,
+            candidates=candidates,
+            usage=GenerationUsage(
+                input_tokens=float(response.usage_metadata.prompt_token_count or 0)
+                if response.usage_metadata
+                else None,
+                output_tokens=float(response.usage_metadata.candidates_token_count or 0)
+                if response.usage_metadata
+                else None,
+                total_tokens=float(response.usage_metadata.total_token_count or 0) if response.usage_metadata else None,
+            ),
         )
 
     async def _streaming_generate(
@@ -1352,21 +1495,41 @@ class GeminiModel:
                 }),
             )
             client = client or self._client
-            generator = client.aio.models.generate_content_stream(
-                model=model_name,
-                contents=cast(genai_types.ContentListUnion, request_contents),
-                config=request_cfg,
-            )
-        accumulated_content = []
-        async for response_chunk in await generator:
-            content = self._contents_from_response(response_chunk)
-            accumulated_content.append(*content)
-            ctx.send_chunk(
-                chunk=GenerateResponseChunk(
-                    content=content,
-                    role=Role.MODEL,
+            try:
+                generator = await client.aio.models.generate_content_stream(
+                    model=model_name,
+                    contents=cast(genai_types.ContentListUnion, request_contents),
+                    config=request_cfg,
                 )
-            )
+            except ClientError as e:
+                status: StatusName = 'INTERNAL'
+                if e.code == 400:
+                    status = 'INVALID_ARGUMENT'
+                elif e.code == 401:
+                    status = 'UNAUTHENTICATED'
+                elif e.code == 403:
+                    status = 'PERMISSION_DENIED'
+                elif e.code == 404:
+                    status = 'NOT_FOUND'
+                elif e.code == 429:
+                    status = 'RESOURCE_EXHAUSTED'
+
+                raise GenkitError(
+                    status=status,
+                    message=e.message or 'Unknown error',
+                    cause=e,
+                ) from e
+        accumulated_content = []
+        async for response_chunk in generator:
+            content = await self._contents_from_response(response_chunk)
+            if content:  # Only process if we have content
+                accumulated_content.extend(content)
+                ctx.send_chunk(
+                    chunk=GenerateResponseChunk(
+                        content=content,
+                        role=Role.MODEL,
+                    )
+                )
 
         return GenerateResponse(
             message=Message(
@@ -1382,9 +1545,14 @@ class GeminiModel:
         Returns:
             model metadata.
         """
-        supports = SUPPORTED_MODELS[self._version].supports.model_dump()
+        if self._version in SUPPORTED_MODELS:
+            supports = SUPPORTED_MODELS[self._version].supports.model_dump(by_alias=True, exclude_none=True)
+        else:
+            # Fallback to default supports for models not explicitly listed
+            supports = DEFAULT_SUPPORTS_MODEL.model_dump(by_alias=True, exclude_none=True)
         return {
             'model': {
+                'label': f'Google AI - {self._version}',
                 'supports': supports,
             }
         }
@@ -1409,7 +1577,7 @@ class GeminiModel:
                 continue
             content_parts: list[genai_types.Part] = []
             for p in msg.content:
-                converted = PartConverter.to_gemini(p)
+                converted = await PartConverter.to_gemini(p)
                 if isinstance(converted, list):
                     content_parts.extend(converted)
                 else:
@@ -1429,7 +1597,7 @@ class GeminiModel:
 
         return request_contents, cache
 
-    def _contents_from_response(self, response: genai_types.GenerateContentResponse) -> list:
+    async def _contents_from_response(self, response: genai_types.GenerateContentResponse) -> list:
         """Retrieve contents from google-genai response.
 
         Args:
@@ -1443,151 +1611,178 @@ class GeminiModel:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
                     for i, part in enumerate(candidate.content.parts):
-                        content.append(PartConverter.from_gemini(part=part, ref=str(i)))
+                        converted = PartConverter.from_gemini(part=part, ref=str(i))
+                        if converted:  # Only append if conversion succeeded
+                            content.append(converted)
 
-        return content
+        # Ensure we always return a list, even if empty
+        return content if content else []
 
-    def _genkit_to_googleai_cfg(self, request: GenerateRequest) -> genai_types.GenerateContentConfig | None:
-        """Translate GenerationCommonConfig to Google Ai GenerateContentConfig.
+    async def _genkit_to_googleai_cfg(self, request: GenerateRequest) -> genai_types.GenerateContentConfig | None:
+        """Converts a Genkit GenerateRequest to a Gemini GenerateContentConfig.
 
-        Args:
-            request: Genkit request.
-
-        Returns:
-            Google Ai request config or None.
+        The conversion follows a linear pipeline:
+        1. Extract system instructions from messages
+        2. Normalize request.config into a dict (regardless of input type)
+        3. Extract tool-related fields from the dict
+        4. Clean Genkit-specific / unsupported keys from the dict
+        5. Build the final GenerateContentConfig
         """
+        system_instruction: list[genai.types.Part] = []
+
+        # 1. System messages
+        system_messages = list(filter(lambda m: m.role == Role.SYSTEM, request.messages))
+        for m in system_messages:
+            if m.content:
+                for p in m.content:
+                    converted = await PartConverter.to_gemini(p)
+                    if isinstance(converted, list):
+                        system_instruction.extend(converted)
+                    else:
+                        system_instruction.append(converted)
+
         cfg = None
-        tools = []
+        tools: list[genai_types.Tool] = []
 
         if request.config:
-            request_config = request.config
-            if isinstance(request_config, GeminiConfigSchema):
-                cfg = request_config
-            elif isinstance(request_config, GenerationCommonConfig):
-                cfg = genai_types.GenerateContentConfig(
-                    max_output_tokens=request_config.max_output_tokens,
-                    top_k=request_config.top_k,
-                    top_p=request_config.top_p,
-                    temperature=request_config.temperature,
-                    stop_sequences=request_config.stop_sequences,
-                )
-            elif isinstance(request_config, dict):
-                if 'image_config' in request_config:
-                    cfg = GeminiImageConfigSchema(**request_config)
-                elif 'speech_config' in request_config:
-                    cfg = GeminiTtsConfigSchema(**request_config)
+            # 2. Normalize config into a dict
+            dumped_config = self._normalize_config_to_dict(request.config)
+
+            if dumped_config is not None:
+                # 3. Extract tool-related fields
+                self._extract_tools_from_config(dumped_config, tools)
+
+                # 4. Clean Genkit-specific and unsupported keys
+                self._clean_unsupported_keys(dumped_config)
+
+                # 5. Build GenerateContentConfig
+                if dumped_config:
+                    cfg = genai_types.GenerateContentConfig(**dumped_config)
                 else:
-                    cfg = GeminiConfigSchema(**request_config)
+                    cfg = None
 
-            if isinstance(cfg, GeminiConfigSchema):
-                if cfg.code_execution:
-                    tools.extend([genai_types.Tool(code_execution=genai_types.ToolCodeExecution())])
+        # Tools from top-level field and config-level fields
+        tools.extend(self._get_tools(request))
 
-                dumped_config = cfg.model_dump(exclude_none=True)
-
-                if 'code_execution' in dumped_config:
-                    dumped_config.pop('code_execution')
-
-                if 'safety_settings' in dumped_config:
-                    dumped_config['safety_settings'] = [
-                        s
-                        for s in dumped_config['safety_settings']
-                        if s['category'] != HarmCategory.HARM_CATEGORY_UNSPECIFIED
-                    ]
-
-                if 'google_search_retrieval' in dumped_config:
-                    val = dumped_config.pop('google_search_retrieval')
-                    if val is not None:
-                        val = {} if val is True else val
-                        tools.append(genai_types.Tool(google_search_retrieval=genai_types.GoogleSearchRetrieval(**val)))
-
-                if 'file_search' in dumped_config:
-                    val = dumped_config.pop('file_search')
-                    # File search requires a store name to be valid.
-                    if val and val.get('file_search_store_names'):
-                        # Filter out empty strings from store names
-                        valid_stores = [s for s in val['file_search_store_names'] if s]
-                        if valid_stores:
-                            val['file_search_store_names'] = valid_stores
-                            tools.append(genai_types.Tool(file_search=genai_types.FileSearch(**val)))
-
-                if 'url_context' in dumped_config:
-                    val = dumped_config.pop('url_context')
-                    if val is not None:
-                        val = {} if val is True else val
-                        tools.append(genai_types.Tool(url_context=genai_types.UrlContext(**val)))
-
-                # Map Function Calling Config to ToolConfig
-                if 'function_calling_config' in dumped_config:
-                    dumped_config['tool_config'] = genai_types.ToolConfig(
-                        function_calling_config=genai_types.FunctionCallingConfig(
-                            **dumped_config.pop('function_calling_config')
-                        )
-                    )
-
-                # Clean up fields not supported by GenerateContentConfig
-                for key in ['api_version', 'api_key', 'base_url', 'context_cache']:
-                    if key in dumped_config:
-                        del dumped_config[key]
-
-                if 'image_config' in dumped_config and isinstance(dumped_config['image_config'], dict):
-                    valid_image_keys = {
-                        'aspect_ratio',
-                        'image_size',
-                        'person_generation',
-                        'output_mime_type',
-                        'output_compression_quality',
-                    }
-                    dumped_config['image_config'] = {
-                        k: v for k, v in dumped_config['image_config'].items() if k in valid_image_keys
-                    }
-
-                # Check if image_config is actually supported by the installed SDK version
-                if (
-                    'image_config' in dumped_config
-                    and 'image_config' not in genai_types.GenerateContentConfig.model_fields
-                ):
-                    del dumped_config['image_config']
-
-                cfg = genai_types.GenerateContentConfig(**dumped_config)
-
-        if request.output:
-            if not cfg:
+        if cfg is not None or tools or system_instruction or request.output:
+            if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
-            response_mime_type = 'application/json' if request.output.format == 'json' and not request.tools else None
-            cfg.response_mime_type = response_mime_type
+            if request.output:
+                response_mime_type = (
+                    'application/json' if request.output.format == 'json' and not request.tools else None
+                )
+                cfg.response_mime_type = response_mime_type
 
-            if request.output.schema and request.output.constrained:
-                cfg.response_schema = self._convert_schema_property(request.output.schema)
+                if request.output.schema and request.output.constrained:
+                    cfg.response_schema = self._convert_schema_property(request.output.schema)
 
-        if request.tools:
-            if not cfg:
-                cfg = genai_types.GenerateContentConfig()
+            if tools:
+                cfg.tools = cast(genai_types.ToolListUnion, tools)
 
-            tools.extend(self._get_tools(request))
+            cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
+            return cfg
 
-        if tools:
-            if not cfg:
-                cfg = genai_types.GenerateContentConfig()
-            cfg.tools = tools
+        return None
 
-        system_messages = list(filter(lambda m: m.role == Role.SYSTEM, request.messages))
-        if system_messages:
-            system_parts = []
-            if not cfg:
-                cfg = genai.types.GenerateContentConfig()
+    # -- Config conversion helpers (called by _genkit_to_googleai_cfg) --
 
-            for msg in system_messages:
-                for p in msg.content:
-                    converted = PartConverter.to_gemini(p)
-                    if isinstance(converted, list):
-                        system_parts.extend(converted)
-                    else:
-                        system_parts.append(converted)
-            cfg.system_instruction = genai.types.Content(parts=system_parts)
+    # Keys that are Genkit-specific and must not be forwarded to the API.
+    # 'version' overrides the model name, others are client-level settings.
+    _GENKIT_ONLY_KEYS = frozenset(['version', 'api_version', 'api_key', 'base_url', 'context_cache'])
 
-        return cfg
+    # Keys that may not be supported by older google-genai SDK versions.
+    _SDK_GATED_KEYS = frozenset(['image_config', 'thinking_config', 'response_modalities'])
+
+    def _normalize_config_to_dict(
+        self,
+        config: GeminiConfigSchema | GenerationCommonConfig | dict,
+    ) -> dict[str, Any] | None:
+        """Normalize any config type into a plain dict for uniform processing.
+
+        Handles three input shapes:
+        - GeminiConfigSchema (and subclasses like TTS/Image): model_dump
+        - GenerationCommonConfig: model_dump
+        - dict: route to the appropriate schema first, then model_dump
+
+        Returns:
+            A mutable dict ready for tool extraction and key cleanup,
+            or None if the config is empty after dumping.
+        """
+        if isinstance(config, GeminiConfigSchema):
+            schema = config
+        elif isinstance(config, GenerationCommonConfig):
+            schema = config
+        elif isinstance(config, dict):
+            if 'image_config' in config:
+                schema = GeminiImageConfigSchema(**config)
+            elif 'speech_config' in config:
+                schema = GeminiTtsConfigSchema(**config)
+            else:
+                schema = GeminiConfigSchema(**config)
+        else:
+            return None
+
+        dumped = schema.model_dump(exclude_none=True)
+        return dumped or None
+
+    def _extract_tools_from_config(
+        self,
+        config: dict[str, Any],
+        tools: list[genai_types.Tool],
+    ) -> None:
+        """Extract tool-related fields from config dict into the tools list.
+
+        Mutates *config* by popping consumed keys and appends to *tools*.
+        """
+        # Code execution
+        if config.pop('code_execution', None):
+            tools.append(genai_types.Tool(code_execution=genai_types.ToolCodeExecution()))
+
+        # Safety settings — filter out unspecified categories
+        if 'safety_settings' in config:
+            config['safety_settings'] = [
+                s for s in config['safety_settings'] if s['category'] != HarmCategory.HARM_CATEGORY_UNSPECIFIED
+            ]
+
+        # Google Search
+        val = config.pop('google_search_retrieval', None)
+        if val is not None:
+            val = {} if val is True else val
+            tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**val)))
+
+        # File Search
+        val = config.pop('file_search', None)
+        if val and val.get('file_search_store_names'):
+            valid_stores = [s for s in val['file_search_store_names'] if s]
+            if valid_stores:
+                val['file_search_store_names'] = valid_stores
+                tools.append(genai_types.Tool(file_search=genai_types.FileSearch(**val)))
+
+        # URL Context
+        val = config.pop('url_context', None)
+        if val is not None:
+            val = {} if val is True else val
+            tools.append(genai_types.Tool(url_context=genai_types.UrlContext(**val)))
+
+        # Function Calling Config → ToolConfig
+        fcc = config.pop('function_calling_config', None)
+        if fcc:
+            config['tool_config'] = genai_types.ToolConfig(
+                function_calling_config=genai_types.FunctionCallingConfig(**fcc)
+            )
+
+    def _clean_unsupported_keys(self, config: dict[str, Any]) -> None:
+        """Remove Genkit-specific and SDK-gated keys from the config dict.
+
+        Mutates *config* in place.
+        """
+        for key in self._GENKIT_ONLY_KEYS:
+            config.pop(key, None)
+
+        for key in self._SDK_GATED_KEYS:
+            if key in config and key not in genai_types.GenerateContentConfig.model_fields:
+                del config[key]
 
     def _create_usage_stats(self, request: GenerateRequest, response: GenerateResponse) -> GenerationUsage:
         """Create usage statistics.

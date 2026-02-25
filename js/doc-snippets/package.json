@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@genkit-ai/express": "workspace:*",
-    "@genkit-ai/googleai": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "data-urls": "^5.0.0",
     "firebase-functions": "^6.3.1",

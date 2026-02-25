@@ -33,11 +33,12 @@ if ! command -v addlicense &>/dev/null; then
   go install github.com/google/addlicense@latest
 fi
 
-export PATH=$(go env GOPATH):$PATH
+GOPATH="$(go env GOPATH)"
+export PATH="${GOPATH}:${PATH}"
 
 # NOTE: If you edit the ignore patterns, make sure to update the ignore patterns
 # in the corresponding add_license script.
-$HOME/go/bin/addlicense \
+"$HOME"/go/bin/addlicense \
   -check \
   -c "Google LLC" \
   -s \
@@ -46,6 +47,7 @@ $HOME/go/bin/addlicense \
   -ignore '**/.eggs/**/*' \
   -ignore '**/.idea/**/*' \
   -ignore '**/.nox/**/*' \
+  -ignore '**/.tox/**/*' \
   -ignore '**/.mypy_cache/**/*' \
   -ignore '**/.next/**/*' \
   -ignore '**/.output/**/*' \
@@ -58,6 +60,8 @@ $HOME/go/bin/addlicense \
   -ignore '**/coverage/**/*' \
   -ignore '**/develop-eggs/**/*' \
   -ignore '**/dist/**/*' \
+  -ignore '**/lib/**/*' \
+  -ignore '**/next-env.d.ts' \
   -ignore '**/node_modules/**/*' \
   -ignore '**/pnpm-lock.yaml' \
   -ignore '.nx/**/*' \
@@ -65,6 +69,9 @@ $HOME/go/bin/addlicense \
   -ignore '**/*.toml' \
   -ignore '**/*.nix' \
   -ignore '**/*.yaml' \
+  -ignore '**/site/**/*' \
+  -ignore '**/generated/*_pb2.py' \
+  -ignore '**/generated/*_pb2_grpc.py' \
   "$TOP_DIR"
 
-uv run --directory "${PY_DIR}" liccheck
+uv run --active --directory "${PY_DIR}" liccheck

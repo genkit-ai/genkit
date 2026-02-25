@@ -1,0 +1,116 @@
+
+<h1 align="center">   Deploy Genkit to Google Cloud Compute Engine     </h1>
+A step-by-step guide to setting up a Google Cloud Platform VM, authenticating with GitHub, and running Genkit Python samples. This guide walks you through deploying Genkit on a Google Cloud Compute Engine instance to run the provider-google-genai-hello sample.
+
+## Create your VM Instance
+
+First, provision a virtual machine in the Google Cloud Console with the following specifications:
+
+```
+| Category      | Configuration                                      |
+|---------------|----------------------------------------------------|
+| Machine Name  | genkit                                             |
+| Region / Zone | us-central1 / us-central1-a                        |
+| Machine Type  | E2 (General Purpose)                               |
+| OS            | Debian GNU/Linux 12 (bookworm)                     |
+| Storage       | 30 GB Balanced Persistent Disk                     |
+| Firewall      | Allow HTTP, HTTPS, and Load Balancer health checks |
+```
+
+## Access the VM via SSH
+
+Open your Google Cloud Shell and connect to your new instance:
+
+```bash
+gcloud compute ssh genkit --zone us-central1-a
+```
+
+## Configure Git and GitHub Authentication
+<Steps>
+  
+  1. Install Git:
+     
+     ```bash
+     sudo apt update && sudo apt install git -y
+     ```
+     
+  2. Set your Identity:
+
+     ```bash
+     git config --global user.name "Your Name"
+     git config --global user.email "youremail@example.com"
+     ```
+     
+  3. Generate SSH Key:
+
+     ```bash
+     ssh-keygen -t ed25519 -C "youremail@example.com"
+     # Press Enter for all prompts (no passphrase)
+     ```
+  4. Add Key to SSH Agent:
+
+     ```bash
+     eval "$(ssh-agent -s)"
+     ssh-add ~/.ssh/id_ed25519
+     ```
+
+  5. Link to GitHub:
+
+     
+     Run `cat ~/.ssh/id_ed25519.pub` and copy the output. Go to <b>GitHub Settings > SSH and GPG keys > New SSH Key</b>, and paste your public key there.
+
+  6. Test Connection:
+
+     ```bash
+     ssh -T git@github.com
+     ```
+         
+</Steps>
+
+## Clone and Initialize Genkit
+Navigate to the Genkit repository and run the automated setup script for Python samples.
+
+```bash
+git clone git@github.com:firebase/genkit.git
+cd genkit/py/samples
+./setup.sh
+```
+
+  <b>During setup:</b>
+
+- Enter your <b>Gemini API Key</b> when prompted.
+
+- Enter your <b>GCP Project ID</b>.
+
+- You can skip other optional prompts.
+
+## Run the Sample
+Follow these steps to launch the Google GenAI hello provider sample:
+
+```bash
+# 1. Load your environment variables
+source ~/.environment
+
+# 2. Navigate to the specific sample
+cd provider-google-genai-hello
+
+# 3. Start the sample
+./run.sh
+```
+
+## Access the Developer UI
+To view the Genkit Developer UI from your local browser, use SSH port forwarding. This is more secure than opening a firewall port.
+
+1.  Disconnect from your current SSH session if you are still connected.
+2.  From your **local machine's terminal**, run the following command to connect to your VM and forward the port:
+
+    ```bash
+    gcloud compute ssh genkit --zone us-central1-a -- -L 4000:localhost:4000
+    ```
+
+3.  Keep this terminal window open. The SSH connection must remain active for port forwarding to work.
+4.  Now, open your local web browser and navigate to:
+
+    `http://localhost:4000`
+
+You should see the Genkit Developer UI.

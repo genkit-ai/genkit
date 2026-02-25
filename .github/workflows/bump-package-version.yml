@@ -71,7 +71,11 @@ jobs:
 
       - name: Bump and Tag
         run: |
-          js/scripts/bump_and_tag.sh ${{ inputs.packageDir }} ${{ inputs.packageName }} ${{ inputs.releaseType }} ${{ inputs.preid }}
+          js/scripts/bump_and_tag.sh ${INPUTS_PACKAGEDIR} ${INPUTS_PACKAGENAME} ${{ inputs.releaseType }} ${INPUTS_PREID}
+        env:
+          INPUTS_PACKAGEDIR: ${{ inputs.packageDir }}
+          INPUTS_PACKAGENAME: ${{ inputs.packageName }}
+          INPUTS_PREID: ${{ inputs.preid }}
 
       - name: Push
         shell: bash

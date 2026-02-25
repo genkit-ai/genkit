@@ -51,7 +51,7 @@ def main():
         Server(
             config=ServerConfig(name='admin', ports=[8001]),
             lifecycle=YourLifecycleClass(app=app2),
-            adapter=ASGIServerAdapter.create(ServerType.GRANIAN),
+            adapter=ASGIServerAdapter.create(ServerType.UVICORN),
         )
     )
 
@@ -115,8 +115,7 @@ class ServerManager:
 
     The manager uses the adapter pattern to abstract away the differences
     between various ASGI server implementations like
-    [uvicorn](https://www.uvicorn.org/) or
-    [granian](https://github.com/emmett-framework/granian). This pattern allows
+    [uvicorn](https://www.uvicorn.org/). This pattern allows
     ServersManager to operate independently of the specific server
     implementation being used, improving modularity and maintainability.
 

@@ -149,6 +149,8 @@ class GenerateResponseWrapper(GenerateResponse, Generic[OutputT]):
 
     # _message_parser is a private attribute that Pydantic will ignore
     _message_parser: Callable[[MessageWrapper], object] | None = PrivateAttr(None)
+    # _schema_type stores the Pydantic class for runtime validation
+    _schema_type: type[BaseModel] | None = PrivateAttr(None)
     # Override the parent's message field with our wrapper type (intentional Liskov violation)
     # pyrefly: ignore[bad-override] - Intentional covariant override for wrapper functionality
     message: MessageWrapper | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -158,6 +160,7 @@ class GenerateResponseWrapper(GenerateResponse, Generic[OutputT]):
         response: GenerateResponse,
         request: GenerateRequest,
         message_parser: Callable[[MessageWrapper], object] | None = None,
+        schema_type: type[BaseModel] | None = None,
     ) -> None:
         """Initializes a GenerateResponseWrapper instance.
 
@@ -165,6 +168,7 @@ class GenerateResponseWrapper(GenerateResponse, Generic[OutputT]):
             response: The original GenerateResponse object.
             request: The GenerateRequest object associated with the response.
             message_parser: An optional function to parse the output from the message.
+            schema_type: Optional Pydantic model class for runtime validation.
         """
         # Wrap the message if it's not already a MessageWrapper
         wrapped_message: MessageWrapper | None = None
@@ -186,8 +190,9 @@ class GenerateResponseWrapper(GenerateResponse, Generic[OutputT]):
             candidates=response.candidates,
             operation=response.operation,
         )
-        # Set subclass-specific field after parent initialization
+        # Set subclass-specific fields after parent initialization
         self._message_parser = message_parser
+        self._schema_type = schema_type
 
     def assert_valid(self) -> None:
         """Validates the basic structure of the response.
@@ -227,13 +232,24 @@ class GenerateResponseWrapper(GenerateResponse, Generic[OutputT]):
         """Parses out JSON data from the text parts of the response.
 
         When used with `Output[T]`, returns the parsed output typed as `T`.
+        If a schema_type was provided and the parsed output is a dict,
+        validates and returns a proper Pydantic model instance.
 
         Returns:
             The parsed JSON data from the response, typed according to the schema.
         """
         if self._message_parser and self.message is not None:
-            return cast(OutputT, self._message_parser(self.message))
-        return cast(OutputT, extract_json(self.text))
+            parsed = self._message_parser(self.message)
+        else:
+            parsed = extract_json(self.text)
+
+        # If we have a schema type and the parsed output is a dict, validate and
+        # return a proper Pydantic instance. Skip if parsed is already the correct
+        # type or if it's not a dict (e.g., custom formats may return strings).
+        if self._schema_type is not None and parsed is not None and isinstance(parsed, dict):
+            return cast(OutputT, self._schema_type.model_validate(parsed))
+
+        return cast(OutputT, parsed)
 
     @cached_property
     def messages(self) -> list[Message]:
@@ -523,9 +539,6 @@ def model_ref(
         A ModelReference instance.
     """
     # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
-    if namespace and not name.startswith(f'{namespace}/'):
-        final_name = f'{namespace}/{name}'
-    else:
-        final_name = name
+    final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
 
     return ModelReference(name=final_name, info=info, version=version, config=config)

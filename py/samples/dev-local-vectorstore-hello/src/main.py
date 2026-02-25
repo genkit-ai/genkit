@@ -21,6 +21,66 @@ This sample demonstrates Genkit's local vector store for development,
 which allows testing RAG (Retrieval Augmented Generation) without
 setting up external vector databases.
 
+Key Concepts (ELI5)::
+
+    ┌─────────────────────┬────────────────────────────────────────────────────┐
+    │ Concept             │ ELI5 Explanation                                   │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ RAG                 │ Retrieval-Augmented Generation. AI looks up        │
+    │                     │ your docs before answering. Fewer hallucinations!  │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Vector Store        │ A database that finds "similar" items by meaning.  │
+    │                     │ "Happy" finds docs about "joyful" too.             │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Local Store         │ Runs on your computer, no cloud needed. Perfect    │
+    │                     │ for testing before deploying to production.        │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Indexing            │ Adding documents to the store. Like a librarian    │
+    │                     │ cataloging new books.                              │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Retrieval           │ Finding documents that match a query. "Show me     │
+    │                     │ docs about sci-fi films" returns matching results. │
+    └─────────────────────┴────────────────────────────────────────────────────┘
+
+Data Flow (RAG Pipeline)::
+
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │               HOW RAG FINDS ANSWERS FROM YOUR DOCUMENTS                 │
+    │                                                                         │
+    │    STEP 1: INDEX (one-time setup)                                       │
+    │    ──────────────────────────────                                       │
+    │    Your Documents: ["The Godfather...", "The Matrix...", ...]           │
+    │         │                                                               │
+    │         │  (1) Convert each doc to numbers (embeddings)                 │
+    │         ▼                                                               │
+    │    ┌─────────────────┐                                                  │
+    │    │  Embedder       │   "sci-fi film" → [0.2, -0.5, 0.8, ...]          │
+    │    └────────┬────────┘                                                  │
+    │             │                                                           │
+    │             │  (2) Store in local vector store                          │
+    │             ▼                                                           │
+    │    ┌─────────────────┐                                                  │
+    │    │  Local Store    │   All docs + embeddings saved locally            │
+    │    └─────────────────┘                                                  │
+    │                                                                         │
+    │    STEP 2: RETRIEVE (at query time)                                     │
+    │    ────────────────────────────────                                     │
+    │    Query: "What's a good sci-fi movie?"                                 │
+    │         │                                                               │
+    │         │  (3) Convert query to embedding                               │
+    │         ▼                                                               │
+    │    ┌─────────────────┐                                                  │
+    │    │  Embedder       │   Query → [0.21, -0.48, 0.79, ...] (similar!)    │
+    │    └────────┬────────┘                                                  │
+    │             │                                                           │
+    │             │  (4) Find nearest matches                                 │
+    │             ▼                                                           │
+    │    ┌─────────────────┐                                                  │
+    │    │  Local Store    │   "The Matrix" (0.95 match)                      │
+    │    │                 │   "Inception" (0.89 match)                       │
+    │    └─────────────────┘                                                  │
+    └─────────────────────────────────────────────────────────────────────────┘
+
 Key Features
 ============
 | Feature Description                     | Example Function / Code Snippet     |
@@ -33,16 +93,16 @@ Key Features
 See README.md for testing instructions.
 """
 
+import asyncio
 import os
-
-from rich.traceback import install as install_rich_traceback
 
 from genkit.ai import Genkit
 from genkit.plugins.dev_local_vectorstore import define_dev_local_vector_store
 from genkit.plugins.google_genai import VertexAI
 from genkit.types import Document, RetrieverResponse
+from samples.shared.logging import setup_sample
 
-install_rich_traceback(show_locals=True, width=120, extra_lines=3)
+setup_sample()
 
 if 'GCLOUD_PROJECT' not in os.environ:
     os.environ['GCLOUD_PROJECT'] = input('Please enter your GCLOUD_PROJECT: ')
@@ -56,7 +116,7 @@ ai = Genkit(
 define_dev_local_vector_store(
     ai,
     name='films',
-    embedder='vertexai/text-embedding-004',
+    embedder='vertexai/gemini-embedding-001',
 )
 
 films = [
@@ -82,11 +142,9 @@ async def index_documents() -> None:
         documents=genkit_documents,
     )
 
-    print('10 film documents indexed successfully')
-
 
 @ai.flow()
-async def retreive_documents() -> RetrieverResponse:
+async def retrieve_documents() -> RetrieverResponse:
     """Retrieve documents from the vector store."""
     return await ai.retrieve(
         query=Document.from_text('sci-fi film'),
@@ -97,9 +155,6 @@ async def retreive_documents() -> RetrieverResponse:
 
 async def main() -> None:
     """Main entry point for the sample - keep alive for Dev UI."""
-    import asyncio
-
-    print('Genkit server running. Press Ctrl+C to stop.')
     # Keep the process alive for Dev UI
     await asyncio.Event().wait()
 

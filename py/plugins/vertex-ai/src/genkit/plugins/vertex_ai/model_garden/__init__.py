@@ -20,4 +20,4 @@
 from .model_garden import model_garden_name
 from .modelgarden_plugin import ModelGardenPlugin
 
-__all__ = ['model_garden_name', 'ModelGardenPlugin']
+__all__ = ['ModelGardenPlugin', 'model_garden_name']

@@ -69,9 +69,6 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		if gOpts.PromptDir != "" {
 			return errors.New("cannot set prompt directory more than once (WithPromptDir)")
 		}
-		if gOpts.PromptFS != nil {
-			return errors.New("cannot use WithPromptDir together with WithPromptFS")
-		}
 		gOpts.PromptDir = o.PromptDir
 	}
 
@@ -79,11 +76,7 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		if gOpts.PromptFS != nil {
 			return errors.New("cannot set prompt filesystem more than once (WithPromptFS)")
 		}
-		if gOpts.PromptDir != "" {
-			return errors.New("cannot use WithPromptFS together with WithPromptDir")
-		}
 		gOpts.PromptFS = o.PromptFS
-		gOpts.PromptDir = o.PromptDir
 	}
 
 	if len(o.Plugins) > 0 {

@@ -192,7 +192,7 @@ class TestEchoModel:
     @pytest.mark.asyncio
     async def test_define_echo_model(self, ai: Genkit) -> None:
         """Test define_echo_model helper function."""
-        echo, action = define_echo_model(ai, name='testEcho')
+        echo, _action = define_echo_model(ai, name='testEcho')
 
         response = await ai.generate(model='testEcho', prompt='Hello')
 
@@ -373,7 +373,7 @@ class TestProgrammableModel:
     @pytest.mark.asyncio
     async def test_define_programmable_model(self, ai: Genkit) -> None:
         """Test define_programmable_model helper function."""
-        pm, action = define_programmable_model(ai, name='testPM')
+        pm, _action = define_programmable_model(ai, name='testPM')
         pm.responses = [
             GenerateResponse(
                 message=Message(
@@ -444,7 +444,7 @@ class TestStaticResponseModel:
     @pytest.mark.asyncio
     async def test_define_static_response_model(self, ai: Genkit) -> None:
         """Test define_static_response_model helper function."""
-        static, action = define_static_response_model(
+        static, _action = define_static_response_model(
             ai,
             message={
                 'role': 'model',

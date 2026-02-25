@@ -237,18 +237,16 @@ describe('dynamic action provider', () => {
       };
     });
 
-    let runInput: any;
+    let runResult: any;
     const originalRun = dap.run.bind(dap);
     dap.run = async (input, options) => {
-      runInput = input;
-      return originalRun(input, options);
+      runResult = await originalRun(input, options);
+      return runResult;
     };
 
     await dap.__cache.getOrFetch();
 
-    assert.deepStrictEqual(runInput, {
-      tool: [tool1.__action, tool2.__action],
-    });
+    assert.deepStrictEqual(runResult.result, [tool1.__action, tool2.__action]);
   });
 
   it('skips trace when requested', async () => {

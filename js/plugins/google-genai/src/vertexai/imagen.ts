@@ -252,14 +252,11 @@ export const KNOWN_MODELS = {
   'imagen-3.0-generate-001': commonRef('imagen-3.0-generate-001'),
   'imagen-3.0-capability-001': commonRef('imagen-3.0-capability-001'),
   'imagen-3.0-fast-generate-001': commonRef('imagen-3.0-fast-generate-001'),
-  'imagen-4.0-generate-preview-06-06': commonRef(
-    'imagen-4.0-generate-preview-06-06'
-  ),
-  'imagen-4.0-ultra-generate-preview-06-06': commonRef(
-    'imagen-4.0-ultra-generate-preview-06-06'
-  ),
-  'virtual-try-on-preview-08-04': commonRef(
-    'virtual-try-on-preview-08-04',
+  'imagen-4.0-fast-generate-001': commonRef('imagen-4.0-fast-generate-001'),
+  'imagen-4.0-generate-001': commonRef('imagen-4.0-generate-001'),
+  'imagen-4.0-ultra-generate-001': commonRef('imagen-4.0-ultra-generate-001'),
+  'virtual-try-on-001': commonRef(
+    'virtual-try-on-001',
     {
       supports: {
         media: true,

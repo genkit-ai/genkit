@@ -311,3 +311,42 @@ async def test_async_action_raises_errors() -> None:
     assert 'stack' in e.value.details
     assert 'trace_id' in e.value.details
     assert str(e.value.cause) == 'oops'
+
+
+@pytest.mark.asyncio
+async def test_arun_raw_raises_on_none_input_when_input_required() -> None:
+    """arun_raw raises GenkitError when input is None but the action requires it."""
+
+    async def typed_fn(input: str) -> str:
+        return f'got {input}'
+
+    action = Action(name='typedAction', kind=ActionKind.CUSTOM, fn=typed_fn)
+
+    with pytest.raises(GenkitError, match=r'.*requires input but none was provided.*'):
+        await action.arun_raw(raw_input=None)
+
+
+@pytest.mark.asyncio
+async def test_arun_raw_succeeds_with_valid_input() -> None:
+    """arun_raw succeeds when valid input is provided."""
+
+    async def typed_fn(input: str) -> str:
+        return f'got {input}'
+
+    action = Action(name='typedAction', kind=ActionKind.CUSTOM, fn=typed_fn)
+
+    result = await action.arun_raw(raw_input='hello')
+    assert result.response == 'got hello'
+
+
+@pytest.mark.asyncio
+async def test_arun_raw_no_input_type_allows_none() -> None:
+    """arun_raw allows None input when action has no input type."""
+
+    async def no_input_fn() -> str:
+        return 'no input needed'
+
+    action = Action(name='noInputAction', kind=ActionKind.CUSTOM, fn=no_input_fn)
+
+    result = await action.arun_raw(raw_input=None)
+    assert result.response == 'no input needed'

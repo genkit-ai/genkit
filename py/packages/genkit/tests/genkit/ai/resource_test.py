@@ -28,6 +28,8 @@ import pytest
 from genkit.blocks.resource import (
     ResourceInput,
     define_resource,
+    find_matching_resource,
+    is_dynamic_resource_action,
     resolve_resources,
     resource,
 )
@@ -121,9 +123,6 @@ async def test_find_matching_resource() -> None:
     dynamic_res = resource({'uri': 'baz://qux'}, dynamic_fn)
 
     # Match static from registry
-    from genkit.blocks.resource import find_matching_resource
-
-    # Match static from registry
     res = await find_matching_resource(registry, [], ResourceInput(uri='bar://baz'))
     assert res == static_res
 
@@ -147,7 +146,6 @@ def test_is_dynamic_resource_action() -> None:
     - Unregistered resources created with `resource()` are dynamic.
     - Registered resources created with `define_resource()` are not dynamic.
     """
-    from genkit.blocks.resource import is_dynamic_resource_action
 
     async def fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
         return {'content': []}

@@ -62,7 +62,7 @@ export const pdfChatRetrieverFirebase = defineFirestoreRetriever(ai, {
   collection: 'pdf-qa',
   contentField: 'facts',
   vectorField: 'embedding',
-  embedder: googleAI.embedder('text-embedding-004'),
+  embedder: googleAI.embedder('gemini-embedding-001'),
   //distanceMeasure: 'COSINE', // optional
   //distanceResultField: 'vector_distance', // optional
   //distanceThreshold: 0.8,  // optional

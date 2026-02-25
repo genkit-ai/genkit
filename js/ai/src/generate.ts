@@ -66,6 +66,7 @@ import {
 } from './resource.js';
 import {
   isDynamicTool,
+  isMultipartTool,
   resolveTools,
   toToolDefinition,
   type ToolArgument,
@@ -463,7 +464,11 @@ function maybeRegisterDynamicTools<
         // generate request.
         registry = Registry.withParent(registry);
       }
-      registry.registerAction('tool', t as Action);
+      if (isMultipartTool(t)) {
+        registry.registerAction('tool.v2', t);
+      } else {
+        registry.registerAction('tool', t as Action);
+      }
     }
   });
   return registry;

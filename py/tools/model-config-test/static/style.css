@@ -1,0 +1,397 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:root {
+    /* Safari-style Light Theme */
+    --bg-app: #F5F5F7;
+    /* Light gray background */
+    --bg-header: rgba(255, 255, 255, 0.72);
+    /* Glassy white */
+    --bg-card: #FFFFFF;
+    /* Pure white cards */
+    --bg-input: #E8E8ED;
+    /* Light gray inputs */
+
+    --text-primary: #1D1D1F;
+    /* Almost black */
+    --text-secondary: #86868B;
+    /* Gray text */
+
+    --accent: #0071E3;
+    /* Apple Blue */
+    --accent-hover: #0077ED;
+
+    --border: rgba(0, 0, 0, 0.1);
+    /* Subtle border */
+    --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.04);
+
+    --radius-card: 18px;
+    --radius-input: 10px;
+    --radius-btn: 10px;
+
+    --success: #34C759;
+    --error: #FF3B30;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* Header / Top Bar */
+.top-bar {
+    height: 60px;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: var(--bg-header);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.logo-icon {
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(135deg, var(--accent), #42a1ff);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    color: white;
+    box-shadow: 0 2px 8px rgba(0, 113, 227, 0.3);
+}
+
+.brand h1 {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+#current-scenario-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.badge {
+    background-color: rgba(0, 0, 0, 0.05);
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+/* Main Layout */
+.main-content {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.content-grid {
+    display: grid;
+    grid-template-columns: 480px 1fr;
+    /* Fixed sidebar width */
+    gap: 24px;
+    padding: 24px;
+    height: 100%;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+/* Panels */
+.config-panel {
+    overflow-y: auto;
+    padding-bottom: 24px;
+}
+
+.results-panel {
+    background-color: var(--bg-card);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    height: 100%;
+    border: 1px solid var(--border);
+}
+
+/* Cards */
+.card {
+    background-color: var(--bg-card);
+    border-radius: var(--radius-card);
+    padding: 24px;
+    box-shadow: var(--shadow-card);
+    border: 1px solid var(--border);
+    margin-bottom: 24px;
+}
+
+.card h3,
+.results-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 16px;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+select,
+textarea,
+input {
+    width: 100%;
+    background-color: var(--bg-input);
+    border: 1px solid transparent;
+    color: var(--text-primary);
+    padding: 10px 12px;
+    border-radius: var(--radius-input);
+    font-family: inherit;
+    font-size: 15px;
+    transition: all 0.2s ease;
+    outline: none;
+}
+
+select:hover,
+textarea:hover,
+input:hover {
+    background-color: #E0E0E5;
+}
+
+select:focus,
+textarea:focus,
+input:focus {
+    background-color: #FFFFFF;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
+}
+
+textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+/* Custom Select Arrow */
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2386868B' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px;
+    padding-right: 40px;
+}
+
+/* Buttons */
+.btn-primary {
+    width: 100%;
+    background-color: var(--accent);
+    color: white;
+    border: none;
+    padding: 12px;
+    border-radius: var(--radius-btn);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 113, 227, 0.2);
+    margin-top: 8px;
+}
+
+.btn-primary:hover {
+    background-color: var(--accent-hover);
+    transform: scale(1.01);
+}
+
+.btn-primary:active {
+    transform: scale(0.99);
+}
+
+.btn-secondary {
+    width: 100%;
+    background-color: rgba(0, 113, 227, 0.08);
+    /* Hint of blue */
+    color: var(--accent);
+    border: none;
+    padding: 12px;
+    border-radius: var(--radius-btn);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-top: 12px;
+}
+
+.btn-secondary:hover {
+    background-color: rgba(0, 113, 227, 0.15);
+}
+
+/* Results Panel Styling */
+.results-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(10px);
+}
+
+.results-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* Result Cards - Cleaner Look */
+.result-card {
+    background-color: white;
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+    transition: transform 0.2s;
+}
+
+.result-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.model-name {
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--text-primary);
+}
+
+/* Status Badges */
+.status {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status.success {
+    background-color: rgba(52, 199, 89, 0.1);
+    color: var(--success);
+}
+
+.status.failure {
+    background-color: rgba(255, 59, 48, 0.1);
+    color: var(--error);
+}
+
+/* Output Text */
+.output-text {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 13px;
+    background-color: #F5F5F7;
+    padding: 16px;
+    border-radius: 10px;
+    color: #424245;
+    white-space: pre-wrap;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.error-text {
+    color: var(--error);
+    background-color: rgba(255, 59, 48, 0.05);
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    color: var(--text-secondary);
+    margin-top: 60px;
+    font-size: 16px;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #D1D1D6;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #8E8E93;
+}

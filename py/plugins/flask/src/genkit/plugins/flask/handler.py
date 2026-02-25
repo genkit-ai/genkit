@@ -17,8 +17,8 @@
 """Genkit Flask plugin."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Iterable
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from typing import Any, TypeAlias
 
 from flask import Response, request
 from genkit.ai import FlowWrapper, Genkit
@@ -26,6 +26,9 @@ from genkit.aio.loop import create_loop, iter_over_async
 from genkit.codec import dump_dict, dump_json
 from genkit.core.context import ContextProvider, RequestData
 from genkit.core.error import GenkitError, get_callable_json
+
+# Type alias for Flask-compatible route handler return type
+FlaskRouteReturn: TypeAlias = Response | dict[str, object] | Iterable[Any]
 
 
 class _FlaskRequestData(RequestData):
@@ -44,7 +47,7 @@ class _FlaskRequestData(RequestData):
 def genkit_flask_handler(
     ai: Genkit,
     context_provider: ContextProvider | None = None,
-) -> Callable[[FlowWrapper], Callable[..., object]]:
+) -> Callable[[FlowWrapper], Callable[..., Awaitable[FlaskRouteReturn]]]:
     """A decorator for serving Genkit flows via a flask sever.
 
     ```python
@@ -66,11 +69,11 @@ def genkit_flask_handler(
     """
     loop = create_loop()
 
-    def decorator(flow: FlowWrapper) -> Callable[..., object]:
+    def decorator(flow: FlowWrapper) -> Callable[..., Awaitable[FlaskRouteReturn]]:
         if not isinstance(flow, FlowWrapper):
             raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
 
-        async def handler() -> Response | dict[str, object] | AsyncIterator[str] | Iterable[Any]:
+        async def handler() -> FlaskRouteReturn:
             input_data = request.get_json()
             if 'data' not in input_data:
                 return Response(status=400, response='flow request must be wrapped in {"data": data} object')

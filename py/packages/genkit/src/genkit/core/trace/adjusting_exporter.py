@@ -182,6 +182,39 @@ class RedactedSpan(ReadableSpan):
         """Return the instrumentation scope."""
         return self._span.instrumentation_scope
 
+    @property
+    @override
+    def dropped_attributes(self) -> int:
+        """Return the number of dropped attributes from the wrapped span.
+
+        The base ReadableSpan implementation accesses ``self._attributes``
+        which is set by ``ReadableSpan.__init__``.  Since RedactedSpan
+        intentionally skips ``super().__init__()`` (to avoid duplicating
+        span state), the private ``_attributes`` field does not exist.
+        This override delegates to the wrapped span instead.
+        """
+        return self._span.dropped_attributes
+
+    @property
+    @override
+    def dropped_events(self) -> int:
+        """Return the number of dropped events from the wrapped span.
+
+        Delegates to the wrapped span for the same reason as
+        :pyattr:`dropped_attributes`.
+        """
+        return self._span.dropped_events
+
+    @property
+    @override
+    def dropped_links(self) -> int:
+        """Return the number of dropped links from the wrapped span.
+
+        Delegates to the wrapped span for the same reason as
+        :pyattr:`dropped_attributes`.
+        """
+        return self._span.dropped_links
+
 
 class AdjustingTraceExporter(SpanExporter):
     """Adjusts spans before exporting for PII redaction and enhancement.

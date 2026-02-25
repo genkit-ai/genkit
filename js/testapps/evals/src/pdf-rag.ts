@@ -18,7 +18,7 @@ import {
   devLocalIndexerRef,
   devLocalRetrieverRef,
 } from '@genkit-ai/dev-local-vectorstore';
-import googleAI from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { EvalStatusEnum, type BaseEvalDataPoint } from 'genkit/evaluator';
 import { Document } from 'genkit/retriever';

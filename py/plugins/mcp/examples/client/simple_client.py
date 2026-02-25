@@ -25,7 +25,7 @@ from genkit.plugins.mcp import McpServerConfig, create_mcp_client
 try:
     from genkit.plugins.google_genai import GoogleAI
 except ImportError:
-    GoogleAI = None  # type: ignore
+    GoogleAI = None  # type: ignore[assignment] - optional dependency
 
 
 # Simple client example connecting to 'everything' server using npx
@@ -44,11 +44,11 @@ async def main() -> None:
 
     await everything_client.connect()
 
-    print('Connected! Listing tools...')
+    print('Connected! Listing tools...')  # noqa: T201 - example script
 
     tools = await everything_client.list_tools()
     for t in tools:
-        print(f'- {t.name}: {t.description}')
+        print(f'- {t.name}: {t.description}')  # noqa: T201 - example script
 
     await everything_client.close()
 

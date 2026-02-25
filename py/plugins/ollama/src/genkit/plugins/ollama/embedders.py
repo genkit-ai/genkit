@@ -21,6 +21,7 @@ from collections.abc import Callable
 
 from pydantic import BaseModel
 
+import ollama as ollama_api
 from genkit.blocks.embedding import EmbedRequest, EmbedResponse
 from genkit.types import Embedding
 
@@ -53,16 +54,28 @@ class OllamaEmbedder:
     ) -> None:
         """Initializes the OllamaEmbedder.
 
-        Sets up the client for communicating with the Ollama server and stores
+        Sets up the client factory for communicating with the Ollama server and stores
         the definition of the embedding model.
+
+        Note: We store the client factory (not the client instance) to avoid async
+        event loop binding issues. The client is created fresh per request to ensure
+        it's bound to the correct event loop.
 
         Args:
             client: A callable that returns an asynchronous Ollama client instance.
             embedding_definition: The definition describing the specific Ollama
                 embedding model to be used.
         """
-        self.client = client()
+        self._client_factory = client
         self.embedding_definition = embedding_definition
+
+    def _get_client(self) -> 'ollama_api.AsyncClient':
+        """Creates a fresh async client bound to the current event loop.
+
+        Returns:
+            A fresh Ollama async client instance.
+        """
+        return self._client_factory()
 
     async def embed(self, request: EmbedRequest) -> EmbedResponse:
         """Generates embeddings for the provided input text.
@@ -77,11 +90,11 @@ class OllamaEmbedder:
         Returns:
             An EmbedResponse containing the generated vector embeddings.
         """
-        input_raw = []
+        input_raw: list[str] = []
         for doc in request.input:
-            input_raw.extend([content.root.text for content in doc.content])
-        response = await self.client.embed(
+            input_raw.extend([str(content.root.text) for content in doc.content if content.root.text is not None])
+        response = await self._get_client().embed(
             model=self.embedding_definition.name,
             input=input_raw,
         )
-        return EmbedResponse(embeddings=[Embedding(embedding=embedding) for embedding in response.embeddings])
+        return EmbedResponse(embeddings=[Embedding(embedding=list(embedding)) for embedding in response.embeddings])

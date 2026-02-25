@@ -21,12 +21,13 @@ Tests tools, prompts, and resources exposed via MCP server.
 """
 
 import os
+import pathlib
 import sys
 import unittest
 from typing import Any, cast
 
-sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+sys.path.insert(0, str(pathlib.Path(os.path.join(pathlib.Path(__file__).parent, '../src')).resolve()))
 
 
 import pytest
@@ -48,7 +49,9 @@ from mcp.types import (
 )
 
 from genkit.ai import Genkit
+from genkit.blocks.resource import matches_uri_template
 from genkit.core.action.types import ActionKind
+from genkit.core.error import GenkitError
 from genkit.plugins.mcp import McpServerOptions, create_mcp_server
 
 
@@ -230,8 +233,6 @@ class TestMcpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_tool_not_found(self) -> None:
         """Test calling a non-existent tool."""
-        from genkit.core.error import GenkitError
-
         request = CallToolRequest(
             method='tools/call',
             params=CallToolRequestParams(name='nonexistent_tool', arguments={}),
@@ -244,8 +245,6 @@ class TestMcpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_prompt_not_found(self) -> None:
         """Test getting a non-existent prompt."""
-        from genkit.core.error import GenkitError
-
         request = GetPromptRequest(
             method='prompts/get',
             params=GetPromptRequestParams(name='nonexistent_prompt', arguments={}),
@@ -258,8 +257,6 @@ class TestMcpServer(unittest.IsolatedAsyncioTestCase):
 
     async def test_resource_not_found(self) -> None:
         """Test reading a non-existent resource."""
-        from genkit.core.error import GenkitError
-
         request = ReadResourceRequest(
             method='resources/read',
             params=ReadResourceRequestParams(uri=AnyUrl('nonexistent://resource')),
@@ -318,8 +315,6 @@ class TestResourceFunctionality(unittest.IsolatedAsyncioTestCase):
 
     async def test_uri_template_matching(self) -> None:
         """Test URI template matching."""
-        from genkit.blocks.resource import matches_uri_template
-
         # Test exact match
         result = matches_uri_template('file://{+path}', 'file:///home/user/doc.txt')
         assert result is not None

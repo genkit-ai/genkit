@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { defineMcpHost } from '@genkit-ai/mcp';
 import { genkit, z } from 'genkit';
 import { logger } from 'genkit/logging';

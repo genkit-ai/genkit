@@ -102,7 +102,15 @@ func InferJSONSchema(x any) (s *jsonschema.Schema) {
 			}
 			if baseType.Kind() == reflect.Struct {
 				if seen[baseType] {
+					// check if the type implements json.Marshaler since it might serialize to a non-object
+					marshalerType := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+					if baseType.Implements(marshalerType) || reflect.PointerTo(baseType).Implements(marshalerType) {
+						return &jsonschema.Schema{
+							AdditionalProperties: jsonschema.TrueSchema,
+						}
+					}
 					return &jsonschema.Schema{
+						Type:                 "object",
 						AdditionalProperties: jsonschema.TrueSchema,
 					}
 				}
@@ -165,10 +173,13 @@ func SchemaAsMap(s *jsonschema.Schema) map[string]any {
 }
 
 // jsonMarkdownRegex matches fenced code blocks with "json" language identifier (case-insensitive).
-var jsonMarkdownRegex = regexp.MustCompile("(?si)```json\\s*(.*?)```")
+var jsonMarkdownRegex = regexp.MustCompile("(?si)```\\s*json\\s*(.*?)```")
 
 // plainMarkdownRegex matches fenced code blocks without any language identifier.
 var plainMarkdownRegex = regexp.MustCompile("(?s)```\\s*\\n(.*?)```")
+
+// implicitJSONRegex matches fenced code blocks with no language identifier that start with { or [
+var implicitJSONRegex = regexp.MustCompile("(?si)```\\s*([{\\[].*?)```")
 
 // ExtractJSONFromMarkdown returns the contents of the first fenced code block in
 // the markdown text md. It matches code blocks with "json" identifier (case-insensitive)
@@ -182,6 +193,12 @@ func ExtractJSONFromMarkdown(md string) string {
 
 	// Fall back to plain code blocks (no language identifier)
 	matches = plainMarkdownRegex.FindStringSubmatch(md)
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// Fall back to implicit JSON blocks (no language identifier, starts with { or [)
+	matches = implicitJSONRegex.FindStringSubmatch(md)
 	if len(matches) >= 2 {
 		return strings.TrimSpace(matches[1])
 	}

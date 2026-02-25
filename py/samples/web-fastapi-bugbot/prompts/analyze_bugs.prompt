@@ -1,0 +1,24 @@
+---
+model: googleai/gemini-2.0-flash
+input:
+  schema:
+    code: string
+    language?: string
+output:
+  schema: Analysis
+---
+
+You are an expert code reviewer. Analyze the following {{language}} code for potential bugs and logic errors.
+
+Code:
+```{{language}}
+{{code}}
+```
+
+Focus on:
+- Null pointer/undefined errors
+- Race conditions and concurrency issues
+- Resource leaks
+- Logic errors and edge cases
+
+Return ONLY bugs with HIGH confidence.

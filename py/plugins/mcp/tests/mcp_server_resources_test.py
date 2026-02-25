@@ -17,6 +17,7 @@
 """Comprehensive tests for MCP server resource handling."""
 
 import os
+import pathlib
 import sys
 import unittest
 from typing import Any
@@ -32,6 +33,8 @@ from mcp.types import (
     TextResourceContents,
 )
 
+from genkit.core.error import GenkitError
+
 # Defer genkit imports to allow mocking. Type annotations help ty understand these are callable.
 Genkit: Any = None
 McpServerOptions: Any = None
@@ -43,21 +46,26 @@ def setup_mocks() -> None:
     global Genkit, McpServerOptions, create_mcp_server
 
     # Add test directory to path for fakes
-    if os.path.dirname(__file__) not in sys.path:
-        sys.path.insert(0, os.path.dirname(__file__))
+    if pathlib.Path(__file__).parent not in sys.path:
+        sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
     # Add src directory to path if not installed
-    src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../src'))
+    src_path = str(pathlib.Path(os.path.join(pathlib.Path(__file__).parent, '../src')).resolve())
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
 
     try:
+        # Deferred import: mock_mcp_modules must be called before importing genkit.plugins.mcp
         from fakes import mock_mcp_modules
 
         mock_mcp_modules()
 
+        # Deferred import: these imports must happen after mock_mcp_modules() is called
         from genkit.ai import Genkit as _Genkit
-        from genkit.plugins.mcp import McpServerOptions as _McpServerOptions, create_mcp_server as _create_mcp_server
+        from genkit.plugins.mcp import (
+            McpServerOptions as _McpServerOptions,
+            create_mcp_server as _create_mcp_server,
+        )
 
         Genkit = _Genkit
         McpServerOptions = _McpServerOptions
@@ -233,8 +241,6 @@ class TestMcpServerResources(unittest.IsolatedAsyncioTestCase):
         # Try to read non-existent resource
         request = MagicMock()
         request.params.uri = 'app://nonexistent'
-
-        from genkit.core.error import GenkitError
 
         with self.assertRaises(GenkitError) as context:
             await server.read_resource(request)

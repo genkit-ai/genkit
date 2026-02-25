@@ -52,7 +52,7 @@ def setup_test() -> tuple[Genkit, ProgrammableModel]:
 
     @ai.tool(name='testTool')
     def test_tool() -> object:
-        """description"""  # noqa: D400, D403, D415
+        """description"""  # noqa: D403, D415
         return 'tool called'
 
     return (ai, pm)
@@ -360,7 +360,8 @@ async def test_generate_middleware_can_modify_stream(
 ##########################################################################
 
 specs = []
-with open(pathlib.Path(__file__).parent.joinpath('../../../../../../tests/specs/generate.yaml').resolve()) as stream:
+spec_path = pathlib.Path(__file__).parent / '../../../../../../tests/specs/generate.yaml'
+with spec_path.resolve().open() as stream:
     tests_spec = yaml.safe_load(stream)
     specs = tests_spec['tests']
     specs = [x for x in tests_spec['tests'] if x['name'] == 'calls tools']
@@ -379,7 +380,7 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
 
     @ai.tool(name='testTool')
     def test_tool() -> object:
-        """description"""  # noqa: D400, D403, D415
+        """description"""  # noqa: D403, D415
         return 'tool called'
 
     if 'modelResponses' in spec:
@@ -399,7 +400,7 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
 
     response = None
     chunks: list[GenerateResponseChunk] | None = None
-    if 'stream' in spec and spec['stream']:
+    if spec.get('stream'):
         chunks = []
         captured_chunks = chunks  # Capture list reference for closure
 
@@ -441,11 +442,7 @@ def is_equal_lists(a: Sequence[object], b: Sequence[object]) -> bool:
     if len(a) != len(b):
         return False
 
-    for i in range(len(a)):
-        if dump_dict(a[i]) != dump_dict(b[i]):
-            return False
-
-    return True
+    return all(dump_dict(a[i]) == dump_dict(b[i]) for i in range(len(a)))
 
 
 primitives = (bool, str, int, float, type(None))

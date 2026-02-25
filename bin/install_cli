@@ -124,6 +124,11 @@
 # Options: prod, next
 channel="${channel:-prod}"
 
+# Environment variable defaults (these can be overridden when piping the script)
+analytics="${analytics:-true}"    # Set to "false" to disable analytics
+uninstall="${uninstall:-false}"   # Set to "true" to uninstall
+upgrade="${upgrade:-false}"       # Set to "true" to upgrade existing install
+
 # This script contains a large amount of comments so you can understand
 # how it interacts with your system. If you're not interested in the
 # technical details, you can just run the command above.
@@ -316,8 +321,7 @@ echo "-- Downloading binary from $DOWNLOAD_URL"
 
 # We use "curl" to download the binary with a flag set to follow redirects
 # (GitHub download URLs redirect to CDNs) and a flag to show a progress bar.
-curl -o "/tmp/genkit_standalone.tmp" --fail -L --progress-bar "$DOWNLOAD_URL"
-if [ $? -ne 0 ]; then
+if ! curl -o "/tmp/genkit_standalone.tmp" --fail -L --progress-bar "$DOWNLOAD_URL"; then
     echo "Something went wrong. Failed to download binary from $DOWNLOAD_URL"
     echo "Please file a bug with your system information on GitHub."
     echo "https://github.com/firebase/genkit/"

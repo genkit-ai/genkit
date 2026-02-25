@@ -18,7 +18,7 @@
 
 from collections.abc import Awaitable, Callable
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from genkit.ai import ActionRunContext
 from genkit.plugins.compat_oai.models.model import OpenAIModel
@@ -65,7 +65,7 @@ class OpenAIModelHandler:
 
     @classmethod
     def get_model_handler(
-        cls, model: str, client: OpenAI, source: PluginSource = PluginSource.OPENAI
+        cls, model: str, client: AsyncOpenAI, source: PluginSource = PluginSource.OPENAI
     ) -> Callable[[GenerateRequest, ActionRunContext], Awaitable[GenerateResponse]]:
         """Factory method to initialize the model handler for the specified OpenAI model.
 

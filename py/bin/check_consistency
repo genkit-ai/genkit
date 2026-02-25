@@ -1,0 +1,706 @@
+#!/usr/bin/env bash
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Consistency checks for the Genkit Python workspace.
+# This script automates the checks documented in py/GEMINI.md.
+#
+# Checks performed:
+#   1. Python version consistency (requires-python = ">=3.10")
+#   2. Plugin version sync (all plugins match core version)
+#   3. Package naming consistency (directory names match package names)
+#   4. Workspace completeness (all packages in [tool.uv.sources])
+#   5. Test file naming convention (*_test.py, not test_*.py)
+#   6. README files exist for plugins and samples
+#   7. LICENSE files exist for publishable packages
+#   8. py.typed marker files exist (PEP 561)
+#   9. Dependency resolution (uv pip check)
+#  10. No in-function imports (imports at top of file)
+#  11. Required pyproject.toml fields for publishable packages
+#  12. Sample run.sh scripts exist
+#  13. No hardcoded API keys or secrets
+#  14. Typos and spelling errors (via typos tool)
+#  15. IDE autocomplete - __all__ exports in __init__.py
+#  16. IDE autocomplete - No broad "type: ignore" comments
+#  17. Python version classifiers (3.10-3.14)
+#  18. Namespace package __init__.py (plugins must not have __init__.py in genkit/ or genkit/plugins/)
+#  19. Test file basename uniqueness (no duplicate basenames across test directories)
+#  20. CHANGELOG.md files exist
+#  21. Model conformance spec coverage (model plugins → conformance spec + entry point)
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Track overall status
+ERRORS=0
+WARNINGS=0
+
+# Get the directory of this script and the py directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "$PY_DIR"
+
+# Total number of checks
+TOTAL_CHECKS=21
+
+echo -e "${BLUE}=== Genkit Python Consistency Checks ===${NC}"
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 1: Python Version Consistency
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[1/$TOTAL_CHECKS] Checking Python version consistency...${NC}"
+EXPECTED_PYTHON_VERSION=">=3.10"
+python_version_errors=0
+
+for f in packages/*/pyproject.toml plugins/*/pyproject.toml samples/*/pyproject.toml; do
+  if [ -f "$f" ]; then
+    version=$(grep 'requires-python' "$f" 2>/dev/null | cut -d'"' -f2 || echo "")
+    if [ -n "$version" ] && [ "$version" != "$EXPECTED_PYTHON_VERSION" ]; then
+      echo -e "  ${RED}MISMATCH${NC}: $f has '$version' (expected '$EXPECTED_PYTHON_VERSION')"
+      python_version_errors=$((python_version_errors + 1))
+    fi
+  fi
+done
+
+if [ $python_version_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All packages use Python $EXPECTED_PYTHON_VERSION"
+else
+  ERRORS=$((ERRORS + python_version_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 2: Plugin Version Sync
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[2/$TOTAL_CHECKS] Checking plugin version sync...${NC}"
+CORE_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+echo -e "  Core framework version: ${YELLOW}$CORE_VERSION${NC}"
+plugin_version_errors=0
+
+for f in plugins/*/pyproject.toml; do
+  if [ -f "$f" ]; then
+    plugin_version=$(grep '^version' "$f" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    plugin_name=$(grep '^name' "$f" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    if [ "$plugin_version" != "$CORE_VERSION" ]; then
+      echo -e "  ${RED}MISMATCH${NC}: $plugin_name has version '$plugin_version' (expected '$CORE_VERSION')"
+      plugin_version_errors=$((plugin_version_errors + 1))
+    fi
+  fi
+done
+
+if [ $plugin_version_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All plugins are version $CORE_VERSION"
+else
+  ERRORS=$((ERRORS + plugin_version_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 3: Package Naming Consistency
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[3/$TOTAL_CHECKS] Checking package naming consistency...${NC}"
+naming_errors=0
+
+# Check plugins
+for d in plugins/*/; do
+  if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
+    name=$(basename "$d")
+    pkg=$(grep '^name' "$d/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    expected="genkit-plugin-$name"
+    if [ "$pkg" != "$expected" ]; then
+      echo -e "  ${RED}MISMATCH${NC}: Plugin $d has name '$pkg' (expected '$expected')"
+      naming_errors=$((naming_errors + 1))
+    fi
+  fi
+done
+
+# Check samples
+for d in samples/*/; do
+  if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
+    name=$(basename "$d")
+    pkg=$(grep '^name' "$d/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    if [ "$pkg" != "$name" ]; then
+      echo -e "  ${RED}MISMATCH${NC}: Sample $d has name '$pkg' (expected '$name')"
+      naming_errors=$((naming_errors + 1))
+    fi
+  fi
+done
+
+if [ $naming_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All package names are consistent with directory names"
+else
+  ERRORS=$((ERRORS + naming_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 4: Workspace Completeness (plugins and samples in pyproject.toml sources)
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[4/$TOTAL_CHECKS] Checking workspace completeness...${NC}"
+workspace_errors=0
+
+# Get all packages from [tool.uv.sources]
+sources_content=$(sed -n '/\[tool.uv.sources\]/,/^\[/p' pyproject.toml | grep -v '^\[' | grep '=' | cut -d'=' -f1 | tr -d ' ')
+
+# Check plugins are in sources
+for d in plugins/*/; do
+  if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
+    pkg=$(grep '^name' "$d/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    if ! echo "$sources_content" | grep -q "^$pkg$"; then
+      echo -e "  ${RED}MISSING${NC}: Plugin '$pkg' not in [tool.uv.sources]"
+      workspace_errors=$((workspace_errors + 1))
+    fi
+  fi
+done
+
+# Check samples are in sources
+for d in samples/*/; do
+  name=$(basename "$d")
+  if [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && [ "$name" != "sample-test" ]; then
+    pkg=$(grep '^name' "$d/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    if ! echo "$sources_content" | grep -q "^$pkg$"; then
+      echo -e "  ${RED}MISSING${NC}: Sample '$pkg' not in [tool.uv.sources]"
+      workspace_errors=$((workspace_errors + 1))
+    fi
+  fi
+done
+
+if [ $workspace_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All plugins and samples are in workspace sources"
+else
+  ERRORS=$((ERRORS + workspace_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 5: Test File Naming Convention
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[5/$TOTAL_CHECKS] Checking test file naming convention...${NC}"
+test_naming_errors=0
+
+# Find test files that don't follow *_test.py convention
+bad_test_files=$(find . -name "test_*.py" -not -path "*/.*" -not -path "./.venv/*" -not -path "*/node_modules/*" 2>/dev/null || true)
+if [ -n "$bad_test_files" ]; then
+  echo -e "  ${RED}ERROR${NC}: Found test files starting with 'test_' (should use '*_test.py'):"
+  echo "$bad_test_files" | while read -r f; do
+    echo -e "    - $f"
+    test_naming_errors=$((test_naming_errors + 1))
+  done
+  ERRORS=$((ERRORS + 1))
+else
+  echo -e "  ${GREEN}✓${NC} All test files follow *_test.py naming convention"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 6: README Files Exist
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[6/$TOTAL_CHECKS] Checking README files exist...${NC}"
+readme_warnings_before=$WARNINGS
+
+# Check plugins have READMEs
+for d in plugins/*/; do
+  if [ -d "$d" ] && [ ! -f "$d/README.md" ]; then
+    echo -e "  ${YELLOW}WARNING${NC}: Plugin $d is missing README.md"
+    WARNINGS=$((WARNINGS + 1))
+  fi
+done
+
+# Check samples have READMEs
+for d in samples/*/; do
+  if [ -d "$d" ] && [ ! -f "$d/README.md" ]; then
+    echo -e "  ${YELLOW}WARNING${NC}: Sample $d is missing README.md"
+    WARNINGS=$((WARNINGS + 1))
+  fi
+done
+
+if [ $WARNINGS -eq $readme_warnings_before ]; then
+  echo -e "  ${GREEN}✓${NC} All plugins and samples have README.md files"
+else
+  echo -e "  ${YELLOW}!${NC} Some packages are missing README.md files (warnings only)"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 7: LICENSE Files Exist
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[7/$TOTAL_CHECKS] Checking LICENSE files exist...${NC}"
+license_missing=0
+
+# Check core package
+if [ ! -f "packages/genkit/LICENSE" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: packages/genkit/ is missing LICENSE file"
+  WARNINGS=$((WARNINGS + 1))
+  license_missing=$((license_missing + 1))
+fi
+
+# Check plugins
+for d in plugins/*/; do
+  if [ -d "$d" ] && [ ! -f "$d/LICENSE" ]; then
+    pkg_name=$(basename "$d")
+    echo -e "  ${YELLOW}WARNING${NC}: plugins/$pkg_name/ is missing LICENSE file"
+    WARNINGS=$((WARNINGS + 1))
+    license_missing=$((license_missing + 1))
+  fi
+done
+
+if [ $license_missing -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All packages have LICENSE files"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 8: py.typed Marker Files (PEP 561)
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[8/$TOTAL_CHECKS] Checking py.typed marker files (PEP 561)...${NC}"
+pytyped_missing=0
+
+# Check core package
+if [ ! -f "packages/genkit/src/genkit/py.typed" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: packages/genkit/ is missing py.typed marker"
+  WARNINGS=$((WARNINGS + 1))
+  pytyped_missing=$((pytyped_missing + 1))
+fi
+
+# Check plugins
+for d in plugins/*/src/genkit/plugins/*/; do
+  if [ -d "$d" ] && [ ! -f "$d/py.typed" ]; then
+    pkg_name=$(echo "$d" | sed 's|plugins/||' | sed 's|/src/genkit/plugins/.*||')
+    echo -e "  ${YELLOW}WARNING${NC}: plugins/$pkg_name/ is missing py.typed marker"
+    WARNINGS=$((WARNINGS + 1))
+    pytyped_missing=$((pytyped_missing + 1))
+  fi
+done
+
+if [ $pytyped_missing -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All packages have py.typed markers"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 9: Dependency Resolution
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[9/$TOTAL_CHECKS] Checking dependency resolution...${NC}"
+if uv pip check > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} All dependencies resolve correctly"
+else
+  echo -e "  ${RED}ERROR${NC}: Dependency resolution failed"
+  uv pip check 2>&1 | head -10
+  ERRORS=$((ERRORS + 1))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 10: No In-Function Imports (excluding TYPE_CHECKING blocks)
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[10/$TOTAL_CHECKS] Checking for in-function imports...${NC}"
+# Note: This check looks for imports inside function bodies (not at module level).
+# TYPE_CHECKING blocks with indented imports are legitimate and excluded.
+# The check uses a simple heuristic: imports with 8+ spaces of indentation
+# are likely inside functions, not in TYPE_CHECKING blocks (which use 4 spaces).
+#
+# NOTE: Core framework (packages/genkit) is excluded from this check because
+# some in-function imports are intentional for lazy loading and circular import
+# avoidance. See PR #4400 for the cleanup effort.
+
+# Find deeply indented imports in plugins only (core framework excluded)
+deep_imports=$(grep -rn "^        import \|^        from .* import" \
+  plugins/*/src/ 2>/dev/null \
+  | grep -v "__pycache__" \
+  | grep -v "\.pyc:" \
+  | grep -v "# noqa" \
+  | grep -v "TYPE_CHECKING" \
+  || true)
+
+if [ -n "$deep_imports" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: Found potentially in-function imports (verify manually):"
+  echo "$deep_imports" | head -5 | while read -r line; do
+    echo -e "    $line"
+  done
+  count=$(echo "$deep_imports" | wc -l | tr -d ' ')
+  if [ "$count" -gt 5 ]; then
+    echo -e "    ... and $((count - 5)) more"
+  fi
+  WARNINGS=$((WARNINGS + 1))
+else
+  echo -e "  ${GREEN}✓${NC} No in-function imports detected in plugins"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 11: Required pyproject.toml Fields
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[11/$TOTAL_CHECKS] Checking required pyproject.toml fields...${NC}"
+metadata_errors=0
+
+REQUIRED_FIELDS=("name" "version" "description" "license" "requires-python")
+PUBLISHABLE_FIELDS=("authors" "classifiers")
+
+# Check core package
+for field in "${REQUIRED_FIELDS[@]}" "${PUBLISHABLE_FIELDS[@]}"; do
+  if ! grep -q "^$field" packages/genkit/pyproject.toml 2>/dev/null; then
+    echo -e "  ${RED}MISSING${NC}: packages/genkit/pyproject.toml missing '$field'"
+    metadata_errors=$((metadata_errors + 1))
+  fi
+done
+
+# Check plugins
+for d in plugins/*/; do
+  if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
+    for field in "${REQUIRED_FIELDS[@]}" "${PUBLISHABLE_FIELDS[@]}"; do
+      if ! grep -q "^$field" "$d/pyproject.toml" 2>/dev/null; then
+        pkg_name=$(basename "$d")
+        echo -e "  ${RED}MISSING${NC}: plugins/$pkg_name/pyproject.toml missing '$field'"
+        metadata_errors=$((metadata_errors + 1))
+      fi
+    done
+  fi
+done
+
+if [ $metadata_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All publishable packages have required metadata"
+else
+  ERRORS=$((ERRORS + metadata_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 12: Sample run.sh Scripts
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[12/$TOTAL_CHECKS] Checking sample run.sh scripts...${NC}"
+runsh_missing=0
+
+for d in samples/*/; do
+  name=$(basename "$d")
+  if [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && [ "$name" != "sample-test" ]; then
+    if [ ! -f "$d/run.sh" ]; then
+      sample_name=$(basename "$d")
+      echo -e "  ${YELLOW}WARNING${NC}: samples/$sample_name/ is missing run.sh"
+      WARNINGS=$((WARNINGS + 1))
+      runsh_missing=$((runsh_missing + 1))
+    fi
+  fi
+done
+
+if [ $runsh_missing -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All samples have run.sh scripts"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 13: No Hardcoded Secrets
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[13/$TOTAL_CHECKS] Checking for hardcoded secrets...${NC}"
+secrets_found=0
+
+# Common API key patterns
+SECRET_PATTERNS=(
+  'sk-[a-zA-Z0-9]{20,}'                    # OpenAI-style keys
+  'AIza[a-zA-Z0-9_-]{35}'                  # Google API keys
+  'ghp_[a-zA-Z0-9]{36}'                    # GitHub personal access tokens
+  'AKIA[0-9A-Z]{16}'                       # AWS access key IDs
+)
+
+EXCLUDE_PATTERNS="tests/|test/|\.env\.example|README\.md|GEMINI\.md|\.pyc$|__pycache__|\.git/|dist/"
+
+for pattern in "${SECRET_PATTERNS[@]}"; do
+  matches=$(grep -rE "$pattern" packages/ plugins/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#" || true)
+  if [ -n "$matches" ]; then
+    echo -e "  ${RED}FOUND${NC}: Potential secrets matching pattern '$pattern'"
+    secrets_found=$((secrets_found + 1))
+  fi
+done
+
+# Check for hardcoded credential assignments
+hardcoded_check=$(grep -rE "(api_key|apikey|secret|password|token)\s*=\s*['\"][a-zA-Z0-9_-]{20,}['\"]" \
+  packages/ plugins/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#|test_|_test\.|mock|fake|dummy|example" || true)
+if [ -n "$hardcoded_check" ]; then
+  echo -e "  ${RED}FOUND${NC}: Potential hardcoded credentials"
+  secrets_found=$((secrets_found + 1))
+fi
+
+if [ $secrets_found -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} No hardcoded secrets detected"
+else
+  echo -e "  ${RED}ERROR${NC}: $secrets_found potential secret pattern(s) found"
+  ERRORS=$((ERRORS + secrets_found))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 14: Typos and Spelling Errors
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[14/$TOTAL_CHECKS] Checking for typos and spelling errors...${NC}"
+if uv run typos --version > /dev/null 2>&1; then
+  # Run typos on plugins/ only (packages/genkit is checked separately by core team)
+  if uv run typos plugins/ samples/ --config typos.toml --format brief > /tmp/typos_output_$$ 2>&1; then
+    echo -e "  ${GREEN}✓${NC} No typos found in plugins/samples"
+  else
+    typos_count=$(grep -c "error:" /tmp/typos_output_$$ 2>/dev/null || echo "0")
+    if [ "$typos_count" -gt 0 ]; then
+      echo -e "  ${RED}ERROR${NC}: $typos_count typo(s) found"
+      grep "error:" /tmp/typos_output_$$ | head -5 | while read -r line; do
+        echo -e "    $line"
+      done
+      ERRORS=$((ERRORS + 1))
+    else
+      echo -e "  ${GREEN}✓${NC} No typos found in plugins/samples"
+    fi
+  fi
+  rm -f /tmp/typos_output_$$ 2>/dev/null || true
+else
+  echo -e "  ${YELLOW}SKIP${NC}: typos tool not available (install with 'uv pip install typos')"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 15: IDE Autocomplete - __all__ exports in __init__.py
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[15/$TOTAL_CHECKS] Checking __all__ exports for IDE autocomplete...${NC}"
+all_missing=0
+
+# Check main genkit package
+if ! grep -q "^__all__" packages/genkit/src/genkit/__init__.py 2>/dev/null; then
+  echo -e "  ${RED}MISSING${NC}: packages/genkit/src/genkit/__init__.py missing __all__"
+  all_missing=$((all_missing + 1))
+fi
+
+# Check plugin __init__.py files
+# Use nullglob to handle case where no files match
+shopt -s nullglob
+plugin_init_files=(plugins/*/src/genkit/plugins/*/__init__.py)
+shopt -u nullglob
+
+for f in "${plugin_init_files[@]}"; do
+  if [ -f "$f" ]; then
+    # Skip empty or minimal __init__.py files (less than 5 lines of actual code)
+    code_lines=$(grep -cv "^#\|^$\|^\"\"\"" "$f" 2>/dev/null || echo "0")
+    if [ "$code_lines" -gt 5 ] && ! grep -q "^__all__" "$f" 2>/dev/null; then
+      echo -e "  ${YELLOW}WARNING${NC}: $f missing __all__ (may affect IDE autocomplete)"
+      WARNINGS=$((WARNINGS + 1))
+    fi
+  fi
+done
+
+if [ $all_missing -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} Main package has __all__ exports"
+else
+  ERRORS=$((ERRORS + all_missing))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 16: IDE Autocomplete - Broad type: ignore comments
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[16/$TOTAL_CHECKS] Checking for broad type: ignore comments...${NC}"
+broad_ignores=$(grep -rn "# type: ignore$" packages/ plugins/ 2>/dev/null \
+  | grep -v "__pycache__" \
+  | grep -v "\.pyc:" \
+  | grep -v "/test" \
+  | grep -v "_test\.py" \
+  || true)
+
+if [ -n "$broad_ignores" ]; then
+  count=$(echo "$broad_ignores" | wc -l | tr -d ' ')
+  echo -e "  ${YELLOW}WARNING${NC}: Found $count broad '# type: ignore' comments (should specify error codes)"
+  echo "$broad_ignores" | head -5 | while read -r line; do
+    echo -e "    $line"
+  done
+  if [ "$count" -gt 5 ]; then
+    echo -e "    ... and $((count - 5)) more"
+  fi
+  WARNINGS=$((WARNINGS + 1))
+else
+  echo -e "  ${GREEN}✓${NC} No broad type: ignore comments found"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 17: Python Version Classifiers (3.10-3.14)
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[17/$TOTAL_CHECKS] Checking Python version classifiers...${NC}"
+classifier_errors=0
+
+REQUIRED_VERSIONS=("3.10" "3.11" "3.12" "3.13" "3.14")
+
+# Check core package and plugins
+for pkg in packages/genkit plugins/*/; do
+  if [ -d "$pkg" ] && [ -f "$pkg/pyproject.toml" ]; then
+    pkg_name=$(grep '^name' "$pkg/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    missing_versions=""
+
+    for ver in "${REQUIRED_VERSIONS[@]}"; do
+      if ! grep -q "Programming Language :: Python :: $ver" "$pkg/pyproject.toml" 2>/dev/null; then
+        missing_versions="$missing_versions $ver"
+      fi
+    done
+
+    if [ -n "$missing_versions" ]; then
+      echo -e "  ${RED}MISSING${NC}: $pkg_name missing Python classifiers:$missing_versions"
+      classifier_errors=$((classifier_errors + 1))
+    fi
+  fi
+done
+
+if [ $classifier_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All packages have Python 3.10-3.14 classifiers"
+else
+  ERRORS=$((ERRORS + classifier_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 18: Namespace Package __init__.py
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[18/$TOTAL_CHECKS] Checking namespace package __init__.py files...${NC}"
+namespace_errors=0
+
+# Plugins use namespace packages (genkit.plugins.*) and must NOT have __init__.py
+# in the genkit/ or genkit/plugins/ directories, only in their specific plugin dir.
+# Having __init__.py in namespace directories breaks imports across packages.
+for plugin in plugins/*/; do
+  if [ -d "$plugin" ]; then
+    plugin_name=$(basename "$plugin")
+
+    # Check for __init__.py in genkit/ namespace directory
+    if [ -f "$plugin/src/genkit/__init__.py" ]; then
+      echo -e "  ${RED}ERROR${NC}: $plugin_name has src/genkit/__init__.py (breaks namespace package)"
+      namespace_errors=$((namespace_errors + 1))
+    fi
+
+    # Check for __init__.py in genkit/plugins/ namespace directory
+    if [ -f "$plugin/src/genkit/plugins/__init__.py" ]; then
+      echo -e "  ${RED}ERROR${NC}: $plugin_name has src/genkit/plugins/__init__.py (breaks namespace package)"
+      namespace_errors=$((namespace_errors + 1))
+    fi
+  fi
+done
+
+if [ $namespace_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} No __init__.py files in namespace directories"
+else
+  ERRORS=$((ERRORS + namespace_errors))
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 19: Test File Basename Uniqueness
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[19/$TOTAL_CHECKS] Checking test file basename uniqueness...${NC}"
+basename_errors=0
+
+# Common exclusion arguments for find — shared across invocations
+# to avoid repetition and keep the exclusion list in sync.
+FIND_EXCLUDE_ARGS=(
+  -not -path './.tox/*'
+  -not -path './.venv/*'
+  -not -path '*/__pycache__/*'
+  -not -path '*/node_modules/*'
+  -not -path './.gemini/*'
+)
+
+# Single find pass: collect all test file paths.
+all_test_paths=$(
+  find . -name '*_test.py' "${FIND_EXCLUDE_ARGS[@]}" 2>/dev/null
+)
+
+# Extract basenames and find duplicates.
+duplicates=$(
+  echo "$all_test_paths" \
+  | while read -r p; do basename "$p"; done \
+  | sort \
+  | uniq -d
+)
+
+if [ -n "$duplicates" ]; then
+  for dup in $duplicates; do
+    echo -e "  ${RED}COLLISION${NC}: '$dup' exists in multiple locations:"
+    echo "$all_test_paths" | grep "/${dup}$" | while read -r loc; do
+      echo -e "    - $loc"
+    done
+    basename_errors=$((basename_errors + 1))
+  done
+  ERRORS=$((ERRORS + basename_errors))
+else
+  echo -e "  ${GREEN}✓${NC} All test file basenames are unique"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 20: CHANGELOG.md Files Exist
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[20/$TOTAL_CHECKS] Checking CHANGELOG.md files exist...${NC}"
+changelog_missing=0
+
+
+# Check core package
+if [ ! -f "packages/genkit/CHANGELOG.md" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: packages/genkit/ is missing CHANGELOG.md"
+  WARNINGS=$((WARNINGS + 1))
+  changelog_missing=$((changelog_missing + 1))
+fi
+
+# Check plugins
+for d in plugins/*/; do
+  if [ -d "$d" ] && [ ! -f "$d/CHANGELOG.md" ]; then
+    pkg_name=$(basename "$d")
+    echo -e "  ${YELLOW}WARNING${NC}: plugins/$pkg_name/ is missing CHANGELOG.md"
+    WARNINGS=$((WARNINGS + 1))
+    changelog_missing=$((changelog_missing + 1))
+  fi
+done
+
+if [ $changelog_missing -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All publishable packages have CHANGELOG.md files"
+else
+  echo -e "  ${YELLOW}!${NC} Some packages are missing CHANGELOG.md files (warnings only)"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Check 21: Model Conformance Spec Coverage
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}[21/$TOTAL_CHECKS] Checking model conformance spec coverage...${NC}"
+# Delegated to the Python-based ``conform check-model`` tool which performs
+# the same checks (model_info.py scanning + additional-model-plugins from
+# TOML config) and prints output in the same colored format.
+CONFORM_CONFIG="${PY_DIR}/tests/conform/conform.toml"
+if ! uv run --active conform check-plugin --config "${CONFORM_CONFIG}"; then
+  ERRORS=$((ERRORS + 1))
+fi
+echo ""
+# -----------------------------------------------------------------------------
+# Summary
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}=== Summary ===${NC}"
+if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
+  echo -e "${GREEN}All consistency checks passed!${NC}"
+  exit 0
+elif [ $ERRORS -eq 0 ]; then
+  echo -e "${YELLOW}Passed with $WARNINGS warning(s)${NC}"
+  exit 0
+else
+  echo -e "${RED}Failed with $ERRORS error(s) and $WARNINGS warning(s)${NC}"
+  exit 1
+fi

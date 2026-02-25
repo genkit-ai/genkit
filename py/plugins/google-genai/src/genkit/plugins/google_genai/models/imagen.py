@@ -62,7 +62,7 @@ SUPPORTED_MODELS = {
             media=True,
             multiturn=False,
             tools=False,
-            system_role=False,
+            system_role=True,
             output=['media'],
         ),
     ),
@@ -72,7 +72,7 @@ SUPPORTED_MODELS = {
             media=False,
             multiturn=False,
             tools=False,
-            system_role=False,
+            system_role=True,
             output=['media'],
         ),
     ),
@@ -82,7 +82,7 @@ SUPPORTED_MODELS = {
             media=False,
             multiturn=False,
             tools=False,
-            system_role=False,
+            system_role=True,
             output=['media'],
         ),
     ),
@@ -92,7 +92,7 @@ DEFAULT_IMAGE_SUPPORT = Supports(
     media=True,
     multiturn=False,
     tools=False,
-    system_role=False,
+    system_role=True,
     output=['media'],
 )
 
@@ -166,6 +166,8 @@ class ImagenModel:
         """
         prompt = self._build_prompt(request)
         config = self._get_config(request)
+        if request.tools:
+            raise ValueError('Tools are not supported for this model.')
 
         with tracer.start_as_current_span('generate_images') as span:
             span.set_attribute(
@@ -241,10 +243,10 @@ class ImagenModel:
         if self._version in SUPPORTED_MODELS:
             model_supports = SUPPORTED_MODELS[self._version].supports  # pyrefly: ignore[bad-index]
             if model_supports:
-                supports = model_supports.model_dump()
+                supports = model_supports.model_dump(by_alias=True)
         else:
             model_supports = vertexai_image_model_info(self._version).supports
             if model_supports:
-                supports = model_supports.model_dump()
+                supports = model_supports.model_dump(by_alias=True)
 
         return {'model': {'supports': supports}}

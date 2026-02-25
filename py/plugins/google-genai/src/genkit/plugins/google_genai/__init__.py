@@ -21,6 +21,106 @@ This plugin provides integration with Google's AI services, including
 Google AI (Gemini API) and Vertex AI. It registers Gemini models and
 embedders for use with the Genkit framework.
 
+Key Concepts (ELI5)::
+
+    ┌─────────────────────┬────────────────────────────────────────────────────┐
+    │ Concept             │ ELI5 Explanation                                   │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Gemini              │ Google's AI model family. Like having a smart     │
+    │                     │ assistant that can read, write, and understand.   │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ GoogleAI            │ Access Gemini directly via API key. Like calling  │
+    │                     │ a pizza place directly with your phone.           │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ VertexAI            │ Access Gemini through Google Cloud. Like ordering │
+    │                     │ pizza through a delivery app with your account.   │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Embeddings          │ Convert text to numbers that capture meaning.     │
+    │                     │ Like a fingerprint for sentences.                 │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Imagen              │ Google's image generation model. Tell it what     │
+    │                     │ you want and it draws a picture.                  │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Context Caching     │ Save conversation history to reuse later.         │
+    │                     │ Like bookmarking your place in a conversation.    │
+    ├─────────────────────┼────────────────────────────────────────────────────┤
+    │ Multimodal          │ Models that understand text AND images/audio.     │
+    │                     │ Like a friend who can see photos you share.       │
+    └─────────────────────┴────────────────────────────────────────────────────┘
+
+Data Flow::
+
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                     HOW YOUR PROMPT BECOMES A RESPONSE                  │
+    │                                                                         │
+    │    Your Code                                                            │
+    │    ai.generate(prompt="Hello!")                                         │
+    │         │                                                               │
+    │         │  (1) Genkit receives your request                             │
+    │         ▼                                                               │
+    │    ┌─────────────────┐                                                  │
+    │    │  GoogleAI or    │   Plugin handles auth & config                   │
+    │    │  VertexAI       │   (API key or GCP credentials)                   │
+    │    └────────┬────────┘                                                  │
+    │             │                                                           │
+    │             │  (2) Request converted to Gemini format                   │
+    │             ▼                                                           │
+    │    ┌─────────────────┐                                                  │
+    │    │  GeminiModel    │   Handles message formatting, tools,             │
+    │    │                 │   streaming, and response parsing                │
+    │    └────────┬────────┘                                                  │
+    │             │                                                           │
+    │             │  (3) HTTP request to Google's servers                     │
+    │             ▼                                                           │
+    │    ════════════════════════════════════════════════════                 │
+    │             │  Internet                                                 │
+    │             ▼                                                           │
+    │    ┌─────────────────┐                                                  │
+    │    │  Google Gemini  │   AI processes your prompt                       │
+    │    │  API            │                                                  │
+    │    └────────┬────────┘                                                  │
+    │             │                                                           │
+    │             │  (4) Response streamed back                               │
+    │             ▼                                                           │
+    │    ┌─────────────────┐                                                  │
+    │    │  Your App       │   response.text contains the answer!             │
+    │    └─────────────────┘                                                  │
+    └─────────────────────────────────────────────────────────────────────────┘
+
+Architecture Overview::
+
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                       Google GenAI Plugin                               │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  Plugin Entry Point (__init__.py)                                       │
+    │  ├── GoogleAI - Plugin for Gemini API (api_key auth)                    │
+    │  ├── VertexAI - Plugin for Vertex AI (GCP auth)                         │
+    │  ├── Model version enums (GoogleAIGeminiVersion, VertexAIGeminiVersion) │
+    │  └── Config schemas (GeminiConfigSchema, etc.)                          │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  google.py - Plugin Implementation                                      │
+    │  ├── GoogleAI class (Gemini API integration)                            │
+    │  └── VertexAI class (Vertex AI integration)                             │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  models/gemini.py - Gemini Model Implementation                         │
+    │  ├── GeminiModel (generation logic)                                     │
+    │  ├── Request/response conversion                                        │
+    │  └── Streaming and tool calling support                                 │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  models/embedder.py - Embedding Implementation                          │
+    │  ├── GeminiEmbedder (text embeddings)                                   │
+    │  └── EmbeddingTaskType enum                                             │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  models/imagen.py - Image Generation                                    │
+    │  └── ImagenModel (Vertex AI only)                                       │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  models/veo.py - Video Generation                                       │
+    │  └── VeoModel (Vertex AI only)                                          │
+    ├─────────────────────────────────────────────────────────────────────────┤
+    │  models/lyria.py - Audio Generation                                     │
+    │  └── LyriaModel (Vertex AI only)                                        │
+    └─────────────────────────────────────────────────────────────────────────┘
+
 Overview:
     The Google GenAI plugin supports two backends:
     - **GoogleAI**: Direct Gemini API access (requires GEMINI_API_KEY)

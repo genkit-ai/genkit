@@ -238,7 +238,7 @@ ai.defineFlow('gemini-image-editing', async (_) => {
   const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
 
   const { media } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash-image-preview'),
+    model: googleAI.model('gemini-2.5-flash-image'),
     prompt: [
       { text: 'add the plant to my room' },
       { media: { url: `data:image/png;base64,${plant}` } },

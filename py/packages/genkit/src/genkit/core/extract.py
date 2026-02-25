@@ -253,8 +253,8 @@ def extract_items(text: str, cursor: int = 0) -> ExtractItemsResult:
                     items.append(obj)
                     current_cursor = i + 1
                     object_start = -1
-                except Exception:
-                    # If parsing fails, continue
+                except Exception:  # noqa: S110 - intentionally silent, parsing partial JSON
+                    # If parsing fails, continue trying next position
                     pass
         elif char == ']' and brace_count == 0:
             # End of array

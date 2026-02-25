@@ -157,8 +157,73 @@ func TestGenkitErrorToReflectionError(t *testing.T) {
 		if re.Message != "success" {
 			t.Errorf("Message = %q, want %q", re.Message, "success")
 		}
-		if re.Details.Stack != nil {
-			t.Error("expected nil stack")
+		if re.Details != nil {
+			t.Error("expected nil details")
+		}
+	})
+}
+
+// testCustomError is a helper type for the errors.As subtest.
+type testCustomError struct {
+	code int
+}
+
+func (e *testCustomError) Error() string {
+	return fmt.Sprintf("custom error %d", e.code)
+}
+
+func TestGenkitErrorUnwrap(t *testing.T) {
+	t.Run("errors.Is matches original cause", func(t *testing.T) {
+		original := errors.New("original failure")
+		gErr := NewError(INTERNAL, "something happened: %v", original)
+
+		if !errors.Is(gErr, original) {
+			t.Errorf("expected errors.Is to return true, but got false")
+		}
+		if gErr.Unwrap() != original {
+			t.Errorf("Unwrap() returned wrong error")
+		}
+	})
+
+	t.Run("errors.As extracts typed cause", func(t *testing.T) {
+		cause := &testCustomError{code: 42}
+		ge := NewError(INTERNAL, "failed: %v", cause)
+
+		var target *testCustomError
+		if !errors.As(ge, &target) {
+			t.Fatal("errors.As failed to find *testCustomError")
+		}
+		if target.code != 42 {
+			t.Errorf("target.code = %d, want 42", target.code)
+		}
+	})
+
+	t.Run("no args returns nil", func(t *testing.T) {
+		ge := NewError(INTERNAL, "no args error")
+
+		if ge.Unwrap() != nil {
+			t.Errorf("Unwrap() = %v, want nil", ge.Unwrap())
+		}
+	})
+
+	t.Run("multiple errors preserves the last one", func(t *testing.T) {
+		first := errors.New("first")
+		second := errors.New("second")
+		ge := NewError(INTERNAL, "two errors: %v %v", first, second)
+
+		if ge.Unwrap() != second {
+			t.Errorf("Unwrap() = %v, want %v (last error)", ge.Unwrap(), second)
+		}
+		if !errors.Is(ge, second) {
+			t.Error("errors.Is(ge, second) = false, want true")
+		}
+	})
+
+	t.Run("non-error args returns nil", func(t *testing.T) {
+		ge := NewError(INTERNAL, "value is %d and %s", 42, "hello")
+
+		if ge.Unwrap() != nil {
+			t.Errorf("Unwrap() = %v, want nil", ge.Unwrap())
 		}
 	})
 }

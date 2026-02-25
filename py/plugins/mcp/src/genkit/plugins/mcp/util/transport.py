@@ -20,6 +20,7 @@ This module contains helper functions for creating and managing
 MCP transport connections (stdio, SSE, custom).
 """
 
+import importlib.util
 from typing import cast
 
 import structlog
@@ -61,14 +62,12 @@ async def transport_from(config: dict[str, object], session_id: str | None = Non
         This function mirrors the JS SDK's transportFrom() function.
     """
     # Handle pre-configured transport first
-    if 'transport' in config and config['transport']:
+    if config.get('transport'):
         return (config['transport'], 'custom')
 
     # Handle SSE/HTTP config
-    if 'url' in config and config['url']:
+    if config.get('url'):
         # Check if SSE client is available
-        import importlib.util
-
         if importlib.util.find_spec('mcp.client.sse') is None:
             logger.warning('SSE client not available')
             return (None, 'http')
@@ -79,7 +78,7 @@ async def transport_from(config: dict[str, object], session_id: str | None = Non
         return (config['url'], 'http')  # Simplified for now
 
     # Handle Stdio config
-    if 'command' in config and config['command']:
+    if config.get('command'):
         cmd = str(config['command'])
         args_raw = config.get('args')
         args: list[str] | None = cast(list[str], args_raw) if isinstance(args_raw, list) else None

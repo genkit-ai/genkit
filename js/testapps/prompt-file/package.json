@@ -4,7 +4,7 @@
   "description": "",
   "dependencies": {
     "genkit": "workspace:*",
-    "@genkit-ai/googleai": "workspace:*"
+    "@genkit-ai/google-genai": "workspace:*"
   },
   "main": "lib/index.js",
   "scripts": {

@@ -89,14 +89,15 @@ ai.defineFlow(
   async (level) => {
     const { text } = await ai.generate({
       model: googleAI.model('gemini-3-pro-preview'),
-      prompt:
-        'Alice, Bob, and Carol each live in a different house on the ' +
-        'same street: red, green, and blue. The person who lives in the red house ' +
-        'owns a cat. Bob does not live in the green house. Carol owns a dog. The ' +
-        'green house is to the left of the red house. Alice does not own a cat. ' +
-        'The person in the blue house owns a fish. ' +
-        'Who lives in each house, and what pet do they own? Provide your ' +
+      prompt: [
+        'Alice, Bob, and Carol each live in a different house on the ',
+        'same street: red, green, and blue. The person who lives in the red house ',
+        'owns a cat. Bob does not live in the green house. Carol owns a dog. The ',
+        'green house is to the left of the red house. Alice does not own a cat. ',
+        'The person in the blue house owns a fish. ',
+        'Who lives in each house, and what pet do they own? Provide your ',
         'step-by-step reasoning.',
+      ].join(''),
       config: {
         thinkingConfig: {
           thinkingLevel: level,
@@ -116,14 +117,15 @@ ai.defineFlow(
   async (level) => {
     const { text } = await ai.generate({
       model: googleAI.model('gemini-3-flash-preview'),
-      prompt:
-        'Alice, Bob, and Carol each live in a different house on the ' +
-        'same street: red, green, and blue. The person who lives in the red house ' +
-        'owns a cat. Bob does not live in the green house. Carol owns a dog. The ' +
-        'green house is to the left of the red house. Alice does not own a cat. ' +
-        'The person in the blue house owns a fish. ' +
-        'Who lives in each house, and what pet do they own? Provide your ' +
+      prompt: [
+        'Alice, Bob, and Carol each live in a different house on the ',
+        'same street: red, green, and blue. The person who lives in the red house ',
+        'owns a cat. Bob does not live in the green house. Carol owns a dog. The ',
+        'green house is to the left of the red house. Alice does not own a cat. ',
+        'The person in the blue house owns a fish. ',
+        'Who lives in each house, and what pet do they own? Provide your ',
         'step-by-step reasoning.',
+      ].join(''),
       config: {
         thinkingConfig: {
           thinkingLevel: level,
@@ -465,7 +467,7 @@ ai.defineFlow('gemini-image-editing', async (_) => {
   const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
 
   const { media } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash-image-preview'),
+    model: googleAI.model('gemini-2.5-flash-image'),
     prompt: [
       { text: 'add the plant to my room' },
       { media: { url: `data:image/png;base64,${plant}` } },
@@ -580,7 +582,7 @@ ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
   const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.0-generate-001'),
+    model: googleAI.model('veo-3.1-fast-generate-preview'),
     prompt: [
       {
         text: 'make the subject in the photo move',
@@ -593,9 +595,11 @@ ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
       },
     ],
     config: {
+      resolution: '4k',
       durationSeconds: 8,
       aspectRatio: '9:16',
       personGeneration: 'allow_adult',
+      seed: 42,
     },
   });
 
@@ -745,3 +749,50 @@ async function downloadVideo(video: MediaPart, path: string) {
 
   Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
 }
+
+// Test external URL with Gemini 3.0 (should pass as fileUri)
+ai.defineFlow('external-url-gemini-3.0', async () => {
+  const { text } = await ai.generate({
+    model: googleAI.model('gemini-3-flash-preview'),
+    prompt: [
+      { text: 'Describe this image.' },
+      {
+        media: {
+          url: 'https://storage.googleapis.com/generativeai-downloads/images/scones.jpg',
+          contentType: 'image/jpeg',
+        },
+      },
+    ],
+  });
+  return text;
+});
+
+// Gemini 3.1 thinkingLevel config
+ai.defineFlow(
+  {
+    name: 'thinking-level-3.1-pro',
+    inputSchema: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+    outputSchema: z.any(),
+  },
+  async (level) => {
+    const { text } = await ai.generate({
+      model: googleAI.model('gemini-3.1-pro-preview'),
+      prompt: [
+        'Alice, Bob, and Carol each live in a different house on the ',
+        'same street: red, green, and blue. The person who lives in the red house ',
+        'owns a cat. Bob does not live in the green house. Carol owns a dog. The ',
+        'green house is to the left of the red house. Alice does not own a cat. ',
+        'The person in the blue house owns a fish. ',
+        'Who lives in each house, and what pet do they own? Provide your ',
+        'step-by-step reasoning.',
+      ].join(''),
+      config: {
+        thinkingConfig: {
+          thinkingLevel: level,
+          includeThoughts: true,
+        },
+      },
+    });
+    return text;
+  }
+);

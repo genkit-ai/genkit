@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Pro } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';
 
@@ -64,7 +64,7 @@ const reservationTool = ai.defineTool(
 
 // [START chat]
 const chat = ai.chat({
-  model: gemini15Pro,
+  model: googleAI.model('gemini-2.5-pro'),
   system:
     "You are an AI customer service agent for Pavel's Cafe. Use the tools " +
     'available to you to help the customer. If you cannot help the ' +

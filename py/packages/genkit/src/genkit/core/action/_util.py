@@ -85,6 +85,6 @@ def extract_action_args_and_types(
         del action_args[0]
 
     for arg in action_args:
-        arg_types.append(resolved_annotations[arg] if arg in resolved_annotations else Any)
+        arg_types.append(resolved_annotations.get(arg, Any))
 
     return action_args, arg_types

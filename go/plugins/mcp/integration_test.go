@@ -24,7 +24,6 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/stretchr/testify/assert"
 )
 
 // TestMCPConnectionAndTranslation tests the full integration between
@@ -45,7 +44,9 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 
 	cmd := exec.Command("go", "build", "-o", serverBinary, "./fixtures/basic_server")
 	err := cmd.Run()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// SETUP: Genkit client
 	g := genkit.Init(ctx)
@@ -53,7 +54,9 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 	host, err := NewMCPHost(g, MCPHostOptions{
 		Name: "test-host",
 	})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// TEST: Connect to MCP server
 	err = host.Connect(ctx, g, "test-server", MCPClientOptions{
@@ -64,14 +67,20 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 	})
 
 	// ASSERT 1: Connection succeeds
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// TEST: Discover resources
 	resources, err := host.GetActiveResources(ctx)
 
 	// ASSERT 2: Resources discovered
-	assert.NoError(t, err)
-	assert.Greater(t, len(resources), 0, "Should discover at least 1 resource from test server")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resources) == 0 {
+		t.Error("Should discover at least 1 resource from test server")
+	}
 
 	// ASSERT 3: MCP template became Genkit resource
 	found := false
@@ -82,7 +91,9 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, found, "Template 'file://test/{filename}' should match 'file://test/README.md'")
+	if !found {
+		t.Errorf("Template 'file://test/{filename}' should match 'file://test/README.md'")
+	}
 }
 
 // TestMCPAIIntegration tests that MCP resources work with AI generation.
@@ -101,7 +112,9 @@ func TestMCPAIIntegration(t *testing.T) {
 
 	cmd := exec.Command("go", "build", "-o", serverBinary, "./fixtures/policy_server")
 	err := cmd.Run()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// SETUP: Genkit with MCP and mock model
 	g := genkit.Init(ctx)
@@ -125,18 +138,26 @@ func TestMCPAIIntegration(t *testing.T) {
 	})
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	err = host.Connect(ctx, g, "policy-server", MCPClientOptions{
 		Name:  "policy-server",
 		Stdio: &StdioConfig{Command: serverBinary},
 	})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Get resources from MCP (like mcp-client sample)
 	hostResources, err := host.GetActiveResources(ctx)
-	assert.NoError(t, err)
-	assert.Greater(t, len(hostResources), 0, "Should have MCP resources")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hostResources) == 0 {
+		t.Error("Should have MCP resources")
+	}
 
 	// TEST: AI generation with MCP resources (like resource_test.go)
 	resp, err := genkit.Generate(ctx, g,
@@ -150,15 +171,23 @@ func TestMCPAIIntegration(t *testing.T) {
 	)
 
 	// ASSERT: Generation succeeds and includes resource content
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
 
 	result := resp.Text()
 	t.Logf("AI response: %s", result)
 
 	// Verify resource content was resolved and included
-	assert.Contains(t, result, "VACATION_POLICY", "Should include resource content")
-	assert.Contains(t, result, "20 days vacation", "Should include specific policy details")
+	if !strings.Contains(result, "VACATION_POLICY") {
+		t.Error("Should include resource content")
+	}
+	if !strings.Contains(result, "20 days vacation") {
+		t.Error("Should include specific policy details")
+	}
 }
 
 // TestMCPURIMatching tests URI template matching edge cases.
@@ -178,24 +207,34 @@ func TestMCPURIMatching(t *testing.T) {
 
 	cmd := exec.Command("go", "build", "-o", serverBinary, "./fixtures/content_server")
 	err := cmd.Run()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// SETUP: Genkit with MCP
 	g := genkit.Init(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	err = host.Connect(ctx, g, "content-server", MCPClientOptions{
 		Name:  "content-server",
 		Stdio: &StdioConfig{Command: serverBinary},
 	})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Get resources to test
 	resources, err := host.GetActiveResources(ctx)
-	assert.NoError(t, err)
-	assert.Greater(t, len(resources), 0, "Should have resources")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resources) == 0 {
+		t.Error("Should have resources")
+	}
 
 	// TEST: Edge cases that should work with our normalizeURI fixes
 	testCases := []struct {
@@ -219,7 +258,9 @@ func TestMCPURIMatching(t *testing.T) {
 					break
 				}
 			}
-			assert.True(t, found, "URI %s should match template file://data/{filename}", tc.uri)
+			if !found {
+				t.Errorf("URI %s should match template file://data/{filename}", tc.uri)
+			}
 		})
 	}
 }
@@ -241,24 +282,34 @@ func TestMCPContentFetch(t *testing.T) {
 
 	cmd := exec.Command("go", "build", "-o", serverBinary, "./fixtures/content_server")
 	err := cmd.Run()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// SETUP: Genkit with MCP
 	g := genkit.Init(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	err = host.Connect(ctx, g, "content-server", MCPClientOptions{
 		Name:  "content-server",
 		Stdio: &StdioConfig{Command: serverBinary},
 	})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// TEST: Get resources and find matching one
 	resources, err := host.GetActiveResources(ctx)
-	assert.NoError(t, err)
-	assert.Greater(t, len(resources), 0, "Should have resources")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resources) == 0 {
+		t.Error("Should have resources")
+	}
 
 	// Find resource that matches our test URI
 	testURI := "file://data/example.txt"
@@ -271,7 +322,9 @@ func TestMCPContentFetch(t *testing.T) {
 	}
 
 	// ASSERT 1: Resource found
-	assert.NotNil(t, matchingResource, "Should find matching resource for %s", testURI)
+	if matchingResource == nil {
+		t.Fatalf("Should find matching resource for %s", testURI)
+	}
 
 	// ASSERT 2: Content can be fetched via AI integration (end-to-end test)
 	genkit.DefineModel(g, "echo-model", &ai.ModelOptions{
@@ -302,16 +355,26 @@ func TestMCPContentFetch(t *testing.T) {
 	)
 
 	// ASSERT 3: Generation succeeds and includes resource content
-	assert.NoError(t, err)
-	assert.NotNil(t, resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
 
 	result := resp.Text()
 	t.Logf("AI response with resource content: %s", result)
 
 	// ASSERT 4: Content was fetched and included
-	assert.Contains(t, result, "CONTENT_FROM_SERVER", "Should include server identifier")
-	assert.Contains(t, result, "example.txt", "Should include the filename variable")
-	assert.Contains(t, result, "with important data.", "Should include expected content")
+	if !strings.Contains(result, "CONTENT_FROM_SERVER") {
+		t.Error("Should include server identifier")
+	}
+	if !strings.Contains(result, "example.txt") {
+		t.Error("Should include the filename variable")
+	}
+	if !strings.Contains(result, "with important data.") {
+		t.Error("Should include expected content")
+	}
 }
 
 // TestMCPMultipleServers tests connecting to multiple MCP servers simultaneously.
@@ -332,37 +395,51 @@ func TestMCPMultipleServers(t *testing.T) {
 
 	cmdA := exec.Command("go", "build", "-o", serverA, "./fixtures/server_a")
 	err := cmdA.Run()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cmdB := exec.Command("go", "build", "-o", serverB, "./fixtures/server_b")
 	err = cmdB.Run()
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// SETUP: Genkit with MCP host
 	g := genkit.Init(ctx)
 
 	host, err := NewMCPHost(g, MCPHostOptions{Name: "multi-host"})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// CONNECT: To both servers
 	err = host.Connect(ctx, g, "server-a", MCPClientOptions{
 		Name:  "server-a",
 		Stdio: &StdioConfig{Command: serverA},
 	})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	err = host.Connect(ctx, g, "server-b", MCPClientOptions{
 		Name:  "server-b",
 		Stdio: &StdioConfig{Command: serverB},
 	})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// TEST: Get all resources from both servers
 	allResources, err := host.GetActiveResources(ctx)
-	assert.NoError(t, err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// ASSERT: Resources from both servers are present
-	assert.GreaterOrEqual(t, len(allResources), 2, "Should have resources from both servers")
+	if len(allResources) < 2 {
+		t.Error("Should have resources from both servers")
+	}
 
 	// ASSERT: Can identify resources from each server
 	serverAResources := 0
@@ -373,17 +450,25 @@ func TestMCPMultipleServers(t *testing.T) {
 		if strings.Contains(name, "server-a") {
 			serverAResources++
 			// Test server A resource matches its URI pattern
-			assert.True(t, res.Matches("a://docs/test.md"), "Server A resource should match a:// pattern")
+			if !res.Matches("a://docs/test.md") {
+				t.Error("Server A resource should match a:// pattern")
+			}
 		} else if strings.Contains(name, "server-b") {
 			serverBResources++
 			// Test server B resource matches its URI pattern
-			assert.True(t, res.Matches("b://files/data.json"), "Server B resource should match b:// pattern")
+			if !res.Matches("b://files/data.json") {
+				t.Error("Server B resource should match b:// pattern")
+			}
 		}
 	}
 
 	// ASSERT: Both servers contributed resources
-	assert.Greater(t, serverAResources, 0, "Should have resources from server A")
-	assert.Greater(t, serverBResources, 0, "Should have resources from server B")
+	if serverAResources == 0 {
+		t.Error("Should have resources from server A")
+	}
+	if serverBResources == 0 {
+		t.Error("Should have resources from server B")
+	}
 
 	t.Logf("Found %d resources from server A, %d from server B", serverAResources, serverBResources)
 }
@@ -406,7 +491,9 @@ func TestMCPErrorResilience(t *testing.T) {
 		defer cancel()
 
 		host, err := NewMCPHost(g, MCPHostOptions{Name: "error-test"})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Try to connect to non-existent command
 		err = host.Connect(ctx, g, "bad-server", MCPClientOptions{
@@ -415,7 +502,9 @@ func TestMCPErrorResilience(t *testing.T) {
 		})
 
 		// ASSERT: Graceful failure, not crash (fails in ~100ms)
-		assert.Error(t, err) // Any connection failure is fine
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
 		t.Logf("Connection failure handled gracefully: %v", err)
 	})
 
@@ -427,20 +516,28 @@ func TestMCPErrorResilience(t *testing.T) {
 
 		cmd := exec.Command("go", "build", "-o", serverBinary, "./fixtures/basic_server")
 		err := cmd.Run()
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		err = host.Connect(ctx, g, "test-server", MCPClientOptions{
 			Name:  "test-server",
 			Stdio: &StdioConfig{Command: serverBinary},
 		})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Try to find non-existent resource
 		resources, err := host.GetActiveResources(ctx)
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Test URI that won't match any resource
 		nonExistentURI := "file://nonexistent/path.txt"
@@ -453,7 +550,9 @@ func TestMCPErrorResilience(t *testing.T) {
 		}
 
 		// ASSERT: Resource not found, but no crash
-		assert.False(t, found, "Non-existent resource should not match")
+		if found {
+			t.Error("Non-existent resource should not match")
+		}
 		t.Logf("Resource not found handled gracefully for URI: %s", nonExistentURI)
 	})
 
@@ -464,19 +563,27 @@ func TestMCPErrorResilience(t *testing.T) {
 
 		cmd := exec.Command("go", "build", "-o", serverBinary, "./fixtures/basic_server")
 		err := cmd.Run()
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		host, err := NewMCPHost(g, MCPHostOptions{Name: "test-host"})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		err = host.Connect(ctx, g, "test-server", MCPClientOptions{
 			Name:  "test-server",
 			Stdio: &StdioConfig{Command: serverBinary},
 		})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		resources, err := host.GetActiveResources(ctx)
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		// Test various malformed URIs
 		malformedURIs := []string{

@@ -70,11 +70,11 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
       title: 'Run Flow',
       description: 'Runs the flow with the provided input',
       inputSchema: getCommonSchema(options.explicitProjectRoot, {
-        flowName: z.string().describe('name of the flow'),
+        flowName: z.string().describe('name of the flow; type: string'),
         input: z
           .string()
           .describe(
-            'Flow input as JSON object encoded as string (it will be passed through `JSON.parse`). Must conform to the schema.'
+            'Flow input as JSON object encoded as string (it will be passed through `JSON.parse`). Must conform to the schema; type: string.'
           )
           .optional(),
       }),

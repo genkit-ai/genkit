@@ -20,6 +20,7 @@ import {
   type SpanData,
 } from '@genkit-ai/tools-common';
 import { logger } from '@genkit-ai/tools-common/utils';
+import cors from 'cors';
 import express from 'express';
 import type * as http from 'http';
 import { BroadcastManager } from './broadcast-manager.js';
@@ -46,9 +47,19 @@ export async function startTelemetryServer(params: {
    * Defaults to '5mb'.
    */
   maxRequestBodySize?: string | number;
+  corsOrigin?: string | RegExp;
 }) {
   await params.traceStore.init();
   const api = express();
+  // Allow all origins and expose trace ID header
+  api.use(
+    cors({
+      // By default, allow connections from localhost on any port.
+      origin: params.corsOrigin || /^http:\/\/localhost:\d+$/,
+      allowedHeaders: ['Content-Type'],
+      exposedHeaders: ['X-Genkit-Trace-Id'],
+    })
+  );
 
   api.use(express.json({ limit: params.maxRequestBodySize ?? '100mb' }));
 

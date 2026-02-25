@@ -268,7 +268,7 @@ async def test_bigquery__get_closest_documents_fail(
 async def test_bigquery__retrieve_neighbors_data_from_db(
     bq_retriever_instance: Any,  # noqa: ANN401
 ) -> None:
-    """Test bigquery retriver _retrieve_neighbors_data_from_db."""
+    """Test bigquery retriever _retrieve_neighbors_data_from_db."""
     # Mock query job result from bigquery query
     mock_bq_query_job = MagicMock()
     mock_bq_query_job.result.return_value = [
@@ -329,7 +329,7 @@ async def test_bigquery__retrieve_neighbors_data_from_db(
 async def test_bigquery_retrieve_neighbors_data_from_db_fail(
     bq_retriever_instance: Any,  # noqa: ANN401
 ) -> None:
-    """Test bigquery retriver _retrieve_neighbors_data_from_db when fails."""
+    """Test bigquery retriever _retrieve_neighbors_data_from_db when fails."""
     # Mock exception from bigquery query
     bq_retriever_instance.bq_client.query.raises = AttributeError
 

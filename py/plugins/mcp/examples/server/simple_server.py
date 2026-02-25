@@ -19,6 +19,7 @@
 
 import asyncio
 import os
+import pathlib
 
 from pydantic import BaseModel, Field
 
@@ -37,7 +38,7 @@ class AddInput(BaseModel):
 def main() -> None:
     """Run the simple MCP server."""
     # Load prompts from the 'prompts' directory relative to this script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = pathlib.Path(pathlib.Path(__file__).resolve()).parent
     prompts_dir = os.path.join(script_dir, 'prompts')
 
     ai = Genkit(prompt_dir=prompts_dir)
@@ -59,7 +60,7 @@ def main() -> None:
     # In JS example: .start() is called.
     server = create_mcp_server(ai, McpServerOptions(name='example_server', version='0.0.1'))
 
-    print('Starting MCP server on stdio...')
+    print('Starting MCP server on stdio...')  # noqa: T201 - example script
     asyncio.run(server.start())
 
 

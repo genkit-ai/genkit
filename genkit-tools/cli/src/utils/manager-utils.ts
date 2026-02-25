@@ -33,9 +33,10 @@ import getPort, { makeRange } from 'get-port';
  *
  * This function is not idempotent. Typically you want to make sure it's called only once per cli instance.
  */
-export async function resolveTelemetryServer(
-  projectRoot: string
-): Promise<string> {
+export async function resolveTelemetryServer(options: {
+  projectRoot: string;
+  corsOrigin?: string;
+}): Promise<string> {
   let telemetryServerUrl = process.env.GENKIT_TELEMETRY_SERVER;
   if (!telemetryServerUrl) {
     const telemetryPort = await getPort({ port: makeRange(4033, 4999) });
@@ -43,9 +44,10 @@ export async function resolveTelemetryServer(
     await startTelemetryServer({
       port: telemetryPort,
       traceStore: new LocalFileTraceStore({
-        storeRoot: projectRoot,
-        indexRoot: projectRoot,
+        storeRoot: options.projectRoot,
+        indexRoot: options.projectRoot,
       }),
+      corsOrigin: options.corsOrigin,
     });
   }
   return telemetryServerUrl;
@@ -54,15 +56,16 @@ export async function resolveTelemetryServer(
 /**
  * Starts the runtime manager and its dependencies.
  */
-export async function startManager(
-  projectRoot: string,
-  manageHealth?: boolean
-): Promise<RuntimeManager> {
-  const telemetryServerUrl = await resolveTelemetryServer(projectRoot);
+export async function startManager(options: {
+  projectRoot: string;
+  manageHealth?: boolean;
+  corsOrigin?: string;
+}): Promise<RuntimeManager> {
+  const telemetryServerUrl = await resolveTelemetryServer(options);
   const manager = RuntimeManager.create({
     telemetryServerUrl,
-    manageHealth,
-    projectRoot,
+    manageHealth: options.manageHealth,
+    projectRoot: options.projectRoot,
   });
   return manager;
 }
@@ -73,6 +76,7 @@ export interface DevProcessManagerOptions {
   healthCheck?: boolean;
   timeout?: number;
   cwd?: string;
+  corsOrigin?: string;
 }
 
 export async function startDevProcessManager(
@@ -81,7 +85,10 @@ export async function startDevProcessManager(
   args: string[],
   options?: DevProcessManagerOptions
 ): Promise<{ manager: RuntimeManager; processPromise: Promise<void> }> {
-  const telemetryServerUrl = await resolveTelemetryServer(projectRoot);
+  const telemetryServerUrl = await resolveTelemetryServer({
+    projectRoot,
+    corsOrigin: options?.corsOrigin,
+  });
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
   const envVars: Record<string, string> = {
     GENKIT_TELEMETRY_SERVER: telemetryServerUrl,
@@ -90,6 +97,7 @@ export async function startDevProcessManager(
   if (!disableRealtimeTelemetry) {
     envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
   }
+
   const processManager = new ProcessManager(command, args, envVars);
   const manager = await RuntimeManager.create({
     telemetryServerUrl,
@@ -169,7 +177,7 @@ export async function runWithManager(
 ) {
   let manager: RuntimeManager;
   try {
-    manager = await startManager(projectRoot, false); // Don't manage health in this case.
+    manager = await startManager({ projectRoot, manageHealth: false }); // Don't manage health in this case.
   } catch (e) {
     process.exit(1);
   }

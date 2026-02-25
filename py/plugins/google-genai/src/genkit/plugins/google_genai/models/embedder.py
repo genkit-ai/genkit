@@ -94,7 +94,7 @@ class Embedder:
         Returns:
             EmbedResponse
         """
-        contents = self._build_contents(request)
+        contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(request)
         response = await self._client.aio.models.embed_content(
             model=self._version,
@@ -105,7 +105,7 @@ class Embedder:
         embeddings = [Embedding(embedding=em.values or []) for em in (response.embeddings or [])]
         return EmbedResponse(embeddings=embeddings)
 
-    def _build_contents(self, request: EmbedRequest) -> list[genai.types.Content]:
+    async def _build_contents(self, request: EmbedRequest) -> list[genai.types.Content]:
         """Build google-genai request contents from Genkit request.
 
         Args:
@@ -118,7 +118,7 @@ class Embedder:
         for doc in request.input:
             content_parts: list[genai.types.Part] = []
             for p in doc.content:
-                converted = PartConverter.to_gemini(p)
+                converted = await PartConverter.to_gemini(p)
                 if isinstance(converted, list):
                     content_parts.extend(converted)
                 else:

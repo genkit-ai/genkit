@@ -97,6 +97,7 @@ See Also:
 """
 
 from .constants import GENKIT_CLIENT_HEADER, GENKIT_VERSION
+from .http_client import clear_client_cache, close_cached_clients, get_cached_client
 from .logging import Logger, get_logger
 
 
@@ -109,4 +110,13 @@ def package_name() -> str:
     return 'genkit.core'
 
 
-__all__ = ['package_name', 'GENKIT_CLIENT_HEADER', 'GENKIT_VERSION', 'Logger', 'get_logger']
+__all__ = [
+    'GENKIT_CLIENT_HEADER',
+    'GENKIT_VERSION',
+    'Logger',
+    'clear_client_cache',
+    'close_cached_clients',
+    'get_cached_client',
+    'get_logger',
+    'package_name',
+]

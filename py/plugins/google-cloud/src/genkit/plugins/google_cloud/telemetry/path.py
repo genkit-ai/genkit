@@ -39,6 +39,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 
 from genkit.core import GENKIT_VERSION
 
+from .gcp_logger import gcp_logger
 from .utils import (
     create_common_log_attributes,
     extract_error_message,
@@ -150,7 +151,7 @@ class PathsTelemetry:
         if thread_name:
             log_attrs['threadName'] = thread_name
 
-        logger.error(f'Error[{display_path}, {error_name}]', **log_attrs)
+        gcp_logger.log_structured_error(f'Error[{display_path}, {error_name}]', log_attrs)
 
 
 # Singleton instance

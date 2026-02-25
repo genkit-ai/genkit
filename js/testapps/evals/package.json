@@ -18,7 +18,7 @@
   "dependencies": {
     "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
-    "@genkit-ai/googleai": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "genkit": "workspace:*",
     "genkitx-langchain": "workspace:*",

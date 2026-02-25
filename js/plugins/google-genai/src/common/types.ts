@@ -484,6 +484,9 @@ export const TaskTypeSchema = z.enum([
   'SEMANTIC_SIMILARITY',
   'CLASSIFICATION',
   'CLUSTERING',
+  'CODE_RETRIEVAL_QUERY',
+  'QUESTION_ANSWERING',
+  'FACT_VERIFICATION',
 ]);
 
 export type TaskType = z.infer<typeof TaskTypeSchema>;

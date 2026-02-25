@@ -44,7 +44,7 @@ def test_makes_deep_copy() -> None:
     assert doc.metadata['foo'] == 'bar'
 
 
-def test_from_dcoument_data() -> None:
+def test_from_document_data() -> None:
     """Test creating a Document from DocumentData."""
     doc = Document.from_document_data(DocumentData(content=[DocumentPart(root=TextPart(text='some text'))]))
 

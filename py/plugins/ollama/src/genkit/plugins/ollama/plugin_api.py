@@ -141,18 +141,18 @@ class Ollama(Plugin):
             Action object for the model.
         """
         # Extract local name (remove plugin prefix)
-        _clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
+        clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
 
         # Try to find the model definition from pre-configured models
         model_ref = None
         for model_def in self.models:
-            if model_def.name == _clean_name:
+            if model_def.name == clean_name:
                 model_ref = model_def
                 break
 
         # If not found in pre-configured models, create a default one
         if model_ref is None:
-            model_ref = ModelDefinition(name=_clean_name)
+            model_ref = ModelDefinition(name=clean_name)
 
         model = OllamaModel(
             client=self.client,
@@ -165,7 +165,7 @@ class Ollama(Plugin):
             fn=model.generate,
             metadata={
                 'model': {
-                    'label': f'Ollama - {_clean_name}',
+                    'label': f'Ollama - {clean_name}',
                     'multiturn': model_ref.api_type == OllamaAPITypes.CHAT,
                     'system_role': True,
                     'tools': model_ref.supports.tools,
@@ -186,9 +186,9 @@ class Ollama(Plugin):
             Action object for the embedder.
         """
         # Extract local name (remove plugin prefix)
-        _clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
+        clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
 
-        embedder_ref = EmbeddingDefinition(name=_clean_name)
+        embedder_ref = EmbeddingDefinition(name=clean_name)
         embedder = OllamaEmbedder(
             client=self.client,
             embedding_definition=embedder_ref,
@@ -200,7 +200,7 @@ class Ollama(Plugin):
             fn=embedder.embed,
             metadata={
                 'embedder': {
-                    'label': f'Ollama Embedding - {_clean_name}',
+                    'label': f'Ollama Embedding - {clean_name}',
                     'dimensions': embedder_ref.dimensions,
                     'supports': {'input': ['text']},
                     'customOptions': to_json_schema(ollama_api.Options),
@@ -218,21 +218,21 @@ class Ollama(Plugin):
                 - info (dict): The metadata dictionary describing the model configuration and properties.
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
-        _client = self.client()
-        response = await _client.list()
+        client = self.client()
+        response = await client.list()
 
         actions = []
         for model in response.models:
-            _name = model.model
-            if not _name:
+            name = model.model
+            if not name:
                 continue
-            if 'embed' in _name:
+            if 'embed' in name:
                 actions.append(
                     embedder_action_metadata(
-                        name=ollama_name(_name),
+                        name=ollama_name(name),
                         options=EmbedderOptions(
                             config_schema=to_json_schema(ollama_api.Options),
-                            label=f'Ollama Embedding - {_name}',
+                            label=f'Ollama Embedding - {name}',
                             supports=EmbedderSupports(input=['text']),
                         ),
                     )
@@ -240,10 +240,10 @@ class Ollama(Plugin):
             else:
                 actions.append(
                     model_action_metadata(
-                        name=ollama_name(_name),
+                        name=ollama_name(name),
                         config_schema=GenerationCommonConfig,
                         info={
-                            'label': f'Ollama - {_name}',
+                            'label': f'Ollama - {name}',
                             'multiturn': True,
                             'system_role': True,
                             'tools': True,

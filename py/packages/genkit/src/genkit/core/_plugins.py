@@ -46,7 +46,8 @@ def extend_plugin_namespace() -> None:
     """
     # Import genkit.plugins to initialize the namespace if needed
     if 'genkit.plugins' not in sys.modules:
-        import genkit.plugins  # noqa: F401
+        # Deferred import: initialize the namespace package only if not already loaded
+        import genkit.plugins  # noqa: F401, PLC0415
 
     genkit_plugins = sys.modules.get('genkit.plugins')
     if genkit_plugins is None or not hasattr(genkit_plugins, '__path__'):

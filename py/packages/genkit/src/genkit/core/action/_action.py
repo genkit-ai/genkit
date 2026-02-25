@@ -99,7 +99,12 @@ from genkit.aio import Channel, ensure_async
 from genkit.core.error import GenkitError
 from genkit.core.tracing import tracer
 
-from ._tracing import SpanAttributeValue, record_input_metadata, record_output_metadata
+from ._tracing import (
+    SpanAttributeValue,
+    record_input_metadata,
+    record_output_metadata,
+    save_parent_path,
+)
 from ._util import extract_action_args_and_types, noop_streaming_callback
 from .types import ActionKind, ActionMetadataKey, ActionResponse
 
@@ -143,7 +148,7 @@ class ActionRunContext:
         self,
         on_chunk: StreamingCallback | None = None,
         context: dict[str, object] | None = None,
-        on_trace_start: Callable[[str], None] | None = None,
+        on_trace_start: Callable[[str, str], None] | None = None,
     ) -> None:
         """Initializes an ActionRunContext instance.
 
@@ -156,12 +161,12 @@ class ActionRunContext:
             context: An optional dictionary containing context data to be made
                      available within the action execution. Defaults to an empty
                      dictionary.
-            on_trace_start: A callable to be invoked with the trace ID when
-                            the trace is started.
+            on_trace_start: A callable to be invoked with the trace ID and span
+                            ID when the trace is started.
         """
         self._on_chunk: StreamingCallback = on_chunk if on_chunk is not None else noop_streaming_callback
         self._context: dict[str, object] = context if context is not None else {}
-        self._on_trace_start: Callable[[str], None] = on_trace_start if on_trace_start else lambda _: None
+        self._on_trace_start: Callable[[str, str], None] = on_trace_start if on_trace_start else lambda _t, _s: None
 
     @property
     def context(self) -> dict[str, object]:
@@ -282,9 +287,21 @@ class Action(Generic[InputT, OutputT, ChunkT]):
     def input_schema(self) -> dict[str, object]:
         return self._input_schema
 
+    @input_schema.setter
+    def input_schema(self, value: dict[str, object]) -> None:
+        """Update input schema (used by lazy-loaded prompts to set schema after registration)."""
+        self._input_schema = value
+        self._metadata[ActionMetadataKey.INPUT_KEY] = value
+
     @property
     def output_schema(self) -> dict[str, object]:
         return self._output_schema
+
+    @output_schema.setter
+    def output_schema(self, value: dict[str, object]) -> None:
+        """Update output schema (used by lazy-loaded prompts to set schema after registration)."""
+        self._output_schema = value
+        self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
 
     @property
     def is_async(self) -> bool:
@@ -333,7 +350,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         input: InputT | None = None,
         on_chunk: StreamingCallback | None = None,
         context: dict[str, object] | None = None,
-        on_trace_start: Callable[[str], None] | None = None,
+        on_trace_start: Callable[[str, str], None] | None = None,
         _telemetry_labels: dict[str, object] | None = None,
     ) -> ActionResponse[OutputT]:
         """Executes the action asynchronously with the given input.
@@ -349,7 +366,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             on_chunk: An optional callback function to receive streaming output chunks.
             context: An optional dictionary containing context data for the execution.
             on_trace_start: An optional callback to be invoked with the trace ID
-                            when the trace is started.
+                            and span ID when the trace is started.
             telemetry_labels: Optional labels for telemetry.
 
         Returns:
@@ -373,7 +390,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         raw_input: InputT | None = None,
         on_chunk: StreamingCallback | None = None,
         context: dict[str, object] | None = None,
-        on_trace_start: Callable[[str], None] | None = None,
+        on_trace_start: Callable[[str, str], None] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> ActionResponse[OutputT]:
         """Executes the action asynchronously with raw, unvalidated input.
@@ -390,16 +407,28 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             on_chunk: An optional callback function to receive streaming output chunks.
             context: An optional dictionary containing context data for the execution.
             on_trace_start: An optional callback to be invoked with the trace ID
-                            when the trace is started.
+                            and span ID when the trace is started.
             telemetry_labels: Optional labels for telemetry.
 
         Returns:
             An awaitable ActionResponse object containing the final result and trace ID.
 
         Raises:
-            GenkitError: If an error occurs during action execution.
+            GenkitError: If an error occurs during action execution, or if
+                the action requires input but none was provided.
         """
-        input_action = self._input_type.validate_python(raw_input) if self._input_type is not None else None
+        input_action: InputT | None = None
+        if self._input_type is not None:
+            if raw_input is None:
+                raise GenkitError(
+                    message=(
+                        f"Action '{self.name}' requires input but none was provided. "
+                        'Please supply a valid input payload.'
+                    ),
+                    status='INVALID_ARGUMENT',
+                )
+            input_action = self._input_type.validate_python(raw_input)
+
         return await self.arun(
             input=input_action,
             on_chunk=on_chunk,
@@ -564,38 +593,44 @@ def _make_tracing_wrappers(
         """
         afn = ensure_async(fn)
         start_time = time.perf_counter()
-        with tracer.start_as_current_span(name) as span:
-            # Format trace_id as 32-char hex string (OpenTelemetry standard format)
-            trace_id = format(span.get_span_context().trace_id, '032x')
-            ctx._on_trace_start(trace_id)  # pyright: ignore[reportPrivateUsage]
-            record_input_metadata(
-                span=span,
-                kind=kind,
-                name=name,
-                span_metadata=span_metadata,
-                input=input,
-            )
 
-            try:
-                match n_action_args:
-                    case 0:
-                        output = await afn()
-                    case 1:
-                        output = await afn(input)
-                    case 2:
-                        output = await afn(input, ctx)
-                    case _:
-                        raise ValueError('action fn must have 0-2 args...')
-            except Exception as e:
-                raise GenkitError(
-                    cause=e.cause if isinstance(e, GenkitError) and e.cause else e,
-                    message=f'Error while running action {name}',
-                    trace_id=trace_id,
-                ) from e
+        with save_parent_path():
+            with tracer.start_as_current_span(name) as span:
+                # Format trace_id and span_id as hex strings (OpenTelemetry standard format)
+                trace_id = format(span.get_span_context().trace_id, '032x')
+                span_id = format(span.get_span_context().span_id, '016x')
+                ctx._on_trace_start(trace_id, span_id)  # pyright: ignore[reportPrivateUsage]
+                record_input_metadata(
+                    span=span,
+                    kind=kind,
+                    name=name,
+                    span_metadata=span_metadata,
+                    input=input,
+                )
 
-            output = _record_latency(output, start_time)
-            record_output_metadata(span, output=output)
-            return ActionResponse(response=output, trace_id=trace_id)
+                try:
+                    match n_action_args:
+                        case 0:
+                            output = await afn()
+                        case 1:
+                            output = await afn(input)
+                        case 2:
+                            output = await afn(input, ctx)
+                        case _:
+                            raise ValueError('action fn must have 0-2 args...')
+                except Exception as e:
+                    # Re-raise existing GenkitError instances to avoid double-wrapping
+                    if isinstance(e, GenkitError):
+                        raise
+                    raise GenkitError(
+                        cause=e,
+                        message=f'Error while running action {name}',
+                        trace_id=trace_id,
+                    ) from e
+
+                output = _record_latency(output, start_time)
+                record_output_metadata(span, output=output)
+                return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
 
     def sync_tracing_wrapper(input: object | None, ctx: ActionRunContext) -> ActionResponse[Any]:
         """Wrap the function in a sync tracing wrapper.
@@ -608,37 +643,43 @@ def _make_tracing_wrappers(
             The action response.
         """
         start_time = time.perf_counter()
-        with tracer.start_as_current_span(name) as span:
-            # Format trace_id as 32-char hex string (OpenTelemetry standard format)
-            trace_id = format(span.get_span_context().trace_id, '032x')
-            ctx._on_trace_start(trace_id)  # pyright: ignore[reportPrivateUsage]
-            record_input_metadata(
-                span=span,
-                kind=kind,
-                name=name,
-                span_metadata=span_metadata,
-                input=input,
-            )
 
-            try:
-                match n_action_args:
-                    case 0:
-                        output = fn()
-                    case 1:
-                        output = fn(input)
-                    case 2:
-                        output = fn(input, ctx)
-                    case _:
-                        raise ValueError('action fn must have 0-2 args...')
-            except Exception as e:
-                raise GenkitError(
-                    cause=e,
-                    message=f'Error while running action {name}',
-                    trace_id=trace_id,
-                ) from e
+        with save_parent_path():
+            with tracer.start_as_current_span(name) as span:
+                # Format trace_id and span_id as hex strings (OpenTelemetry standard format)
+                trace_id = format(span.get_span_context().trace_id, '032x')
+                span_id = format(span.get_span_context().span_id, '016x')
+                ctx._on_trace_start(trace_id, span_id)  # pyright: ignore[reportPrivateUsage]
+                record_input_metadata(
+                    span=span,
+                    kind=kind,
+                    name=name,
+                    span_metadata=span_metadata,
+                    input=input,
+                )
 
-            output = _record_latency(output, start_time)
-            record_output_metadata(span, output=output)
-            return ActionResponse(response=output, trace_id=trace_id)
+                try:
+                    match n_action_args:
+                        case 0:
+                            output = fn()
+                        case 1:
+                            output = fn(input)
+                        case 2:
+                            output = fn(input, ctx)
+                        case _:
+                            raise ValueError('action fn must have 0-2 args...')
+                except Exception as e:
+                    # Re-raise existing GenkitError instances to avoid double-wrapping
+                    if isinstance(e, GenkitError):
+                        raise
+                    raise GenkitError(
+                        cause=e,
+                        message=f'Error while running action {name}',
+                        trace_id=trace_id,
+                    ) from e
+
+                output = _record_latency(output, start_time)
+                record_output_metadata(span, output=output)
+                return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
 
     return sync_tracing_wrapper, async_tracing_wrapper

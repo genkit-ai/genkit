@@ -400,12 +400,20 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
 
   /**
    * Converts a Genkit ToolDefinition to an Anthropic Tool object.
+   *
+   * Anthropic requires `input_schema.type` to be present (usually `"object"`).
+   * Genkit's `ToolDefinition` may have an empty schema (e.g. from `z.void()`)
+   * which lacks the `type` field. We default to `{ type: "object" }` to
+   * prevent 400 errors from the Anthropic API.
    */
   protected toAnthropicTool(tool: ToolDefinition): RunnerTool<ApiTypes> {
+    const schema = tool.inputSchema || {};
+    const inputSchema =
+      'type' in schema ? schema : { ...schema, type: 'object' as const };
     return {
       name: tool.name,
       description: tool.description,
-      input_schema: tool.inputSchema,
+      input_schema: inputSchema,
     } as RunnerTool<ApiTypes>;
   }
 

@@ -484,7 +484,9 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 	}
 
 	if modelRef, ok := genOpts.Model.(ModelRef); ok && genOpts.Config == nil {
-		genOpts.Config = modelRef.Config()
+		if cfg := modelRef.Config(); !base.IsNil(cfg) {
+			genOpts.Config = cfg
+		}
 	}
 
 	respondParts := []*toolResponsePart{}

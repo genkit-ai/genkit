@@ -19,14 +19,14 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIndex_Success_NoDocuments(t *testing.T) {
 	ds := DocStore{}
 	err := ds.Index(context.Background(), nil)
-	require.NoError(t, err)
-
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestIndex_Fail_EmbedReturnError(t *testing.T) {
@@ -44,5 +44,7 @@ func TestIndex_Fail_EmbedReturnError(t *testing.T) {
 	}}
 
 	err := ds.Index(context.Background(), docs)
-	require.Error(t, err)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
 }

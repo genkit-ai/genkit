@@ -139,210 +139,110 @@ differences here for now.
 * **Content negotiation**: Different response formats based on accept headers or
   query parameters.
 
-# Sync vs Async Design
+# Async-First Design
+
 Genkit is a library that allows application developers to create AI flows for
 their applications using an API that abstracts over various components such as
-indexers, retiervers, models, embedders, etc.
+indexers, retrievers, models, embedders, etc.
 
-Ideally, as a user, one would like the API to be async-first because this
-single-threaded model of dealing with concurrency is the direction that Python
-frameworks are taking and Genkit naturally lives in an async world. Genkit is
-majorly I/O-bound not as much computationally-bound since it's primary purpose
-is composing various AI foundational components and setting up typed
-communication patterns between them.
+The API is **async-first** because this single-threaded model of dealing with
+concurrency is the direction that Python frameworks are taking and Genkit
+naturally lives in an async world. Genkit is majorly I/O-bound, not as much
+computationally-bound, since its primary purpose is composing various AI
+foundational components and setting up typed communication patterns between them.
 
-### Shape of the API
+### Class Hierarchy
 
-Before we begin, let's study `structlog`, a structured logging library that has
-had to deal with this problem as well and exposes a well-defined set of APIs
-that is familiar to the Python world:
-
-```python
-import asyncio
-import structlog
-
-logger = structlog.get_logger(__name__)
-
-async def foo() -> str:
-  """Foo.
-
-  Returns:
-    The name of this function.
-  """
-  await logger.ainfo('Returning foo from function', fn=foo.__name__)
-
-  return foo.__name__
-
-
-if __name__ == '__main__':
-    asyncio.run(foo())
-
-```
-
-Running the program displays the following on the console:
-
-```shell
-zsh❯ uv run foo.py
-2025-03-30 14:23:13 [info     ] Returning foo from function    fn=foo
-
-```
-
-`structlog` exposes the async equivalent (`await logger.ainfo()`) functionality
-of their `logger.info()` calls using the minimally-invasive `a*` prefix, without
-resorting to any sort of magic.
-
-We propose to do the same:
-
-```python
-ai = Genkit()
-
-@ai.flow()
-async def async_flow(...):
-    response = await ai.generate(f"Answer this: {query}")
-    return {"answer": response.text}
-
-@ai.flow()
-def sync_flow(...):
-    response = ai.generate(f"Answer this: {query}")
-    return {"answer": response.text}
-
-async def main() -> None:
-    """Main entry-point."""
-    ...
-
-if __name__ == '__main__':
-    asyncio.run(main())
-
-```
-
-!!! note
-
-    In an initial iteration of this design, we were considering using decorators
-    to detect whether the callable is a coroutine and change the meaning of the
-    `ai` treating it as a special variable inside it, but this increases the
-    complexity of the implementation and adds very little value.
-
-    We have, therefore, decided to favor simplicity and add the `a*` prefix to
-    every asynchronous method made available by the API.
-
-To make this work, we could have a user-facing veneer
-`genkit.ai.GenkitExperimental` class that composes 2 implementations of Genkit:
-
-- `genkit.ai.AsyncGenkit`
-- `genkit.ai.SyncGenkit`
-
-#### ASCII Diagram
+The implementation uses a three-level class hierarchy:
 
 ```ascii
-+---------------------+      +-------------------+
-|   RegistrarMixin    |      |      Registry     |
-|---------------------|      |-------------------|
-| - _registry         |<>----|(placeholder type) |  (Composition: RegistrarMixin has a Registry)
-|---------------------|      +-------------------+
-| + __init__(registry)|
-| + flow()            |
-| + tool()            |
++---------------------+
+|   GenkitRegistry    |  (in _registry.py)
+|---------------------|
+| + flow()            |  Decorator to register flows
+| + tool()            |  Decorator to register tools
+| + define_model()    |  Register model actions
+| + define_embedder() |  Register embedder actions
 | + registry (prop)   |
 +--------^------------+
-         | (Inheritance: GenkitExperimental is-a RegistrarMixin)
-+--------|-----------------+      +----------------------+     +----------------------+
-|  GenkitExperimental      |----->|      AsyncGenkit     |     |       SyncGenkit     |
-| (in _veneer.py)          |<>--  | (in _async.py)       |     | (in _sync.py)        |
-|--------------------------|  |   |----------------------|     |----------------------|
-| - _registry (inherited)  |  |   | + generate()         |     | + generate()         |
-| - _async_ai : AsyncGenkit|  |   | + generate_stream()  |     | + generate_stream()  |
-| - _sync_ai : SyncGenkit  |  *-->+----------------------+     *-->+----------------------+
-|--------------------------|        (Async Implementation)        (Independent Sync Impl.)
-| + __init__(registry)     |
-| + flow() (inherited)     |
-| + tool() (inherited)     |
-|                          |
-| + generate() ----------> calls _sync_ai.generate()
-| + generate_stream() ---> calls _sync_ai.generate_stream()
-|                          |
-| + agenerate() ---------> calls _async_ai.generate()
-| + agenerate_stream() --> calls _async_ai.generate_stream()
-|                          |
-| + aio (prop) ---------> returns _async_ai instance
-| + io (prop) ----------> returns _sync_ai instance
-+--------------------------+
+         |
++--------|-----------+
+|    GenkitBase      |  (in _base_async.py)
+|--------------------|
+| + __init__(        |
+|     plugins,       |
+|     model,         |
+|     reflection_    |
+|     server_spec)   |
++--------^-----------+
+         |
++--------|-----------+
+|      Genkit        |  (in _aio.py)
+|--------------------|
+| + generate()       |  async — text generation
+| + generate_stream()|  streaming generation
+| + embed()          |  async — create embeddings
+| + retrieve()       |  async — fetch documents
+| + rerank()         |  async — reorder documents
+| + evaluate()       |  async — evaluate outputs
+| + chat()           |  session-based chat
++--------------------+
 ```
-
-#### Mermaid Diagram
 
 ```mermaid
 classDiagram
-    class RegistrarMixin {
-        -Registry _registry
-        +__init__(registry: Registry | None)
-        +flow(name: str | None, description: str | None) Callable
-        +tool(name: str | None, description: str | None) Callable
+    class GenkitRegistry {
+        <<_registry.py>>
+        +flow(name, description) Callable
+        +tool(name, description) Callable
+        +define_model(config, fn) Action
+        +define_embedder(config, fn) Action
         +registry() Registry
     }
 
-    class Registry {
-        %% Placeholder for Registry type %%
+    class GenkitBase {
+        <<_base_async.py>>
+        +__init__(plugins, model, reflection_server_spec)
     }
 
-    class AsyncGenkit {
-        <<_async.py>>
-        +generate(prompt: str) str
-        +generate_stream(prompt: str) AsyncGenerator
+    class Genkit {
+        <<_aio.py>>
+        +generate(model, prompt, system, ...) GenerateResponseWrapper
+        +generate_stream(model, prompt, ...) tuple
+        +embed(embedder, content) EmbedResponse
+        +retrieve(retriever, query) list
+        +rerank(reranker, query, documents) list
+        +evaluate(evaluator, dataset) EvalResponse
     }
 
-    class SyncGenkit {
-        <<_sync.py>>
-        +generate(prompt: str) str
-        +generate_stream(prompt: str) Generator
-    }
-
-    class GenkitExperimental {
-        <<_veneer.py>>
-        -AsyncGenkit _async_ai
-        -SyncGenkit _sync_ai
-        +__init__(registry: Registry | None)
-        +generate(prompt: str) str
-        +generate_stream(prompt: str) Generator
-        +agenerate(prompt: str) str
-        +agenerate_stream(prompt: str) AsyncGenerator
-        +aio() AsyncGenkit
-        +io() SyncGenkit
-    }
-
-    RegistrarMixin *-- Registry : has a >
-    GenkitExperimental --|> RegistrarMixin : inherits
-    GenkitExperimental *-- AsyncGenkit : has _async_ai >
-    GenkitExperimental *-- SyncGenkit : has _sync_ai >
-
-    GenkitExperimental --> AsyncGenkit : calls agenerate()
-    GenkitExperimental --> AsyncGenkit : calls agenerate_stream()
-    GenkitExperimental --> SyncGenkit : calls generate()
-    GenkitExperimental --> SyncGenkit : calls generate_stream()
+    GenkitBase --|> GenkitRegistry : inherits
+    Genkit --|> GenkitBase : inherits
 ```
 
-An instance of each of these would be exposed as a property on the veneer class.
-The veneer class should use a mixin called `RegistrarMixin` to manage the
-registration of AI blocks such as tools, flows, actions, etc
+All methods on the `Genkit` class are `async`. Synchronously-defined flows and
+tools are executed using a thread-pool executor internally.
 
-### Maintaining parity
+### Usage
 
-This would imply we'd have 2 implementations of Genkit. There's 2 ways that
-occur to me in which we could maintain parity:
+```python
+from genkit.ai import Genkit
+from genkit.plugins.google_genai import GoogleAI
 
-1. Maintain two separate implementations one for async and another for sync.
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.0-flash',
+)
 
-2. Implement one in terms of the other.
-
-We recommend option 1 for simplicity and easier maintenance.
+@ai.flow()
+async def my_flow(query: str) -> str:
+    response = await ai.generate(prompt=f"Answer this: {query}")
+    return response.text
+```
 
 ## Implementation
 
-Currently, the Veneer API contains an implementation that uses threads to start
-a reflection server when Genkit is in use in an environment where the
-`GENKIT_ENV` environment variable has been set to `'dev'`.
-
-There are a few ways to set that environment variable, and running the development
-server using `genkit start` also sets it.
+The `Genkit` class starts a reflection server when the `GENKIT_ENV` environment
+variable has been set to `'dev'`.
 
 Running the following command:
 
@@ -350,60 +250,28 @@ Running the following command:
 genkit start -- uv run sample.py
 ```
 
-would set `GENKIT_ENV='dev'` within a running instance of `sample.py`.
+sets `GENKIT_ENV='dev'` within a running instance of `sample.py`.
 
 `genkit start` exposes a developer UI (usually called dev UI for short) that is
 used for debugging and that talks to a reflection API server implemented by the
-veneer `Genkit` class instance.  The reflection API server provides a way for
-the dev UI to allow users to debug their custom flows, test features such as
-models and plugins, and also observe traces emitted by these components.
+`Genkit` class instance. The reflection API server provides a way for the dev UI
+to allow users to debug their custom flows, test features such as models and
+plugins, and also observe traces emitted by these components.
 
 ### Concurrency handling
 
-We would like to avoid using threads since asyncio is primarily a
-single-threaded design and threading complicates the internals of the API.
-Synchronously-defined flows, tools, and other actions would execute using a
-thread-pool executor used by the `SyncGenkit` implementation.
+The implementation avoids using threads for server infrastructure since asyncio
+is primarily a single-threaded design. The reflection server runs as a coroutine
+on the same event loop.
 
 #### Scenarios
 
-- For simple short lived applications, when we don't have the dev server we'd
-  want the program to exit since that shouldn't start the reflection server.
+- For simple short-lived applications without dev mode, the program exits
+  normally after completing all flows.
 
-- For simple short lived applications, when we have the dev server (meaning the
-  `GENKIT_ENV=dev` environment variable has been set), we should start the
-  reflection server and prevent the application's main thread from exiting and
-  shutting down the process to enable debugging.
+- For simple short-lived applications with dev mode (`GENKIT_ENV=dev`), the
+  reflection server starts and prevents the main thread from exiting to enable
+  debugging.
 
-- For servers, we'd want the user to be able to add the reflection server to a
-  manager object such as that used in @multi_server.py  passed into the
-  arguments of the Genkit veneer class instance so that it attaches to the
-  server manager alongside any application servers written by the end user.
-
-The end user should not need to expliclity add code to their main thread to wait
-for the reflection server when dev mode is enabled. Since we're building an
-asyncio-first solution it should naturally do that since we'd be running the
-reflection server on the same event loop.
-
-```pseudocode
-if short lived app:
-  if dev mode enabled:
-    add reflection server coroutine to the event loop so main thread waits for dev UI debugging
-  else:
-    complete all flows and exit normally
-elif long-lived server:
-  if dev mode enabled:
-    add reflection server coroutine to the server manager to enable debuggging using dev UI
-  else:
-    run user-defined servers using server manager
-
-```
-
-Each of these can be demonstrated using individual entry-points sharing a common
-set of flows and tools. For example, the sample would define all the flows in
-`flows.py` and use them in both `server_example.py` and `short_lived_example.py`
-as a demonstration:
-
-- `flows.py`
-- `server_example.py`
-- `short_lived_example.py`
+- For long-lived servers, the reflection server attaches to the server manager
+  alongside any application servers written by the end user.

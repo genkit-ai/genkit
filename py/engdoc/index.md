@@ -19,7 +19,7 @@ tools for testing and debugging. The following language runtimes are supported:
 |------------------|---------|--------------|
 | Node.js          | 22.0+   | 1            |
 | Go               | 1.22+   | 1            |
-| Python           | 3.12+   | 1            |
+| Python           | 3.10+   | 1            |
 
 It is designed to work with any generative AI model API or vector database.
 While we offer integrations for Firebase and Google Cloud, you can use Genkit
@@ -52,25 +52,40 @@ capabilities in code:
 | Feature           | Python | JavaScript | Go |
 |-------------------|--------|------------|----|
 | Agents            | ❌     | ✅         | ✅ |
-| Chat              | ❌     | ✅         | ✅ |
-| Data retrieval    | ❌     | ✅         | ✅ |
-| Generation        | ❌     | ✅         | ✅ |
-| Prompt templating | ❌     | ✅         | ✅ |
-| Structured output | ❌     | ✅         | ✅ |
-| Tool calling      | ❌     | ✅         | ✅ |
+| Chat              | ✅     | ✅         | ✅ |
+| Data retrieval    | ✅     | ✅         | ✅ |
+| Generation        | ✅     | ✅         | ✅ |
+| Prompt templating | ✅     | ✅         | ✅ |
+| Structured output | ✅     | ✅         | ✅ |
+| Tool calling      | ✅     | ✅         | ✅ |
 
 ### Plugin Parity
 
-| Plugins      | Python | JavaScript | Go |
-|--------------|--------|------------|----|
-| Chroma DB    | ❌     | ✅         | ✅ |
-| Dotprompt    | ❌     | ✅         | ✅ |
-| Firebase     | ❌     | ✅         | ✅ |
-| Google AI    | ❌     | ✅         | ✅ |
-| Google Cloud | ❌     | ✅         | ✅ |
-| Ollama       | ❌     | ✅         | ✅ |
-| Pinecone     | ❌     | ✅         | ✅ |
-| Vertex AI    | ❌     | ✅         | ✅ |
+| Plugins                | Python | JavaScript | Go |
+|------------------------|--------|------------|----|
+| Amazon Bedrock         | ✅     | —          | —  |
+| Anthropic              | ✅     | —          | —  |
+| Checks                 | ✅     | ✅         | —  |
+| Cloudflare Workers AI  | ✅     | —          | —  |
+| Cohere                 | ✅     | —          | —  |
+| Compat-OAI             | ✅     | —          | —  |
+| DeepSeek               | ✅     | —          | —  |
+| Dev Local Vectorstore  | ✅     | ✅         | —  |
+| Dotprompt              | ✅     | ✅         | ✅ |
+| Evaluators             | ✅     | ✅         | —  |
+| FastAPI                | ✅     | —          | —  |
+| Firebase               | ✅     | ✅         | ✅ |
+| Flask                  | ✅     | —          | —  |
+| Google Cloud           | ✅     | ✅         | ✅ |
+| Google GenAI           | ✅     | ✅         | ✅ |
+| Hugging Face           | ✅     | —          | —  |
+| MCP                    | ✅     | —          | —  |
+| Microsoft Foundry      | ✅     | —          | —  |
+| Mistral                | ✅     | —          | —  |
+| Observability          | ✅     | —          | —  |
+| Ollama                 | ✅     | ✅         | —  |
+| Vertex AI              | ✅     | ✅         | ✅ |
+| xAI                    | ✅     | —          | —  |
 
 ## Examples
 
@@ -78,37 +93,30 @@ capabilities in code:
 
 === "Python"
 
-    ```python hl_lines="12 13 14 15 17 20 21 22" linenums="1"
+    ```python linenums="1"
     import asyncio
-    import structlog
 
-    from genkit.ai import genkit
-    from genkit.plugins.google_ai import googleAI
-    from genkit.plugins.google_ai.models import gemini15Flash
+    from genkit.ai import Genkit
+    from genkit.plugins.google_genai import GoogleAI
 
-    logger = structlog.get_logger()
+    ai = Genkit(
+        plugins=[GoogleAI()],
+        model='googleai/gemini-2.0-flash',
+    )
 
 
     async def main() -> None:
-        ai = genkit({        # (1)!
-          plugins: [googleAI()],
-          model: gemini15Flash,
-        })
+        response = await ai.generate(prompt='Why is AI awesome?')
+        print(response.text)
 
-        response = await ai.generate('Why is AI awesome?')
-        await logger.adebug(response.text)
-
-        stream, _ = ai.generate_stream("Tell me a story")
+        stream, _ = ai.generate_stream(prompt='Tell me a story')
         async for chunk in stream:
-            await logger.adebug("Received chunk", text=chunk.text)
-        await logger.adebug("Finished generating text stream")
+            print(chunk.text, end='')
 
 
     if __name__ == '__main__':
-        asyncio.run(content_generation())
+        asyncio.run(main())
     ```
-
-1. :man_raising_hand: Basic example of annotation.
 
 === "JavaScript"
 
@@ -148,42 +156,37 @@ capabilities in code:
 
     ```python
     import asyncio
-    import structlog
-
-    from genkit.ai import genkit
-    from genkit.plugins.google_ai import googleAI
-    from genkit.plugins.google_ai.models import gemini15Flash
-
-    logger = structlog.get_logger()
-
-    from pydantic import BaseModel, Field, validator
     from enum import Enum
+
+    from pydantic import BaseModel
+
+    from genkit.ai import Genkit, Output
+    from genkit.plugins.google_genai import GoogleAI
+
+    ai = Genkit(
+        plugins=[GoogleAI()],
+        model='googleai/gemini-2.0-flash',
+    )
+
 
     class Role(str, Enum):
         KNIGHT = "knight"
         MAGE = "mage"
         ARCHER = "archer"
 
+
     class CharacterProfile(BaseModel):
         name: str
         role: Role
         backstory: str
 
-    async def main() -> None:
-        ai = genkit({
-          plugins: [googleAI()],
-          model: gemini15Flash,
-        })
 
-        await logger.adebug("Generating structured output", prompt="Create a brief profile for a character in a fantasy video game.")
+    async def main() -> None:
         response = await ai.generate(
             prompt="Create a brief profile for a character in a fantasy video game.",
-            output={
-                "format": "json",
-                "schema": CharacterProfile,
-            },
+            output=Output(schema=CharacterProfile),
         )
-        await logger.ainfo("Generated output", output=response.output)
+        print(response.output)
 
 
     if __name__ == "__main__":
@@ -224,51 +227,30 @@ capabilities in code:
 
     ```python
     import asyncio
-    import structlog
 
-    from genkit.ai import genkit
-    from genkit.plugins.google_ai import googleAI
-    from genkit.plugins.google_ai.models import gemini15Flash
     from pydantic import BaseModel, Field
 
-    logger = structlog.get_logger()
+    from genkit.ai import Genkit
+    from genkit.plugins.google_genai import GoogleAI
+
+    ai = Genkit(
+        plugins=[GoogleAI()],
+        model='googleai/gemini-2.0-flash',
+    )
 
 
-    class GetWeatherInput(BaseModel):
-        location: str = Field(description="The location to get the current weather for")
-
-
-    class GetWeatherOutput(BaseModel):
-        weather: str
-
-
-    async def get_weather(input: GetWeatherInput) -> GetWeatherOutput:
-        await logger.adebug("Calling get_weather tool", location=input.location)
-        # Replace this with an actual API call to a weather service
-        weather_info = f"The current weather in {input.location} is 63°F and sunny."
-        return GetWeatherOutput(weather=weather_info)
+    @ai.tool()
+    async def get_weather(location: str = Field(description="The location to get the current weather for")) -> str:
+        """Gets the current weather in a given location."""
+        return f"The current weather in {location} is 63°F and sunny."
 
 
     async def main() -> None:
-        ai = genkit({
-          plugins: [googleAI()],
-          model: gemini15Flash,
-        })
-
-        get_weather_tool = ai.define_tool(
-            name="getWeather",
-            description="Gets the current weather in a given location",
-            input_schema=GetWeatherInput,
-            output_schema=GetWeatherOutput,
-            func=get_weather,
-        )
-
-        await logger.adebug("Generating text with tool", prompt="What is the weather like in New York?")
         response = await ai.generate(
             prompt="What is the weather like in New York?",
-            tools=[get_weather_tool],
+            tools=['get_weather'],
         )
-        await logger.ainfo("Generated text", text=response.text)
+        print(response.text)
 
 
     if __name__ == "__main__":
@@ -317,43 +299,30 @@ capabilities in code:
 
     ```python
     import asyncio
-    import structlog
 
-    from genkit.ai import genkit
-    from genkit.plugins.google_ai import googleAI
-    from genkit.plugins.google_ai.models import gemini15Flash
-    from pydantic import BaseModel, Field
+    from genkit.ai import Genkit
+    from genkit.plugins.google_genai import GoogleAI
 
-    logger = structlog.get_logger()
-
-
-    class ChatResponse(BaseModel):
-        text: str
-
-
-    async def chat(input: str) -> ChatResponse:
-        await logger.adebug("Calling chat tool", input=input)
-        # Replace this with an actual API call to a language model,
-        # providing the user query and the conversation history.
-        response_text = "Ahoy there! Your name is Pavel, you scurvy dog!"
-        return ChatResponse(text=response_text)
+    ai = Genkit(
+        plugins=[GoogleAI()],
+        model='googleai/gemini-2.0-flash',
+    )
 
 
     async def main() -> None:
-        ai = genkit({
-          plugins: [googleAI()],
-          model: gemini15Flash,
-        })
+        response = await ai.generate(
+            prompt='Hi, my name is Pavel',
+            system='Talk like a pirate',
+        )
+        print(response.text)
 
-        chat_tool = ai.chat({system: 'Talk like a pirate'})
-
-        await logger.adebug("Calling chat tool", input="Hi, my name is Pavel")
-        response = await chat_tool.send("Hi, my name is Pavel")
-
-        await logger.adebug("Calling chat tool", input="What is my name?")
-        response = await chat_tool.send("What is my name?")
-
-        await logger.ainfo("Chat response", text=response.text)
+        response = await ai.generate(
+            prompt='What is my name?',
+            system='Talk like a pirate',
+            messages=response.messages,
+        )
+        print(response.text)
+        # Ahoy there! Your name is Pavel, you scurvy dog!
 
 
     if __name__ == "__main__":
@@ -385,7 +354,8 @@ capabilities in code:
 === "Python"
 
     ```python
-
+    # Not yet implemented in Python.
+    # See: https://github.com/firebase/genkit/pull/4212
     ```
 
 === "JavaScript"
@@ -438,46 +408,39 @@ capabilities in code:
 
     ```python
     import asyncio
-    import structlog
 
-    from genkit.ai import genkit
-    from genkit.plugins.google_ai import googleAI
-    from genkit.plugins.google_ai.models import gemini15Flash, textEmbedding004
-    from genkit.plugins.dev_local_vectorstore import devLocalVectorstore, devLocalRetrieverRef
+    from genkit.ai import Genkit
+    from genkit.plugins.google_genai import GoogleAI
+    from genkit.plugins.dev_local_vectorstore import DevLocalVectorstore
 
-    logger = structlog.get_logger()
+    ai = Genkit(
+        plugins=[
+            GoogleAI(),
+            DevLocalVectorstore(
+                indexes=[{
+                    'index_name': 'BobFacts',
+                    'embedder': 'googleai/text-embedding-004',
+                }],
+            ),
+        ],
+        model='googleai/gemini-2.0-flash',
+    )
 
 
     async def main() -> None:
-        ai = genkit(
-            plugins=[
-                googleAI(),
-                devLocalVectorstore(
-                    [
-                        {
-                            "index_name": "BobFacts",
-                            "embedder": textEmbedding004,
-                        }
-                    ]
-                ),
-            ],
-            model=gemini15Flash,
-        )
-
-        retriever = devLocalRetrieverRef("BobFacts")
-
         query = "How old is Bob?"
 
-        await logger.adebug("Retrieving documents", query=query)
-        docs = await ai.retrieve(retriever=retriever, query=query)
-
-        await logger.adebug("Generating answer", query=query)
-        response = await ai.generate(
-            prompt=f"Use the provided context from the BobFacts database to answer this query: {query}",
-            docs=docs,
+        docs = await ai.retrieve(
+            retriever='devLocalVectorstore/BobFacts',
+            query=query,
         )
 
-        await logger.ainfo("Generated answer", answer=response.text)
+        response = await ai.generate(
+            prompt=f"Use the provided context to answer: {query}",
+            docs=docs,
+        )
+        print(response.text)
+
 
     if __name__ == "__main__":
         asyncio.run(main())

@@ -14,6 +14,55 @@ This document provides rules and examples for building with the Genkit API in Go
 
 NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but you should follow the user's preference as mentioned above.
 
+## Project Setup
+
+### Project Initialization
+
+- If the directory is empty:
+  ```bash
+  go mod init <module-name>
+  ```
+- If the directory is not empty:
+  Adhere to the current project structure.
+
+### Dependencies
+
+```bash
+go get github.com/firebase/genkit/go/genkit
+go get github.com/firebase/genkit/go/plugins/googlegenai
+go get github.com/firebase/genkit/go/ai
+go get google.golang.org/genai
+```
+
+### Genkit CLI
+
+If the Genkit CLI is not already installed:
+
+```bash
+curl -sL cli.genkit.dev | bash
+```
+
+### Configuration
+
+Create a `main.go` file:
+
+```go
+package main
+
+import (
+	"context"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/plugins/googlegenai"
+)
+
+func main() {
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	// Your flows and logic here
+	<-ctx.Done()
+}
+```
+
 ## Best Practices
 
 1.  **Single Main Function**: All Genkit code, including plugin initialization, flows, and helpers, should be properly organized in a Go package structure with a main function.

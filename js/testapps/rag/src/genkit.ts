@@ -48,17 +48,17 @@ export const ai = genkit({
     pinecone([
       {
         indexId: 'cat-facts',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
       {
         indexId: 'pdf-chat',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
     chroma([
       {
         collectionName: 'dogfacts_collection',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
         createCollectionIfMissing: true,
         clientParams: async () => {
           // Replace this with your Cloud Run Instance URL
@@ -79,11 +79,11 @@ export const ai = genkit({
     devLocalVectorstore([
       {
         indexName: 'dog-facts',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
       {
         indexName: 'pdfQA',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
     genkitEval({

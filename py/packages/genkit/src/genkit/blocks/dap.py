@@ -474,10 +474,7 @@ def define_dynamic_action_provider(
         - JS implementation: js/core/src/dynamic-action-provider.ts
     """
     # Normalize config
-    if isinstance(config, str):
-        cfg = DapConfig(name=config)
-    else:
-        cfg = config
+    cfg = DapConfig(name=config) if isinstance(config, str) else config
 
     # Create metadata with DAP type marker
     action_metadata = {

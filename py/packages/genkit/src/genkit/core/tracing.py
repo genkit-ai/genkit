@@ -112,7 +112,7 @@ def run_in_new_span(
             yield span
             span.set_genkit_attribute('status', 'success')
         except Exception as e:
-            logger.debug(f'Error in run_in_new_span: {str(e)}')
+            logger.debug(f'Error in run_in_new_span: {e!s}')
             logger.debug(traceback.format_exc())
             span.set_genkit_attribute('status', 'error')
             span.set_status(status=trace_api.StatusCode.ERROR, description=str(e))

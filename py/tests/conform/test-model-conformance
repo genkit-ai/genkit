@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Model conformance test runner for Python plugins.
+#
+# Runs `genkit dev:test-model` against the specified plugin's conformance
+# spec and entry point. Each plugin has its own spec file and lightweight
+# Python entry point under py/tests/conform/<plugin>/.
+
+set -euo pipefail
+
+# Colors (auto-disabled when stdout is not a terminal).
+if [ -t 1 ]; then
+  RED='\033[0;31m'
+  GREEN='\033[0;32m'
+  YELLOW='\033[1;33m'
+  BLUE='\033[0;34m'
+  CYAN='\033[0;36m'
+  BOLD='\033[1m'
+  DIM='\033[2m'
+  NC='\033[0m'
+else
+  RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFORMANCE_DIR="${SCRIPT_DIR}"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+# Returns required env vars for a plugin (space-separated).
+get_env_vars() {
+  case "$1" in
+    google-genai)          echo "GEMINI_API_KEY" ;;
+    anthropic)             echo "ANTHROPIC_API_KEY" ;;
+    compat-oai)            echo "OPENAI_API_KEY" ;;
+    mistral)               echo "MISTRAL_API_KEY" ;;
+    deepseek)              echo "DEEPSEEK_API_KEY" ;;
+    xai)                   echo "XAI_API_KEY" ;;
+    cohere)                echo "COHERE_API_KEY" ;;
+    amazon-bedrock)        echo "AWS_REGION" ;;
+    huggingface)           echo "HF_TOKEN" ;;
+    microsoft-foundry)     echo "AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT" ;;
+    cloudflare-workers-ai) echo "CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN" ;;
+    vertex-ai)             echo "GOOGLE_CLOUD_PROJECT" ;;
+    ollama)                echo "" ;;
+    *)                     echo "" ;;
+  esac
+}
+
+usage() {
+  echo ""
+  echo -e "${BOLD}${CYAN}Model Conformance Test Runner${NC}"
+  echo -e "${DIM}─────────────────────────────────────────────────────${NC}"
+  echo ""
+  echo -e "${BOLD}USAGE${NC}"
+  echo -e "  ${GREEN}$(basename "$0")${NC} ${YELLOW}<plugin>${NC}"
+  echo -e "  ${GREEN}$(basename "$0")${NC} ${YELLOW}--all${NC}"
+  echo -e "  ${GREEN}$(basename "$0")${NC} ${YELLOW}--help${NC}"
+  echo ""
+  echo -e "${BOLD}DESCRIPTION${NC}"
+  echo -e "  Runs ${CYAN}genkit dev:test-model${NC} against model conformance specs."
+  echo -e "  Each plugin has a YAML spec + Python entry point in this directory."
+  echo ""
+  echo -e "${BOLD}EXAMPLES${NC}"
+  echo -e "  ${DIM}# Test a single plugin${NC}"
+  echo -e "  ${GREEN}$(basename "$0")${NC} anthropic"
+  echo ""
+  echo -e "  ${DIM}# Test all plugins (requires all env vars)${NC}"
+  echo -e "  ${GREEN}$(basename "$0")${NC} --all"
+  echo ""
+  echo -e "${BOLD}AVAILABLE PLUGINS${NC}"
+
+  for plugin_dir in "${CONFORMANCE_DIR}"/*/; do
+    [ ! -d "$plugin_dir" ] && continue
+    plugin=$(basename "${plugin_dir}")
+    env_vars=$(get_env_vars "$plugin")
+    if [ -n "$env_vars" ]; then
+      # Build colored env var list: blue if set, red if missing
+      colored_vars=""
+      all_set=true
+      for env_var in $env_vars; do
+        val=$(eval "printf '%s' \"\${${env_var}:-}\"")
+        if [ -n "$val" ]; then
+          colored_vars="${colored_vars}${BLUE}${env_var}${NC} "
+        else
+          colored_vars="${colored_vars}${RED}${env_var}${NC} "
+          all_set=false
+        fi
+      done
+      if $all_set; then
+        status="${GREEN}●${NC}"
+      else
+        status="${RED}○${NC}"
+      fi
+      echo -e "  ${status} ${BOLD}${plugin}${NC}  ${DIM}(${NC}${colored_vars}${DIM})${NC}"
+    else
+      echo -e "  ${GREEN}●${NC} ${BOLD}${plugin}${NC}  ${DIM}(no credentials needed)${NC}"
+    fi
+  done
+
+  echo ""
+  echo -e "${BOLD}LEGEND${NC}"
+  echo -e "  ${GREEN}●${NC} Ready    ${RED}○${NC} Missing env vars"
+  echo -e "  ${BLUE}VAR${NC} Set     ${RED}VAR${NC} Not set"
+  echo ""
+  exit "${1:-1}"
+}
+
+check_env() {
+  local plugin="$1"
+  local env_vars
+  env_vars=$(get_env_vars "$plugin")
+  local missing=0
+  for env_var in $env_vars; do
+    val=$(eval "printf '%s' \"\${${env_var}:-}\"")
+    if [ -z "$val" ]; then
+      echo -e "${RED}ERROR${NC}: ${YELLOW}${env_var}${NC} is not set (required for ${BOLD}${plugin}${NC})" >&2
+      missing=1
+    fi
+  done
+  return $missing
+}
+
+run_plugin() {
+  local plugin="$1"
+  local spec_file="${CONFORMANCE_DIR}/${plugin}/model-conformance.yaml"
+  local entry_point="${CONFORMANCE_DIR}/${plugin}/conformance_entry.py"
+
+  if [ ! -f "${spec_file}" ]; then
+    echo -e "${RED}ERROR${NC}: Spec file not found: ${spec_file}" >&2
+    return 1
+  fi
+  if [ ! -f "${entry_point}" ]; then
+    echo -e "${RED}ERROR${NC}: Entry point not found: ${entry_point}" >&2
+    return 1
+  fi
+
+  if ! check_env "${plugin}"; then
+    return 1
+  fi
+
+  echo -e "${BLUE}━━━ Testing ${BOLD}${plugin}${NC}${BLUE} ━━━${NC}"
+  echo -e "  ${DIM}Spec:${NC}  ${spec_file}"
+  echo -e "  ${DIM}Entry:${NC} ${entry_point}"
+  echo ""
+
+  genkit dev:test-model \
+    --from-file "${spec_file}" \
+    -- uv run --project "${REPO_ROOT}/py" --active "${entry_point}"
+}
+
+# Parse arguments
+if [ $# -eq 0 ] || [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  usage 0
+fi
+
+failed=0
+passed=0
+
+if [ "$1" = "--all" ]; then
+  echo ""
+  echo -e "${BOLD}${CYAN}Running all conformance tests${NC}"
+  echo -e "${DIM}─────────────────────────────────────────────────────${NC}"
+  echo ""
+  for plugin_dir in "${CONFORMANCE_DIR}"/*/; do
+    [ ! -d "$plugin_dir" ] && continue
+    plugin=$(basename "${plugin_dir}")
+    if run_plugin "${plugin}"; then
+      echo -e "${GREEN}✓ PASS${NC}: ${BOLD}${plugin}${NC}"
+      passed=$((passed + 1))
+    else
+      echo -e "${RED}✗ FAIL${NC}: ${BOLD}${plugin}${NC}"
+      failed=$((failed + 1))
+    fi
+    echo ""
+  done
+else
+  plugin="$1"
+  if [ ! -d "${CONFORMANCE_DIR}/${plugin}" ]; then
+    echo -e "${RED}ERROR${NC}: Unknown plugin '${BOLD}${plugin}${NC}'" >&2
+    echo ""
+    usage 1
+  fi
+  if ! run_plugin "${plugin}"; then
+    failed=1
+  else
+    passed=1
+  fi
+fi
+
+# Summary
+echo -e "${DIM}─────────────────────────────────────────────────────${NC}"
+if [ ${failed} -ne 0 ]; then
+  echo -e "${RED}${BOLD}FAILED${NC}: ${passed} passed, ${failed} failed"
+  exit 1
+fi
+
+echo -e "${GREEN}${BOLD}ALL PASSED${NC}: ${passed} plugin(s) tested successfully"

@@ -181,8 +181,8 @@ func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	// Project and Region values gets validated by genai SDK upon client creation
 	gc := genai.ClientConfig{
 		Backend:    genai.BackendVertexAI,
-		Project:    v.ProjectID,
-		Location:   v.Location,
+		Project:    projectID,
+		Location:   location,
 		HTTPClient: httpClient,
 		HTTPOptions: genai.HTTPOptions{
 			Headers: genkitClientHeader,

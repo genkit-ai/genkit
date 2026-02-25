@@ -375,7 +375,7 @@ async def test_generate_with_tools(setup_test: SetupFixture) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_with_iterrupting_tools(
+async def test_generate_with_interrupting_tools(
     setup_test: SetupFixture,
 ) -> None:
     """Test that the generate function with tools works."""

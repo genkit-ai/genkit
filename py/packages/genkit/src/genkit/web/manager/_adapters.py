@@ -29,7 +29,6 @@ extensibility, maintainbility, and dependency management.
 | ServerType        | Enum defining the supported ASGI server types      |
 | ASGIServerAdapter | Abstract base class defining the adapter interface |
 | UvicornAdapter    | Concrete adapter for the Uvicorn ASGI server       |
-| GranianAdapter    | Concrete adapter for the Granian ASGI server       |
 
 Usage:
 
@@ -48,7 +47,6 @@ Usage:
 from __future__ import annotations
 
 import abc
-import socket
 
 from genkit.core._compat import StrEnum, override
 from genkit.core.logging import get_logger
@@ -67,11 +65,9 @@ class ServerType(StrEnum):
     The supported values are:
 
     - `UVICORN`: For serving applications with Uvicorn
-    - `GRANIAN`: For serving applications with Granian
     """
 
     UVICORN = 'uvicorn'
-    GRANIAN = 'granian'
 
 
 class ASGIServerAdapter(abc.ABC):
@@ -91,7 +87,6 @@ class ASGIServerAdapter(abc.ABC):
     | Adapter          | Purpose                               |
     |------------------|---------------------------------------|
     | `UvicornAdapter` | For serving applications with Uvicorn |
-    | `GranianAdapter` | For serving applications with Granian |
 
     New server implementations can be added by creating new adapter classes that
     inherit from this base class.
@@ -140,8 +135,6 @@ class ASGIServerAdapter(abc.ABC):
         match server_type:
             case ServerType.UVICORN:
                 return UvicornAdapter()
-            case ServerType.GRANIAN:
-                return GranianAdapter()
             case _:  # pyright: ignore[reportUnnecessaryComparison]
                 raise ValueError(f'Unsupported server type: {server_type}')  # pyright: ignore[reportUnreachable]
 
@@ -174,7 +167,8 @@ class UvicornAdapter(ASGIServerAdapter):
             port: The port to bind to
             log_level: The logging level to use
         """
-        import uvicorn
+        # Lazy import: uvicorn is only imported when this adapter is used
+        import uvicorn  # noqa: PLC0415
 
         # Configure Uvicorn
         config = uvicorn.Config(
@@ -200,77 +194,3 @@ class UvicornAdapter(ASGIServerAdapter):
         )
 
         await server.serve()
-
-
-class GranianAdapter(ASGIServerAdapter):
-    """Adapter for the Granian ASGI server.
-
-    This adapter implements the ASGIServerAdapter interface for Granian.  It
-    handles the specific details of configuring and starting a Granian server,
-    including mapping log levels from string format to Python logging levels.
-
-    The Granian package is imported lazily in the serve method to avoid
-    unnecessary imports when the adapter is not being used. If Granian is not
-    available, an ImportError will be raised when the serve method is called.
-    """
-
-    @override
-    async def serve(
-        self,
-        app: Application,
-        host: str,
-        port: int,
-        log_level: str = 'info',
-    ) -> None:
-        """Start and run a Granian server.
-
-        Args:
-            app: The ASGI application to serve
-            host: The host interface to bind to
-            port: The port to bind to
-            log_level: The logging level to use, mapped to Granian's levels
-
-        Raises:
-            ImportError: If Granian is not available
-            Exception: If the server fails to start or encounters an error
-        """
-        import granian  # type: ignore[import-not-found]
-
-        # Granian accepts the log level as a string
-        # Valid values are: 'trace', 'debug', 'info', 'warn', 'error', or 'off'
-        valid_levels = ['trace', 'debug', 'info', 'warn', 'error', 'off']
-        granian_log_level = log_level.lower() if log_level.lower() in valid_levels else 'info'
-
-        if host == 'localhost':
-            ip_address = '127.0.0.1'
-        else:
-            try:
-                ip_address = socket.gethostbyname(host)
-            except socket.gaierror:
-                ip_address = host
-
-        await logger.ainfo(
-            'Starting granian server',
-            host=host,
-            ip=ip_address,
-            port=port,
-        )
-
-        try:
-            await granian.Granian(
-                app,
-                address=ip_address,
-                port=port,
-                workers=1,
-                loop='auto',
-                log_level=granian_log_level,
-            ).serve()
-        except Exception as e:
-            await logger.aerror(
-                'Error starting granian server',
-                host=host,
-                ip=ip_address,
-                port=port,
-                error=e,
-            )
-            raise

@@ -214,7 +214,7 @@ describe('GoogleAI Plugin', () => {
 
   describe('googleAI.model', () => {
     it('should return a gemini ModelReference with correct schema', () => {
-      const modelName = 'gemini-2.0-flash';
+      const modelName = 'gemini-2.5-flash';
       const modelRef = googleAI.model(modelName);
       assert.strictEqual(
         modelRef.name,

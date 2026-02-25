@@ -79,16 +79,16 @@ class DevLocalVectorStoreRetriever(LocalVectorStoreAPI):
         if isinstance(request.options, dict) and (limit_val := request.options.get('limit')) is not None:
             k = int(limit_val)
 
-        docs = self._get_closest_documents(
+        docs = await self._get_closest_documents(
             k=k,
             query_embeddings=Embedding(embedding=embed_resp[0].embedding),
         )
 
         return RetrieverResponse(documents=[d.document for d in docs])
 
-    def _get_closest_documents(self, k: int, query_embeddings: Embedding) -> list[ScoredDocument]:
+    async def _get_closest_documents(self, k: int, query_embeddings: Embedding) -> list[ScoredDocument]:
         # pyrefly: ignore[missing-attribute] - _load_filestore inherited from LocalVectorStoreAPI
-        db = self._load_filestore()
+        db = await self._load_filestore()
         scored_documents = []
 
         for val in db.values():

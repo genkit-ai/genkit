@@ -21,12 +21,7 @@ import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { modelRef } from '../../ai/src/model';
 import { interrupt } from '../../ai/src/tool';
-import {
-  dynamicResource,
-  dynamicTool,
-  genkit,
-  type GenkitBeta,
-} from '../src/beta';
+import { dynamicResource, genkit, tool, type GenkitBeta } from '../src/beta';
 import {
   defineEchoModel,
   defineProgrammableModel,
@@ -467,7 +462,7 @@ describe('generate', () => {
           foo: { type: 'string' },
         },
       } as JSONSchema7;
-      const dynamicTestTool1 = dynamicTool(
+      const dynamicTestTool1 = tool(
         {
           name: 'dynamicTestTool1',
           inputJsonSchema: schema,
@@ -482,6 +477,20 @@ describe('generate', () => {
           description: 'description 2',
         },
         async () => 'tool called 2'
+      );
+      const dynamicMultipartTool = tool(
+        {
+          multipart: true,
+          name: 'dynamicMultipartTool',
+          inputJsonSchema: schema,
+          description: 'description',
+        },
+        async () => {
+          return {
+            output: 'main output',
+            content: [{ text: 'part 1' }],
+          };
+        }
       );
 
       // first response is a tool call, the subsequent responses are just text response from agent b.
@@ -507,6 +516,13 @@ describe('generate', () => {
                         ref: 'ref234',
                       },
                     },
+                    {
+                      toolRequest: {
+                        name: 'dynamicMultipartTool',
+                        input: { foo: 'baz' },
+                        ref: 'ref234',
+                      },
+                    },
                   ]
                 : [{ text: 'done' }],
           },
@@ -515,80 +531,115 @@ describe('generate', () => {
 
       const { text } = await ai.generate({
         prompt: 'call the tool',
-        tools: [dynamicTestTool1, dynamicTestTool2],
+        tools: [dynamicTestTool1, dynamicTestTool2, dynamicMultipartTool],
       });
 
       assert.strictEqual(text, 'done');
-      assert.deepStrictEqual(
-        pm.lastRequest,
-
-        {
-          config: {},
-          messages: [
-            {
-              role: 'user',
-              content: [{ text: 'call the tool' }],
+      // remove properties from outputSchema -- too verbose, not important for the test
+      delete pm.lastRequest?.tools?.[2]?.outputSchema?.properties;
+      assert.deepStrictEqual(pm.lastRequest, {
+        config: {},
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'call the tool' }],
+          },
+          {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  input: { foo: 'bar' },
+                  name: 'dynamicTestTool1',
+                  ref: 'ref123',
+                },
+              },
+              {
+                toolRequest: {
+                  input: { foo: 'baz' },
+                  name: 'dynamicTestTool2',
+                  ref: 'ref234',
+                },
+              },
+              {
+                toolRequest: {
+                  input: {
+                    foo: 'baz',
+                  },
+                  name: 'dynamicMultipartTool',
+                  ref: 'ref234',
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            content: [
+              {
+                toolResponse: {
+                  name: 'dynamicTestTool1',
+                  output: 'tool called 1',
+                  ref: 'ref123',
+                },
+              },
+              {
+                toolResponse: {
+                  name: 'dynamicTestTool2',
+                  output: 'tool called 2',
+                  ref: 'ref234',
+                },
+              },
+              {
+                toolResponse: {
+                  content: [
+                    {
+                      text: 'part 1',
+                    },
+                  ],
+                  name: 'dynamicMultipartTool',
+                  output: 'main output',
+                  ref: 'ref234',
+                },
+              },
+            ],
+          },
+        ],
+        output: {},
+        tools: [
+          {
+            description: 'description',
+            inputSchema: schema,
+            name: 'dynamicTestTool1',
+            outputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            {
-              role: 'model',
-              content: [
-                {
-                  toolRequest: {
-                    input: { foo: 'bar' },
-                    name: 'dynamicTestTool1',
-                    ref: 'ref123',
-                  },
-                },
-                {
-                  toolRequest: {
-                    input: { foo: 'baz' },
-                    name: 'dynamicTestTool2',
-                    ref: 'ref234',
-                  },
-                },
-              ],
+          },
+          {
+            description: 'description 2',
+            inputSchema: schema,
+            name: 'dynamicTestTool2',
+            outputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            {
-              role: 'tool',
-              content: [
-                {
-                  toolResponse: {
-                    name: 'dynamicTestTool1',
-                    output: 'tool called 1',
-                    ref: 'ref123',
-                  },
+          },
+          {
+            description: 'description',
+            inputSchema: {
+              properties: {
+                foo: {
+                  type: 'string',
                 },
-                {
-                  toolResponse: {
-                    name: 'dynamicTestTool2',
-                    output: 'tool called 2',
-                    ref: 'ref234',
-                  },
-                },
-              ],
-            },
-          ],
-          output: {},
-          tools: [
-            {
-              description: 'description',
-              inputSchema: schema,
-              name: 'dynamicTestTool1',
-              outputSchema: {
-                $schema: 'http://json-schema.org/draft-07/schema#',
               },
             },
-            {
-              description: 'description 2',
-              inputSchema: schema,
-              name: 'dynamicTestTool2',
-              outputSchema: {
-                $schema: 'http://json-schema.org/draft-07/schema#',
-              },
+            name: 'dynamicMultipartTool',
+            outputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              additionalProperties: true,
+              type: 'object',
             },
-          ],
-        }
-      );
+          },
+        ],
+      });
     });
 
     it('calls the dynamic resource', async () => {
@@ -1484,6 +1535,45 @@ describe('generate', () => {
       });
 
       const operation = await ai.checkOperation({
+        action: '/background-model/bkg-model',
+        id: '123',
+      });
+
+      assert.deepStrictEqual(operation, {
+        ...newOp,
+        action: '/background-model/bkg-model',
+      });
+    });
+
+    it('cancels operation', async () => {
+      const newOp = {
+        id: '123',
+        done: true,
+        output: {
+          finishReason: 'stop',
+          message: {
+            role: 'model',
+            content: [{ text: 'cancelled' }],
+          },
+        },
+      } as Operation;
+
+      ai.defineBackgroundModel({
+        name: 'bkg-model',
+        async start(_) {
+          return {
+            id: '123',
+          };
+        },
+        async check(operation) {
+          return operation;
+        },
+        async cancel(operation) {
+          return { ...newOp };
+        },
+      });
+
+      const operation = await ai.cancelOperation({
         action: '/background-model/bkg-model',
         id: '123',
       });

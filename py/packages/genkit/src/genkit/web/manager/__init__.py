@@ -18,7 +18,6 @@
 
 from ._adapters import (
     ASGIServerAdapter,
-    GranianAdapter,
     ServerType,
     UvicornAdapter,
 )
@@ -31,7 +30,6 @@ from ._server import Server, ServerConfig, ServerLifecycle
 __all__ = [
     'ASGIServerAdapter',
     'AbstractBaseServer',
-    'GranianAdapter',
     'Server',
     'ServerConfig',
     'ServerLifecycle',
