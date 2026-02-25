@@ -133,9 +133,10 @@ func copySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[Sta
 // Session holds conversation state and provides thread-safe read/write access to messages,
 // input variables, custom state, and artifacts.
 type Session[State any] struct {
-	mu    sync.RWMutex
-	state SessionState[State]
-	store SessionStore[State]
+	mu      sync.RWMutex
+	state   SessionState[State]
+	store   SessionStore[State]
+	version uint64 // incremented on every mutation; used to skip redundant snapshots
 }
 
 // State returns a copy of the current state.
@@ -160,6 +161,7 @@ func (s *Session[State]) AddMessages(messages ...*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Messages = append(s.state.Messages, messages...)
+	s.version++
 }
 
 // SetMessages replaces the conversation history with the given messages.
@@ -167,6 +169,7 @@ func (s *Session[State]) SetMessages(messages []*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Messages = messages
+	s.version++
 }
 
 // UpdateMessages atomically reads the current messages, applies the given
@@ -175,6 +178,7 @@ func (s *Session[State]) UpdateMessages(fn func([]*ai.Message) []*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Messages = fn(s.state.Messages)
+	s.version++
 }
 
 // Custom returns the current user-defined custom state.
@@ -190,6 +194,7 @@ func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Custom = fn(s.state.Custom)
+	s.version++
 }
 
 // InputVariables returns the prompt input stored in the session state.
@@ -228,6 +233,7 @@ func (s *Session[State]) AddArtifacts(artifacts ...*Artifact) {
 			s.state.Artifacts = append(s.state.Artifacts, a)
 		}
 	}
+	s.version++
 }
 
 // UpdateArtifacts atomically reads the current artifacts, applies the given
@@ -236,6 +242,7 @@ func (s *Session[State]) UpdateArtifacts(fn func([]*Artifact) []*Artifact) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Artifacts = fn(s.state.Artifacts)
+	s.version++
 }
 
 // copyStateLocked returns a deep copy of the state. Caller must hold mu (read or write).

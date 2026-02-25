@@ -1509,3 +1509,160 @@ func TestPromptAgent_RunText(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentFlow_SingleTurnSnapshotDedup(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineCustomAgent(reg, "dedupFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	// Single-turn invocation: should produce exactly 1 snapshot (turn-end),
+	// not 2 (turn-end + invocation-end with identical state).
+	response, err := af.RunText(ctx, "hello")
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+
+	if response.SnapshotID == "" {
+		t.Fatal("expected snapshot ID in response")
+	}
+
+	// Count total snapshots in the store.
+	snap, err := store.GetSnapshot(ctx, response.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if snap.Event != SnapshotEventTurnEnd {
+		t.Errorf("expected turn-end snapshot, got %s", snap.Event)
+	}
+	// The turn-end snapshot should have no parent (first and only snapshot).
+	if snap.ParentID != "" {
+		t.Errorf("expected no parent (single snapshot), got parent %q", snap.ParentID)
+	}
+}
+
+func TestAgentFlow_MultiTurnSnapshotDedup(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineCustomAgent(reg, "multiDedupFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	// Multi-turn: last turn-end snapshot should dedup with invocation-end.
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi failed: %v", err)
+	}
+
+	var snapshotIDs []string
+	for i := 0; i < 3; i++ {
+		conn.SendText(fmt.Sprintf("turn %d", i))
+		for chunk, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive error on turn %d: %v", i, err)
+			}
+			if chunk.SnapshotID != "" {
+				snapshotIDs = append(snapshotIDs, chunk.SnapshotID)
+			}
+			if chunk.EndTurn {
+				break
+			}
+		}
+	}
+	conn.Close()
+
+	response, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
+
+	// Should have 3 turn-end snapshots (one per turn), no extra invocation-end.
+	if got := len(snapshotIDs); got != 3 {
+		t.Errorf("expected 3 turn-end snapshots, got %d", got)
+	}
+
+	// The output snapshot ID should reuse the last turn-end snapshot.
+	if response.SnapshotID == "" {
+		t.Fatal("expected snapshot ID in response")
+	}
+	if response.SnapshotID != snapshotIDs[len(snapshotIDs)-1] {
+		t.Errorf("expected output snapshot to reuse last turn-end snapshot %q, got %q",
+			snapshotIDs[len(snapshotIDs)-1], response.SnapshotID)
+	}
+}
+
+func TestAgentFlow_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineCustomAgent(reg, "postRunMutateFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+			// Mutate state AFTER sess.Run returns -- this should trigger
+			// a separate invocation-end snapshot.
+			sess.UpdateCustom(func(s testState) testState {
+				s.Counter = 99
+				return s
+			})
+			return sess.Result(), nil
+		},
+		WithSessionStore(store),
+	)
+
+	response, err := af.RunText(ctx, "hello")
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+
+	if response.SnapshotID == "" {
+		t.Fatal("expected snapshot ID in response")
+	}
+
+	// The final snapshot should be an invocation-end snapshot that captured
+	// the post-Run mutation.
+	snap, err := store.GetSnapshot(ctx, response.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if snap.Event != SnapshotEventInvocationEnd {
+		t.Errorf("expected invocation-end snapshot, got %s", snap.Event)
+	}
+	if snap.State.Custom.Counter != 99 {
+		t.Errorf("expected counter=99 in final snapshot, got %d", snap.State.Custom.Counter)
+	}
+	// Should have a parent (the turn-end snapshot).
+	if snap.ParentID == "" {
+		t.Error("expected parent ID (turn-end snapshot)")
+	}
+}

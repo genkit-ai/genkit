@@ -54,10 +54,11 @@ type AgentSession[State any] struct {
 	// directly.
 	TurnIndex int
 
-	snapshotCallback  SnapshotCallback[State]
-	onEndTurn         func(ctx context.Context)
-	lastSnapshot      *SessionSnapshot[State]
-	collectTurnOutput func() any
+	snapshotCallback    SnapshotCallback[State]
+	onEndTurn           func(ctx context.Context)
+	lastSnapshot        *SessionSnapshot[State]
+	lastSnapshotVersion uint64
+	collectTurnOutput   func() any
 }
 
 // Run loops over the input channel, calling fn for each turn. Each turn is
@@ -117,15 +118,24 @@ func (a *AgentSession[State]) Result() *AgentFlowResult {
 }
 
 // maybeSnapshot creates a snapshot if conditions are met (store configured,
-// callback approves). Returns the snapshot ID or empty string.
+// callback approves, state changed). Returns the snapshot ID or empty string.
 func (a *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
 	if a.store == nil {
 		return ""
 	}
 
 	a.mu.RLock()
+	currentVersion := a.version
 	currentState := a.copyStateLocked()
 	a.mu.RUnlock()
+
+	// Skip if state hasn't changed since the last snapshot. This avoids
+	// redundant snapshots, e.g. the invocation-end snapshot after a
+	// single-turn Run where the turn-end snapshot already captured the
+	// same state.
+	if a.lastSnapshot != nil && currentVersion == a.lastSnapshotVersion {
+		return ""
+	}
 
 	if a.snapshotCallback != nil {
 		var prevState *SessionState[State]
@@ -169,6 +179,7 @@ func (a *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotE
 	a.mu.Unlock()
 
 	a.lastSnapshot = snapshot
+	a.lastSnapshotVersion = currentVersion
 
 	return snapshot.SnapshotID
 }
@@ -298,8 +309,13 @@ func DefineCustomAgent[Stream, State any](
 			return nil, fnErr
 		}
 
-		// Final snapshot at invocation end.
+		// Final snapshot at invocation end. If skipped (state unchanged
+		// since last turn-end snapshot), use the last snapshot's ID so
+		// the output always reflects the latest snapshot.
 		snapshotID := agentSess.maybeSnapshot(ctx, SnapshotEventInvocationEnd)
+		if snapshotID == "" && agentSess.lastSnapshot != nil {
+			snapshotID = agentSess.lastSnapshot.SnapshotID
+		}
 
 		out := &AgentFlowOutput[State]{
 			SnapshotID: snapshotID,
