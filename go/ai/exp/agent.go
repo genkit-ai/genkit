@@ -344,8 +344,7 @@ func DefinePromptAgent[State, PromptIn any](
 	}
 
 	fn := func(ctx context.Context, resp Responder[any], sess *AgentSession[State]) (*AgentFlowResult, error) {
-		var lastModelMessage *ai.Message
-		err := sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+		if err := sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
 			// Resolve prompt input: session state override > default.
 			promptInput := defaultInput
 			if stored := sess.InputVariables(); stored != nil {
@@ -396,8 +395,6 @@ func DefinePromptAgent[State, PromptIn any](
 				return fmt.Errorf("generate: %w", err)
 			}
 
-			lastModelMessage = modelResp.Message
-
 			// Replace session messages with the full history minus prompt
 			// messages. This captures intermediate tool call/response
 			// messages from the tool loop, not just the final response.
@@ -426,14 +423,10 @@ func DefinePromptAgent[State, PromptIn any](
 			}
 
 			return nil
-		})
-		if err != nil {
+		}); err != nil {
 			return nil, err
 		}
-		return &AgentFlowResult{
-			Message:   lastModelMessage,
-			Artifacts: sess.Artifacts(),
-		}, nil
+		return sess.Result(), nil
 	}
 
 	return DefineCustomAgent(r, promptName, fn, opts...)
@@ -482,7 +475,7 @@ func newSessionFromInit[State any](
 	var snapshot *SessionSnapshot[State]
 	if init != nil {
 		if init.SnapshotID != "" && init.State != nil {
-			return nil, nil, core.NewError(core.INVALID_ARGUMENT, "snapshotId and state are mutually exclusive")
+			return nil, nil, core.NewError(core.INVALID_ARGUMENT, "snapshot ID and state are mutually exclusive")
 		}
 		if init.SnapshotID != "" && store == nil {
 			return nil, nil, core.NewError(core.FAILED_PRECONDITION, "snapshot ID %q provided but no session store configured", init.SnapshotID)
@@ -512,7 +505,6 @@ func newSessionFromInit[State any](
 // of the iterator between turns does not cancel the underlying connection.
 type AgentFlowConnection[Stream, State any] struct {
 	conn *core.BidiConnection[*AgentFlowInput, *AgentFlowOutput[State], *AgentFlowStreamChunk[Stream]]
-
 	// chunks buffers stream chunks from the underlying connection so that
 	// breaking from Receive() between turns doesn't cancel the context.
 	chunks   chan *AgentFlowStreamChunk[Stream]
