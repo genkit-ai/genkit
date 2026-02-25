@@ -48,8 +48,8 @@ type flowContext struct {
 }
 
 // NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
-func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	return (*Flow[In, Out, struct{}])(NewAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
+func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}, struct{}] {
+	return &Flow[In, Out, struct{}, struct{}]{NewAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -59,8 +59,8 @@ func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}
 }
 
 // NewStreamingFlow creates a streaming Flow that runs fn without registering it.
-func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	return (*Flow[In, Out, Stream])(NewStreamingAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
+func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream, struct{}] {
+	return &Flow[In, Out, Stream, struct{}]{NewStreamingAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -69,7 +69,7 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out
 			cb = func(context.Context, Stream) error { return nil }
 		}
 		return fn(ctx, input, cb)
-	}))
+	})}
 }
 
 // NewBidiFlow creates a bidirectional streaming Flow without registering it.
@@ -83,7 +83,7 @@ func NewBidiFlow[In, Out, Stream, Init any](name string, fn BidiFunc[In, Out, St
 }
 
 // DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
-func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
+func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}, struct{}] {
 	f := NewFlow(name, fn)
 	f.Register(r)
 	return f
@@ -99,9 +99,9 @@ func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flo
 // with a final return value that includes all the streamed data.
 // Otherwise, it should ignore the callback and just return a result.
 func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream, struct{}] {
-  f := NewStreamingFlow(name, fn)
-  f.Register(r)
-  return f
+	f := NewStreamingFlow(name, fn)
+	f.Register(r)
+	return f
 }
 
 // DefineBidiFlow creates a bidirectional streaming Flow that runs fn, and registers it as an action.
@@ -167,7 +167,7 @@ func (f *Flow[In, Out, Stream, Init]) Stream(ctx context.Context, input In) func
 			}
 			return nil
 		}
-		output, err := (*ActionDef[In, Out, Stream])(f).Run(ctx, input, cb)
+		output, err := f.Action.Run(ctx, input, cb)
 		if errors.Is(err, errStop) {
 			// Consumer broke out of the loop; don't yield again.
 			return

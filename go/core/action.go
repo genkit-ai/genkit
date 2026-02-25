@@ -257,8 +257,8 @@ func (a *Action[In, Out, Stream, Init]) Run(ctx context.Context, input In, cb St
 	return r.Result, nil
 }
 
-// Run executes the Action's function in a new trace span.
-func (a *ActionDef[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream]) (output api.ActionRunResult[Out], err error) {
+// runWithTelemetry executes the Action's function in a new trace span and returns telemetry info.
+func (a *Action[In, Out, Stream, Init]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream]) (output api.ActionRunResult[Out], err error) {
 	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name())
 	defer func() {
 		logger.FromContext(ctx).Debug("Action.Run",
