@@ -30,7 +30,7 @@ import (
 	"syscall"
 
 	"github.com/firebase/genkit/go/ai"
-	aix "github.com/firebase/genkit/go/ai/x"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"

@@ -14,11 +14,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Package aix provides experimental AI primitives for Genkit.
+// Package exp provides experimental AI primitives for Genkit.
 //
 // APIs in this package are under active development and may change in any
 // minor version release.
-package aix
+package exp
 
 import (
 	"context"

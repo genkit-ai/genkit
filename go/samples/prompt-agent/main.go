@@ -26,7 +26,7 @@ import (
 	"os"
 	"strings"
 
-	aix "github.com/firebase/genkit/go/ai/x"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )

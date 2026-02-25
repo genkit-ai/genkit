@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
-	aix "github.com/firebase/genkit/go/ai/x"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"google.golang.org/genai"
@@ -37,8 +37,7 @@ func main() {
 
 	chatFlow := genkit.DefineCustomAgent(g, "chat",
 		func(ctx context.Context, resp aix.Responder[any], sess *aix.AgentSession[any]) (*aix.AgentFlowResult, error) {
-			var lastMessage *ai.Message
-			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentFlowInput) error {
+			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentFlowInput) error {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
 					ai.WithModel(googlegenai.ModelRef("googleai/gemini-3-flash-preview", &genai.GenerateContentConfig{
 						ThinkingConfig: &genai.ThinkingConfig{
@@ -52,19 +51,17 @@ func main() {
 						return err
 					}
 					if chunk.Done {
-						lastMessage = chunk.Response.Message
-						sess.AddMessages(lastMessage)
+						sess.AddMessages(chunk.Response.Message)
 						break
 					}
 					resp.SendModelChunk(chunk.Chunk)
 				}
 
 				return nil
-			})
-			if err != nil {
+			}); err != nil {
 				return nil, err
 			}
-			return &aix.AgentFlowResult{Message: lastMessage}, nil
+			return sess.Result(), nil
 		},
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
