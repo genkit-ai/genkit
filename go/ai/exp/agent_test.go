@@ -1331,3 +1331,181 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		t.Errorf("msg[3] should be final model response, got role=%s text=%s", msgs[3].Role, msgs[3].Text())
 	}
 }
+
+func TestAgentFlow_RunText(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "runTextFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				if len(input.Messages) > 0 {
+					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Messages[0].Content[0].Text))
+				}
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+	)
+
+	response, err := af.RunText(ctx, "hello")
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+
+	// 1 user message + 1 echo reply = 2.
+	if got := len(response.State.Messages); got != 2 {
+		t.Errorf("expected 2 messages, got %d", got)
+	}
+	if got := response.State.Custom.Counter; got != 1 {
+		t.Errorf("expected counter=1, got %d", got)
+	}
+}
+
+func TestAgentFlow_Run(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "runFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				if len(input.Messages) > 0 {
+					sess.AddMessages(ai.NewModelTextMessage("reply"))
+				}
+				return nil
+			})
+		},
+	)
+
+	input := &AgentFlowInput{
+		Messages: []*ai.Message{
+			ai.NewUserTextMessage("msg1"),
+			ai.NewUserTextMessage("msg2"),
+		},
+	}
+
+	response, err := af.Run(ctx, input)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// 2 user messages + 1 reply = 3.
+	if got := len(response.State.Messages); got != 3 {
+		t.Errorf("expected 3 messages, got %d", got)
+	}
+}
+
+func TestAgentFlow_RunText_WithState(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "runStateFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+	)
+
+	clientState := &SessionState[testState]{
+		Messages: []*ai.Message{
+			ai.NewUserTextMessage("previous"),
+			ai.NewModelTextMessage("previous reply"),
+		},
+		Custom: testState{Counter: 10},
+	}
+
+	response, err := af.RunText(ctx, "new message", WithState(clientState))
+	if err != nil {
+		t.Fatalf("RunText with state failed: %v", err)
+	}
+
+	// 2 previous + 1 new user + 1 reply = 4.
+	if got := len(response.State.Messages); got != 4 {
+		t.Errorf("expected 4 messages, got %d", got)
+	}
+	// Counter should be 11 (started at 10, incremented once).
+	if got := response.State.Custom.Counter; got != 11 {
+		t.Errorf("expected counter=11, got %d", got)
+	}
+}
+
+func TestAgentFlow_RunText_WithSnapshot(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineCustomAgent(reg, "runSnapshotFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	// First invocation via RunText.
+	resp1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("first RunText failed: %v", err)
+	}
+	if resp1.SnapshotID == "" {
+		t.Fatal("expected snapshot ID from first invocation")
+	}
+
+	// Resume from snapshot via RunText.
+	resp2, err := af.RunText(ctx, "second", WithSnapshotID[testState](resp1.SnapshotID))
+	if err != nil {
+		t.Fatalf("second RunText failed: %v", err)
+	}
+
+	snap, err := store.GetSnapshot(ctx, resp2.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	// 4 messages: first user + reply + second user + reply.
+	if got := len(snap.State.Messages); got != 4 {
+		t.Errorf("expected 4 messages after resume, got %d", got)
+	}
+	if got := snap.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2, got %d", got)
+	}
+}
+
+func TestPromptAgent_RunText(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	ai.DefinePrompt(reg, "runTextPrompt",
+		ai.WithModelName("test/echo"),
+		ai.WithSystem("You are a test assistant."),
+	)
+
+	af := DefinePromptAgent[testState, any](reg, "runTextPrompt", nil)
+
+	response, err := af.RunText(ctx, "hello")
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+
+	// 1 user message + 1 model reply = 2.
+	if got := len(response.State.Messages); got != 2 {
+		t.Errorf("expected 2 messages, got %d", got)
+		for i, m := range response.State.Messages {
+			t.Logf("  msg[%d]: role=%s text=%s", i, m.Role, m.Text())
+		}
+	}
+}

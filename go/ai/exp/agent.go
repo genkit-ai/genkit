@@ -432,35 +432,90 @@ func DefinePromptAgent[State, PromptIn any](
 	return DefineCustomAgent(r, promptName, fn, opts...)
 }
 
-// StreamBidi starts a new agent flow invocation.
+// StreamBidi starts a new agent flow invocation with bidirectional streaming.
+// Use this for multi-turn interactions where you need to send multiple inputs
+// and receive streaming chunks. For single-turn usage, see Run and RunText.
 func (af *AgentFlow[Stream, State]) StreamBidi(
 	ctx context.Context,
-	opts ...StreamBidiOption[State],
+	opts ...InvocationOption[State],
 ) (*AgentFlowConnection[Stream, State], error) {
-	sbOpts := &streamBidiOptions[State]{}
-	for _, opt := range opts {
-		if err := opt.applyStreamBidi(sbOpts); err != nil {
-			return nil, fmt.Errorf("AgentFlow.StreamBidi %q: %w", af.flow.Name(), err)
-		}
+	invOpts, err := af.resolveOptions(opts)
+	if err != nil {
+		return nil, err
 	}
 
-	init := &AgentFlowInit[State]{
-		SnapshotID: sbOpts.snapshotID,
-		State:      sbOpts.state,
-	}
-	if sbOpts.promptInput != nil {
-		if init.State == nil {
-			init.State = &SessionState[State]{}
-		}
-		init.State.InputVariables = sbOpts.promptInput
-	}
-
-	conn, err := af.flow.StreamBidi(ctx, init)
+	conn, err := af.flow.StreamBidi(ctx, invOpts)
 	if err != nil {
 		return nil, err
 	}
 
 	return &AgentFlowConnection[Stream, State]{conn: conn}, nil
+}
+
+// Run starts a single-turn agent flow invocation with the given input.
+// It sends the input, waits for the flow to complete, and returns the output.
+// For multi-turn interactions or streaming, use StreamBidi instead.
+func (af *AgentFlow[Stream, State]) Run(
+	ctx context.Context,
+	input *AgentFlowInput,
+	opts ...InvocationOption[State],
+) (*AgentFlowOutput[State], error) {
+	conn, err := af.StreamBidi(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := conn.Send(input); err != nil {
+		return nil, err
+	}
+	if err := conn.Close(); err != nil {
+		return nil, err
+	}
+
+	// Drain stream chunks.
+	for _, err := range conn.Receive() {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return conn.Output()
+}
+
+// RunText is a convenience method that starts a single-turn agent flow
+// invocation with a user text message. It is equivalent to calling Run with
+// an AgentFlowInput containing a single user text message.
+func (af *AgentFlow[Stream, State]) RunText(
+	ctx context.Context,
+	text string,
+	opts ...InvocationOption[State],
+) (*AgentFlowOutput[State], error) {
+	return af.Run(ctx, &AgentFlowInput{
+		Messages: []*ai.Message{ai.NewUserTextMessage(text)},
+	}, opts...)
+}
+
+// resolveOptions applies invocation options and returns the init struct.
+func (af *AgentFlow[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*AgentFlowInit[State], error) {
+	invOpts := &invocationOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyInvocation(invOpts); err != nil {
+			return nil, fmt.Errorf("AgentFlow %q: %w", af.flow.Name(), err)
+		}
+	}
+
+	init := &AgentFlowInit[State]{
+		SnapshotID: invOpts.snapshotID,
+		State:      invOpts.state,
+	}
+	if invOpts.promptInput != nil {
+		if init.State == nil {
+			init.State = &SessionState[State]{}
+		}
+		init.State.InputVariables = invOpts.promptInput
+	}
+
+	return init, nil
 }
 
 // newSessionFromInit creates a Session from initialization data.

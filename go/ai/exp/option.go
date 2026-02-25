@@ -74,20 +74,20 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) AgentFlowOption[State] {
 	})
 }
 
-// --- StreamBidiOption ---
+// --- InvocationOption ---
 
-// StreamBidiOption configures a StreamBidi call.
-type StreamBidiOption[State any] interface {
-	applyStreamBidi(*streamBidiOptions[State]) error
+// InvocationOption configures an agent flow invocation (StreamBidi, Run, or RunText).
+type InvocationOption[State any] interface {
+	applyInvocation(*invocationOptions[State]) error
 }
 
-type streamBidiOptions[State any] struct {
+type invocationOptions[State any] struct {
 	state       *SessionState[State]
 	snapshotID  string
 	promptInput any
 }
 
-func (o *streamBidiOptions[State]) applyStreamBidi(opts *streamBidiOptions[State]) error {
+func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
 	if o.state != nil {
 		if opts.state != nil {
 			return errors.New("cannot set state more than once (WithState)")
@@ -117,18 +117,18 @@ func (o *streamBidiOptions[State]) applyStreamBidi(opts *streamBidiOptions[State
 
 // WithState sets the initial state for the invocation.
 // Use this for client-managed state where the client sends state directly.
-func WithState[State any](state *SessionState[State]) StreamBidiOption[State] {
-	return &streamBidiOptions[State]{state: state}
+func WithState[State any](state *SessionState[State]) InvocationOption[State] {
+	return &invocationOptions[State]{state: state}
 }
 
 // WithSnapshotID loads state from a persisted snapshot by ID.
 // Use this for server-managed state where snapshots are stored.
-func WithSnapshotID[State any](id string) StreamBidiOption[State] {
-	return &streamBidiOptions[State]{snapshotID: id}
+func WithSnapshotID[State any](id string) InvocationOption[State] {
+	return &invocationOptions[State]{snapshotID: id}
 }
 
 // WithInputVariables overrides the default input variables for a prompt-backed agent flow.
 // Used with DefinePromptAgent to customize the input variables per invocation.
-func WithInputVariables[State any](input any) StreamBidiOption[State] {
-	return &streamBidiOptions[State]{promptInput: input}
+func WithInputVariables[State any](input any) InvocationOption[State] {
+	return &invocationOptions[State]{promptInput: input}
 }

@@ -116,4 +116,5 @@ func main() {
 	}
 
 	conn.Close()
+	fmt.Println(conn.Output())
 }
