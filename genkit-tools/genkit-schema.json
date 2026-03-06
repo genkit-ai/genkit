@@ -1,6 +1,28 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "parts"
+      ],
+      "additionalProperties": false
+    },
     "SessionFlowInit": {
       "type": "object",
       "properties": {
@@ -84,28 +106,6 @@
           "type": "boolean"
         }
       },
-      "additionalProperties": false
-    },
-    "Artifact": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "parts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Part"
-          }
-        },
-        "metadata": {
-          "type": "object",
-          "additionalProperties": {}
-        }
-      },
-      "required": [
-        "parts"
-      ],
       "additionalProperties": false
     },
     "SessionState": {
