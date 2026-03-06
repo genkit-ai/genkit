@@ -47,48 +47,48 @@ export const SessionStateSchema = z.object({
   custom: z.any().optional(),
   /** Named collections of parts produced during the conversation. */
   artifacts: z.array(ArtifactSchema).optional(),
-  /** Input used for agent flows that require input variables. */
+  /** Input used for session flows that require input variables. */
   inputVariables: z.any().optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 
 /**
- * Zod schema for agent flow input (per-turn).
+ * Zod schema for session flow input (per-turn).
  */
-export const AgentFlowInputSchema = z.object({
+export const SessionFlowInputSchema = z.object({
   /** User's input messages for this turn. */
   messages: z.array(MessageSchema).optional(),
   /** Tool request parts to re-execute interrupted tools. */
   toolRestarts: z.array(PartSchema).optional(),
 });
-export type AgentFlowInput = z.infer<typeof AgentFlowInputSchema>;
+export type SessionFlowInput = z.infer<typeof SessionFlowInputSchema>;
 
 /**
- * Zod schema for agent flow initialization.
+ * Zod schema for session flow initialization.
  */
-export const AgentFlowInitSchema = z.object({
+export const SessionFlowInitSchema = z.object({
   /** Loads state from a persisted snapshot. Mutually exclusive with state. */
   snapshotId: z.string().optional(),
   /** Direct state for the invocation. Mutually exclusive with snapshotId. */
   state: SessionStateSchema.optional(),
 });
-export type AgentFlowInit = z.infer<typeof AgentFlowInitSchema>;
+export type SessionFlowInit = z.infer<typeof SessionFlowInitSchema>;
 
 /**
- * Zod schema for agent flow result.
+ * Zod schema for session flow result.
  */
-export const AgentFlowResultSchema = z.object({
+export const SessionFlowResultSchema = z.object({
   /** Last model response message from the conversation. */
   message: MessageSchema.optional(),
   /** Artifacts produced during the session. */
   artifacts: z.array(ArtifactSchema).optional(),
 });
-export type AgentFlowResult = z.infer<typeof AgentFlowResultSchema>;
+export type SessionFlowResult = z.infer<typeof SessionFlowResultSchema>;
 
 /**
- * Zod schema for agent flow output.
+ * Zod schema for session flow output.
  */
-export const AgentFlowOutputSchema = z.object({
+export const SessionFlowOutputSchema = z.object({
   /** ID of the snapshot created at the end of this invocation. */
   snapshotId: z.string().optional(),
   /** Final conversation state (only when client-managed). */
@@ -98,12 +98,12 @@ export const AgentFlowOutputSchema = z.object({
   /** Artifacts produced during the session. */
   artifacts: z.array(ArtifactSchema).optional(),
 });
-export type AgentFlowOutput = z.infer<typeof AgentFlowOutputSchema>;
+export type SessionFlowOutput = z.infer<typeof SessionFlowOutputSchema>;
 
 /**
- * Zod schema for agent flow stream chunk.
+ * Zod schema for session flow stream chunk.
  */
-export const AgentFlowStreamChunkSchema = z.object({
+export const SessionFlowStreamChunkSchema = z.object({
   /** Generation tokens from the model. */
   modelChunk: ModelResponseChunkSchema.optional(),
   /** User-defined structured status information. */
@@ -112,7 +112,7 @@ export const AgentFlowStreamChunkSchema = z.object({
   artifact: ArtifactSchema.optional(),
   /** ID of a snapshot that was just persisted. */
   snapshotId: z.string().optional(),
-  /** Signals that the agent flow has finished processing the current input. */
+  /** Signals that the session flow has finished processing the current input. */
   endTurn: z.boolean().optional(),
 });
-export type AgentFlowStreamChunk = z.infer<typeof AgentFlowStreamChunkSchema>;
+export type SessionFlowStreamChunk = z.infer<typeof SessionFlowStreamChunkSchema>;

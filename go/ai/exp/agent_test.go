@@ -40,13 +40,13 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 	return registry.New()
 }
 
-func TestAgentFlow_BasicMultiTurn(t *testing.T) {
+func TestSessionFlow_BasicMultiTurn(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "basicFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "basicFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				resp.SendStatus(testStatus{Phase: "generating"})
 				// Echo back the user's message.
 				if len(input.Messages) > 0 {
@@ -115,14 +115,14 @@ func TestAgentFlow_BasicMultiTurn(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_WithSessionStore(t *testing.T) {
+func TestSessionFlow_WithSessionStore(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "snapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "snapshotFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -185,14 +185,14 @@ func TestAgentFlow_WithSessionStore(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_ResumeFromSnapshot(t *testing.T) {
+func TestSessionFlow_ResumeFromSnapshot(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "resumeFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "resumeFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -275,13 +275,13 @@ func TestAgentFlow_ResumeFromSnapshot(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_ClientManagedState(t *testing.T) {
+func TestSessionFlow_ClientManagedState(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "clientStateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "clientStateFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -338,13 +338,13 @@ func TestAgentFlow_ClientManagedState(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_Artifacts(t *testing.T) {
+func TestSessionFlow_Artifacts(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "artifactFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "artifactFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 
 				resp.SendArtifact(&Artifact{
 					Name:  "code.go",
@@ -369,7 +369,7 @@ func TestAgentFlow_Artifacts(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			return &AgentFlowResult{Artifacts: sess.Artifacts()}, nil
+			return &SessionFlowResult{Artifacts: sess.Artifacts()}, nil
 		},
 	)
 
@@ -408,16 +408,16 @@ func TestAgentFlow_Artifacts(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_SnapshotCallback(t *testing.T) {
+func TestSessionFlow_SnapshotCallback(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
 	// Only snapshot on even turns.
 	callbackCalls := 0
-	af := DefineCustomAgent(reg, "callbackFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "callbackFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -467,13 +467,13 @@ func TestAgentFlow_SnapshotCallback(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_SendMessages(t *testing.T) {
+func TestSessionFlow_SendMessages(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "sendMsgsFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "sendMsgsFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				return nil
 			})
 		},
@@ -513,14 +513,14 @@ func TestAgentFlow_SendMessages(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_SessionContext(t *testing.T) {
+func TestSessionFlow_SessionContext(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
 	var retrievedCounter int
-	af := DefineCustomAgent(reg, "contextFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "contextFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				// Session should be retrievable from context.
 				ctxSess := SessionFromContext[testState](ctx)
 				if ctxSess == nil {
@@ -559,13 +559,13 @@ func TestAgentFlow_SessionContext(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_ErrorInTurn(t *testing.T) {
+func TestSessionFlow_ErrorInTurn(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "errorFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "errorFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				return fmt.Errorf("turn failed")
 			})
 		},
@@ -585,13 +585,13 @@ func TestAgentFlow_ErrorInTurn(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_SetMessages(t *testing.T) {
+func TestSessionFlow_SetMessages(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "setMsgsFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "setMsgsFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				// Replace all messages with just one.
 				sess.SetMessages([]*ai.Message{ai.NewModelTextMessage("replaced")})
 				return nil
@@ -626,14 +626,14 @@ func TestAgentFlow_SetMessages(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_SnapshotIDInMessageMetadata(t *testing.T) {
+func TestSessionFlow_SnapshotIDInMessageMetadata(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "metadataFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "metadataFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil
 			})
@@ -641,7 +641,7 @@ func TestAgentFlow_SnapshotIDInMessageMetadata(t *testing.T) {
 				return nil, err
 			}
 			msgs := sess.Messages()
-			return &AgentFlowResult{Message: msgs[len(msgs)-1]}, nil
+			return &SessionFlowResult{Message: msgs[len(msgs)-1]}, nil
 		},
 		WithSessionStore(store),
 	)
@@ -722,14 +722,14 @@ func TestInMemorySessionStore(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_TurnSpanOutput(t *testing.T) {
+func TestSessionFlow_TurnSpanOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
 	var capturedOutputs []any
 
-	af := DefineCustomAgent(reg, "turnOutputFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+	af := DefineSessionFlow(reg, "turnOutputFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
 			// Wrap collectTurnOutput to capture what each turn produces.
 			originalCollect := sess.collectTurnOutput
 			sess.collectTurnOutput = func() any {
@@ -738,7 +738,7 @@ func TestAgentFlow_TurnSpanOutput(t *testing.T) {
 				return output
 			}
 
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				resp.SendStatus(testStatus{Phase: "thinking"})
 				resp.SendModelChunk(&ai.ModelResponseChunk{
 					Content: []*ai.Part{ai.NewTextPart("reply")},
@@ -784,9 +784,9 @@ func TestAgentFlow_TurnSpanOutput(t *testing.T) {
 	}
 
 	for i, output := range capturedOutputs {
-		chunks, ok := output.([]*AgentFlowStreamChunk[testStatus])
+		chunks, ok := output.([]*SessionFlowStreamChunk[testStatus])
 		if !ok {
-			t.Fatalf("turn %d: expected []*AgentFlowStreamChunk[testStatus], got %T", i, output)
+			t.Fatalf("turn %d: expected []*SessionFlowStreamChunk[testStatus], got %T", i, output)
 		}
 		// 3 content chunks per turn: status + model chunk + artifact.
 		if len(chunks) != 3 {
@@ -803,15 +803,15 @@ func TestAgentFlow_TurnSpanOutput(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_TurnSpanOutput_WithSnapshots(t *testing.T) {
+func TestSessionFlow_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
 	var capturedOutputs []any
 
-	af := DefineCustomAgent(reg, "turnOutputSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
+	af := DefineSessionFlow(reg, "turnOutputSnapshotFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
 			originalCollect := sess.collectTurnOutput
 			sess.collectTurnOutput = func() any {
 				output := originalCollect()
@@ -819,7 +819,7 @@ func TestAgentFlow_TurnSpanOutput_WithSnapshots(t *testing.T) {
 				return output
 			}
 
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				resp.SendStatus(testStatus{Phase: "working"})
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil
@@ -857,7 +857,7 @@ func TestAgentFlow_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	if len(capturedOutputs) != 1 {
 		t.Fatalf("expected 1 captured output, got %d", len(capturedOutputs))
 	}
-	chunks := capturedOutputs[0].([]*AgentFlowStreamChunk[testStatus])
+	chunks := capturedOutputs[0].([]*SessionFlowStreamChunk[testStatus])
 	if len(chunks) != 1 {
 		t.Errorf("expected 1 content chunk, got %d", len(chunks))
 	}
@@ -916,7 +916,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState, any](
+	af := DefineSessionFlowFromPrompt[testState, any](
 		reg, "testPrompt", nil,
 	)
 
@@ -988,7 +988,7 @@ func TestPromptAgent_PromptInputOverride(t *testing.T) {
 		ai.WithPrompt("Hello {{name}}!"),
 	)
 
-	af := DefinePromptAgent[testState](
+	af := DefineSessionFlowFromPrompt[testState](
 		reg, "greetPrompt", greetInput{Name: "default"},
 	)
 
@@ -1066,7 +1066,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefinePromptAgent[testState, any](
+	af := DefineSessionFlowFromPrompt[testState, any](
 		reg, "historyPrompt", nil,
 	)
 
@@ -1142,7 +1142,7 @@ func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState, any](
+	af := DefineSessionFlowFromPrompt[testState, any](
 		reg, "snapPrompt", nil,
 		WithSessionStore(store),
 	)
@@ -1274,7 +1274,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet")),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "toolPrompt", nil)
+	af := DefineSessionFlowFromPrompt[testState, any](reg, "toolPrompt", nil)
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1332,13 +1332,13 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_RunText(t *testing.T) {
+func TestSessionFlow_RunText(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "runTextFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "runTextFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Messages[0].Content[0].Text))
 				}
@@ -1365,13 +1365,13 @@ func TestAgentFlow_RunText(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_Run(t *testing.T) {
+func TestSessionFlow_Run(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "runFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "runFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -1380,7 +1380,7 @@ func TestAgentFlow_Run(t *testing.T) {
 		},
 	)
 
-	input := &AgentFlowInput{
+	input := &SessionFlowInput{
 		Messages: []*ai.Message{
 			ai.NewUserTextMessage("msg1"),
 			ai.NewUserTextMessage("msg2"),
@@ -1398,13 +1398,13 @@ func TestAgentFlow_Run(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_RunText_WithState(t *testing.T) {
+func TestSessionFlow_RunText_WithState(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "runStateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "runStateFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1438,14 +1438,14 @@ func TestAgentFlow_RunText_WithState(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_RunText_WithSnapshot(t *testing.T) {
+func TestSessionFlow_RunText_WithSnapshot(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "runSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "runSnapshotFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1494,7 +1494,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "runTextPrompt", nil)
+	af := DefineSessionFlowFromPrompt[testState, any](reg, "runTextPrompt", nil)
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -1510,14 +1510,14 @@ func TestPromptAgent_RunText(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_SingleTurnSnapshotDedup(t *testing.T) {
+func TestSessionFlow_SingleTurnSnapshotDedup(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "dedupFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "dedupFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1554,14 +1554,14 @@ func TestAgentFlow_SingleTurnSnapshotDedup(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_MultiTurnSnapshotDedup(t *testing.T) {
+func TestSessionFlow_MultiTurnSnapshotDedup(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "multiDedupFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "multiDedupFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1616,14 +1616,14 @@ func TestAgentFlow_MultiTurnSnapshotDedup(t *testing.T) {
 	}
 }
 
-func TestAgentFlow_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
+func TestSessionFlow_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
-	af := DefineCustomAgent(reg, "postRunMutateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentFlowResult, error) {
-			if err := sess.Run(ctx, func(ctx context.Context, input *AgentFlowInput) error {
+	af := DefineSessionFlow(reg, "postRunMutateFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil
 			}); err != nil {

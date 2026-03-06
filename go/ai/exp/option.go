@@ -21,19 +21,19 @@ import (
 	"errors"
 )
 
-// --- AgentFlowOption ---
+// --- SessionFlowOption ---
 
-// AgentFlowOption configures an AgentFlow.
-type AgentFlowOption[State any] interface {
-	applyAgentFlow(*agentFlowOptions[State]) error
+// SessionFlowOption configures an SessionFlow.
+type SessionFlowOption[State any] interface {
+	applySessionFlow(*sessionFlowOptions[State]) error
 }
 
-type agentFlowOptions[State any] struct {
+type sessionFlowOptions[State any] struct {
 	store    SessionStore[State]
 	callback SnapshotCallback[State]
 }
 
-func (o *agentFlowOptions[State]) applyAgentFlow(opts *agentFlowOptions[State]) error {
+func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[State]) error {
 	if o.store != nil {
 		if opts.store != nil {
 			return errors.New("cannot set session store more than once (WithSessionStore)")
@@ -50,20 +50,20 @@ func (o *agentFlowOptions[State]) applyAgentFlow(opts *agentFlowOptions[State]) 
 }
 
 // WithSessionStore sets the store for persisting snapshots.
-func WithSessionStore[State any](store SessionStore[State]) AgentFlowOption[State] {
-	return &agentFlowOptions[State]{store: store}
+func WithSessionStore[State any](store SessionStore[State]) SessionFlowOption[State] {
+	return &sessionFlowOptions[State]{store: store}
 }
 
 // WithSnapshotCallback configures when snapshots are created.
 // If not provided and a store is configured, snapshots are always created.
-func WithSnapshotCallback[State any](cb SnapshotCallback[State]) AgentFlowOption[State] {
-	return &agentFlowOptions[State]{callback: cb}
+func WithSnapshotCallback[State any](cb SnapshotCallback[State]) SessionFlowOption[State] {
+	return &sessionFlowOptions[State]{callback: cb}
 }
 
 // WithSnapshotOn configures snapshots to be created only for the specified events.
 // For example, WithSnapshotOn[MyState](SnapshotEventTurnEnd) skips the
 // invocation-end snapshot.
-func WithSnapshotOn[State any](events ...SnapshotEvent) AgentFlowOption[State] {
+func WithSnapshotOn[State any](events ...SnapshotEvent) SessionFlowOption[State] {
 	set := make(map[SnapshotEvent]struct{}, len(events))
 	for _, e := range events {
 		set[e] = struct{}{}
@@ -76,7 +76,7 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) AgentFlowOption[State] {
 
 // --- InvocationOption ---
 
-// InvocationOption configures an agent flow invocation (StreamBidi, Run, or RunText).
+// InvocationOption configures an session flow invocation (StreamBidi, Run, or RunText).
 type InvocationOption[State any] interface {
 	applyInvocation(*invocationOptions[State]) error
 }
@@ -127,8 +127,8 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{snapshotID: id}
 }
 
-// WithInputVariables overrides the default input variables for a prompt-backed agent flow.
-// Used with DefinePromptAgent to customize the input variables per invocation.
+// WithInputVariables overrides the default input variables for a prompt-backed session flow.
+// Used with DefineSessionFlowFromPrompt to customize the input variables per invocation.
 func WithInputVariables[State any](input any) InvocationOption[State] {
 	return &invocationOptions[State]{promptInput: input}
 }

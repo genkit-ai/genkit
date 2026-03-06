@@ -22,9 +22,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-// AgentFlowInit is the input for starting an agent flow invocation.
+// SessionFlowInit is the input for starting an session flow invocation.
 // Provide either SnapshotID (to load from store) or State (direct state).
-type AgentFlowInit[State any] struct {
+type SessionFlowInit[State any] struct {
 	// SnapshotID loads state from a persisted snapshot.
 	// Mutually exclusive with State.
 	SnapshotID string `json:"snapshotId,omitempty"`
@@ -33,8 +33,8 @@ type AgentFlowInit[State any] struct {
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// AgentFlowInput is the input sent to an agent flow during a conversation turn.
-type AgentFlowInput struct {
+// SessionFlowInput is the input sent to an session flow during a conversation turn.
+type SessionFlowInput struct {
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
 	// ToolRestarts contains tool request parts to re-execute interrupted tools.
@@ -44,9 +44,9 @@ type AgentFlowInput struct {
 	ToolRestarts []*ai.Part `json:"toolRestarts,omitempty"`
 }
 
-// AgentFlowOutput is the output when an agent flow invocation completes.
-// It wraps AgentFlowResult with framework-managed fields.
-type AgentFlowOutput[State any] struct {
+// SessionFlowOutput is the output when an session flow invocation completes.
+// It wraps SessionFlowResult with framework-managed fields.
+type SessionFlowOutput[State any] struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Message is the last model response message from the conversation.
@@ -59,21 +59,21 @@ type AgentFlowOutput[State any] struct {
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// AgentFlowResult is the return value from an AgentFlowFunc.
+// SessionFlowResult is the return value from an SessionFlowFunc.
 // It contains the user-specified outputs of the agent invocation.
-type AgentFlowResult struct {
+type SessionFlowResult struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
 }
 
-// AgentFlowStreamChunk represents a single item in the agent flow's output stream.
+// SessionFlowStreamChunk represents a single item in the session flow's output stream.
 // Multiple fields can be populated in a single chunk.
-type AgentFlowStreamChunk[Stream any] struct {
+type SessionFlowStreamChunk[Stream any] struct {
 	// Artifact contains a newly produced artifact.
 	Artifact *Artifact `json:"artifact,omitempty"`
-	// EndTurn signals that the agent flow has finished processing the current input.
+	// EndTurn signals that the session flow has finished processing the current input.
 	// When true, the client should stop iterating and may send the next input.
 	EndTurn bool `json:"endTurn,omitempty"`
 	// ModelChunk contains generation tokens from the model.
@@ -103,8 +103,8 @@ type SessionState[State any] struct {
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Custom is the user-defined state associated with this conversation.
 	Custom State `json:"custom,omitempty"`
-	// InputVariables is the input used for agent flows that require input variables
-	// (e.g. prompt-backed agent flows).
+	// InputVariables is the input used for session flows that require input variables
+	// (e.g. prompt-backed session flows).
 	InputVariables any `json:"inputVariables,omitempty"`
 	// Messages is the conversation history (user/model exchanges).
 	// Does NOT include prompt-rendered messages — those are rendered fresh each turn.

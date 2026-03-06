@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates DefinePromptAgent, which creates a
-// multi-turn conversational agent flow backed by a .prompt file. The
+// This sample demonstrates DefineSessionFlowFromPrompt, which creates a
+// multi-turn conversational session flow backed by a .prompt file. The
 // conversation loop (render prompt, call model, stream chunks, update history)
 // is handled automatically. Compare with custom-agent which wires
 // the same loop manually.
@@ -39,7 +39,7 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	chatFlow := genkit.DefinePromptAgent(
+	chatFlow := genkit.DefineSessionFlowFromPrompt(
 		g, "chat", ChatPromptInput{Personality: "a sarcastic pirate"},
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {
@@ -47,7 +47,7 @@ func main() {
 		}),
 	)
 
-	fmt.Println("Prompt Agent Chat (type 'quit' to exit)")
+	fmt.Println("Session Flow Chat (type 'quit' to exit)")
 	fmt.Println()
 
 	conn, err := chatFlow.StreamBidi(ctx)

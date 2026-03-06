@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates the AgentFlow API for multi-turn conversation
+// This sample demonstrates the SessionFlow API for multi-turn conversation
 // with token-level streaming. It runs a CLI REPL where conversation history
 // is managed automatically by the session.
 package main
@@ -35,9 +35,9 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	chatFlow := genkit.DefineCustomAgent(g, "chat",
-		func(ctx context.Context, resp aix.Responder[any], sess *aix.AgentSession[any]) (*aix.AgentFlowResult, error) {
-			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentFlowInput) error {
+	chatFlow := genkit.DefineSessionFlow(g, "chat",
+		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
 					ai.WithModel(googlegenai.ModelRef("googleai/gemini-3-flash-preview", &genai.GenerateContentConfig{
 						ThinkingConfig: &genai.ThinkingConfig{
@@ -67,7 +67,7 @@ func main() {
 		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
 
-	fmt.Println("Agent Flow Chat (type 'quit' to exit)")
+	fmt.Println("Session Flow Chat (type 'quit' to exit)")
 	fmt.Println()
 
 	conn, err := chatFlow.StreamBidi(ctx)

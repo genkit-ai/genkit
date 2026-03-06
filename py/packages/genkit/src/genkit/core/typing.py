@@ -987,24 +987,24 @@ class Messages(RootModel[list[Message]]):
     root: list[Message]
 
 
-class AgentFlowInput(BaseModel):
-    """Model for agentflowinput data."""
+class SessionFlowInput(BaseModel):
+    """Model for sessionflowinput data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     messages: list[Message] | None = None
     tool_restarts: list[Part] | None = Field(default=None)
 
 
-class AgentFlowResult(BaseModel):
-    """Model for agentflowresult data."""
+class SessionFlowResult(BaseModel):
+    """Model for sessionflowresult data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     message: Message | None = None
     artifacts: list[Artifact] | None = None
 
 
-class AgentFlowStreamChunk(BaseModel):
-    """Model for agentflowstreamchunk data."""
+class SessionFlowStreamChunk(BaseModel):
+    """Model for sessionflowstreamchunk data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     model_chunk: ModelResponseChunk | None = Field(default=None)
@@ -1101,16 +1101,16 @@ class Request(RootModel[GenerateRequest]):
     root: GenerateRequest
 
 
-class AgentFlowInit(BaseModel):
-    """Model for agentflowinit data."""
+class SessionFlowInit(BaseModel):
+    """Model for sessionflowinit data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = Field(default=None)
     state: SessionState | None = None
 
 
-class AgentFlowOutput(BaseModel):
-    """Model for agentflowoutput data."""
+class SessionFlowOutput(BaseModel):
+    """Model for sessionflowoutput data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = Field(default=None)

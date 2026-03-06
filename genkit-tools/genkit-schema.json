@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
-    "AgentFlowInit": {
+    "SessionFlowInit": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -13,7 +13,7 @@
       },
       "additionalProperties": false
     },
-    "AgentFlowInput": {
+    "SessionFlowInput": {
       "type": "object",
       "properties": {
         "messages": {
@@ -31,7 +31,7 @@
       },
       "additionalProperties": false
     },
-    "AgentFlowOutput": {
+    "SessionFlowOutput": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -52,7 +52,7 @@
       },
       "additionalProperties": false
     },
-    "AgentFlowResult": {
+    "SessionFlowResult": {
       "type": "object",
       "properties": {
         "message": {
@@ -67,7 +67,7 @@
       },
       "additionalProperties": false
     },
-    "AgentFlowStreamChunk": {
+    "SessionFlowStreamChunk": {
       "type": "object",
       "properties": {
         "modelChunk": {
