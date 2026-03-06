@@ -115,4 +115,6 @@ export const SessionFlowStreamChunkSchema = z.object({
   /** Signals that the session flow has finished processing the current input. */
   endTurn: z.boolean().optional(),
 });
-export type SessionFlowStreamChunk = z.infer<typeof SessionFlowStreamChunkSchema>;
+export type SessionFlowStreamChunk = z.infer<
+  typeof SessionFlowStreamChunkSchema
+>;
