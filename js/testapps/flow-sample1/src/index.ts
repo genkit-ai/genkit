@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { genkit, z } from 'genkit';
+import { genkit, z } from 'genkit/beta';
 
 const ai = genkit({});
 
@@ -332,7 +332,7 @@ export const chatFlowWithInit = ai.defineBidiFlow(
     name: 'chatFlowWithInit',
     inputSchema: z.string(),
     outputSchema: z.string(),
-    initSchema: z.object({ prefix: z.string() }),
+    initSchema: z.object({ prefix: z.string() }).optional(),
   },
   async function* ({ inputStream, init }) {
     const prefix = init?.prefix || '';

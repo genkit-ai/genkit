@@ -38,7 +38,15 @@ import {
   type SessionData,
   type SessionOptions,
 } from '@genkit-ai/ai/session';
-import type { Operation, z } from '@genkit-ai/core';
+import {
+  defineBidiFlow,
+  type Action,
+  type ActionFnArg,
+  type ActionRunOptions,
+  type FlowConfig,
+  type Operation,
+  type z,
+} from '@genkit-ai/core';
 import { v4 as uuidv4 } from 'uuid';
 import type { Formatter } from './formats';
 import { Genkit, type GenkitOptions } from './genkit';
@@ -288,5 +296,24 @@ export class GenkitBeta extends Genkit {
    */
   defineResource(opts: ResourceOptions, fn: ResourceFn): ResourceAction {
     return defineResource(this.registry, opts, fn);
+  }
+
+  /**
+   * Defines and registers a bi-directional flow.
+   */
+  defineBidiFlow<
+    I extends z.ZodTypeAny = z.ZodTypeAny,
+    O extends z.ZodTypeAny = z.ZodTypeAny,
+    S extends z.ZodTypeAny = z.ZodTypeAny,
+    Init extends z.ZodTypeAny = z.ZodTypeAny,
+  >(
+    config: FlowConfig<I, O, S, Init>,
+    fn: (
+      input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
+    ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
+  ): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
+    const flow = defineBidiFlow(this.registry, config, fn);
+    this.flows.push(flow);
+    return flow;
   }
 }
