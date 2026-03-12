@@ -596,7 +596,7 @@ export function action<
           abortSignal: opts?.abortSignal,
           telemetryLabels: opts?.telemetryLabels,
           init: opts?.init,
-        } as ActionRunOptions<z.infer<S>, z.infer<I>>
+        }
       )
       .then((s) => s.result)
       .finally(() => {
@@ -634,7 +634,7 @@ export function action<
     const result = actionFn.stream(undefined, {
       ...opts,
       inputStream,
-    } as ActionRunOptions<z.infer<S>, z.infer<I>>);
+    });
 
     return {
       ...result,
