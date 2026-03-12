@@ -256,6 +256,7 @@ export type ActionParams<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
   /**
    * Name of the action, or an object with pluginId and actionId.
@@ -302,17 +303,6 @@ export type ActionParams<
    * The type of action.
    */
   actionType: ActionType;
-};
-
-/**
- * Configuration for a bi-directional action.
- */
-export interface BidiActionParams<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
-> extends ActionParams<I, O, S> {
   /**
    * Zod schema for the initialization data.
    */
@@ -321,7 +311,7 @@ export interface BidiActionParams<
    * JSON schema for the initialization data.
    */
   initJsonSchema?: JSONSchema7;
-}
+};
 
 /**
  * Configuration for an async action (lazy loaded).
@@ -429,7 +419,7 @@ export function action<
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  config: BidiActionParams<I, O, S>,
+  config: ActionParams<I, O, S>,
   fn: (
     input: z.infer<I>,
     options: ActionFnArg<z.infer<S>, z.infer<I>>
@@ -684,14 +674,15 @@ export function defineAction<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  config: ActionParams<I, O, S>,
+  config: ActionParams<I, O, S, Init>,
   fn: (
     input: z.infer<I>,
-    options: ActionFnArg<z.infer<S>, z.infer<I>>
+    options: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => Promise<z.infer<O>>
-): Action<I, O, S> {
+): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
   if (isInRuntimeContext()) {
     throw new Error(
       'Cannot define new actions at runtime.\n' +
@@ -717,7 +708,7 @@ export function defineBidiAction<
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  config: BidiActionParams<I, O, S, Init>,
+  config: ActionParams<I, O, S, Init>,
   fn: (
     input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
@@ -736,7 +727,7 @@ export function bidiAction<
   S extends z.ZodTypeAny = z.ZodTypeAny,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  config: BidiActionParams<I, O, S, Init>,
+  config: ActionParams<I, O, S, Init>,
   fn: (
     input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
