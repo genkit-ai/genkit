@@ -481,11 +481,7 @@ export function action<
         schema: config.initSchema,
         jsonSchema: config.initJsonSchema,
       });
-      if (options) {
-        options.init = validatedInit;
-      } else {
-        options = { init: validatedInit };
-      }
+      options = { ...options, init: validatedInit };
     }
 
     let traceId;
@@ -599,7 +595,7 @@ export function action<
           inputStream: opts?.inputStream,
           abortSignal: opts?.abortSignal,
           telemetryLabels: opts?.telemetryLabels,
-          init: (opts as ActionFnArg<z.infer<S>>)?.init,
+          init: opts?.init,
         } as ActionRunOptions<z.infer<S>, z.infer<I>>
       )
       .then((s) => s.result)
