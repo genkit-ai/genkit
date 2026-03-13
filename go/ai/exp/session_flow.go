@@ -575,7 +575,7 @@ func newSessionFromInit[State any](
 // It provides a Receive() iterator that supports multi-turn patterns: breaking out
 // of the iterator between turns does not cancel the underlying connection.
 type SessionFlowConnection[Stream, State any] struct {
-	conn *core.BidiConnection[*SessionFlowInput, *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream]]
+	conn *core.BidiConnection[*SessionFlowInput, *SessionFlowStreamChunk[Stream], *SessionFlowOutput[State]]
 
 	// chunks buffers stream chunks from the underlying connection so that
 	// breaking from Receive() between turns doesn't cancel the context.
