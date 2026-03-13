@@ -264,6 +264,7 @@ func TestFlowNameFromContextOutsideFlow(t *testing.T) {
 func TestBidiActionEcho(t *testing.T) {
 	ctx := context.Background()
 
+	// In=struct{} (no initial data), Out=string, OutStream=string, InStream=string
 	action := NewBidiAction(
 		"echo", api.ActionTypeCustom, nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
@@ -315,18 +316,19 @@ func TestBidiActionEcho(t *testing.T) {
 	}
 }
 
-func TestBidiActionWithInit(t *testing.T) {
+func TestBidiActionWithConfig(t *testing.T) {
 	ctx := context.Background()
 
 	type Config struct {
 		Prefix string
 	}
 
+	// In=Config (initial config), Out=string, OutStream=string, InStream=string
 	action := NewBidiAction(
 		"prefixed", api.ActionTypeCustom, nil,
-		func(ctx context.Context, init Config, inCh <-chan string, outCh chan<- string) (string, error) {
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
 			for input := range inCh {
-				outCh <- fmt.Sprintf("%s: %s", init.Prefix, input)
+				outCh <- fmt.Sprintf("%s: %s", cfg.Prefix, input)
 			}
 			return "done", nil
 		},
