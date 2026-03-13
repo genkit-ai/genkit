@@ -19,6 +19,7 @@
 
 import json
 import os
+import pathlib
 import re
 from collections.abc import Callable
 from typing import Any, cast
@@ -41,7 +42,7 @@ from genkit.plugins.metrics.helper import load_prompt_file, render_text
 
 def _get_prompt_path(filename: str) -> str:
     """Get absolute path to a prompt file in the prompts directory."""
-    plugin_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_dir = pathlib.Path(pathlib.Path(__file__).resolve()).parent
     return os.path.join(plugin_dir, '..', '..', '..', '..', 'prompts', filename)
 
 
@@ -89,10 +90,10 @@ def _configure_evaluator(ai: Genkit, param: MetricConfig) -> None:
                 assert datapoint.output is not None, 'output is required'
                 output_string = datapoint.output if isinstance(datapoint.output, str) else json.dumps(datapoint.output)
                 input_string = datapoint.input if isinstance(datapoint.input, str) else json.dumps(datapoint.input)
-                prompt_function = await load_prompt_file(_get_prompt_path('faithfulness_long_form.prompt'))
+                prompt_function = await load_prompt_file(_get_prompt_path('answer_relevancy.prompt'))
                 context = ' '.join(json.dumps(e) for e in (datapoint.context or []))
                 prompt = await render_text(
-                    prompt_function, {'input': input_string, 'output': output_string, 'context': context}
+                    prompt_function, {'question': input_string, 'answer': output_string, 'context': context}
                 )
 
                 response = await ai.generate(
@@ -119,7 +120,7 @@ def _configure_evaluator(ai: Genkit, param: MetricConfig) -> None:
                 fn=_relevancy_eval,
             )
         case GenkitMetricType.FAITHFULNESS:
-            _faithfulness_prompts = {}
+            faithfulness_prompts = {}
 
             async def _faithfulness_eval(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
                 assert param.judge is not None, 'judge is required for FAITHFULNESS metric'
@@ -128,15 +129,15 @@ def _configure_evaluator(ai: Genkit, param: MetricConfig) -> None:
                 input_string = datapoint.input if isinstance(datapoint.input, str) else json.dumps(datapoint.input)
                 context_list = [(json.dumps(e) if not isinstance(e, str) else e) for e in (datapoint.context or [])]
 
-                if 'longform' not in _faithfulness_prompts:
-                    _faithfulness_prompts['longform'] = await load_prompt_file(
+                if 'longform' not in faithfulness_prompts:
+                    faithfulness_prompts['longform'] = await load_prompt_file(
                         _get_prompt_path('faithfulness_long_form.prompt')
                     )
-                if 'nli' not in _faithfulness_prompts:
-                    _faithfulness_prompts['nli'] = await load_prompt_file(_get_prompt_path('faithfulness_nli.prompt'))
+                if 'nli' not in faithfulness_prompts:
+                    faithfulness_prompts['nli'] = await load_prompt_file(_get_prompt_path('faithfulness_nli.prompt'))
 
                 prompt = await render_text(
-                    _faithfulness_prompts['longform'], {'question': input_string, 'answer': output_string}
+                    faithfulness_prompts['longform'], {'question': input_string, 'answer': output_string}
                 )
                 longform_response = await ai.generate(
                     model=param.judge.name,
@@ -155,7 +156,7 @@ def _configure_evaluator(ai: Genkit, param: MetricConfig) -> None:
                 all_statements = '\n'.join([f'statement: {s}' for s in statements])
                 all_context = '\n'.join(context_list)
                 prompt = await render_text(
-                    _faithfulness_prompts['nli'], {'context': all_context, 'statements': all_statements}
+                    faithfulness_prompts['nli'], {'context': all_context, 'statements': all_statements}
                 )
 
                 nli_response = await ai.generate(
@@ -246,7 +247,7 @@ def _configure_evaluator(ai: Genkit, param: MetricConfig) -> None:
                 assert isinstance(datapoint.reference, str), 'reference must be of string (regex)'
                 output_string = datapoint.output if isinstance(datapoint.output, str) else json.dumps(datapoint.output)
                 pattern = re.compile(datapoint.reference)
-                score = False if pattern.search(output_string) is None else True
+                score = pattern.search(output_string) is not None
                 status = EvalStatusEnum.PASS_ if score else EvalStatusEnum.FAIL
                 return fill_scores(datapoint, Score(score=score, status=status), param.status_override_fn)
 

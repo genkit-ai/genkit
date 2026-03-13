@@ -450,28 +450,24 @@ def create_mcp_server(ai: Genkit, options: McpServerOptions) -> McpServer:
         GenkitMcpServer instance.
 
     Example:
-        ```python
-        from genkit.ai import Genkit
-        from genkit.plugins.mcp import create_mcp_server, McpServerOptions
-
-        ai = Genkit()
-
-
-        # Define some tools and resources
-        @ai.tool()
-        def add(a: int, b: int) -> int:
-            return a + b
-
-
-        ai.define_resource(
-            name='my_resource',
-            uri='my://resource',
-            fn=lambda req: {'content': [{'text': 'resource content'}]},
-        )
-
-        # Create and start MCP server
-        server = create_mcp_server(ai, McpServerOptions(name='my-server'))
-        await server.start()
-        ```
+        >>> from genkit.ai import Genkit
+        >>> from genkit.plugins.mcp import create_mcp_server, McpServerOptions
+        >>>
+        >>> ai = Genkit()
+        >>>
+        >>> # Define some tools and resources
+        >>> @ai.tool()
+        ... def add(a: int, b: int) -> int:
+        ...     return a + b
+        >>>
+        >>> ai.define_resource(
+        ...     name='my_resource',
+        ...     uri='my://resource',
+        ...     fn=lambda req: {'content': [{'text': 'resource content'}]},
+        ... )
+        >>>
+        >>> # Create and start MCP server
+        >>> server = create_mcp_server(ai, McpServerOptions(name='my-server'))
+        >>> await server.start()
     """
     return McpServer(ai, options)

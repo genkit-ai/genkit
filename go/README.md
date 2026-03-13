@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://genkit.dev/go/docs">Documentation</a> &bull;
+  <a href="https://genkit.dev/docs/overview/?lang=go">Documentation</a> &bull;
   <a href="https://pkg.go.dev/github.com/firebase/genkit/go">API Reference</a> &bull;
   <a href="https://discord.gg/qXt5zzQKpc">Discord</a>
 </p>
@@ -487,6 +487,31 @@ r := chi.NewRouter()
 r.Post("/joke", genkit.Handler(jokeFlow))
 http.ListenAndServe(":8080", r)
 ```
+
+### Frameworks with Centralized Error Handling
+
+`genkit.HandlerFunc` returns:
+
+```go
+func(http.ResponseWriter, *http.Request) error
+```
+
+This is useful for frameworks that support centralized error handling and middleware chains, and expect handlers to return an error.
+
+For example, Echo natively supports handlers that return error, so `genkit.HandlerFunc` can be adapted directly:
+
+```go
+e := echo.New()
+h := genkit.HandlerFunc(jokeFlow)
+
+e.POST("/joke", func(c *echo.Context) error {
+	  return h(c.Response(), c.Request())
+})
+
+e.Start(":8080")
+```
+
+Any error returned by `genkit.HandlerFunc` will be handled by Echo's middleware stack.
 
 ---
 

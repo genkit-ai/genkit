@@ -15,6 +15,7 @@
  */
 
 import {
+  cancelOperation,
   checkOperation,
   defineHelper,
   definePartial,
@@ -883,6 +884,16 @@ export class Genkit implements HasRegistry {
    */
   checkOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
     return checkOperation(this.registry, operation);
+  }
+
+  /**
+   * Cancels a given operation. Returns a new operation which will contain the updated status.
+   *
+   * @param operation
+   * @returns
+   */
+  cancelOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
+    return cancelOperation(this.registry, operation);
   }
 
   /**

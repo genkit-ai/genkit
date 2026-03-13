@@ -62,6 +62,7 @@ jobs:
         registry-url: 'https://wombat-dressing-room.appspot.com/'
     - name: release script
       shell: bash
-      run: RELEASE_BRANCH=${{ steps.extract_branch.outputs.branch }} RELEASE_TAG=${{ inputs.releaseTag }} scripts/release_main.sh
+      run: RELEASE_BRANCH=${STEPS_EXTRACT_BRANCH_OUTPUTS_BRANCH} RELEASE_TAG=${{ inputs.releaseTag }} scripts/release_main.sh
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+        STEPS_EXTRACT_BRANCH_OUTPUTS_BRANCH: ${{ steps.extract_branch.outputs.branch }}

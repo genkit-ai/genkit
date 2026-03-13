@@ -141,7 +141,8 @@ def run_loop(coro: Coroutine[object, object, T], *, debug: bool | None = None) -
         debug: If True, run in debug mode.
     """
     try:
-        import uvloop
+        # Lazy import: uvloop is optional and only loaded if available
+        import uvloop  # noqa: PLC0415
 
         logger.debug('✅ Using uvloop (recommended)')
         return uvloop.run(coro, debug=debug)

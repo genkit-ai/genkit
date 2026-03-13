@@ -1,0 +1,599 @@
+#!/usr/bin/env bash
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Release readiness checks for Genkit Python packages.
+# Run this script before any release to ensure all packages are ready.
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Track overall status
+ERRORS=0
+WARNINGS=0
+
+# Get the directory of this script and the py directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TOP_DIR="$(cd "${PY_DIR}/.." && pwd)"
+
+cd "$PY_DIR"
+
+# Parse arguments
+VERBOSE=false
+# shellcheck disable=SC2034
+FIX_MODE=false  # Reserved for future use (--fix flag)
+CI_MODE=false
+SKIP_TESTS=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -v|--verbose)
+      VERBOSE=true
+      shift
+      ;;
+    --fix)
+      # shellcheck disable=SC2034
+      FIX_MODE=true  # Reserved for future use
+      shift
+      ;;
+    --ci)
+      CI_MODE=true
+      shift
+      ;;
+    --skip-tests)
+      SKIP_TESTS=true
+      shift
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  -v, --verbose    Show detailed output"
+      echo "  --fix            Attempt to fix issues automatically (reserved for future use)"
+      echo "  --ci             CI mode (implies --skip-tests, optimized for CI pipelines)"
+      echo "  --skip-tests     Skip running unit tests (use when tests run separately)"
+      echo "  -h, --help       Show this help message"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# CI mode implies skip-tests (tests run separately in CI)
+if [ "$CI_MODE" = true ]; then
+  SKIP_TESTS=true
+fi
+
+echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║          Genkit Python Release Readiness Check                 ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+# Show mode indicators
+if [ "$CI_MODE" = true ]; then
+  echo -e "Mode: ${CYAN}CI${NC} (tests skipped - run separately)"
+fi
+
+# Get core version
+CORE_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+echo -e "Release version: ${CYAN}$CORE_VERSION${NC}"
+echo ""
+
+# =============================================================================
+# Section 1: Package Metadata Checks
+# =============================================================================
+echo -e "${BLUE}━━━ Section 1: Package Metadata ━━━${NC}"
+
+check_package_metadata() {
+  local pkg_path="$1"
+  local pkg_type="$2"  # "core", "plugin", or "sample"
+  local pkg_name
+  local errors=0
+  
+  if [ ! -f "$pkg_path/pyproject.toml" ]; then
+    echo -e "  ${RED}ERROR${NC}: $pkg_path/pyproject.toml not found"
+    return 1
+  fi
+  
+  pkg_name=$(grep '^name' "$pkg_path/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+  
+  if [ "$VERBOSE" = true ]; then
+    echo -e "  Checking ${CYAN}$pkg_name${NC}..."
+  fi
+  
+  # Required fields for all packages
+  local required_fields=("name" "version" "description" "license" "requires-python")
+  
+  # Additional required fields for publishable packages (core and plugins)
+  if [ "$pkg_type" != "sample" ]; then
+    required_fields+=("authors" "classifiers")
+  fi
+  
+  for field in "${required_fields[@]}"; do
+    if ! grep -q "^$field" "$pkg_path/pyproject.toml" 2>/dev/null; then
+      echo -e "  ${RED}MISSING${NC}: $pkg_name is missing '$field' field"
+      errors=$((errors + 1))
+    fi
+  done
+  
+  # Check for README
+  if [ "$pkg_type" != "sample" ] && [ ! -f "$pkg_path/README.md" ]; then
+    echo -e "  ${YELLOW}WARNING${NC}: $pkg_name is missing README.md"
+    WARNINGS=$((WARNINGS + 1))
+  fi
+  
+  # Check for LICENSE file (required for PyPI publishing)
+  if [ "$pkg_type" != "sample" ] && [ ! -f "$pkg_path/LICENSE" ]; then
+    echo -e "  ${RED}MISSING${NC}: $pkg_name is missing LICENSE file"
+    errors=$((errors + 1))
+  fi
+  
+  # Check version matches core (for plugins only)
+  if [ "$pkg_type" = "plugin" ]; then
+    local pkg_version
+    pkg_version=$(grep '^version' "$pkg_path/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    if [ "$pkg_version" != "$CORE_VERSION" ]; then
+      echo -e "  ${RED}VERSION${NC}: $pkg_name has version '$pkg_version' (expected '$CORE_VERSION')"
+      errors=$((errors + 1))
+    fi
+  fi
+  
+  # Check Python version
+  local py_version
+  py_version=$(grep 'requires-python' "$pkg_path/pyproject.toml" 2>/dev/null | sed 's/.*= *"//' | sed 's/".*//' || echo "")
+  if [ -n "$py_version" ] && [ "$py_version" != ">=3.10" ]; then
+    echo -e "  ${RED}PYTHON${NC}: $pkg_name has requires-python='$py_version' (expected '>=3.10')"
+    errors=$((errors + 1))
+  fi
+  
+  # Check build system
+  if ! grep -q '\[build-system\]' "$pkg_path/pyproject.toml" 2>/dev/null; then
+    echo -e "  ${RED}BUILD${NC}: $pkg_name is missing [build-system] section"
+    errors=$((errors + 1))
+  fi
+  
+  return $errors
+}
+
+echo -e "\n${CYAN}Checking core package...${NC}"
+if ! check_package_metadata "packages/genkit" "core"; then
+  ERRORS=$((ERRORS + 1))
+else
+  echo -e "  ${GREEN}✓${NC} packages/genkit metadata OK"
+fi
+
+echo -e "\n${CYAN}Checking plugins...${NC}"
+for d in plugins/*/; do
+  if [ -d "$d" ]; then
+    if ! check_package_metadata "$d" "plugin"; then
+      ERRORS=$((ERRORS + 1))
+    elif [ "$VERBOSE" = true ]; then
+      echo -e "  ${GREEN}✓${NC} $d metadata OK"
+    fi
+  fi
+done
+echo -e "  ${GREEN}✓${NC} All plugin metadata checked"
+
+echo ""
+
+# =============================================================================
+# Section 2: Build Verification
+# =============================================================================
+echo -e "${BLUE}━━━ Section 2: Build Verification ━━━${NC}"
+
+echo -e "\n${CYAN}Checking uv lock is up to date...${NC}"
+if uv lock --check > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} uv.lock is up to date"
+else
+  echo -e "  ${RED}ERROR${NC}: uv.lock is out of date. Run 'uv lock' to update."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo -e "\n${CYAN}Checking dependency resolution...${NC}"
+if uv pip check > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} All dependencies resolve correctly"
+else
+  echo -e "  ${RED}ERROR${NC}: Dependency resolution failed"
+  uv pip check 2>&1 | head -5
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo -e "\n${CYAN}Checking for dependency issues (deptry)...${NC}"
+deptry_errors=0
+# Check each plugin individually (core package has workspace deps that confuse deptry)
+# Exclude test directories since they legitimately use dev dependencies
+for pkg in plugins/*/; do
+  if [ -d "$pkg" ] && [ -f "$pkg/pyproject.toml" ]; then
+    pkg_name=$(grep '^name' "$pkg/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    if [ "$VERBOSE" = true ]; then
+      echo -e "  Checking $pkg_name..."
+    fi
+    # DEP002: unused deps (may be false positives for optional features)
+    # DEP003: transitive deps (expected in workspace setup)
+    # Exclude tests/ and test/ directories (they use dev deps like pytest)
+    deptry_output=$(uv run deptry "$pkg" --ignore DEP002,DEP003 -ee ".*/tests/" -ee ".*/test/" 2>&1)
+    deptry_exit=$?
+    if [ $deptry_exit -ne 0 ]; then
+      # Only report if there are actual errors (DEP001: missing deps)
+      if echo "$deptry_output" | grep -qE "DEP001"; then
+        echo -e "  ${RED}DEPTRY${NC}: $pkg_name has missing dependencies"
+        if [ "$VERBOSE" = true ]; then
+          echo "$deptry_output" | grep "DEP001" | head -5
+        fi
+        deptry_errors=$((deptry_errors + 1))
+      fi
+    fi
+  fi
+done
+
+if [ $deptry_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} No missing dependencies found"
+else
+  echo -e "  ${RED}ERROR${NC}: $deptry_errors package(s) have missing dependencies"
+  ERRORS=$((ERRORS + deptry_errors))
+fi
+
+echo -e "\n${CYAN}Testing package builds (build_dists)...${NC}"
+# Clean up any previous dist directory
+rm -rf "$PY_DIR/dist" 2>/dev/null || true
+
+if "$SCRIPT_DIR/build_dists" > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} All packages build successfully"
+  
+  # Verify wheel contents (only for publishable packages: genkit and genkit-plugin-*)
+  echo -e "\n${CYAN}Verifying wheel contents (publishable packages only)...${NC}"
+  wheel_warnings=0
+  for wheel_file in "$PY_DIR"/dist/*.whl; do
+    if [ -f "$wheel_file" ]; then
+      wheel_name=$(basename "$wheel_file" | sed 's/-[0-9].*//')
+      
+      # Only check publishable packages (genkit and genkit-plugin-*)
+      if [[ "$wheel_name" == "genkit" ]] || [[ "$wheel_name" == genkit_plugin_* ]]; then
+        wheel_contents=$(unzip -l "$wheel_file" 2>/dev/null)
+        
+        # Check for py.typed (can be in package root or subpackages)
+        if ! echo "$wheel_contents" | grep -qE "py\.typed$"; then
+          echo -e "  ${YELLOW}WARNING${NC}: $wheel_name wheel missing py.typed"
+          wheel_warnings=$((wheel_warnings + 1))
+        fi
+        
+        # Check for LICENSE (in dist-info/licenses/ or package root)
+        if ! echo "$wheel_contents" | grep -qE "(LICENSE|licenses/LICENSE)"; then
+          echo -e "  ${YELLOW}WARNING${NC}: $wheel_name wheel missing LICENSE"
+          wheel_warnings=$((wheel_warnings + 1))
+        fi
+      fi
+    fi
+  done
+  
+  if [ $wheel_warnings -eq 0 ]; then
+    echo -e "  ${GREEN}✓${NC} All publishable wheels have required files (py.typed, LICENSE)"
+  else
+    WARNINGS=$((WARNINGS + wheel_warnings))
+  fi
+  
+  # Twine check is already run by build_dists, but let's verify
+  echo -e "\n${CYAN}Running twine check...${NC}"
+  if uv run twine check "$PY_DIR"/dist/* > /dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} Twine check passed"
+  else
+    echo -e "  ${RED}ERROR${NC}: Twine check failed. Run 'uv run twine check py/dist/*' for details."
+    ERRORS=$((ERRORS + 1))
+  fi
+else
+  echo -e "  ${RED}ERROR${NC}: Package builds failed. Run 'py/bin/build_dists' for details."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo ""
+
+# =============================================================================
+# Section 3: Code Quality
+# =============================================================================
+echo -e "${BLUE}━━━ Section 3: Code Quality ━━━${NC}"
+
+echo -e "\n${CYAN}Running consistency checks...${NC}"
+if "$SCRIPT_DIR/check_consistency" > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} All consistency checks passed"
+else
+  echo -e "  ${RED}ERROR${NC}: Consistency checks failed. Run 'py/bin/check_consistency' for details."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo -e "\n${CYAN}Checking for type errors...${NC}"
+type_errors=0
+
+# Ty check
+if uv run ty check . > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} Ty type check passed"
+else
+  echo -e "  ${RED}ERROR${NC}: Ty type check failed"
+  type_errors=$((type_errors + 1))
+fi
+
+# Pyrefly check
+if uv run pyrefly check . 2>&1 | grep -q "0 errors"; then
+  echo -e "  ${GREEN}✓${NC} Pyrefly type check passed"
+else
+  echo -e "  ${RED}ERROR${NC}: Pyrefly type check failed"
+  type_errors=$((type_errors + 1))
+fi
+
+# Pyright check
+if uv run pyright packages/ > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} Pyright type check passed"
+else
+  echo -e "  ${RED}ERROR${NC}: Pyright type check failed"
+  type_errors=$((type_errors + 1))
+fi
+
+if [ $type_errors -gt 0 ]; then
+  ERRORS=$((ERRORS + type_errors))
+fi
+
+echo -e "\n${CYAN}Checking code formatting...${NC}"
+if uv run ruff format --check . > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} Code formatting OK"
+else
+  echo -e "  ${RED}ERROR${NC}: Code formatting issues found. Run 'uv run ruff format .' to fix."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo -e "\n${CYAN}Checking linting...${NC}"
+if uv run ruff check . > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} Linting passed"
+else
+  echo -e "  ${RED}ERROR${NC}: Linting issues found. Run 'uv run ruff check --fix .' to fix."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo -e "\n${CYAN}Checking for typos and spelling errors...${NC}"
+if uv run typos packages/ plugins/ --config typos.toml --format brief > /tmp/typos_release_$$ 2>&1; then
+  echo -e "  ${GREEN}✓${NC} No typos found"
+else
+  typos_count=$(grep -c "error:" /tmp/typos_release_$$ 2>/dev/null || echo "0")
+  if [ "$typos_count" -gt 0 ]; then
+    echo -e "  ${RED}ERROR${NC}: $typos_count typo(s) found:"
+    grep "error:" /tmp/typos_release_$$ | head -10 | while read -r line; do
+      echo -e "    $line"
+    done
+    if [ "$typos_count" -gt 10 ]; then
+      echo -e "    ... and $((typos_count - 10)) more. Run 'uv run typos packages/ plugins/' for full list."
+    fi
+    ERRORS=$((ERRORS + 1))
+  else
+    echo -e "  ${GREEN}✓${NC} No typos found"
+  fi
+fi
+rm -f /tmp/typos_release_$$ 2>/dev/null || true
+
+echo -e "\n${CYAN}Checking shell scripts (shellcheck)...${NC}"
+if command -v shellcheck &> /dev/null; then
+  shell_errors=0
+  # Check both py/bin/ and root bin/ directories (consistent with bin/lint)
+  for script in bin/* "${TOP_DIR}"/bin/*; do
+    if [ -f "$script" ] && file "$script" | grep -q "shell\|bash\|sh" 2>/dev/null; then
+      script_name=$(basename "$script")
+      # Skip .py files
+      if [[ "$script_name" == *.py ]]; then
+        continue
+      fi
+      if shellcheck "$script" > /tmp/shellcheck_$$ 2>&1; then
+        if [ "$VERBOSE" = true ]; then
+          echo -e "  ${GREEN}✓${NC} $script_name"
+        fi
+      else
+        echo -e "  ${RED}ERROR${NC}: $script_name has shellcheck warnings"
+        if [ "$VERBOSE" = true ]; then
+          head -5 /tmp/shellcheck_$$
+        fi
+        shell_errors=$((shell_errors + 1))
+      fi
+    fi
+  done
+  rm -f /tmp/shellcheck_$$ 2>/dev/null || true
+  
+  if [ $shell_errors -eq 0 ]; then
+    echo -e "  ${GREEN}✓${NC} All shell scripts pass shellcheck"
+  else
+    echo -e "  ${RED}ERROR${NC}: $shell_errors script(s) have shellcheck warnings"
+    ERRORS=$((ERRORS + 1))
+  fi
+else
+  echo -e "  ${YELLOW}SKIP${NC}: shellcheck not installed (brew install shellcheck)"
+fi
+
+echo ""
+
+# =============================================================================
+# Section 4: Tests
+# =============================================================================
+echo -e "${BLUE}━━━ Section 4: Tests ━━━${NC}"
+
+if [ "$SKIP_TESTS" = true ]; then
+  echo -e "\n${YELLOW}Skipping unit tests (--skip-tests flag set)${NC}"
+else
+  echo -e "\n${CYAN}Running unit tests...${NC}"
+  if uv run pytest . -x --tb=no -q > /dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} All tests passed"
+  else
+    echo -e "  ${RED}ERROR${NC}: Some tests failed. Run 'uv run pytest .' for details."
+    ERRORS=$((ERRORS + 1))
+  fi
+fi
+
+echo ""
+
+# =============================================================================
+# Section 5: Security & Compliance
+# =============================================================================
+echo -e "${BLUE}━━━ Section 5: Security & Compliance ━━━${NC}"
+
+echo -e "\n${CYAN}Running security scan...${NC}"
+if "$SCRIPT_DIR/run_python_security_checks" > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} Security scan passed"
+else
+  echo -e "  ${YELLOW}WARNING${NC}: Security scan found issues. Run 'py/bin/run_python_security_checks' for details."
+  WARNINGS=$((WARNINGS + 1))
+fi
+
+echo -e "\n${CYAN}Checking for hardcoded secrets...${NC}"
+secrets_found=0
+
+# Common API key patterns to search for
+# Exclude test files, .env.example files, and documentation
+SECRET_PATTERNS=(
+  # Generic API keys (32+ hex or alphanumeric chars that look like keys)
+  'sk-[a-zA-Z0-9]{20,}'                    # OpenAI-style keys
+  'sk_live_[a-zA-Z0-9]{20,}'               # Stripe-style keys
+  'AIza[a-zA-Z0-9_-]{35}'                  # Google API keys
+  'ghp_[a-zA-Z0-9]{36}'                    # GitHub personal access tokens
+  'gho_[a-zA-Z0-9]{36}'                    # GitHub OAuth tokens
+  'github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}'  # GitHub fine-grained PATs
+  'xoxb-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{24}'  # Slack bot tokens
+  'xoxp-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{24}'  # Slack user tokens
+  'AKIA[0-9A-Z]{16}'                       # AWS access key IDs
+  'ya29\.[a-zA-Z0-9_-]{50,}'               # Google OAuth tokens
+)
+
+# Files/directories to exclude from secret scanning
+EXCLUDE_PATTERNS="tests/|test/|\.env\.example|README\.md|GEMINI\.md|\.pyc$|__pycache__|\.git/|dist/|\.whl$"
+
+for pattern in "${SECRET_PATTERNS[@]}"; do
+  # Search in Python files and config files, excluding test directories
+  matches=$(grep -rE "$pattern" packages/ plugins/ samples/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#" || true)
+  if [ -n "$matches" ]; then
+    echo -e "  ${RED}FOUND${NC}: Potential secrets matching pattern '$pattern':"
+    echo "$matches" | head -3 | while read -r line; do
+      echo -e "    $line"
+    done
+    secrets_found=$((secrets_found + 1))
+  fi
+done
+
+# Also check for common secret variable assignments with actual values
+# (not just references to environment variables)
+hardcoded_check=$(grep -rE "(api_key|apikey|api-key|secret|password|token)\s*=\s*['\"][a-zA-Z0-9_-]{20,}['\"]" \
+  packages/ plugins/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#|test_|_test\.|mock|fake|dummy|example" || true)
+if [ -n "$hardcoded_check" ]; then
+  echo -e "  ${RED}FOUND${NC}: Potential hardcoded credentials:"
+  echo "$hardcoded_check" | head -5 | while read -r line; do
+    echo -e "    $line"
+  done
+  secrets_found=$((secrets_found + 1))
+fi
+
+if [ $secrets_found -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} No hardcoded secrets detected"
+else
+  echo -e "  ${RED}ERROR${NC}: $secrets_found potential secret pattern(s) found. Review and remove before release."
+  ERRORS=$((ERRORS + secrets_found))
+fi
+
+echo -e "\n${CYAN}Checking source file license headers...${NC}"
+if "$TOP_DIR/bin/check_license" > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} License headers check passed"
+else
+  echo -e "  ${RED}ERROR${NC}: License headers check failed. Run 'bin/check_license' for details."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo -e "\n${CYAN}Checking dependency licenses...${NC}"
+if uv run liccheck -s pyproject.toml > /dev/null 2>&1; then
+  echo -e "  ${GREEN}✓${NC} Dependency license check passed"
+else
+  echo -e "  ${RED}ERROR${NC}: Dependency license check failed. Run 'uv run liccheck -s pyproject.toml' for details."
+  ERRORS=$((ERRORS + 1))
+fi
+
+echo ""
+
+# =============================================================================
+# Section 6: Documentation
+# =============================================================================
+echo -e "${BLUE}━━━ Section 6: Documentation ━━━${NC}"
+
+echo -e "\n${CYAN}Checking README files...${NC}"
+readme_missing=0
+for pkg in packages/genkit plugins/*/; do
+  if [ -d "$pkg" ] && [ ! -f "$pkg/README.md" ]; then
+    pkg_name=$(basename "$pkg")
+    echo -e "  ${YELLOW}MISSING${NC}: $pkg_name/README.md"
+    readme_missing=$((readme_missing + 1))
+  fi
+done
+if [ $readme_missing -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All publishable packages have README.md"
+else
+  WARNINGS=$((WARNINGS + readme_missing))
+fi
+
+echo -e "\n${CYAN}Checking CHANGELOG...${NC}"
+if [ -f "CHANGELOG.md" ]; then
+  # Check if current version is documented
+  if grep -q "## \[$CORE_VERSION\]" CHANGELOG.md 2>/dev/null || grep -q "## $CORE_VERSION" CHANGELOG.md 2>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} CHANGELOG.md has entry for version $CORE_VERSION"
+  else
+    echo -e "  ${YELLOW}WARNING${NC}: CHANGELOG.md missing entry for version $CORE_VERSION"
+    WARNINGS=$((WARNINGS + 1))
+  fi
+else
+  echo -e "  ${YELLOW}WARNING${NC}: CHANGELOG.md not found"
+  WARNINGS=$((WARNINGS + 1))
+fi
+
+echo ""
+
+# =============================================================================
+# Summary
+# =============================================================================
+echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║                         Summary                                ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "Version: ${CYAN}$CORE_VERSION${NC}"
+echo -e "Errors:  ${RED}$ERRORS${NC}"
+echo -e "Warnings: ${YELLOW}$WARNINGS${NC}"
+echo ""
+
+if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
+  echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${GREEN}║  ✓ All release checks passed! Ready for release.              ║${NC}"
+  echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
+  exit 0
+elif [ $ERRORS -eq 0 ]; then
+  echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${YELLOW}║  ⚠ Release checks passed with $WARNINGS warning(s).               ║${NC}"
+  echo -e "${YELLOW}║  Review warnings before releasing.                             ║${NC}"
+  echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════╝${NC}"
+  exit 0
+else
+  echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${RED}║  ✗ Release checks failed with $ERRORS error(s).                    ║${NC}"
+  echo -e "${RED}║  Fix all errors before releasing.                              ║${NC}"
+  echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+  exit 1
+fi

@@ -71,11 +71,16 @@ from genkit.web.typing import (
 logger = get_logger(__name__)
 
 
-def _list_registered_actions(registry: Registry) -> dict[str, Action]:
-    """Return all locally registered actions keyed as `/<kind>/<name>`."""
+async def _list_registered_actions(registry: Registry) -> dict[str, Action]:
+    """Return all locally registered actions keyed as `/<kind>/<name>`.
+
+    Uses resolve_actions_by_kind() to trigger lazy loading for any actions with
+    deferred metadata (e.g., file-based prompts), ensuring schemas are available
+    for the Dev UI.
+    """
     registered: dict[str, Action] = {}
     for kind in ActionKind.__members__.values():
-        for name, action in registry.get_actions_by_kind(kind).items():
+        for name, action in (await registry.resolve_actions_by_kind(kind)).items():
             registered[f'/{kind.value}/{name}'] = action
     return registered
 
@@ -217,7 +222,7 @@ def create_reflection_asgi_app(
         Returns:
             A JSON response containing all serializable actions.
         """
-        registered = _list_registered_actions(registry)
+        registered = await _list_registered_actions(registry)
         metas = await registry.list_actions()
         actions = _build_actions_payload(registered_actions=registered, plugin_metas=metas)
 
@@ -238,11 +243,11 @@ def create_reflection_asgi_app(
         """
         kind = request.query_params.get('type')
         if not kind:
-            return JSONResponse(content='Query parameter "type" is required.', status_code=400)
+            return JSONResponse(content={'error': 'Query parameter "type" is required.'}, status_code=400)
 
         if kind != 'defaultModel':
             return JSONResponse(
-                content=f"'type' {kind} is not supported. Only 'defaultModel' is supported", status_code=400
+                content={'error': f"'type' {kind} is not supported. Only 'defaultModel' is supported"}, status_code=400
             )
 
         values = registry.list_values(kind)
@@ -340,7 +345,7 @@ def create_reflection_asgi_app(
         # Wrap execution to track the task for cancellation support
         task = asyncio.current_task()
 
-        def on_trace_start(trace_id: str) -> None:
+        def on_trace_start(trace_id: str, span_id: str) -> None:
             if task:
                 active_actions[trace_id] = task
 
@@ -360,7 +365,7 @@ def create_reflection_asgi_app(
         _action_input: object,
         context: dict[str, Any],
         version: str,
-        on_trace_start: Callable[[str], None],
+        on_trace_start: Callable[[str, str], None],
     ) -> StreamingResponse:
         """Handle streaming action execution with early header flushing.
 
@@ -386,11 +391,13 @@ def create_reflection_asgi_app(
         # Event to signal when trace ID is available
         trace_id_event: asyncio.Event = asyncio.Event()
         run_trace_id: str | None = None
+        run_span_id: str | None = None
 
-        def wrapped_on_trace_start(tid: str) -> None:
-            nonlocal run_trace_id
+        def wrapped_on_trace_start(tid: str, sid: str) -> None:
+            nonlocal run_trace_id, run_span_id
             run_trace_id = tid
-            on_trace_start(tid)
+            run_span_id = sid
+            on_trace_start(tid, sid)
             trace_id_event.set()  # Signal that trace ID is ready
 
         async def run_action_task() -> None:
@@ -410,7 +417,7 @@ def create_reflection_asgi_app(
                 )
                 final_response = {
                     'result': dump_dict(output.response),
-                    'telemetry': {'traceId': output.trace_id},
+                    'telemetry': {'traceId': output.trace_id, 'spanId': output.span_id},
                 }
                 chunk_queue.put_nowait(json.dumps(final_response))
 
@@ -419,7 +426,8 @@ def create_reflection_asgi_app(
                 # Log with exc_info for pretty exception output via rich/structlog
                 logger.exception('Error streaming action', exc_info=e)
                 # Error response also should not have trailing newline (final message)
-                chunk_queue.put_nowait(json.dumps(error_response))
+                # Wrap error in an 'error' field to match JS SDK format
+                chunk_queue.put_nowait(json.dumps({'error': error_response}))
                 # Ensure trace_id_event is set even on error
                 trace_id_event.set()
 
@@ -444,6 +452,8 @@ def create_reflection_asgi_app(
         }
         if run_trace_id:
             headers['X-Genkit-Trace-Id'] = run_trace_id  # pyright: ignore[reportUnreachable]
+        if run_span_id:
+            headers['X-Genkit-Span-Id'] = run_span_id  # pyright: ignore[reportUnreachable]
 
         async def stream_generator() -> AsyncGenerator[str, None]:
             """Yield chunks from the queue as they arrive."""
@@ -471,7 +481,7 @@ def create_reflection_asgi_app(
         _action_input: object,
         context: dict[str, Any],
         version: str,
-        on_trace_start: Callable[[str], None],
+        on_trace_start: Callable[[str, str], None],
     ) -> StreamingResponse:
         """Handle standard (non-streaming) action execution with early header flushing.
 
@@ -493,13 +503,15 @@ def create_reflection_asgi_app(
         # Event to signal when trace ID is available
         trace_id_event: asyncio.Event = asyncio.Event()
         run_trace_id: str | None = None
+        run_span_id: str | None = None
         action_result: dict[str, Any] | None = None
         action_error: Exception | None = None
 
-        def wrapped_on_trace_start(tid: str) -> None:
-            nonlocal run_trace_id
+        def wrapped_on_trace_start(tid: str, sid: str) -> None:
+            nonlocal run_trace_id, run_span_id
             run_trace_id = tid
-            on_trace_start(tid)
+            run_span_id = sid
+            on_trace_start(tid, sid)
             trace_id_event.set()  # Signal that trace ID is ready
 
         async def run_action_and_get_result() -> None:
@@ -512,7 +524,7 @@ def create_reflection_asgi_app(
                 )
                 action_result = {
                     'result': dump_dict(output.response),
-                    'telemetry': {'traceId': output.trace_id},
+                    'telemetry': {'traceId': output.trace_id, 'spanId': output.span_id},
                 }
             except Exception as e:
                 action_error = e
@@ -535,7 +547,8 @@ def create_reflection_asgi_app(
                 error_response = get_reflection_json(action_error).model_dump(by_alias=True)
                 # Log with exc_info for pretty exception output via rich/structlog
                 logger.exception('Error executing action', exc_info=action_error)
-                yield json.dumps(error_response).encode('utf-8')
+                # Wrap error in an 'error' field to match JS SDK format
+                yield json.dumps({'error': error_response}).encode('utf-8')
             else:
                 yield json.dumps(action_result).encode('utf-8')
 
@@ -544,9 +557,12 @@ def create_reflection_asgi_app(
 
         headers = {
             'x-genkit-version': version,
+            'Transfer-Encoding': 'chunked',
         }
         if run_trace_id:
             headers['X-Genkit-Trace-Id'] = run_trace_id  # pyright: ignore[reportUnreachable]
+        if run_span_id:
+            headers['X-Genkit-Span-Id'] = run_span_id  # pyright: ignore[reportUnreachable]
 
         return StreamingResponse(
             body_generator(),

@@ -7,10 +7,10 @@ Genkit is a framework for building AI-powered applications. It provides open sou
 Install the following Genkit dependencies to use Genkit in your project:
 
 - `genkit` provides Genkit core capabilities.
-- `@genkit-ai/googleai` provides access to the Google AI Gemini models. Check out other plugins: https://www.npmjs.com/search?q=keywords:genkit-plugin
+- `@genkit-ai/google-genai` provides access to the Google AI Gemini models. Check out other plugins: https://www.npmjs.com/search?q=keywords:genkit-plugin
 
 ```posix-terminal
-npm install genkit @genkit-ai/googleai
+npm install genkit @genkit-ai/google-genai
 ```
 
 ## Make your first request

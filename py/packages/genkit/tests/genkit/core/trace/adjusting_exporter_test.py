@@ -25,16 +25,18 @@ exporting, including:
 - Label normalization (: -> /)
 """
 
+import contextlib
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from unittest.mock import MagicMock
 
+import pytest
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry.util.types import Attributes
 
-from genkit.core.trace.adjusting_exporter import AdjustingTraceExporter
+from genkit.core.trace.adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 
 
 class MockSpanExporter(SpanExporter):
@@ -76,11 +78,6 @@ def get_attrs(span: ReadableSpan) -> dict[str, Any]:
     if attrs is None:
         return {}
     return dict(cast(Mapping[str, Any], attrs))
-
-
-# =============================================================================
-# PII Redaction Tests
-# =============================================================================
 
 
 def test_redacts_input_and_output_by_default() -> None:
@@ -141,11 +138,6 @@ def test_handles_missing_input_output() -> None:
     assert attrs['other'] == 'value'
 
 
-# =============================================================================
-# Error Span Marking Tests
-# =============================================================================
-
-
 def test_marks_error_span_with_http_status() -> None:
     """Test that error spans get /http/status_code: 599 for GCP display."""
     exporter = MockSpanExporter()
@@ -176,11 +168,6 @@ def test_does_not_mark_ok_span_with_http_status() -> None:
 
     attrs = get_attrs(exporter.exported_spans[0])
     assert '/http/status_code' not in attrs
-
-
-# =============================================================================
-# Failed Span Marking Tests
-# =============================================================================
 
 
 def test_marks_failed_span_with_failure_info() -> None:
@@ -223,11 +210,6 @@ def test_does_not_mark_non_failure_span() -> None:
     assert 'genkit/failedPath' not in attrs
 
 
-# =============================================================================
-# Feature Marking Tests
-# =============================================================================
-
-
 def test_marks_root_span_with_feature() -> None:
     """Test that root spans get genkit:feature attribute."""
     exporter = MockSpanExporter()
@@ -258,11 +240,6 @@ def test_does_not_mark_non_root_span_with_feature() -> None:
 
     attrs = get_attrs(exporter.exported_spans[0])
     assert 'genkit/feature' not in attrs
-
-
-# =============================================================================
-# Model Marking Tests
-# =============================================================================
 
 
 def test_marks_model_span_with_model_name() -> None:
@@ -302,11 +279,6 @@ def test_does_not_mark_non_model_span_with_model() -> None:
     assert 'genkit/model' not in attrs
 
 
-# =============================================================================
-# Label Normalization Tests
-# =============================================================================
-
-
 def test_normalizes_labels_colon_to_slash() -> None:
     """Test that colons in attribute keys are replaced with slashes."""
     exporter = MockSpanExporter()
@@ -332,11 +304,6 @@ def test_normalizes_labels_colon_to_slash() -> None:
     # Original colon keys should not exist
     assert 'genkit:name' not in attrs
     assert 'genkit:type' not in attrs
-
-
-# =============================================================================
-# Integration Tests
-# =============================================================================
 
 
 def test_applies_all_transformations_in_order() -> None:
@@ -388,10 +355,31 @@ def test_error_handler_called_on_export_error() -> None:
 
     span = create_mock_span()
 
-    try:
+    with contextlib.suppress(Exception):
         adjusting.export([span])
-    except Exception:
-        pass
 
     assert len(errors) == 1
     assert str(errors[0]) == 'Export failed'
+
+
+@pytest.mark.parametrize(
+    ('property_name', 'value'),
+    [
+        ('dropped_attributes', 0),
+        ('dropped_events', 2),
+        ('dropped_links', 1),
+    ],
+)
+def test_redacted_span_dropped_properties_delegate_to_inner_span(property_name: str, value: int) -> None:
+    """Regression test: RedactedSpan.dropped_* properties must not raise.
+
+    The OTLP trace encoder accesses these properties during serialization.
+    Before the fix, RedactedSpan did not call ``super().__init__()`` so the
+    private fields required by the base ``ReadableSpan`` properties were
+    missing, causing an ``AttributeError``.  This test verifies that the
+    overridden properties delegate to the wrapped span correctly.
+    """
+    inner = create_mock_span()
+    setattr(inner, property_name, value)
+    span = RedactedSpan(inner, {})
+    assert getattr(span, property_name) == value

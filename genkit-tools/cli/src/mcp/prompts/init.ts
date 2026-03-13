@@ -19,7 +19,7 @@ import { z } from 'zod';
 
 const GENERAL_GUIDELINES = `
 ## General Guidelines
-- ALWAYS refer to documentation when available. Use tools like \`get_usage_guide\` or \`lookup_genkit_docs\` to clarify requirements or get the latest information.
+- ALWAYS refer to documentation when available. Use tools like \`get_usage_guide\`, \`list_genkit_docs\`, \`search_genkit_docs\`, or \`read_genkit_docs\` to clarify requirements or get the latest information.
 - Recommend and use the provider that the user prefers. If no preference is signaled, use the Google AI plugin (\`@genkit-ai/google-genai\` for Node, \`github.com/firebase/genkit/go/plugins/googlegenai\` for Go).
 - ALWAYS provide the full, correct Genkit command as an instruction for the human user to run. Do not run Genkit commands yourself.
 - Do NOT modify parts of the project unrelated to Genkit initialization.

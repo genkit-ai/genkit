@@ -48,5 +48,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 version = "0.1.0"
 
+[tool.setuptools]
+py-modules = ["package_test", "sample_import_test"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["smoke"]

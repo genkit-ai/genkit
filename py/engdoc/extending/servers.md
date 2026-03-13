@@ -38,10 +38,10 @@ the runtime. The initialization process deals with:
 
 | Server           | Sources                                                                                                                                                                  |
 |------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Flows            | [JS](https://github.com/firebase/genkit/blob/main/js/plugins/express/src/index.ts), [Go](TODO), [Python](TODO)                                                           |
+| Flows            | [JS](https://github.com/firebase/genkit/blob/main/js/plugins/express/src/index.ts), [Go](TODO), [Python](https://github.com/firebase/genkit/blob/main/py/packages/genkit/src/genkit/core/flows.py) |
 | Telemetry        | [JS](https://github.com/firebase/genkit/blob/main/genkit-tools/telemetry-server/src/index.ts)                                                                            |
 | Dev UI/Tools API | [JS](https://github.com/firebase/genkit/blob/main/genkit-tools/common/src/server/server.ts)                                                                              |
-| Reflection       | [JS](https://github.com/firebase/genkit/blob/main/js/core/src/reflection.ts), [Go](https://github.com/firebase/genkit/blob/main/go/genkit/reflection.go), [Python](TODO) |
+| Reflection       | [JS](https://github.com/firebase/genkit/blob/main/js/core/src/reflection.ts), [Go](https://github.com/firebase/genkit/blob/main/go/genkit/reflection.go), [Python](https://github.com/firebase/genkit/blob/main/py/packages/genkit/src/genkit/core/reflection.py) |
 
 ## Environment Variables
 
@@ -104,4 +104,3 @@ Many of these servers handle signals to handle graceful termination and clean up
     | `SIGTSTP`            | 20 or 18 | Terminal stop signal. Sent when the user presses `Ctrl+Z`.                                              | Stop                  | Used for job control.                                           |
     | `SIGTTIN`            | 21       | Terminal input. Sent to a background process that attempts to read from the terminal.                   | Stop                  | Used for job control.                                           |
     | `SIGTTOU`            | 22       | Terminal output. Sent to a background process that attempts to write to the terminal.                   | Stop                  | Used for job control.                                           |
-

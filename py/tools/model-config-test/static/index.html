@@ -1,0 +1,109 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+ SPDX-License-Identifier: Apache-2.0
+-->
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Genkit Model Performance</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <div class="brand">
+                    <div class="logo-icon">G</div>
+                    <h1>Genkit Model Config Test</h1>
+                </div>
+                <h2 id="current-scenario-title">Model Performance Testing</h2>
+                <div class="actions">
+                    <span id="model-count" class="badge">0 Models</span>
+                </div>
+            </header>
+
+            <div class="content-grid">
+                <!-- Configuration Column -->
+                <div class="config-panel">
+                    <div class="card">
+                        <h3>Test Configuration</h3>
+
+                        <div class="form-group">
+                            <label>Select Sample</label>
+                            <select id="sample-select">
+                                <option value="">Loading samples...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Select Model</label>
+                            <select id="model-select">
+                                <option value="">Loading models...</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>System Prompt</label>
+                            <textarea id="system-prompt" rows="2"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>User Prompt</label>
+                            <textarea id="user-prompt" rows="3"></textarea>
+                        </div>
+
+                        <button id="run-btn" class="btn-primary">
+                            Run Test
+                        </button>
+
+                        <button id="run-comprehensive-btn" class="btn-secondary">
+                            Run Comprehensive Test
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Results Column -->
+                <div class="results-panel">
+                    <div class="results-header">
+                        <h3>Results</h3>
+                        <div id="stats-bar" class="hidden">
+                            <span class="stat-item success">Pass: <span id="pass-count">0</span></span>
+                            <span class="stat-item error">Fail: <span id="fail-count">0</span></span>
+                        </div>
+                    </div>
+
+                    <div id="results-list" class="results-list">
+                        <div class="empty-state">
+                            Select a model and run test to see results.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="/static/script.js?v=3"></script>
+</body>
+
+</html>

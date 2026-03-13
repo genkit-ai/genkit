@@ -10,9 +10,13 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from opentelemetry import trace as trace_api
+from opentelemetry.sdk.trace import TracerProvider
 
 from genkit.ai import Genkit
+from genkit.ai._registry import SimpleRetrieverOptions
 from genkit.core.action import Action
+from genkit.core.action._action import _action_context
 from genkit.core.action.types import ActionKind
 from genkit.core.typing import DocumentPart, Operation
 from genkit.types import DocumentData, RetrieverRequest, RetrieverResponse, TextPart
@@ -149,8 +153,6 @@ async def test_define_simple_retriever_mapped() -> None:
             {'id': '2', 'text': 'world', 'extra': 'more'},
         ]
 
-    from genkit.ai._registry import SimpleRetrieverOptions
-
     options = SimpleRetrieverOptions(name='mapped', content='text', metadata=['extra'])
 
     retriever_action = ai.define_simple_retriever(options, db_handler)
@@ -168,8 +170,6 @@ async def test_define_simple_retriever_mapped() -> None:
 @pytest.mark.asyncio
 async def test_current_context() -> None:
     """Test Genkit.current_context method."""
-    from genkit.core.action._action import _action_context
-
     # current_context is a static method
     assert Genkit.current_context() is None
 
@@ -188,9 +188,6 @@ async def test_current_context() -> None:
 @pytest.mark.asyncio
 async def test_flush_tracing() -> None:
     """Test Genkit.flush_tracing method."""
-    from opentelemetry import trace as trace_api
-    from opentelemetry.sdk.trace import TracerProvider
-
     ai = Genkit()
 
     mock_provider = MagicMock(spec=TracerProvider)

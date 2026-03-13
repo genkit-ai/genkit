@@ -1,0 +1,97 @@
+[
+  {
+    "testCaseId": "test_case_id_1",
+    "input": "input",
+    "output": "Why did the scarecrow love his job? Because he was outstanding in his field."
+  },
+  {
+    "testCaseId": "test_case_id_2",
+    "input": "input",
+    "output": "What do you call a lazy kangaroo? Pouch potato."
+  },
+  {
+    "testCaseId": "test_case_id_3",
+    "input": "input",
+    "output": "I tried to sue the airport for misplacing my luggage. I lost my case."
+  },
+  {
+    "testCaseId": "test_case_id_4",
+    "input": "input",
+    "output": "If athletes get athlete's foot, what do astronauts get?  Missile toe."
+  },
+  {
+    "testCaseId": "test_case_id_5",
+    "input": "input",
+    "output": "What do you call a bear with no teeth? A gummy bear!"
+  },
+  {
+    "testCaseId": "test_case_id_6",
+    "input": "input",
+    "output": "Why don't scientists trust atoms? Because they make up everything."
+  },
+  {
+    "testCaseId": "test_case_id_7",
+    "input": "input",
+    "output": "Why was the math book sad? Because it had too many problems."
+  },
+  {
+    "testCaseId": "test_case_id_8",
+    "input": "input",
+    "output": "Did you hear about the restaurant on the moon? Great food, no atmosphere."
+  },
+  {
+    "testCaseId": "test_case_id_9",
+    "input": "input",
+    "output": "Velcro – what a rip-off!"
+  },
+  {
+    "testCaseId": "test_case_id_21",
+    "input": "input",
+    "output": "I dropped my phone down the toilet. It was a bad call."
+  },
+  {
+    "testCaseId": "test_case_id_22",
+    "input": "input",
+    "output": "What do you call a fake noodle? An impasta."
+  },
+  {
+    "testCaseId": "test_case_id_23",
+    "input": "input",
+    "output": "What's red and bad for your teeth? A brick."
+  },
+  {
+    "testCaseId": "test_case_id_24",
+    "input": "input",
+    "output": "Why did the toilet paper roll down the hill? To get to the bottom."
+  },
+  {
+    "testCaseId": "test_case_id_25",
+    "input": "input",
+    "output": "My boss told me to have a good day... so I went home."
+  },
+  {
+    "testCaseId": "test_case_id_26",
+    "input": "input",
+    "output": "Today a man knocked on my door and asked for a small donation towards the local swimming pool. I gave him a glass of water."
+  },
+  {
+    "testCaseId": "test_case_id_27",
+    "input": "input",
+    "output": "What has one head, one foot, and four legs? A bed."
+  },
+  {
+    "testCaseId": "test_case_id_28",
+    "input": "input",
+    "output": "I used to be addicted to soap, but I'm clean now."
+  },
+  {
+    "testCaseId": "test_case_id_29",
+    "input": "input",
+    "output": "What is the least spoken language in the world? Sign language."
+  },
+  {
+    "testCaseId": "test_case_id_30",
+    "input": "input",
+    "output": "Why couldn't the bicycle stand up by itself? It was two tired."
+  }
+]

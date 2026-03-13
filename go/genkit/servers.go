@@ -84,20 +84,50 @@ func WithStreamManager(manager streaming.StreamManager) HandlerOption {
 
 // Handler returns an HTTP handler function that serves the action with the provided options.
 //
+// The provided HandlerOptions are applied during construction. If any option
+// fails to apply, Handler panics.
+//
 // Example:
 //
-//	genkit.Handler(g, genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
-//		return api.ActionContext{"myKey": "myValue"}, nil
-//	}))
+//	genkit.Handler(
+//		g,
+//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
+//			return api.ActionContext{"myKey": "myValue"}, nil
+//		}))
 func Handler(a api.Action, opts ...HandlerOption) http.HandlerFunc {
+	return wrapHandler(HandlerFunc(a, opts...))
+}
+
+// HandlerFunc returns an HTTP handler function that executes the given action
+// and returns an error instead of writing it directly to the response.
+//
+// It is intended for use with web frameworks that expect handlers with the
+// signature:
+//
+//	func(http.ResponseWriter, *http.Request) error
+//
+// so that errors can be handled centrally (e.g., by middleware).
+//
+// The provided HandlerOptions are applied during construction. If any option
+// fails to apply, HandlerFunc panics.
+//
+// Example:
+//
+//	genkit.HandlerFunc(
+//		g,
+//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
+//			return api.ActionContext{"myKey": "myValue"}, nil
+//		}),
+//	)
+func HandlerFunc(a api.Action, opts ...HandlerOption) func(http.ResponseWriter, *http.Request) error {
 	options := &handlerOptions{}
 	for _, opt := range opts {
 		if err := opt.applyHandler(options); err != nil {
-			panic(fmt.Errorf("genkit.Handler: error applying options: %w", err))
+			panic(fmt.Errorf("genkit.HandlerFunc: error applying options: %w", err))
 		}
 	}
 
-	return wrapHandler(handler(a, options))
+	return handler(a, options)
 }
 
 // wrapHandler wraps an HTTP handler function with common logging and error handling.

@@ -15,11 +15,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Base API for dev-local-vectorstore."""
+"""Base API for dev-local-vectorstore.
+
+Provides async file-backed storage for document embeddings using
+``aiofiles`` to avoid blocking the event loop during reads and writes.
+"""
 
 import json
-import os
 from functools import cached_property
+
+import aiofiles
+import aiofiles.os
+
+from genkit.codec import dump_json
 
 from .constant import DbValue
 
@@ -41,17 +49,20 @@ class LocalVectorStoreAPI:
         """Get the filename of the index file."""
         return self._LOCAL_FILESTORE_TEMPLATE.format(index_name=self.index_name)
 
-    def _load_filestore(self) -> dict[str, DbValue]:
+    async def _load_filestore(self) -> dict[str, DbValue]:
+        """Load the filestore asynchronously to avoid blocking the event loop."""
         data: dict[str, object] = {}
-        if os.path.exists(self.index_file_name):
-            with open(self.index_file_name, encoding='utf-8') as f:
-                data = json.load(f)
+        if await aiofiles.os.path.exists(self.index_file_name):
+            async with aiofiles.open(self.index_file_name, encoding='utf-8') as f:
+                contents = await f.read()
+            data = json.loads(contents)
         return self._deserialize_data(data)
 
-    def _dump_filestore(self, data: dict[str, DbValue]) -> None:
+    async def _dump_filestore(self, data: dict[str, DbValue]) -> None:
+        """Dump the filestore asynchronously to avoid blocking the event loop."""
         serialized_data = self._serialize_data(data)
-        with open(self.index_file_name, 'w', encoding='utf-8') as f:
-            json.dump(serialized_data, f, indent=2)
+        async with aiofiles.open(self.index_file_name, 'w', encoding='utf-8') as f:
+            await f.write(dump_json(serialized_data, indent=2))
 
     @staticmethod
     def _serialize_data(data: dict[str, DbValue]) -> dict[str, object]:

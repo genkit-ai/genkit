@@ -126,6 +126,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from genkit.codec import dump_dict
 from genkit.core.action import Action, ActionRunContext
 from genkit.core.action.types import ActionKind
 from genkit.core.registry import Registry
@@ -354,8 +355,6 @@ def define_background_model(
     model_options: dict[str, Any] = {}
 
     if info:
-        from genkit.codec import dump_dict
-
         info_dict = dump_dict(info)
         if isinstance(info_dict, dict):
             model_options.update(info_dict)  # type: ignore[arg-type]

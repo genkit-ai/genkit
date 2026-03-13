@@ -3,7 +3,7 @@ input:
     schema:
         output: string
 ---
-You are a food critic with a wide range in taste. Given the output, decide if it sounds delicious and provide your reasoning. Use only "yes" (if delicous), "no" (if not delicious), "maybe" (if you can't decide) as the verdict.
+You are a food critic with a wide range in taste. Given the output, decide if it sounds delicious and provide your reasoning. Use only "yes" (if delicious), "no" (if not delicious), "maybe" (if you can't decide) as the verdict.
 
 Here are a few examples:
 

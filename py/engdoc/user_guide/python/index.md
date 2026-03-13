@@ -163,9 +163,8 @@ An ASGI application is:
 An ASGI deployment artifact has 2 components:
 
 * **Protocol server**, which terminates sockets and translates them into
-  connections and per-connection event messages. Examples of protocol servers
-  are [Granian](https://github.com/emmett-framework/granian) and
-  [Uvicorn](https://www.uvicorn.org/).
+  connections and per-connection event messages. An example of a protocol server
+  is [Uvicorn](https://www.uvicorn.org/).
 
 * **Application**, which lives inside a protocol server, is called once per
   connection, and handles event messages as they happen, emitting its own event

@@ -129,9 +129,9 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     class MockListResponse(BaseModel):
         models: list[MockModelResponse]
 
-    _client_mock = MagicMock()
+    client_mock = MagicMock()
     list_method_mock = AsyncMock()
-    _client_mock.list = list_method_mock
+    client_mock.list = list_method_mock
 
     list_method_mock.return_value = MockListResponse(
         models=[
@@ -141,7 +141,7 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     )
 
     def mock_client() -> MagicMock:
-        return _client_mock
+        return client_mock
 
     ollama_plugin_instance.client = mock_client
 

@@ -106,12 +106,16 @@ describe('Google AI Veo', () => {
           aspectRatio: '16:9',
           personGeneration: 'allow_adult',
           durationSeconds: 7,
+          resolution: '4k',
+          seed: 42,
         },
       };
       const result = toVeoParameters(request);
       assert.strictEqual(result.aspectRatio, '16:9');
       assert.strictEqual(result.personGeneration, 'allow_adult');
       assert.strictEqual(result.durationSeconds, 7);
+      assert.strictEqual(result.resolution, '4k');
+      assert.strictEqual(result.seed, 42);
     });
 
     it('should omit null but keep false config parameters', () => {
@@ -247,6 +251,8 @@ describe('Google AI Veo', () => {
         messages: [{ role: 'user', content: [{ text: prompt }] }],
         config: {
           aspectRatio: '16:9',
+          resolution: '4k',
+          seed: 123,
         },
       };
 

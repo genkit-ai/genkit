@@ -17,9 +17,10 @@
 
 """OpenAI OpenAI API Compatible Plugin for Genkit."""
 
-from typing import Any
+import enum
+from typing import Any, TypeAlias
 
-from openai import OpenAI as OpenAIClient
+from openai import AsyncOpenAI
 from openai.types import Model
 
 from genkit.ai import Plugin
@@ -31,14 +32,20 @@ from genkit.core.schema import to_json_schema
 from genkit.core.typing import GenerationCommonConfig
 from genkit.plugins.compat_oai.models import (
     SUPPORTED_EMBEDDING_MODELS,
+    SUPPORTED_IMAGE_MODELS,
     SUPPORTED_OPENAI_COMPAT_MODELS,
     SUPPORTED_OPENAI_MODELS,
+    SUPPORTED_STT_MODELS,
+    SUPPORTED_TTS_MODELS,
+    OpenAIImageModel,
     OpenAIModel,
     OpenAIModelHandler,
+    OpenAISTTModel,
+    OpenAITTSModel,
 )
 from genkit.plugins.compat_oai.models.model_info import get_default_openai_model_info
 from genkit.plugins.compat_oai.typing import OpenAIConfig
-from genkit.types import Embedding, EmbedRequest, EmbedResponse
+from genkit.types import Embedding, EmbedRequest, EmbedResponse, ModelInfo, Supports
 
 
 def open_ai_name(name: str) -> str:
@@ -51,6 +58,127 @@ def open_ai_name(name: str) -> str:
         The fully qualified OpenAI action name.
     """
     return f'openai/{name}'
+
+
+class _ModelType(enum.Enum):
+    """Classification of OpenAI model types based on name patterns."""
+
+    EMBEDDER = 'embedder'
+    IMAGE = 'image'
+    TTS = 'tts'
+    STT = 'stt'
+    CHAT = 'chat'
+
+
+def _classify_model(name: str) -> _ModelType:
+    """Classify a model name into its type based on name patterns.
+
+    Centralizes the name-matching logic used by both resolve() and
+    list_actions() to avoid inconsistencies.
+
+    Args:
+        name: The model name (with or without 'openai/' prefix).
+
+    Returns:
+        The classified model type.
+    """
+    if 'embed' in name:
+        return _ModelType.EMBEDDER
+    if 'gpt-image' in name or 'dall-e' in name:
+        return _ModelType.IMAGE
+    if 'tts' in name:
+        return _ModelType.TTS
+    if 'whisper' in name or 'transcribe' in name:
+        return _ModelType.STT
+    return _ModelType.CHAT
+
+
+# Default Supports for each multimodal model type, used as fallback when
+# a model is not found in the registry.
+_DEFAULT_SUPPORTS: dict[_ModelType, Supports] = {
+    _ModelType.IMAGE: Supports(
+        media=False,
+        output=['media'],
+        multiturn=False,
+        system_role=False,
+        tools=False,
+    ),
+    _ModelType.TTS: Supports(
+        media=False,
+        output=['media'],
+        multiturn=False,
+        system_role=False,
+        tools=False,
+    ),
+    _ModelType.STT: Supports(
+        media=True,
+        output=['text', 'json'],
+        multiturn=False,
+        system_role=False,
+        tools=False,
+    ),
+}
+
+# Type alias for multimodal model classes.
+_MultimodalModel: TypeAlias = OpenAIImageModel | OpenAITTSModel | OpenAISTTModel
+_MultimodalModelConfig: TypeAlias = tuple[type[_MultimodalModel], dict[str, ModelInfo]]
+
+# Maps multimodal model types to their class and registry.
+_MULTIMODAL_CONFIG: dict[_ModelType, _MultimodalModelConfig] = {
+    _ModelType.IMAGE: (OpenAIImageModel, SUPPORTED_IMAGE_MODELS),
+    _ModelType.TTS: (OpenAITTSModel, SUPPORTED_TTS_MODELS),
+    _ModelType.STT: (OpenAISTTModel, SUPPORTED_STT_MODELS),
+}
+
+
+def _get_multimodal_info_dict(
+    name: str,
+    model_type: _ModelType,
+    supported_models: dict[str, ModelInfo],
+) -> dict[str, object]:
+    """Build the info dictionary for a multimodal model.
+
+    Uses registry metadata when available, falls back to default supports.
+
+    Args:
+        name: The raw model name (without the 'openai/' prefix).
+        model_type: The classified model type for default supports fallback.
+        supported_models: Registry of known models and their metadata.
+
+    Returns:
+        A dictionary suitable for Action or ActionMetadata info field.
+    """
+    model_info = supported_models.get(name)
+    if model_info:
+        return model_info.model_dump(by_alias=True, exclude_none=True)
+
+    default_supports = _DEFAULT_SUPPORTS.get(model_type)
+    return {
+        'label': f'OpenAI - {name}',
+        'supports': default_supports.model_dump(by_alias=True, exclude_none=True) if default_supports else {},
+    }
+
+
+def _multimodal_action_metadata(
+    name: str,
+    supported_models: dict[str, ModelInfo],
+    model_type: _ModelType,
+) -> ActionMetadata:
+    """Build ActionMetadata for a multimodal model.
+
+    Args:
+        name: The raw model name (without the 'openai/' prefix).
+        supported_models: Registry of known models and their metadata.
+        model_type: The classified model type for default supports fallback.
+
+    Returns:
+        ActionMetadata for the model.
+    """
+    return model_action_metadata(
+        name=open_ai_name(name),
+        config_schema=GenerationCommonConfig,
+        info=_get_multimodal_info_dict(name, model_type, supported_models),
+    )
 
 
 def default_openai_metadata(name: str) -> dict[str, Any]:
@@ -77,23 +205,35 @@ class OpenAI(Plugin):
                            other configuration settings required by OpenAI's API.
         """
         self._openai_params = openai_params
-        self._openai_client = OpenAIClient(**openai_params)
+        self._async_client = AsyncOpenAI(**openai_params)
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
 
         Returns:
-            Actions for built-in OpenAI models and embedders.
+            Actions for built-in OpenAI models, embedders, image, TTS, and STT.
         """
         actions = []
 
-        # Add known models
-        for name in SUPPORTED_OPENAI_MODELS.keys():
+        # Add known chat models.
+        for name in SUPPORTED_OPENAI_MODELS:
             actions.append(self._create_model_action(open_ai_name(name)))
 
-        # Add known embedders
-        for name in SUPPORTED_EMBEDDING_MODELS.keys():
+        # Add known embedders.
+        for name in SUPPORTED_EMBEDDING_MODELS:
             actions.append(self._create_embedder_action(open_ai_name(name)))
+
+        # Add multimodal models (Image, TTS, STT).
+        for model_type, (model_class, supported_models) in _MULTIMODAL_CONFIG.items():
+            for name in supported_models:
+                actions.append(
+                    self._create_multimodal_action(
+                        open_ai_name(name),
+                        model_class,
+                        supported_models,
+                        model_type,
+                    )
+                )
 
         return actions
 
@@ -110,14 +250,18 @@ class OpenAI(Plugin):
             the model's capabilities (e.g., tools, streaming).
         """
         if model_supported := SUPPORTED_OPENAI_MODELS.get(name):
-            supports = model_supported.supports.model_dump(exclude_none=True) if model_supported.supports else {}
+            supports = (
+                model_supported.supports.model_dump(by_alias=True, exclude_none=True)
+                if model_supported.supports
+                else {}
+            )
             return {
                 'label': model_supported.label,
                 'supports': supports,
             }
 
         model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(name, get_default_openai_model_info(name))
-        supports = model_info.supports.model_dump(exclude_none=True) if model_info.supports else {}
+        supports = model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
         return {
             'label': model_info.label,
             'supports': supports,
@@ -126,6 +270,9 @@ class OpenAI(Plugin):
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         """Resolve an action by creating and returning an Action object.
 
+        Uses name-based pattern matching (mirroring JS implementation) to
+        route to the correct model type: image, TTS, STT, embedder, or chat.
+
         Args:
             action_type: The kind of action to resolve.
             name: The namespaced name of the action to resolve.
@@ -133,10 +280,19 @@ class OpenAI(Plugin):
         Returns:
             Action object if found, None otherwise.
         """
-        if action_type == ActionKind.MODEL:
-            return self._create_model_action(name)
-        elif action_type == ActionKind.EMBEDDER:
+        if action_type == ActionKind.EMBEDDER:
+            if _classify_model(name) != _ModelType.EMBEDDER:
+                return None
             return self._create_embedder_action(name)
+
+        if action_type == ActionKind.MODEL:
+            model_type = _classify_model(name)
+            if model_type == _ModelType.EMBEDDER:
+                return None  # Embedders should not be resolved as models.
+            if model_type in _MULTIMODAL_CONFIG:
+                model_class, supported_models = _MULTIMODAL_CONFIG[model_type]
+                return self._create_multimodal_action(name, model_class, supported_models, model_type)
+            return self._create_model_action(name)
 
         return None
 
@@ -153,7 +309,7 @@ class OpenAI(Plugin):
         clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
 
         # Create the model handler
-        openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._openai_client))
+        openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._async_client))
         model_info = self.get_model_info(clean_name) or {}
 
         return Action(
@@ -166,6 +322,35 @@ class OpenAI(Plugin):
                     'customOptions': to_json_schema(OpenAIConfig),
                 },
             },
+        )
+
+    def _create_multimodal_action(
+        self,
+        name: str,
+        model_class: type[_MultimodalModel],
+        supported_models: dict[str, ModelInfo],
+        model_type: _ModelType,
+    ) -> Action:
+        """Create an Action for a multimodal model (image, TTS, or STT).
+
+        Args:
+            name: The namespaced name of the model.
+            model_class: The model class to instantiate.
+            supported_models: Registry of known models and their metadata.
+            model_type: The classified model type for default metadata fallback.
+
+        Returns:
+            Action object for the model.
+        """
+        clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
+        model_instance = model_class(clean_name, self._async_client)
+        info_dict = _get_multimodal_info_dict(clean_name, model_type, supported_models)
+
+        return Action(
+            kind=ActionKind.MODEL,
+            name=name,
+            fn=model_instance.generate,
+            metadata={'model': info_dict},
         )
 
     def _create_embedder_action(self, name: str) -> Action:
@@ -210,7 +395,7 @@ class OpenAI(Plugin):
                     encoding_format = str(enc_val) if enc_val in ('float', 'base64') else None
 
             # Create embeddings for each document
-            response = self._openai_client.embeddings.create(
+            response = await self._async_client.embeddings.create(
                 model=clean_name,
                 input=texts,
                 dimensions=dimensions,  # type: ignore[arg-type]
@@ -238,40 +423,43 @@ class OpenAI(Plugin):
     async def list_actions(self) -> list[ActionMetadata]:
         """Generate a list of available actions or models.
 
+        Uses pattern matching on model names (mirroring the JS implementation)
+        to categorize models as embedders, image generators, TTS, STT, or chat.
+
         Returns:
-            list[ActionMetadata]: A list of ActionMetadata objects, each with the following attributes:
-                - name (str): The name of the action or model.
-                - kind (ActionKind): The type or category of the action.
-                - info (dict): The metadata dictionary describing the model configuration and properties.
-                - config_schema (type): The schema class used for validating the model's configuration.
+            list[ActionMetadata]: A list of ActionMetadata objects.
         """
-        actions = []
-        models_ = self._openai_client.models.list()
+        actions: list[ActionMetadata] = []
+        models_ = await self._async_client.models.list()
         models: list[Model] = models_.data
-        # Print each model
         for model in models:
-            _name = model.id
-            if 'embed' in _name:
-                # Default embedder metadata for OpenAI embedding models
+            name = model.id
+            model_type = _classify_model(name)
+            if model_type == _ModelType.EMBEDDER:
                 actions.append(
                     embedder_action_metadata(
-                        name=open_ai_name(_name),
+                        name=open_ai_name(name),
                         options=EmbedderOptions(
-                            label=f'OpenAI Embedding - {_name}',
+                            label=f'OpenAI Embedding - {name}',
                             supports=EmbedderSupports(input=['text']),
                         ),
                     )
                 )
+            elif model_type in _DEFAULT_SUPPORTS:
+                config = _MULTIMODAL_CONFIG[model_type]
+                actions.append(_multimodal_action_metadata(name, config[1], model_type))
             else:
                 actions.append(
                     model_action_metadata(
-                        name=open_ai_name(_name),
+                        name=open_ai_name(name),
                         config_schema=GenerationCommonConfig,
                         info={
-                            'label': f'OpenAI - {_name}',
-                            'multiturn': True,
-                            'system_role': True,
-                            'tools': False,
+                            'label': f'OpenAI - {name}',
+                            'supports': Supports(
+                                multiturn=True,
+                                system_role=True,
+                                tools=False,
+                            ).model_dump(by_alias=True, exclude_none=True),
                         },
                     )
                 )

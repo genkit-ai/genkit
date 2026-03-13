@@ -16,6 +16,7 @@
 
 """Tests for xAI models."""
 
+import asyncio
 from collections.abc import Iterator
 from unittest.mock import MagicMock
 
@@ -26,6 +27,7 @@ from genkit.types import (
     GenerateRequest,
     GenerateResponseChunk,
     Message,
+    OutputConfig,
     Part,
     Role,
     TextPart,
@@ -216,6 +218,9 @@ async def test_streaming_generation() -> None:
 
     response = await model.generate(sample_request, ctx)
 
+    # Allow event loop to process call_soon_threadsafe callbacks
+    await asyncio.sleep(0.1)
+
     assert len(collected_chunks) == 3
     assert response.usage
     assert response.usage.input_tokens == 10
@@ -368,3 +373,142 @@ async def test_to_genkit_content_parses_json_arguments() -> None:
     assert isinstance(part1.tool_request.input, dict)
     assert part1.tool_request.input['location'] == 'Paris'
     assert part1.tool_request.input['unit'] == 'celsius'
+
+
+def test_build_params_json_output_with_schema() -> None:
+    """Test that _build_params sets FORMAT_TYPE_JSON_SCHEMA when schema is provided."""
+    from xai_sdk.proto.v6 import chat_pb2
+
+    mock_client = MagicMock()
+    model = XAIModel(model_name='grok-3', client=mock_client)
+
+    schema = {
+        'type': 'object',
+        'properties': {'name': {'type': 'string'}, 'age': {'type': 'number'}},
+        'required': ['name', 'age'],
+    }
+    request = GenerateRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
+        config=XAIConfig(),
+        output=OutputConfig(format='json', schema=schema),
+    )
+
+    params = model._build_params(request)
+
+    response_format = params['response_format']
+    assert isinstance(response_format, chat_pb2.ResponseFormat)
+    assert response_format.format_type == chat_pb2.FormatType.FORMAT_TYPE_JSON_SCHEMA
+    assert response_format.schema  # schema string is set
+
+
+def test_build_params_json_output_without_schema() -> None:
+    """Test that _build_params sets FORMAT_TYPE_JSON_OBJECT when no schema."""
+    from xai_sdk.proto.v6 import chat_pb2
+
+    mock_client = MagicMock()
+    model = XAIModel(model_name='grok-3', client=mock_client)
+
+    request = GenerateRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
+        config=XAIConfig(),
+        output=OutputConfig(format='json'),
+    )
+
+    params = model._build_params(request)
+
+    response_format = params['response_format']
+    assert isinstance(response_format, chat_pb2.ResponseFormat)
+    assert response_format.format_type == chat_pb2.FormatType.FORMAT_TYPE_JSON_OBJECT
+
+
+def test_build_params_no_output() -> None:
+    """Test that _build_params omits response_format when no output config."""
+    mock_client = MagicMock()
+    model = XAIModel(model_name='grok-3', client=mock_client)
+
+    request = GenerateRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Test'))])],
+        config=XAIConfig(),
+    )
+
+    params = model._build_params(request)
+
+    assert 'response_format' not in params
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_calls_emit_chunks() -> None:
+    """Test that tool call parts are emitted as chunks during streaming."""
+    mock_tool_call = MagicMock()
+    mock_tool_call.id = 'call_42'
+    mock_tool_call.function = MagicMock()
+    mock_tool_call.function.name = 'get_weather'
+    mock_tool_call.function.arguments = '{"city": "NYC"}'
+
+    mock_choice = MagicMock()
+    mock_choice.tool_calls = [mock_tool_call]
+
+    mock_chunk = MagicMock()
+    mock_chunk.content = None
+    mock_chunk.choices = [mock_choice]
+
+    mock_response = MagicMock()
+    mock_response.finish_reason = 'TOOL_CALLS'
+    mock_response.usage = MagicMock(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+    )
+
+    def mock_stream() -> Iterator:
+        yield mock_response, mock_chunk
+
+    mock_chat = MagicMock()
+    mock_chat.stream = MagicMock(return_value=mock_stream())
+
+    mock_client = MagicMock()
+    mock_client.chat = MagicMock()
+    mock_client.chat.create = MagicMock(return_value=mock_chat)
+
+    model = XAIModel(model_name='grok-3', client=mock_client)
+
+    request = GenerateRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='Use weather tool'))])],
+        config=XAIConfig(),
+        tools=[
+            ToolDefinition(
+                name='get_weather',
+                description='Get weather',
+                input_schema={'type': 'object', 'properties': {'city': {'type': 'string'}}},
+            )
+        ],
+    )
+
+    ctx = MagicMock()
+    ctx.is_streaming = True
+    collected_chunks: list[GenerateResponseChunk] = []
+
+    def send_chunk(chunk: GenerateResponseChunk) -> None:
+        collected_chunks.append(chunk)
+
+    ctx.send_chunk = send_chunk
+
+    response = await model.generate(request, ctx)
+
+    # Allow event loop to process call_soon_threadsafe callbacks
+    await asyncio.sleep(0.1)
+
+    # A chunk should have been emitted for the tool request
+    assert len(collected_chunks) == 1
+    chunk_part = collected_chunks[0].content[0]
+    actual = chunk_part.root if isinstance(chunk_part, Part) else chunk_part
+    assert isinstance(actual, ToolRequestPart)
+    assert actual.tool_request.name == 'get_weather'
+    assert actual.tool_request.input == {'city': 'NYC'}
+
+    # Final response should also contain the tool request
+    assert response.message
+    assert len(response.message.content) == 1
+    final_part = response.message.content[0].root
+    assert isinstance(final_part, ToolRequestPart)
+    assert final_part.tool_request.ref == 'call_42'

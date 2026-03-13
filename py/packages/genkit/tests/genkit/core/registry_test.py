@@ -98,3 +98,38 @@ def test_register_value() -> None:
     registry.register_value('format', 'json', [1, 2, 3])
 
     assert registry.lookup_value('format', 'json') == [1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_trigger_lazy_loading_reentrant_guard() -> None:
+    """Regression: _trigger_lazy_loading must not recurse infinitely.
+
+    When a lazy factory resolves its own action key, the re-entrancy guard
+    must skip the nested invocation instead of recursing until
+    RecursionError.  See https://github.com/firebase/genkit/issues/4491.
+    """
+    registry = Registry()
+
+    call_count = 0
+
+    async def self_resolving_factory() -> None:
+        nonlocal call_count
+        call_count += 1
+        # This attempts to resolve the same action, which would trigger
+        # _trigger_lazy_loading again.  Without the guard, infinite recursion.
+        await registry.resolve_action(ActionKind.CUSTOM, 'self_ref')
+
+    action = registry.register_action(
+        kind=ActionKind.CUSTOM,
+        name='self_ref',
+        fn=lambda: None,
+        metadata={'lazy': True},
+    )
+    setattr(action, '_async_factory', self_resolving_factory)  # noqa: B010
+
+    # Should complete without RecursionError
+    resolved = await registry.resolve_action(ActionKind.CUSTOM, 'self_ref')
+    assert resolved is not None
+    assert resolved.name == 'self_ref'
+    # Factory should have been called exactly once (re-entrant call skipped)
+    assert call_count == 1

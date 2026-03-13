@@ -193,6 +193,8 @@ export declare interface VeoParameters {
   personGeneration?: string;
   durationSeconds?: number;
   enhancePrompt?: boolean;
+  resolution?: string;
+  seed?: number;
 }
 
 export declare interface VeoInstance {

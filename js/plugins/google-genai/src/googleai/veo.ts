@@ -69,9 +69,18 @@ export const VeoConfigSchema = z
     durationSeconds: z
       .number()
       .step(1)
-      .min(5)
+      .min(4) // Veo 3.1 supports 4s for some resolutions.
       .max(8)
-      .describe('Length of each output video in seconds, between 5 and 8.')
+      .describe('Length of each output video in seconds.')
+      .optional(),
+    resolution: z
+      .enum(['720p', '1080p', '4k'])
+      .describe('Resolution of the output video.')
+      .optional(),
+    seed: z
+      .number()
+      .int()
+      .describe('Random seed for the video generation.')
       .optional(),
     enhancePrompt: z
       .boolean()

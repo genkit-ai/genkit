@@ -22,7 +22,7 @@ from typing import cast
 import pytest
 
 from genkit.blocks.generate import generate_action
-from genkit.blocks.resource import ResourceInput, ResourceOutput, define_resource
+from genkit.blocks.resource import ResourceInput, ResourceOutput, define_resource, resource
 from genkit.core.action import ActionRunContext
 from genkit.core.registry import ActionKind, Registry
 from genkit.core.typing import (
@@ -31,6 +31,8 @@ from genkit.core.typing import (
     GenerateResponse,
     Message,
     Part,
+    Resource1,
+    ResourcePart,
     Role,
     TextPart,
 )
@@ -58,9 +60,6 @@ async def test_generate_with_resources() -> None:
 
     registry.register_action(ActionKind.MODEL, 'mock-model', mock_model)
 
-    # 3. Call generate_action with a message containing a resource part
-    from genkit.core.typing import Resource1, ResourcePart
-
     options = GenerateActionOptions(
         model='mock-model',
         messages=[Message(role=Role.USER, content=[Part(root=ResourcePart(resource=Resource1(uri='test://foo')))])],
@@ -80,8 +79,6 @@ async def test_dynamic_action_provider_resource() -> None:
 
     # Register a dynamic provider that handles any "dynamic://*" uri
     def provider_fn(input: dict[str, object], ctx: ActionRunContext) -> object:
-        from genkit.blocks.resource import resource
-
         kind = cast(ActionKind, input['kind'])
         name = cast(str, input['name'])
         if kind == ActionKind.RESOURCE and name.startswith('dynamic://'):
@@ -107,9 +104,6 @@ async def test_dynamic_action_provider_resource() -> None:
         return GenerateResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))
 
     registry.register_action(ActionKind.MODEL, 'mock-model', mock_model)
-
-    # Call generate with dynamic resource in message
-    from genkit.core.typing import Resource1, ResourcePart
 
     options = GenerateActionOptions(
         model='mock-model',

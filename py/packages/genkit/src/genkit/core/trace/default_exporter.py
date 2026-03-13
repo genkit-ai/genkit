@@ -37,12 +37,17 @@ import httpx
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    SimpleSpanProcessor,
     SpanExporter,
     SpanExportResult,
 )
 
 from genkit.core._compat import override
+from genkit.core.environment import is_dev_environment
 from genkit.core.logging import get_logger
+
+from .realtime_processor import RealtimeSpanProcessor
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace import SpanProcessor
@@ -223,12 +228,6 @@ def create_span_processor(exporter: SpanExporter) -> SpanProcessor:
     Returns:
         A SpanProcessor configured for the current environment.
     """
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-
-    from genkit.core.environment import is_dev_environment
-
-    from .realtime_processor import RealtimeSpanProcessor
-
     # Match JS: RealtimeSpanProcessor requires BOTH dev mode AND env var
     if is_dev_environment() and is_realtime_telemetry_enabled():
         return RealtimeSpanProcessor(exporter)

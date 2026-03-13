@@ -17,7 +17,17 @@
 
 """OpenAI Compatible Models for Genkit."""
 
+from .audio import (
+    SUPPORTED_STT_MODELS,
+    SUPPORTED_TTS_MODELS,
+    OpenAISTTModel,
+    OpenAITTSModel,
+)
 from .handler import OpenAIModelHandler
+from .image import (
+    SUPPORTED_IMAGE_MODELS,
+    OpenAIImageModel,
+)
 from .model import OpenAIModel
 from .model_info import (
     SUPPORTED_EMBEDDING_MODELS,
@@ -28,11 +38,17 @@ from .model_info import (
 )
 
 __all__ = [
+    'OpenAIImageModel',
     'OpenAIModel',
-    'PluginSource',
-    'SUPPORTED_OPENAI_MODELS',
-    'SUPPORTED_EMBEDDING_MODELS',
-    'SUPPORTED_OPENAI_COMPAT_MODELS',
     'OpenAIModelHandler',
+    'OpenAISTTModel',
+    'OpenAITTSModel',
+    'PluginSource',
+    'SUPPORTED_EMBEDDING_MODELS',
+    'SUPPORTED_IMAGE_MODELS',
+    'SUPPORTED_OPENAI_COMPAT_MODELS',
+    'SUPPORTED_OPENAI_MODELS',
+    'SUPPORTED_STT_MODELS',
+    'SUPPORTED_TTS_MODELS',
     'get_default_model_info',
 ]

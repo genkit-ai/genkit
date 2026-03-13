@@ -27,6 +27,7 @@ interface RunOptions {
   port?: string;
   open?: boolean;
   disableRealtimeTelemetry?: boolean;
+  corsOrigin?: string;
 }
 
 /** Command to run code in dev mode and/or the Dev UI. */
@@ -38,6 +39,10 @@ export const start = new Command('start')
   .option(
     '--disable-realtime-telemetry',
     'Disable real-time telemetry streaming'
+  )
+  .option(
+    '--cors-origin <origin>',
+    'specify the allowed origin for CORS requests'
   )
   .action(async (options: RunOptions) => {
     const projectRoot = await findProjectRoot();
@@ -55,12 +60,19 @@ export const start = new Command('start')
         projectRoot,
         start.args[0],
         start.args.slice(1),
-        { disableRealtimeTelemetry: options.disableRealtimeTelemetry }
+        {
+          disableRealtimeTelemetry: options.disableRealtimeTelemetry,
+          corsOrigin: options.corsOrigin,
+        }
       );
       manager = result.manager;
       processPromise = result.processPromise;
     } else {
-      manager = await startManager(projectRoot, true);
+      manager = await startManager({
+        projectRoot,
+        manageHealth: true,
+        corsOrigin: options.corsOrigin,
+      });
       processPromise = new Promise(() => {});
     }
     if (!options.noui) {

@@ -17,6 +17,7 @@
 """Generate action."""
 
 import copy
+import re
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -60,6 +61,30 @@ StreamingCallback = Callable[[GenerateResponseChunkWrapper], None]
 DEFAULT_MAX_TURNS = 5
 
 logger = get_logger(__name__)
+
+
+# Matches data URIs: everything up to the first comma is the media-type +
+# parameters (e.g. "data:audio/L16;codec=pcm;rate=24000;base64,").
+_DATA_URI_RE = re.compile(r'data:[^,]{0,200},(?=.{100})', re.ASCII)
+
+
+def _redact_data_uris(obj: Any) -> Any:  # noqa: ANN401
+    """Recursively truncate long ``data:`` URIs in a serialized dict/list.
+
+    Replaces values like ``data:image/png;base64,iVBORw0KGgo...`` with
+    ``data:image/png;base64,...<12345 bytes>`` so debug logs stay readable
+    when requests contain inline images or other binary media.
+    """
+    if isinstance(obj, str):
+        m = _DATA_URI_RE.match(obj)
+        if m:
+            return f'{m.group()}...<{len(obj) - m.end()} bytes>'
+        return obj
+    if isinstance(obj, dict):
+        return {k: _redact_data_uris(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_data_uris(v) for v in obj]
+    return obj
 
 
 def define_generate_action(registry: Registry) -> None:
@@ -131,7 +156,7 @@ async def generate_action(
 
     request = await action_to_generate_request(raw_request, tools, model)
 
-    logger.debug('generate request', model=model.name, request=dump_dict(request))
+    logger.debug('generate request', model=model.name, request=_redact_data_uris(dump_dict(request)))
 
     prev_chunks: list[GenerateResponseChunk] = []
 
@@ -278,13 +303,17 @@ async def generate_action(
             return None
         return formatter.parse_message(msg)
 
+    # Extract schema_type for runtime Pydantic validation
+    schema_type = raw_request.output.schema_type if raw_request.output else None
+
     response = GenerateResponseWrapper(
         model_response,
         request,
         message_parser=message_parser if formatter else None,
+        schema_type=schema_type,
     )
 
-    logger.debug('generate response', response=dump_dict(response))
+    logger.debug('generate response', response=_redact_data_uris(dump_dict(response)))
 
     response.assert_valid()
     generated_msg = response.message
@@ -323,6 +352,7 @@ async def generate_action(
             response,
             request,
             message_parser=message_parser if formatter else None,
+            schema_type=schema_type,
         )
         interrupted_resp.finish_reason = FinishReason.INTERRUPTED
         interrupted_resp.finish_message = 'One or more tool calls resulted in interrupts.'

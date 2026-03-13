@@ -58,6 +58,22 @@ export const ActionSchema = z
 
 export type Action = z.infer<typeof ActionSchema>;
 
+export const ActionMetadataSchema = z
+  .object({
+    actionType: z.string().optional(),
+    name: z.string(),
+    description: z.string().optional(),
+    inputSchema: z.unknown().optional(),
+    inputJsonSchema: JSONSchema7Schema.optional(),
+    outputSchema: z.unknown().optional(),
+    outputJsonSchema: JSONSchema7Schema.optional(),
+    streamSchema: z.unknown().optional(),
+    metadata: z.record(z.string(), CustomAnySchema).optional(),
+  })
+  .openapi('ActionMetadata');
+
+export type ActionMetadata = z.infer<typeof ActionMetadataSchema>;
+
 export const RunActionResponseSchema = z.object({
   result: z.unknown().optional(),
   telemetry: z

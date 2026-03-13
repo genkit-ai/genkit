@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { gemini15Pro, googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit/beta';
 import type { AgentState } from './types';
 
 export const ai = genkit({
   plugins: [googleAI()],
-  model: gemini15Pro,
+  model: googleAI.model('gemini-2.5-pro'),
 });
 
 ai.defineHelper(

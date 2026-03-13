@@ -17,6 +17,7 @@
 """xAI model implementations."""
 
 import asyncio
+import contextlib
 import json
 from typing import Any, cast
 
@@ -26,7 +27,9 @@ from xai_sdk.proto.v6 import chat_pb2, image_pb2
 
 from genkit.ai import ActionRunContext
 from genkit.blocks.model import get_basic_usage_stats
+from genkit.core.logging import get_logger
 from genkit.core.schema import to_json_schema
+from genkit.plugins.xai.converters import DEFAULT_MAX_OUTPUT_TOKENS, FINISH_REASON_MAP
 from genkit.plugins.xai.model_info import get_model_info
 from genkit.types import (
     FinishReason,
@@ -60,16 +63,9 @@ TOOL_TYPE_MAP = {
 }
 
 
+logger = get_logger(__name__)
+
 __all__ = ['XAIModel']
-
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
-
-FINISH_REASON_MAP = {
-    'STOP': FinishReason.STOP,
-    'LENGTH': FinishReason.LENGTH,
-    'TOOL_CALLS': FinishReason.STOP,
-    'CONTENT_FILTER': FinishReason.OTHER,
-}
 
 ROLE_MAP = {
     Role.SYSTEM: chat_pb2.MessageRole.ROLE_SYSTEM,
@@ -117,6 +113,8 @@ class XAIModel:
         params = self._build_params(request)
         streaming = ctx and ctx.is_streaming
 
+        logger.debug('xAI generate request', model=self.model_name, streaming=bool(streaming))
+
         if streaming:
             assert ctx is not None  # streaming requires ctx
             return await self._generate_streaming(params, request, ctx)
@@ -125,7 +123,14 @@ class XAIModel:
             chat = self.client.chat.create(**cast(dict[str, Any], params))
             return chat.sample()
 
-        response: Any = await asyncio.to_thread(_sample)  # noqa: ANN401
+        response: Any = await asyncio.to_thread(_sample)
+        logger.debug(
+            'xAI raw API response',
+            model=self.model_name,
+            content=str(response.content)[:500] if response.content else None,
+            tool_calls=str(response.tool_calls) if response.tool_calls else None,
+            finish_reason=str(response.finish_reason),
+        )
         content = self._to_genkit_content(response)
         response_message = Message(role=Role.MODEL, content=content)
         basic_usage = get_basic_usage_stats(input_=request.messages, response=response_message)
@@ -166,6 +171,18 @@ class XAIModel:
             params['deferred'] = config.deferred
         if config.reasoning_effort is not None:
             params['reasoning_effort'] = config.reasoning_effort
+
+        # Structured output: set response_format for JSON output requests.
+        if request.output and request.output.format == 'json':
+            if request.output.schema:
+                params['response_format'] = chat_pb2.ResponseFormat(
+                    format_type=chat_pb2.FormatType.FORMAT_TYPE_JSON_SCHEMA,
+                    schema=json.dumps(request.output.schema),
+                )
+            else:
+                params['response_format'] = chat_pb2.ResponseFormat(
+                    format_type=chat_pb2.FormatType.FORMAT_TYPE_JSON_OBJECT,
+                )
 
         if request.tools:
             params['tools'] = [
@@ -211,22 +228,27 @@ class XAIModel:
                             if tool_call.function:
                                 tool_input = tool_call.function.arguments
                                 if isinstance(tool_input, str):
-                                    try:
+                                    with contextlib.suppress(json.JSONDecodeError, TypeError):
                                         tool_input = json.loads(tool_input)
-                                    except (json.JSONDecodeError, TypeError):
-                                        pass
 
-                                accumulated_content.append(
-                                    Part(
-                                        root=ToolRequestPart(
-                                            tool_request=ToolRequest(
-                                                ref=tool_call.id,
-                                                name=tool_call.function.name,
-                                                input=tool_input,
-                                            )
+                                tool_part = Part(
+                                    root=ToolRequestPart(
+                                        tool_request=ToolRequest(
+                                            ref=tool_call.id,
+                                            name=tool_call.function.name,
+                                            input=tool_input,
                                         )
                                     )
                                 )
+                                loop.call_soon_threadsafe(
+                                    ctx.send_chunk,
+                                    GenerateResponseChunk(
+                                        role=Role.MODEL,
+                                        index=0,
+                                        content=[tool_part],
+                                    ),
+                                )
+                                accumulated_content.append(tool_part)
 
             response_message = Message(role=Role.MODEL, content=accumulated_content)
             basic_usage = get_basic_usage_stats(input_=request.messages, response=response_message)
@@ -307,10 +329,8 @@ class XAIModel:
             for tool_call in response.tool_calls:
                 tool_input = tool_call.function.arguments
                 if isinstance(tool_input, str):
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError, TypeError):
                         tool_input = json.loads(tool_input)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
 
                 content.append(
                     Part(

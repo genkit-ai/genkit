@@ -52,6 +52,9 @@ export const serverHarness = new Command('__server-harness')
     });
 
     const portNum = Number.parseInt(port) || 4100;
-    const manager = await startManager(await findProjectRoot(), true);
+    const manager = await startManager({
+      projectRoot: await findProjectRoot(),
+      manageHealth: true,
+    });
     await startServer(manager, portNum);
   });

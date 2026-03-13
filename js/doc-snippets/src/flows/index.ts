@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';
 

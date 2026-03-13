@@ -21,6 +21,7 @@
 
 from typing import Any
 
+import aiofiles
 from dotpromptz import Dotprompt
 from dotpromptz.typing import DataArgument, PromptFunction
 
@@ -29,8 +30,10 @@ dp = Dotprompt()
 
 async def load_prompt_file(path: str) -> PromptFunction:
     """Load a prompt file from the given path."""
-    with open(path) as f:
-        result = await dp.compile(f.read())
+    # Use aiofiles for async file I/O to avoid blocking the event loop
+    async with aiofiles.open(path, encoding='utf-8') as f:
+        content = await f.read()
+        result = await dp.compile(content)
 
     return result
 

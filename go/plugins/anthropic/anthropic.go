@@ -22,7 +22,10 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -44,9 +47,11 @@ type Anthropic struct {
 	APIKey  string // If not provided, defaults to ANTHROPIC_API_KEY
 	BaseURL string // Optional. If not provided, defaults to ANTHROPIC_BASE_URL
 
-	aclient anthropic.Client // Anthropic client
-	mu      sync.Mutex       // Mutex to control access
-	initted bool             // Whether the plugin has been initialized
+	aclient     anthropic.Client // Anthropic client
+	mu          sync.Mutex       // Mutex to control access
+	initted     bool             // Whether the plugin has been initialized
+	models      []string         // Cached list of models
+	lastUpdated time.Time        // When the cache was last updated
 }
 
 // Name returns the name of the plugin
@@ -103,14 +108,16 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	actions := []api.ActionDesc{}
 
-	models, err := listModels(ctx, &a.aclient)
+	models, err := a.getModels(ctx)
 	if err != nil {
 		slog.Error("unable to list anthropic models from Anthropic API", "error", err)
 		return nil
 	}
 
 	for _, name := range models {
-		model := newModel(a.aclient, name, defaultClaudeOpts)
+		// When listing discovered models, the Genkit action name and the
+		// Anthropic API model ID are identical.
+		model := newModel(a.aclient, name, name, defaultClaudeOpts)
 		if actionDef, ok := model.(api.Action); ok {
 			actions = append(actions, actionDef.Desc())
 		}
@@ -133,7 +140,21 @@ func IsDefinedModel(g *genkit.Genkit, name string) bool {
 func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 	switch atype {
 	case api.ActionTypeModel:
-		return newModel(a.aclient, id, ai.ModelOptions{
+		models, err := a.getModels(context.Background())
+		if err != nil {
+			slog.Error("unable to list anthropic models from Anthropic API", "error", err)
+			return nil
+		}
+
+		realID, ok := resolveModelID(id, models)
+		if !ok {
+			// If not found, fall back to using id as is (legacy behavior, or for models not in list)
+			realID = id
+		}
+
+		// We register the model using the ID requested by the user, but
+		// use the resolved 'realID' (e.g. versioned) for actual API calls.
+		return newModel(a.aclient, id, realID, ai.ModelOptions{
 			Label:    fmt.Sprintf("%s - %s", anthropicLabelPrefix, id),
 			Stage:    ai.ModelStageStable,
 			Versions: []string{},
@@ -143,8 +164,27 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 	return nil
 }
 
+// getModels returns the list of available models, using a cache if available.
+func (a *Anthropic) getModels(ctx context.Context) ([]string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !a.lastUpdated.IsZero() && time.Since(a.lastUpdated) < time.Hour {
+		return a.models, nil
+	}
+
+	models, err := listModels(ctx, &a.aclient)
+	if err != nil {
+		return nil, err
+	}
+
+	a.models = models
+	a.lastUpdated = time.Now()
+	return models, nil
+}
+
 // newModel creates a model wihout registering it
-func newModel(client anthropic.Client, name string, opts ai.ModelOptions) ai.Model {
+func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelOptions) ai.Model {
 	config := &anthropic.MessageNewParams{}
 
 	meta := &ai.ModelOptions{
@@ -155,15 +195,51 @@ func newModel(client anthropic.Client, name string, opts ai.ModelOptions) ai.Mod
 		Stage:        opts.Stage,
 	}
 
+	targetModel := name
+	if apiModelName != "" {
+		targetModel = apiModelName
+	}
+
 	fn := func(
 		ctx context.Context,
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return ant.Generate(ctx, client, name, input, cb)
+		return ant.Generate(ctx, client, targetModel, input, cb)
 	}
 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
+}
+
+func resolveModelID(id string, availableModels []string) (string, bool) {
+	// First check for exact match
+	for _, m := range availableModels {
+		if m == id {
+			return m, true
+		}
+	}
+
+	var bestMatch string
+	prefix := id + "-"
+	// Suffix must be exactly 8 digits (YYYYMMDD)
+	dateSuffix := regexp.MustCompile(`^\d{8}$`)
+
+	for _, m := range availableModels {
+		if strings.HasPrefix(m, prefix) {
+			suffix := strings.TrimPrefix(m, prefix)
+			if dateSuffix.MatchString(suffix) {
+				if m > bestMatch {
+					bestMatch = m
+				}
+			}
+		}
+	}
+
+	if bestMatch != "" {
+		return bestMatch, true
+	}
+
+	return "", false
 }
 
 // configToMap converts a config struct to a map[string]any.

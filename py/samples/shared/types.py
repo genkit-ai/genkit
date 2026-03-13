@@ -14,9 +14,42 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Common types for samples."""
+"""Common types for provider samples.
+
+Centralizes Pydantic models that are shared across multiple provider
+hello samples. Provider-specific types stay in each sample's main.py.
+"""
 
 from pydantic import BaseModel, Field
+
+
+class CalculatorInput(BaseModel):
+    """Input for the calculator tool."""
+
+    operation: str = Field(description='Math operation: add, subtract, multiply, divide', default='add')
+    a: float = Field(description='First number', default=123)
+    b: float = Field(description='Second number', default=321)
+
+
+class CharacterInput(BaseModel):
+    """Input for character generation."""
+
+    name: str = Field(default='Whiskers', description='Character name')
+
+
+class CodeInput(BaseModel):
+    """Input for code generation flow."""
+
+    task: str = Field(
+        default='Write a Python function to calculate fibonacci numbers',
+        description='Coding task description',
+    )
+
+
+class ConfigInput(BaseModel):
+    """Input for config flow."""
+
+    name: str = Field(default='Ginger', description='User name for greeting')
 
 
 class CurrencyExchangeInput(BaseModel):
@@ -27,12 +60,40 @@ class CurrencyExchangeInput(BaseModel):
     to_currency: str = Field(description='Target currency code (e.g., EUR)', default='EUR')
 
 
-class CalculatorInput(BaseModel):
-    """Input for the calculator tool."""
+class EmbedInput(BaseModel):
+    """Input for embedding flow."""
 
-    operation: str = Field(description='Math operation: add, subtract, multiply, divide', default='add')
-    a: float = Field(description='First number', default=123)
-    b: float = Field(description='Second number', default=321)
+    text: str = Field(default='Artificial intelligence is transforming the world.', description='Text to embed')
+
+
+class ImageDescribeInput(BaseModel):
+    """Input for image description flow."""
+
+    image_url: str = Field(
+        default='https://upload.wikimedia.org/wikipedia/commons/1/13/Cute_kitten.jpg',
+        description='URL of the image to describe',
+    )
+
+
+class MultiTurnInput(BaseModel):
+    """Input for multi_turn_chat flow."""
+
+    destination: str = Field(default='Japan', description='Travel destination')
+
+
+class ReasoningInput(BaseModel):
+    """Input for reasoning flow."""
+
+    prompt: str = Field(
+        default='What is heavier, one kilo of steel or one kilo of feathers? Explain step by step.',
+        description='Reasoning question to solve',
+    )
+
+
+class GreetingInput(BaseModel):
+    """Input for generate_greeting flow."""
+
+    name: str = Field(default='Mittens', description='Name to greet')
 
 
 class Skills(BaseModel):
@@ -50,6 +111,37 @@ class RpgCharacter(BaseModel):
     back_story: str = Field(description='back story', alias='backStory')
     abilities: list[str] = Field(description='list of abilities (3-4)')
     skills: Skills
+
+
+class StreamInput(BaseModel):
+    """Input for streaming flow."""
+
+    name: str = Field(default='Shadow', description='Name for streaming story')
+
+
+class StreamingToolInput(BaseModel):
+    """Input for streaming tool flow."""
+
+    location: str = Field(default='London', description='Location to get weather for')
+
+
+class SystemPromptInput(BaseModel):
+    """Input for system_prompt flow."""
+
+    question: str = Field(default='What is your quest?', description='Question to ask')
+
+
+class TranslateInput(BaseModel):
+    """Input for translation flow."""
+
+    text: str = Field(
+        default='Artificial intelligence is transforming how we build software.',
+        description='Text to translate',
+    )
+    target_language: str = Field(
+        default='French',
+        description='Target language for translation',
+    )
 
 
 class WeatherInput(BaseModel):

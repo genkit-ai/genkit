@@ -25,43 +25,40 @@ if ((EUID == 0)); then
 fi
 
 TOP_DIR=$(git rev-parse --show-toplevel)
+PY_DIR="${TOP_DIR}/py"
 
-PROJECT_DIRS=(
-  "packages/genkit"
-  "plugins/compat-oai"
-  "plugins/dev-local-vectorstore"
-  "plugins/firebase"
-  "plugins/flask"
-  "plugins/google-cloud"
-  "plugins/google-genai"
-  "plugins/ollama"
-  "plugins/vertex-ai"
-  "samples/compat-oai-hello"
-  "samples/google-genai-context-caching"
-  "samples/firestore-retreiver"
-  "samples/flask-hello"
-  "samples/google-genai-hello"
-  "samples/google-genai-image"
-  "samples/google-genai-vertexai-hello"
-  "samples/google-genai-vertexai-image"
-  "samples/menu"
-  "samples/multi-server"
-  "samples/ollama-hello"
-  "samples/ollama-simple-embed"
-  "samples/tool-interrupts"
-  "samples/vertex-ai-vector-search-bigquery"
-  "samples/vertex-ai-vector-search-firestore"
-  "tests/smoke"
-)
+# Automatically discover all directories containing pyproject.toml
+# This includes packages, plugins, samples, and tests
+PROJECT_DIRS=()
+while IFS= read -r -d '' pyproject; do
+  # Get the directory containing pyproject.toml, relative to py/
+  project_dir=$(dirname "${pyproject}")
+  project_dir="${project_dir#"${PY_DIR}"/}"
+  PROJECT_DIRS+=("$project_dir")
+done < <(find "${PY_DIR}/packages" "${PY_DIR}/plugins" "${PY_DIR}/samples" "${PY_DIR}/tests" \
+  -name "pyproject.toml" -type f -print0 2>/dev/null)
+
+echo "Discovered ${#PROJECT_DIRS[@]} projects to build:"
+for dir in "${PROJECT_DIRS[@]}"; do
+  echo "  - $dir"
+done
+echo ""
+
 
 for PROJECT_DIR in "${PROJECT_DIRS[@]}"; do
   uv \
-    --directory=${TOP_DIR}/py \
+    --directory="${TOP_DIR}"/py \
     --project "$PROJECT_DIR" \
     build
 done
 
-TWINE_CHECK=$(uv run --directory ${TOP_DIR}/py twine check ${TOP_DIR}/py/dist/*)
+# Safely handle glob expansion for filenames with spaces
+dist_files=("${TOP_DIR}"/py/dist/*)
+if [[ ! -e "${dist_files[0]}" ]]; then
+  echo "Error: No distribution files found in dist/" >&2
+  exit 1
+fi
+TWINE_CHECK=$(uv run --directory "${TOP_DIR}"/py twine check "${dist_files[@]}")
 echo "$TWINE_CHECK"
 if echo "$TWINE_CHECK" | grep -q "FAIL"; then
   echo "Twine check failed."

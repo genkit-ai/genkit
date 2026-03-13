@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,107 +14,89 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Publish Python Package
+# Publish all Python packages to PyPI.
+#
+# Triggered by pushing a tag like py/v0.7.0 or manually via workflow_dispatch.
+# Auth uses PyPI trusted publishing (OIDC) — no API tokens needed.
+
+name: Publish Python
 
 on:
+  push:
+    tags:
+      - "py/v*"
   workflow_dispatch:
-    inputs:
-      project_type:
-        description: Type of project
-        type: choice
-        default: package
-        required: true
-        options:
-          - packages
-          - plugins
-      project_name:
-        description: Project name publishing to Pypi
-        type: choice
-        default: genkit
-        required: true
-        options:
-          - genkit
-          - compat-oai
-          - dev-local-vectorstore
-          - firebase
-          - flask
-          - google-cloud
-          - google-genai
-          - ollama
-          - vertex-ai
 
-
+concurrency:
+  group: publish-python-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  python_build:
-    name: Python build packages
+  publish:
     runs-on: ubuntu-latest
-    env:
-      PATH: ${{ github.workspace }}/.cargo/bin:${{ github.workspace }}/.local/bin:/usr/local/bin:/usr/bin:/bin
-    strategy:
-      matrix:
-        python-version:
-          - "3.12"
-      fail-fast: false
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential curl libffi-dev
-
-      # Install rust for packages that requires it
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Install toml-cli
-        run: cargo install toml-cli
-
-      - name: Install uv and setup Python version
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install Python dependencies
-        run: |
-          cd py/${{ github.event.inputs.project_type }}/${{ github.event.inputs.project_name }}
-          uv pip install -e .[dev,test,docs]
-          uv pip install twine toml
-
-      - name: Build package and validate pypi
-        run: |
-          cd py
-          PROJECT_NAME=${{ github.event.inputs.project_name }} PROJECT_TYPE=${{ github.event.inputs.project_type }}  ./bin/publish_pypi.sh
-
-      - name: Upload build packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: py/dist/
-
-  pypi_publish:
-    name: Upload to PyPI
-    needs: [python_build]
-    runs-on: ubuntu-latest
-    environment:
-      # change to publish or similar in productive CI
-      name: pypi_github_publishing
     permissions:
       id-token: write
+    environment:
+      name: pypi_github_publishing
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          name: dist
-          path: py/dist/
+          enable-cache: true
+          python-version: "3.12"
+          version: "0.6.6"
 
-      - name: Publish distribution to PyPI
+      - name: Build and publish packages
+        run: |
+          set -uo pipefail
+
+          PACKAGES=(
+            py/packages/genkit
+            py/plugins/anthropic
+            py/plugins/compat-oai
+            py/plugins/dev-local-vectorstore
+            py/plugins/google-cloud
+            py/plugins/google-genai
+            py/plugins/ollama
+            py/plugins/firebase
+            py/plugins/flask
+            py/plugins/vertex-ai
+          )
+
+          FAILED=()
+          for pkg in "${PACKAGES[@]}"; do
+            echo "::group::$pkg"
+            if uv build "$pkg" --out-dir dist/; then
+              echo "Build succeeded: $pkg"
+            else
+              echo "::error::Build failed: $pkg"
+              FAILED+=("$pkg")
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo "::error::Failed packages: ${FAILED[*]}"
+          fi
+
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: dist/
           verbose: true
-          packages-dir: py/dist/
+          skip-existing: true
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Smoke test
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#py/v}"
+          pip install "genkit==${VERSION}"
+          python -c "from genkit.ai import Genkit; print('ok')"

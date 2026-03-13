@@ -14,8 +14,13 @@
  * limitations under the License.
  */
 
-import type * as z from 'zod';
-import { Action, ActionMetadata, defineAction } from './action.js';
+import * as z from 'zod';
+import {
+  Action,
+  ActionMetadata,
+  ActionMetadataSchema,
+  defineAction,
+} from './action.js';
 import { GenkitError } from './error.js';
 import { ActionMetadataRecord, ActionType, Registry } from './registry.js';
 
@@ -27,20 +32,24 @@ class SimpleCache {
   private value: DapValue | undefined;
   private expiresAt: number | undefined;
   private ttlMillis: number;
-  private dap: DynamicActionProviderAction;
+  private dap: DynamicActionProviderAction | undefined;
   private dapFn: DapFn;
   private fetchPromise: Promise<DapValue> | null = null;
 
-  constructor(
-    dap: DynamicActionProviderAction,
-    config: DapConfig,
-    dapFn: DapFn
-  ) {
-    this.dap = dap;
+  constructor(config: DapConfig, dapFn: DapFn) {
     this.dapFn = dapFn;
     this.ttlMillis = !config.cacheConfig?.ttlMillis
       ? 3 * 1000
       : config.cacheConfig?.ttlMillis;
+  }
+
+  setDap(dap: DynamicActionProviderAction) {
+    this.dap = dap;
+  }
+
+  setValue(value: DapValue) {
+    this.value = value;
+    this.expiresAt = Date.now() + this.ttlMillis;
   }
 
   /**
@@ -61,17 +70,13 @@ class SimpleCache {
     if (!this.fetchPromise) {
       this.fetchPromise = (async () => {
         try {
-          // Get a new value
-          this.value = await this.dapFn(); // this returns the actual actions
-          this.expiresAt = Date.now() + this.ttlMillis;
-
-          if (!params?.skipTrace) {
-            // Also run the action
-            // This action actually does nothing, with the important side
-            // effect of logging its input and output (which are the same).
-            // It does not change what we return, it just makes
-            // the content of the DAP visible in the DevUI and logging trace.
-            await this.dap.run(transformDapValue(this.value));
+          if (this.dap && !params?.skipTrace) {
+            await this.dap.run(); // calls setValue
+          } else {
+            this.setValue(await this.dapFn());
+          }
+          if (!this.value) {
+            throw new Error('value is undefined');
           }
           return this.value;
         } catch (error) {
@@ -107,8 +112,8 @@ export interface DynamicRegistry {
 }
 
 export type DynamicActionProviderAction = Action<
-  z.ZodTypeAny,
-  z.ZodTypeAny,
+  z.ZodVoid,
+  z.ZodArray<typeof ActionMetadataSchema>,
   z.ZodTypeAny
 > &
   DynamicRegistry & {
@@ -142,14 +147,10 @@ export type DapMetadata = {
   [K in ActionType]?: ActionMetadata[];
 };
 
-function transformDapValue(value: DapValue): DapMetadata {
-  const metadata: DapMetadata = {};
-  for (const key of Object.keys(value)) {
-    metadata[key] = value[key].map((a) => {
-      return a.__action;
-    });
-  }
-  return metadata;
+function transformDapValue(value: DapValue): ActionMetadata[] {
+  return Object.values(value).flatMap(
+    (actions) => actions?.map((a) => a.__action) || []
+  );
 }
 
 export function defineDynamicActionProvider(
@@ -163,36 +164,29 @@ export function defineDynamicActionProvider(
   } else {
     cfg = { ...config };
   }
+  const cache = new SimpleCache(cfg, fn);
   const a = defineAction(
     registry,
     {
       ...cfg,
+      inputSchema: z.void(),
+      outputSchema: z.array(ActionMetadataSchema),
       actionType: 'dynamic-action-provider',
       metadata: { ...(cfg.metadata || {}), type: 'dynamic-action-provider' },
     },
-    async (i, _options) => {
-      // The actions are retrieved, saved in a cache, formatted nicely and
-      // then passed in here so they can be automatically logged by the action
-      // call. This action is for logging only. We cannot run the actual
-      // 'getting the data from the DAP' here because the DAP data is required
-      // to resolve tools/resources etc. And there can be a LOT of tools etc.
-      // for a single generate. Which would log one DAP action per resolve,
-      // and unnecessarily overwhelm the Dev UI with DAP actions that all have
-      // the same information. So we only run this action (for the logging) when
-      // we go get new data from the DAP (so we can see what it returned).
-      return i;
+    async (_options) => {
+      const dapValue = await fn();
+      cache.setValue(dapValue);
+      return transformDapValue(dapValue);
     }
   );
-  implementDap(a as DynamicActionProviderAction, cfg, fn);
+  implementDap(a as DynamicActionProviderAction, cache);
   return a as DynamicActionProviderAction;
 }
 
-function implementDap(
-  dap: DynamicActionProviderAction,
-  config: DapConfig,
-  dapFn: DapFn
-) {
-  dap.__cache = new SimpleCache(dap, config, dapFn);
+function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
+  cache.setDap(dap);
+  dap.__cache = cache;
   dap.invalidateCache = () => {
     dap.__cache.invalidate();
   };

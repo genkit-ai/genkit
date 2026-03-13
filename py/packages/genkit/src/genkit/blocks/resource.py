@@ -421,14 +421,7 @@ async def find_matching_resource(
 
     # Iterate all resources to check for matches (e.g. templates)
     # This is less efficient but necessary for template matching if not optimized
-    resources = (
-        registry.get_actions_by_kind(cast(ActionKind, ActionKind.RESOURCE))
-        if hasattr(registry, 'get_actions_by_kind')
-        else {}
-    )
-    if not resources and hasattr(registry, '_entries'):
-        # Fallback for compatibility if registry instance is old (unlikely in this context)
-        resources = registry._entries.get(cast(ActionKind, ActionKind.RESOURCE), {})  # pyright: ignore[reportPrivateUsage]
+    resources = await registry.resolve_actions_by_kind(cast(ActionKind, ActionKind.RESOURCE))
 
     for action in resources.values():
         if (

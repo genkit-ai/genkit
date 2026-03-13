@@ -37,6 +37,7 @@ from __future__ import annotations
 import structlog
 from opentelemetry.sdk.trace import ReadableSpan
 
+from .gcp_logger import gcp_logger
 from .utils import (
     create_common_log_attributes,
     extract_outer_feature_name_from_path,
@@ -103,7 +104,7 @@ class ActionTelemetry:
         session_id: str | None,
         thread_name: str | None,
     ) -> None:
-        """Write a structured log entry."""
+        """Write a structured log entry to Cloud Logging."""
         path = truncate_path(to_display_path(qualified_path))
         metadata = {
             **create_common_log_attributes(span, project_id),
@@ -117,7 +118,7 @@ class ActionTelemetry:
         if thread_name:
             metadata['threadName'] = thread_name
 
-        logger.info(f'{tag}[{path}, {feature_name}]', **metadata)
+        gcp_logger.log_structured(f'{tag}[{path}, {feature_name}]', metadata)
 
 
 # Singleton instance

@@ -7,7 +7,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -45,7 +44,9 @@ func TestGenerateTelemetry_PipelineIntegration(t *testing.T) {
 
 	// Verify the span was exported
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 }
 
 func TestGenerateTelemetry_MetricCapture(t *testing.T) {
@@ -194,18 +195,23 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 
 			// Wait for span to be processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 
 			// Collect metrics using the manual reader
 			var resourceMetrics metricdata.ResourceMetrics
 			err := reader.Collect(ctx, &resourceMetrics)
-			assert.NoError(t, err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			if tc.expectMetrics {
 				// Verify request counter
 				requestMetric := findMetric(&resourceMetrics, "genkit/ai/generate/requests")
-				assert.NotNil(t, requestMetric, "Expected generate/requests metric")
-				if requestMetric != nil {
+				if requestMetric == nil {
+					t.Error("Expected generate/requests metric")
+				} else {
 					verifyCounterMetric(t, requestMetric, map[string]interface{}{
 						"modelName": tc.attrs["genkit:name"],
 						"status":    tc.expectedStatus,
@@ -216,16 +222,18 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 				// Verify character metrics if we have usage data
 				if tc.expectedInputChars > 0 {
 					inputCharMetric := findMetric(&resourceMetrics, "genkit/ai/generate/input/characters")
-					assert.NotNil(t, inputCharMetric, "Expected input/characters metric")
-					if inputCharMetric != nil {
+					if inputCharMetric == nil {
+						t.Error("Expected input/characters metric")
+					} else {
 						verifyCounterMetricValue(t, inputCharMetric, tc.expectedInputChars)
 					}
 				}
 
 				if tc.expectedOutputChars > 0 {
 					outputCharMetric := findMetric(&resourceMetrics, "genkit/ai/generate/output/characters")
-					assert.NotNil(t, outputCharMetric, "Expected output/characters metric")
-					if outputCharMetric != nil {
+					if outputCharMetric == nil {
+						t.Error("Expected output/characters metric")
+					} else {
 						verifyCounterMetricValue(t, outputCharMetric, tc.expectedOutputChars)
 					}
 				}
@@ -233,16 +241,18 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 				// Verify token metrics
 				if tc.expectedInputTokens > 0 {
 					inputTokenMetric := findMetric(&resourceMetrics, "genkit/ai/generate/input/tokens")
-					assert.NotNil(t, inputTokenMetric, "Expected input/tokens metric")
-					if inputTokenMetric != nil {
+					if inputTokenMetric == nil {
+						t.Error("Expected input/tokens metric")
+					} else {
 						verifyCounterMetricValue(t, inputTokenMetric, tc.expectedInputTokens)
 					}
 				}
 
 				if tc.expectedOutputTokens > 0 {
 					outputTokenMetric := findMetric(&resourceMetrics, "genkit/ai/generate/output/tokens")
-					assert.NotNil(t, outputTokenMetric, "Expected output/tokens metric")
-					if outputTokenMetric != nil {
+					if outputTokenMetric == nil {
+						t.Error("Expected output/tokens metric")
+					} else {
 						verifyCounterMetricValue(t, outputTokenMetric, tc.expectedOutputTokens)
 					}
 				}
@@ -250,16 +260,18 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 				// Verify image metrics
 				if tc.expectedInputImages > 0 {
 					inputImageMetric := findMetric(&resourceMetrics, "genkit/ai/generate/input/images")
-					assert.NotNil(t, inputImageMetric, "Expected input/images metric")
-					if inputImageMetric != nil {
+					if inputImageMetric == nil {
+						t.Error("Expected input/images metric")
+					} else {
 						verifyCounterMetricValue(t, inputImageMetric, tc.expectedInputImages)
 					}
 				}
 
 				if tc.expectedOutputImages > 0 {
 					outputImageMetric := findMetric(&resourceMetrics, "genkit/ai/generate/output/images")
-					assert.NotNil(t, outputImageMetric, "Expected output/images metric")
-					if outputImageMetric != nil {
+					if outputImageMetric == nil {
+						t.Error("Expected output/images metric")
+					} else {
 						verifyCounterMetricValue(t, outputImageMetric, tc.expectedOutputImages)
 					}
 				}
@@ -267,16 +279,18 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 				// Verify video metrics
 				if tc.expectedInputVideos > 0 {
 					inputVideoMetric := findMetric(&resourceMetrics, "genkit/ai/generate/input/videos")
-					assert.NotNil(t, inputVideoMetric, "Expected input/videos metric")
-					if inputVideoMetric != nil {
+					if inputVideoMetric == nil {
+						t.Error("Expected input/videos metric")
+					} else {
 						verifyCounterMetricValue(t, inputVideoMetric, tc.expectedInputVideos)
 					}
 				}
 
 				if tc.expectedOutputVideos > 0 {
 					outputVideoMetric := findMetric(&resourceMetrics, "genkit/ai/generate/output/videos")
-					assert.NotNil(t, outputVideoMetric, "Expected output/videos metric")
-					if outputVideoMetric != nil {
+					if outputVideoMetric == nil {
+						t.Error("Expected output/videos metric")
+					} else {
 						verifyCounterMetricValue(t, outputVideoMetric, tc.expectedOutputVideos)
 					}
 				}
@@ -284,16 +298,18 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 				// Verify audio metrics
 				if tc.expectedInputAudio > 0 {
 					inputAudioMetric := findMetric(&resourceMetrics, "genkit/ai/generate/input/audio")
-					assert.NotNil(t, inputAudioMetric, "Expected input/audio metric")
-					if inputAudioMetric != nil {
+					if inputAudioMetric == nil {
+						t.Error("Expected input/audio metric")
+					} else {
 						verifyCounterMetricValue(t, inputAudioMetric, tc.expectedInputAudio)
 					}
 				}
 
 				if tc.expectedOutputAudio > 0 {
 					outputAudioMetric := findMetric(&resourceMetrics, "genkit/ai/generate/output/audio")
-					assert.NotNil(t, outputAudioMetric, "Expected output/audio metric")
-					if outputAudioMetric != nil {
+					if outputAudioMetric == nil {
+						t.Error("Expected output/audio metric")
+					} else {
 						verifyCounterMetricValue(t, outputAudioMetric, tc.expectedOutputAudio)
 					}
 				}
@@ -301,15 +317,18 @@ func TestGenerateTelemetry_MetricCapture(t *testing.T) {
 				// Verify latency histogram
 				if tc.expectedLatency > 0 {
 					latencyMetric := findMetric(&resourceMetrics, "genkit/ai/generate/latency")
-					assert.NotNil(t, latencyMetric, "Expected latency metric")
-					if latencyMetric != nil {
+					if latencyMetric == nil {
+						t.Error("Expected latency metric")
+					} else {
 						verifyHistogramMetricValue(t, latencyMetric, tc.expectedLatency)
 					}
 				}
 			} else {
 				// Should have no generate metrics
 				requestMetric := findMetric(&resourceMetrics, "genkit/ai/generate/requests")
-				assert.Nil(t, requestMetric, "Should not have generate metrics for non-model spans")
+				if requestMetric != nil {
+					t.Error("Should not have generate metrics for non-model spans")
+				}
 			}
 		})
 	}
@@ -374,7 +393,9 @@ func TestGenerateTelemetry_FilteringLogic(t *testing.T) {
 
 			// Verify span was processed by pipeline
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -450,16 +471,25 @@ func TestGenerateTelemetry_JSONParsingEdgeCases(t *testing.T) {
 
 			// Function that should not panic
 			testFunc := func() {
+				defer func() {
+					if r := recover(); r != nil {
+						if !tc.expectPanic {
+							t.Errorf("Should handle malformed JSON gracefully, but got panic: %v", r)
+						}
+					} else {
+						if tc.expectPanic {
+							t.Error("Expected panic for malformed data")
+						}
+					}
+				}()
 				span.End()
 				spans := f.waitAndGetSpans()
-				assert.Len(t, spans, 1)
+				if len(spans) != 1 {
+					t.Errorf("got %d spans, want 1", len(spans))
+				}
 			}
 
-			if tc.expectPanic {
-				assert.Panics(t, testFunc, "Expected panic for malformed data")
-			} else {
-				assert.NotPanics(t, testFunc, "Should handle malformed JSON gracefully")
-			}
+			testFunc()
 		})
 	}
 }
@@ -527,7 +557,9 @@ func TestGenerateTelemetry_FeatureNameExtraction(t *testing.T) {
 
 			// Verify span was processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -536,33 +568,50 @@ func TestGenerateTelemetry_FeatureNameExtraction(t *testing.T) {
 
 func verifyCounterMetricValue(t *testing.T, metric *metricdata.Metrics, expectedValue int64) {
 	sum, ok := metric.Data.(metricdata.Sum[int64])
-	assert.True(t, ok, "Expected metric to be a Sum[int64]")
+	if !ok {
+		t.Errorf("Expected metric to be a Sum[int64], got %T", metric.Data)
+		return
+	}
 
-	assert.Len(t, sum.DataPoints, 1, "Expected exactly one data point")
-	if len(sum.DataPoints) > 0 {
-		assert.Equal(t, expectedValue, sum.DataPoints[0].Value, "Metric value mismatch")
+	if len(sum.DataPoints) != 1 {
+		t.Fatalf("got %d data points, want 1", len(sum.DataPoints))
+	}
+	if got, want := sum.DataPoints[0].Value, expectedValue; got != want {
+		t.Errorf("Metric value = %v, want %v", got, want)
 	}
 }
 
 func verifyHistogramMetricValue(t *testing.T, metric *metricdata.Metrics, expectedValue float64) {
 	// Try Int64Histogram first (for latency metrics)
 	if hist, ok := metric.Data.(metricdata.Histogram[int64]); ok {
-		assert.Len(t, hist.DataPoints, 1, "Expected exactly one data point")
+		if len(hist.DataPoints) != 1 {
+			t.Fatalf("got %d data points, want 1", len(hist.DataPoints))
+		}
 		if len(hist.DataPoints) > 0 {
 			dp := hist.DataPoints[0]
-			assert.Equal(t, int64(expectedValue), dp.Sum, "Histogram sum mismatch")
-			assert.Equal(t, uint64(1), dp.Count, "Histogram count should be 1")
+			if got, want := dp.Sum, int64(expectedValue); got != want {
+				t.Errorf("Histogram sum = %v, want %v", got, want)
+			}
+			if got, want := dp.Count, uint64(1); got != want {
+				t.Errorf("Histogram count = %v, want %v", got, want)
+			}
 		}
 		return
 	}
 
 	// Try Float64Histogram as fallback
 	if hist, ok := metric.Data.(metricdata.Histogram[float64]); ok {
-		assert.Len(t, hist.DataPoints, 1, "Expected exactly one data point")
+		if len(hist.DataPoints) != 1 {
+			t.Fatalf("got %d data points, want 1", len(hist.DataPoints))
+		}
 		if len(hist.DataPoints) > 0 {
 			dp := hist.DataPoints[0]
-			assert.Equal(t, expectedValue, dp.Sum, "Histogram sum mismatch")
-			assert.Equal(t, uint64(1), dp.Count, "Histogram count should be 1")
+			if got, want := dp.Sum, expectedValue; got != want {
+				t.Errorf("Histogram sum = %v, want %v", got, want)
+			}
+			if got, want := dp.Count, uint64(1); got != want {
+				t.Errorf("Histogram count = %v, want %v", got, want)
+			}
 		}
 		return
 	}

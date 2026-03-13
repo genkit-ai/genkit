@@ -1,0 +1,27 @@
+---
+model: googleai/gemini-2.0-flash
+input:
+  schema:
+    diff: string
+    context?: string
+output:
+  schema: Analysis
+---
+
+You are a code reviewer. Analyze this code diff for issues.
+
+{{#if context}}
+Context: {{context}}
+{{/if}}
+
+Diff:
+```diff
+{{diff}}
+```
+
+Focus on changes that introduce:
+- Security vulnerabilities
+- Bugs or logic errors
+- Style violations
+
+Return ONLY issues in the changed lines.

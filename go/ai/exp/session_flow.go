@@ -217,7 +217,7 @@ type SessionFlowFunc[Stream, State any] = func(ctx context.Context, resp Respond
 
 // SessionFlow is a bidirectional streaming flow with automatic snapshot management.
 type SessionFlow[Stream, State any] struct {
-	flow *core.Flow[*SessionFlowInput, *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream], *SessionFlowInit[State]]
+	flow *core.Flow[*SessionFlowInit[State], *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream], *SessionFlowInput]
 }
 
 // DefineSessionFlow creates an SessionFlow with automatic snapshot management and registers it.
@@ -239,11 +239,11 @@ func DefineSessionFlow[Stream, State any](
 
 	flow := core.DefineBidiFlow(r, name, func(
 		ctx context.Context,
-		init *SessionFlowInit[State],
+		in *SessionFlowInit[State],
 		inCh <-chan *SessionFlowInput,
 		outCh chan<- *SessionFlowStreamChunk[Stream],
 	) (*SessionFlowOutput[State], error) {
-		session, snapshot, err := newSessionFromInit(ctx, init, store)
+		session, snapshot, err := newSessionFromInit(ctx, in, store)
 		if err != nil {
 			return nil, err
 		}
@@ -576,6 +576,7 @@ func newSessionFromInit[State any](
 // of the iterator between turns does not cancel the underlying connection.
 type SessionFlowConnection[Stream, State any] struct {
 	conn *core.BidiConnection[*SessionFlowInput, *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream]]
+
 	// chunks buffers stream chunks from the underlying connection so that
 	// breaking from Receive() between turns doesn't cancel the context.
 	chunks   chan *SessionFlowStreamChunk[Stream]

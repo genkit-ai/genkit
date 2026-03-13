@@ -98,9 +98,9 @@ class ModelGardenPlugin(Plugin):
         if action_type != ActionKind.MODEL:
             return None
 
-        return self._create_model_action(name)
+        return await self._create_model_action(name)
 
-    def _create_model_action(self, name: str) -> Action:
+    async def _create_model_action(self, name: str) -> Action:
         """Create an Action object for a Model Garden Vertex AI model.
 
         Args:
@@ -149,6 +149,9 @@ class ModelGardenPlugin(Plugin):
             location=location,
             project_id=self.project_id,
         )
+
+        # Create the async client (offloads credential refresh to thread)
+        await model_proxy.create_client()
 
         # Get model info and handler
         model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(clean_name, {})

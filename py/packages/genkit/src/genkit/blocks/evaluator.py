@@ -22,11 +22,14 @@ model.
 """
 
 from collections.abc import Callable, Coroutine
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from genkit.core.action import ActionMetadata
+from genkit.core.action.types import ActionKind
+from genkit.core.schema import to_json_schema
 from genkit.core.typing import (
     BaseDataPoint,
     EvalFnResponse,
@@ -63,3 +66,25 @@ def evaluator_ref(name: str, config_schema: dict[str, object] | None = None) -> 
         An EvaluatorRef instance.
     """
     return EvaluatorRef(name=name, config_schema=config_schema)
+
+
+def evaluator_action_metadata(
+    name: str,
+    config_schema: type | dict[str, Any] | None = None,
+) -> ActionMetadata:
+    """Generates an ActionMetadata for evaluators.
+
+    Args:
+        name: Name of the evaluator.
+        config_schema: Optional schema for evaluator configuration.
+
+    Returns:
+        An ActionMetadata instance for the evaluator.
+    """
+    return ActionMetadata(
+        kind=cast(ActionKind, ActionKind.EVALUATOR),
+        name=name,
+        input_json_schema=to_json_schema(EvalRequest),
+        output_json_schema=to_json_schema(list[EvalFnResponse]),
+        metadata={'evaluator': {'customOptions': to_json_schema(config_schema) if config_schema else None}},
+    )

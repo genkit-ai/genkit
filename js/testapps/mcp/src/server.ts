@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { createMcpServer } from '@genkit-ai/mcp';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { genkit, z } from 'genkit/beta';

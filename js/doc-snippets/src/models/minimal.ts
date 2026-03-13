@@ -15,7 +15,7 @@
  */
 
 // [START minimal]
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 
 const ai = genkit({

@@ -53,6 +53,7 @@ from genkit.ai._aio import Genkit, Output
 
 # Core types for convenience (also available from genkit.types)
 from genkit.blocks.document import Document
+from genkit.blocks.interfaces import Input
 
 # Response types
 from genkit.blocks.model import GenerateResponseWrapper
@@ -79,20 +80,22 @@ extend_plugin_namespace()
 __all__ = [
     # Main class
     'Genkit',
+    'Input',
     'Output',
     # Response types
     'GenerateResponseWrapper',
+    'GenerateStreamResponse',
     # Errors
     'GenkitError',
     'UserFacingError',
     # Core types (convenience)
     'Document',
+    'Media',
+    'MediaPart',
     'Message',
     'Part',
     'Role',
     'TextPart',
-    'MediaPart',
-    'Media',
     # Plugin interface
     'Plugin',
     # From genkit.ai
@@ -100,7 +103,6 @@ __all__ = [
     'ActionRunContext',
     'ExecutablePrompt',
     'FlowWrapper',
-    'GenerateStreamResponse',
     'GenkitRegistry',
     'OutputOptions',
     'PromptGenerateOptions',
@@ -108,6 +110,7 @@ __all__ = [
     'SimpleRetrieverOptions',
     'ToolRunContext',
     'tool_response',
+    # Version info
     'GENKIT_CLIENT_HEADER',
     'GENKIT_VERSION',
 ]

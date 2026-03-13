@@ -28,6 +28,7 @@ from genkit.types import ModelInfo, Supports
 __all__ = ['SUPPORTED_XAI_MODELS', 'get_model_info']
 
 
+# Source: https://docs.x.ai/docs/models
 LANGUAGE_MODEL_SUPPORTS = Supports(
     multiturn=True,
     tools=True,
@@ -36,40 +37,90 @@ LANGUAGE_MODEL_SUPPORTS = Supports(
     output=['text', 'json'],
 )
 
+REASONING_MODEL_SUPPORTS = Supports(
+    multiturn=True,
+    tools=True,
+    media=False,
+    system_role=True,
+    output=['text', 'json'],
+)
+
+VISION_MODEL_SUPPORTS = Supports(
+    multiturn=False,
+    tools=True,
+    media=True,
+    system_role=False,
+    output=['text', 'json'],
+)
+
+# --- Grok 3 family (legacy) ---
 GROK_3 = ModelInfo(label='xAI - Grok 3', versions=['grok-3'], supports=LANGUAGE_MODEL_SUPPORTS)
 GROK_3_FAST = ModelInfo(label='xAI - Grok 3 Fast', versions=['grok-3-fast'], supports=LANGUAGE_MODEL_SUPPORTS)
 GROK_3_MINI = ModelInfo(label='xAI - Grok 3 Mini', versions=['grok-3-mini'], supports=LANGUAGE_MODEL_SUPPORTS)
 GROK_3_MINI_FAST = ModelInfo(
     label='xAI - Grok 3 Mini Fast', versions=['grok-3-mini-fast'], supports=LANGUAGE_MODEL_SUPPORTS
 )
-GROK_4 = ModelInfo(label='xAI - Grok 4', versions=['grok-4'], supports=LANGUAGE_MODEL_SUPPORTS)
+
+# --- Grok 4 family ---
+GROK_4 = ModelInfo(label='xAI - Grok 4', versions=['grok-4'], supports=REASONING_MODEL_SUPPORTS)
+GROK_4_FAST_REASONING = ModelInfo(
+    label='xAI - Grok 4 Fast (Reasoning)',
+    versions=['grok-4-fast-reasoning'],
+    supports=REASONING_MODEL_SUPPORTS,
+)
+GROK_4_FAST_NON_REASONING = ModelInfo(
+    label='xAI - Grok 4 Fast (Non-Reasoning)',
+    versions=['grok-4-fast-non-reasoning'],
+    supports=LANGUAGE_MODEL_SUPPORTS,
+)
+
+# --- Grok 4.1 family ---
+# NOTE: "grok-4.1" is an alias available only on the OpenAI-compatible REST API.
+# The native xai_sdk (gRPC) does not support this alias; use the explicit model IDs below.
+GROK_4_1_FAST_REASONING = ModelInfo(
+    label='xAI - Grok 4.1 Fast (Reasoning)',
+    versions=['grok-4-1-fast-reasoning'],
+    supports=REASONING_MODEL_SUPPORTS,
+)
+GROK_4_1_FAST_NON_REASONING = ModelInfo(
+    label='xAI - Grok 4.1 Fast (Non-Reasoning)',
+    versions=['grok-4-1-fast-non-reasoning'],
+    supports=LANGUAGE_MODEL_SUPPORTS,
+)
+
+# --- Specialist models ---
+GROK_CODE_FAST_1 = ModelInfo(
+    label='xAI - Grok Code Fast 1',
+    versions=['grok-code-fast-1'],
+    supports=LANGUAGE_MODEL_SUPPORTS,
+)
+
+# --- Vision models ---
 GROK_2_VISION_1212 = ModelInfo(
     label='xAI - Grok 2 Vision',
     versions=['grok-2-vision-1212'],
-    supports=Supports(
-        multiturn=False,
-        tools=True,
-        media=True,
-        system_role=False,
-        output=['text', 'json'],
-    ),
+    supports=VISION_MODEL_SUPPORTS,
 )
 
 
-# Enum for xAI Grok versions
 class XAIGrokVersion(StrEnum):
     """xAI Grok models.
 
-    Model Support:
+    Source: https://docs.x.ai/docs/models
 
-    | Model                | Description        | Status     |
-    |----------------------|--------------------|------------|
-    | `grok-3`             | Grok 3             | Supported  |
-    | `grok-3-fast`        | Grok 3 Fast        | Supported  |
-    | `grok-3-mini`        | Grok 3 Mini        | Supported  |
-    | `grok-3-mini-fast`   | Grok 3 Mini Fast   | Supported  |
-    | `grok-4`             | Grok 4             | Supported  |
-    | `grok-2-vision-1212` | Grok 2 Vision      | Supported  |
+    | Model                         | Description                    | Status     |
+    |-------------------------------|--------------------------------|------------|
+    | `grok-3`                      | Grok 3                         | Supported  |
+    | `grok-3-fast`                 | Grok 3 Fast                    | Supported  |
+    | `grok-3-mini`                 | Grok 3 Mini                    | Supported  |
+    | `grok-3-mini-fast`            | Grok 3 Mini Fast               | Supported  |
+    | `grok-4`                      | Grok 4 (reasoning)             | Supported  |
+    | `grok-4-fast-reasoning`       | Grok 4 Fast (reasoning)        | Supported  |
+    | `grok-4-fast-non-reasoning`   | Grok 4 Fast (non-reasoning)    | Supported  |
+    | `grok-4-1-fast-reasoning`     | Grok 4.1 Fast (reasoning)      | Supported  |
+    | `grok-4-1-fast-non-reasoning` | Grok 4.1 Fast (non-reasoning)  | Supported  |
+    | `grok-code-fast-1`            | Grok Code Fast 1 (coding)      | Supported  |
+    | `grok-2-vision-1212`          | Grok 2 Vision                  | Supported  |
     """
 
     GROK_3 = 'grok-3'
@@ -77,6 +128,11 @@ class XAIGrokVersion(StrEnum):
     GROK_3_MINI = 'grok-3-mini'
     GROK_3_MINI_FAST = 'grok-3-mini-fast'
     GROK_4 = 'grok-4'
+    GROK_4_FAST_REASONING = 'grok-4-fast-reasoning'
+    GROK_4_FAST_NON_REASONING = 'grok-4-fast-non-reasoning'
+    GROK_4_1_FAST_REASONING = 'grok-4-1-fast-reasoning'
+    GROK_4_1_FAST_NON_REASONING = 'grok-4-1-fast-non-reasoning'
+    GROK_CODE_FAST_1 = 'grok-code-fast-1'
     GROK_2_VISION_1212 = 'grok-2-vision-1212'
 
 
@@ -86,6 +142,11 @@ SUPPORTED_XAI_MODELS: dict[str, ModelInfo] = {
     XAIGrokVersion.GROK_3_MINI: GROK_3_MINI,
     XAIGrokVersion.GROK_3_MINI_FAST: GROK_3_MINI_FAST,
     XAIGrokVersion.GROK_4: GROK_4,
+    XAIGrokVersion.GROK_4_FAST_REASONING: GROK_4_FAST_REASONING,
+    XAIGrokVersion.GROK_4_FAST_NON_REASONING: GROK_4_FAST_NON_REASONING,
+    XAIGrokVersion.GROK_4_1_FAST_REASONING: GROK_4_1_FAST_REASONING,
+    XAIGrokVersion.GROK_4_1_FAST_NON_REASONING: GROK_4_1_FAST_NON_REASONING,
+    XAIGrokVersion.GROK_CODE_FAST_1: GROK_CODE_FAST_1,
     XAIGrokVersion.GROK_2_VISION_1212: GROK_2_VISION_1212,
 }
 

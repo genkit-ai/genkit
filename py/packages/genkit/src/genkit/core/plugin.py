@@ -196,7 +196,8 @@ class Plugin(abc.ABC):
         Returns:
             ModelReference: A reference to the model.
         """
-        from genkit.blocks.model import ModelReference
+        # Deferred import: avoid circular import with genkit.blocks.model
+        from genkit.blocks.model import ModelReference  # noqa: PLC0415
 
         target = name if '/' in name else f'{self.name}/{name}'
         return ModelReference(name=target)
@@ -212,7 +213,8 @@ class Plugin(abc.ABC):
         Returns:
             EmbedderRef: A reference to the embedder.
         """
-        from genkit.blocks.embedding import EmbedderRef
+        # Deferred import: avoid circular import with genkit.blocks.embedding
+        from genkit.blocks.embedding import EmbedderRef  # noqa: PLC0415
 
         target = name if '/' in name else f'{self.name}/{name}'
         return EmbedderRef(name=target)

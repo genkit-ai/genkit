@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+export { cancelOperation } from './cancel-operation.js';
 export { checkOperation } from './check-operation.js';
 export { Document, DocumentDataSchema, type DocumentData } from './document.js';
 export {

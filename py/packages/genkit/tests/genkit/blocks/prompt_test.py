@@ -20,6 +20,7 @@
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, Field
@@ -103,7 +104,7 @@ async def test_simple_prompt_with_override_config() -> None:
 
 @pytest.mark.asyncio
 async def test_prompt_with_system() -> None:
-    """Test that the propmt utilises both prompt and system prompt."""
+    """Test that the prompt utilises both prompt and system prompt."""
     ai, *_ = setup_test()
 
     want_txt = '[ECHO] system: "talk like a pirate" user: "hi"'
@@ -775,8 +776,8 @@ Hello {{name}}!
 
         # Verify the prompt is registered
         # File-based prompts are registered with an empty namespace by default
-        prompt_actions = ai.registry.get_actions_by_kind(ActionKind.PROMPT)
-        executable_prompt_actions = ai.registry.get_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
+        prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.PROMPT)
+        executable_prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
         assert 'test' in prompt_actions
         assert 'test' in executable_prompt_actions
 
@@ -787,8 +788,8 @@ async def test_automatic_prompt_loading_default_none() -> None:
     ai = Genkit(prompt_dir=None)
 
     # Check that no prompts are registered (assuming a clean environment)
-    prompt_actions = ai.registry.get_actions_by_kind(ActionKind.PROMPT)
-    executable_prompt_actions = ai.registry.get_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
+    prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.PROMPT)
+    executable_prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
     assert len(prompt_actions) == 0
     assert len(executable_prompt_actions) == 0
 
@@ -796,8 +797,6 @@ async def test_automatic_prompt_loading_default_none() -> None:
 @pytest.mark.asyncio
 async def test_automatic_prompt_loading_defaults_mock() -> None:
     """Test that Genkit defaults to ./prompts when prompt_dir is not specified and dir exists."""
-    from unittest.mock import ANY, MagicMock, patch
-
     with patch('genkit.ai._aio.load_prompt_folder') as mock_load, patch('genkit.ai._aio.Path') as mock_path:
         # Setup mock to simulate ./prompts existing
         mock_path_instance = MagicMock()
@@ -811,8 +810,6 @@ async def test_automatic_prompt_loading_defaults_mock() -> None:
 @pytest.mark.asyncio
 async def test_automatic_prompt_loading_defaults_missing() -> None:
     """Test that Genkit skips loading when ./prompts is missing."""
-    from unittest.mock import MagicMock, patch
-
     with patch('genkit.ai._aio.load_prompt_folder') as mock_load, patch('genkit.ai._aio.Path') as mock_path:
         # Setup mock to simulate ./prompts missing
         mock_path_instance = MagicMock()
@@ -821,3 +818,39 @@ async def test_automatic_prompt_loading_defaults_missing() -> None:
 
         Genkit()
         mock_load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_variant_prompt_loading_does_not_recurse() -> None:
+    """Regression: loading a .variant.prompt file must not cause infinite recursion.
+
+    Before the fix, create_prompt_from_file() called resolve_action_by_key()
+    on its own action key before setting _cached_prompt.  This triggered
+    _trigger_lazy_loading() which re-invoked create_prompt_from_file(),
+    recursing until RecursionError.
+    See https://github.com/firebase/genkit/issues/4491.
+    """
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+
+        # Base prompt
+        base = prompt_dir / 'recipe.prompt'
+        base.write_text('---\nmodel: echoModel\n---\nMake a recipe for {{food}}.')
+
+        # Variant prompt (this was the trigger for the visible failure)
+        variant = prompt_dir / 'recipe.robot.prompt'
+        variant.write_text('---\nmodel: echoModel\n---\nYou are a robot chef. Make a recipe for {{food}}.')
+
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        # Should resolve without RecursionError
+        base_exec = await prompt(ai.registry, 'recipe')
+        base_response = await base_exec({'food': 'pizza'})
+        assert 'pizza' in base_response.text
+
+        robot_exec = await prompt(ai.registry, 'recipe', variant='robot')
+        robot_response = await robot_exec({'food': 'pizza'})
+        assert 'pizza' in robot_response.text

@@ -25,7 +25,6 @@
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
-    "@genkit-ai/googleai": "workspace:*",
     "@genkit-ai/mcp": "workspace:*",
     "@genkit-ai/next": "workspace:^",
     "@genkit-ai/vertexai": "workspace:*",

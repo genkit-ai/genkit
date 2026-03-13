@@ -17,8 +17,8 @@
 
 """Tests for the Gemini model implementation."""
 
+import base64
 import sys
-import urllib.request
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if sys.version_info < (3, 11):
@@ -209,8 +209,12 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
 
     assert content.root.media.content_type == response_mimetype
 
-    with urllib.request.urlopen(content.root.media.url) as response:
-        assert response.read() == response_byte_string
+    # Verify the data URL contains the correct base64-encoded content
+    # Data URLs have format: data:<mimetype>;base64,<data>
+    data_url = content.root.media.url
+    assert data_url.startswith(f'data:{response_mimetype};base64,')
+    encoded_data = data_url.split(',', 1)[1]
+    assert base64.b64decode(encoded_data) == response_byte_string
 
 
 def test_convert_schema_property(mocker: MockerFixture) -> None:
@@ -292,7 +296,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     """Test Generate using system instructions."""
     response_text = 'request answer'
     request_text = 'response question'
-    system_instruction = 'system instruciton text'
+    system_instruction = 'system instruction text'
     version = GoogleAIGeminiVersion.GEMINI_2_0_FLASH
 
     request = GenerateRequest(

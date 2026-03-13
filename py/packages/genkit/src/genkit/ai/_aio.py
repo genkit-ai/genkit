@@ -33,7 +33,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import Any, TypeVar, cast, overload  # noqa: F401
+from typing import Any, TypeVar, cast, overload
 
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
@@ -51,7 +51,7 @@ from genkit.blocks.generate import (
     StreamingCallback as ModelStreamingCallback,
     generate_action,
 )
-from genkit.blocks.interfaces import Input as _Input, Output, OutputConfigDict
+from genkit.blocks.interfaces import Output, OutputConfigDict
 from genkit.blocks.model import (
     GenerateResponseChunkWrapper,
     GenerateResponseWrapper,
@@ -61,6 +61,7 @@ from genkit.blocks.prompt import PromptConfig, load_prompt_folder, to_generate_a
 from genkit.blocks.retriever import IndexerRef, IndexerRequest, RetrieverRef
 from genkit.core.action import Action, ActionRunContext
 from genkit.core.action.types import ActionKind
+from genkit.core.error import GenkitError
 from genkit.core.plugin import Plugin
 from genkit.core.tracing import run_in_new_span
 from genkit.core.typing import (
@@ -87,9 +88,6 @@ from ._base_async import GenkitBase
 from ._server import ServerSpec
 
 T = TypeVar('T')
-Input = _Input
-
-
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
 
@@ -676,10 +674,7 @@ class Genkit(GenkitBase):
         if content is None:
             raise ValueError('Content must be specified for embedding.')
 
-        if isinstance(content, str):
-            documents = [Document.from_text(content, metadata)]
-        else:
-            documents = [content]
+        documents = [Document.from_text(content, metadata)] if isinstance(content, str) else [content]
 
         # Document subclasses DocumentData, so this is type-safe at runtime.
         # list is invariant so list[Document] isn't assignable to list[DocumentData]
@@ -1100,8 +1095,6 @@ class Genkit(GenkitBase):
             >>> # Access result
             >>> print(operation.output)
         """
-        from genkit.core.error import GenkitError
-
         # Resolve the model and check for long_running support
         resolved_model = model or self.registry.default_model
         if not resolved_model:

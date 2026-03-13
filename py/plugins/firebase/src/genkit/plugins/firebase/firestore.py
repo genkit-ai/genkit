@@ -63,7 +63,7 @@ def define_firestore_vector_store(
     Args:
         ai: The Genkit instance to register the retriever with.
         name: Name of the retriever.
-        embedder: The embedder to use (e.g., 'vertexai/text-embedding-004').
+        embedder: The embedder to use (e.g., 'vertexai/gemini-embedding-001').
         embedder_options: Optional configuration to pass to the embedder.
         collection: The name of the Firestore collection to query.
         vector_field: The name of the field containing the vector embeddings.

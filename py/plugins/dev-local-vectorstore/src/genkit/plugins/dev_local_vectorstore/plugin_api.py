@@ -46,7 +46,7 @@ def define_dev_local_vector_store(
     Args:
         ai: The Genkit instance to register the retriever and indexer with.
         name: Name of the retriever and indexer.
-        embedder: The embedder to use (e.g., 'vertexai/text-embedding-004').
+        embedder: The embedder to use (e.g., 'vertexai/gemini-embedding-001').
         embedder_options: Optional configuration to pass to the embedder.
 
     Returns:

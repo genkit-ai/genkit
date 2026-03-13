@@ -18,13 +18,16 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from genkit.plugins.vertex_ai.model_garden.client import OpenAIClient
 
 
+@pytest.mark.asyncio
 @patch('google.auth.default')
 @patch('google.auth.transport.requests.Request')
-@patch('openai.OpenAI')
-def test_client_initialization_with_explicit_project_id(
+@patch('genkit.plugins.vertex_ai.model_garden.client._AsyncOpenAI')
+async def test_client_initialization_with_explicit_project_id(
     mock_openai_cls: MagicMock, mock_request_cls: MagicMock, mock_default_auth: MagicMock
 ) -> None:
     """Unittests for init client."""
@@ -37,7 +40,7 @@ def test_client_initialization_with_explicit_project_id(
 
     mock_default_auth.return_value = (mock_credentials, 'project_id')
 
-    client_instance = OpenAIClient(location=mock_location, project_id=mock_project_id)
+    client_instance = await OpenAIClient.create(location=mock_location, project_id=mock_project_id)
 
     mock_default_auth.assert_called_once()
     mock_credentials.refresh.assert_called_once()
@@ -46,10 +49,11 @@ def test_client_initialization_with_explicit_project_id(
     assert client_instance is not None
 
 
+@pytest.mark.asyncio
 @patch('google.auth.default')
 @patch('google.auth.transport.requests.Request')
-@patch('openai.OpenAI')
-def test_client_initialization_without_explicit_project_id(
+@patch('genkit.plugins.vertex_ai.model_garden.client._AsyncOpenAI')
+async def test_client_initialization_without_explicit_project_id(
     mock_openai_cls: MagicMock, mock_request_cls: MagicMock, mock_default_auth: MagicMock
 ) -> None:
     """Unittests for init client."""
@@ -61,7 +65,7 @@ def test_client_initialization_without_explicit_project_id(
 
     mock_default_auth.return_value = (mock_credentials, 'project_id')
 
-    client_instance = OpenAIClient(
+    client_instance = await OpenAIClient.create(
         location=mock_location,
     )
 

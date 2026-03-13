@@ -30,6 +30,8 @@ try:
 except ImportError:
     psutil = None  # type: ignore[assignment]
 
+import pathlib
+
 from ._server import ServerConfig
 
 # TODO(#4354): OpenTelemetry integration
@@ -76,7 +78,7 @@ def _get_process_info() -> dict[str, Any]:
         A dictionary containing process information.
     """
     info = {
-        'cwd': os.getcwd(),
+        'cwd': pathlib.Path.cwd(),
         'pid': os.getpid(),
         'argv': sys.argv,
         'executable': sys.executable,
@@ -288,9 +290,9 @@ def _get_deps_info() -> dict[str, Any]:
                         for req in requires:
                             if current_module in req.lower():
                                 module_deps[pkg_name] = packages[pkg_name]
-                except Exception:
+                except Exception:  # noqa: S110 - best-effort dependency discovery
                     pass
-        except Exception:
+        except Exception:  # noqa: S110 - best-effort module info gathering
             pass
 
         return {

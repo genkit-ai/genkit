@@ -70,9 +70,6 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		if gOpts.PromptDir != "" {
 			return errors.New("cannot set prompt directory more than once (WithPromptDir)")
 		}
-		if gOpts.PromptFS != nil {
-			return errors.New("cannot use WithPromptDir together with WithPromptFS")
-		}
 		gOpts.PromptDir = o.PromptDir
 	}
 
@@ -80,11 +77,7 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		if gOpts.PromptFS != nil {
 			return errors.New("cannot set prompt filesystem more than once (WithPromptFS)")
 		}
-		if gOpts.PromptDir != "" {
-			return errors.New("cannot use WithPromptFS together with WithPromptDir")
-		}
 		gOpts.PromptFS = o.PromptFS
-		gOpts.PromptDir = o.PromptDir
 	}
 
 	if len(o.Plugins) > 0 {
@@ -363,14 +356,15 @@ func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.St
 // DefineBidiFlow defines a bidirectional streaming flow, registers it as a [core.Action] of type Flow,
 // and returns a [core.Flow] capable of bidirectional streaming.
 //
-// The provided function `fn` receives initialization data of type `Init`, reads
-// inputs of type `In` from an input channel, and writes streamed outputs of type
-// `Stream` to an output channel. It returns a final output of type `Out` when complete.
+// The provided function `fn` receives an initial input of type `In`, reads
+// incoming stream messages of type `StreamIn` from an input channel, and writes
+// outgoing stream messages of type `StreamOut` to an output channel. It returns
+// a final output of type `Out` when complete.
 //
 // Example:
 //
 //	chatFlow := genkit.DefineBidiFlow(g, "chat",
-//		func(ctx context.Context, init struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+//		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
 //			var count int
 //			for input := range inCh {
 //				count++
@@ -404,7 +398,7 @@ func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.St
 //	// Get the final output:
 //	output, err := conn.Output()
 //	fmt.Println(output) // Output: "processed 2 messages"
-func DefineBidiFlow[In, Out, Stream, Init any](g *Genkit, name string, fn core.BidiFunc[In, Out, Stream, Init]) *core.Flow[In, Out, Stream, Init] {
+func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn core.BidiFunc[In, Out, StreamOut, StreamIn]) *core.Flow[In, Out, StreamOut, StreamIn] {
 	return core.DefineBidiFlow(g.reg, name, fn)
 }
 

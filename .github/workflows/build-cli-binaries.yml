@@ -146,20 +146,26 @@ jobs:
         shell: bash
         run: |
           echo "Testing genkit --help"
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} --help
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} --help
+        env:
+          STEPS_BINARY_OUTPUTS_EXT: ${{ steps.binary.outputs.ext }}
       
       - name: Test --version command
         shell: bash
         run: |
           echo "Testing genkit --version"
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} --version
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} --version
+        env:
+          STEPS_BINARY_OUTPUTS_EXT: ${{ steps.binary.outputs.ext }}
       
       - name: Verify UI commands exist
         shell: bash
         run: |
           echo "Verifying UI commands are available"
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} ui:start --help
-          ./genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }} ui:stop --help
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} ui:start --help
+          ./genkit-${{ matrix.target }}${STEPS_BINARY_OUTPUTS_EXT} ui:stop --help
+        env:
+          STEPS_BINARY_OUTPUTS_EXT: ${{ steps.binary.outputs.ext }}
       
       - name: Test UI start functionality (Unix only)
         if: runner.os != 'Windows'

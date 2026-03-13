@@ -17,7 +17,7 @@
 
 """Tests for the Imagen model implementation."""
 
-import urllib.request
+import base64
 
 import pytest
 from google import genai
@@ -81,5 +81,9 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
 
     assert content.root.media.content_type == response_mimetype
 
-    with urllib.request.urlopen(content.root.media.url) as response:
-        assert response.read() == response_byte_string
+    # Verify the data URL contains the correct base64-encoded content
+    # Data URLs have format: data:<mimetype>;base64,<data>
+    data_url = content.root.media.url
+    assert data_url.startswith(f'data:{response_mimetype};base64,')
+    encoded_data = data_url.split(',', 1)[1]
+    assert base64.b64decode(encoded_data) == response_byte_string

@@ -48,7 +48,9 @@ if [[ $CI_ENABLED == "true" ]] && [[ -f $TYPING_FILE ]]; then
 fi
 
 # Generate types using configuration from pyproject.toml.
-uv run --directory "${TOP_DIR}/py" datamodel-codegen \
+# Use --active to respect the currently active Python environment (from CI matrix)
+# instead of the .python-version file.
+uv run --active --directory "${TOP_DIR}/py" datamodel-codegen \
   --formatters=ruff-check \
   --formatters=ruff-format
 
@@ -56,11 +58,11 @@ uv run --directory "${TOP_DIR}/py" datamodel-codegen \
 python3 "${TOP_DIR}/py/bin/sanitize_schema_typing.py" "${TYPING_FILE}"
 
 # Checks and formatting.
-uv run --directory "${TOP_DIR}/py" \
+uv run --active --directory "${TOP_DIR}/py" \
   ruff format "${TOP_DIR}"
-uv run --directory "${TOP_DIR}/py" \
+uv run --active --directory "${TOP_DIR}/py" \
   ruff check --fix "${TYPING_FILE}"
-uv run --directory "${TOP_DIR}/py" \
+uv run --active --directory "${TOP_DIR}/py" \
   ruff format "${TOP_DIR}"
 
 # We want to detect and raise an error when this file changes in our hooks or in

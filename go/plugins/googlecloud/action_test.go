@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -64,14 +63,24 @@ func TestActionTelemetry_PipelineIntegration(t *testing.T) {
 	logOutput := logBuf.String()
 
 	// Verify action telemetry worked
-	assert.Contains(t, logOutput, "Input[testFlow > testTool, testFlow]")
-	assert.Contains(t, logOutput, "Output[testFlow > testTool, testFlow]")
-	assert.Contains(t, logOutput, "test input data")
-	assert.Contains(t, logOutput, "test output data")
+	if !strings.Contains(logOutput, "Input[testFlow > testTool, testFlow]") {
+		t.Error("logOutput should contain \"Input[testFlow > testTool, testFlow]\"")
+	}
+	if !strings.Contains(logOutput, "Output[testFlow > testTool, testFlow]") {
+		t.Error("logOutput should contain \"Output[testFlow > testTool, testFlow]\"")
+	}
+	if !strings.Contains(logOutput, "test input data") {
+		t.Error("logOutput should contain \"test input data\"")
+	}
+	if !strings.Contains(logOutput, "test output data") {
+		t.Error("logOutput should contain \"test output data\"")
+	}
 
 	// Verify the span was exported
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 }
 
 func TestActionTelemetry_FilteringLogic(t *testing.T) {
@@ -191,16 +200,26 @@ func TestActionTelemetry_FilteringLogic(t *testing.T) {
 
 			// Verify processing behavior
 			if tc.expectProcessing {
-				assert.Contains(t, logOutput, tc.expectedInputLog, "Expected input log")
-				assert.Contains(t, logOutput, tc.expectedOutputLog, "Expected output log")
+				if !strings.Contains(logOutput, tc.expectedInputLog) {
+					t.Errorf("Expected input log containing %q but got: %q", tc.expectedInputLog, logOutput)
+				}
+				if !strings.Contains(logOutput, tc.expectedOutputLog) {
+					t.Errorf("Expected output log containing %q but got: %q", tc.expectedOutputLog, logOutput)
+				}
 			} else {
-				assert.NotContains(t, logOutput, "Input[", "Should not have input logs")
-				assert.NotContains(t, logOutput, "Output[", "Should not have output logs")
+				if strings.Contains(logOutput, "Input[") {
+					t.Error("Should not have input logs")
+				}
+				if strings.Contains(logOutput, "Output[") {
+					t.Error("Should not have output logs")
+				}
 			}
 
 			// Verify span was processed regardless
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -350,32 +369,50 @@ func TestActionTelemetry_LoggingBehavior(t *testing.T) {
 
 			// Verify logging behavior
 			if tc.expectInputLog {
-				assert.Contains(t, logOutput, tc.expectedInputLog, "Expected input log header")
+				if !strings.Contains(logOutput, tc.expectedInputLog) {
+					t.Errorf("Expected input log header %q but got: %q", tc.expectedInputLog, logOutput)
+				}
 				if tc.expectedInputContent != "" {
-					assert.Contains(t, logOutput, tc.expectedInputContent, "Expected input content in logs")
+					if !strings.Contains(logOutput, tc.expectedInputContent) {
+						t.Errorf("Expected input content %q in logs", tc.expectedInputContent)
+					}
 				}
 			} else {
-				assert.NotContains(t, logOutput, "Input[", "Should not have input log")
+				if strings.Contains(logOutput, "Input[") {
+					t.Error("Should not have input log")
+				}
 				if tc.expectedInputContent != "" {
-					assert.NotContains(t, logOutput, tc.expectedInputContent, "Should not have input content in logs")
+					if strings.Contains(logOutput, tc.expectedInputContent) {
+						t.Errorf("Should not have input content %q in logs", tc.expectedInputContent)
+					}
 				}
 			}
 
 			if tc.expectOutputLog {
-				assert.Contains(t, logOutput, tc.expectedOutputLog, "Expected output log header")
+				if !strings.Contains(logOutput, tc.expectedOutputLog) {
+					t.Errorf("Expected output log header %q but got: %q", tc.expectedOutputLog, logOutput)
+				}
 				if tc.expectedOutputContent != "" {
-					assert.Contains(t, logOutput, tc.expectedOutputContent, "Expected output content in logs")
+					if !strings.Contains(logOutput, tc.expectedOutputContent) {
+						t.Errorf("Expected output content %q in logs", tc.expectedOutputContent)
+					}
 				}
 			} else {
-				assert.NotContains(t, logOutput, "Output[", "Should not have output log")
+				if strings.Contains(logOutput, "Output[") {
+					t.Error("Should not have output log")
+				}
 				if tc.expectedOutputContent != "" {
-					assert.NotContains(t, logOutput, tc.expectedOutputContent, "Should not have output content in logs")
+					if strings.Contains(logOutput, tc.expectedOutputContent) {
+						t.Errorf("Should not have output content %q in logs", tc.expectedOutputContent)
+					}
 				}
 			}
 
 			// Verify span was processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -474,11 +511,15 @@ func TestActionTelemetry_FeatureNameExtraction(t *testing.T) {
 			logOutput := logBuf.String()
 
 			// Verify feature name extraction worked correctly
-			assert.Contains(t, logOutput, tc.expectedLog, "Expected log with correct feature name")
+			if !strings.Contains(logOutput, tc.expectedLog) {
+				t.Errorf("Expected log with correct feature name %q but got: %q", tc.expectedLog, logOutput)
+			}
 
 			// Verify span was processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -585,12 +626,16 @@ func TestActionTelemetry_EdgeCases(t *testing.T) {
 
 			// Verify logging behavior
 			if tc.expectLogs {
-				assert.Contains(t, logOutput, tc.expectedLog, "Expected log content")
+				if !strings.Contains(logOutput, tc.expectedLog) {
+					t.Errorf("Expected log content %q but got: %q", tc.expectedLog, logOutput)
+				}
 			}
 
 			// Verify span was processed
 			spans := f.waitAndGetSpans()
-			assert.Len(t, spans, 1)
+			if len(spans) != 1 {
+				t.Errorf("got %d spans, want 1", len(spans))
+			}
 		})
 	}
 }
@@ -647,16 +692,24 @@ func TestActionTelemetry_InputTruncation(t *testing.T) {
 	logOutput := logBuf.String()
 
 	// Verify the log header appears
-	assert.Contains(t, logOutput, "Input[testFlow > myTool, testFlow]", "Expected input log header")
+	if !strings.Contains(logOutput, "Input[testFlow > myTool, testFlow]") {
+		t.Error("Expected input log header \"Input[testFlow > myTool, testFlow]\"")
+	}
 
 	// Simple verification: check that the original input is not entirely present in logs
 	// If truncation worked, the full 130k character string should not appear in logs
-	assert.NotContains(t, logOutput, longInput, "Full long input should not appear in logs (should be truncated)")
+	if strings.Contains(logOutput, longInput) {
+		t.Error("Full long input should not appear in logs (should be truncated)")
+	}
 
 	// Verify that some of the content appears (the beginning should be preserved)
-	assert.Contains(t, logOutput, "AAAAAAAAAA", "Beginning of input should appear in logs")
+	if !strings.Contains(logOutput, "AAAAAAAAAA") {
+		t.Error("Beginning of input should appear in logs")
+	}
 
 	// Verify spans were processed
 	spans := f.waitAndGetSpans()
-	assert.Len(t, spans, 1)
+	if len(spans) != 1 {
+		t.Errorf("got %d spans, want 1", len(spans))
+	}
 }

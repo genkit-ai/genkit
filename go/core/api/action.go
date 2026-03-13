@@ -75,7 +75,7 @@ type ActionDesc struct {
 	Description  string         `json:"description"`            // Description of the action.
 	InputSchema  map[string]any `json:"inputSchema"`            // JSON schema to validate against the action's input.
 	OutputSchema map[string]any `json:"outputSchema"`           // JSON schema to validate against the action's output.
-	StreamSchema map[string]any `json:"streamSchema,omitempty"` // JSON schema to validate against the action's streamed chunks.
-	InitSchema   map[string]any `json:"initSchema,omitempty"`   // JSON schema to validate against the action's initialization data.
+	StreamOutSchema map[string]any `json:"streamOutSchema,omitempty"` // JSON schema to validate against the action's outgoing streamed chunks.
+	StreamInSchema  map[string]any `json:"streamInSchema,omitempty"`  // JSON schema to validate against the action's incoming stream messages (bidi only).
 	Metadata     map[string]any `json:"metadata"`               // Metadata for the action.
 }

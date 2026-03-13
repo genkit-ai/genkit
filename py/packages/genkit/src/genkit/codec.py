@@ -83,11 +83,32 @@ def dump_dict(obj: object, fallback: Callable[[object], object] | None = None) -
     Returns:
         A dictionary if the input is a Pydantic BaseModel, otherwise the
         original object.
+
+    Raises:
+        ValueError: If a circular reference is detected.
     """
-    if isinstance(obj, BaseModel):
-        return obj.model_dump(exclude_none=True, by_alias=True, fallback=fallback)
-    else:
-        return obj
+
+    def _dump(o: object, seen: set[int]) -> object:
+        if isinstance(o, (list, dict)):
+            obj_id = id(o)
+            if obj_id in seen:
+                raise ValueError('Circular reference detected')
+            seen.add(obj_id)
+
+        try:
+            if isinstance(o, BaseModel):
+                return o.model_dump(exclude_none=True, by_alias=True, fallback=fallback)
+            elif isinstance(o, list):
+                return [_dump(i, seen) for i in o]
+            elif isinstance(o, dict):
+                return {k: _dump(v, seen) for k, v in o.items()}
+            else:
+                return o
+        finally:
+            if isinstance(o, (list, dict)):
+                seen.remove(id(o))
+
+    return _dump(obj, set())
 
 
 def default_serializer(obj: object) -> object:

@@ -19,11 +19,11 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/stretchr/testify/assert"
 )
 
 type fakeEmbedder struct {
@@ -48,7 +48,9 @@ func (f *fakeEmbedder) Register(r api.Registry) {
 
 func TestVectorsearch_Name(t *testing.T) {
 	v := &VertexAIVectorSearch{}
-	assert.Equal(t, vectorsearchProvider, v.Name())
+	if got, want := v.Name(), vectorsearchProvider; got != want {
+		t.Errorf("Name() = %q, want %q", got, want)
+	}
 }
 
 // ---------- tests: Init ----------
@@ -56,10 +58,12 @@ func TestVectorsearch_Name(t *testing.T) {
 func TestInit_AlreadyInitialized(t *testing.T) {
 	v := &VertexAIVectorSearch{initted: true}
 
-	// Use assert.Panics to check for panic
-	assert.Panics(t, func() {
-		v.Init(context.Background())
-	}, "Expected Init to panic when the plugin is already initialized")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected Init to panic when the plugin is already initialized")
+		}
+	}()
+	v.Init(context.Background())
 }
 
 func TestInit_MissingProjectID_Panics(t *testing.T) {
@@ -86,10 +90,12 @@ func TestInit_MissingProjectID_Panics(t *testing.T) {
 
 	v := &VertexAIVectorSearch{}
 
-	// Use assert.Panics to check for panic
-	assert.Panics(t, func() {
-		v.Init(context.Background())
-	}, "Expected Init to panic when GOOGLE_CLOUD_PROJECT is not set")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected Init to panic when GOOGLE_CLOUD_PROJECT is not set")
+		}
+	}()
+	v.Init(context.Background())
 }
 
 func TestInit_MissingLocation_Panics(t *testing.T) {
@@ -102,16 +108,20 @@ func TestInit_MissingLocation_Panics(t *testing.T) {
 
 	v := &VertexAIVectorSearch{}
 
-	// Use assert.Panics to check for panic
-	assert.Panics(t, func() {
-		v.Init(context.Background())
-	}, "Expected Init to panic when GOOGLE_CLOUD_LOCATION is not set")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected Init to panic when GOOGLE_CLOUD_LOCATION is not set")
+		}
+	}()
+	v.Init(context.Background())
 }
 
 func setEnv(t *testing.T, k, v string) func() {
 	t.Helper()
 	old, had := os.LookupEnv(k)
-	assert.NoError(t, os.Setenv(k, v))
+	if err := os.Setenv(k, v); err != nil {
+		t.Fatal(err)
+	}
 	return func() {
 		if had {
 			_ = os.Setenv(k, old)
@@ -145,12 +155,18 @@ func TestRetrieve_Success(t *testing.T) {
 	v := newVSWithToken("tok123", nil)
 	findNeighborsJSON := `{"nearestNeighbors":[{"neighbors":[{"datapoint":{"datapointId":"doc-1"},"distance":0.4}]}]}`
 	withTransport(t, rtFunc(func(r *http.Request) (*http.Response, error) {
-		assert.Equal(t, "Bearer tok123", r.Header.Get("Authorization"))
+		if got, want := r.Header.Get("Authorization"), "Bearer tok123"; got != want {
+			t.Errorf("Authorization header = %q, want %q", got, want)
+		}
 		return newHTTPResponse(http.StatusOK, findNeighborsJSON), nil
 	}), func() {
 		docRetriever := func(ctx context.Context, neighbors []Neighbor, options any) ([]*ai.Document, error) {
-			assert.Len(t, neighbors, 1)
-			assert.Equal(t, "doc-1", neighbors[0].Datapoint.DatapointId)
+			if len(neighbors) != 1 {
+				t.Errorf("len(neighbors) = %d, want 1", len(neighbors))
+			}
+			if got, want := neighbors[0].Datapoint.DatapointId, "doc-1"; got != want {
+				t.Errorf("datapointId = %q, want %q", got, want)
+			}
 			return []*ai.Document{{Content: []*ai.Part{{Text: "Hello"}}}}, nil
 		}
 
@@ -168,9 +184,15 @@ func TestRetrieve_Success(t *testing.T) {
 		}
 
 		resp, err := v.Retrieve(context.Background(), req)
-		assert.NoError(t, err)
-		assert.NotNil(t, resp)
-		assert.Equal(t, "Hello", resp.Documents[0].Content[0].Text)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if resp == nil {
+			t.Fatal("expected response, got nil")
+		}
+		if got, want := resp.Documents[0].Content[0].Text, "Hello"; got != want {
+			t.Errorf("document content = %q, want %q", got, want)
+		}
 	})
 }
 
@@ -186,8 +208,12 @@ func TestRetrieve_EmbedderError(t *testing.T) {
 		},
 	}
 	_, err := v.Retrieve(context.Background(), req)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error generating embedding for query")
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if want := "error generating embedding for query"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), want)
+	}
 }
 
 func TestRetrieve_NoEmbeddings(t *testing.T) {
@@ -202,8 +228,12 @@ func TestRetrieve_NoEmbeddings(t *testing.T) {
 		},
 	}
 	_, err := v.Retrieve(context.Background(), req)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no embeddings generated for query")
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if want := "no embeddings generated for query"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), want)
+	}
 }
 
 func TestRetrieve_NoNeighborsReturnsNil(t *testing.T) {
@@ -223,7 +253,11 @@ func TestRetrieve_NoNeighborsReturnsNil(t *testing.T) {
 			},
 		}
 		resp, err := v.Retrieve(context.Background(), req)
-		assert.NoError(t, err)
-		assert.Nil(t, resp)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if resp != nil {
+			t.Errorf("Retrieve() resp = %v, want nil", resp)
+		}
 	})
 }

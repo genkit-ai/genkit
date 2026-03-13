@@ -139,7 +139,7 @@ const ai = genkit({
 });
 
 const embeddings = await ai.embed({
-  embedder: googleAI.embedder('text-embedding-004'),
+  embedder: googleAI.embedder('gemini-embedding-001'),
   content: 'Embed this text.',
 });
 ```

@@ -34,31 +34,34 @@ import (
 // Func is an alias for non-streaming functions with input of type In and output of type Out.
 type Func[In, Out any] = func(context.Context, In) (Out, error)
 
-// StreamingFunc is an alias for streaming functions with input of type In, output of type Out, and streaming chunk of type Stream.
-type StreamingFunc[In, Out, Stream any] = func(context.Context, In, StreamCallback[Stream]) (Out, error)
+// StreamingFunc is an alias for streaming functions with input of type In, output of type Out, and outgoing stream chunk of type StreamOut.
+type StreamingFunc[In, Out, StreamOut any] = func(context.Context, In, StreamCallback[StreamOut]) (Out, error)
 
-// StreamCallback is a function that is called during streaming to return the next chunk of the stream.
-type StreamCallback[Stream any] = func(context.Context, Stream) error
+// StreamCallback is a function that is called during streaming to return the next chunk of the outgoing stream.
+type StreamCallback[StreamOut any] = func(context.Context, StreamOut) error
 
 // BidiFunc is the function signature for bidirectional streaming actions.
-// It receives initialization data, reads inputs from inCh, and writes
-// streamed outputs to outCh. It returns a final output when complete.
-type BidiFunc[In, Out, Stream, Init any] = func(ctx context.Context, init Init, inCh <-chan In, outCh chan<- Stream) (Out, error)
+// It receives an initial input, reads incoming stream messages from inCh,
+// and writes outgoing stream messages to outCh. It returns a final output when complete.
+type BidiFunc[In, Out, StreamOut, StreamIn any] = func(ctx context.Context, in In, inCh <-chan StreamIn, outCh chan<- StreamOut) (Out, error)
 
 // An Action is a named, observable operation that underlies all Genkit primitives.
-// It consists of a function that takes an input of type I and returns an output
-// of type O, optionally streaming values of type S incrementally by invoking a callback.
+// It consists of a function that takes an input of type In and returns an output
+// of type Out, optionally streaming values of type StreamOut incrementally by
+// invoking a callback. For bidirectional actions, StreamIn is the type of
+// incoming stream messages.
+//
 // It optionally has other metadata, like a description and JSON Schemas for its input and
 // output which it validates against.
 //
 // Each time an Action is run, it results in a new trace span.
 //
 // For internal use only.
-type Action[In, Out, Stream, Init any] struct {
-	fn       StreamingFunc[In, Out, Stream]  // Function that is called during runtime. May not actually support streaming.
-	bidiFn   BidiFunc[In, Out, Stream, Init] // Non-nil for bidi actions only.
-	desc     *api.ActionDesc                 // Descriptor of the action.
-	registry api.Registry                    // Registry for schema resolution. Set when registered.
+type Action[In, Out, StreamOut, StreamIn any] struct {
+	fn       StreamingFunc[In, Out, StreamOut]      // Function that is called during runtime. May not actually support streaming.
+	bidiFn   BidiFunc[In, Out, StreamOut, StreamIn] // Non-nil for bidi actions only.
+	desc     *api.ActionDesc                        // Descriptor of the action.
+	registry api.Registry                           // Registry for schema resolution. Set when registered.
 }
 
 type noStream = func(context.Context, struct{}) error
@@ -80,32 +83,32 @@ func NewAction[In, Out any](
 
 // NewStreamingAction creates a new streaming [Action] without registering it.
 // If inputSchema is nil, it is inferred from the function's input api.
-func NewStreamingAction[In, Out, Stream any](
+func NewStreamingAction[In, Out, StreamOut any](
 	name string,
 	atype api.ActionType,
 	metadata map[string]any,
 	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream, struct{}] {
-	return newAction[In, Out, Stream, struct{}](name, atype, metadata, inputSchema, fn)
+	fn StreamingFunc[In, Out, StreamOut],
+) *Action[In, Out, StreamOut, struct{}] {
+	return newAction[In, Out, StreamOut, struct{}](name, atype, metadata, inputSchema, fn)
 }
 
 // ActionOptions configures a bidi action. Nil schema fields are inferred from type parameters.
 type ActionOptions struct {
-	Metadata     map[string]any // Arbitrary key-value data attached to the action descriptor.
-	InputSchema  map[string]any // JSON schema for the action's input. Inferred from In if nil.
-	OutputSchema map[string]any // JSON schema for the action's output. Inferred from Out if nil.
-	StreamSchema map[string]any // JSON schema for streamed chunks. Inferred from Stream if nil. Not used for non-streaming actions.
-	InitSchema   map[string]any // JSON schema for bidi initialization data. Inferred from Init if nil. Not used for non-bidi actions.
+	Metadata        map[string]any // Arbitrary key-value data attached to the action descriptor.
+	InputSchema     map[string]any // JSON schema for the action's input. Inferred from In if nil.
+	OutputSchema    map[string]any // JSON schema for the action's output. Inferred from Out if nil.
+	StreamOutSchema map[string]any // JSON schema for outgoing streamed chunks. Inferred from StreamOut if nil. Not used for non-streaming actions.
+	StreamInSchema  map[string]any // JSON schema for incoming stream messages. Inferred from StreamIn if nil. Not used for non-bidi actions.
 }
 
 // NewBidiAction creates a new bidirectional streaming [Action] without registering it.
-func NewBidiAction[In, Out, Stream, Init any](
+func NewBidiAction[In, Out, StreamOut, StreamIn any](
 	name string,
 	atype api.ActionType,
 	opts *ActionOptions,
-	fn BidiFunc[In, Out, Stream, Init],
-) *Action[In, Out, Stream, Init] {
+	fn BidiFunc[In, Out, StreamOut, StreamIn],
+) *Action[In, Out, StreamOut, StreamIn] {
 	if opts == nil {
 		opts = &ActionOptions{}
 	}
@@ -116,22 +119,22 @@ func NewBidiAction[In, Out, Stream, Init any](
 	}
 	metadata["bidi"] = true
 
-	a := newAction[In, Out, Stream, Init](name, atype, metadata, opts.InputSchema, wrapBidiAsStreaming(fn))
+	a := newAction[In, Out, StreamOut, StreamIn](name, atype, metadata, opts.InputSchema, wrapBidiAsStreaming(fn))
 	a.bidiFn = fn
 
 	if opts.OutputSchema != nil {
 		a.desc.OutputSchema = opts.OutputSchema
 	}
-	if opts.StreamSchema != nil {
-		a.desc.StreamSchema = opts.StreamSchema
+	if opts.StreamOutSchema != nil {
+		a.desc.StreamOutSchema = opts.StreamOutSchema
 	}
 
-	if opts.InitSchema != nil {
-		a.desc.InitSchema = opts.InitSchema
+	if opts.StreamInSchema != nil {
+		a.desc.StreamInSchema = opts.StreamInSchema
 	} else {
-		var init Init
-		if reflect.ValueOf(init).Kind() != reflect.Invalid {
-			a.desc.InitSchema = InferSchemaMap(init)
+		var inStream StreamIn
+		if reflect.ValueOf(inStream).Kind() != reflect.Invalid {
+			a.desc.StreamInSchema = InferSchemaMap(inStream)
 		}
 	}
 
@@ -139,13 +142,13 @@ func NewBidiAction[In, Out, Stream, Init any](
 }
 
 // DefineBidiAction creates and registers a bidirectional streaming [Action].
-func DefineBidiAction[In, Out, Stream, Init any](
+func DefineBidiAction[In, Out, StreamOut, StreamIn any](
 	r api.Registry,
 	name string,
 	atype api.ActionType,
 	opts *ActionOptions,
-	fn BidiFunc[In, Out, Stream, Init],
-) *Action[In, Out, Stream, Init] {
+	fn BidiFunc[In, Out, StreamOut, StreamIn],
+) *Action[In, Out, StreamOut, StreamIn] {
 	a := NewBidiAction(name, atype, opts, fn)
 	a.Register(r)
 	return a
@@ -169,27 +172,27 @@ func DefineAction[In, Out any](
 
 // DefineStreamingAction creates a new streaming action and registers it.
 // If inputSchema is nil, it is inferred from the function's input api.
-func DefineStreamingAction[In, Out, Stream any](
+func DefineStreamingAction[In, Out, StreamOut any](
 	r api.Registry,
 	name string,
 	atype api.ActionType,
 	metadata map[string]any,
 	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream, struct{}] {
-	return defineAction[In, Out, Stream, struct{}](r, name, atype, metadata, inputSchema, fn)
+	fn StreamingFunc[In, Out, StreamOut],
+) *Action[In, Out, StreamOut, struct{}] {
+	return defineAction[In, Out, StreamOut, struct{}](r, name, atype, metadata, inputSchema, fn)
 }
 
 // defineAction creates an action and registers it with the given Registry.
-func defineAction[In, Out, Stream, Init any](
+func defineAction[In, Out, StreamOut, StreamIn any](
 	r api.Registry,
 	name string,
 	atype api.ActionType,
 	metadata map[string]any,
 	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream, Init] {
-	a := newAction[In, Out, Stream, Init](name, atype, metadata, inputSchema, fn)
+	fn StreamingFunc[In, Out, StreamOut],
+) *Action[In, Out, StreamOut, StreamIn] {
+	a := newAction[In, Out, StreamOut, StreamIn](name, atype, metadata, inputSchema, fn)
 	a.Register(r)
 	return a
 }
@@ -197,13 +200,13 @@ func defineAction[In, Out, Stream, Init any](
 // newAction creates a new Action with the given name and arguments.
 // If registry is nil, tracing state is left nil to be set later.
 // If inputSchema is nil, it is inferred from In.
-func newAction[In, Out, Stream, Init any](
+func newAction[In, Out, StreamOut, StreamIn any](
 	name string,
 	atype api.ActionType,
 	metadata map[string]any,
 	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream, Init] {
+	fn StreamingFunc[In, Out, StreamOut],
+) *Action[In, Out, StreamOut, StreamIn] {
 	if inputSchema == nil {
 		var i In
 		if reflect.ValueOf(i).Kind() != reflect.Invalid {
@@ -217,10 +220,10 @@ func newAction[In, Out, Stream, Init any](
 		outputSchema = InferSchemaMap(o)
 	}
 
-	var s Stream
-	var streamSchema map[string]any
+	var s StreamOut
+	var outStreamSchema map[string]any
 	if reflect.ValueOf(s).Kind() != reflect.Invalid {
-		streamSchema = InferSchemaMap(s)
+		outStreamSchema = InferSchemaMap(s)
 	}
 
 	var description string
@@ -228,28 +231,28 @@ func newAction[In, Out, Stream, Init any](
 		description = desc
 	}
 
-	return &Action[In, Out, Stream, Init]{
-		fn: func(ctx context.Context, input In, cb StreamCallback[Stream]) (Out, error) {
+	return &Action[In, Out, StreamOut, StreamIn]{
+		fn: func(ctx context.Context, input In, cb StreamCallback[StreamOut]) (Out, error) {
 			return fn(ctx, input, cb)
 		},
 		desc: &api.ActionDesc{
-			Type:         atype,
-			Key:          api.KeyFromName(atype, name),
-			Name:         name,
-			Description:  description,
-			InputSchema:  inputSchema,
-			OutputSchema: outputSchema,
-			StreamSchema: streamSchema,
-			Metadata:     metadata,
+			Type:            atype,
+			Key:             api.KeyFromName(atype, name),
+			Name:            name,
+			Description:     description,
+			InputSchema:     inputSchema,
+			OutputSchema:    outputSchema,
+			StreamOutSchema: outStreamSchema,
+			Metadata:        metadata,
 		},
 	}
 }
 
 // Name returns the Action's Name.
-func (a *Action[In, Out, Stream, Init]) Name() string { return a.desc.Name }
+func (a *Action[In, Out, StreamOut, StreamIn]) Name() string { return a.desc.Name }
 
 // Run executes the Action's function in a new trace span.
-func (a *Action[In, Out, Stream, Init]) Run(ctx context.Context, input In, cb StreamCallback[Stream]) (output Out, err error) {
+func (a *Action[In, Out, StreamOut, StreamIn]) Run(ctx context.Context, input In, cb StreamCallback[StreamOut]) (output Out, err error) {
 	r, err := a.runWithTelemetry(ctx, input, cb)
 	if err != nil {
 		return base.Zero[Out](), err
@@ -257,17 +260,12 @@ func (a *Action[In, Out, Stream, Init]) Run(ctx context.Context, input In, cb St
 	return r.Result, nil
 }
 
-// Run executes the Action's function in a new trace span.
-func (a *Action[In, Out, Stream, Init]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream]) (output api.ActionRunResult[Out], err error) {
-	inputBytes, _ := json.Marshal(input)
-	logger.FromContext(ctx).Debug("Action.Run",
-		"name", a.Name(),
-		"input", inputBytes)
+// runWithTelemetry executes the Action's function in a new trace span and returns telemetry info.
+func (a *Action[In, Out, StreamOut, StreamIn]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[StreamOut]) (output api.ActionRunResult[Out], err error) {
+	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name())
 	defer func() {
-		outputBytes, _ := json.Marshal(output)
 		logger.FromContext(ctx).Debug("Action.Run",
 			"name", a.Name(),
-			"output", outputBytes,
 			"err", err)
 	}()
 
@@ -339,7 +337,7 @@ func (a *Action[In, Out, Stream, Init]) runWithTelemetry(ctx context.Context, in
 }
 
 // RunJSON runs the action with a JSON input, and returns a JSON result.
-func (a *Action[In, Out, Stream, Init]) RunJSON(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+func (a *Action[In, Out, StreamOut, StreamIn]) RunJSON(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (json.RawMessage, error) {
 	r, err := a.RunJSONWithTelemetry(ctx, input, cb)
 	if err != nil {
 		return nil, err
@@ -348,15 +346,15 @@ func (a *Action[In, Out, Stream, Init]) RunJSON(ctx context.Context, input json.
 }
 
 // RunJSONWithTelemetry runs the action with a JSON input, and returns a JSON result along with telemetry info.
-func (a *Action[In, Out, Stream, Init]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+func (a *Action[In, Out, StreamOut, StreamIn]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
 	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
 	if err != nil {
 		return nil, NewError(INVALID_ARGUMENT, err.Error())
 	}
 
-	var scb StreamCallback[Stream]
+	var scb StreamCallback[StreamOut]
 	if cb != nil {
-		scb = func(ctx context.Context, s Stream) error {
+		scb = func(ctx context.Context, s StreamOut) error {
 			bytes, err := json.Marshal(s)
 			if err != nil {
 				return err
@@ -386,12 +384,12 @@ func (a *Action[In, Out, Stream, Init]) RunJSONWithTelemetry(ctx context.Context
 }
 
 // Desc returns a descriptor of the action with resolved schema references.
-func (a *Action[In, Out, Stream, Init]) Desc() api.ActionDesc {
+func (a *Action[In, Out, StreamOut, StreamIn]) Desc() api.ActionDesc {
 	return *a.desc
 }
 
 // Register registers the action with the given registry.
-func (a *Action[In, Out, Stream, Init]) Register(r api.Registry) {
+func (a *Action[In, Out, StreamOut, StreamIn]) Register(r api.Registry) {
 	a.registry = r
 	r.RegisterAction(a.desc.Key, a)
 }
@@ -399,15 +397,15 @@ func (a *Action[In, Out, Stream, Init]) Register(r api.Registry) {
 // StreamBidi starts a bidirectional streaming connection.
 // Returns an error if the action is not a bidi action.
 // A trace span is created that remains open for the lifetime of the connection.
-func (a *Action[In, Out, Stream, Init]) StreamBidi(ctx context.Context, init Init) (*BidiConnection[In, Out, Stream], error) {
+func (a *Action[In, Out, StreamOut, StreamIn]) StreamBidi(ctx context.Context, in In) (*BidiConnection[StreamIn, Out, StreamOut], error) {
 	if a.bidiFn == nil {
 		return nil, NewError(FAILED_PRECONDITION, "StreamBidi called on non-bidi action %q", a.desc.Name)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	conn := &BidiConnection[In, Out, Stream]{
-		inputCh:  make(chan In, 1),
-		streamCh: make(chan Stream, 1),
+	conn := &BidiConnection[StreamIn, Out, StreamOut]{
+		inputCh:  make(chan StreamIn, 1),
+		streamCh: make(chan StreamOut, 1),
 		doneCh:   make(chan struct{}),
 		ctx:      ctx,
 		cancel:   cancel,
@@ -426,10 +424,10 @@ func (a *Action[In, Out, Stream, Init]) StreamBidi(ctx context.Context, init Ini
 	go func() {
 		defer close(conn.doneCh)
 		defer close(conn.streamCh)
-		output, err := tracing.RunInNewSpan(conn.ctx, spanMetadata, init,
-			func(ctx context.Context, init Init) (Out, error) {
+		output, err := tracing.RunInNewSpan(conn.ctx, spanMetadata, in,
+			func(ctx context.Context, in In) (Out, error) {
 				start := time.Now()
-				output, err := a.bidiFn(ctx, init, conn.inputCh, conn.streamCh)
+				output, err := a.bidiFn(ctx, in, conn.inputCh, conn.streamCh)
 				latency := time.Since(start)
 				if err != nil {
 					metrics.WriteActionFailure(ctx, a.desc.Name, latency, err)
@@ -451,14 +449,14 @@ func (a *Action[In, Out, Stream, Init]) StreamBidi(ctx context.Context, init Ini
 // ResolveActionFor returns the action for the given key in the global registry,
 // or nil if there is none.
 // It panics if the action is of the wrong api.
-func ResolveActionFor[In, Out, Stream, Init any](r api.Registry, atype api.ActionType, name string) *Action[In, Out, Stream, Init] {
+func ResolveActionFor[In, Out, StreamOut, StreamIn any](r api.Registry, atype api.ActionType, name string) *Action[In, Out, StreamOut, StreamIn] {
 	provider, id := api.ParseName(name)
 	key := api.NewKey(atype, provider, id)
 	a := r.ResolveAction(key)
 	if a == nil {
 		return nil
 	}
-	return a.(*Action[In, Out, Stream, Init])
+	return a.(*Action[In, Out, StreamOut, StreamIn])
 }
 
 // LookupActionFor returns the action for the given key in the global registry,
@@ -466,22 +464,24 @@ func ResolveActionFor[In, Out, Stream, Init any](r api.Registry, atype api.Actio
 // It panics if the action is of the wrong api.
 //
 // Deprecated: Use ResolveActionFor.
-func LookupActionFor[In, Out, Stream, Init any](r api.Registry, atype api.ActionType, name string) *Action[In, Out, Stream, Init] {
+func LookupActionFor[In, Out, StreamOut, StreamIn any](r api.Registry, atype api.ActionType, name string) *Action[In, Out, StreamOut, StreamIn] {
 	provider, id := api.ParseName(name)
 	key := api.NewKey(atype, provider, id)
 	a := r.LookupAction(key)
 	if a == nil {
 		return nil
 	}
-	return a.(*Action[In, Out, Stream, Init])
+	return a.(*Action[In, Out, StreamOut, StreamIn])
 }
 
 // wrapBidiAsStreaming wraps a BidiFunc into a StreamingFunc for use with Run/RunJSON.
-// The input is sent as a single message, and stream chunks are forwarded to the callback.
-func wrapBidiAsStreaming[In, Out, Stream, Init any](fn BidiFunc[In, Out, Stream, Init]) StreamingFunc[In, Out, Stream] {
-	return func(ctx context.Context, input In, cb StreamCallback[Stream]) (Out, error) {
-		inCh := make(chan In, 1)
-		outCh := make(chan Stream, 1)
+// The input is passed as the initial input to the bidi func, and the input stream
+// channel is closed immediately (no streaming inputs). Outgoing stream chunks are
+// forwarded to the callback.
+func wrapBidiAsStreaming[In, Out, StreamOut, StreamIn any](fn BidiFunc[In, Out, StreamOut, StreamIn]) StreamingFunc[In, Out, StreamOut] {
+	return func(ctx context.Context, input In, cb StreamCallback[StreamOut]) (Out, error) {
+		inCh := make(chan StreamIn, 1)
+		outCh := make(chan StreamOut, 1)
 		doneCh := make(chan struct{})
 
 		var output Out
@@ -490,12 +490,10 @@ func wrapBidiAsStreaming[In, Out, Stream, Init any](fn BidiFunc[In, Out, Stream,
 		go func() {
 			defer close(doneCh)
 			defer close(outCh)
-			var init Init
-			output, fnErr = fn(ctx, init, inCh, outCh)
+			output, fnErr = fn(ctx, input, inCh, outCh)
 		}()
 
-		// Send the single input and close.
-		inCh <- input
+		// No streaming inputs when used as a non-bidi streaming action.
 		close(inCh)
 
 		// Forward streamed chunks to the callback.
@@ -517,9 +515,9 @@ func wrapBidiAsStreaming[In, Out, Stream, Init any](fn BidiFunc[In, Out, Stream,
 }
 
 // BidiConnection represents an active bidirectional streaming session.
-type BidiConnection[In, Out, Stream any] struct {
-	inputCh  chan In
-	streamCh chan Stream
+type BidiConnection[StreamIn, Out, StreamOut any] struct {
+	inputCh  chan StreamIn
+	streamCh chan StreamOut
 	doneCh   chan struct{}
 	output   Out
 	err      error
@@ -531,13 +529,12 @@ type BidiConnection[In, Out, Stream any] struct {
 
 // Send sends an input message to the bidi action.
 // Returns an error if the connection is closed or the context is cancelled.
-func (c *BidiConnection[In, Out, Stream]) Send(input In) error {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return NewError(FAILED_PRECONDITION, "connection is closed")
-	}
-	c.mu.Unlock()
+func (c *BidiConnection[StreamIn, Out, StreamOut]) Send(input StreamIn) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = NewError(FAILED_PRECONDITION, "connection is closed")
+		}
+	}()
 
 	select {
 	case c.inputCh <- input:
@@ -550,7 +547,7 @@ func (c *BidiConnection[In, Out, Stream]) Send(input In) error {
 }
 
 // Close signals that no more inputs will be sent.
-func (c *BidiConnection[In, Out, Stream]) Close() error {
+func (c *BidiConnection[StreamIn, Out, StreamOut]) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -563,8 +560,8 @@ func (c *BidiConnection[In, Out, Stream]) Close() error {
 
 // Receive returns an iterator for receiving streamed response chunks.
 // The iterator completes when the action finishes.
-func (c *BidiConnection[In, Out, Stream]) Receive() iter.Seq2[Stream, error] {
-	return func(yield func(Stream, error) bool) {
+func (c *BidiConnection[StreamIn, Out, StreamOut]) Receive() iter.Seq2[StreamOut, error] {
+	return func(yield func(StreamOut, error) bool) {
 		for {
 			select {
 			case chunk, ok := <-c.streamCh:
@@ -576,7 +573,7 @@ func (c *BidiConnection[In, Out, Stream]) Receive() iter.Seq2[Stream, error] {
 					return
 				}
 			case <-c.ctx.Done():
-				var zero Stream
+				var zero StreamOut
 				yield(zero, c.ctx.Err())
 				return
 			}
@@ -586,7 +583,7 @@ func (c *BidiConnection[In, Out, Stream]) Receive() iter.Seq2[Stream, error] {
 
 // Output returns the final output after the action completes.
 // Blocks until done or context cancelled.
-func (c *BidiConnection[In, Out, Stream]) Output() (Out, error) {
+func (c *BidiConnection[StreamIn, Out, StreamOut]) Output() (Out, error) {
 	select {
 	case <-c.doneCh:
 		c.mu.Lock()
@@ -599,6 +596,6 @@ func (c *BidiConnection[In, Out, Stream]) Output() (Out, error) {
 }
 
 // Done returns a channel that is closed when the connection completes.
-func (c *BidiConnection[In, Out, Stream]) Done() <-chan struct{} {
+func (c *BidiConnection[StreamIn, Out, StreamOut]) Done() <-chan struct{} {
 	return c.doneCh
 }

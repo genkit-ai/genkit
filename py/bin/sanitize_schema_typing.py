@@ -43,6 +43,8 @@ Transformations applied:
 from __future__ import annotations
 
 import ast
+import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -52,10 +54,16 @@ from typing import cast
 class ClassTransformer(ast.NodeTransformer):
     """AST transformer that modifies class definitions."""
 
-    def __init__(self) -> None:
-        """Initialize the ClassTransformer."""
+    def __init__(self, models_allowing_extra: set[str] | None = None) -> None:
+        """Initialize the ClassTransformer.
+
+        Args:
+            models_allowing_extra: Set of model names that have additionalProperties: true
+                in the JSON schema and should use extra='allow' instead of extra='forbid'.
+        """
         self.modified = False
         self.schema_fields_to_suppress: list[ast.AnnAssign] = []
+        self.models_allowing_extra = models_allowing_extra or set()
 
     def is_rootmodel_class(self, node: ast.ClassDef) -> bool:
         """Check if a class definition is a RootModel class."""
@@ -69,20 +77,27 @@ class ClassTransformer(ast.NodeTransformer):
         return False
 
     def create_model_config(
-        self, existing_config: ast.Call | None = None, frozen: bool = False, has_schema_field: bool = False
+        self,
+        existing_config: ast.Call | None = None,
+        frozen: bool = False,
+        has_schema_field: bool = False,
+        allow_extra: bool = False,
     ) -> ast.AnnAssign:
         """Create or update a model_config assignment with proper type annotation.
 
         Creates: model_config: ClassVar[ConfigDict] = ConfigDict(...)
 
-        Ensures alias_generator=to_camel, populate_by_name=True, and extra='forbid',
-        keeping other existing settings.
+        Ensures alias_generator=to_camel, populate_by_name=True, and the appropriate
+        'extra' setting based on the JSON schema's additionalProperties.
 
         Args:
             existing_config: Existing ConfigDict call to preserve settings from.
             frozen: Whether to add frozen=True for immutable models.
             has_schema_field: Whether the class has a 'schema' field. If True,
                 adds protected_namespaces=() to allow using 'schema' as a field name.
+            allow_extra: Whether to use extra='allow' (True) or extra='forbid' (False).
+                This corresponds to additionalProperties: true/false in JSON schema.
+                In Zod (JS), this is .passthrough() vs .strict().
         """
         keywords = []
         found_populate = False
@@ -101,7 +116,7 @@ class ClassTransformer(ast.NodeTransformer):
                     )
                     found_populate = True
                 elif kw.arg == 'extra':
-                    # Skip the existing 'extra', we will enforce 'forbid'
+                    # Skip the existing 'extra', we will set based on allow_extra
                     continue
                 elif kw.arg == 'alias_generator':
                     # Skip existing alias_generator, we will add our own
@@ -121,8 +136,11 @@ class ClassTransformer(ast.NodeTransformer):
                 else:
                     keywords.append(kw)  # Keep other existing settings
 
-        # Always add extra='forbid'
-        keywords.append(ast.keyword(arg='extra', value=ast.Constant(value='forbid')))
+        # Add extra based on JSON schema's additionalProperties
+        # 'allow' corresponds to .passthrough() in Zod (JS)
+        # 'forbid' corresponds to .strict() or no modifier in Zod
+        extra_value = 'allow' if allow_extra else 'forbid'
+        keywords.append(ast.keyword(arg='extra', value=ast.Constant(value=extra_value)))
 
         # Add populate_by_name=True if it wasn't found
         if not found_populate:
@@ -193,7 +211,7 @@ class ClassTransformer(ast.NodeTransformer):
                     return True
         return False
 
-    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AnnAssign:  # noqa: N802
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> ast.AnnAssign:
         """Visit and transform annotated assignment.
 
         - Transform Role type to Role | str for flexibility
@@ -236,7 +254,7 @@ class ClassTransformer(ast.NodeTransformer):
 
         return node
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> object:  # noqa: N802
+    def visit_ClassDef(self, node: ast.ClassDef) -> object:
         """Visit and transform a class definition node.
 
         Args:
@@ -313,14 +331,16 @@ class ClassTransformer(ast.NodeTransformer):
             added_config = False
             frozen = node.name == 'PathMetadata'
             has_schema = self.has_schema_field(node)
+            # Check if this model allows extra properties (additionalProperties: true in JSON schema)
+            # This corresponds to .passthrough() in Zod (JS)
+            allow_extra = node.name in self.models_allowing_extra
             for stmt in node.body[body_start_index:]:
                 # Check for model_config (both Assign and AnnAssign)
                 is_model_config = False
-                if isinstance(stmt, ast.Assign) and any(
-                    isinstance(target, ast.Name) and target.id == 'model_config' for target in stmt.targets
-                ):
-                    is_model_config = True
-                elif (
+                if (
+                    isinstance(stmt, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == 'model_config' for target in stmt.targets)
+                ) or (
                     isinstance(stmt, ast.AnnAssign)
                     and isinstance(stmt.target, ast.Name)
                     and stmt.target.id == 'model_config'
@@ -330,7 +350,10 @@ class ClassTransformer(ast.NodeTransformer):
                 if is_model_config:
                     # Update existing model_config
                     updated_config = self.create_model_config(
-                        existing_model_config_call, frozen=frozen, has_schema_field=has_schema
+                        existing_model_config_call,
+                        frozen=frozen,
+                        has_schema_field=has_schema,
+                        allow_extra=allow_extra,
                     )
                     # Check if the config actually changed
                     if ast.dump(updated_config) != ast.dump(stmt):
@@ -354,7 +377,10 @@ class ClassTransformer(ast.NodeTransformer):
                 # Add model_config if it wasn't present
                 # Insert after potential docstring
                 insert_pos = 1 if len(new_body) > 0 and isinstance(new_body[0], ast.Expr) else 0
-                new_body.insert(insert_pos, self.create_model_config(frozen=frozen, has_schema_field=has_schema))
+                new_body.insert(
+                    insert_pos,
+                    self.create_model_config(frozen=frozen, has_schema_field=has_schema, allow_extra=allow_extra),
+                )
                 self.modified = True
         elif any(isinstance(base, ast.Name) and base.id == 'Enum' for base in node.bases):
             # Uppercase Enum members
@@ -373,6 +399,11 @@ class ClassTransformer(ast.NodeTransformer):
         # PYTHON EXTENSION: Add resources field to GenerateActionOptions
         if node.name == 'GenerateActionOptions':
             self._inject_resources_field(new_body)
+
+        # PYTHON EXTENSION: Add schema_type field to GenerateActionOutputConfig
+        # This stores the original Pydantic type for runtime validation
+        if node.name == 'GenerateActionOutputConfig':
+            self._inject_schema_type_field(new_body)
 
         node.body = cast(list[ast.stmt], new_body)
         return node
@@ -418,6 +449,50 @@ class ClassTransformer(ast.NodeTransformer):
         body.insert(tools_index + 1, resources_field)
         self.modified = True
 
+    def _inject_schema_type_field(self, body: list[ast.stmt | ast.Constant | ast.Assign]) -> None:
+        """Inject schema_type field at the end of GenerateActionOutputConfig.
+
+        This adds the schema_type field to store the original Pydantic type for
+        runtime validation. The field is excluded from JSON serialization.
+        This is a Python-specific extension that enables typed outputs.
+        """
+        # Check if schema_type field already exists
+        for stmt in body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                if stmt.target.id == 'schema_type':
+                    return  # Already exists, don't add again
+
+        # Find the constrained field to insert after it
+        constrained_index = -1
+        for i, stmt in enumerate(body):
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                if stmt.target.id == 'constrained':
+                    constrained_index = i
+                    break
+
+        # Create the schema_type field: schema_type: Any = Field(default=None, exclude=True)
+        # Using Any to avoid JSON schema issues with `type`
+        schema_type_field = ast.AnnAssign(
+            target=ast.Name(id='schema_type', ctx=ast.Store()),
+            annotation=ast.Name(id='Any', ctx=ast.Load()),
+            value=ast.Call(
+                func=ast.Name(id='Field', ctx=ast.Load()),
+                args=[],
+                keywords=[
+                    ast.keyword(arg='default', value=ast.Constant(value=None)),
+                    ast.keyword(arg='exclude', value=ast.Constant(value=True)),
+                ],
+            ),
+            simple=1,
+        )
+
+        # Insert after constrained field, or at end if not found
+        if constrained_index != -1:
+            body.insert(constrained_index + 1, schema_type_field)
+        else:
+            body.append(schema_type_field)
+        self.modified = True
+
 
 def fix_field_defaults(content: str) -> str:
     """Fix Field(None) and Field(None, ...) to use default=None for pyright compatibility.
@@ -425,8 +500,6 @@ def fix_field_defaults(content: str) -> str:
     Pyright doesn't recognize Field(None) as providing a default value,
     but it does recognize Field(default=None).
     """
-    import re
-
     # Replace Field(None) with Field(default=None)
     content = content.replace('Field(None)', 'Field(default=None)')
     # Replace Field(None, other_args) with Field(default=None, other_args)
@@ -435,18 +508,34 @@ def fix_field_defaults(content: str) -> str:
 
 
 def add_schema_field_suppression(content: str) -> str:
-    """Add pyrefly suppression comment for 'schema' fields.
+    """Add pyrefly and pyright suppression comments for 'schema' fields.
 
     The 'schema' field name shadows a method in Pydantic's BaseModel.
-    While protected_namespaces=() allows this in Pydantic, pyrefly still
-    reports it as a bad-override. We add a suppression comment.
+    While protected_namespaces=() allows this in Pydantic, both pyrefly and
+    pyright report it as a bad-override/incompatible method override.
+    We add suppression comments for both.
     """
-    import re
-
-    # Find lines that define a 'schema' field and add the suppression comment
+    # Find lines that define a 'schema' field and add the suppression comments
     # Pattern: "    schema: ... = Field(...)"
-    pattern = r'^(    schema: .+= Field\(.+\))$'
-    replacement = r'    # pyrefly: ignore[bad-override] - Pydantic protected_namespaces=() allows schema field\n\1'
+    # Add pyrefly comment above and pyright inline comment
+    pattern = r'^(    schema: .+= Field\(.+)\)$'
+    replacement = (
+        r'    # pyrefly: ignore[bad-override] - Pydantic protected_namespaces=() allows schema field.\n'
+        r"    # 'schema' shadows BaseModel.schema() but protected_namespaces=() explicitly allows this.\n"
+        r'\1)  # pyright: ignore[reportIncompatibleMethodOverride]'
+    )
+    content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+    return content
+
+
+def add_schema_type_comment(content: str) -> str:
+    """Add explanatory comment for schema_type field in GenerateActionOutputConfig.
+
+    The schema_type field stores the original Pydantic type for runtime validation.
+    """
+    # Find the schema_type field line and add a comment before it
+    pattern = r'^(    schema_type: Any = Field\(default=None, exclude=True\))$'
+    replacement = r'    # Store the original Pydantic type for runtime validation (excluded from JSON)\n\1'
     content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
     return content
 
@@ -505,7 +594,65 @@ from pydantic.alias_generators import to_camel
     return final_output
 
 
-def process_file(filename: str) -> None:
+def load_models_allowing_extra(schema_path: Path) -> set[str]:
+    """Load JSON schema and extract models with additionalProperties: true.
+
+    In Zod (JS), these are models defined with .passthrough() which allows
+    extra properties beyond the defined schema. In Pydantic (Python), this
+    corresponds to extra='allow' in the model_config.
+
+    This function checks both:
+    1. Top-level $defs with additionalProperties: true
+    2. Inline nested objects with additionalProperties: true (e.g., Score.details)
+
+    For inline schemas, datamodel-codegen extracts them as separate classes.
+    We map from the JSON schema property name to the generated Python class name.
+
+    Args:
+        schema_path: Path to the genkit-schema.json file.
+
+    Returns:
+        Set of model names that allow extra properties.
+    """
+    if not schema_path.is_file():
+        return set()
+
+    try:
+        with schema_path.open(encoding='utf-8') as f:
+            schema = json.load(f)
+
+        defs = schema.get('$defs', {})
+        result: set[str] = set()
+
+        # 1. Check top-level $defs for additionalProperties: true
+        for name, defn in defs.items():
+            if isinstance(defn, dict) and defn.get('additionalProperties') is True:
+                result.add(name)
+
+        # 2. Check inline nested objects in properties
+        # datamodel-codegen extracts these as separate classes with PascalCase names
+        # e.g., Score.properties.details -> Details class
+        # e.g., Operation.properties.error -> Error class
+        for defn in defs.values():
+            if not isinstance(defn, dict):
+                continue
+            properties = defn.get('properties', {})
+            for prop_name, prop_defn in properties.items():
+                if not isinstance(prop_defn, dict):
+                    continue
+                # Check if this is an inline object with additionalProperties: true
+                if prop_defn.get('type') == 'object' and prop_defn.get('additionalProperties') is True:
+                    # Convert property name to PascalCase class name
+                    # e.g., 'details' -> 'Details', 'error' -> 'Error'
+                    class_name = prop_name[0].upper() + prop_name[1:]
+                    result.add(class_name)
+
+        return result
+    except (json.JSONDecodeError, OSError):
+        return set()
+
+
+def process_file(filename: str, schema_path: Path | None = None) -> None:
     """Process a Python file to remove model_config from RootModel classes.
 
     This function reads a Python file, processes its AST to remove model_config
@@ -513,6 +660,8 @@ def process_file(filename: str) -> None:
 
     Args:
         filename: Path to the Python file to process.
+        schema_path: Path to genkit-schema.json for determining which models
+            allow extra properties.
 
     Raises:
         FileNotFoundError: If the input file does not exist.
@@ -520,15 +669,19 @@ def process_file(filename: str) -> None:
     """
     path = Path(filename)
     if not path.is_file():
-        print(f'Error: File not found: {filename}')
         sys.exit(1)
 
+    # Load models that allow extra properties from JSON schema
+    models_allowing_extra: set[str] = set()
+    if schema_path:
+        models_allowing_extra = load_models_allowing_extra(schema_path)
+
     try:
-        with open(path, encoding='utf-8') as f:
+        with Path(path).open(encoding='utf-8') as f:
             source = f.read()
 
         tree = ast.parse(source)
-        class_transformer = ClassTransformer()
+        class_transformer = ClassTransformer(models_allowing_extra=models_allowing_extra)
         modified_tree = class_transformer.visit(tree)
 
         # Generate source from potentially modified AST
@@ -541,19 +694,18 @@ def process_file(filename: str) -> None:
         # Add pyrefly suppression for 'schema' fields that shadow BaseModel.schema
         modified_source_no_header = add_schema_field_suppression(modified_source_no_header)
 
+        # Add explanatory comment for schema_type field
+        modified_source_no_header = add_schema_type_comment(modified_source_no_header)
+
         # Add header and specific imports correctly
         final_source = add_header(modified_source_no_header)
 
         # Write back only if content has changed (header or AST)
         if final_source != source:
-            with open(path, 'w', encoding='utf-8') as f:
+            with Path(path).open('w', encoding='utf-8') as f:
                 f.write(final_source)
-            print(f'Successfully processed and updated {filename}')
-        else:
-            print(f'No changes needed for {filename}')
 
-    except SyntaxError as e:
-        print(f'Error: Invalid Python syntax in {filename}: {e}')
+    except SyntaxError:
         sys.exit(1)
 
 
@@ -567,10 +719,20 @@ def main() -> None:
         python script.py <filename>
     """
     if len(sys.argv) != 2:
-        print('Usage: python script.py <filename>')
         sys.exit(1)
 
-    process_file(sys.argv[1])
+    typing_file = Path(sys.argv[1])
+
+    # Derive genkit-schema.json path relative to the typing.py file
+    # typing.py is at: py/packages/genkit/src/genkit/core/typing.py
+    # schema is at: genkit-tools/genkit-schema.json
+    # So we go up 6 directories from typing.py to reach repo root, then into genkit-tools/
+    schema_path = typing_file.parent
+    for _ in range(6):  # Go up: core -> genkit -> src -> genkit -> packages -> py -> (repo root)
+        schema_path = schema_path.parent
+    schema_path = schema_path / 'genkit-tools' / 'genkit-schema.json'
+
+    process_file(sys.argv[1], schema_path=schema_path if schema_path.is_file() else None)
 
 
 if __name__ == '__main__':

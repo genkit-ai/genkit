@@ -14,6 +14,60 @@ This document provides rules and examples for building with the Genkit API in No
 
 NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but you should follow the user's preference as mentioned above.
 
+## Project Setup
+
+### Project Initialization
+
+- If the directory is empty:
+  Initialize a new project:
+  ```bash
+  npm init -y
+  npm install -D typescript tsx @types/node
+  ```
+- If the directory is not empty (existing project):
+  - Adhere to the current project structure.
+  - Detect the package manager in use (npm, pnpm, yarn, bun) and use the corresponding commands.
+  - Detect if the project is ESM (`"type": "module"` in package.json) or CJS.
+    - For ESM: Use `import` syntax.
+    - For CJS: Use `require` syntax.
+  - IMPORTANT: Do NOT refactor the project (e.g., converting to TypeScript or ESM) solely for Genkit. Work with the existing setup.
+
+### Dependencies
+
+Install core dependencies (adjust command for the user's package manager):
+
+```bash
+npm install genkit @genkit-ai/google-genai
+```
+
+(Add other plugins as requested)
+
+### Genkit CLI
+
+If the Genkit CLI is not already installed:
+
+```bash
+curl -sL cli.genkit.dev | bash
+# or,
+npm install -g genkit-cli
+```
+
+### Configuration
+
+Create a single `src/index.ts` (or `src/index.js` for JS) file.
+
+```ts
+// src/index.ts
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+
+export const ai = genkit({
+  plugins: [googleAI()],
+});
+
+// Your flows and logic here
+```
+
 ## Best Practices
 
 1.  **Single File Structure**: All Genkit code, including plugin initialization, flows, and helpers, must be placed in a single `src/index.ts` file. This ensures all components are correctly registered with the Genkit runtime.

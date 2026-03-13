@@ -87,6 +87,7 @@ See Also:
 """
 
 from genkit.blocks.document import Document
+from genkit.blocks.interfaces import Input
 from genkit.blocks.model import GenerateResponseWrapper
 from genkit.blocks.prompt import (
     ExecutablePrompt,
@@ -101,37 +102,37 @@ from genkit.core.action import ActionRunContext
 from genkit.core.action.types import ActionKind
 from genkit.core.plugin import Plugin
 
-from ._aio import Genkit, Input, Output
+from ._aio import Genkit, Output
 from ._registry import FlowWrapper, GenkitRegistry, SimpleRetrieverOptions
 
 __all__ = [
+    # Version info
+    'GENKIT_CLIENT_HEADER',
+    'GENKIT_VERSION',
     # Main class
     'Genkit',
     'Input',
     'Output',
-    # Response types
-    'GenerateResponseWrapper',
-    # Registry and flow
-    'GenkitRegistry',
-    'FlowWrapper',
-    'SimpleRetrieverOptions',
     # Actions
     'ActionKind',
     'ActionRunContext',
-    # Tools
-    'ToolRunContext',
-    'tool_response',
+    # Document
+    'Document',
     # Prompts
     'ExecutablePrompt',
-    'GenerateStreamResponse',
     'OutputOptions',
     'PromptGenerateOptions',
     'ResumeOptions',
-    # Document
-    'Document',
+    # Registry and flow
+    'FlowWrapper',
+    'GenkitRegistry',
+    'SimpleRetrieverOptions',
+    # Response types
+    'GenerateResponseWrapper',
+    'GenerateStreamResponse',
+    # Tools
+    'ToolRunContext',
+    'tool_response',
     # Plugin
     'Plugin',
-    # Version info
-    'GENKIT_CLIENT_HEADER',
-    'GENKIT_VERSION',
 ]

@@ -177,10 +177,10 @@ def create_flows_asgi_app(
             except json.JSONDecodeError as e:
                 await logger.aerror(
                     'Invalid JSON',
-                    error=f'Invalid JSON: {str(e)}',
+                    error=f'Invalid JSON: {e!s}',
                 )
                 return JSONResponse(
-                    content={'error': f'Invalid JSON: {str(e)}'},
+                    content={'error': f'Invalid JSON: {e!s}'},
                     status_code=400,
                 )
 
@@ -204,7 +204,7 @@ def create_flows_asgi_app(
                             error=str(e),
                         )
                         return JSONResponse(
-                            content={'error': f'Unauthorized: {str(e)}'},
+                            content={'error': f'Unauthorized: {e!s}'},
                             status_code=401,
                         )
 

@@ -1,5 +1,5 @@
 ---
-model: googleai/gemini-pro
+model: googleai/gemini-pro-latest
 input:
   schema:
     subject: string

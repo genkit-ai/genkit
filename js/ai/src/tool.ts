@@ -415,8 +415,13 @@ export function isToolResponse(part: Part): part is ToolResponsePart {
   return !!part.toolResponse;
 }
 
-export function isDynamicTool(t: unknown): t is ToolAction {
+export function isDynamicTool(
+  t: unknown
+): t is ToolAction | MultipartToolAction {
   return isAction(t) && t.__action?.metadata?.dynamic === true;
+}
+export function isMultipartTool(t: unknown): t is MultipartToolAction {
+  return isAction(t) && t.__action?.metadata?.type === 'tool.v2';
 }
 
 export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -538,6 +543,7 @@ function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
         ...(config.metadata || {}),
         type: 'tool.v2',
         tool: { multipart: true },
+        dynamic: true,
       },
     },
     (i, runOptions) => {

@@ -42,12 +42,12 @@ def _remove_file(file_path: Path | None) -> bool:
     Returns:
         True if cleanup was successful or file didn't exist, False on error.
     """
-    # NOTE: Neither print nor logger appears to work during atexit.
+    # NOTE: Neither print nor logger appears to work during atexit, so print is intentional here.
     if not file_path:
         return True
     try:
         if file_path.exists():
-            print(f'Removing file: {file_path}')
+            print(f'Removing file: {file_path}')  # noqa: T201 - atexit handler, logger unavailable
             file_path.unlink()
             # Consider success if unlink didn't raise error
             return True
@@ -55,7 +55,7 @@ def _remove_file(file_path: Path | None) -> bool:
             # Consider success if file already gone
             return True
     except Exception as e:
-        print(f'Error deleting {file_path}: {e}')
+        print(f'Error deleting {file_path}: {e}')  # noqa: T201 - atexit handler, logger unavailable
         return False
 
 
@@ -109,7 +109,7 @@ def _create_and_write_runtime_file(runtime_dir: Path, spec: ServerSpec) -> Path:
     })
 
     logger.debug(f'Writing runtime file: {runtime_file_path}')
-    with open(runtime_file_path, 'w', encoding='utf-8') as f:
+    with Path(runtime_file_path).open('w', encoding='utf-8') as f:
         _ = f.write(metadata)
 
     logger.info(f'Initialized runtime file: {runtime_file_path}')
@@ -163,7 +163,7 @@ class RuntimeManager:
         """
         self.spec: ServerSpec = spec
         if runtime_dir is None:
-            self._runtime_dir: Path = Path(os.getcwd()) / DEFAULT_RUNTIME_DIR_NAME
+            self._runtime_dir: Path = Path(Path.cwd()) / DEFAULT_RUNTIME_DIR_NAME
         else:
             self._runtime_dir = Path(runtime_dir)
 
