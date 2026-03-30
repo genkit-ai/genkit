@@ -1224,7 +1224,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	reg := registry.New()
 	ai.ConfigureFormats(reg)
 
-	// Define a tool that the model will call.
+	// Define two tools so the model can call them across multiple rounds.
 	ai.DefineTool(reg, "greet", "returns a greeting",
 		func(ctx *ai.ToolContext, input struct {
 			Name string `json:"name"`
@@ -1232,38 +1232,66 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 			return "hello " + input.Name, nil
 		},
 	)
+	ai.DefineTool(reg, "farewell", "returns a farewell",
+		func(ctx *ai.ToolContext, input struct {
+			Name string `json:"name"`
+		}) (string, error) {
+			return "goodbye " + input.Name, nil
+		},
+	)
 
-	// Model that requests a tool call on the first call, then returns
-	// a final text response once it sees the tool result.
+	// Model that drives a multi-round tool loop:
+	//   Round 1: request "greet" tool
+	//   Round 2: after seeing greet response, request "farewell" tool
+	//   Round 3: after seeing farewell response, return final text
 	ai.DefineModel(reg, "test/toolmodel", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true, Tools: true}},
 		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			// Check if we already got a tool response.
+			// Count tool responses to determine which round we're in.
+			toolResps := 0
 			for _, msg := range req.Messages {
 				for _, p := range msg.Content {
 					if p.IsToolResponse() {
-						resp := &ai.ModelResponse{
-							Request: req,
-							Message: ai.NewModelTextMessage("done: " + fmt.Sprintf("%v", p.ToolResponse.Output)),
-						}
-						if cb != nil {
-							cb(ctx, &ai.ModelResponseChunk{Content: resp.Message.Content})
-						}
-						return resp, nil
+						toolResps++
 					}
 				}
 			}
-			// First call: request the tool.
-			resp := &ai.ModelResponse{
-				Request: req,
-				Message: &ai.Message{
-					Role: ai.RoleModel,
-					Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{
-						Name:  "greet",
-						Input: map[string]any{"name": "world"},
-					})},
-				},
+
+			switch toolResps {
+			case 0:
+				// Round 1: request greet.
+				return &ai.ModelResponse{
+					Request: req,
+					Message: &ai.Message{
+						Role: ai.RoleModel,
+						Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{
+							Name:  "greet",
+							Input: map[string]any{"name": "world"},
+						})},
+					},
+				}, nil
+			case 1:
+				// Round 2: saw greet response, now request farewell.
+				return &ai.ModelResponse{
+					Request: req,
+					Message: &ai.Message{
+						Role: ai.RoleModel,
+						Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{
+							Name:  "farewell",
+							Input: map[string]any{"name": "world"},
+						})},
+					},
+				}, nil
+			default:
+				// Round 3: saw both tool responses, return final text.
+				resp := &ai.ModelResponse{
+					Request: req,
+					Message: ai.NewModelTextMessage("done"),
+				}
+				if cb != nil {
+					cb(ctx, &ai.ModelResponseChunk{Content: resp.Message.Content})
+				}
+				return resp, nil
 			}
-			return resp, nil
 		},
 	)
 	ai.DefineGenerateAction(ctx, reg)
@@ -1271,7 +1299,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	ai.DefinePrompt(reg, "toolPrompt",
 		ai.WithModelName("test/toolmodel"),
 		ai.WithSystem("You are a test assistant."),
-		ai.WithTools(ai.ToolName("greet")),
+		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
 	af := DefineSessionFlowFromPrompt[testState, any](reg, "toolPrompt", nil)
@@ -1297,14 +1325,16 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	// Session should contain:
+	// Session should contain all messages from the multi-round tool loop:
 	// 1. user message ("go")
-	// 2. model tool-call message
-	// 3. tool response message
-	// 4. final model text response
+	// 2. model tool-call message (greet request)
+	// 3. tool response message (greet result)
+	// 4. model tool-call message (farewell request)
+	// 5. tool response message (farewell result)
+	// 6. final model text response
 	msgs := response.State.Messages
-	if got := len(msgs); got != 4 {
-		t.Errorf("expected 4 messages, got %d", got)
+	if got := len(msgs); got != 6 {
+		t.Errorf("expected 6 messages, got %d", got)
 		for i, m := range msgs {
 			t.Logf("  msg[%d]: role=%s text=%s", i, m.Role, m.Text())
 		}
@@ -1314,21 +1344,38 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 	if msgs[0].Role != ai.RoleUser {
 		t.Errorf("msg[0] role = %s, want user", msgs[0].Role)
 	}
-	hasToolReq := false
-	for _, p := range msgs[1].Content {
-		if p.IsToolRequest() {
-			hasToolReq = true
-			break
+
+	// Verify the two tool request/response pairs.
+	for _, pair := range []struct {
+		reqIdx  int
+		respIdx int
+		tool    string
+	}{
+		{1, 2, "greet"},
+		{3, 4, "farewell"},
+	} {
+		reqMsg := msgs[pair.reqIdx]
+		if reqMsg.Role != ai.RoleModel {
+			t.Errorf("msg[%d] role = %s, want model", pair.reqIdx, reqMsg.Role)
+		}
+		hasReq := false
+		for _, p := range reqMsg.Content {
+			if p.IsToolRequest() && p.ToolRequest.Name == pair.tool {
+				hasReq = true
+			}
+		}
+		if !hasReq {
+			t.Errorf("msg[%d] should contain a %s tool request", pair.reqIdx, pair.tool)
+		}
+
+		respMsg := msgs[pair.respIdx]
+		if respMsg.Role != ai.RoleTool {
+			t.Errorf("msg[%d] role = %s, want tool", pair.respIdx, respMsg.Role)
 		}
 	}
-	if msgs[1].Role != ai.RoleModel || !hasToolReq {
-		t.Errorf("msg[1] should be a model tool-call message")
-	}
-	if msgs[2].Role != ai.RoleTool {
-		t.Errorf("msg[2] role = %s, want tool", msgs[2].Role)
-	}
-	if msgs[3].Role != ai.RoleModel || !strings.Contains(msgs[3].Text(), "done:") {
-		t.Errorf("msg[3] should be final model response, got role=%s text=%s", msgs[3].Role, msgs[3].Text())
+
+	if msgs[5].Role != ai.RoleModel || msgs[5].Text() != "done" {
+		t.Errorf("msg[5] should be final model response, got role=%s text=%q", msgs[5].Role, msgs[5].Text())
 	}
 }
 
