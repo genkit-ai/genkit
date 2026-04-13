@@ -164,8 +164,16 @@ func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error
 }
 
 func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
-	// Detect capabilities before acquiring the lock to avoid holding it
-	// during HTTP I/O.
+	// Check the init guard first under a brief lock — before any I/O — so
+	// that a forgotten Init() panics immediately rather than after a timeout.
+	o.mu.Lock()
+	if !o.initted {
+		o.mu.Unlock()
+		panic("ollama.Init not called")
+	}
+	o.mu.Unlock()
+
+	// Detect capabilities outside the lock to avoid holding it during HTTP I/O.
 	var modelOpts ai.ModelOptions
 	if opts != nil {
 		modelOpts = *opts
@@ -184,11 +192,9 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		}
 	}
 
+	// Re-acquire lock for the registration step.
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if !o.initted {
-		panic("ollama.Init not called")
-	}
 	meta := &ai.ModelOptions{
 		Label:        "Ollama - " + model.Name,
 		Supports:     modelOpts.Supports,
