@@ -164,13 +164,9 @@ func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error
 }
 
 func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if !o.initted {
-		panic("ollama.Init not called")
-	}
+	// Detect capabilities before acquiring the lock to avoid holding it
+	// during HTTP I/O.
 	var modelOpts ai.ModelOptions
-
 	if opts != nil {
 		modelOpts = *opts
 	} else {
@@ -178,12 +174,20 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		// /api/show. This replaces the hardcoded allowlist approach so that
 		// newly released models (e.g. gemma4) work automatically without
 		// code changes. Falls back to the static list for older servers.
-		caps := o.getModelCapabilities(context.Background(), model.Name)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(o.Timeout)*time.Second)
+		defer cancel()
+		caps := o.getModelCapabilities(ctx, model.Name)
 		modelOpts = ai.ModelOptions{
 			Label:    model.Name,
 			Supports: modelSupportsFromCapabilities(caps, model.Name),
 			Versions: []string{},
 		}
+	}
+
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.initted {
+		panic("ollama.Init not called")
 	}
 	meta := &ai.ModelOptions{
 		Label:        "Ollama - " + model.Name,
@@ -425,6 +429,10 @@ func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
 		if strings.Contains(name, "embed") {
 			continue
 		}
+		// Check for context cancellation before each potentially slow HTTP call.
+		if ctx.Err() != nil {
+			break
+		}
 		// Query each model's actual capabilities from the Ollama server.
 		caps := o.getModelCapabilities(ctx, name)
 		supports := modelSupportsFromCapabilities(caps, name)
@@ -442,7 +450,9 @@ func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
 		return nil
 	}
 	// Query the model's actual capabilities from the Ollama server.
-	caps := o.getModelCapabilities(context.Background(), name)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(o.Timeout)*time.Second)
+	defer cancel()
+	caps := o.getModelCapabilities(ctx, name)
 	supports := modelSupportsFromCapabilities(caps, name)
 	model := o.newModel(name, ai.ModelOptions{Supports: supports})
 	if action, ok := model.(api.Action); ok {
