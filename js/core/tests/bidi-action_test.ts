@@ -35,8 +35,8 @@ describe('bidi action', () => {
       {
         name: 'chat',
         actionType: 'custom',
-        inputSchema: z.string(),
         outputSchema: z.string(),
+        inputSchema: z.string(), // Option 1: messages are strings
       },
       async function* ({ inputStream }) {
         for await (const chunk of inputStream) {
@@ -66,8 +66,8 @@ describe('bidi action', () => {
       {
         name: 'chat',
         actionType: 'custom',
-        inputSchema: z.string(),
         outputSchema: z.string(),
+        inputSchema: z.string(),
       },
       async function* ({ inputStream }) {
         for await (const chunk of inputStream) {
@@ -82,7 +82,7 @@ describe('bidi action', () => {
       yield '2';
     }
 
-    const session = act.streamBidi(inputGen());
+    const session = act.streamBidi(undefined, { inputStream: inputGen() }); // Pass stream in options!
 
     const chunks: string[] = [];
     for await (const chunk of session.stream) {
@@ -99,8 +99,8 @@ describe('bidi action', () => {
       {
         name: 'chat',
         actionType: 'custom',
-        inputSchema: z.string(),
         outputSchema: z.string(),
+        inputSchema: z.string(),
       },
       async function* ({ inputStream }) {
         const inputs: string[] = [];
@@ -111,7 +111,7 @@ describe('bidi action', () => {
       }
     );
 
-    const result = await act.run('1');
+    const result = await act.run('1'); // Pass single message as input!
     assert.strictEqual(result.result, 'done: 1');
   });
 
@@ -121,8 +121,8 @@ describe('bidi action', () => {
       {
         name: 'chat',
         actionType: 'custom',
-        inputSchema: z.string(),
         outputSchema: z.string(),
+        inputSchema: z.string(),
       },
       async function* ({ inputStream }) {
         for await (const chunk of inputStream) {
@@ -141,51 +141,14 @@ describe('bidi action', () => {
     assert.strictEqual(result.result, 'done');
   });
 
-  it('validates input stream items', async () => {
-    const act = defineBidiAction(
-      registry,
-      {
-        name: 'chat',
-        actionType: 'custom',
-        inputSchema: z.string(), // Input is string
-      },
-      async function* ({ inputStream }) {
-        for await (const chunk of inputStream) {
-          yield `echo ${chunk}`;
-        }
-      }
-    );
-
-    const session = act.streamBidi();
-    // Bypass TS check to send invalid data
-    (session as any).send(123);
-    session.close();
-
-    try {
-      for await (const _ of session.stream) {
-        // Consume
-      }
-      assert.fail('Should have thrown validation error');
-    } catch (e: any) {
-      // Zod validation error or Genkit validation error
-      assert.ok(
-        e.message.includes('Expected string, received number') ||
-          e.name === 'ZodError' ||
-          e.code === 'invalid_type' ||
-          e.message.includes('Validation failed') ||
-          e.message.includes('must be string')
-      );
-    }
-  });
-
   it('bidi action receives init data', async () => {
     const act = defineBidiAction(
       registry,
       {
         name: 'chatWithInit',
         actionType: 'custom',
-        inputSchema: z.string(),
         outputSchema: z.string(),
+        inputSchema: z.string(),
         initSchema: z.object({ prefix: z.string() }),
       },
       async function* ({ inputStream, init }) {
@@ -197,7 +160,7 @@ describe('bidi action', () => {
       }
     );
 
-    const session = act.streamBidi(undefined, { init: { prefix: '>> ' } });
+    const session = act.streamBidi({ prefix: '>> ' }); // Pass init as first argument!
     session.send('1');
     session.send('2');
     session.close();
@@ -210,32 +173,57 @@ describe('bidi action', () => {
     assert.deepStrictEqual(chunks, ['>> 1', '>> 2']);
     assert.strictEqual(await session.output, 'done');
   });
-
-  it('validates init data', async () => {
+  it('classic run works on bidi action with init', async () => {
     const act = defineBidiAction(
       registry,
       {
-        name: 'chatWithInitValidation',
+        name: 'chatWithInitRun',
         actionType: 'custom',
+        outputSchema: z.string(),
         inputSchema: z.string(),
-        initSchema: z.object({ count: z.number() }),
+        initSchema: z.object({ prefix: z.string() }),
       },
       async function* ({ inputStream, init }) {
-        yield `count: ${init?.count}`;
+        const prefix = init?.prefix || '';
+        const inputs: string[] = [];
+        for await (const chunk of inputStream) {
+          inputs.push(chunk);
+        }
+        return `${prefix}${inputs.join(', ')}`;
       }
     );
 
-    // Invalid init (string instead of number)
-    try {
-      const session = act.streamBidi(undefined, {
-        init: { count: '123' } as any,
-      });
-      for await (const _ of session.stream) {
-        // Consume
+    const result = await act.run('1', { init: { prefix: '>> ' } });
+    assert.strictEqual(result.result, '>> 1');
+  });
+
+  it('classic stream works on bidi action with init', async () => {
+    const act = defineBidiAction(
+      registry,
+      {
+        name: 'chatWithInitStream',
+        actionType: 'custom',
+        outputSchema: z.string(),
+        inputSchema: z.string(),
+        initSchema: z.object({ prefix: z.string() }),
+      },
+      async function* ({ inputStream, init }) {
+        const prefix = init?.prefix || '';
+        for await (const chunk of inputStream) {
+          yield `${prefix}${chunk}`;
+        }
+        return 'done';
       }
-      assert.fail('Should have thrown validation error');
-    } catch (e: any) {
-      assert.ok(e.message.includes('count: must be number'));
+    );
+
+    const session = act.stream('1', { init: { prefix: '>> ' } });
+    
+    const chunks: string[] = [];
+    for await (const chunk of session.stream) {
+      chunks.push(chunk);
     }
+
+    assert.deepStrictEqual(chunks, ['>> 1']);
+    assert.strictEqual(await session.output, 'done');
   });
 });

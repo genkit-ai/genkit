@@ -20,7 +20,6 @@ import {
   ActionRunOptions,
   JSONSchema7,
   action,
-  bidiAction,
   type Action,
 } from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
@@ -114,50 +113,6 @@ export function defineFlow<
 
   registry.registerAction('flow', f);
 
-  return f;
-}
-
-/**
- * Defines a bi-directional flow and registers the flow in the provided registry.
- */
-export function defineBidiFlow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
->(
-  registry: Registry,
-  config: FlowConfig<I, O, S, Init>,
-  fn: (
-    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
-  ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
-): Flow<I, O, S, Init> {
-  const flow = bidiFlow(config, fn);
-  registry.registerAction('flow', flow);
-  return flow;
-}
-
-/**
- * Defines a bi-directional flow.
- */
-export function bidiFlow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
->(
-  config: FlowConfig<I, O, S, Init>,
-  fn: (
-    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
-  ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
-): Flow<I, O, S, Init> {
-  const f = bidiAction(
-    {
-      ...config,
-      actionType: 'flow',
-    },
-    fn
-  );
   return f;
 }
 

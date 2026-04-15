@@ -235,19 +235,31 @@ export type Action<
   __registry?: Registry;
   run(
     input?: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ): Promise<ActionResult<z.infer<O>>>;
 
   stream(
     input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>, z.infer<I>>
-  ): StreamingResponse<O, S>;
-
-  streamBidi(
-    input?: AsyncIterable<z.infer<I>>,
     opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
-  ): BidiStreamingResponse<O, S, I>;
+  ): StreamingResponse<O, S>;
 };
+
+export interface BidiAction<
+  IS extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodTypeAny = z.ZodTypeAny,
+  OS extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  RunOptions extends ActionRunOptions<
+    z.infer<OS>,
+    z.infer<IS>,
+    z.infer<Init>
+  > = ActionRunOptions<z.infer<OS>, z.infer<IS>, z.infer<Init>>,
+> extends Action<IS, O, OS, RunOptions, Init> {
+  streamBidi(
+    init?: z.infer<Init>,
+    opts?: RunOptions
+  ): BidiStreamingResponse<O, OS, IS>;
+}
 
 /**
  * Action factory params.
@@ -358,26 +370,27 @@ export function actionWithMiddleware<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   middleware: Middleware<z.infer<I>, z.infer<O>, z.infer<S>>[]
-): Action<I, O, S> {
+): Action<I, O, S, any, Init> {
   const wrapped = (async (
     req: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => {
     return (await wrapped.run(req, options)).result;
-  }) as Action<I, O, S>;
+  }) as Action<I, O, S, any, Init>;
   wrapped.__action = action.__action;
   wrapped.run = async (
     req: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ): Promise<ActionResult<z.infer<O>>> => {
     let telemetry;
     const dispatch = async (
       index: number,
       req: z.infer<I>,
-      opts?: ActionRunOptions<z.infer<S>, z.infer<I>>
+      opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
     ) => {
       if (index === middleware.length) {
         // end of the chain, call the original model action
@@ -404,7 +417,11 @@ export function actionWithMiddleware<
       }
     };
     wrapped.stream = action.stream;
-    wrapped.streamBidi = action.streamBidi;
+    if ((action as any as BidiAction).streamBidi) {
+      (wrapped as BidiAction<I, O, S, Init>).streamBidi = (
+        action as BidiAction<I, O, S, Init>
+      ).streamBidi;
+    }
 
     return { result: await dispatch(0, req, options), telemetry };
   };
@@ -418,13 +435,14 @@ export function action<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  config: ActionParams<I, O, S>,
+  config: ActionParams<I, O, S, Init>,
   fn: (
     input: z.infer<I>,
-    options: ActionFnArg<z.infer<S>, z.infer<I>>
+    options: ActionFnArg<z.infer<S>, z.infer<Init>>
   ) => Promise<z.infer<O>>
-): Action<I, O, z.infer<S>> {
+): Action<I, O, z.infer<S>, any, Init> {
   const actionName =
     typeof config.name === 'string'
       ? config.name
@@ -444,15 +462,15 @@ export function action<
 
   const actionFn = (async (
     input?: I,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => {
     return (await actionFn.run(input, options)).result;
-  }) as Action<I, O, z.infer<S>>;
+  }) as Action<I, O, z.infer<S>, any, Init>;
   actionFn.__action = { ...actionMetadata };
 
   actionFn.run = async (
     input: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ): Promise<ActionResult<z.infer<O>>> => {
     if (config.inputSchema || config.inputJsonSchema) {
       if (!options?.inputStream) {
@@ -568,7 +586,7 @@ export function action<
 
   actionFn.stream = (
     input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>, z.infer<I>>
+    opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
   ): StreamingResponse<O, S> => {
     let chunkStreamController: ReadableStreamController<z.infer<S>>;
     const chunkStream = new ReadableStream<z.infer<S>>({
@@ -621,38 +639,6 @@ export function action<
     };
   };
 
-  actionFn.streamBidi = (
-    inputStream?: AsyncIterable<z.infer<I>>,
-    opts?: ActionRunOptions<z.infer<S>, z.infer<I>>
-  ): BidiStreamingResponse<O, S, I> => {
-    let channel: Channel<z.infer<I>> | undefined;
-    if (!inputStream) {
-      channel = new Channel<z.infer<I>>();
-      inputStream = channel;
-    }
-
-    const result = actionFn.stream(undefined, {
-      ...opts,
-      inputStream,
-    });
-
-    return {
-      ...result,
-      send: (chunk) => {
-        if (!channel) {
-          throw new Error('Cannot send to a provided stream.');
-        }
-        channel.send(chunk);
-      },
-      close: () => {
-        if (!channel) {
-          throw new Error('Cannot close a provided stream.');
-        }
-        channel.close();
-      },
-    };
-  };
-
   if (config.use) {
     return actionWithMiddleware(actionFn, config.use);
   }
@@ -698,17 +684,17 @@ export function defineAction<
  * Defines a bi-directional action with the given config and registers it in the registry.
  */
 export function defineBidiAction<
-  I extends z.ZodTypeAny,
+  IS extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  OS extends z.ZodTypeAny = z.ZodTypeAny,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  config: ActionParams<I, O, S, Init>,
+  config: ActionParams<IS, O, OS, Init>,
   fn: (
-    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
-  ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
-): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
+    input: ActionFnArg<z.infer<OS>, z.infer<IS>, z.infer<Init>>
+  ) => AsyncGenerator<z.infer<OS>, z.infer<O>, void>
+): BidiAction<IS, O, OS, Init> {
   const act = bidiAction(config, fn);
   registry.registerAction(config.actionType, act);
   return act;
@@ -718,35 +704,26 @@ export function defineBidiAction<
  * Creates a bi-directional action with the given config.
  */
 export function bidiAction<
-  I extends z.ZodTypeAny,
+  IS extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  OS extends z.ZodTypeAny = z.ZodTypeAny,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  config: ActionParams<I, O, S, Init>,
+  config: ActionParams<IS, O, OS, Init>,
   fn: (
-    input: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
-  ) => AsyncGenerator<z.infer<S>, z.infer<O>, void>
-): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
+    input: ActionFnArg<z.infer<OS>, z.infer<IS>, z.infer<Init>>
+  ) => AsyncGenerator<z.infer<OS>, z.infer<O>, void>
+): BidiAction<IS, O, OS, Init> {
   const meta = { ...config.metadata, bidi: true };
-  return action({ ...config, metadata: meta }, async (input, options) => {
-    let stream = options.inputStream;
-    if (!stream) {
-      if (input !== undefined) {
-        stream = (async function* () {
-          yield input;
-        })();
-      } else {
-        stream = (async function* () {})();
-      }
-    }
+  const act = action({ ...config, metadata: meta }, async (input, options) => {
+    const stream = options.inputStream;
 
     const outputGen = fn({
       ...options,
+      init: options.init,
       inputStream: stream,
-    });
+    } as ActionFnArg<z.infer<OS>, z.infer<IS>, z.infer<Init>>);
 
-    // Manually iterate to get chunks and the return value
     const iter = outputGen[Symbol.asyncIterator]();
     let result: z.infer<O>;
     while (true) {
@@ -758,7 +735,40 @@ export function bidiAction<
       options.sendChunk(value);
     }
     return result;
-  });
+  }) as unknown as BidiAction<IS, O, OS, Init>;
+
+  act.streamBidi = (init, opts) => {
+    let channel: Channel<z.infer<IS>> | undefined;
+    let stream = opts?.inputStream;
+    if (!stream) {
+      channel = new Channel<z.infer<IS>>();
+      stream = channel;
+    }
+
+    const result = act.stream(undefined, {
+      ...opts,
+      init: init,
+      inputStream: stream,
+    });
+
+    return {
+      ...result,
+      send: (chunk) => {
+        if (!channel) {
+          throw new Error('Cannot send to a provided stream.');
+        }
+        channel.send(chunk);
+      },
+      close: () => {
+        if (!channel) {
+          throw new Error('Cannot close a provided stream.');
+        }
+        channel.close();
+      },
+    };
+  };
+
+  return act;
 }
 
 /**
