@@ -25,9 +25,10 @@ export function defineReadFileTool(
   resolvePath: (requestedPath: string) => string,
   prefix?: string
 ): ToolAction {
+  const toolName = `${prefix || ''}read_file`;
   return tool(
     {
-      name: `${prefix || ''}read_file`,
+      name: toolName,
       description: 'Reads the contents of a file',
       inputSchema: z.object({
         filePath: z.string().describe('File path relative to root.'),
@@ -59,6 +60,10 @@ export function defineReadFileTool(
         const content = await fs.readFile(targetFile, 'utf8');
         parts.push({
           text: `<read_file path="${input.filePath}">\n${content}\n</read_file>`,
+          metadata: {
+            filePath: input.filePath,
+            filesystemMiddlewareTool: toolName,
+          },
         });
       }
 
@@ -68,7 +73,13 @@ export function defineReadFileTool(
       ) {
         messageQueue[messageQueue.length - 1].content.push(...parts);
       } else {
-        messageQueue.push({ role: 'user', content: parts });
+        messageQueue.push({
+          role: 'user',
+          content: parts,
+          metadata: {
+            filesystemMiddlewareTool: toolName,
+          },
+        });
       }
 
       return `File ${input.filePath} read successfully, see contents below`;

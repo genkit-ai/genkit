@@ -19,7 +19,11 @@ import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { generate, generateStream } from '../../src/generate.js';
+import {
+  GenerateResponseChunk,
+  generate,
+  generateStream,
+} from '../../src/generate.js';
 import {
   GenerateMiddlewareDef,
   generateMiddleware,
@@ -387,7 +391,7 @@ describe('generateMiddleware', () => {
               ...ctx,
               onChunk: (chunk) => {
                 chunkIntercepts.push(`model_mw: ${chunk.content[0].text}`);
-                chunk.content[0].text = chunk.content[0].text.toUpperCase();
+                chunk.content[0].text = chunk.content[0].text?.toUpperCase();
                 originalOnChunk(chunk);
               },
             };
@@ -811,7 +815,7 @@ describe('generateMiddleware', () => {
     const testMiddleware = generateMiddleware({ name: 'testMw' }, () => ({
       generate: async (req, ctx, next) => {
         generateMiddlewareCallCount++;
-        const lastMsg = req.messages[req.messages.length - 1];
+        const lastMsg = req.request.messages[req.request.messages.length - 1];
         if (lastMsg?.role === 'tool') {
           seenToolResponseInGenerate = true;
         }
@@ -961,5 +965,161 @@ describe('generateMiddleware', () => {
       m.content.some((c) => c.toolResponse)
     );
     assert.ok(!hasToolResponse, 'Should not contain any tool response');
+  });
+
+  it('passes and respects envelope updates in generate middleware', async () => {
+    let receivedIndex = -1;
+    let receivedTurn = -1;
+
+    const mockModel = defineModel(
+      registry,
+      { name: 'mockModel' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'done' }] },
+      })
+    );
+
+    const testMiddleware = generateMiddleware({ name: 'test' }, () => ({
+      generate: async (envelope, ctx, next) => {
+        receivedIndex = envelope.messageIndex;
+        receivedTurn = envelope.currentTurn;
+        // Increment messageIndex by 5 and currentTurn by 2
+        return next(
+          {
+            ...envelope,
+            messageIndex: envelope.messageIndex + 5,
+            currentTurn: envelope.currentTurn + 2,
+          },
+          ctx
+        );
+      },
+    }));
+
+    let checkIndex = -1;
+    let checkTurn = -1;
+    const checkerMiddleware = generateMiddleware({ name: 'checker' }, () => ({
+      generate: async (envelope, ctx, next) => {
+        checkIndex = envelope.messageIndex;
+        checkTurn = envelope.currentTurn;
+        return next(envelope, ctx);
+      },
+    }));
+
+    await generate(registry, {
+      model: mockModel,
+      prompt: 'hi',
+      use: [testMiddleware(), checkerMiddleware()],
+    });
+
+    assert.strictEqual(receivedIndex, 0, 'Initial messageIndex should be 0');
+    assert.strictEqual(receivedTurn, 0, 'Initial currentTurn should be 0');
+    assert.strictEqual(
+      checkIndex,
+      5,
+      'Checker should see incremented messageIndex'
+    );
+    assert.strictEqual(
+      checkTurn,
+      2,
+      'Checker should see incremented currentTurn'
+    );
+  });
+
+  it('wraps raw chunks from middleware in GenerateResponseChunk', async () => {
+    const mockModel = defineModel(
+      registry,
+      { name: 'mockModel' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'done' }] },
+      })
+    );
+
+    const rawChunkMiddleware = generateMiddleware({ name: 'rawChunk' }, () => ({
+      generate: async (envelope, ctx, next) => {
+        if (ctx.onChunk) {
+          // Send a raw object instead of GenerateResponseChunk
+          ctx.onChunk({ content: [{ text: 'raw content' }] } as any);
+        }
+        return next(envelope, ctx);
+      },
+    }));
+
+    const chunks: any[] = [];
+    const { stream, response } = generateStream(registry, {
+      model: mockModel,
+      prompt: 'test',
+      use: [rawChunkMiddleware()],
+    });
+
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    await response;
+
+    const rawChunk = chunks.find((c) => c.text === 'raw content');
+    assert.ok(rawChunk, 'Should find the raw content chunk');
+    assert.strictEqual(rawChunk.index, 0, 'Should have index 0');
+    assert.deepStrictEqual(
+      rawChunk.previousChunks,
+      [],
+      'Should have empty previousChunks'
+    );
+  });
+
+  it('accumulates middleware chunks into sharedPreviousChunks for subsequent model chunks', async () => {
+    const mockStreamingModel = defineModel(
+      registry,
+      { name: 'mockStreamingModel' },
+      async (req, streamingCallback) => {
+        if (streamingCallback) {
+          // The model emits a chunk
+          streamingCallback({ content: [{ text: 'model chunk' }] });
+        }
+        return {
+          message: { role: 'model', content: [{ text: 'done' }] },
+        };
+      }
+    );
+
+    const rawChunkMiddleware = generateMiddleware(
+      { name: 'rawChunk2' },
+      () => ({
+        generate: async (envelope, ctx, next) => {
+          if (ctx.onChunk) {
+            // Middleware emits a raw chunk BEFORE the model runs
+            ctx.onChunk({ content: [{ text: 'middleware chunk ' }] } as any);
+          }
+          return next(envelope, ctx);
+        },
+      })
+    );
+
+    const chunks: GenerateResponseChunk[] = [];
+    const { stream, response } = generateStream(registry, {
+      model: mockStreamingModel,
+      prompt: 'test',
+      use: [rawChunkMiddleware()],
+    });
+
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    await response;
+
+    // We expect 2 chunks in the stream
+    assert.strictEqual(chunks.length, 2);
+    assert.strictEqual(chunks[0].text, 'middleware chunk ');
+    assert.strictEqual(chunks[1].text, 'model chunk');
+
+    // CRITICAL ASSERTION: The model chunk should have the middleware chunk in its previousChunks!
+    assert.strictEqual(chunks[1].previousChunks!.length, 1);
+    assert.strictEqual(
+      chunks[1].previousChunks![0].content[0].text,
+      'middleware chunk '
+    );
+    assert.strictEqual(
+      chunks[1].accumulatedText,
+      'middleware chunk model chunk'
+    );
   });
 });

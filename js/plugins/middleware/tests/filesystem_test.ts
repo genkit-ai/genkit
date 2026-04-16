@@ -43,17 +43,26 @@ describe('filesystem middleware', () => {
     let turn = 0;
     return ai.defineModel(
       { name: `pm-${toolName}-${Math.random()}` },
-      async () => {
+      async (_, sendChunk) => {
         turn++;
         if (turn === 1) {
+          const content = [{ toolRequest: { name: toolName, input } }];
+          if (sendChunk) {
+            sendChunk({ content });
+          }
+
           return {
             message: {
               role: 'model',
-              content: [{ toolRequest: { name: toolName, input } }],
+              content,
             },
           };
         }
-        return { message: { role: 'model', content: [{ text: 'done' }] } };
+        const content = [{ text: 'done' }];
+        if (sendChunk) {
+          sendChunk({ content });
+        }
+        return { message: { role: 'model', content } };
       }
     );
   }
@@ -242,6 +251,48 @@ describe('filesystem middleware', () => {
       );
       assert.ok(userMsg);
       assert.ok(userMsg.content[0].text.includes('sub file'));
+    });
+
+    it('streams file contents when reading a file', async () => {
+      const ai = genkit({});
+      const pm = createToolModel(ai, 'read_file', { filePath: 'file1.txt' });
+
+      const { stream, response } = ai.generateStream({
+        model: pm,
+        prompt: 'test',
+        use: [filesystem({ rootDirectory: tempDir })],
+      });
+
+      const chunks: any[] = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+
+      await response;
+
+      const indices = chunks.map((c) => c.index);
+      const uniqueIndices = [...new Set(indices)];
+
+      // We expect indices 0, 1, 2, 3
+      // 0: Model tool request
+      // 1: Tool response string
+      // 2: Injected file content <--- IMPORTANT
+      // 3: Final model response
+      assert.deepStrictEqual(
+        uniqueIndices,
+        [0, 1, 2, 3],
+        'Should have sequential message indices'
+      );
+
+      const fileContentChunk = chunks.find(
+        (c) => c.text && c.text.includes('hello world')
+      );
+      assert.ok(fileContentChunk, 'Stream should contain file content');
+      assert.strictEqual(
+        fileContentChunk.index,
+        2,
+        'File content should have index 2'
+      );
     });
 
     it('rejects reading outside root directory', async () => {
