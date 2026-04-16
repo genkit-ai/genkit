@@ -217,7 +217,7 @@ describe('bidi action', () => {
     );
 
     const session = act.stream('1', { init: { prefix: '>> ' } });
-    
+
     const chunks: string[] = [];
     for await (const chunk of session.stream) {
       chunks.push(chunk);
