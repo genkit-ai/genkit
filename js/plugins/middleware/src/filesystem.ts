@@ -134,12 +134,23 @@ export const filesystem: GenerateMiddleware<typeof FilesystemOptionsSchema> =
             throw e;
           }
         },
-        generate: async (req, ctx, next) => {
+        generate: async (envelope, ctx, next) => {
+          const { request } = envelope;
+          let { messageIndex } = envelope;
           if (messageQueue.length > 0) {
-            req.messages.push(...messageQueue);
+            if (ctx.onChunk) {
+              for (const msg of messageQueue) {
+                ctx.onChunk({
+                  role: msg.role,
+                  index: messageIndex++,
+                  content: msg.content,
+                });
+              }
+            }
+            request.messages.push(...messageQueue);
             messageQueue.length = 0;
           }
-          return await next(req, ctx);
+          return await next({ ...envelope, request, messageIndex }, ctx);
         },
       };
     }
