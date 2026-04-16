@@ -599,6 +599,61 @@ ai.defineFlow(
   }
 );
 
+ai.defineFlow(
+  {
+    name: 'tts-audio-tags',
+    inputSchema: z.string().default(
+      `DIRECTOR'S NOTES
+Style:
+* The "Vocal Smile": You must hear the grin in the audio. The soft palate is
+always raised to keep the tone bright, sunny, and explicitly inviting.
+* Dynamics: High projection without shouting. Punchy consonants and elongated
+vowels on excitement words (e.g., "Beauuutiful morning").
+
+Pace: Speaks at an energetic pace, keeping up with the fast music.  Speaks
+with A "bouncing" cadence. High-speed delivery with fluid transitions — no dead
+air, no gaps.
+
+Accent: Jaz is from Brixton, London
+
+SAMPLE CONTEXT
+Jaz is the industry standard for Top 40 radio, high-octane event promos, or any
+script that requires a charismatic Estuary accent and 11/10 infectious energy.
+
+TRANSCRIPT
+[excitedly] Yes, massive vibes in the studio! You are locked in and it is
+absolutely popping off in London right now. If you're stuck on the tube, or
+just sat there pretending to work... stop it. Seriously, I see you.
+[shouting] Turn this up! We've got the project roadmap landing in three,
+two... let's go!`
+    ),
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async (prompt: string) => {
+    const { media } = await ai.generate({
+      model: googleAI.model('gemini-3.1-flash-tts-preview'),
+      config: {
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: 'Algenib' },
+          },
+        },
+      },
+      prompt,
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    const audioBuffer = Buffer.from(
+      media.url.substring(media.url.indexOf(',') + 1),
+      'base64'
+    );
+    return {
+      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
+    };
+  }
+);
+
 async function toWav(
   pcmData: Buffer,
   channels = 1,
