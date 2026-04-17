@@ -353,5 +353,16 @@ On error, the following updates are made to the parent span:
 - **genkit:state:** Set to `"error"`.
 - **genkit:isFailureSource:** Set to `true` on the **first** span in the call stack where the error originated.
 
-### Span Links
-While not events, **Links** allow spans to reference other traces. Genkit uses these to link evaluation test cases back to the original generation traces.
+## Cleanup & Technical Debt
+
+- **Deprecated Internal Metadata:** The attribute `genkit:metadata:genkit-dev-internal` was removed in PR #1357 but lingering references remain in `genkit-tools/common/src/utils/trace.ts` and its associated tests. These should be cleaned up as they no longer serve a purpose in the core instrumentation.
+
+## Attribute Conventions (genkit vs genkitx)
+
+Genkit distinguishes between core framework attributes and extended/tooling attributes through its prefixing strategy:
+
+- **`genkit:`**: Reserved for core framework attributes defined by the Genkit specification. These are consistently implemented across all SDKs (JS, Go, Python).
+- **`genkitx:`**: Used for **extended** or **external** attributes. These are typically used by specific plugins, tools (like the Dev UI), or for cross-cutting logic that isn't part of the core AI orchestration.
+  - Example: `genkitx:ignore-trace` is used by the Python SDK to suppress telemetry export for specific internal operations.
+
+**Note on `telemetryLabels`:** The `telemetryLabels` option in Action run configurations allows users to inject arbitrary attributes. These are added to the span **\\"as is\\"** without enforcing any specific prefix. However, following the `genkitx:` convention for custom technical metadata is recommended to avoid future collisions with core framework attributes.
