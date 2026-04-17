@@ -105,15 +105,6 @@
       },
       "additionalProperties": false
     },
-    "TurnEnd": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
     "SessionState": {
       "type": "object",
       "properties": {
@@ -140,6 +131,15 @@
         "turnEnd",
         "invocationEnd"
       ]
+    },
+    "TurnEnd": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "DocumentData": {
       "type": "object",
