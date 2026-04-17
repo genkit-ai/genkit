@@ -101,6 +101,23 @@ export const SessionFlowOutputSchema = z.object({
 export type SessionFlowOutput = z.infer<typeof SessionFlowOutputSchema>;
 
 /**
+ * Zod schema for the turn-end signal emitted by a session flow.
+ *
+ * A TurnEnd value is emitted exactly once per turn, regardless of whether a
+ * snapshot was persisted. Grouping all turn-end signals here lets callers
+ * detect turn boundaries with a single field check and leaves room for
+ * additional turn-end metadata in the future.
+ */
+export const TurnEndSchema = z.object({
+  /**
+   * ID of the snapshot persisted at the end of this turn. Empty if no
+   * snapshot was created (callback returned false or no store configured).
+   */
+  snapshotId: z.string().optional(),
+});
+export type TurnEnd = z.infer<typeof TurnEndSchema>;
+
+/**
  * Zod schema for session flow stream chunk.
  */
 export const SessionFlowStreamChunkSchema = z.object({
@@ -110,10 +127,12 @@ export const SessionFlowStreamChunkSchema = z.object({
   status: z.any().optional(),
   /** A newly produced artifact. */
   artifact: ArtifactSchema.optional(),
-  /** ID of a snapshot that was just persisted. */
-  snapshotId: z.string().optional(),
-  /** Signals that the session flow has finished processing the current input. */
-  endTurn: z.boolean().optional(),
+  /**
+   * Non-null when the session flow has finished processing the current
+   * input. Groups all turn-end signals; the client should stop iterating and
+   * may send the next input.
+   */
+  turnEnd: TurnEndSchema.optional(),
 });
 export type SessionFlowStreamChunk = z.infer<
   typeof SessionFlowStreamChunkSchema

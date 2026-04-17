@@ -78,11 +78,11 @@ func TestSessionFlow_BasicMultiTurn(t *testing.T) {
 			t.Fatalf("Receive error: %v", err)
 		}
 		turn1Chunks++
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
-	if turn1Chunks < 2 { // at least status + endTurn
+	if turn1Chunks < 2 { // at least status + TurnEnd
 		t.Errorf("expected at least 2 chunks in turn 1, got %d", turn1Chunks)
 	}
 
@@ -94,7 +94,7 @@ func TestSessionFlow_BasicMultiTurn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -148,10 +148,10 @@ func TestSessionFlow_WithSessionStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.SnapshotID != "" {
-			snapshotIDs = append(snapshotIDs, chunk.SnapshotID)
-		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
+			if chunk.TurnEnd.SnapshotID != "" {
+				snapshotIDs = append(snapshotIDs, chunk.TurnEnd.SnapshotID)
+			}
 			break
 		}
 	}
@@ -216,7 +216,7 @@ func TestSessionFlow_ResumeFromSnapshot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -239,7 +239,7 @@ func TestSessionFlow_ResumeFromSnapshot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -313,7 +313,7 @@ func TestSessionFlow_ClientManagedState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -387,7 +387,7 @@ func TestSessionFlow_Artifacts(t *testing.T) {
 		if chunk.Artifact != nil {
 			receivedArtifacts = append(receivedArtifacts, chunk.Artifact)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -445,10 +445,10 @@ func TestSessionFlow_SnapshotCallback(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Receive error on turn %d: %v", i, err)
 			}
-			if chunk.SnapshotID != "" {
-				snapshotIDs = append(snapshotIDs, chunk.SnapshotID)
-			}
-			if chunk.EndTurn {
+			if chunk.TurnEnd != nil {
+				if chunk.TurnEnd.SnapshotID != "" {
+					snapshotIDs = append(snapshotIDs, chunk.TurnEnd.SnapshotID)
+				}
 				break
 			}
 		}
@@ -496,7 +496,7 @@ func TestSessionFlow_SendMessages(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -547,7 +547,7 @@ func TestSessionFlow_SessionContext(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -609,7 +609,7 @@ func TestSessionFlow_SetMessages(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -656,7 +656,7 @@ func TestSessionFlow_SnapshotIDInMessageMetadata(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -767,7 +767,7 @@ func TestSessionFlow_TurnSpanOutput(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Receive error on turn %d: %v", turn, err)
 			}
-			if chunk.EndTurn {
+			if chunk.TurnEnd != nil {
 				break
 			}
 		}
@@ -793,11 +793,8 @@ func TestSessionFlow_TurnSpanOutput(t *testing.T) {
 			t.Errorf("turn %d: expected 3 chunks, got %d", i, len(chunks))
 		}
 		for j, chunk := range chunks {
-			if chunk.EndTurn {
-				t.Errorf("turn %d, chunk %d: EndTurn should not be in turn output", i, j)
-			}
-			if chunk.SnapshotID != "" {
-				t.Errorf("turn %d, chunk %d: SnapshotID should not be in turn output", i, j)
+			if chunk.TurnEnd != nil {
+				t.Errorf("turn %d, chunk %d: TurnEnd should not be in turn output", i, j)
 			}
 		}
 	}
@@ -839,10 +836,10 @@ func TestSessionFlow_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.SnapshotID != "" {
-			sawSnapshot = true
-		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
+			if chunk.TurnEnd.SnapshotID != "" {
+				sawSnapshot = true
+			}
 			break
 		}
 	}
@@ -850,10 +847,10 @@ func TestSessionFlow_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	conn.Output()
 
 	if !sawSnapshot {
-		t.Fatal("expected a snapshot chunk on the stream")
+		t.Fatal("expected a snapshot ID on the turn-end chunk")
 	}
 
-	// Turn output should contain only the status chunk, not the snapshot/endTurn.
+	// Turn output should contain only the status chunk, not the TurnEnd signal.
 	if len(capturedOutputs) != 1 {
 		t.Fatalf("expected 1 captured output, got %d", len(capturedOutputs))
 	}
@@ -938,7 +935,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		if chunk.ModelChunk != nil {
 			gotChunk = true
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -954,7 +951,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1007,7 +1004,7 @@ func TestPromptAgent_PromptInputOverride(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1085,7 +1082,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		if chunk.ModelChunk != nil {
 			turn1Response += chunk.ModelChunk.Text()
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1106,7 +1103,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		if chunk.ModelChunk != nil {
 			turn2Response += chunk.ModelChunk.Text()
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1160,7 +1157,7 @@ func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1195,7 +1192,7 @@ func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1314,7 +1311,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
 		}
-		if chunk.EndTurn {
+		if chunk.TurnEnd != nil {
 			break
 		}
 	}
@@ -1633,10 +1630,10 @@ func TestSessionFlow_MultiTurnSnapshotDedup(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Receive error on turn %d: %v", i, err)
 			}
-			if chunk.SnapshotID != "" {
-				snapshotIDs = append(snapshotIDs, chunk.SnapshotID)
-			}
-			if chunk.EndTurn {
+			if chunk.TurnEnd != nil {
+				if chunk.TurnEnd.SnapshotID != "" {
+					snapshotIDs = append(snapshotIDs, chunk.TurnEnd.SnapshotID)
+				}
 				break
 			}
 		}

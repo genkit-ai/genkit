@@ -84,10 +84,10 @@ func main() {
 			if chunk.ModelChunk != nil {
 				fmt.Print(chunk.ModelChunk.Text())
 			}
-			if chunk.SnapshotID != "" {
-				fmt.Printf("\n[snapshot: %s]", chunk.SnapshotID)
-			}
-			if chunk.EndTurn {
+			if chunk.TurnEnd != nil {
+				if chunk.TurnEnd.SnapshotID != "" {
+					fmt.Printf("\n[snapshot: %s]", chunk.TurnEnd.SnapshotID)
+				}
 				fmt.Println()
 				fmt.Println()
 				break

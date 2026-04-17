@@ -63,8 +63,8 @@ type SessionRunner[State any] struct {
 
 // Run loops over the input channel, calling fn for each turn. Each turn is
 // wrapped in a trace span for observability. Input messages are automatically
-// added to the session before fn is called. After fn returns successfully, an
-// EndTurn chunk is sent and a snapshot check is triggered.
+// added to the session before fn is called. After fn returns successfully, a
+// TurnEnd chunk is sent and a snapshot check is triggered.
 func (a *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *SessionFlowInput) error) error {
 	for input := range a.InputCh {
 		spanMeta := &tracing.SpanMetadata{
@@ -281,8 +281,8 @@ func DefineSessionFlow[Stream, State any](
 				if chunk.Artifact != nil {
 					session.AddArtifacts(chunk.Artifact)
 				}
-				// Accumulate content chunks (exclude control signals from onEndTurn).
-				if !chunk.EndTurn && chunk.SnapshotID == "" {
+				// Accumulate content chunks (exclude the TurnEnd control signal).
+				if chunk.TurnEnd == nil {
 					turnMu.Lock()
 					turnChunks = append(turnChunks, chunk)
 					turnMu.Unlock()
@@ -291,14 +291,13 @@ func DefineSessionFlow[Stream, State any](
 			}
 		}()
 
-		// Wire up onEndTurn: triggers snapshot + sends EndTurn chunk.
+		// Wire up onEndTurn: triggers snapshot + sends TurnEnd chunk.
 		// Writes through respCh to preserve ordering with user chunks.
 		agentSess.onEndTurn = func(turnCtx context.Context) {
 			snapshotID := agentSess.maybeSnapshot(turnCtx, SnapshotEventTurnEnd)
-			if snapshotID != "" {
-				respCh <- &SessionFlowStreamChunk[Stream]{SnapshotID: snapshotID}
+			respCh <- &SessionFlowStreamChunk[Stream]{
+				TurnEnd: &TurnEnd{SnapshotID: snapshotID},
 			}
-			respCh <- &SessionFlowStreamChunk[Stream]{EndTurn: true}
 		}
 
 		result, fnErr := fn(ctx, Responder[Stream](respCh), agentSess)
@@ -634,7 +633,7 @@ func (c *SessionFlowConnection[Stream, State]) Close() error {
 // Receive returns an iterator for receiving stream chunks.
 // Unlike the underlying BidiConnection.Receive, breaking out of this iterator
 // does not cancel the connection. This enables multi-turn patterns where the
-// caller breaks on EndTurn, sends the next input, then calls Receive again.
+// caller breaks on TurnEnd, sends the next input, then calls Receive again.
 func (c *SessionFlowConnection[Stream, State]) Receive() iter.Seq2[*SessionFlowStreamChunk[Stream], error] {
 	c.initReceiver()
 	return func(yield func(*SessionFlowStreamChunk[Stream], error) bool) {

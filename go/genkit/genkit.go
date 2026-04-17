@@ -472,7 +472,7 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 //	// Send a message and stream the response:
 //	conn.SendText("Hello!")
 //	for chunk, err := range conn.Receive() {
-//		if chunk.EndTurn {
+//		if chunk.TurnEnd != nil {
 //			break
 //		}
 //		fmt.Print(chunk.ModelChunk.Text())
@@ -540,7 +540,7 @@ func DefineSessionFlow[Stream, State any](
 //	// Send a message and stream the response:
 //	conn.SendText("Hello!")
 //	for chunk, err := range conn.Receive() {
-//		if chunk.EndTurn {
+//		if chunk.TurnEnd != nil {
 //			break
 //		}
 //		fmt.Print(chunk.ModelChunk.Text())

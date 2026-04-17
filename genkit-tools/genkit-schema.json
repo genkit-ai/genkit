@@ -99,11 +99,17 @@
         "artifact": {
           "$ref": "#/$defs/Artifact"
         },
+        "turnEnd": {
+          "$ref": "#/$defs/TurnEnd"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TurnEnd": {
+      "type": "object",
+      "properties": {
         "snapshotId": {
           "type": "string"
-        },
-        "endTurn": {
-          "type": "boolean"
         }
       },
       "additionalProperties": false

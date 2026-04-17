@@ -22,6 +22,17 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
+// Artifact represents a named collection of parts produced during a session.
+// Examples: generated files, images, code snippets, diagrams, etc.
+type Artifact struct {
+	// Metadata contains additional artifact-specific data.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Name identifies the artifact (e.g., "generated_code.go", "diagram.png").
+	Name string `json:"name,omitempty"`
+	// Parts contains the artifact content (text, media, etc.).
+	Parts []*ai.Part `json:"parts"`
+}
+
 // SessionFlowInit is the input for starting an session flow invocation.
 // Provide either SnapshotID (to load from store) or State (direct state).
 type SessionFlowInit[State any] struct {
@@ -73,27 +84,16 @@ type SessionFlowResult struct {
 type SessionFlowStreamChunk[Stream any] struct {
 	// Artifact contains a newly produced artifact.
 	Artifact *Artifact `json:"artifact,omitempty"`
-	// EndTurn signals that the session flow has finished processing the current input.
-	// When true, the client should stop iterating and may send the next input.
-	EndTurn bool `json:"endTurn,omitempty"`
 	// ModelChunk contains generation tokens from the model.
 	ModelChunk *ai.ModelResponseChunk `json:"modelChunk,omitempty"`
-	// SnapshotID contains the ID of a snapshot that was just persisted.
-	SnapshotID string `json:"snapshotId,omitempty"`
 	// Status contains user-defined structured status information.
 	// The Stream type parameter defines the shape of this data.
 	Status Stream `json:"status,omitempty"`
-}
-
-// Artifact represents a named collection of parts produced during a session.
-// Examples: generated files, images, code snippets, diagrams, etc.
-type Artifact struct {
-	// Metadata contains additional artifact-specific data.
-	Metadata map[string]any `json:"metadata,omitempty"`
-	// Name identifies the artifact (e.g., "generated_code.go", "diagram.png").
-	Name string `json:"name,omitempty"`
-	// Parts contains the artifact content (text, media, etc.).
-	Parts []*ai.Part `json:"parts"`
+	// TurnEnd is non-nil when the session flow has finished processing the current
+	// input. It groups all turn-end signals (snapshot ID, etc.) so callers can
+	// check a single field. When set, the client should stop iterating and may
+	// send the next input.
+	TurnEnd *TurnEnd `json:"turnEnd,omitempty"`
 }
 
 // SessionState is the portable conversation state that flows between client
@@ -120,3 +120,13 @@ const (
 	// InvocationEnd indicates the snapshot was triggered at the end of the invocation.
 	SnapshotEventInvocationEnd SnapshotEvent = "invocationEnd"
 )
+
+// TurnEnd groups the signals emitted when a session flow turn finishes.
+// A TurnEnd value is emitted exactly once per turn, regardless of whether a
+// snapshot was persisted.
+type TurnEnd struct {
+	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
+	// Empty if no snapshot was created (callback returned false or no store
+	// configured).
+	SnapshotID string `json:"snapshotId,omitempty"`
+}

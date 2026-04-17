@@ -1006,6 +1006,13 @@ class SessionFlowResult(BaseModel):
     artifacts: list[Artifact] | None = None
 
 
+class TurnEnd(BaseModel):
+    """Model for turnend data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = Field(default=None)
+
+
 class SessionFlowStreamChunk(BaseModel):
     """Model for sessionflowstreamchunk data."""
 
@@ -1013,8 +1020,7 @@ class SessionFlowStreamChunk(BaseModel):
     model_chunk: ModelResponseChunk | None = Field(default=None)
     status: Any | None = None
     artifact: Artifact | None = None
-    snapshot_id: str | None = Field(default=None)
-    end_turn: bool | None = Field(default=None)
+    turn_end: TurnEnd | None = Field(default=None)
 
 
 class SessionState(BaseModel):
