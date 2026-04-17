@@ -39,6 +39,13 @@ class Model(RootModel[Any]):
     root: Any
 
 
+class TurnEnd(BaseModel):
+    """Model for turnend data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = Field(default=None)
+
+
 class SnapshotEvent(StrEnum):
     """SnapshotEvent data type class."""
 
@@ -1004,13 +1011,6 @@ class SessionFlowResult(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     message: Message | None = None
     artifacts: list[Artifact] | None = None
-
-
-class TurnEnd(BaseModel):
-    """Model for turnend data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    snapshot_id: str | None = Field(default=None)
 
 
 class SessionFlowStreamChunk(BaseModel):
