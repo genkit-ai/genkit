@@ -726,13 +726,19 @@ export function bidiAction<
 
     const iter = outputGen[Symbol.asyncIterator]();
     let result: z.infer<O>;
-    while (true) {
-      const { value, done } = await iter.next();
-      if (done) {
-        result = value;
-        break;
+    try {
+      while (true) {
+        const { value, done } = await iter.next();
+        if (done) {
+          result = value;
+          break;
+        }
+        options.sendChunk(value);
       }
-      options.sendChunk(value);
+    } finally {
+      if (iter.return) {
+        await iter.return(undefined as any);
+      }
     }
     return result;
   }) as unknown as BidiAction<IS, O, OS, Init>;

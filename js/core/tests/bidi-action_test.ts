@@ -226,4 +226,40 @@ describe('bidi action', () => {
     assert.deepStrictEqual(chunks, ['>> 1']);
     assert.strictEqual(await session.output, 'done');
   });
+
+  it('bidi action generator is closed on sendChunk error', async () => {
+    let generatorClosed = false;
+    const act = defineBidiAction(
+      registry,
+      {
+        name: 'chatCleanup',
+        actionType: 'custom',
+        outputSchema: z.string(),
+        inputSchema: z.string(),
+      },
+      async function* ({ inputStream }) {
+        try {
+          for await (const chunk of inputStream) {
+            yield `echo ${chunk}`;
+          }
+        } finally {
+          generatorClosed = true;
+        }
+        return 'done';
+      }
+    );
+
+    try {
+      await act.run('1', {
+        onChunk: (c) => {
+          throw new Error('abort');
+        },
+      });
+      assert.fail('Expected error to be thrown');
+    } catch (e: any) {
+      assert.strictEqual(e.message, 'abort');
+    }
+
+    assert.strictEqual(generatorClosed, true, 'Generator should be closed');
+  });
 });
