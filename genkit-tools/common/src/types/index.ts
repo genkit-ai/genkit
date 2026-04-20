@@ -23,6 +23,7 @@ export * from './document';
 export * from './env';
 export * from './eval';
 export * from './evaluator';
+export * from './middleware';
 export * from './model';
 export * from './prompt';
 export * from './reflection';

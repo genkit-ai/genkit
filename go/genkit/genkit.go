@@ -221,6 +221,16 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 			action.Register(r)
 		}
 		r.RegisterPlugin(plugin.Name(), plugin)
+
+		if mp, ok := plugin.(ai.MiddlewarePlugin); ok {
+			descs, err := mp.Middlewares(ctx)
+			if err != nil {
+				panic(fmt.Errorf("genkit.Init: plugin %q Middlewares failed: %w", plugin.Name(), err))
+			}
+			for _, d := range descs {
+				d.Register(r)
+			}
+		}
 	}
 
 	ai.ConfigureFormats(r)
@@ -678,6 +688,68 @@ func DefineMultipartTool[In any](g *Genkit, name, description string, fn ai.Mult
 // Since the types are not known at lookup time, it returns a type-erased tool.
 func LookupTool(g *Genkit, name string) ai.Tool {
 	return ai.LookupTool(g.reg, name)
+}
+
+// DefineMiddleware registers a middleware descriptor with the Genkit instance
+// and returns the resulting [*ai.MiddlewareDesc]. Registered middleware is
+// surfaced to the Dev UI and addressable by name for cross-runtime dispatch.
+//
+// This is the path for application code that declares its own middleware
+// directly. Plugins should instead construct descriptors with [ai.NewMiddleware]
+// (no registration) and return them from [ai.MiddlewarePlugin.Middlewares];
+// [Init] registers those descriptors during plugin setup.
+//
+// The `description` is a human-readable explanation shown in the Dev UI. The
+// `prototype` is a value of a type that implements [ai.Middleware]. Its
+// [ai.Middleware.Name] method supplies the registered name, and its fields
+// (both exported JSON config and unexported plugin-level state) are captured
+// by a value-copy inside the descriptor so JSON-dispatched invocations
+// preserve prototype state across calls.
+//
+// For pure Go use, registration is not strictly required: passing a middleware
+// config directly to [ai.WithUse] invokes its [ai.Middleware.New] method on
+// the local fast path without a registry lookup. Registration is what makes
+// the middleware visible to the Dev UI and callable from other runtimes. For
+// ad-hoc one-off middleware that doesn't need Dev UI visibility, use
+// [ai.MiddlewareFunc] instead of defining a type.
+//
+// Example:
+//
+//	type Trace struct {
+//		Label string `json:"label,omitempty"`
+//	}
+//
+//	func (Trace) Name() string { return "mine/trace" }
+//
+//	func (t Trace) New(ctx context.Context) (*ai.Hooks, error) {
+//		return &ai.Hooks{
+//			WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
+//				start := time.Now()
+//				resp, err := next(ctx, p)
+//				log.Printf("[%s] model call took %s", t.Label, time.Since(start))
+//				return resp, err
+//			},
+//		}, nil
+//	}
+//
+//	// Register so it appears in the Dev UI and can be called by name:
+//	genkit.DefineMiddleware(g, "logs model call latency", Trace{})
+//
+//	// Use it per-call:
+//	resp, err := genkit.Generate(ctx, g,
+//		ai.WithPrompt("hello"),
+//		ai.WithUse(Trace{Label: "debug"}),
+//	)
+func DefineMiddleware[M ai.Middleware](g *Genkit, description string, prototype M) *ai.MiddlewareDesc {
+	return ai.DefineMiddleware(g.reg, description, prototype)
+}
+
+// LookupMiddleware retrieves a registered middleware descriptor by its name.
+// It returns the descriptor if found, or `nil` if no middleware with the
+// given name is registered (e.g., via [DefineMiddleware] or through a
+// plugin's [ai.MiddlewarePlugin.Middlewares] method).
+func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
+	return ai.LookupMiddleware(g.reg, name)
 }
 
 // DefinePrompt defines a prompt programmatically, registers it as a [core.Action]

@@ -15,6 +15,7 @@
  */
 import { z } from 'zod';
 import { DocumentDataSchema } from './document';
+import { MiddlewareRefSchema } from './middleware';
 import {
   CustomPartSchema,
   DataPartSchema,
@@ -63,32 +64,6 @@ export {
 //
 // IMPORTANT: Keep this file in sync with genkit/ai/src/model-types.ts!
 //
-
-/** Descriptor for a registered middleware, returned by reflection API. */
-export const MiddlewareDescSchema = z.object({
-  /** Unique name of the middleware. */
-  name: z.string(),
-  /** Human-readable description of what the middleware does. */
-  description: z.string().optional(),
-  /** JSON Schema for the middleware's configuration. */
-  configSchema: z.record(z.any()).nullish(),
-  /** User defined metadata for the middleware. */
-  metadata: z.record(z.any()).nullish(),
-});
-export type MiddlewareDesc = z.infer<typeof MiddlewareDescSchema>;
-
-/**
- * Zod schema of middleware reference.
- */
-export const MiddlewareRefSchema = z.object({
-  name: z.string(),
-  config: z.any().optional(),
-});
-
-/**
- * Middleware reference.
- */
-export type MiddlewareRef = z.infer<typeof MiddlewareRefSchema>;
 
 /**
  * Zod schema of an opration representing a model reference.

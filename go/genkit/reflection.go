@@ -303,6 +303,7 @@ func serveMux(g *Genkit, s *reflectionServer) *http.ServeMux {
 	mux.HandleFunc("POST /api/runAction", wrapReflectionHandler(handleRunAction(g, s.activeActions)))
 	mux.HandleFunc("POST /api/notify", wrapReflectionHandler(handleNotify()))
 	mux.HandleFunc("POST /api/cancelAction", wrapReflectionHandler(handleCancelAction(s.activeActions)))
+	mux.HandleFunc("GET /api/values", wrapReflectionHandler(handleListValues(g)))
 	return mux
 }
 
@@ -595,6 +596,26 @@ func handleListActions(g *Genkit) func(w http.ResponseWriter, r *http.Request) e
 			descMap[d.Key] = d
 		}
 		return writeJSON(r.Context(), w, descMap)
+	}
+}
+
+// handleListValues returns registered values filtered by type query parameter.
+// Matches JS: GET /api/values?type=middleware
+func handleListValues(g *Genkit) func(w http.ResponseWriter, r *http.Request) error {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		valueType := r.URL.Query().Get("type")
+		if valueType == "" {
+			return core.NewError(core.INVALID_ARGUMENT, `query parameter "type" is required`)
+		}
+		prefix := "/" + valueType + "/"
+		result := map[string]any{}
+		for key, val := range g.reg.ListValues() {
+			if strings.HasPrefix(key, prefix) {
+				name := strings.TrimPrefix(key, prefix)
+				result[name] = val
+			}
+		}
+		return writeJSON(r.Context(), w, result)
 	}
 }
 
