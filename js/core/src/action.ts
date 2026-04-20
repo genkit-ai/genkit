@@ -100,7 +100,7 @@ export interface ActionResult<O> {
 /**
  * Options (side channel) data to pass to the model.
  */
-export interface ActionRunOptions<S, I = any, Init = any> {
+export interface ActionRunOptions<S, Init = any> {
   /**
    * Streaming callback (optional).
    */
@@ -130,14 +130,20 @@ export interface ActionRunOptions<S, I = any, Init = any> {
   onTraceStart?: (traceInfo: { traceId: string; spanId: string }) => void;
 
   /**
-   * Streaming input (optional).
-   */
-  inputStream?: AsyncIterable<I>;
-
-  /**
    * Initialization data provided to the action.
    */
   init?: Init;
+}
+
+/**
+ * Options (side channel) data to pass to the model for bi-directional actions.
+ */
+export interface BidiActionRunOptions<S, I = any, Init = any>
+  extends ActionRunOptions<S, Init> {
+  /**
+   * Streaming input (optional).
+   */
+  inputStream?: AsyncIterable<I>;
 }
 
 /**
@@ -182,7 +188,7 @@ export interface ActionFnArg<S, I = any, Init = any> {
   /**
    * Initialization data provided to the action.
    */
-  init?: Init;
+  init: Init;
 }
 
 /**
@@ -225,7 +231,7 @@ export type Action<
   S extends z.ZodTypeAny = z.ZodTypeAny,
   RunOptions extends ActionRunOptions<
     z.infer<S>,
-    z.infer<I>
+    z.infer<Init>
   > = ActionRunOptions<z.infer<S>, z.infer<I>>,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 > = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
@@ -235,13 +241,10 @@ export type Action<
   __registry?: Registry;
   run(
     input?: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    options?: RunOptions
   ): Promise<ActionResult<z.infer<O>>>;
 
-  stream(
-    input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
-  ): StreamingResponse<O, S>;
+  stream(input?: z.infer<I>, opts?: RunOptions): StreamingResponse<O, S>;
 };
 
 export interface BidiAction<
@@ -249,11 +252,11 @@ export interface BidiAction<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   OS extends z.ZodTypeAny = z.ZodTypeAny,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
-  RunOptions extends ActionRunOptions<
+  RunOptions extends BidiActionRunOptions<
     z.infer<OS>,
     z.infer<IS>,
     z.infer<Init>
-  > = ActionRunOptions<z.infer<OS>, z.infer<IS>, z.infer<Init>>,
+  > = BidiActionRunOptions<z.infer<OS>, z.infer<IS>, z.infer<Init>>,
 > extends Action<IS, O, OS, RunOptions, Init> {
   streamBidi(
     init?: z.infer<Init>,
@@ -377,20 +380,20 @@ export function actionWithMiddleware<
 ): Action<I, O, S, any, Init> {
   const wrapped = (async (
     req: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<Init>>
   ) => {
     return (await wrapped.run(req, options)).result;
   }) as Action<I, O, S, any, Init>;
   wrapped.__action = action.__action;
   wrapped.run = async (
     req: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<Init>>
   ): Promise<ActionResult<z.infer<O>>> => {
     let telemetry;
     const dispatch = async (
       index: number,
       req: z.infer<I>,
-      opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+      opts?: ActionRunOptions<z.infer<S>, z.infer<Init>>
     ) => {
       if (index === middleware.length) {
         // end of the chain, call the original model action
@@ -462,7 +465,7 @@ export function action<
 
   const actionFn = (async (
     input?: I,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<Init>>
   ) => {
     return (await actionFn.run(input, options)).result;
   }) as Action<I, O, z.infer<S>, any, Init>;
@@ -470,7 +473,9 @@ export function action<
 
   actionFn.run = async (
     input: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    options?: ActionRunOptions<z.infer<S>, z.infer<Init>> & {
+      inputStream?: AsyncIterable<z.infer<I>>;
+    }
   ): Promise<ActionResult<z.infer<O>>> => {
     if (config.inputSchema || config.inputJsonSchema) {
       if (!options?.inputStream) {
@@ -586,7 +591,9 @@ export function action<
 
   actionFn.stream = (
     input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>, z.infer<I>, z.infer<Init>>
+    opts?: ActionRunOptions<z.infer<S>, z.infer<Init>> & {
+      inputStream?: AsyncIterable<z.infer<I>>;
+    }
   ): StreamingResponse<O, S> => {
     let chunkStreamController: ReadableStreamController<z.infer<S>>;
     const chunkStream = new ReadableStream<z.infer<S>>({
