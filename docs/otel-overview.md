@@ -332,6 +332,24 @@ Go's flow implementation and conformance tests record more verbose flow state in
 ##### Error Handling (markedError)
 Go uses a specialized `markedError` type to track whether an error has already been recorded by a span. This ensures that `genkit:isFailureSource` is only set once on the original failing span and prevents redundant error recording as the exception bubbles up.
 
+## Realtime Telemetry
+
+Genkit supports real-time visualization of traces in the Dev UI by breaking the traditional OpenTelemetry "export only on completion" rule. This allows users to see long-running flows or stalled operations as they happen.
+
+### Two-Phase Export
+In development mode (enabled by `GENKIT_ENABLE_REALTIME_TELEMETRY=true`), Genkit utilizes a specialized `RealtimeSpanProcessor` that triggers an export at two distinct points in a span's lifecycle:
+
+1.  **`onStart`**: As soon as a span is created, it is exported to the telemetry server. At this stage, the span has a `startTime` and initial metadata (like `genkit:path`), but `endTime` is `0`.
+2.  **`onEnd`**: Once the operation completes, the span is exported again with its `endTime`, final `genkit:state`, and `genkit:output`.
+
+### Server-Side Classification
+The Genkit telemetry server (supporting both `/api/traces` and `/api/otlp` endpoints) uses the `endTime` field to classify incoming data:
+- **`endTime == 0`**: The server generates a `span_start` event, signaling the Dev UI to render the span in an "active" or "loading" state.
+- **`endTime > 0`**: The server generates a `span_end` event, allowing the Dev UI to finalize the span's visualization and display its result.
+
+### Production Constraints
+Realtime telemetry is strictly for **local development**. Production backends like Google Cloud Trace require both a `startTime` and an `endTime` for every span; consequently, the `google-cloud` plugin uses the standard `BatchSpanProcessor`, which only exports finalized spans.
+
 ## Trace Events
 
 Trace events capture point-in-time occurrences within a span.
