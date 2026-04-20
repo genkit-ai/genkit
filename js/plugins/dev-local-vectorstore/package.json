@@ -21,7 +21,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/dev-local-vectorstore"
   },
   "author": "genkit",

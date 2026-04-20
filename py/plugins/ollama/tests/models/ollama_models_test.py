@@ -725,7 +725,7 @@ class TestResolveImage(unittest.IsolatedAsyncioTestCase):
             cache_key='ollama/image-fetch',
             timeout=60.0,
             headers={
-                'User-Agent': 'Genkit/1.0 (https://github.com/firebase/genkit; genkit@google.com)',
+                'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
             },
             follow_redirects=True,
         )

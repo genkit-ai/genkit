@@ -20,7 +20,7 @@
   "type": "commonjs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/anthropic"
   },
   "author": "genkit",
