@@ -249,6 +249,14 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 		}
 	}
 
+	refs, err := configsToRefs(execOpts.Use)
+	if err != nil {
+		return nil, fmt.Errorf("Prompt.Execute: %w", err)
+	}
+	if len(refs) > 0 {
+		actionOpts.Use = refs
+	}
+
 	return GenerateWithRequest(ctx, r, actionOpts, execOpts.Middleware, execOpts.Stream)
 }
 

@@ -106,6 +106,13 @@ func IsToolInterruptError(err error) (bool, map[string]any) {
 	return false, nil
 }
 
+// NewToolInterruptError creates a tool interrupt error with the given metadata.
+// This is intended for use in middleware that needs to interrupt tool execution
+// without calling the tool itself.
+func NewToolInterruptError(metadata map[string]any) error {
+	return &toolInterruptError{Metadata: metadata}
+}
+
 // InterruptOptions provides configuration for tool interruption.
 type InterruptOptions struct {
 	Metadata map[string]any

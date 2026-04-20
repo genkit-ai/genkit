@@ -111,8 +111,9 @@ type GenerateActionOptions struct {
 	// the model to choose a tool, and none forces the model not to use any tools. Defaults to auto.
 	ToolChoice ToolChoice `json:"toolChoice,omitempty"`
 	// Tools is a list of registered tool names for this generation if supported.
-	Tools []string         `json:"tools,omitempty"`
-	Use   []*MiddlewareRef `json:"use,omitempty"`
+	Tools []string `json:"tools,omitempty"`
+	// Use is middleware to apply to this generation, referenced by name with optional config.
+	Use []*MiddlewareRef `json:"use,omitempty"`
 }
 
 // GenerateActionResume holds options for resuming an interrupted generation.
@@ -225,16 +226,25 @@ type Message struct {
 	Role Role `json:"role,omitempty"`
 }
 
+// MiddlewareDesc is the registered descriptor for a middleware.
 type MiddlewareDesc struct {
-	ConfigSchema any    `json:"configSchema,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Metadata     any    `json:"metadata,omitempty"`
-	Name         string `json:"name,omitempty"`
+	// ConfigSchema is a JSON Schema describing the middleware's configuration.
+	ConfigSchema map[string]any `json:"configSchema,omitempty"`
+	// Description explains what the middleware does.
+	Description string `json:"description,omitempty"`
+	// Metadata contains additional context for the middleware.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Name is the middleware's unique identifier.
+	Name          string `json:"name,omitempty"`
+	buildFromJSON middlewareFactoryFunc
 }
 
+// MiddlewareRef is a serializable reference to a registered middleware with config.
 type MiddlewareRef struct {
-	Config any    `json:"config,omitempty"`
-	Name   string `json:"name,omitempty"`
+	// Config contains the middleware configuration.
+	Config any `json:"config,omitempty"`
+	// Name is the name of the registered middleware.
+	Name string `json:"name,omitempty"`
 }
 
 // ModelInfo contains metadata about a model's capabilities and characteristics.
