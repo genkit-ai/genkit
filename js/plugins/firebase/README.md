@@ -81,7 +81,7 @@ app.post('/myDurableRtdbFlow', expressHandler(myFlow, { streamManager: rtdb }));
 *   **Firestore**: The entire stream history (chunks and final result) is stored in a single document. Firestore has a strict [1MB limitation on document size](https://firebase.google.com/docs/firestore/quotas). If your stream output exceeds this limit, the flow will fail.
 *   **Realtime Database**: While RTDB does not have the same 1MB limit, storing very large streams may impact performance or hit other quotas.
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests against that repo.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
 Usage information and reference details can be found in [Genkit documentation](https://genkit.dev/).
 

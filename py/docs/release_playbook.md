@@ -28,7 +28,7 @@ No PR required.
 3. Open a PR to main with release notes in the description
 4. Merge the PR
 5. `./bin/create_release 0.7.1` — tags `py/v0.7.1`, pushes tag, creates GitHub release
-6. Approve the publish at <https://github.com/firebase/genkit/actions>
+6. Approve the publish at <https://github.com/genkit-ai/genkit/actions>
 
 ## Workflow: `publish_python.yml`
 

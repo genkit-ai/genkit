@@ -40,7 +40,7 @@ jobs:
 
           # Find all TODOs without proper issue references
           # Proper formats:
-          #   # TODO(https://github.com/firebase/genkit/issues/1234): Description
+          #   # TODO(https://github.com/genkit-ai/genkit/issues/1234): Description
           #   # TODO(#1234): Description
           # Invalid format:
           #   # TODO: Description
@@ -71,7 +71,7 @@ jobs:
             echo ""
             echo "Correct formats:"
             echo "  # TODO(#1234): Description"
-            echo "  # TODO(https://github.com/firebase/genkit/issues/1234): Description"
+            echo "  # TODO(https://github.com/genkit-ai/genkit/issues/1234): Description"
             echo ""
             echo "Wrong format:"
             echo "  # TODO: Description"

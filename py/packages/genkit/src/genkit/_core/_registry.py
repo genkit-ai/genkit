@@ -103,7 +103,7 @@ class Registry:
 
         # Re-entrancy guard for _trigger_lazy_loading.  Prevents infinite
         # recursion when a lazy factory resolves its own action key (see
-        # https://github.com/firebase/genkit/issues/4491).
+        # https://github.com/genkit-ai/genkit/issues/4491).
         self._loading_actions: set[str] = set()
 
         # Initialize Dotprompt with schema_resolver to match JS SDK pattern
@@ -341,7 +341,7 @@ class Registry:
 
         A re-entrancy guard (``_loading_actions``) prevents infinite recursion
         when a factory resolves its own action key during initialization.
-        See https://github.com/firebase/genkit/issues/4491.
+        See https://github.com/genkit-ai/genkit/issues/4491.
         """
         if action is None:
             return None

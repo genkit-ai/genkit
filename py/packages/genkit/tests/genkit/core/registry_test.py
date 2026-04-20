@@ -109,7 +109,7 @@ async def test_trigger_lazy_loading_reentrant_guard() -> None:
 
     When a lazy factory resolves its own action key, the re-entrancy guard
     must skip the nested invocation instead of recursing until
-    RecursionError.  See https://github.com/firebase/genkit/issues/4491.
+    RecursionError.  See https://github.com/genkit-ai/genkit/issues/4491.
     """
     registry = Registry()
 
