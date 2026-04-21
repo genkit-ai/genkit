@@ -69,6 +69,10 @@ export interface ActionMetadata<
   outputJsonSchema?: JSONSchema7;
   /** Stream Zod schema. */
   streamSchema?: S;
+  /** Schema of the initialization data. */
+  initSchema?: z.ZodTypeAny;
+  /** JSON schema of the initialization data. */
+  initJsonSchema?: JSONSchema7;
   /** Metadata for the action. */
   metadata?: Record<string, any>;
 }
@@ -83,6 +87,8 @@ export const ActionMetadataSchema = z.object({
   outputSchema: z.unknown().optional(),
   outputJsonSchema: z.object({}).optional(),
   streamSchema: z.unknown().optional(),
+  initSchema: z.unknown().optional(),
+  initJsonSchema: z.object({}).optional(),
   metadata: z.record(z.string(), z.any()).optional(),
 });
 
@@ -459,6 +465,8 @@ export function action<
     outputSchema: config.outputSchema,
     outputJsonSchema: config.outputJsonSchema,
     streamSchema: config.streamSchema,
+    initSchema: config.initSchema,
+    initJsonSchema: config.initJsonSchema,
     metadata: config.metadata,
     actionType: config.actionType,
   } as ActionMetadata<I, O, S>;
@@ -625,21 +633,30 @@ export function action<
       )
       .then((s) => s.result)
       .finally(() => {
-        chunkStreamController.close();
+        try {
+          chunkStreamController.close();
+        } catch (e) {
+          // Ignore if already closed or cancelled
+        }
       });
 
     return {
       output: invocationPromise,
       stream: (async function* () {
         const reader = chunkStream.getReader();
-        while (true) {
-          const chunk = await reader.read();
-          if (chunk.value) {
-            yield chunk.value;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.value) {
+              yield chunk.value;
+            }
+            if (chunk.done) {
+              break;
+            }
           }
-          if (chunk.done) {
-            break;
-          }
+        } finally {
+          await reader.cancel();
+          reader.releaseLock();
         }
         return await invocationPromise;
       })(),
@@ -766,6 +783,17 @@ export function bidiAction<
 
     return {
       ...result,
+      stream: (async function* () {
+        try {
+          for await (const chunk of result.stream) {
+            yield chunk;
+          }
+        } finally {
+          if (channel) {
+            channel.close();
+          }
+        }
+      })(),
       send: (chunk) => {
         if (!channel) {
           throw new Error('Cannot send to a provided stream.');

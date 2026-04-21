@@ -262,4 +262,42 @@ describe('bidi action', () => {
 
     assert.strictEqual(generatorClosed, true, 'Generator should be closed');
   });
+
+  it('bidi action generator is closed on early break by consumer', async () => {
+    let generatorClosed = false;
+    const act = defineBidiAction(
+      registry,
+      {
+        name: 'chatCleanupBreak',
+        actionType: 'custom',
+        outputSchema: z.string(),
+        inputSchema: z.string(),
+      },
+      async function* ({ inputStream }) {
+        try {
+          for await (const chunk of inputStream) {
+            yield `echo ${chunk}`;
+          }
+        } finally {
+          generatorClosed = true;
+        }
+        return 'done';
+      }
+    );
+
+    const session = act.streamBidi();
+    session.send('1');
+    session.send('2');
+
+    // Read only one chunk and break
+    for await (const chunk of session.stream) {
+      assert.strictEqual(chunk, 'echo 1');
+      break; // Stop reading early
+    }
+
+    // Give the stream some time to propagate the close.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.strictEqual(generatorClosed, true, 'Generator should be closed');
+  });
 });
