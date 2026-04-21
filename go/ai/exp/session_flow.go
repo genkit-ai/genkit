@@ -65,27 +65,27 @@ type SessionRunner[State any] struct {
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
 // TurnEnd chunk is sent and a snapshot check is triggered.
-func (a *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *SessionFlowInput) error) error {
-	for input := range a.InputCh {
+func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *SessionFlowInput) error) error {
+	for input := range s.InputCh {
 		spanMeta := &tracing.SpanMetadata{
-			Name:    fmt.Sprintf("sessionFlow/turn/%d", a.TurnIndex),
+			Name:    fmt.Sprintf("sessionFlow/turn/%d", s.TurnIndex),
 			Type:    "flowStep",
 			Subtype: "flowStep",
 		}
 
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *SessionFlowInput) (any, error) {
-				a.AddMessages(input.Messages...)
+				s.AddMessages(input.Messages...)
 
 				if err := fn(ctx, input); err != nil {
 					return nil, err
 				}
 
-				a.onEndTurn(ctx)
-				a.TurnIndex++
+				s.onEndTurn(ctx)
+				s.TurnIndex++
 
-				if a.collectTurnOutput != nil {
-					return a.collectTurnOutput(), nil
+				if s.collectTurnOutput != nil {
+					return s.collectTurnOutput(), nil
 				}
 				return nil, nil
 			},
@@ -101,17 +101,17 @@ func (a *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 // the last message in the conversation history and all artifacts.
 // It is a convenience for custom session flows that don't need to construct the
 // result manually.
-func (a *SessionRunner[State]) Result() *SessionFlowResult {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+func (s *SessionRunner[State]) Result() *SessionFlowResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	result := &SessionFlowResult{}
-	if msgs := a.state.Messages; len(msgs) > 0 {
+	if msgs := s.state.Messages; len(msgs) > 0 {
 		result.Message = msgs[len(msgs)-1]
 	}
-	if len(a.state.Artifacts) > 0 {
-		arts := make([]*Artifact, len(a.state.Artifacts))
-		copy(arts, a.state.Artifacts)
+	if len(s.state.Artifacts) > 0 {
+		arts := make([]*Artifact, len(s.state.Artifacts))
+		copy(arts, s.state.Artifacts)
 		result.Artifacts = arts
 	}
 	return result
@@ -119,33 +119,33 @@ func (a *SessionRunner[State]) Result() *SessionFlowResult {
 
 // maybeSnapshot creates a snapshot if conditions are met (store configured,
 // callback approves, state changed). Returns the snapshot ID or empty string.
-func (a *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
-	if a.store == nil {
+func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
+	if s.store == nil {
 		return ""
 	}
 
-	a.mu.RLock()
-	currentVersion := a.version
-	currentState := a.copyStateLocked()
-	a.mu.RUnlock()
+	s.mu.RLock()
+	currentVersion := s.version
+	currentState := s.copyStateLocked()
+	s.mu.RUnlock()
 
 	// Skip if state hasn't changed since the last snapshot. This avoids
 	// redundant snapshots, e.g. the invocation-end snapshot after a
 	// single-turn Run where the turn-end snapshot already captured the
 	// same state.
-	if a.lastSnapshot != nil && currentVersion == a.lastSnapshotVersion {
+	if s.lastSnapshot != nil && currentVersion == s.lastSnapshotVersion {
 		return ""
 	}
 
-	if a.snapshotCallback != nil {
+	if s.snapshotCallback != nil {
 		var prevState *SessionState[State]
-		if a.lastSnapshot != nil {
-			prevState = &a.lastSnapshot.State
+		if s.lastSnapshot != nil {
+			prevState = &s.lastSnapshot.State
 		}
-		if !a.snapshotCallback(ctx, &SnapshotContext[State]{
+		if !s.snapshotCallback(ctx, &SnapshotContext[State]{
 			State:     &currentState,
 			PrevState: prevState,
-			TurnIndex: a.TurnIndex,
+			TurnIndex: s.TurnIndex,
 			Event:     event,
 		}) {
 			return ""
@@ -158,28 +158,28 @@ func (a *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 		Event:      event,
 		State:      currentState,
 	}
-	if a.lastSnapshot != nil {
-		snapshot.ParentID = a.lastSnapshot.SnapshotID
+	if s.lastSnapshot != nil {
+		snapshot.ParentID = s.lastSnapshot.SnapshotID
 	}
 
-	if err := a.store.SaveSnapshot(ctx, snapshot); err != nil {
+	if err := s.store.SaveSnapshot(ctx, snapshot); err != nil {
 		logger.FromContext(ctx).Error("session flow: failed to save snapshot", "err", err)
 		return ""
 	}
 
 	// Set snapshotId in last message metadata.
-	a.mu.Lock()
-	if msgs := a.state.Messages; len(msgs) > 0 {
+	s.mu.Lock()
+	if msgs := s.state.Messages; len(msgs) > 0 {
 		lastMsg := msgs[len(msgs)-1]
 		if lastMsg.Metadata == nil {
 			lastMsg.Metadata = make(map[string]any)
 		}
 		lastMsg.Metadata["snapshotId"] = snapshot.SnapshotID
 	}
-	a.mu.Unlock()
+	s.mu.Unlock()
 
-	a.lastSnapshot = snapshot
-	a.lastSnapshotVersion = currentVersion
+	s.lastSnapshot = snapshot
+	s.lastSnapshotVersion = currentVersion
 
 	return snapshot.SnapshotID
 }
