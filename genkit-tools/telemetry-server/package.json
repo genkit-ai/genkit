@@ -7,7 +7,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.33.0-rc.0",
+  "version": "1.34.0-rc.0",
   "type": "commonjs",
   "scripts": {
     "compile": "pnpm genversion && tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json",
