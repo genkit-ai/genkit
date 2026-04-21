@@ -51,6 +51,18 @@ export function cacheControl(options?: Partial<CacheControlEphemeral>): {
   };
 }
 
+/**
+ * Strips the 'anthropic/' namespace prefix if present.
+ * Throws if the model name is missing.
+ */
+export function checkModelName(name?: string): string {
+  const cleanName = name?.replace(/^anthropic\//, '');
+  if (!cleanName) {
+    throw new Error('Model name is required.');
+  }
+  return cleanName;
+}
+
 export function removeUndefinedProperties<T>(obj: T): T {
   if (typeof obj !== 'object' || obj === null) {
     return obj;
@@ -59,4 +71,11 @@ export function removeUndefinedProperties<T>(obj: T): T {
   return Object.fromEntries(
     Object.entries(obj).filter(([_, value]) => value !== undefined)
   ) as T;
+}
+
+export function isKnownKey<T extends object>(
+  key: string | number | symbol,
+  obj: T
+): key is keyof T {
+  return key in obj;
 }
