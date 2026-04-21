@@ -1,0 +1,12 @@
+[project]
+name = "tracing"
+version = "0.2.0"
+requires-python = ">=3.10"
+dependencies = ["genkit", "genkit-plugin-google-genai"]
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

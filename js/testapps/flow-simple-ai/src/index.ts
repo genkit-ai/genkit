@@ -18,6 +18,7 @@ import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { enableGoogleCloudTelemetry } from '@genkit-ai/google-cloud';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
+import { filesystem, skills, toolApproval } from '@genkit-ai/middleware';
 import { GoogleAIFileManager } from '@google/generative-ai/server';
 import { AlwaysOnSampler } from '@opentelemetry/sdk-trace-base';
 import { initializeApp } from 'firebase-admin/app';
@@ -71,8 +72,11 @@ const ai = genkit({
         GenkitMetric.JSONATA,
       ],
     }),
+    filesystem.plugin(),
+    skills.plugin(),
+    toolApproval.plugin(),
   ],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 const math: PluginProvider = {
@@ -207,7 +211,7 @@ export const streamJsonFlow = ai.defineFlow(
   },
   async (count, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       output: {
         schema: GameCharactersSchema,
       },
@@ -307,7 +311,7 @@ export const vertexStreamer = ai.defineFlow(
   async (input, { sendChunk }) => {
     return await ai.run('call-llm', async () => {
       const llmResponse = await ai.generate({
-        model: googleAI.model('gemini-2.5-flash'),
+        model: googleAI.model('gemini-flash-latest'),
         prompt: `Tell me a very long joke about ${input}.`,
         onChunk: (c) => sendChunk(c.text),
       });
@@ -358,7 +362,7 @@ export const searchDestinations = ai.defineFlow(
     });
 
     const result = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Give me a list of vacation options based on the provided context. Use only the options provided below, and describe how it fits with my query.
 
 Query: ${input}
@@ -464,7 +468,7 @@ export const toolCaller = ai.defineFlow(
   },
   async (_, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       config: {
         temperature: 1,
       },
@@ -506,7 +510,7 @@ export const dynamicToolCaller = ai.defineFlow(
     );
 
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       config: {
         temperature: 1,
       },
@@ -595,7 +599,7 @@ export const invalidOutput = ai.defineFlow(
   },
   async () => {
     const result = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       output: {
         schema: z.object({
           name: z.string(),
@@ -628,7 +632,7 @@ export const fileApi = ai.defineFlow(
     console.log(uploadResult.file);
 
     const result = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: [
         { text: 'Describe this image:' },
         {
@@ -671,7 +675,7 @@ export const toolTester = ai.defineFlow(
   },
   async (query) => {
     const result = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: query,
       tools: testTools,
     });
@@ -689,7 +693,7 @@ export const arrayStreamTester = ai.defineFlow(
   async (input, { sendChunk }) => {
     try {
       const { stream, response } = ai.generateStream({
-        model: googleAI.model('gemini-2.5-flash'),
+        model: googleAI.model('gemini-flash-latest'),
         config: {
           safetySettings: [
             {
@@ -745,7 +749,7 @@ ai.defineFlow(
   },
   async (query, { sendChunk }) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: query,
       tools: ['math/add', 'math/subtract'],
       onChunk: sendChunk,
@@ -784,7 +788,7 @@ ai.defineFlow('blockingMiddleware', async () => {
 
 ai.defineFlow('formatJson', async (input, { sendChunk }) => {
   const { output, text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: `generate an RPG game character of type ${input || 'archer'}`,
     output: {
       constrained: true,
@@ -803,7 +807,7 @@ ai.defineFlow('formatJson', async (input, { sendChunk }) => {
 
 ai.defineFlow('formatJsonManualSchema', async (input, { sendChunk }) => {
   const { output, text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: `generate one RPG game character of type ${input || 'archer'} and generated JSON must match this interface
 
     \`\`\`typescript
@@ -873,7 +877,7 @@ ai.defineFlow(
   },
   async (input) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `extract data from:\n\n${input}`,
       output: {
         schema: z.object({
@@ -925,7 +929,7 @@ ai.defineFlow('geminiImages', async (_, { sendChunk }) => {
 
 ai.defineFlow('geminiEnum', async (thing, { sendChunk }) => {
   const { response, stream } = await ai.generateStream({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: `What type of thing is ${thing || 'a banana'}?`,
     output: {
       schema: z.object({
@@ -945,13 +949,13 @@ ai.defineFlow('embedders-tester', async () => {
   console.log(
     await ai.embed({
       content: 'hello world',
-      embedder: googleAI.embedder('text-embedding-004'),
+      embedder: googleAI.embedder('gemini-embedding-001'),
     })
   );
   console.log(
     await ai.embed({
       content: 'hello world',
-      embedder: vertexAI.embedder('text-embedding-004'),
+      embedder: vertexAI.embedder('gemini-embedding-001'),
     })
   );
 });
@@ -959,7 +963,7 @@ ai.defineFlow('embedders-tester', async () => {
 ai.defineFlow('reasoning', async (_, { sendChunk }) => {
   const { message } = await ai.generate({
     prompt: 'whats heavier, one kilo of steel or or one kilo of feathers',
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     config: {
       thinkingConfig: {
         thinkingBudget: 1024,
@@ -1112,7 +1116,7 @@ async function saveWaveFile(
 
 ai.defineFlow('googleSearch', async (thing) => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: `What is a banana?`,
     config: { tools: [{ googleSearch: {} }] },
   });
@@ -1132,7 +1136,7 @@ ai.defineFlow('googleSearchRetrieval', async (thing) => {
 
 ai.defineFlow('googleai-imagen', async (thing) => {
   const { message } = await ai.generate({
-    model: googleAI.model('imagen-3.0-generate-002'),
+    model: googleAI.model('imagen-4.0-generate-001'),
     prompt:
       thing ??
       `Dark but cozy room. A programmer happily programming an AI library.`,
@@ -1144,7 +1148,7 @@ ai.defineFlow('googleai-imagen', async (thing) => {
 
 ai.defineFlow('meme-of-the-day', async () => {
   const { text: script } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt:
       'Write a detailed script for a 8 second video. The video should be a meme of the day. ' +
       'A Silly DIY FAIL situation like a: broken tools, or bad weather or crooked assembly, etc. Be creative. The FAIL should be very obvious. ' +
@@ -1266,7 +1270,7 @@ ai.defineResource(
 
 ai.defineFlow('resource', async () => {
   return await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: [
       { text: 'analyze this: ' },
       { resource: { uri: 'my://resource/value' } },
@@ -1279,9 +1283,145 @@ ai.defineFlow('abort-signal', async (_, { sendChunk }) => {
   const signal = abort.signal;
   setTimeout(() => abort.abort(), 2000);
   return await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: [{ text: 'tell me a long joke' }],
     onChunk: sendChunk,
     abortSignal: signal,
   });
 });
+
+const transferMoney = ai.defineTool(
+  {
+    name: 'transferMoney',
+    description: 'Transfers money between accounts.',
+    inputSchema: z.object({
+      toAccountId: z
+        .string()
+        .describe('the account id of the transfer destination'),
+      amount: z.number().describe('the amount in integer cents (100 = $1.00)'),
+    }),
+    outputSchema: z.object({
+      status: z.string().describe('the outcome of the transfer'),
+      message: z.string().optional(),
+    }),
+  },
+  async (input, opts) => {
+    const { interrupt, resumed, context } = opts;
+    const resumedStatus = (resumed as Record<string, any>)?.status;
+    // if the user rejected the transaction
+    if (resumedStatus === 'REJECTED') {
+      return {
+        status: 'REJECTED',
+        message: 'The user rejected the transaction.',
+      };
+    }
+    // trigger an interrupt to confirm if amount > $100
+    if (resumedStatus !== 'APPROVED' && input.amount > 10000) {
+      interrupt({
+        message: 'Please confirm sending an amount > $100.',
+      });
+    }
+    // complete the transaction if not interrupted
+    return {
+      status: 'COMPLETED',
+      message: `Transferred $${input.amount / 100} to ${input.toAccountId}`,
+    };
+  }
+);
+
+export const transferFlow = ai.defineFlow(
+  {
+    name: 'transferFlowWithRestart',
+    inputSchema: z.string(),
+    outputSchema: z.string(),
+  },
+  async (prompt) => {
+    let response = await ai.generate({
+      model: googleAI.model('gemini-flash-latest'),
+      tools: [transferMoney],
+      prompt: prompt,
+    });
+
+    while (response.interrupts.length) {
+      console.log('Interrupted, resuming with approval in 5 seconds...');
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const confirmations = [];
+      // multiple interrupts can be called at once, so we handle them all
+      for (const interrupt of response.interrupts) {
+        confirmations.push(
+          // use the 'restart' method on our tool to provide `resumed` metadata
+          transferMoney.restart(
+            interrupt,
+            // send the tool request input to the user to respond. assume that this
+            // returns `{status: "APPROVED"}` or `{status: "REJECTED"}`
+            { status: 'APPROVED' }
+          )
+        );
+      }
+
+      console.log('Resuming');
+      response = await ai.generate({
+        model: googleAI.model('gemini-flash-latest'),
+        tools: [transferMoney],
+        messages: response.messages,
+        resume: {
+          restart: confirmations,
+        },
+      });
+    }
+    // no more interrupts, we can see the final response
+    return response.text;
+  }
+);
+
+const askQuestion = ai.defineInterrupt({
+  name: 'askQuestion',
+  description: 'use this to ask the user a clarifying question',
+  inputSchema: z.object({
+    choices: z.array(z.string()).describe('the choices to display to the user'),
+    allowOther: z.boolean().optional().describe('when true, allow write-ins'),
+  }),
+  outputSchema: z.string(),
+});
+
+export const transferFlowManual = ai.defineFlow(
+  {
+    name: 'transferFlowManual',
+    outputSchema: z.string(),
+  },
+  async () => {
+    const response = await ai.generate({
+      prompt: 'Ask me a movie trivia question.',
+      tools: [askQuestion],
+      model: googleAI.model('gemini-2.5-pro'),
+    });
+
+    const answers = [];
+    if (response.interrupts.length > 0) {
+      console.log('Interrupted, resuming with approval in 5 seconds...');
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // multiple interrupts can be called at once, so we handle them all
+      for (const question of response.interrupts) {
+        answers.push(
+          // use the `respond` method on our tool to populate answers
+          askQuestion.respond(
+            question,
+            // mock response
+            'The answer is C'
+          )
+        );
+      }
+    }
+
+    const finalResponse = await ai.generate({
+      tools: [askQuestion],
+      model: googleAI.model('gemini-2.5-pro'),
+      messages: response.messages,
+      resume: {
+        respond: answers,
+      },
+    });
+
+    return finalResponse.text;
+  }
+);

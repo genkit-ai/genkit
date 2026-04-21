@@ -22,7 +22,6 @@ matching the JavaScript implementation in js/plugins/google-cloud/src/utils.ts.
 Functions:
     - truncate(): Limit string length for log content
     - truncate_path(): Limit Genkit path string length
-    - to_display_path(): Convert internal path to display format
     - extract_outer_feature_name_from_path(): Get root feature from path
     - create_common_log_attributes(): Build log attributes dict
     - extract_error_*(): Error info extraction helpers
@@ -188,30 +187,3 @@ def create_common_log_attributes(span: ReadableSpan, project_id: str | None = No
         'logging.googleapis.com/trace': f'projects/{project_id}/traces/{format(span_context.trace_id, "032x")}',
         'logging.googleapis.com/trace_sampled': '1' if is_sampled else '0',
     }
-
-
-def to_display_path(qualified_path: str) -> str:
-    """Convert a qualified Genkit path to a display path.
-
-    Simplifies paths like '/{myFlow,t:flow}/{step,t:flowStep}' to 'myFlow/step'.
-
-    Args:
-        qualified_path: The full Genkit path.
-
-    Returns:
-        A simplified display path.
-    """
-    if not qualified_path:
-        return ''
-
-    # Extract names from path segments like '{name,t:type}'
-    parts = []
-    for segment in qualified_path.split('/'):
-        if segment.startswith('{'):
-            match = re.match(r'\{([^,}]+)', segment)
-            if match:
-                parts.append(match.group(1))
-        elif segment:
-            parts.append(segment)
-
-    return '/'.join(parts)

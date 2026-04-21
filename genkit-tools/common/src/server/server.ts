@@ -23,7 +23,7 @@ import type { Server } from 'http';
 import os from 'os';
 import path from 'path';
 import type { GenkitToolsError } from '../manager';
-import type { RuntimeManager } from '../manager/manager';
+import type { BaseRuntimeManager } from '../manager/manager';
 import { writeToolsInfoFile } from '../utils';
 import { logger } from '../utils/logger';
 import { toolsPackage } from '../utils/package';
@@ -43,10 +43,50 @@ const UI_ASSETS_ROOT = path.resolve(
 const UI_ASSETS_SERVE_PATH = path.resolve(UI_ASSETS_ROOT, 'ui', 'browser');
 const API_BASE_PATH = '/api';
 
+class PushableAsyncIterable<T> implements AsyncIterable<T> {
+  private queue: T[] = [];
+  private resolvers: ((value: IteratorResult<T>) => void)[] = [];
+  private closed = false;
+
+  [Symbol.asyncIterator]() {
+    return {
+      next: () => this.next(),
+    };
+  }
+
+  next(): Promise<IteratorResult<T>> {
+    if (this.queue.length > 0) {
+      return Promise.resolve({ value: this.queue.shift()!, done: false });
+    }
+    if (this.closed) {
+      return Promise.resolve({ value: undefined as any, done: true });
+    }
+    return new Promise((resolve) => this.resolvers.push(resolve));
+  }
+
+  push(value: T) {
+    if (this.closed) return;
+    if (this.resolvers.length > 0) {
+      this.resolvers.shift()!({ value, done: false });
+    } else {
+      this.queue.push(value);
+    }
+  }
+
+  close() {
+    this.closed = true;
+    while (this.resolvers.length > 0) {
+      this.resolvers.shift()!({ value: undefined as any, done: true });
+    }
+  }
+}
+
+const activeInputStreams = new Map<string, PushableAsyncIterable<any>>();
+
 /**
  * Starts up the Genkit Tools server which includes static files for the UI and the Tools API.
  */
-export function startServer(manager: RuntimeManager, port: number) {
+export function startServer(manager: BaseRuntimeManager, port: number) {
   let server: Server;
   const app = express();
 
@@ -131,29 +171,76 @@ export function startServer(manager: RuntimeManager, port: number) {
         res.flushHeaders();
       }
 
+      let inputStream: PushableAsyncIterable<any> | undefined;
+      const bidi = req.query.bidi === 'true';
+      if (bidi) {
+        inputStream = new PushableAsyncIterable();
+      }
+
+      let capturedTraceId: string | undefined;
+
       try {
-        const onTraceIdCallback = !manager.disableRealtimeTelemetry
-          ? (traceId: string) => {
-              // Set trace ID header and flush - this fires before first chunk
-              res.setHeader('X-Genkit-Trace-Id', traceId);
-              res.flushHeaders();
-            }
-          : undefined;
+        const onTraceIdCallback = (traceId: string) => {
+          capturedTraceId = traceId;
+          // Set trace ID header and flush - this fires before first chunk
+          if (!manager.disableRealtimeTelemetry) {
+            res.setHeader('X-Genkit-Trace-Id', traceId);
+            res.flushHeaders();
+          }
+          if (bidi && inputStream) {
+            activeInputStreams.set(traceId, inputStream);
+          }
+        };
 
         const result = await manager.runAction(
           req.body,
           (chunk) => {
             res.write(JSON.stringify(chunk) + '\n');
           },
-          onTraceIdCallback
+          onTraceIdCallback,
+          inputStream
         );
         res.write(JSON.stringify(result));
       } catch (err) {
         res.write(JSON.stringify({ error: (err as GenkitToolsError).data }));
+      } finally {
+        if (capturedTraceId) {
+          activeInputStreams.delete(capturedTraceId);
+        }
       }
       res.end();
     }
   );
+
+  app.post(
+    '/api/sendBidiInput',
+    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    (req, res) => {
+      const { traceId, chunk } = req.body;
+      const stream = activeInputStreams.get(traceId);
+      if (stream) {
+        stream.push(chunk);
+        res.status(200).send('OK');
+      } else {
+        res.status(404).send('Stream not found');
+      }
+    }
+  );
+
+  app.post('/api/endBidiInput', bodyParser.json(), (req, res) => {
+    const { traceId } = req.body;
+    const stream = activeInputStreams.get(traceId);
+    if (stream) {
+      stream.close();
+      // Don't delete here, wait for action to complete (finally block)
+      // or delete if we want to ensure no more writes.
+      // If we delete here, subsequent writes will fail, which is correct.
+      // But finally block handles cleanup anyway.
+      res.status(200).send('OK');
+    } else {
+      res.status(404).send('Stream not found');
+    }
+  });
 
   app.post(
     '/api/streamTrace',

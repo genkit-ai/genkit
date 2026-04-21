@@ -20,30 +20,15 @@ dependencies = [
   "dotpromptz==0.1.5",
   "genkit",
   "genkit-plugin-anthropic",
-  "genkit-plugin-checks",
-  "genkit-plugin-cloudflare-workers-ai",
   "genkit-plugin-compat-oai",
-  "genkit-plugin-deepseek",
-  "genkit-plugin-dev-local-vectorstore",
-  "genkit-plugin-evaluators",
   "genkit-plugin-fastapi",
-  "genkit-plugin-firebase",
   "genkit-plugin-flask",
   "genkit-plugin-google-cloud",
   "genkit-plugin-google-genai",
   "genkit-plugin-ollama",
+  "genkit-plugin-evaluators",
   "genkit-plugin-vertex-ai",
-  "genkit-plugin-xai",
-  "genkit-plugin-mcp",
-  "genkit-plugin-microsoft-foundry",
-  "genkit-plugin-amazon-bedrock",
-
-  "genkit-plugin-cohere",
-  "genkit-plugin-mistral",
-  "genkit-plugin-huggingface",
-  "genkit-plugin-observability",
   # Internal tools (private, not published)
-  "conform",
   "liccheck>=0.9.2",
   "setuptools>=75.0.0,<82",                   # Required by liccheck (provides pkg_resources, removed in setuptools 82+)
   "mcp>=1.25.0",
@@ -84,7 +69,7 @@ lint = [
   "litestar>=2.20.0",         # For web/typing.py type resolution
   "mypy>=1.14.0",
   "pip-audit>=2.7.0",
-  "pypdf>=6.6.2",
+  "pypdf>=6.7.5",
   "pyrefly>=0.15.0",
   "pyright>=1.1.392",
   "pysentry-rs>=0.3.14",
@@ -124,13 +109,19 @@ addopts = [
   "-ra",
   "-vv",
   "--ignore=testapps",
-  "--ignore=tools/conform/tests",
   "--import-mode=importlib",
 ]
 asyncio_default_fixture_loop_scope = "session"
+filterwarnings = [
+    # Pydantic warns when a field named 'schema' shadows BaseModel.schema()
+    # We intentionally use 'schema' to match the JSON schema spec.
+    "ignore:Field name .schema. in .* shadows an attribute in parent .BaseModel.:UserWarning",
+    # dotpromptz uses the same pattern; not our code, suppress it too.
+    "ignore:Field name .schema. in .Prompt.*Config. shadows:UserWarning",
+]
 norecursedirs = ["testapps", ".git", ".tox", ".nox", ".venv", "build", "dist"]
 python_files = ["*_test.py"]
-pythonpath = ["."] # For samples.shared imports
+pythonpath = ["."]
 testpaths = ["packages", "plugins", "samples", "tests", "tools"]
 #asyncio_mode = "auto"
 asyncio_mode = "strict"
@@ -141,7 +132,7 @@ fail_under = 78
 [tool.coverage.run]
 omit = [
   "**/__init__.py",  # Often contains just imports
-  "**/testing.py",   # Test utilities
+  "**/_testing.py",  # Internal test utilities
   "**/constants.py", # Typically just constants
   "**/typing.py",    # Often auto-generated or complex types
   "**/types.py",     # Often auto-generated or complex types
@@ -151,87 +142,47 @@ source = ["packages", "plugins"]
 # uv based package management.
 [tool.uv]
 default-groups = ["dev", "lint"]
+override-dependencies = ["werkzeug>=3.1.6"]
 
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
-dev-local-vectorstore-hello                = { workspace = true }
-framework-context-demo                     = { workspace = true }
-framework-custom-evaluators                = { workspace = true }
-framework-dynamic-tools-demo               = { workspace = true }
-framework-evaluator-demo                   = { workspace = true }
-framework-format-demo                      = { workspace = true }
-framework-middleware-demo                  = { workspace = true }
-framework-prompt-demo                      = { workspace = true }
-framework-realtime-tracing-demo            = { workspace = true }
-framework-restaurant-demo                  = { workspace = true }
-framework-tool-interrupts                  = { workspace = true }
-provider-amazon-bedrock-hello              = { workspace = true }
-provider-anthropic-hello                   = { workspace = true }
-provider-checks-hello                      = { workspace = true }
-provider-cloudflare-workers-ai-hello       = { workspace = true }
-provider-cohere-hello                      = { workspace = true }
-provider-compat-oai-hello                  = { workspace = true }
-provider-deepseek-hello                    = { workspace = true }
-provider-firestore-retriever               = { workspace = true }
-provider-google-genai-code-execution       = { workspace = true }
-provider-google-genai-context-caching      = { workspace = true }
-provider-google-genai-hello                = { workspace = true }
-provider-google-genai-media-models-demo    = { workspace = true }
-provider-google-genai-vertexai-hello       = { workspace = true }
-provider-google-genai-vertexai-image       = { workspace = true }
-provider-huggingface-hello                 = { workspace = true }
-provider-microsoft-foundry-hello           = { workspace = true }
-provider-mistral-hello                     = { workspace = true }
-provider-observability-hello               = { workspace = true }
-provider-ollama-hello                      = { workspace = true }
-provider-vertex-ai-model-garden            = { workspace = true }
-provider-vertex-ai-rerank-eval             = { workspace = true }
-provider-vertex-ai-vector-search-bigquery  = { workspace = true }
-provider-vertex-ai-vector-search-firestore = { workspace = true }
-provider-xai-hello                         = { workspace = true }
-web-fastapi-bugbot                         = { workspace = true }
-web-flask-hello                            = { workspace = true }
-web-multi-server                           = { workspace = true }
-web-short-n-long                           = { workspace = true }
+context              = { workspace = true }
+dynamic-tools        = { workspace = true }
+evaluators           = { workspace = true }
+fastapi-bugbot       = { workspace = true }
+flask-hello          = { workspace = true }
+gemini-code-execution = { workspace = true }
+gemini-context-caching = { workspace = true }
+google-genai-media   = { workspace = true }
+middleware           = { workspace = true }
+output-formats       = { workspace = true }
+prompts              = { workspace = true }
+tool-interrupts      = { workspace = true }
+tracing              = { workspace = true }
+vertexai-imagen      = { workspace = true }
 
 # Core packages
 genkit = { workspace = true }
 # Plugins (alphabetical)
-genkit-plugin-amazon-bedrock        = { workspace = true }
 genkit-plugin-anthropic             = { workspace = true }
-genkit-plugin-checks                = { workspace = true }
-genkit-plugin-cloudflare-workers-ai = { workspace = true }
-genkit-plugin-cohere                = { workspace = true }
 genkit-plugin-compat-oai            = { workspace = true }
-genkit-plugin-deepseek              = { workspace = true }
-genkit-plugin-dev-local-vectorstore = { workspace = true }
-genkit-plugin-evaluators            = { workspace = true }
 genkit-plugin-fastapi               = { workspace = true }
-genkit-plugin-firebase              = { workspace = true }
 genkit-plugin-flask                 = { workspace = true }
 genkit-plugin-google-cloud          = { workspace = true }
 genkit-plugin-google-genai          = { workspace = true }
-genkit-plugin-huggingface           = { workspace = true }
-genkit-plugin-mcp                   = { workspace = true }
-genkit-plugin-microsoft-foundry     = { workspace = true }
-genkit-plugin-mistral               = { workspace = true }
-genkit-plugin-observability         = { workspace = true }
 genkit-plugin-ollama                = { workspace = true }
+genkit-plugin-evaluators            = { workspace = true }
 genkit-plugin-vertex-ai             = { workspace = true }
-genkit-plugin-xai                   = { workspace = true }
-# Internal tools (private, not published)
-conform                        = { workspace = true }
-genkit-tools-model-config-test = { workspace = true }
-genkit-tools-sample-flows      = { workspace = true }
-
 [tool.uv.workspace]
 exclude = ["*/shared", "testapps/*"]
-members = ["packages/*", "plugins/*", "samples/*", "tools/*"]
+members = ["packages/*", "plugins/*", "samples/*"]
 
 
 # Ruff checks and formatting.
 [tool.ruff]
 exclude = [
+  "packages/genkit/src/genkit/_core/_typing.py",  # Generated by generate_schema_typing
+  "tools/schema_to_typing",  # Internal generator script
   ".bzr",
   ".direnv",
   ".eggs",
@@ -291,23 +242,36 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
-  # TODO(https://github.com/firebase/genkit/issues/4398): Enable PLC0415 after
+  # TODO(https://github.com/genkit-ai/genkit/issues/4398): Enable PLC0415 after
   # completing cleanup of remaining in-function imports in core framework.
   # "PLC0415",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Auto-generated file from schema
-"packages/genkit/src/genkit/core/typing.py" = ["E501"]
-# Typing tests use reveal_type(), intentional unused vars, and don't need docstrings
+"packages/genkit/src/genkit/_core/_typing.py" = ["E501"]
+# Base model uses **kwargs: Any to match pydantic signatures
+"packages/genkit/src/genkit/_core/_base.py" = ["ANN401"]
+# HTTP client uses **httpx_kwargs: Any to forward arbitrary options
+"packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
+# Span wrapper uses __getattr__ -> Any for dynamic delegation
+"packages/genkit/src/genkit/_core/trace/_adjusting_exporter.py" = ["ANN401"]
+# Re-export modules (F401 would flag imports used only for re-export)
+"packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
+"packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
+"packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
+"packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
+"packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
+# Test files don't need docstrings; test method names are self-documenting
+"**/tests/**/*.py" = ["D", "ANN401"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Validation/provenance/safe-defaults test methods are self-documenting via names;
 # S108 false positives on Path('/tmp/x') used as dummy non-existent paths in tests.
 # Samples have install_rich_traceback() call after imports, before other code
 # Samples are demo code and can use blocking I/O for simplicity
-"samples/*/*.py"     = ["E402", "ASYNC"]
-"samples/*/**/*.py"  = ["E402", "ASYNC"]
-"samples/*/src/*.py" = ["E402", "ASYNC"]
+"samples/*/*.py"     = ["ANN", "D", "E402", "ASYNC"]
+"samples/*/**/*.py"  = ["ANN", "D", "E402", "ASYNC"]
+"samples/*/src/*.py" = ["ANN", "D", "E402", "ASYNC"]
 
 
 [tool.ruff.lint.isort]
@@ -337,13 +301,14 @@ skip-magic-trailing-comma  = false
 #collapse-root-models = true # Don't use; produces Any as types.
 #strict-types = ["str", "int", "float", "bool", "bytes"] # Don't use; produces StrictStr, StrictInt, etc.
 #use-subclass-enum        = true
+base-class               = "genkit._core._base.GenkitModel"
 capitalize-enum-members  = true
 disable-timestamp        = true
 enable-version-header    = true
 field-constraints        = true
 input                    = "../genkit-tools/genkit-schema.json"
 input-file-type          = "jsonschema"
-output                   = "packages/genkit/src/genkit/core/typing.py"
+output                   = "packages/genkit/src/genkit/_core/_typing.py"
 output-model-type        = "pydantic_v2.BaseModel"
 snake-case-field         = true
 strict-nullable          = true
@@ -410,7 +375,9 @@ pyasn1                = "0.6.2"    # BSD-2-Clause
 [tool.ty.src]
 # Auto-generated protobuf stubs use grpc.experimental implicit submodule
 # access that ty warns about. We can't modify generated code.
-exclude = ["**/generated"]
+exclude = [
+  "**/generated",
+]
 
 [tool.ty.environment]
 root = [
@@ -418,34 +385,13 @@ root = [
   "packages/genkit/src",
   # Plugins
   "plugins/anthropic/src",
-  "plugins/amazon-bedrock/src",
-  "plugins/checks/src",
-  "plugins/cloudflare-workers-ai/src",
-  "plugins/cohere/src",
   "plugins/compat-oai/src",
-  "plugins/deepseek/src",
-  "plugins/dev-local-vectorstore/src",
-  "plugins/evaluators/src",
-  "plugins/firebase/src",
   "plugins/flask/src",
   "plugins/google-cloud/src",
   "plugins/google-genai/src",
-  "plugins/huggingface/src",
-  "plugins/mcp/src",
-  "plugins/microsoft-foundry/src",
-  "plugins/mistral/src",
-  "plugins/observability/src",
   "plugins/ollama/src",
   "plugins/vertex-ai/src",
-  "plugins/xai/src",
-  # Samples
-  ".",                                     # For samples.shared imports
-  "samples/framework-evaluator-demo",      # For evaluator_demo package imports
-  "samples/framework-restaurant-demo/src", # For restaurant demo sample imports
-  "samples/framework-custom-evaluators",   # For custom evaluators sample imports
-  "plugins/mcp/tests",                     # For fakes module imports in tests
-  # Tools
-  "tools/conform/src",    # For conform package imports
+  ".",  # For samples.shared and other root-level imports
 ]
 
 # Pyright type checking configuration.
@@ -461,40 +407,16 @@ exclude = [
   "build",
   "dist",
 ]
-
-# Use the venv where packages are installed as editable installs.
-# extraPaths lists all source roots so pyright can resolve PEP 420
-# namespace packages (genkit.plugins.*) across the workspace without
-# relying solely on the venv's editable install paths.
 extraPaths = [
   "packages/genkit/src",
-  "plugins/amazon-bedrock/src",
   "plugins/anthropic/src",
-  "plugins/checks/src",
-  "plugins/cloudflare-workers-ai/src",
-  "plugins/cohere/src",
   "plugins/compat-oai/src",
-  "plugins/deepseek/src",
-  "plugins/dev-local-vectorstore/src",
-  "plugins/evaluators/src",
   "plugins/fastapi/src",
-  "plugins/firebase/src",
   "plugins/flask/src",
   "plugins/google-cloud/src",
   "plugins/google-genai/src",
-  "plugins/huggingface/src",
-  "plugins/mcp/src",
-  "plugins/microsoft-foundry/src",
-  "plugins/mistral/src",
-  "plugins/observability/src",
   "plugins/ollama/src",
   "plugins/vertex-ai/src",
-  "plugins/xai/src",
-  "samples/framework-custom-evaluators",
-  # Tools
-  "tools/conform/src",
-  "tools/model-config-test",
-  "tools/sample-flows",
 ]
 pythonVersion = "3.10"
 reportMissingImports = true
@@ -528,7 +450,6 @@ project_excludes = [
   "dist",
   "testapps",
   "testapps",
-  "tools/model-config-test/**/*.py",
 ]
 project_includes = [
   # Core package (source and tests)
@@ -540,29 +461,10 @@ project_includes = [
   # Samples
   "samples/*/src/**/*.py",
   "samples/*/tests/**/*.py",
-  "samples/framework-evaluator-demo/evaluator_demo/**/*.py",
-  # Tools
-  "tools/conform/src/**/*.py",
-  "tools/sample-flows/**/*.py",
 ]
 
 # Search path for first-party code import resolution.
-# The project root "." covers all packages. Additional paths are needed for:
-# - plugins/mcp/tests: has a local `fakes` module for test mocks
-# - samples/framework-evaluator-demo: has `evaluator_demo` package with internal imports
-# - samples/framework-restaurant-demo/src: has internal imports (menu_ai, menu_schemas)
-# - tools/model-config-test: has `model_performance_test` module for imports
-search-path = [
-  ".",
-  "plugins/mcp/tests",
-  "samples/framework-evaluator-demo",
-  "samples/framework-custom-evaluators",
-  "samples/framework-restaurant-demo/src",
-  # Tools
-  "tools/conform/src",
-  "tools/sample-flows",
-  "tools/model-config-test",
-]
+search-path = ["."]
 # Ignore missing imports for namespace packages - pyrefly can't resolve PEP 420
 # namespace packages but these imports work at runtime.
 # model_performance_test is local to sample-test (excluded from workspace).
@@ -573,3 +475,30 @@ python_version         = "3.10"
 [tool.pyrefly.errors]
 deprecated     = "error"
 redundant-cast = "error"
+
+# Ty analysis: suppress unresolved-import for plugins (PEP 420 namespace packages).
+[tool.ty.analysis]
+allowed-unresolved-imports = ["genkit.plugins.**"]
+
+# Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
+[tool.ty.rules]
+unused-type-ignore-comment = "ignore"
+
+# Relax invalid-argument-type in tests: config=dict is common, ModelRequest validates at runtime.
+[[tool.ty.overrides]]
+include = ["**/tests/**", "**/*_test.py", "samples/**", "tools/**"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+no-matching-overload = "ignore"
+
+# Vertex AI model_garden has relative imports ty struggles to resolve (PEP 420 / namespace).
+[[tool.ty.overrides]]
+include = ["plugins/vertex-ai/**"]
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+
+# genkit._ai._formats._schema: dict.get with str keys from JSON schema traversal.
+[[tool.ty.overrides]]
+include = ["packages/genkit/src/genkit/_ai/_formats/_schema.py"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"

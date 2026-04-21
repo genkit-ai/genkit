@@ -288,6 +288,7 @@ export class Registry {
       !action.__action.name.startsWith(`${opts.namespace}/`)
     ) {
       action.__action.name = `${opts.namespace}/${action.__action.name}`;
+      action.__action.key = `/${type}/${action.__action.name}`;
     }
     const key = `/${type}/${action.__action.name}`;
     logger.debug(`registering ${key}`);
@@ -335,6 +336,7 @@ export class Registry {
     await Promise.all(
       Object.entries(this.actionsById).map(async ([key, action]) => {
         actions[key] = await action;
+        actions[key].__action.key = key; // For async actions with namespace
       })
     );
     return {

@@ -17,11 +17,16 @@
 
 """Model Garden implementation."""
 
+from __future__ import annotations
+
 import typing
 from collections.abc import Callable
 
 if typing.TYPE_CHECKING:
     from openai import AsyncOpenAI
+
+    from genkit import ModelRequest, ModelResponse
+    from genkit.plugin_api import ActionRunContext
 
 from genkit.plugins.compat_oai.models import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
@@ -76,9 +81,8 @@ class ModelGarden:
         """
         self.name = model
         self._openai_params = {'location': location, 'project_id': project_id}
-        self.client: AsyncOpenAI | None = None
 
-    async def create_client(self) -> 'AsyncOpenAI':
+    async def create_client(self) -> AsyncOpenAI:
         """Create the AsyncOpenAI client with refreshed credentials.
 
         This offloads the blocking ``credentials.refresh()`` call to a
@@ -87,8 +91,7 @@ class ModelGarden:
         Returns:
             The authenticated AsyncOpenAI client.
         """
-        self.client = await OpenAIClient.create(**self._openai_params)
-        return self.client
+        return await OpenAIClient.create(**self._openai_params)
 
     def get_model_info(self) -> dict[str, object] | None:
         """Retrieve metadata and supported features for the specified model.
@@ -106,22 +109,24 @@ class ModelGarden:
         supports = model_info.supports
         return {
             'name': model_info.label,
-            'supports': supports.model_dump() if supports and hasattr(supports, 'model_dump') else {},
+            'supports': (
+                supports.model_dump(by_alias=False, exclude_none=False)
+                if supports and hasattr(supports, 'model_dump')
+                else {}
+            ),
         }
 
     def to_openai_compatible_model(self) -> Callable:
         """Convert the Model Garden model into an OpenAI-compatible Genkit model function.
 
-        Must be called after ``create_client()`` has completed.
-
         Returns:
             A callable function (specifically, the ``generate`` method of an
             ``OpenAIModel`` instance) that can be used by Genkit.
-
-        Raises:
-            RuntimeError: If called before ``create_client()``.
         """
-        if self.client is None:
-            raise RuntimeError('Client not initialized. Call await create_client() first.')
-        openai_model = OpenAIModel(self.name, self.client)
-        return openai_model.generate
+
+        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            client = await self.create_client()
+            openai_model = OpenAIModel(self.name, client)
+            return await openai_model.generate(request, ctx)
+
+        return _generate

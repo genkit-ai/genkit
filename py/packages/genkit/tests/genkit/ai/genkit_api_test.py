@@ -5,7 +5,6 @@
 
 """Tests for the Genkit extra API methods."""
 
-from typing import Any
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,13 +12,9 @@ import pytest
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 
-from genkit.ai import Genkit
-from genkit.ai._registry import SimpleRetrieverOptions
-from genkit.core.action import Action
-from genkit.core.action._action import _action_context
-from genkit.core.action.types import ActionKind
-from genkit.core.typing import DocumentPart, Operation
-from genkit.types import DocumentData, RetrieverRequest, RetrieverResponse, TextPart
+from genkit import Genkit
+from genkit._core._action import _action_context
+from genkit._core._typing import Operation
 
 
 @pytest.mark.asyncio
@@ -27,50 +22,22 @@ async def test_genkit_run() -> None:
     """Test Genkit.run method."""
     ai = Genkit()
 
-    def sync_fn() -> str:
-        return 'hello'
-
     async def async_fn() -> str:
         return 'world'
 
-    res1 = await ai.run('test1', sync_fn)
-    assert res1 == 'hello'
-
-    res2 = await ai.run('test2', async_fn)
-    assert res2 == 'world'
+    res1 = await ai.run(name='test1', fn=async_fn)
+    assert res1 == 'world'
 
     # Test with metadata
-    res3 = await ai.run('test3', sync_fn, metadata={'foo': 'bar'})
-    assert res3 == 'hello'
+    res2 = await ai.run(name='test2', fn=async_fn, metadata={'foo': 'bar'})
+    assert res2 == 'world'
 
-    # Test with input overload
-    async def multiply(x: int) -> int:
-        return x * 2
+    # Test that sync functions raise TypeError
+    def sync_fn() -> str:
+        return 'hello'
 
-    res4 = await ai.run('multiply', 10, multiply)
-    assert res4 == 20
-
-
-@pytest.mark.asyncio
-async def test_genkit_dynamic_tool() -> None:
-    """Test Genkit.dynamic_tool method."""
-    ai = Genkit()
-
-    def my_tool(x: int) -> int:
-        return x + 1
-
-    tool = ai.dynamic_tool('my_tool', my_tool, description='increment x')
-
-    assert isinstance(tool, Action)
-    assert tool.kind == ActionKind.TOOL
-    assert tool.name == 'my_tool'
-    assert tool.description == 'increment x'
-    assert tool.metadata.get('type') == 'tool'
-    assert tool.metadata.get('dynamic') is True
-
-    # Execution
-    resp = await tool.arun(5)
-    assert resp.response == 6
+    with pytest.raises(TypeError, match='fn must be a coroutine function'):
+        await ai.run(name='test3', fn=sync_fn)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -86,7 +53,7 @@ async def test_genkit_check_operation() -> None:
 
     # Patch lookup_background_action to return our mock
     with mock.patch(
-        'genkit.blocks.background_model.lookup_background_action',
+        'genkit._core._background.lookup_background_action',
         new=AsyncMock(return_value=mock_background_action),
     ) as mock_lookup:
         updated_op = await ai.check_operation(op)
@@ -115,56 +82,6 @@ async def test_genkit_check_operation_not_found() -> None:
 
     with pytest.raises(ValueError, match='Failed to resolve background action from original request: missing'):
         await ai.check_operation(op)
-
-
-@pytest.mark.asyncio
-async def test_define_simple_retriever_legacy() -> None:
-    """Test define_simple_retriever with legacy handler signature."""
-    ai = Genkit()
-
-    def simple_retriever(query: DocumentData, options: Any) -> list[DocumentData]:  # noqa: ANN401
-        # Returns list[DocumentData] directly
-
-        text_part: DocumentPart = DocumentPart(root=TextPart(text='doc1'))
-        return [DocumentData(content=[text_part])]
-
-    retriever_action = ai.define_simple_retriever('simple', simple_retriever)
-
-    assert retriever_action.kind == ActionKind.RETRIEVER
-
-    # Test execution
-    req = RetrieverRequest(query=DocumentData(content=[]))
-    resp_wrapper = await retriever_action.arun(req)
-    response = resp_wrapper.response
-
-    assert isinstance(response, RetrieverResponse)
-    assert len(response.documents) == 1
-    assert response.documents[0].content[0].root.text == 'doc1'
-
-
-@pytest.mark.asyncio
-async def test_define_simple_retriever_mapped() -> None:
-    """Test define_simple_retriever with mapping options."""
-    ai = Genkit()
-
-    def db_handler(query: DocumentData, options: Any) -> list[dict[str, Any]]:  # noqa: ANN401
-        return [
-            {'id': '1', 'text': 'hello', 'extra': 'data'},
-            {'id': '2', 'text': 'world', 'extra': 'more'},
-        ]
-
-    options = SimpleRetrieverOptions(name='mapped', content='text', metadata=['extra'])
-
-    retriever_action = ai.define_simple_retriever(options, db_handler)
-
-    req = RetrieverRequest(query=DocumentData(content=[]))
-    resp_wrapper = await retriever_action.arun(req)
-    response = resp_wrapper.response
-
-    assert len(response.documents) == 2
-    assert response.documents[0].content[0].root.text == 'hello'
-    assert response.documents[0].metadata == {'extra': 'data'}
-    assert 'id' not in response.documents[0].metadata
 
 
 @pytest.mark.asyncio

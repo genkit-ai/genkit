@@ -111,5 +111,5 @@ export const ai = genkit({
       metrics: [GenkitMetric.FAITHFULNESS, GenkitMetric.MALICIOUSNESS],
     }),
   ],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });

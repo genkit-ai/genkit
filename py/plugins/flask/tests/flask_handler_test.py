@@ -18,7 +18,7 @@
 
 import pytest
 
-from genkit.core.error import GenkitError
+from genkit._core._error import GenkitError
 from genkit.plugins.flask.handler import genkit_flask_handler
 
 
@@ -26,7 +26,7 @@ class TestGenkitFlaskHandlerValidation:
     """Tests that genkit_flask_handler rejects non-flow inputs."""
 
     def test_rejects_plain_function(self) -> None:
-        """The decorator must reject arguments that are not FlowWrapper."""
+        """The decorator must reject arguments that are not Flow."""
 
         class FakeGenkit:
             pass

@@ -16,12 +16,15 @@
 
 """Tests for Google GenAI plugin."""
 
+import asyncio
 import os
+import queue
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from genkit.core.registry import ActionKind
+from genkit import ActionKind
 from genkit.plugins.google_genai import (
     EmbeddingTaskType,
     GeminiConfigSchema,
@@ -97,6 +100,46 @@ def test_vertexai_initialization_from_env() -> None:
         with patch('genkit.plugins.google_genai.google.genai.client.Client'):
             plugin = VertexAI()
             assert plugin.name == 'vertexai'
+
+
+@patch('genkit.plugins.google_genai.google.genai.client.Client')
+@pytest.mark.asyncio
+async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
+    """GoogleAI runtime clients should be cached per event loop."""
+    created: list[MagicMock] = []
+
+    def _new_client(*args: object, **kwargs: object) -> MagicMock:
+        client = MagicMock(name=f'client-{len(created)}')
+        created.append(client)
+        return client
+
+    mock_client_ctor.side_effect = _new_client
+
+    plugin = GoogleAI(api_key='test-key')
+    first = plugin._runtime_client()
+    second = plugin._runtime_client()
+    assert first is second
+
+    q: queue.Queue[MagicMock] = queue.Queue()
+
+    def _other_thread() -> None:
+        async def _get_client() -> MagicMock:
+            return plugin._runtime_client()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            q.put(loop.run_until_complete(_get_client()))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_other_thread, daemon=True)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    other_loop_client = q.get_nowait()
+
+    assert other_loop_client is not first
 
 
 def test_genai_models_container() -> None:

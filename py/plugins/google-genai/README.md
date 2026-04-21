@@ -80,7 +80,7 @@ Built-in evaluators for assessing model output quality. Evaluators are automatic
 
 ```python
 from genkit import Genkit
-from genkit.core.typing import BaseDataPoint
+from genkit._core.typing import BaseDataPoint
 from genkit.plugins.google_genai import VertexAI
 
 ai = Genkit(plugins=[VertexAI(project='my-project')])
@@ -119,5 +119,7 @@ for result in results.root:
 
 For comprehensive usage examples, see:
 
-- [`py/samples/provider-google-genai-hello/README.md`](../../samples/provider-google-genai-hello/README.md) - Basic Gemini usage
-- [`py/samples/provider-vertex-ai-rerank-eval/README.md`](../../samples/provider-vertex-ai-rerank-eval/README.md) - Rerankers and evaluators
+- [`py/samples/google-genai-media/README.md`](../../samples/google-genai-media/README.md) - Speech, image, and video generation
+- [`py/samples/gemini-code-execution/README.md`](../../samples/gemini-code-execution/README.md) - Gemini code execution
+- [`py/samples/gemini-context-caching/README.md`](../../samples/gemini-context-caching/README.md) - Context caching for large prompts
+- [`py/samples/vertexai-imagen/README.md`](../../samples/vertexai-imagen/README.md) - Vertex AI Imagen generation

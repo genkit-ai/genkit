@@ -22,11 +22,11 @@
 
 import { EmbedderReference, ModelReference, z } from 'genkit';
 import {
-  GenkitPluginV2,
-  ResolvableAction,
   genkitPluginV2,
+  type GenkitPluginV2,
+  type ResolvableAction,
 } from 'genkit/plugin';
-import { ActionType } from 'genkit/registry';
+import { type ActionType } from 'genkit/registry';
 import { listModels } from './client.js';
 
 import * as embedder from './embedder.js';
@@ -146,7 +146,7 @@ export type VertexAIPlugin = {
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
 
   embedder(
-    name: string,
+    name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
     config?: embedder.EmbeddingConfig
   ): EmbedderReference<embedder.EmbeddingConfigSchemaType>;
 };

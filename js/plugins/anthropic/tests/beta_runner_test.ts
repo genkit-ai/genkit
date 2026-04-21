@@ -626,6 +626,42 @@ describe('BetaRunner', () => {
     );
   });
 
+  it('should not leak maxOutputTokens, stopSequences, version, or apiKey into the request body', () => {
+    const mockClient = createMockAnthropicClient();
+    const runner = new BetaRunner({
+      name: 'claude-3-5-haiku',
+      client: mockClient as Anthropic,
+    }) as any;
+
+    const body = runner.toAnthropicRequestBody(
+      'claude-3-5-haiku',
+      {
+        messages: [],
+        config: {
+          maxOutputTokens: 100,
+          stopSequences: ['END'],
+          version: 'claude-3-5-haiku-custom',
+          apiKey: 'fake-api-key',
+          temperature: 0.5,
+        },
+      } satisfies any,
+      false
+    );
+
+    assert.deepStrictEqual(body, {
+      model: 'claude-3-5-haiku-custom',
+      max_tokens: 100,
+      messages: [],
+      stop_sequences: ['END'],
+      temperature: 0.5,
+      betas: [
+        'files-api-2025-04-14',
+        'effort-2025-11-24',
+        'structured-outputs-2025-11-13',
+      ],
+    });
+  });
+
   it('should throw for unsupported mcp tool use blocks', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new BetaRunner({

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -36,35 +37,114 @@ func main() {
 
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	operation, err := genkit.GenerateOperation(ctx, g,
-		ai.WithMessages(ai.NewUserTextMessage("Cat racing mouse")),
-		ai.WithModelName("googleai/veo-3.0-generate-001"),
-		ai.WithConfig(&genai.GenerateVideosConfig{
-			NumberOfVideos:  1,
-			AspectRatio:     "16:9",
-			DurationSeconds: genai.Ptr(int32(8)),
-			Resolution:      "720p",
-		}),
-	)
-	if err != nil {
-		log.Fatalf("Failed to start video generation: %v", err)
-	}
+	genkit.DefineFlow(g, "text-to-video", func(ctx context.Context, input string) (string, error) {
+		if input == "" {
+			input = "Cat racing mouse"
+		}
+		operation, err := genkit.GenerateOperation(ctx, g,
+			ai.WithMessages(ai.NewUserTextMessage(input)),
+			ai.WithModelName("googleai/veo-3.1-generate-preview"),
+			ai.WithConfig(&genai.GenerateVideosConfig{
+				NumberOfVideos:  1,
+				AspectRatio:     "16:9",
+				DurationSeconds: genai.Ptr(int32(8)),
+				Resolution:      "720p",
+			}),
+		)
+		if err != nil {
+			return "", fmt.Errorf("failed to start video generation: %w", err)
+		}
+		printStatus(operation)
 
-	log.Printf("Started operation: %s", operation.ID)
-	printStatus(operation)
+		operation, err = waitForCompletion(ctx, g, operation)
+		if err != nil {
+			return "", fmt.Errorf("operation failed: %w", err)
+		}
+		log.Println("Video generation completed successfully!")
 
-	operation, err = waitForCompletion(ctx, g, operation)
-	if err != nil {
-		log.Fatalf("Operation failed: %v", err)
-	}
+		if err := downloadGeneratedVideo(ctx, operation); err != nil {
+			return "", fmt.Errorf("failed to download video: %w", err)
+		}
 
-	log.Println("Video generation completed successfully!")
+		// Return the video URI for chaining
+		uri, err := extractVideoURL(operation)
+		if err != nil {
+			return "", err
+		}
+		return uri, nil
+	})
 
-	if err := downloadGeneratedVideo(ctx, operation); err != nil {
-		log.Fatalf("Failed to download video: %v", err)
-	}
+	genkit.DefineFlow(g, "image-to-video", func(ctx context.Context, input any) (string, error) {
+		imgb64, err := fetchImgAsBase64()
+		if err != nil {
+			return "", fmt.Errorf("unable to download image: %w", err)
+		}
+		operation, err := genkit.GenerateOperation(ctx, g,
+			ai.WithModelName("googleai/veo-3.1-generate-preview"),
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Generate a video of the following image, the cat should wake up and start accelerating the go-kart as if it just acquired a mushroom from Mario Kart"),
+				ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+imgb64),
+			)),
+			ai.WithConfig(&genai.GenerateVideosConfig{
+				NumberOfVideos:  1,
+				AspectRatio:     "16:9",
+				DurationSeconds: genai.Ptr(int32(8)),
+			}),
+		)
+		if err != nil {
+			return "", fmt.Errorf("failed to start video generation: %w", err)
+		}
+		printStatus(operation)
 
-	log.Println("Video successfully downloaded to veo3_video.mp4")
+		operation, err = waitForCompletion(ctx, g, operation)
+		if err != nil {
+			return "", fmt.Errorf("operation failed: %w", err)
+		}
+		log.Println("Video generation completed successfully!")
+
+		if err := downloadGeneratedVideo(ctx, operation); err != nil {
+			return "", fmt.Errorf("failed to download video: %w", err)
+		}
+
+		return "Video successfully downloaded to veo3_video.mp4", nil
+	})
+
+	genkit.DefineFlow(g, "video-to-video", func(ctx context.Context, inputURI string) (string, error) {
+		if inputURI == "" {
+			return "", fmt.Errorf("input URI is required for video extension")
+		}
+
+		log.Printf("Extending video from URI: %s", inputURI)
+
+		operation, err := genkit.GenerateOperation(ctx, g,
+			ai.WithModelName("googleai/veo-3.1-generate-preview"),
+			ai.WithMessages(ai.NewUserMessage(
+				ai.NewTextPart("Edit the original video background to be a rainforest, also change the video style to be a cartoon from 1950, make the transition smooth. You must keep the characters from the original video"),
+				ai.NewMediaPart("video/mp4", inputURI),
+			)),
+			ai.WithConfig(&genai.GenerateVideosConfig{
+				NumberOfVideos:  1,
+				AspectRatio:     "16:9",
+				DurationSeconds: genai.Ptr(int32(8)),
+			}),
+		)
+		if err != nil {
+			return "", fmt.Errorf("failed to start video generation: %w", err)
+		}
+		printStatus(operation)
+
+		operation, err = waitForCompletion(ctx, g, operation)
+		if err != nil {
+			return "", fmt.Errorf("operation failed: %w", err)
+		}
+		log.Println("Video extension completed successfully!")
+
+		if err := downloadGeneratedVideo(ctx, operation); err != nil {
+			return "", fmt.Errorf("failed to download video: %w", err)
+		}
+
+		return "Video successfully downloaded to veo3_video.mp4", nil
+	})
+	<-ctx.Done()
 }
 
 // waitForCompletion polls the operation status until it completes.
@@ -192,4 +272,26 @@ func downloadVideo(ctx context.Context, url, filename string) error {
 	}
 
 	return nil
+}
+
+// fetchImgAsBase64 downloads a predefined image and returns the image encoded in a base64 string
+func fetchImgAsBase64() (string, error) {
+	// CC0 license image
+	imgURL := "https://pd.w.org/2025/07/896686fbbcd9990c9.84605288-2048x1365.jpg"
+	resp, err := http.Get(imgURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download image: HTTP %d", resp.StatusCode)
+	}
+
+	imageBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	base64string := base64.StdEncoding.EncodeToString(imageBytes)
+	return base64string, nil
 }

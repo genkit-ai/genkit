@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { RuntimeManager } from '@genkit-ai/tools-common/manager';
+import { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { z } from 'zod';
 import { startDevProcessManager, startManager } from '../utils/manager-utils';
 
@@ -62,7 +62,7 @@ export function resolveProjectRoot(
 /** Genkit Runtime manager specifically for the MCP server. Allows lazy
  * initialization and dev process manangement. */
 export class McpRuntimeManager {
-  private manager: RuntimeManager | undefined;
+  private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
 
   async getManager(projectRoot: string) {
@@ -86,7 +86,7 @@ export class McpRuntimeManager {
     args: string[];
     explicitProjectRoot: boolean;
     timeout?: number;
-  }): Promise<RuntimeManager> {
+  }): Promise<BaseRuntimeManager> {
     const { projectRoot, command, args, timeout, explicitProjectRoot } = params;
     if (this.manager) {
       await this.manager.stop();

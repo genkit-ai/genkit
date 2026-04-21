@@ -47,6 +47,11 @@ function parseFirebaseProjectId(): string | undefined {
   }
 }
 
+export function shouldUseLegacyEndpoint(model: string) {
+  // This only covers lyria models so far
+  return model === 'lyria-002';
+}
+
 let __mockDerivedOptions: ClientOptions | undefined = undefined;
 function setMockDerivedOptions(options: ClientOptions | undefined): void {
   __mockDerivedOptions = options;

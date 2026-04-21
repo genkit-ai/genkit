@@ -31,14 +31,17 @@ import os
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
-from genkit.core.environment import EnvVar, GenkitEnvironment
+# Environment variable and value constants (matching genkit._core._environment)
+_GENKIT_ENV = 'GENKIT_ENV'
+_ENV_DEV = 'dev'
+_ENV_PROD = 'prod'
 
 
 def test_add_gcp_telemetry_wraps_with_gcp_adjusting_exporter() -> None:
     """Test that add_gcp_telemetry wraps the exporter with GcpAdjustingTraceExporter."""
     # Set production environment and clear project-related env vars to ensure project_id is None
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}, clear=False),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter') as mock_adjusting,
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter') as mock_add_exporter,
@@ -81,7 +84,7 @@ def test_add_gcp_telemetry_wraps_with_gcp_adjusting_exporter() -> None:
 def test_add_gcp_telemetry_with_log_input_and_output_enabled() -> None:
     """Test that log_input_and_output=True disables PII redaction (JS parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter') as mock_adjusting,
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter'),
@@ -104,7 +107,7 @@ def test_add_gcp_telemetry_with_log_input_and_output_enabled() -> None:
 def test_add_gcp_telemetry_with_project_id() -> None:
     """Test that project_id is passed to GcpAdjustingTraceExporter (JS/Go parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter') as mock_adjusting,
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter'),
@@ -127,7 +130,7 @@ def test_add_gcp_telemetry_with_project_id() -> None:
 def test_add_gcp_telemetry_skips_in_dev_without_force() -> None:
     """Test that telemetry is skipped in dev environment without force_dev_export (JS/Go parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.DEV}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter') as mock_add_exporter,
     ):
@@ -144,7 +147,7 @@ def test_add_gcp_telemetry_skips_in_dev_without_force() -> None:
 def test_add_gcp_telemetry_exports_in_dev_with_force() -> None:
     """Test that telemetry is exported in dev environment with force_dev_export=True (JS/Go parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.DEV}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter') as mock_add_exporter,
@@ -167,7 +170,7 @@ def test_add_gcp_telemetry_exports_in_dev_with_force() -> None:
 def test_add_gcp_telemetry_disable_traces() -> None:
     """Test that disable_traces=True skips trace export (JS/Go parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter') as mock_add_exporter,
         patch('genkit.plugins.google_cloud.telemetry.config.GoogleCloudResourceDetector'),
@@ -189,7 +192,7 @@ def test_add_gcp_telemetry_disable_traces() -> None:
 def test_add_gcp_telemetry_disable_metrics() -> None:
     """Test that disable_metrics=True skips metrics export (JS/Go parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter'),
@@ -214,7 +217,7 @@ def test_add_gcp_telemetry_disable_metrics() -> None:
 def test_add_gcp_telemetry_custom_metric_interval() -> None:
     """Test that metric_export_interval_ms is passed correctly (JS/Go parity)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter'),
@@ -239,7 +242,7 @@ def test_add_gcp_telemetry_custom_metric_interval() -> None:
 def test_add_gcp_telemetry_enforces_minimum_interval() -> None:
     """Test that metric_export_interval_ms enforces minimum 5000ms (GCP requirement)."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter'),
@@ -316,7 +319,7 @@ def test_resolve_project_id_from_credentials() -> None:
 def test_legacy_force_export_parameter() -> None:
     """Test that legacy force_export parameter still works but shows warning."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.DEV}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_DEV}),
         patch('genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter') as mock_gcp_exporter,
         patch('genkit.plugins.google_cloud.telemetry.config.GcpAdjustingTraceExporter'),
         patch('genkit.plugins.google_cloud.telemetry.config.add_custom_exporter'),
@@ -344,7 +347,7 @@ def test_legacy_force_export_parameter() -> None:
 def test_add_gcp_telemetry_is_fail_safe() -> None:
     """Test that add_gcp_telemetry does not crash if initialization fails."""
     with (
-        mock.patch.dict(os.environ, {EnvVar.GENKIT_ENV: GenkitEnvironment.PROD}),
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}),
         patch(
             'genkit.plugins.google_cloud.telemetry.config.GenkitGCPExporter',
             side_effect=Exception('Auth failed'),

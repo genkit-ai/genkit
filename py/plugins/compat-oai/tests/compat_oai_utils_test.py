@@ -21,6 +21,20 @@ import base64
 import pytest
 from pydantic import BaseModel
 
+from genkit import (
+    Media,
+    MediaPart,
+    Message,
+    ModelRequest,
+    Part,
+    ReasoningPart,
+    Role,
+    TextPart,
+    ToolRequest,
+    ToolRequestPart,
+    ToolResponse,
+    ToolResponsePart,
+)
 from genkit.plugins.compat_oai.models.utils import (
     DictMessageAdapter,
     MessageAdapter,
@@ -31,20 +45,6 @@ from genkit.plugins.compat_oai.models.utils import (
     decode_data_uri_bytes,
     extract_config_dict,
     parse_data_uri_content_type,
-)
-from genkit.types import (
-    GenerateRequest,
-    Media,
-    MediaPart,
-    Message,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
-    ToolResponse,
-    ToolResponsePart,
 )
 
 
@@ -162,9 +162,9 @@ class TestDecodeDataUriBytes:
 class TestExtractConfigDict:
     """Tests for extract_config_dict."""
 
-    def _make_request(self, config: object = None) -> GenerateRequest:
-        """Create a minimal GenerateRequest with the given config."""
-        return GenerateRequest(
+    def _make_request(self, config: object = None) -> ModelRequest:
+        """Create a minimal ModelRequest with the given config."""
+        return ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -206,7 +206,7 @@ class TestFindText:
 
     def test_returns_text_from_first_message(self) -> None:
         """Find and return text from the first message's text part."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -218,12 +218,12 @@ class TestFindText:
 
     def test_returns_none_for_no_messages(self) -> None:
         """Return None when there are no messages."""
-        request = GenerateRequest(messages=[])
+        request = ModelRequest(messages=[])
         assert _find_text(request) is None
 
     def test_returns_none_for_no_text_parts(self) -> None:
         """Return None when message has only media parts."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -235,7 +235,7 @@ class TestFindText:
 
     def test_returns_first_text_part(self) -> None:
         """Return the first text part when multiple exist."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -254,7 +254,7 @@ class TestExtractText:
 
     def test_returns_text_when_present(self) -> None:
         """Extract and return text when present."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -266,13 +266,13 @@ class TestExtractText:
 
     def test_raises_for_no_messages(self) -> None:
         """Raise ValueError when request has no messages."""
-        request = GenerateRequest(messages=[])
+        request = ModelRequest(messages=[])
         with pytest.raises(ValueError, match='No messages found'):
             _extract_text(request)
 
     def test_raises_for_no_text_content(self) -> None:
         """Raise ValueError when no text parts exist."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -289,7 +289,7 @@ class TestExtractMedia:
 
     def test_extracts_media_url_and_content_type(self) -> None:
         """Extract URL and content type from a media part."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -312,7 +312,7 @@ class TestExtractMedia:
 
     def test_parses_content_type_from_data_uri_when_missing(self) -> None:
         """Parse content type from data URI when not explicitly provided."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -334,13 +334,13 @@ class TestExtractMedia:
 
     def test_raises_for_no_messages(self) -> None:
         """Raise ValueError when request has no messages."""
-        request = GenerateRequest(messages=[])
+        request = ModelRequest(messages=[])
         with pytest.raises(ValueError, match='No messages found'):
             _extract_media(request)
 
     def test_raises_for_no_media_parts(self) -> None:
         """Raise ValueError when message has no media parts."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -353,7 +353,7 @@ class TestExtractMedia:
 
     def test_skips_text_parts_finds_media(self) -> None:
         """Find media part even when text parts come first."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -376,7 +376,7 @@ class TestExtractMedia:
 
     def test_content_type_from_data_uri_without_base64_qualifier(self) -> None:
         """Parse content type from data URI that omits ;base64 qualifier."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,

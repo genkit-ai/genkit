@@ -1,0 +1,5 @@
+[
+  {"testCaseId": "full_match", "input": "What is 2+2?", "output": "4", "reference": "4"},
+  {"testCaseId": "partial", "input": "Who wrote Romeo and Juliet?", "output": "Shakespeare", "reference": "William Shakespeare wrote Romeo and Juliet."},
+  {"testCaseId": "no_match", "input": "What is the capital of France?", "output": "London", "reference": "Paris"}
+]

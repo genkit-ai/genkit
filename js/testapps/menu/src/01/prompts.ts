@@ -29,7 +29,7 @@ export const s01_vanillaPrompt = ai.definePrompt({
   config: { temperature: 0.3 },
   messages: async (input: MenuQuestionInput) => {
     const promptText = `
-      You are acting as a helpful AI assistant named "Walt" that can answer 
+      You are acting as a helpful AI assistant named "Walt" that can answer
       questions about the food available on the menu at Walt's Burgers.
       Customer says: ${input.question}
       `;
@@ -44,17 +44,17 @@ export const s01_vanillaPrompt = ai.definePrompt({
 
 export const s01_staticMenuDotPrompt = ai.definePrompt({
   name: 's01_staticMenuDotPrompt',
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   input: { schema: MenuQuestionInputSchema },
   output: { format: 'text' },
   messages: `
-You are acting as a helpful AI assistant named "Walt" that can answer 
-questions about the food available on the menu at Walt's Burgers. 
+You are acting as a helpful AI assistant named "Walt" that can answer
+questions about the food available on the menu at Walt's Burgers.
 Here is today's menu:
 
 - The Regular Burger $12
   The classic charbroiled to perfection with your choice of cheese
-  
+
 - The Fancy Burger $13
   Classic burger topped with bacon & Blue Cheese
 
@@ -63,14 +63,14 @@ Here is today's menu:
 
 - Everything Burger $14
   Heinz 57 sauce, American cheese, bacon, fried egg & crispy onion bits
-  
+
 - Chicken Breast Sandwich $12
   Tender juicy chicken breast on a brioche roll.
   Grilled, blackened, or fried
 
 Our fresh 1/2 lb. beef patties are made using choice cut
 brisket, short rib & sirloin. Served on a toasted
-brioche roll with chips. Served with lettuce, tomato & pickles. 
+brioche roll with chips. Served with lettuce, tomato & pickles.
 Onions upon request. Substitute veggie patty $2
 
 Answer this customer's question, in a concise and helpful manner,

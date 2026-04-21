@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from genkit.ai import ActionKind
+from genkit import ActionKind
 from genkit.plugins.ollama import Ollama, ollama_name
 from genkit.plugins.ollama.embedders import EmbeddingDefinition
 from genkit.plugins.ollama.models import ModelDefinition

@@ -23,17 +23,17 @@ import pytest
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit.ai import ActionRunContext
-from genkit.plugins.google_genai.models.imagen import ImagenModel, ImagenVersion
-from genkit.types import (
-    GenerateRequest,
-    GenerateResponse,
+from genkit import (
+    ActionRunContext,
     MediaPart,
     Message,
+    ModelRequest,
+    ModelResponse,
     Part,
     Role,
     TextPart,
 )
+from genkit.plugins.google_genai.models.imagen import ImagenModel, ImagenVersion
 
 
 @pytest.mark.asyncio
@@ -44,7 +44,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     response_byte_string = b'\x89PNG\r\n\x1a\n'
     response_mimetype = 'image/png'
 
-    request = GenerateRequest(
+    request = ModelRequest(
         messages=[
             Message(
                 role=Role.USER,
@@ -74,7 +74,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     googleai_client_mock.assert_has_calls([
         mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=None)
     ])
-    assert isinstance(response, GenerateResponse)
+    assert isinstance(response, ModelResponse)
     assert response.message is not None
     content = response.message.content[0]
     assert isinstance(content.root, MediaPart)

@@ -19,24 +19,24 @@ import Anthropic from '@anthropic-ai/sdk';
 import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
 
 import type { Part } from 'genkit';
-import { ActionMetadata, ModelReference, z } from 'genkit';
-import { ModelAction } from 'genkit/model';
-import { ActionType } from 'genkit/registry';
+import { z, type ActionMetadata, type ModelReference } from 'genkit';
+import { type ModelAction } from 'genkit/model';
+import { type ActionType } from 'genkit/registry';
 import { listActions } from './list.js';
 import {
-  AnthropicConfigSchemaType,
-  ClaudeConfig,
-  ClaudeModelName,
   KNOWN_CLAUDE_MODELS,
-  KnownClaudeModels,
   claudeModel,
   claudeModelReference,
+  type AnthropicConfigSchemaType,
+  type ClaudeConfig,
+  type ClaudeModelName,
+  type KnownClaudeModels,
 } from './models.js';
 import {
-  InternalPluginOptions,
-  PluginOptions,
   __testClient,
   type AnthropicDocumentOptions,
+  type InternalPluginOptions,
+  type PluginOptions,
 } from './types.js';
 
 // Re-export types and utilities for consumers

@@ -38,6 +38,7 @@ import {
   serverHarness,
 } from './commands/server-harness';
 import { start } from './commands/start';
+import { startFlutter } from './commands/start-flutter';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
@@ -61,6 +62,7 @@ const commands: Command[] = [
   initAiTools,
   config,
   start,
+  startFlutter,
   devTestModel,
   mcp,
   docsList,

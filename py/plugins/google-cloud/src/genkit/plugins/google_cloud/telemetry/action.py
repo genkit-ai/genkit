@@ -37,11 +37,12 @@ from __future__ import annotations
 import structlog
 from opentelemetry.sdk.trace import ReadableSpan
 
+from genkit.plugin_api import to_display_path
+
 from .gcp_logger import gcp_logger
 from .utils import (
     create_common_log_attributes,
     extract_outer_feature_name_from_path,
-    to_display_path,
     truncate,
     truncate_path,
 )

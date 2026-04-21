@@ -57,12 +57,18 @@ import {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
+  MultipartToolResponseSchema,
+  ReasoningPartSchema,
+  ResourcePartSchema,
   TextPartSchema,
   ToolRequestPartSchema,
   ToolResponsePartSchema,
   type CustomPart,
   type DataPart,
   type MediaPart,
+  type MultipartToolResponse,
+  type ReasoningPart,
+  type ResourcePart,
   type TextPart,
   type ToolRequestPart,
   type ToolResponsePart,
@@ -73,6 +79,9 @@ export {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
+  MultipartToolResponseSchema,
+  ReasoningPartSchema,
+  ResourcePartSchema,
   TextPartSchema,
   ToolRequestPartSchema,
   ToolResponsePartSchema,
@@ -80,6 +89,9 @@ export {
   type CustomPart,
   type DataPart,
   type MediaPart,
+  type MultipartToolResponse,
+  type ReasoningPart,
+  type ResourcePart,
   type TextPart,
   type ToolRequestPart,
   type ToolResponsePart,
@@ -357,7 +369,13 @@ function getModelMiddleware(options: {
   return middleware;
 }
 
-export interface ModelReference<CustomOptions extends z.ZodTypeAny> {
+export const ModelReferenceSchema = z.object({
+  name: z.string(),
+  config: z.any().optional(),
+});
+
+export interface ModelReference<CustomOptions extends z.ZodTypeAny>
+  extends z.infer<typeof ModelReferenceSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: ModelInfo;

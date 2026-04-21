@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit.core.schema import to_json_schema
+from genkit._core._schema import to_json_schema
 
 
 def test_to_json_schema_pydantic_model() -> None:

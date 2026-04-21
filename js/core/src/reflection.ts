@@ -92,6 +92,7 @@ export class ReflectionServer {
       startTime: Date;
     }
   >();
+  private v2Server: any | null = null;
 
   constructor(registry: Registry, options?: ReflectionServerOptions) {
     this.registry = registry;
@@ -135,6 +136,17 @@ export class ReflectionServer {
       );
       return;
     }
+    if (process.env.GENKIT_REFLECTION_V2_SERVER) {
+      const { ReflectionServerV2 } = await import('./reflection-v2.js');
+      this.v2Server = new ReflectionServerV2(this.registry, {
+        configuredEnvs: this.options.configuredEnvs,
+        name: this.options.name,
+        url: process.env.GENKIT_REFLECTION_V2_SERVER,
+      });
+      await this.v2Server.start();
+      ReflectionServer.RUNNING_SERVERS.push(this);
+      return;
+    }
 
     const server = express();
 
@@ -167,16 +179,25 @@ export class ReflectionServer {
           response.status(400).send('Query parameter "type" is required.');
           return;
         }
-        if (type !== 'defaultModel') {
+        if (type !== 'defaultModel' && type !== 'middleware') {
           response
             .status(400)
             .send(
-              `'type' ${type} is not supported. Only 'defaultModel' is supported`
+              `'type' ${type} is not supported. Only 'defaultModel' and 'middleware' are supported`
             );
           return;
         }
         const values = await this.registry.listValues(type as string);
-        response.send(values);
+        const mappedValues: Record<string, any> = {};
+        for (const [key, value] of Object.entries(values)) {
+          mappedValues[key] =
+            value &&
+            (value as any).toJson &&
+            typeof (value as any).toJson === 'function'
+              ? (value as any).toJson()
+              : value;
+        }
+        response.send(mappedValues);
       } catch (err) {
         const { message, stack } = err as Error;
         next({ message, stack });
@@ -263,7 +284,7 @@ export class ReflectionServer {
               response.write(JSON.stringify(chunk) + '\n');
             };
             const result = await action.run(input, {
-              context,
+              context: context || {},
               onChunk: callback,
               telemetryLabels,
               onTraceStart: onTraceStartCallback,
@@ -304,7 +325,7 @@ export class ReflectionServer {
         } else {
           // Non-streaming: send JSON response
           const result = await action.run(input, {
-            context,
+            context: context || {},
             telemetryLabels,
             onTraceStart: onTraceStartCallback,
             abortSignal: abortController.signal,
@@ -439,6 +460,15 @@ export class ReflectionServer {
    * Stops the server and removes it from the list of running servers to clean up on exit.
    */
   async stop(): Promise<void> {
+    if (this.v2Server) {
+      await this.v2Server.stop();
+      const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
+      if (index > -1) {
+        ReflectionServer.RUNNING_SERVERS.splice(index, 1);
+      }
+      return;
+    }
+
     if (!this.server) {
       return;
     }

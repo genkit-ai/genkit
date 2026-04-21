@@ -243,16 +243,19 @@ export class Runner extends BaseRunner<RunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
     const body: MessageCreateParamsNonStreaming = {
       model: mappedModelName,
-      max_tokens:
-        request.config?.maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
       messages,
       system: system as TextBlockParam[],
-      stop_sequences: request.config?.stopSequences,
+      stop_sequences: stopSequences,
       temperature: request.config?.temperature,
       top_k: topK,
       top_p: topP,
@@ -294,6 +297,10 @@ export class Runner extends BaseRunner<RunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 

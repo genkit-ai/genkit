@@ -1,115 +1,207 @@
 # Types
 
-This module provides all public types for Genkit applications.
+Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, and genkit.evaluator.
 
-## Errors
+## genkit
 
-::: genkit.types.GenkitError
+::: genkit.Genkit
 
-::: genkit.types.ToolInterruptError
+::: genkit.Plugin
 
-## Actions
+::: genkit.Action
 
-::: genkit.types.ActionRunContext
+::: genkit.Flow
 
-## Message and Part Types
+::: genkit.ActionKind
 
-::: genkit.core.typing.Message
+::: genkit.ActionRunContext
 
-::: genkit.blocks.model.MessageWrapper
+::: genkit.ExecutablePrompt
 
-::: genkit.core.typing.Part
+::: genkit.PromptGenerateOptions
 
-::: genkit.core.typing.TextPart
+::: genkit.ResumeOptions
 
-::: genkit.core.typing.MediaPart
+::: genkit.ToolRunContext
 
-::: genkit.core.typing.Media
+::: genkit.StreamResponse
 
-::: genkit.core.typing.CustomPart
+::: genkit.ModelStreamResponse
 
-::: genkit.core.typing.DataPart
+::: genkit.GenkitError
 
-::: genkit.core.typing.ReasoningPart
+::: genkit.PublicError
 
-::: genkit.core.typing.Role
+::: genkit.ToolInterruptError
 
-::: genkit.core.typing.Metadata
+::: genkit.Message
 
-## Tool Types
+::: genkit.Part
 
-::: genkit.core.typing.ToolRequest
+::: genkit.TextPart
 
-::: genkit.core.typing.ToolRequestPart
+::: genkit.MediaPart
 
-::: genkit.core.typing.ToolResponse
+::: genkit.Media
 
-::: genkit.core.typing.ToolResponsePart
+::: genkit.CustomPart
 
-::: genkit.core.typing.ToolDefinition
+::: genkit.ReasoningPart
 
-::: genkit.core.typing.ToolChoice
+::: genkit.Role
 
-## Document Types
+::: genkit.Metadata
 
-::: genkit.types.Document
+::: genkit.ToolRequest
 
-::: genkit.core.typing.DocumentData
+::: genkit.ToolRequestPart
 
-## Generation Types
+::: genkit.ToolResponse
 
-::: genkit.core.typing.GenerateRequest
+::: genkit.ToolResponsePart
 
-::: genkit.core.typing.GenerateResponse
+::: genkit.ToolDefinition
 
-::: genkit.blocks.model.GenerateResponseWrapper
+::: genkit.ToolChoice
 
-::: genkit.core.typing.GenerateResponseChunk
+::: genkit.Document
 
-::: genkit.core.typing.GenerateActionOptions
+::: genkit.DocumentPart
 
-::: genkit.core.typing.GenerationCommonConfig
+::: genkit.EmbedderRef
 
-::: genkit.core.typing.GenerationUsage
+::: genkit.EmbedderOptions
 
-::: genkit.core.typing.OutputConfig
+::: genkit.Embedding
 
-::: genkit.core.typing.FinishReason
+::: genkit.EmbedRequest
 
-## Embedding Types
+::: genkit.EmbedResponse
 
-::: genkit.core.typing.Embedding
+::: genkit.ModelRequest
 
-::: genkit.core.typing.EmbedRequest
+::: genkit.ModelResponse
 
-::: genkit.core.typing.EmbedResponse
+::: genkit.ModelResponseChunk
 
-## Retriever Types
+::: genkit.ModelConfig
 
-::: genkit.core.typing.RetrieverRequest
+::: genkit.ModelInfo
 
-::: genkit.core.typing.RetrieverResponse
+::: genkit.ModelUsage
 
-## Evaluation Types
+::: genkit.Constrained
 
-::: genkit.core.typing.BaseEvalDataPoint
+::: genkit.Stage
 
-::: genkit.core.typing.EvalRequest
+::: genkit.Supports
 
-::: genkit.core.typing.EvalResponse
+::: genkit.FinishReason
 
-::: genkit.core.typing.EvalFnResponse
+## genkit.model
 
-::: genkit.core.typing.EvalStatusEnum
+::: genkit.model.BackgroundAction
 
-::: genkit.core.typing.Score
+::: genkit.model.ModelRequest
 
-## Model Info (for Plugin Authors)
+::: genkit.model.ModelResponse
 
-::: genkit.core.typing.ModelInfo
+::: genkit.model.ModelResponseChunk
 
-::: genkit.core.typing.Supports
+::: genkit.model.ModelUsage
 
-::: genkit.core.typing.Constrained
+::: genkit.model.Candidate
 
-::: genkit.core.typing.Stage
+::: genkit.model.FinishReason
+
+::: genkit.model.GenerateActionOptions
+
+::: genkit.model.Error
+
+::: genkit.model.Operation
+
+::: genkit.model.ToolRequest
+
+::: genkit.model.ToolDefinition
+
+::: genkit.model.ToolResponse
+
+::: genkit.model.ModelInfo
+
+::: genkit.model.Supports
+
+::: genkit.model.Constrained
+
+::: genkit.model.Stage
+
+::: genkit.model.ModelRef
+
+::: genkit.model.ModelConfig
+
+::: genkit.model.Message
+
+## genkit.embedder
+
+::: genkit.embedder.EmbedRequest
+
+::: genkit.embedder.EmbedResponse
+
+::: genkit.embedder.Embedding
+
+::: genkit.embedder.EmbedderRef
+
+::: genkit.embedder.EmbedderSupports
+
+::: genkit.embedder.EmbedderOptions
+
+## genkit.plugin_api
+
+::: genkit.plugin_api.Plugin
+
+::: genkit.plugin_api.Action
+
+::: genkit.plugin_api.ActionMetadata
+
+::: genkit.plugin_api.ActionKind
+
+::: genkit.plugin_api.ActionRunContext
+
+::: genkit.plugin_api.StatusCodes
+
+::: genkit.plugin_api.StatusName
+
+::: genkit.plugin_api.GenkitError
+
+::: genkit.plugin_api.AdjustingTraceExporter
+
+::: genkit.plugin_api.RedactedSpan
+
+::: genkit.plugin_api.ModelRef
+
+::: genkit.plugin_api.EmbedderRef
+
+::: genkit.plugin_api.EvaluatorRef
+
+::: genkit.plugin_api.ContextProvider
+
+::: genkit.plugin_api.RequestData
+
+## genkit.evaluator
+
+::: genkit.evaluator.EvalRequest
+
+::: genkit.evaluator.EvalResponse
+
+::: genkit.evaluator.EvalFnResponse
+
+::: genkit.evaluator.Score
+
+::: genkit.evaluator.Details
+
+::: genkit.evaluator.BaseEvalDataPoint
+
+::: genkit.evaluator.BaseDataPoint
+
+::: genkit.evaluator.EvalStatusEnum
+
+::: genkit.evaluator.EvaluatorRef

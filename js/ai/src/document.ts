@@ -46,6 +46,13 @@ export class Document implements DocumentData {
     this.metadata = deepCopy(data.metadata);
   }
 
+  static fromParts(content: Part[], metadata?: Record<string, any>) {
+    return new Document({
+      content,
+      metadata,
+    });
+  }
+
   static fromText(text: string, metadata?: Record<string, any>) {
     return new Document({
       content: [{ text }],

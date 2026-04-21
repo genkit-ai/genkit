@@ -47,7 +47,7 @@ export const jokeFlow = ai.defineFlow(
     return await ai.run('call-llm', async () => {
       const llmResponse = await ai.generate({
         prompt: `tell me long joke about ${subject}`,
-        model: googleAI.model('gemini-2.5-flash'),
+        model: googleAI.model('gemini-flash-latest'),
         config: {
           temperature: 1,
         },
@@ -130,7 +130,7 @@ app.get('/jokeStream', async (req: Request, res: Response) => {
   });
   await ai.generate({
     prompt: `Tell me a long joke about ${subject}`,
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     config: {
       temperature: 1,
     },

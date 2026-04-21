@@ -48,6 +48,14 @@ class SimpleCache {
   }
 
   setValue(value: DapValue) {
+    const dapId = this.dap?.__action?.name;
+    if (dapId) {
+      Object.values(value).forEach((actionList) => {
+        actionList?.forEach((action) => {
+          action.__action.key = `/dynamic-action-provider/${dapId}:${action.__action.actionType}/${action.__action.name}`;
+        });
+      });
+    }
     this.value = value;
     this.expiresAt = Date.now() + this.ttlMillis;
   }
@@ -230,17 +238,16 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
     // This is ok, because the DevUI will show the actions, so
     // not having them in the trace is fine.
     const result = await dap.__cache.getOrFetch({ skipTrace: true });
-    for (const [actionType, actions] of Object.entries(result)) {
+    for (const actions of Object.values(result)) {
       const metadataList = actions.map((a) => a.__action);
       for (const metadata of metadataList) {
-        if (!metadata.name) {
+        if (!metadata.name || !metadata.key) {
           throw new GenkitError({
             status: 'INVALID_ARGUMENT',
             message: `Invalid metadata when listing dynamic actions from ${dapPrefix} - name required`,
           });
         }
-        const key = `${dapPrefix}:${actionType}/${metadata.name}`;
-        dapActions[key] = metadata;
+        dapActions[metadata.key] = metadata;
       }
     }
     return dapActions;

@@ -19,13 +19,13 @@ import { genkit } from 'genkit';
 
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 async function fn01() {
   // [START ex01]
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: 'Invent a menu item for a pirate themed restaurant.',
   });
   // [END ex01]

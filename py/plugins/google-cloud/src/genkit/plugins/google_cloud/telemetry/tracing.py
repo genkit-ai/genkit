@@ -89,7 +89,7 @@ Key Components:
     1. **GcpAdjustingTraceExporter**: Extends AdjustingTraceExporter to add
        GCP-specific telemetry recording before spans are adjusted and exported.
 
-    2. **AdjustingTraceExporter** (from genkit.core.trace): Base class that
+    2. **AdjustingTraceExporter** (from genkit._core._trace): Base class that
        handles PII redaction, error marking, and label normalization.
 
     3. **GenkitGCPExporter**: Extends CloudTraceSpanExporter with retry logic

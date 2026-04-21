@@ -2545,6 +2545,33 @@ describe('Runner request bodies and error branches', () => {
     assert.deepStrictEqual(body.thinking, { type: 'disabled' });
   });
 
+  it('should not leak maxOutputTokens, stopSequences, version, or apiKey into the request body', () => {
+    const mockClient = createMockAnthropicClient();
+    const runner = new Runner({
+      name: 'claude-3-5-haiku',
+      client: mockClient,
+    }) as Runner & RunnerProtectedMethods;
+
+    const body = runner['toAnthropicRequestBody']('claude-3-5-haiku', {
+      messages: [],
+      config: {
+        maxOutputTokens: 100,
+        stopSequences: ['END'],
+        version: 'claude-3-5-haiku-custom',
+        apiKey: 'fake-api-key',
+        temperature: 0.5,
+      },
+    } as unknown as GenerateRequest<typeof AnthropicConfigSchema>);
+
+    assert.deepStrictEqual(body, {
+      model: 'claude-3-5-haiku-custom',
+      max_tokens: 100,
+      messages: [],
+      stop_sequences: ['END'],
+      temperature: 0.5,
+    });
+  });
+
   it('should throw descriptive errors for missing tool refs', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new Runner({

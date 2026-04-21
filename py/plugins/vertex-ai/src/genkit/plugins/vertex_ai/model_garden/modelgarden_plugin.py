@@ -19,11 +19,8 @@
 import os
 from typing import cast
 
-from genkit.ai import Plugin
-from genkit.blocks.model import model_action_metadata
-from genkit.core.action import Action, ActionMetadata
-from genkit.core.action.types import ActionKind
-from genkit.core.schema import to_json_schema
+from genkit.model import model_action_metadata
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 from genkit.plugins.compat_oai.models import SUPPORTED_OPENAI_COMPAT_MODELS
 from genkit.plugins.compat_oai.typing import OpenAIConfig
 from genkit.plugins.vertex_ai import constants as const
@@ -149,9 +146,6 @@ class ModelGardenPlugin(Plugin):
             location=location,
             project_id=self.project_id,
         )
-
-        # Create the async client (offloads credential refresh to thread)
-        await model_proxy.create_client()
 
         # Get model info and handler
         model_info = SUPPORTED_OPENAI_COMPAT_MODELS.get(clean_name, {})

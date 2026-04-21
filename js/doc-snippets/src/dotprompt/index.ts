@@ -153,7 +153,7 @@ function fn09() {
   // [START definePromptTempl]
   const myPrompt = ai.definePrompt({
     name: 'myPrompt',
-    model: 'googleai/gemini-2.5-flash',
+    model: 'googleai/gemini-flash-latest',
     input: {
       schema: z.object({
         name: z.string(),
@@ -168,7 +168,7 @@ function fn10() {
   // [START definePromptFn]
   const myPrompt = ai.definePrompt({
     name: 'myPrompt',
-    model: 'googleai/gemini-2.5-flash',
+    model: 'googleai/gemini-flash-latest',
     input: {
       schema: z.object({
         name: z.string(),

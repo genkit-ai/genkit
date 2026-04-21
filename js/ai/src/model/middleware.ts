@@ -322,7 +322,7 @@ const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
  *
  * ```ts
  * const { text } = await ai.generate({
- *   model: googleAI.model('gemini-2.5-pro'),
+ *   model: googleAI.model('gemini-pro-latest'),
  *   prompt: 'You are a helpful AI assistant named Walt, say hello',
  *   use: [
  *     retry({
@@ -406,11 +406,11 @@ export interface FallbackOptions {
  *
  * ```ts
  * const { text } = await ai.generate({
- *   model: googleAI.model('gemini-2.5-pro'),
+ *   model: googleAI.model('gemini-pro-latest'),
  *   prompt: 'You are a helpful AI assistant named Walt, say hello',
  *   use: [
  *     fallback(ai, {
- *       models: [googleAI.model('gemini-2.5-flash')],
+ *       models: [googleAI.model('gemini-flash-latest')],
  *       statuses: ['RESOURCE_EXHAUSTED'],
  *     }),
  *   ],

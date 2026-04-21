@@ -15,11 +15,13 @@
  */
 import { z } from 'zod';
 import { DocumentDataSchema } from './document';
+import { MiddlewareRefSchema } from './middleware';
 import {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
   MultipartToolResponseSchema,
+  Part,
   PartSchema,
   ReasoningPartSchema,
   ResourcePartSchema,
@@ -30,7 +32,6 @@ import {
   type DataPart,
   type MediaPart,
   type MultipartToolResponse,
-  type Part,
   type ReasoningPart,
   type ResourcePart,
   type TextPart,
@@ -42,6 +43,7 @@ export {
   DataPartSchema,
   MediaPartSchema,
   MultipartToolResponseSchema,
+  Part,
   PartSchema,
   ReasoningPartSchema,
   ResourcePartSchema,
@@ -52,7 +54,6 @@ export {
   type DataPart,
   type MediaPart,
   type MultipartToolResponse,
-  type Part,
   type ReasoningPart,
   type ResourcePart,
   type TextPart,
@@ -61,11 +62,24 @@ export {
 };
 
 //
-// IMPORTANT: Keep this file in sync with genkit/ai/src/model.ts!
+// IMPORTANT: Keep this file in sync with genkit/ai/src/model-types.ts!
 //
 
 /**
- * Zod schema of an opration representing a background task.
+ * Zod schema of an opration representing a model reference.
+ */
+export const ModelReferenceSchema = z.object({
+  name: z.string(),
+  config: z.any().optional(),
+});
+
+/**
+ * Model Reference
+ */
+export type ModelReference = z.infer<typeof ModelReferenceSchema>;
+
+/**
+ * Zod schema of an operation representing a background task.
  */
 export const OperationSchema = z.object({
   action: z.string().optional(),
@@ -136,7 +150,7 @@ export const ModelInfoSchema = z.object({
       constrained: z.enum(['none', 'all', 'no-tools']).optional(),
       /** Model supports controlling tool choice, e.g. forced tool calling. */
       toolChoice: z.boolean().optional(),
-      /** Model supports long running operations. */
+      /** Model can perform long-running operations. */
       longRunning: z.boolean().optional(),
     })
     .optional(),
@@ -183,17 +197,63 @@ export const ToolDefinitionSchema = z.object({
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 
 /**
+ * Configuration parameter descriptions.
+ */
+export const GenerationCommonConfigDescriptions = {
+  temperature:
+    'Controls the degree of randomness in token selection. A lower value is ' +
+    'good for a more predictable response. A higher value leads to more ' +
+    'diverse or unexpected results.',
+  maxOutputTokens: 'The maximum number of tokens to include in the response.',
+  topK: 'The maximum number of tokens to consider when sampling.',
+  topP:
+    'Decides how many possible words to consider. A higher value means ' +
+    'that the model looks at more possible words, even the less likely ' +
+    'ones, which makes the generated text more diverse.',
+};
+
+/**
  * Zod schema of a common config object.
  */
-export const GenerationCommonConfigSchema = z.object({
-  /** A specific version of a model family, e.g. `gemini-1.0-pro-001` for the `gemini-1.0-pro` family. */
-  version: z.string().optional(),
-  temperature: z.number().optional(),
-  maxOutputTokens: z.number().optional(),
-  topK: z.number().optional(),
-  topP: z.number().optional(),
-  stopSequences: z.array(z.string()).optional(),
-});
+export const GenerationCommonConfigSchema = z
+  .object({
+    version: z
+      .string()
+      .describe(
+        'A specific version of a model family, e.g. `gemini-2.5-flash` ' +
+          'for the `googleai` family.'
+      )
+      .optional(),
+    temperature: z
+      .number()
+      .describe(GenerationCommonConfigDescriptions.temperature)
+      .optional(),
+    maxOutputTokens: z
+      .number()
+      .describe(GenerationCommonConfigDescriptions.maxOutputTokens)
+      .optional(),
+    topK: z
+      .number()
+      .describe(GenerationCommonConfigDescriptions.topK)
+      .optional(),
+    topP: z
+      .number()
+      .describe(GenerationCommonConfigDescriptions.topP)
+      .optional(),
+    stopSequences: z
+      .array(z.string())
+      .describe(
+        'Set of character sequences (up to 5) that will stop output generation.'
+      )
+      .optional(),
+    apiKey: z
+      .string()
+      .describe(
+        'API Key to use for the model call, overrides API key provided in plugin config.'
+      )
+      .optional(),
+  })
+  .passthrough();
 
 /**
  * Common config object.
@@ -379,6 +439,8 @@ export const GenerateActionOptionsSchema = z.object({
   messages: z.array(MessageSchema),
   /** List of registered tool names for this generation if supported by the underlying model. */
   tools: z.array(z.string()).optional(),
+  /** List of registered resource names for this generation if supported by the underlying model. */
+  resources: z.array(z.string()).optional(),
   /** Tool calling mode. `auto` lets the model decide whether to use tools, `required` forces the model to choose a tool, and `none` forces the model not to use any tools. Defaults to `auto`.  */
   toolChoice: z.enum(['auto', 'required', 'none']).optional(),
   /** Configuration for the generation request. */
@@ -399,5 +461,7 @@ export const GenerateActionOptionsSchema = z.object({
   maxTurns: z.number().optional(),
   /** Custom step name for this generate call to display in trace views. Defaults to "generate". */
   stepName: z.string().optional(),
+  /** Middleware to apply to this generation. */
+  use: z.array(MiddlewareRefSchema).optional(),
 });
 export type GenerateActionOptions = z.infer<typeof GenerateActionOptionsSchema>;

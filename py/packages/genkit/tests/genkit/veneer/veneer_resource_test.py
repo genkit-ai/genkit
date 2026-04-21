@@ -24,10 +24,10 @@ from typing import Any, cast
 
 import pytest
 
-from genkit.ai import ActionRunContext, Genkit
-from genkit.blocks.resource import ResourceInput
-from genkit.core.action.types import ActionKind
-from genkit.core.typing import Part, TextPart
+from genkit import ActionRunContext, Genkit
+from genkit._ai._resource import ResourceInput
+from genkit._core._action import ActionKind
+from genkit._core._typing import Part, TextPart
 
 
 @pytest.mark.asyncio
@@ -38,7 +38,7 @@ async def test_define_resource_veneer() -> None:
     async def my_resource_fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, list[Part]]:
         return {'content': [Part(root=TextPart(text=f'Content for {input.uri}'))]}
 
-    act = ai.define_resource({'uri': 'http://example.com/foo'}, my_resource_fn)
+    act = ai.define_resource(fn=my_resource_fn, uri='http://example.com/foo')
 
     assert act.name == 'http://example.com/foo'
     assert act.metadata is not None
@@ -51,5 +51,5 @@ async def test_define_resource_veneer() -> None:
     assert looked_up == act
 
     # Verify execution
-    output = await act.arun({'uri': 'http://example.com/foo'})
+    output = await act.run({'uri': 'http://example.com/foo'})
     assert 'Content for http://example.com/foo' in output.response['content'][0]['text']

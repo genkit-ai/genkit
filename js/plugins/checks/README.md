@@ -196,6 +196,6 @@ Run `genkit start -- tsx --watch src/index.ts` and open the Genkit UI, usually a
 
 # Genkit
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repository. Please file issues and pull requests against that repository.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repository. Please file issues and pull requests against that repository.
 
 Usage information and reference details can be found in the [official Genkit documentation](https://genkit.dev/docs/get-started/).

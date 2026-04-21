@@ -17,13 +17,15 @@
 
 """Tests for the OpenAI compatible plugin."""
 
+import asyncio
+import queue
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from openai.types import Model
 
-from genkit.core.action import ActionMetadata
-from genkit.core.action.types import ActionKind
+from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
 from genkit.plugins.compat_oai.openai_plugin import OpenAI, openai_model
 
 
@@ -82,17 +84,49 @@ async def test_openai_plugin_list_actions() -> None:
     mock_result_.data = entries
     mock_client.models.list = AsyncMock(return_value=mock_result_)
 
-    plugin._async_client = mock_client
+    plugin._runtime_client = lambda: mock_client
 
     actions: list[ActionMetadata] = await plugin.list_actions()
     mock_client.models.list.assert_called_once()
     _ = await plugin.list_actions()
-    # Should be called twice now since it's not cached anymore
-    assert mock_client.models.list.call_count == 2
+    # list_actions is cached after the first API fetch.
+    assert mock_client.models.list.call_count == 1
 
     assert len(actions) == len(entries)
     assert actions[0].name == 'openai/gpt-4-0613'
     assert actions[-1].name == 'openai/text-embedding-ada-002'
+
+
+@pytest.mark.asyncio
+async def test_openai_runtime_clients_are_loop_local() -> None:
+    """Runtime OpenAI clients are cached per event loop."""
+    plugin = OpenAI(api_key='test-key')
+    plugin._runtime_client = loop_local_client(lambda: object())
+
+    first = plugin._runtime_client()
+    second = plugin._runtime_client()
+    assert first is second
+
+    q: queue.Queue[object] = queue.Queue()
+
+    def _other_thread() -> None:
+        async def _get_client() -> object:
+            return plugin._runtime_client()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            q.put(loop.run_until_complete(_get_client()))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_other_thread, daemon=True)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive()
+
+    other_loop_client = q.get_nowait()
+    assert other_loop_client is not first
 
 
 @pytest.mark.parametrize(

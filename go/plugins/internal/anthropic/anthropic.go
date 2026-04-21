@@ -22,12 +22,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
+	"github.com/invopop/jsonschema"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -42,10 +44,17 @@ func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOp
 	if provider == "vertexai" {
 		label = "Vertex AI"
 	}
+
+	configSchema := info.ConfigSchema
+	if configSchema == nil {
+		configSchema = ConfigSchema(anthropic.MessageNewParams{})
+	}
+
 	meta := &ai.ModelOptions{
-		Label:    label + "-" + name,
-		Supports: info.Supports,
-		Versions: info.Versions,
+		Label:        label + "-" + name,
+		Supports:     info.Supports,
+		Versions:     info.Versions,
+		ConfigSchema: configSchema,
 	}
 
 	return ai.NewModel(api.NewName(provider, name), meta, func(
@@ -53,19 +62,60 @@ func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOp
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, name, input, cb)
+		return Generate(ctx, client, provider, name, input, cb)
 	})
+}
+
+// ConfigSchema converts a config struct to a map[string]any.
+func ConfigSchema(config any) map[string]any {
+	r := jsonschema.Reflector{
+		DoNotReference:             true, // Prevent $ref usage
+		AllowAdditionalProperties:  false,
+		ExpandedStruct:             true,
+		RequiredFromJSONSchemaTags: true,
+	}
+	// The anthropic SDK uses a number of wrapper types for float, int, etc.
+	// By default, jsonschema will treat these as objects, but we want to
+	// treat them as their underlying primitive types.
+	r.Mapper = func(r reflect.Type) *jsonschema.Schema {
+		if r.Name() == "Opt[float64]" {
+			return &jsonschema.Schema{
+				Type: "number",
+			}
+		}
+		if r.Name() == "Opt[int64]" {
+			return &jsonschema.Schema{
+				Type: "integer",
+			}
+		}
+		if r.Name() == "Opt[string]" {
+			return &jsonschema.Schema{
+				Type: "string",
+			}
+		}
+		if r.Name() == "Opt[bool]" {
+			return &jsonschema.Schema{
+				Type: "boolean",
+			}
+		}
+		return nil
+	}
+	schema := r.Reflect(config)
+	result := base.SchemaAsMap(schema)
+
+	return result
 }
 
 // Generate function defines how a generate request is done in Anthropic models
 func Generate(
 	ctx context.Context,
 	client anthropic.Client,
+	provider string,
 	model string,
 	input *ai.ModelRequest,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
-	req, err := toAnthropicRequest(input)
+	req, err := toAnthropicRequest(provider, input)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate anthropic request: %w", err)
 	}
@@ -110,6 +160,23 @@ func Generate(
 				if err != nil {
 					return nil, err
 				}
+			case anthropic.ContentBlockStopEvent:
+				if int(event.Index) < len(message.Content) {
+					block := message.Content[event.Index]
+					if toolBlock, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
+						p := ai.NewToolRequestPart(&ai.ToolRequest{
+							Ref:   toolBlock.ID,
+							Input: toolBlock.Input,
+							Name:  toolBlock.Name,
+						})
+						err := cb(ctx, &ai.ModelResponseChunk{
+							Content: []*ai.Part{p},
+						})
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
 			case anthropic.MessageStopEvent:
 				r, err := toGenkitResponse(&message)
 				if err != nil {
@@ -141,7 +208,7 @@ func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
 }
 
 // toAnthropicRequest translates [ai.ModelRequest] to an Anthropic request
-func toAnthropicRequest(i *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
+func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
 	messages := make([]anthropic.MessageParam, 0)
 
 	req, err := configFromRequest(i)
@@ -187,11 +254,29 @@ func toAnthropicRequest(i *ai.ModelRequest) (*anthropic.MessageNewParams, error)
 	req.System = sysBlocks
 	req.Messages = messages
 
-	tools, err := toAnthropicTools(i.Tools)
+	tools, err := toAnthropicTools(provider, i.Tools)
 	if err != nil {
 		return nil, err
 	}
 	req.Tools = tools
+
+	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
+		// Native structured output via OutputConfig
+		var outputSchema map[string]any
+		if b, err := json.Marshal(i.Output.Schema); err != nil {
+			return nil, fmt.Errorf("failed to clone output schema: %w", err)
+		} else if err := json.Unmarshal(b, &outputSchema); err != nil {
+			return nil, fmt.Errorf("failed to clone output schema: %w", err)
+		}
+		enforceStrictSchema(outputSchema)
+
+		req.OutputConfig = anthropic.OutputConfigParam{
+			Format: anthropic.JSONOutputFormatParam{
+				Schema: outputSchema,
+				// Type is elided, defaults to "json_schema"
+			},
+		}
+	}
 
 	return req, nil
 }
@@ -220,7 +305,7 @@ func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, err
 }
 
 // toAnthropicTools translates [ai.ToolDefinition] to an anthropic.ToolParam type
-func toAnthropicTools(tools []*ai.ToolDefinition) ([]anthropic.ToolUnionParam, error) {
+func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.ToolUnionParam, error) {
 	resp := make([]anthropic.ToolUnionParam, 0)
 	regex := regexp.MustCompile(ToolNameRegex)
 
@@ -237,22 +322,66 @@ func toAnthropicTools(tools []*ai.ToolDefinition) ([]anthropic.ToolUnionParam, e
 		if len(inputSchema) == 0 {
 			inputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
+
+		// Strict tools require additionalProperties: false recursively
+		var strictInputSchema map[string]any
+		if b, err := json.Marshal(inputSchema); err != nil {
+			return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
+		} else if err := json.Unmarshal(b, &strictInputSchema); err != nil {
+			return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
+		}
+		enforceStrictSchema(strictInputSchema)
+		inputSchema = strictInputSchema
+
 		var err error
 		schema, err = base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse tool input schema: %w", err)
 		}
 
-		resp = append(resp, anthropic.ToolUnionParam{
-			OfTool: &anthropic.ToolParam{
-				Name:        t.Name,
-				Description: anthropic.String(t.Description),
-				InputSchema: schema,
-			},
-		})
+		// ToolInputSchemaParam struct doesn't have AdditionalProperties field,
+		// so we must add it to ExtraFields manually for the top-level schema.
+		if schema.ExtraFields == nil {
+			schema.ExtraFields = make(map[string]any)
+		}
+		if t, ok := inputSchema["type"].(string); ok && t == "object" {
+			schema.ExtraFields["additionalProperties"] = false
+		}
+
+		tool := &anthropic.ToolParam{
+			Name:        t.Name,
+			Description: anthropic.String(t.Description),
+			InputSchema: schema,
+		}
+		// Vertex AI's Anthropic endpoint does not support the strict field.
+		if provider != "vertexai" {
+			tool.Strict = anthropic.Bool(true)
+		}
+		resp = append(resp, anthropic.ToolUnionParam{OfTool: tool})
 	}
 
 	return resp, nil
+}
+
+// enforceStrictSchema is a helper function that sets additionalProperties to false
+// for every object in a schema
+func enforceStrictSchema(schema map[string]any) {
+	if t, ok := schema["type"].(string); ok && t == "object" {
+		schema["additionalProperties"] = false
+		if props, ok := schema["properties"].(map[string]any); ok {
+			for _, v := range props {
+				if subSchema, ok := v.(map[string]any); ok {
+					enforceStrictSchema(subSchema)
+				}
+			}
+		}
+	}
+	// recursively enforce additionalProperties to false
+	if t, ok := schema["type"].(string); ok && t == "array" {
+		if items, ok := schema["items"].(map[string]any); ok {
+			enforceStrictSchema(items)
+		}
+	}
 }
 
 // toAnthropicParts translates [ai.Part] to an anthropic.ContentBlockParamUnion type
@@ -340,9 +469,11 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 	}
 
 	r.Message = msg
+	r.Raw = m.JSON
 	r.Usage = &ai.GenerationUsage{
-		InputTokens:  int(m.Usage.InputTokens),
-		OutputTokens: int(m.Usage.OutputTokens),
+		InputTokens:         int(m.Usage.InputTokens),
+		OutputTokens:        int(m.Usage.OutputTokens),
+		CachedContentTokens: int(m.Usage.CacheReadInputTokens),
 	}
 	return &r, nil
 }

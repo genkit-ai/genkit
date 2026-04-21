@@ -22,12 +22,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from genkit import ModelRequest, ModelResponseChunk, TextPart, ToolRequestPart
 from genkit.plugins.compat_oai.models import OpenAIModel
-from genkit.types import GenerateRequest, GenerateResponseChunk, TextPart, ToolRequestPart
 
 
 @pytest.mark.asyncio
-async def test_generate_with_tool_calls_executes_tools(sample_request: GenerateRequest) -> None:
+async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequest) -> None:
     """Test generate with tool calls executes tools."""
     mock_tool_call = MagicMock()
     mock_tool_call.id = 'tool123'
@@ -86,7 +86,7 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: GenerateR
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_with_tool_calls(sample_request: GenerateRequest) -> None:
+async def test_generate_stream_with_tool_calls(sample_request: ModelRequest) -> None:
     """Test generate_stream processes tool calls streamed in chunks correctly."""
     mock_client = MagicMock()
 
@@ -137,7 +137,7 @@ async def test_generate_stream_with_tool_calls(sample_request: GenerateRequest) 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     collected_chunks = []
 
-    def callback(chunk: GenerateResponseChunk) -> None:
+    def callback(chunk: ModelResponseChunk) -> None:
         collected_chunks.append(chunk.content[0].root)
 
     await model._generate_stream(sample_request, callback)

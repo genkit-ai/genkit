@@ -19,6 +19,7 @@ import { ModelAction } from '@genkit-ai/ai/model';
 import { Operation, z, type JSONSchema7 } from '@genkit-ai/core';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
+import { generateMiddleware } from '../../ai/src/generate/middleware';
 import { modelRef } from '../../ai/src/model';
 import { interrupt } from '../../ai/src/tool';
 import { dynamicResource, genkit, tool, type GenkitBeta } from '../src/beta';
@@ -107,6 +108,42 @@ describe('generate', () => {
         tools: [],
         toolChoice: 'required',
       });
+    });
+
+    it('works with a middleware plugin', async () => {
+      let middlewareExecuted = false;
+      const myMiddleware = generateMiddleware(
+        { name: 'myMiddleware', configSchema: z.string() },
+        ({ config }) => {
+          return {
+            model: async (req, ctx, next) => {
+              middlewareExecuted = true;
+              return {
+                request: req,
+                finishReason: 'stop',
+                message: {
+                  role: 'model',
+                  content: [{ text: `${config}: hi` }],
+                },
+              };
+            },
+          };
+        }
+      );
+
+      const aiWithPlugin = genkit({
+        model: 'echoModel',
+        plugins: [myMiddleware.plugin()],
+      });
+      defineEchoModel(aiWithPlugin);
+
+      const response = await aiWithPlugin.generate({
+        prompt: 'hi',
+        use: [myMiddleware('z-prefix')],
+      });
+
+      assert.strictEqual(response.text, 'z-prefix: hi');
+      assert.strictEqual(middlewareExecuted, true);
     });
 
     it('streams the default model', async () => {

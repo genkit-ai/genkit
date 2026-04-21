@@ -27,10 +27,11 @@ See:
 import re
 from typing import Any
 
-from genkit.core.logging import get_logger
-from genkit.types import GenerateRequest, GenerationUsage, MediaPart, Part, TextPart
+import structlog
 
-logger = get_logger(__name__)
+from genkit import MediaPart, ModelRequest, ModelUsage, Part, TextPart
+
+logger = structlog.get_logger(__name__)
 
 # PDF MIME type for document handling.
 PDF_MIME_TYPE = 'application/pdf'
@@ -76,7 +77,7 @@ def strip_markdown_fences(text: str) -> str:
     return text
 
 
-def maybe_strip_fences(request: GenerateRequest, parts: list[Part]) -> list[Part]:
+def maybe_strip_fences(request: ModelRequest, parts: list[Part]) -> list[Part]:
     """Strip markdown fences from text parts when JSON output is expected.
 
     Args:
@@ -86,7 +87,7 @@ def maybe_strip_fences(request: GenerateRequest, parts: list[Part]) -> list[Part
     Returns:
         Parts with fences stripped from text if JSON was requested.
     """
-    if not request.output or request.output.format != 'json':
+    if request.output_format != 'json':
         return parts
 
     cleaned: list[Part] = []
@@ -111,9 +112,6 @@ def get_cache_control(part: Any) -> dict[str, str] | None:  # noqa: ANN401
     ``metadata.cache_control``, it is passed through to the
     Anthropic API as cache control configuration.
 
-    ``Metadata`` is a Pydantic ``RootModel[dict[str, Any]]``, so the
-    underlying dict is accessed via ``.root``.
-
     Supported format::
 
         Part(root=TextPart(text='...', metadata={'cache_control': {'type': 'ephemeral'}}))
@@ -125,15 +123,10 @@ def get_cache_control(part: Any) -> dict[str, str] | None:  # noqa: ANN401
         Cache control dict (e.g. ``{'type': 'ephemeral'}``) or None.
     """
     metadata = getattr(part, 'metadata', None)
-    if metadata is None:
+    if not isinstance(metadata, dict):
         return None
 
-    # Metadata is a RootModel[dict[str, Any]] — unwrap the root dict.
-    meta_dict = metadata.root if hasattr(metadata, 'root') else metadata
-    if not isinstance(meta_dict, dict):
-        return None
-
-    cache_ctrl = meta_dict.get('cache_control')
+    cache_ctrl = metadata.get('cache_control')
     if cache_ctrl and isinstance(cache_ctrl, dict):
         return cache_ctrl
     return None
@@ -234,11 +227,11 @@ def to_anthropic_media(media_part: MediaPart) -> dict[str, Any]:
 def build_cache_usage(
     input_tokens: int,
     output_tokens: int,
-    basic_usage: GenerationUsage,
+    basic_usage: ModelUsage,
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0,
-) -> GenerationUsage:
-    """Build GenerationUsage with cache-aware token counts.
+) -> ModelUsage:
+    """Build ModelUsage with cache-aware token counts.
 
     Args:
         input_tokens: Number of input tokens from the API response.
@@ -248,7 +241,7 @@ def build_cache_usage(
         cache_read_input_tokens: Tokens read from existing cache entries.
 
     Returns:
-        GenerationUsage with token, character, and cache counts.
+        ModelUsage with token, character, and cache counts.
     """
     custom: dict[str, float] = {}
     if cache_creation_input_tokens:
@@ -256,7 +249,7 @@ def build_cache_usage(
     if cache_read_input_tokens:
         custom['cache_read_input_tokens'] = cache_read_input_tokens
 
-    return GenerationUsage(
+    return ModelUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,

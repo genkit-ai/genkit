@@ -30,6 +30,7 @@ import {
   GenerateContentCandidate,
   GenerateContentResponse,
   GenerateContentStreamResult,
+  PART_KEYS,
   Part,
   isObject,
 } from './types.js';
@@ -539,15 +540,26 @@ function aggregateResponses(
 
         for (const part of candidate.content.parts) {
           const newPart: Partial<Part> = {};
-          if (part.thought) {
-            newPart.thought = part.thought;
+
+          // Instead of iterating over the keys in the Object, which might
+          // Contain new, unsupported things, we iterate over the PART_KEYS
+          // which is the list of Part keys we know about.
+          // This keeps us in sync
+          for (const key of PART_KEYS) {
+            if (key === 'functionCall') {
+              // shouldContinue in the functionCall logic below applies to the
+              // top level for loop, not this nested one.
+              continue;
+            } else if (key === 'text') {
+              if (typeof part.text === 'string') {
+                newPart.text = part.text;
+              }
+            } else if (part[key]) {
+              // Essentially newPart[key] = part[key] with type safety.
+              Object.assign(newPart, { [key]: part[key] });
+            }
           }
-          if (part.thoughtSignature) {
-            newPart.thoughtSignature = part.thoughtSignature;
-          }
-          if (typeof part.text === 'string') {
-            newPart.text = part.text;
-          }
+
           if (part.functionCall) {
             // function calls are special, there can be partials, so we need aggregate
             // the partials into final functionCall.
@@ -559,15 +571,7 @@ function aggregateResponses(
             }
             activePartialToolRequest = newActivePartialToolRequest;
           }
-          if (part.executableCode) {
-            newPart.executableCode = part.executableCode;
-          }
-          if (part.codeExecutionResult) {
-            newPart.codeExecutionResult = part.codeExecutionResult;
-          }
-          if (part.inlineData) {
-            newPart.inlineData = part.inlineData;
-          }
+
           if (Object.keys(newPart).length === 0) {
             newPart.text = '';
           }
@@ -613,6 +617,13 @@ export function getGenkitClientHeader() {
     return defaultGetClientHeader() + ' firebase-studio-vm';
   }
   return defaultGetClientHeader();
+}
+
+export function isKnownKey<T extends object>(
+  key: string | number | symbol,
+  obj: T
+): key is keyof T {
+  return key in obj;
 }
 
 export const TEST_ONLY = { aggregateResponses };

@@ -23,6 +23,7 @@ import {
   modelRef,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import { fromImagenResponse, toImagenPredictRequest } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
@@ -236,25 +237,22 @@ function commonRef(
   });
 }
 
-// Allow all the capabilities for unknown future models
+// There are no more future imagen models, set these to the commonRef values.
 const GENERIC_MODEL = commonRef('imagen', {
   supports: {
     media: true,
-    multiturn: true,
-    tools: true,
-    systemRole: true,
+    multiturn: false,
+    tools: false,
+    toolChoice: false,
+    systemRole: false,
     output: ['media'],
   },
 });
 
+// The 'regular' imagen models are deprecated, but not shutdown yet.
+// Shutdown is June 30, 2026 - until then, we need to keep the same
+// logic as before in the definitions so we are backwards compatible.
 export const KNOWN_MODELS = {
-  'imagen-3.0-generate-002': commonRef('imagen-3.0-generate-002'),
-  'imagen-3.0-generate-001': commonRef('imagen-3.0-generate-001'),
-  'imagen-3.0-capability-001': commonRef('imagen-3.0-capability-001'),
-  'imagen-3.0-fast-generate-001': commonRef('imagen-3.0-fast-generate-001'),
-  'imagen-4.0-fast-generate-001': commonRef('imagen-4.0-fast-generate-001'),
-  'imagen-4.0-generate-001': commonRef('imagen-4.0-generate-001'),
-  'imagen-4.0-ultra-generate-001': commonRef('imagen-4.0-ultra-generate-001'),
   'virtual-try-on-001': commonRef(
     'virtual-try-on-001',
     {
@@ -270,6 +268,7 @@ export const KNOWN_MODELS = {
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS;
+
 export type ImagenModelName =
   | KnownModels
   | `imagen-${string}`
@@ -286,11 +285,13 @@ export function isImagenModelName(value?: string): value is ImagenModelName {
 export function model(
   version: string,
   config: ImagenConfig = {}
-): ModelReference<typeof ImagenConfigSchema> {
+): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
+
   return modelRef({
     name: `vertexai/${name}`,
     config,

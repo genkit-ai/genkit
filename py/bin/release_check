@@ -187,7 +187,7 @@ fi
 
 echo -e "\n${CYAN}Checking plugins...${NC}"
 for d in plugins/*/; do
-  if [ -d "$d" ]; then
+  if [ -d "$d" ] && [ -f "${d}pyproject.toml" ]; then
     if ! check_package_metadata "$d" "plugin"; then
       ERRORS=$((ERRORS + 1))
     elif [ "$VERBOSE" = true ]; then
@@ -234,8 +234,8 @@ for pkg in plugins/*/; do
     # DEP002: unused deps (may be false positives for optional features)
     # DEP003: transitive deps (expected in workspace setup)
     # Exclude tests/ and test/ directories (they use dev deps like pytest)
-    deptry_output=$(uv run deptry "$pkg" --ignore DEP002,DEP003 -ee ".*/tests/" -ee ".*/test/" 2>&1)
-    deptry_exit=$?
+    deptry_exit=0
+    deptry_output=$(uv run deptry "$pkg" --ignore DEP002,DEP003 -ee ".*/tests/" -ee ".*/test/" 2>&1) || deptry_exit=$?
     if [ $deptry_exit -ne 0 ]; then
       # Only report if there are actual errors (DEP001: missing deps)
       if echo "$deptry_output" | grep -qE "DEP001"; then

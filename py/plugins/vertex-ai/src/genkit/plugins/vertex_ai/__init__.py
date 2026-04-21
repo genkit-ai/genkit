@@ -146,13 +146,6 @@ See Also:
 from genkit.plugins.vertex_ai.model_garden.modelgarden_plugin import (
     ModelGardenPlugin,
 )
-from genkit.plugins.vertex_ai.vector_search import (
-    BigQueryRetriever,
-    FirestoreRetriever,
-    RetrieverOptionsSchema,
-    define_vertex_vector_search_big_query,
-    define_vertex_vector_search_firestore,
-)
 
 
 def package_name() -> str:
@@ -165,11 +158,6 @@ def package_name() -> str:
 
 
 __all__ = [
-    'BigQueryRetriever',
-    'FirestoreRetriever',
     'ModelGardenPlugin',
-    'RetrieverOptionsSchema',
-    'define_vertex_vector_search_big_query',
-    'define_vertex_vector_search_firestore',
     'package_name',
 ]

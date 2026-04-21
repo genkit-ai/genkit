@@ -6,14 +6,12 @@
 """Tests for latency tracking in actions."""
 
 import asyncio
-import time
 from typing import cast
 
 import pytest
 from pydantic import BaseModel
 
-from genkit.core.action import Action
-from genkit.core.action.types import ActionKind
+from genkit._core._action import Action, ActionKind
 
 
 class MockResponse(BaseModel):
@@ -36,28 +34,11 @@ async def test_action_latency_ms_population() -> None:
     # if we want to test sync wrapper or just await a task.
     action = cast(Action[str, MockResponse], Action(name='testModel', kind=ActionKind.MODEL, fn=async_model_fn))
 
-    response = await action.arun('world')
+    response = await action.run('world')
 
     assert response.response.value == 'hello world'
     assert response.response.latency_ms is not None
     assert response.response.latency_ms >= 100  # Should be at least 100ms due to sleep
-
-
-def test_sync_action_latency_ms_population() -> None:
-    """Verify that latency_ms is automatically populated for sync actions."""
-
-    def sync_model_fn(input: str) -> MockResponse:
-        time.sleep(0.1)
-        return MockResponse(value=f'sync hello {input}')
-
-    action = cast(Action[str, MockResponse], Action(name='syncTestModel', kind=ActionKind.CUSTOM, fn=sync_model_fn))
-
-    # run() is sync
-    response = action.run('world')
-
-    assert response.response.value == 'sync hello world'
-    assert response.response.latency_ms is not None
-    assert response.response.latency_ms >= 100
 
 
 class ImmutableMockResponse(BaseModel):
@@ -80,7 +61,7 @@ async def test_immutable_action_latency_ms_population() -> None:
         Action(name='testImmutableModel', kind=ActionKind.MODEL, fn=async_model_fn),
     )
 
-    response = await action.arun('world')
+    response = await action.run('world')
 
     assert response.response.value == 'hello world'
     assert response.response.latency_ms is not None
@@ -115,7 +96,7 @@ async def test_readonly_action_latency_ms_population() -> None:
     # will still try to use setattr if the field exists, or it won't have latency_ms in its fields.
     # Actually, Pydantic's model_copy only updates fields. latency_ms is a property here.
 
-    response = await action.arun('world')
+    response = await action.run('world')
 
     assert response.response.value == 'hello world'
     # Since it's a property without a setter AND not a Pydantic field,

@@ -30,23 +30,6 @@ concurrency:
 
 jobs:
   # =============================================================================
-  # Detect which directories changed to skip unrelated test jobs
-  # =============================================================================
-  detect-changes:
-    name: Detect Changes
-    runs-on: ubuntu-latest
-    outputs:
-      conform: ${{ steps.filter.outputs.conform }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            conform:
-              - 'py/tools/conform/**'
-
-  # =============================================================================
   # Fast checks that run quickly and catch common issues early
   # =============================================================================
   lint-and-format:
@@ -120,7 +103,7 @@ jobs:
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: uv run --directory py pyright packages/
+        run: cd py && uv run pyright packages/
 
   # =============================================================================
   # Security and compliance checks
@@ -197,48 +180,13 @@ jobs:
           uv run --python ${{ matrix.python-version }} --active --isolated --directory py \
             pytest -xvs --log-level=DEBUG .
   # =============================================================================
-  # Conform tool tests (workspace member — needs root uv sync)
-  # =============================================================================
-  conform-tests:
-    name: Conform Tests (Python ${{ matrix.python-version }})
-    needs: detect-changes
-    if: needs.detect-changes.outputs.conform == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
-
-      - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          cd py
-          uv sync
-
-      - name: Run conform tests
-        run: |
-          uv run --directory py pytest tools/conform/tests/ -xvs --no-cov --import-mode=importlib
-
-  # =============================================================================
   # Build verification (runs after tests pass)
   # =============================================================================
   build:
     name: Build Distributions
     runs-on: ubuntu-latest
     if: ${{ always() && !failure() && !cancelled() }}
-    needs: [lint-and-format, type-check, security-and-compliance, tests, conform-tests]
+    needs: [lint-and-format, type-check, security-and-compliance, tests]
     steps:
       - uses: actions/checkout@v5
 

@@ -22,8 +22,8 @@ from collections.abc import Callable
 from pydantic import BaseModel
 
 import ollama as ollama_api
-from genkit.blocks.embedding import EmbedRequest, EmbedResponse
-from genkit.types import Embedding
+from genkit import Embedding
+from genkit.embedder import EmbedRequest, EmbedResponse
 
 
 class EmbeddingDefinition(BaseModel):
@@ -69,7 +69,7 @@ class OllamaEmbedder:
         self._client_factory = client
         self.embedding_definition = embedding_definition
 
-    def _get_client(self) -> 'ollama_api.AsyncClient':
+    def _get_client(self) -> ollama_api.AsyncClient:
         """Creates a fresh async client bound to the current event loop.
 
         Returns:

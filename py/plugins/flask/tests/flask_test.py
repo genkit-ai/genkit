@@ -21,8 +21,8 @@ from typing import Any
 
 from flask import Flask, Request
 
-from genkit.ai import ActionRunContext, Genkit
-from genkit.core.context import RequestData
+from genkit import ActionRunContext, Genkit
+from genkit.plugin_api import RequestData
 from genkit.plugins.flask import genkit_flask_handler
 
 
@@ -81,8 +81,8 @@ def test_streaming() -> None:
         chunks.append(chunk)
 
     assert chunks == [
-        b'data: {"message": 1}\n\n',
-        b'data: {"message": {"username": "Pavel"}}\n\n',
-        b'data: {"message": {"foo": "bar"}}\n\n',
-        b'data: {"result": {"bar": "baz"}}\n\n',
+        b'data: {"message":1}\n\n',
+        b'data: {"message":{"username":"Pavel"}}\n\n',
+        b'data: {"message":{"foo":"bar"}}\n\n',
+        b'data: {"result":{"bar":"baz"}}\n\n',
     ]

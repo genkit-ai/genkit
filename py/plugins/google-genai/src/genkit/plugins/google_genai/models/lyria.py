@@ -73,10 +73,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from genkit.core.typing import (
-    ModelInfo,
-    Supports,
-)
+from genkit import ModelInfo, Supports
 
 
 class LyriaVersion(StrEnum):
@@ -152,7 +149,7 @@ def _extract_text(messages: list[Any]) -> str:
     """Extract text prompt from messages.
 
     Args:
-        messages: The message list from a GenerateRequest.
+        messages: The message list from a ModelRequest.
 
     Returns:
         The text prompt string.

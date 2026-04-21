@@ -34,7 +34,7 @@ export interface ProcessManagerStartOptions {
  */
 export class ProcessManager {
   private appProcess?: ChildProcess;
-  private originalStdIn?: NodeJS.ReadStream;
+
   private _status: ProcessStatus = 'stopped';
   private manualRestart = false;
 
@@ -58,13 +58,11 @@ export class ProcessManager {
           ...this.env,
         },
         shell: process.platform === 'win32',
+        stdio: options?.nonInteractive ? 'pipe' : 'inherit',
       });
 
       if (!options?.nonInteractive) {
-        this.originalStdIn = process.stdin;
-        this.appProcess.stderr?.pipe(process.stderr);
-        this.appProcess.stdout?.pipe(process.stdout);
-        process.stdin?.pipe(this.appProcess.stdin!);
+        // In interactive mode, stdio: inherit handles the piping.
       } else {
         this.appProcess.stderr?.on('data', (data) => {
           logger.debug(`[ProcessManager Stderr] ${data.toString()}`);
@@ -138,10 +136,6 @@ export class ProcessManager {
   }
 
   private cleanup() {
-    if (this.originalStdIn) {
-      process.stdin.unpipe(this.appProcess?.stdin!);
-      this.originalStdIn = undefined;
-    }
     if (this.appProcess) {
       this.appProcess.stdout?.removeAllListeners();
       this.appProcess.stderr?.removeAllListeners();

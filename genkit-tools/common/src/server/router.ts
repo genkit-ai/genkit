@@ -21,7 +21,7 @@ import {
   runNewEvaluation,
   validateSchema,
 } from '../eval';
-import type { RuntimeManager } from '../manager/manager';
+import type { BaseRuntimeManager } from '../manager/manager';
 import { AppProcessStatus } from '../manager/process-manager';
 import { GenkitToolsError, type RuntimeInfo } from '../manager/types';
 import { TraceDataSchema } from '../types';
@@ -125,7 +125,7 @@ const loggedProcedure = t.procedure.use(async (opts) => {
 });
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-export const TOOLS_SERVER_ROUTER = (manager: RuntimeManager) =>
+export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
   t.router({
     /** Retrieves all runnable actions. */
     listActions: loggedProcedure

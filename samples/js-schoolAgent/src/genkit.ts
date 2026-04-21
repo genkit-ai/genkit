@@ -20,7 +20,7 @@ import type { AgentState } from './types';
 
 export const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-pro'),
+  model: googleAI.model('gemini-pro-latest'),
 });
 
 ai.defineHelper(

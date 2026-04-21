@@ -59,17 +59,8 @@ jobs:
           - provider-google-genai-vertexai-hello
           - provider-google-genai-vertexai-image
           - provider-anthropic-hello
-          - provider-mistral-hello
-          - provider-xai-hello
-          - provider-deepseek-hello
-          - provider-cohere-hello
-          - provider-huggingface-hello
-          - provider-amazon-bedrock-hello
-          - provider-cloudflare-workers-ai-hello
           - provider-compat-oai-hello
-          - provider-microsoft-foundry-hello
-          - provider-checks-hello
-          - provider-observability-hello
+          - provider-vertex-ai-model-garden
           - framework-prompt-demo
           - framework-format-demo
           - framework-context-demo
@@ -79,8 +70,6 @@ jobs:
           - framework-restaurant-demo
           - web-fastapi-bugbot
           - web-flask-hello
-          - web-multi-server
-          - web-short-n-long
     steps:
       - uses: actions/checkout@v5
 
@@ -124,9 +113,6 @@ jobs:
       matrix:
         include:
           - sample: provider-ollama-hello
-            # Use the smallest model for CI smoke test — full model
-            # list (gemma3:latest, mistral-nemo, llava, nomic-embed-text)
-            # would be ~10 GB and too slow for PR checks.
             models: "gemma3:1b"
     steps:
       - uses: actions/checkout@v5

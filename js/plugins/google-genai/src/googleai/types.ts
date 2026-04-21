@@ -15,6 +15,10 @@
  */
 
 import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from '../common/interaction-types.js';
+import {
   Content,
   FinishReason,
   GenerateContentCandidate,
@@ -46,6 +50,8 @@ export {
   HarmCategory,
   TaskTypeSchema,
   type Content,
+  type CreateInteractionRequest,
+  type GeminiInteraction,
   type GenerateContentCandidate,
   type GenerateContentRequest,
   type GenerateContentResponse,

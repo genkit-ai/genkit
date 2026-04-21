@@ -458,7 +458,7 @@ function isFilterMatch(
   filter?: TraceQueryFilter
 ): boolean {
   if (!filter) return true;
-  const { eq, neq, gt, gte, lt, lte } = filter;
+  const { eq, neq, gt, gte, lt, lte, contains } = filter;
   if (eq) {
     for (const k of Object.keys(eq)) {
       const filterVal = eq[k];
@@ -505,6 +505,19 @@ function isFilterMatch(
     for (const k of Object.keys(lte)) {
       const val = d[k];
       if (typeof val !== 'number' || val > lte[k]) return false;
+    }
+  }
+  if (contains) {
+    for (const k of Object.keys(contains)) {
+      const filterVal = contains[k];
+      const val = d[k];
+      if (typeof val !== 'string') return false;
+      const match = Array.isArray(filterVal)
+        ? filterVal.some((fv) =>
+            val.toLowerCase().includes(`${fv}`.toLowerCase())
+          )
+        : val.toLowerCase().includes(`${filterVal}`.toLowerCase());
+      if (!match) return false;
     }
   }
   return true;

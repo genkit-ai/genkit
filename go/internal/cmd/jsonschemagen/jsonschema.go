@@ -29,6 +29,7 @@ import (
 type Schema struct {
 	SchemaVersion        string                   `json:"$schema,omitempty"`
 	ID                   string                   `json:"$id,omitempty"`
+	Format               string                   `json:"format,omitempty"`
 	Type                 *OneOf[string, []string] `json:"type,omitempty"`
 	Description          string                   `json:"description,omitempty"`
 	Properties           map[string]*Schema       `json:"properties,omitempty"`

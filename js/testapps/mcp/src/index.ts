@@ -45,7 +45,7 @@ export const PERMISSIVE_SAFETY_SETTINGS: any = {
 
 export const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 logger.setLogLevel('debug'); // Set the logging level to debug for detailed output

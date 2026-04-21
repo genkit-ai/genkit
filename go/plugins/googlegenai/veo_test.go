@@ -169,16 +169,18 @@ func TestToVeoParameters(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		request  *ai.ModelRequest
-		expected genai.GenerateVideosConfig
+		name        string
+		request     *ai.ModelRequest
+		expected    genai.GenerateVideosConfig
+		expectError bool
 	}{
 		{
 			name: "request with no config",
 			request: &ai.ModelRequest{
 				Config: nil,
 			},
-			expected: genai.GenerateVideosConfig{},
+			expected:    genai.GenerateVideosConfig{},
+			expectError: false,
 		},
 		{
 			name: "request with valid GenerateVideosConfig",
@@ -194,6 +196,23 @@ func TestToVeoParameters(t *testing.T) {
 				DurationSeconds:  genai.Ptr(int32(5)),
 				PersonGeneration: "allow_adult",
 			},
+			expectError: false,
+		},
+		{
+			name: "request with valid map config",
+			request: &ai.ModelRequest{
+				Config: map[string]any{
+					"aspectRatio":      "16:9",
+					"durationSeconds":  5,
+					"personGeneration": "allow_adult",
+				},
+			},
+			expected: genai.GenerateVideosConfig{
+				AspectRatio:      "16:9",
+				DurationSeconds:  genai.Ptr(int32(5)),
+				PersonGeneration: "allow_adult",
+			},
+			expectError: false,
 		},
 		{
 			name: "request with different config type",
@@ -202,13 +221,25 @@ func TestToVeoParameters(t *testing.T) {
 					MaxOutputTokens: int32(100),
 				},
 			},
-			expected: genai.GenerateVideosConfig{}, // Should return default config
+			expected:    genai.GenerateVideosConfig{},
+			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := toVeoParameters(tt.request)
+			result, err := toVeoParameters(tt.request)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("toVeoParameters() expected error but got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("toVeoParameters() unexpected error: %v", err)
+			}
 
 			// Compare AspectRatio
 			if result.AspectRatio != tt.expected.AspectRatio {

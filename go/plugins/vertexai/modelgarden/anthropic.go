@@ -32,7 +32,9 @@ import (
 )
 
 const (
-	provider = "vertexai"
+	// TODO: The provider value should be updated in the next major version to avoid collisions with the main vertexai plugin.
+	provider   = "vertexai"
+	pluginName = "vertex-model-garden-anthropic"
 )
 
 // Anthropic is a Genkit plugin for interacting with Anthropic models in Vertex AI Model Garden
@@ -47,7 +49,7 @@ type Anthropic struct {
 
 // Name returns the name of the plugin
 func (a *Anthropic) Name() string {
-	return provider
+	return pluginName
 }
 
 // Init initializes the VertexAI Model Garden for Anthropic plugin and all its known models.
@@ -86,7 +88,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	}
 
 	c := anthropic.NewClient(
-		vertex.WithGoogleAuth(context.Background(), location, projectID),
+		vertex.WithGoogleAuth(ctx, location, projectID, "https://www.googleapis.com/auth/cloud-platform"),
 	)
 	a.client = c
 	a.initted = true

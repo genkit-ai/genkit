@@ -14,4 +14,4 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the genkit.core.trace module."""
+"""Tests for the genkit._core._trace module."""

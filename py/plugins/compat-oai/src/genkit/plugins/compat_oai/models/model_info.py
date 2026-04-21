@@ -24,11 +24,11 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
-from genkit.plugins.compat_oai.typing import SupportedOutputFormat
-from genkit.types import (
+from genkit import (
     ModelInfo,
     Supports,
 )
+from genkit.plugins.compat_oai.typing import SupportedOutputFormat
 
 OPENAI = 'openai'
 MODEL_GARDEN = 'model-garden'

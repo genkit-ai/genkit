@@ -3123,7 +3123,7 @@ func TestDefineDataPromptPanics(t *testing.T) {
 
 // TestLoadPromptTemplateVariableSubstitution tests that template variables are
 // properly substituted with actual input values at execution time.
-// This is a regression test for https://github.com/firebase/genkit/issues/3924
+// This is a regression test for https://github.com/genkit-ai/genkit/issues/3924
 func TestLoadPromptTemplateVariableSubstitution(t *testing.T) {
 	t.Run("single role", func(t *testing.T) {
 		tempDir := t.TempDir()

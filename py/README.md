@@ -41,13 +41,13 @@ and is loaded lazily by the `Registry`.
 
 ### Plugin Class Hierarchy
 
-All plugins inherit from `genkit.core.plugin.Plugin` and implement three
+All plugins inherit from `genkit._core.plugin.Plugin` and implement three
 abstract methods:
 
 ```
   ┌─────────────────────────────────────────────────────────────────────┐
   │                  Plugin (Abstract Base Class)                       │
-  │                  genkit.core.plugin.Plugin                          │
+  │                  genkit._core.plugin.Plugin                          │
   ├─────────────────────────────────────────────────────────────────────┤
   │                                                                     │
   │  name: str                                                          │
@@ -182,9 +182,7 @@ registry uses a multi-step resolution algorithm:
 ### Writing a Custom Plugin
 
 ```python
-from genkit.core.plugin import Plugin
-from genkit.core.action import Action, ActionMetadata
-from genkit.core.action.types import ActionKind
+from genkit.plugin_api import Plugin, Action, ActionMetadata, ActionKind
 
 
 class MyPlugin(Plugin):
@@ -206,6 +204,7 @@ class MyPlugin(Plugin):
         return [
             ActionMetadata(kind=ActionKind.MODEL, name='myplugin/my-model'),
         ]
+
 
 # Usage:
 ai = Genkit(plugins=[MyPlugin(api_key='...')])
@@ -305,7 +304,6 @@ and deciding whether to allow or reject it:
 py/
 ├── packages/genkit/          # Core Genkit framework package
 ├── plugins/                  # Official plugins
-│   ├── amazon-bedrock/       # Amazon Bedrock models + X-Ray telemetry (community)
 │   ├── anthropic/            # Claude models
 │   ├── azure/                # Azure AI telemetry (community)
 │   ├── cloudflare-workers-ai/# Cloudflare Workers AI + OTLP telemetry (community)
@@ -360,7 +358,7 @@ ai = Genkit(
     model=gemini_2_0_flash,
 )
 
-response = await ai.generate(prompt="Tell me a joke")
+response = await ai.generate(prompt='Tell me a joke')
 print(response.text)
 ```
 
@@ -377,7 +375,7 @@ print(response.text)
 | **Context Provider** | Middleware that runs *before* a flow is called via HTTP. It reads the request (headers, body) and either provides auth info to the flow or rejects the request. | `api_key()`, `create_flows_asgi_app()` |
 | **Flow Server** | A built-in HTTP server that wraps your flows as API endpoints so `curl` (or any client) can call them. It's Genkit's simple way to deploy flows without a web framework. | `create_flows_asgi_app()` |
 | **Registry** | The internal directory of all defined flows, tools, models, and prompts. The Dev UI and CLI read it to discover what's available. | `ai.registry` |
-| **Action** | The low-level building block behind flows, tools, models, and prompts. Everything you define becomes an "action" in the registry with input/output schemas and tracing. | `genkit.core.action` |
+| **Action** | The low-level building block behind flows, tools, models, and prompts. Everything you define becomes an "action" in the registry with input/output schemas and tracing. | `genkit.plugin_api` |
 | **Middleware** | Functions that wrap around model calls to add behavior — logging, caching, safety checks, or modifying requests/responses. Runs at the model level, not HTTP level. | `ai.define_model(use=[...])` |
 | **Embedder** | A model that turns text into numbers (vectors) for similarity search. Used with vector stores for RAG (Retrieval-Augmented Generation). | `ai.embed()` |
 | **Retriever** | A component that searches a vector store and returns relevant documents for a query. Used in RAG pipelines. | `ai.retrieve()` |
@@ -403,7 +401,6 @@ print(response.text)
 
 Some plugins are community-maintained and supported on a best-effort basis:
 
-- **amazon-bedrock** - Amazon Bedrock models + AWS X-Ray telemetry
 - **azure** - Azure Monitor / Application Insights telemetry
 - **cloudflare-workers-ai** - Cloudflare Workers AI models + OTLP telemetry
 - **cohere** - Cohere command models + reranking
@@ -412,50 +409,24 @@ Some plugins are community-maintained and supported on a best-effort basis:
 
 ## Sample Catalog
 
-Each sample demonstrates specific Genkit concepts. Use this table to find
-examples of any feature:
+The Python samples are intentionally short and beginner-friendly. Use this table to jump to the clearest example for each concept:
 
 | Sample | Key Concepts | Description |
 |--------|-------------|-------------|
-| **Model Providers** | | |
-| `provider-google-genai-hello` | Model, Flow | Basic Gemini model usage |
-| `provider-anthropic-hello` | Model, Flow | Claude model usage |
-| `provider-ollama-hello` | Model, Flow | Local Ollama models |
-| `provider-cohere-hello` | Model, Flow | Cohere models |
-| `provider-compat-oai-hello` | Model, Flow | OpenAI-compatible APIs |
-| `provider-deepseek-hello` | Model, Flow | DeepSeek models |
-| `provider-xai-hello` | Model, Flow | Grok models |
-| `provider-mistral-hello` | Model, Flow | Mistral models |
-| `provider-huggingface-hello` | Model, Flow | HuggingFace Inference API |
-| `provider-amazon-bedrock-hello` | Model, Flow, Telemetry | AWS Bedrock + X-Ray tracing |
-| `provider-cloudflare-workers-ai-hello` | Model, Flow, Telemetry | Cloudflare Workers AI |
-| `provider-microsoft-foundry-hello` | Model, Flow | Azure AI Foundry |
-| **Google Cloud** | | |
-| `provider-google-genai-vertexai-hello` | Model, Flow | Vertex AI models |
-| `provider-google-genai-vertexai-image` | Model, Flow | Imagen image generation |
-| `provider-google-genai-media-models-demo` | Model, Flow | TTS, STT, Veo, Lyria |
-| `provider-google-genai-code-execution` | Model, Tool | Code execution sandbox |
-| `provider-google-genai-context-caching` | Model, Flow | Context caching for long prompts |
-| `provider-vertex-ai-model-garden` | Model, Flow | Model Garden access |
-| `provider-vertex-ai-rerank-eval` | Retriever, Evaluator | Reranking + evaluation |
-| `provider-vertex-ai-vector-search-*` | Embedder, Indexer, Retriever | Vector search |
-| `provider-firestore-retriever` | Retriever | Firestore document retrieval |
-| `provider-observability-hello` | Telemetry | Multi-backend tracing |
-| **Framework Patterns** | | |
-| `framework-prompt-demo` | Prompt, Dotprompt | Advanced prompt templates |
-| `framework-format-demo` | Structured Output | JSON/enum output formatting |
-| `framework-context-demo` | Context Provider, Flow | Auth context in flows |
-| `framework-middleware-demo` | Middleware | Model-level request/response hooks |
-| `framework-evaluator-demo` | Evaluator | Custom evaluation metrics |
-| `framework-restaurant-demo` | Flow, Tool, Prompt | Multi-step agent with tools |
-| `framework-dynamic-tools-demo` | Tool, Dynamic Action Provider | Runtime tool registration |
-| `framework-tool-interrupts` | Tool | Human-in-the-loop tool approval |
-| `framework-realtime-tracing-demo` | Tracing | Live trace streaming |
-| `dev-local-vectorstore-hello` | Embedder, Retriever, Indexer | Local dev vector store |
-| **Deployment** | | |
-| `web-short-n-long` | Flow Server, Context Provider | Built-in flows server + `api_key()` auth |
-| `web-flask-hello` | Flow, Plugin (Flask) | Flask framework integration |
-| `web-multi-server` | Flow Server, Reflection API | Multiple Genkit instances |
+| `context` | Context, Flow, Tool | Pass request context through `generate()`, flows, and tools |
+| `dynamic-tools` | Dynamic Tool, Tracing | Create a tool at runtime and trace plain functions with `ai.run()` |
+| `evaluators` | Evaluator | Run simple custom evaluators with `genkit eval:run` |
+| `fastapi-bugbot` | FastAPI, Prompt | Build a small code-review API with Genkit |
+| `flask-hello` | Flask, Flow | Serve Genkit flows through Flask |
+| `gemini-code-execution` | Gemini, Code Execution | Ask Gemini to write and run code for a task |
+| `gemini-context-caching` | Gemini, Context Caching | Cache a large document and ask follow-up questions |
+| `google-genai-media` | Gemini, Imagen, Veo | Simple speech, image, and video generation examples |
+| `middleware` | Middleware | Observe or modify model requests with `use=[...]` |
+| `output-formats` | Structured Output | Text, enum, JSON object, array, and JSONL outputs |
+| `prompts` | Prompt, Dotprompt | Use `.prompt` files, helpers, variants, and streaming |
+| `tool-interrupts` | Tool | Pause tool execution for human approval |
+| `tracing` | Tracing | Watch spans appear in the Dev UI as they start |
+| `vertexai-imagen` | Vertex AI, Image Generation | Generate an image with Vertex AI Imagen |
 
 See the [samples/README.md](samples/README.md) for running instructions.
 
@@ -470,7 +441,7 @@ uv run pytest .
 Run tests for a specific plugin:
 
 ```bash
-uv run pytest plugins/amazon-bedrock/
+uv run pytest plugins/anthropic/
 ```
 
 ## Development

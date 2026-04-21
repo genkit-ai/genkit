@@ -38,7 +38,4 @@ export const SUPPORTED_STT_MODELS = {
   'gpt-4o-mini-transcribe': openAITranscriptionModelRef({
     name: 'gpt-4o-mini-transcribe',
   }),
-  'whisper-1': openAITranscriptionModelRef({
-    name: 'whisper-1',
-  }),
 };

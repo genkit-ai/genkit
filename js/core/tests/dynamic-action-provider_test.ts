@@ -173,19 +173,24 @@ describe('dynamic action provider', () => {
 
   it('gets action metadata record', async () => {
     let callCount = 0;
+    const resource1 = defineAction(
+      registry,
+      { name: 'resource1', actionType: 'resource' },
+      async () => 'resource1'
+    );
     const dap = defineDynamicActionProvider(registry, 'my-dap', async () => {
       callCount++;
       return {
         tool: [tool1, tool2],
-        flow: [tool1],
+        resource: [resource1],
       };
     });
 
     const record = await dap.getActionMetadataRecord('dap/my-dap');
     assert.deepStrictEqual(record, {
-      'dap/my-dap:tool/tool1': tool1.__action,
-      'dap/my-dap:tool/tool2': tool2.__action,
-      'dap/my-dap:flow/tool1': tool1.__action,
+      '/dynamic-action-provider/my-dap:tool/tool1': tool1.__action,
+      '/dynamic-action-provider/my-dap:tool/tool2': tool2.__action,
+      '/dynamic-action-provider/my-dap:resource/resource1': resource1.__action,
     });
     assert.strictEqual(callCount, 1);
   });
@@ -274,6 +279,34 @@ describe('dynamic action provider', () => {
     await dap.__cache.getOrFetch();
     assert.strictEqual(runCalled, true);
     assert.strictEqual(callCount, 2);
+  });
+
+  it('propagates the correct key for dynamically provided actions', async () => {
+    let callCount = 0;
+    const dap = defineDynamicActionProvider(registry, 'my-dap', async () => {
+      callCount++;
+      return {
+        tool: [tool1, tool2],
+      };
+    });
+
+    const action1 = await dap.getAction('tool', 'tool1');
+    assert.ok(action1);
+    assert.strictEqual(
+      action1.__action.key,
+      '/dynamic-action-provider/my-dap:tool/tool1'
+    );
+    assert.strictEqual(action1, tool1);
+
+    const metadata = await dap.listActionMetadata('tool', '*');
+    assert.strictEqual(
+      metadata[0].key,
+      '/dynamic-action-provider/my-dap:tool/tool1'
+    );
+    assert.strictEqual(
+      metadata[1].key,
+      '/dynamic-action-provider/my-dap:tool/tool2'
+    );
   });
 
   it('identifies dynamic action providers', async () => {
