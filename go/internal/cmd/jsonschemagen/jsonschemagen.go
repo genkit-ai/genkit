@@ -442,7 +442,11 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 		if skipOmitEmpty(goName, field) {
 			jsonTag = fmt.Sprintf(`json:"%s"`, field)
 		}
-		g.pr(fmt.Sprintf("  %s %s `%s`\n", adjustIdentifier(field), typeExpr, jsonTag))
+		fieldName := fcfg.name
+		if fieldName == "" {
+			fieldName = adjustIdentifier(field)
+		}
+		g.pr(fmt.Sprintf("  %s %s `%s`\n", fieldName, typeExpr, jsonTag))
 	}
 	for _, f := range tcfg.fields {
 		g.pr(fmt.Sprintf("  %s %s\n", f.name, f.typeExpr))
@@ -509,6 +513,11 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 		s2, name, err := g.resolveRef(s.Ref)
 		if err != nil {
 			return "", err
+		}
+		// Nested refs (e.g. "#/$defs/Foo/properties/bar") don't correspond to a
+		// generated Go type; inline the resolved sub-schema's type instead.
+		if strings.Count(s.Ref, "/") > 2 {
+			return g.typeExpr(s2)
 		}
 		ic := g.cfg.configFor(name)
 		if s2 == nil {
