@@ -416,7 +416,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			}
 		}
 
-		var contextMap core.ActionContext = nil
+		contextMap := core.ActionContext{}
 		if body.Context != nil {
 			json.Unmarshal(body.Context, &contextMap)
 		}
@@ -558,6 +558,15 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 	}
 }
 
+// configureTelemetry sets up the telemetry client if not already configured via env var.
+// Shared between V1 and V2 reflection servers.
+func configureTelemetry(url string) {
+	if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && url != "" {
+		tracing.WriteTelemetryImmediate(tracing.NewHTTPTelemetryClient(url))
+		slog.Debug("connected to telemetry server", "url", url)
+	}
+}
+
 // handleNotify configures the telemetry server URL from the request.
 func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
@@ -571,10 +580,7 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 			return core.NewError(core.INVALID_ARGUMENT, err.Error())
 		}
 
-		if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && body.TelemetryServerURL != "" {
-			tracing.WriteTelemetryImmediate(tracing.NewHTTPTelemetryClient(body.TelemetryServerURL))
-			slog.Debug("connected to telemetry server", "url", body.TelemetryServerURL)
-		}
+		configureTelemetry(body.TelemetryServerURL)
 
 		if body.ReflectionApiSpecVersion != internal.GENKIT_REFLECTION_API_SPEC_VERSION {
 			slog.Error("Genkit CLI version is not compatible with runtime library. Please use `genkit-cli` version compatible with runtime library version.")
@@ -683,9 +689,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage
 	if action == nil {
 		return nil, core.NewError(core.NOT_FOUND, "action %q not found", key)
 	}
-	if runtimeContext != nil {
-		ctx = core.WithActionContext(ctx, runtimeContext)
-	}
+	ctx = core.WithActionContext(ctx, runtimeContext)
 
 	// Parse telemetry attributes if provided
 	var telemetryAttributes map[string]string

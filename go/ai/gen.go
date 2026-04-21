@@ -28,9 +28,9 @@ type ActionMetadata struct {
 	Metadata        map[string]any `json:"metadata,omitempty"`
 	Name            string         `json:"name,omitempty"`
 	// A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.
-	OutputJsonSchema *ActionMetadata `json:"outputJsonSchema,omitempty"`
-	OutputSchema     any             `json:"outputSchema,omitempty"`
-	StreamSchema     any             `json:"streamSchema,omitempty"`
+	OutputJsonSchema any `json:"outputJsonSchema,omitempty"`
+	OutputSchema     any `json:"outputSchema,omitempty"`
+	StreamSchema     any `json:"streamSchema,omitempty"`
 }
 
 type customPart struct {
@@ -152,7 +152,7 @@ type GenerateActionOutputConfig struct {
 // GenerationCommonConfig holds configuration parameters for model generation requests.
 type GenerationCommonConfig struct {
 	// API Key to use for the model call, overrides API key provided in plugin config.
-	ApiKey string `json:"apiKey,omitempty"`
+	APIKey string `json:"apiKey,omitempty"`
 	// MaxOutputTokens limits the maximum number of tokens generated in the response.
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 	// StopSequences specifies sequences that will cause generation to stop when encountered.
@@ -445,77 +445,6 @@ type reasoningPart struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Reasoning contains the reasoning text of the message.
 	Reasoning string `json:"reasoning,omitempty"`
-}
-
-type ReflectionCancelActionParams struct {
-	TraceID string `json:"traceId,omitempty"`
-}
-
-type ReflectionCancelActionResponse struct {
-	Message string `json:"message,omitempty"`
-}
-
-type ReflectionConfigureParams struct {
-	TelemetryServerUrl string `json:"telemetryServerUrl,omitempty"`
-}
-
-type ReflectionEndInputStreamParams struct {
-	RequestID string `json:"requestId,omitempty"`
-}
-
-type ReflectionListActionsResponse struct {
-	Actions map[string]*ActionMetadata `json:"actions,omitempty"`
-}
-
-type ReflectionListValuesParams struct {
-	Type string `json:"type,omitempty"`
-}
-
-type ReflectionListValuesResponse struct {
-	Values map[string]any `json:"values,omitempty"`
-}
-
-type ReflectionRegisterParams struct {
-	Envs                     []string `json:"envs,omitempty"`
-	GenkitVersion            string   `json:"genkitVersion,omitempty"`
-	Id                       string   `json:"id,omitempty"`
-	Name                     string   `json:"name,omitempty"`
-	Pid                      float64  `json:"pid,omitempty"`
-	ReflectionApiSpecVersion float64  `json:"reflectionApiSpecVersion,omitempty"`
-}
-
-type ReflectionRunActionParams struct {
-	// Additional runtime context data (ex. auth context data).
-	Context any `json:"context,omitempty"`
-	// An input with the type that this action expects.
-	Input any `json:"input,omitempty"`
-	// Action key that consists of the action type and ID.
-	Key string `json:"key,omitempty"`
-	// ID of the Genkit runtime to run the action on. Typically $pid-$port.
-	RuntimeID   string `json:"runtimeId,omitempty"`
-	Stream      bool   `json:"stream,omitempty"`
-	StreamInput bool   `json:"streamInput,omitempty"`
-	// Labels to be applied to telemetry data.
-	TelemetryLabels map[string]string `json:"telemetryLabels,omitempty"`
-}
-
-type ReflectionRunActionStateParams struct {
-	RequestID string                               `json:"requestId,omitempty"`
-	State     *ReflectionRunActionStateParamsState `json:"state,omitempty"`
-}
-
-type ReflectionRunActionStateParamsState struct {
-	TraceID string `json:"traceId,omitempty"`
-}
-
-type ReflectionSendInputStreamChunkParams struct {
-	Chunk     any    `json:"chunk,omitempty"`
-	RequestID string `json:"requestId,omitempty"`
-}
-
-type ReflectionStreamChunkParams struct {
-	Chunk     any    `json:"chunk,omitempty"`
-	RequestID string `json:"requestId,omitempty"`
 }
 
 // RerankerRequest represents a request to rerank documents based on relevance.

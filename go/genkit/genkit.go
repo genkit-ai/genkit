@@ -252,14 +252,20 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
 
-		go func() {
-			if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
-				return
-			}
-			if err := <-errCh; err != nil {
-				slog.Error("reflection server error", "err", err)
-			}
-		}()
+		if v2URL := os.Getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
+			// V2: connect to the CLI's WebSocket server.
+			go startReflectionServerV2(ctx, g, reflectionServerV2Options{URL: v2URL}, errCh, serverStartCh)
+		} else {
+			// V1: start an HTTP reflection server.
+			go func() {
+				if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
+					return
+				}
+				if err := <-errCh; err != nil {
+					slog.Error("reflection server error", "err", err)
+				}
+			}()
+		}
 
 		select {
 		case err := <-errCh:
