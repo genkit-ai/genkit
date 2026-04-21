@@ -25,7 +25,7 @@ Supported STT models: gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1
 Data Flow (TTS)::
 
     ┌─────────────────────────────────────────────────────────────────────┐
-    │  GenerateRequest (text input)                                       │
+    │  ModelRequest (text input)                                       │
     │         │                                                           │
     │         ▼                                                           │
     │  to_tts_params()  ──►  SpeechCreateParams                           │
@@ -34,13 +34,13 @@ Data Flow (TTS)::
     │  client.audio.speech.create()                                       │
     │         │                                                           │
     │         ▼                                                           │
-    │  to_tts_response()  ──►  GenerateResponse (audio media part)        │
+    │  to_tts_response()  ──►  ModelResponse (audio media part)        │
     └─────────────────────────────────────────────────────────────────────┘
 
 Data Flow (STT)::
 
     ┌─────────────────────────────────────────────────────────────────────┐
-    │  GenerateRequest (audio media input)                                │
+    │  ModelRequest (audio media input)                                │
     │         │                                                           │
     │         ▼                                                           │
     │  to_stt_params()  ──►  TranscriptionCreateParams                    │
@@ -49,7 +49,7 @@ Data Flow (STT)::
     │  client.audio.transcriptions.create()                               │
     │         │                                                           │
     │         ▼                                                           │
-    │  to_stt_response()  ──►  GenerateResponse (text part)               │
+    │  to_stt_response()  ──►  ModelResponse (text part)               │
     └─────────────────────────────────────────────────────────────────────┘
 """
 
@@ -62,26 +62,26 @@ from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription
 
-from genkit.ai import ActionRunContext
-from genkit.core.typing import FinishReason
+from genkit import (
+    Media,
+    MediaPart,
+    Message,
+    ModelInfo,
+    ModelRequest,
+    ModelResponse,
+    Part,
+    Role,
+    Supports,
+    TextPart,
+)
+from genkit.model import FinishReason
+from genkit.plugin_api import ActionRunContext
 from genkit.plugins.compat_oai.models.utils import (
     _extract_media,
     _extract_text,
     _find_text,
     decode_data_uri_bytes,
     extract_config_dict,
-)
-from genkit.types import (
-    GenerateRequest,
-    GenerateResponse,
-    Media,
-    MediaPart,
-    Message,
-    ModelInfo,
-    Part,
-    Role,
-    Supports,
-    TextPart,
 )
 
 # Maps audio response formats to their MIME types.
@@ -176,9 +176,9 @@ SUPPORTED_STT_MODELS: dict[str, ModelInfo] = {
 
 def _to_tts_params(
     model_name: str,
-    request: GenerateRequest,
+    request: ModelRequest,
 ) -> dict[str, Any]:
-    """Convert a GenerateRequest into OpenAI TTS parameters.
+    """Convert a ModelRequest into OpenAI TTS parameters.
 
     Args:
         model_name: The TTS model name (e.g., 'tts-1').
@@ -202,7 +202,7 @@ def _to_tts_params(
             params[key] = config.pop(key)
 
     # Strip standard GenAI config keys.
-    for key in ('temperature', 'maxOutputTokens', 'stopSequences', 'topK', 'topP'):
+    for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
         config.pop(key, None)
 
     return {k: v for k, v in params.items() if v is not None}
@@ -211,8 +211,8 @@ def _to_tts_params(
 def _to_tts_response(
     response: HttpxBinaryResponseContent,
     response_format: str = 'mp3',
-) -> GenerateResponse:
-    """Convert an OpenAI speech response to a Genkit GenerateResponse.
+) -> ModelResponse:
+    """Convert an OpenAI speech response to a Genkit ModelResponse.
 
     The response body is read as bytes and encoded as a base64 data URI.
 
@@ -221,7 +221,7 @@ def _to_tts_response(
         response_format: The audio format used (determines MIME type).
 
     Returns:
-        A GenerateResponse with a media part containing the audio data.
+        A ModelResponse with a media part containing the audio data.
     """
     # The response from speech.create() is an HttpxBinaryResponseContent
     # which supports .read() to get raw bytes.
@@ -229,7 +229,7 @@ def _to_tts_response(
     media_type = RESPONSE_FORMAT_MEDIA_TYPES.get(response_format, 'audio/mpeg')
     b64_data = base64.b64encode(audio_bytes).decode('ascii')
 
-    return GenerateResponse(
+    return ModelResponse(
         message=Message(
             role=Role.MODEL,
             content=[
@@ -249,9 +249,9 @@ def _to_tts_response(
 
 def _to_stt_params(
     model_name: str,
-    request: GenerateRequest,
+    request: ModelRequest,
 ) -> dict[str, Any]:
-    """Convert a GenerateRequest into OpenAI transcription parameters.
+    """Convert a ModelRequest into OpenAI transcription parameters.
 
     Extracts the audio media from the first message and converts it into
     a file-like object suitable for the transcriptions API.
@@ -290,19 +290,19 @@ def _to_stt_params(
 
     # Determine response format: config override > output format > default.
     response_format = config.pop('response_format', None)
-    if not response_format and request.output and request.output.format in ('json', 'text'):
-        response_format = request.output.format
+    if not response_format and request.output_format and request.output_format in ('json', 'text'):
+        response_format = request.output_format
     params['response_format'] = response_format or 'text'
 
     # Strip standard GenAI config keys.
-    for key in ('maxOutputTokens', 'stopSequences', 'topK', 'topP'):
+    for key in ('max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
         config.pop(key, None)
 
     return {k: v for k, v in params.items() if v is not None}
 
 
-def _to_stt_response(result: Transcription | str) -> GenerateResponse:
-    """Convert an OpenAI transcription result to a Genkit GenerateResponse.
+def _to_stt_response(result: Transcription | str) -> ModelResponse:
+    """Convert an OpenAI transcription result to a Genkit ModelResponse.
 
     Handles the full union of types returned by transcriptions.create().
     All non-str result types (Transcription, TranscriptionVerbose,
@@ -313,7 +313,7 @@ def _to_stt_response(result: Transcription | str) -> GenerateResponse:
             object with a .text attribute, or a plain string).
 
     Returns:
-        A GenerateResponse with a text part containing the transcription.
+        A ModelResponse with a text part containing the transcription.
     """
     if isinstance(result, str):
         text = result
@@ -321,7 +321,7 @@ def _to_stt_response(result: Transcription | str) -> GenerateResponse:
         text = result.text
     else:
         text = str(result)
-    return GenerateResponse(
+    return ModelResponse(
         message=Message(
             role=Role.MODEL,
             content=[Part(root=TextPart(text=text))],
@@ -353,7 +353,7 @@ class OpenAITTSModel:
         """The name of the TTS model."""
         return self._model_name
 
-    async def generate(self, request: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
+    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         """Generate speech audio from the request.
 
         Args:
@@ -361,7 +361,7 @@ class OpenAITTSModel:
             ctx: The action run context.
 
         Returns:
-            A GenerateResponse containing audio media parts.
+            A ModelResponse containing audio media parts.
         """
         params = _to_tts_params(self._model_name, request)
         response_format = params.get('response_format', 'mp3')
@@ -392,7 +392,7 @@ class OpenAISTTModel:
         """The name of the STT model."""
         return self._model_name
 
-    async def generate(self, request: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
+    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         """Transcribe audio from the request.
 
         Args:
@@ -400,7 +400,7 @@ class OpenAISTTModel:
             ctx: The action run context.
 
         Returns:
-            A GenerateResponse containing the transcribed text.
+            A ModelResponse containing the transcribed text.
         """
         params = _to_stt_params(self._model_name, request)
         result = await self._client.audio.transcriptions.create(

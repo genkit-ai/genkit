@@ -104,6 +104,9 @@ func main() {
 
 	// Create a request with text and image
 	request := &ai.ModelRequest{
+		Config: &ollama.GenerateContentConfig{
+			Temperature: ollama.Ptr(0.4),
+		},
 		Messages: []*ai.Message{
 			{
 				Role: ai.RoleUser,

@@ -1057,6 +1057,19 @@ describe('prompt', () => {
     });
   });
 
+  it('does not auto-load prompts when promptDir is null', async () => {
+    const aiWithoutPromptDir = genkit({
+      model: 'echoModel',
+      promptDir: null,
+    });
+
+    const prompt = aiWithoutPromptDir.prompt('test');
+    const response = prompt();
+    await assert.rejects(response, {
+      message: 'NOT_FOUND: Prompt test not found',
+    });
+  });
+
   it('loads from from the sub folder', async () => {
     const testPrompt = ai.prompt('sub/test'); // see tests/prompts/sub folder
 

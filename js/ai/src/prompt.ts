@@ -32,6 +32,7 @@ import { toJsonSchema } from '@genkit-ai/core/schema';
 import { SPAN_TYPE_ATTR, runInNewSpan } from '@genkit-ai/core/tracing';
 import { Message as DpMessage, PromptFunction } from 'dotprompt';
 import { existsSync, readFileSync, readdirSync } from 'fs';
+import type Handlebars from 'handlebars';
 import { basename, join, resolve } from 'path';
 import type { DocumentData } from './document.js';
 import {
@@ -48,6 +49,7 @@ import {
 import { Message } from './message.js';
 import {
   GenerateActionOptionsSchema,
+  MiddlewareRef,
   type GenerateActionOptions,
   type GenerateRequest,
   type GenerateRequestSchema,
@@ -127,7 +129,7 @@ export interface PromptConfig<
   metadata?: Record<string, any>;
   tools?: ToolArgument[];
   toolChoice?: ToolChoice;
-  use?: ModelMiddleware[];
+  use?: (ModelMiddleware | MiddlewareRef)[];
   context?: ActionContext;
 }
 
@@ -861,6 +863,7 @@ function loadPrompt(
         maxTurns: promptMetadata.raw?.['maxTurns'],
         toolChoice: promptMetadata.raw?.['toolChoice'],
         returnToolRequests: promptMetadata.raw?.['returnToolRequests'],
+        use: promptMetadata.raw?.['use'],
         messages: parsedPrompt.template,
       };
     })
@@ -874,7 +877,7 @@ export async function prompt<
 >(
   registry: Registry,
   name: string,
-  options?: { variant?: string; dir?: string }
+  options?: { variant?: string; dir?: string | null }
 ): Promise<ExecutablePrompt<I, O, CustomOptions>> {
   return await lookupPrompt<I, O, CustomOptions>(
     registry,

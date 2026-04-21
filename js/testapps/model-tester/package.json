@@ -16,16 +16,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "@google/generative-ai": "^0.15.0",
     "colorette": "^2.0.20",
+    "genkit": "workspace:*",
     "genkitx-ollama": "workspace:*",
-    "genkitx-openai": "^0.10.1"
+    "genkitx-openai": "^0.30.0"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

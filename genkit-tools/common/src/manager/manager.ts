@@ -51,7 +51,7 @@ const STREAM_DELIMITER = '\n';
 const HEALTH_CHECK_INTERVAL = 5000;
 export const GENKIT_REFLECTION_API_SPEC_VERSION = 1;
 
-interface RuntimeManagerOptions {
+export interface RuntimeManagerOptions {
   /** URL of the telemetry server. */
   telemetryServerUrl?: string;
   /** Whether to clean up unhealthy runtimes. */
@@ -62,11 +62,210 @@ interface RuntimeManagerOptions {
   processManager?: ProcessManager;
   /** Whether to disable realtime telemetry streaming. Defaults to false. */
   disableRealtimeTelemetry?: boolean;
+  /** Experimental Reflection V2 flag */
+  experimentalReflectionV2?: boolean;
+  /** Reflection V2 Port */
+  reflectionV2Port?: number;
 }
 
-export class RuntimeManager {
-  readonly processManager?: ProcessManager;
-  readonly disableRealtimeTelemetry: boolean;
+export abstract class BaseRuntimeManager {
+  constructor(
+    readonly telemetryServerUrl: string | undefined,
+    readonly projectRoot: string,
+    readonly processManager?: ProcessManager,
+    readonly disableRealtimeTelemetry: boolean = false
+  ) {}
+
+  abstract listRuntimes(): RuntimeInfo[];
+  abstract getRuntimeById(id: string): RuntimeInfo | undefined;
+  abstract getMostRecentRuntime(): RuntimeInfo | undefined;
+  abstract getMostRecentDevUI(): DevToolsInfo | undefined;
+  abstract onRuntimeEvent(
+    listener: (eventType: RuntimeEvent, runtime: RuntimeInfo) => void
+  ): () => void;
+  abstract listActions(
+    input?: apis.ListActionsRequest
+  ): Promise<Record<string, Action>>;
+  abstract runAction(
+    input: apis.RunActionRequest,
+    streamingCallback?: StreamingCallback<any>,
+    onTraceId?: (traceId: string) => void,
+    inputStream?: AsyncIterable<any>
+  ): Promise<RunActionResponse>;
+  abstract cancelAction(input: {
+    traceId: string;
+    runtimeId?: string;
+  }): Promise<{ message: string }>;
+  abstract listValues(
+    input: apis.ListValuesRequest
+  ): Promise<Record<string, unknown>>;
+
+  abstract stop(): Promise<void>;
+
+  /**
+   * Retrieves all traces
+   */
+  async listTraces(
+    input: apis.ListTracesRequest
+  ): Promise<apis.ListTracesResponse> {
+    const { limit, continuationToken, filter } = input;
+    let query = '';
+    if (limit) {
+      query += `limit=${limit}`;
+    }
+    if (continuationToken) {
+      if (query !== '') {
+        query += '&';
+      }
+      query += `continuationToken=${continuationToken}`;
+    }
+    if (filter) {
+      if (query !== '') {
+        query += '&';
+      }
+      query += `filter=${encodeURI(JSON.stringify(filter))}`;
+    }
+
+    const response = await axios
+      .get(`${this.telemetryServerUrl}/api/traces?${query}`)
+      .catch((err) =>
+        this.httpErrorHandler(err, `Error listing traces for query='${query}'.`)
+      );
+
+    return apis.ListTracesResponseSchema.parse(response.data);
+  }
+
+  /**
+   * Retrieves a trace for a given ID.
+   */
+  async getTrace(input: apis.GetTraceRequest): Promise<TraceData> {
+    const { traceId } = input;
+    const response = await axios
+      .get(`${this.telemetryServerUrl}/api/traces/${traceId}`)
+      .catch((err) =>
+        this.httpErrorHandler(
+          err,
+          `Error getting trace for traceId='${traceId}'`
+        )
+      );
+
+    return response.data as TraceData;
+  }
+
+  /**
+   * Streams trace updates in real-time from the telemetry server.
+   * Connects to the telemetry server's SSE endpoint and forwards updates via callback.
+   */
+  async streamTrace(
+    input: apis.StreamTraceRequest,
+    streamingCallback: StreamingCallback<any>
+  ): Promise<void> {
+    const { traceId } = input;
+
+    if (!this.telemetryServerUrl) {
+      throw new Error(
+        'Telemetry server URL not configured. Cannot stream trace updates.'
+      );
+    }
+
+    const response = await axios
+      .get(`${this.telemetryServerUrl}/api/traces/${traceId}/stream`, {
+        headers: {
+          Accept: 'text/event-stream',
+        },
+        responseType: 'stream',
+      })
+      .catch((err) =>
+        this.httpErrorHandler(
+          err,
+          `Error streaming trace for traceId='${traceId}'`
+        )
+      );
+
+    const stream = response.data;
+    let buffer = '';
+
+    // Return a promise that resolves when the stream ends
+    return new Promise<void>((resolve, reject) => {
+      stream.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+
+        // Process complete messages (ending with \n\n)
+        while (buffer.includes('\n\n')) {
+          const messageEnd = buffer.indexOf('\n\n');
+          const message = buffer.substring(0, messageEnd).trim();
+          buffer = buffer.substring(messageEnd + 2);
+
+          // Skip empty messages
+          if (!message) {
+            continue;
+          }
+          // Parse SSE data line - strip "data: " prefix
+          try {
+            const jsonData = message.startsWith('data: ')
+              ? message.slice(6)
+              : message;
+            const parsed = JSON.parse(jsonData);
+            streamingCallback(parsed);
+          } catch (err) {
+            logger.error(`Error parsing stream data: ${err}`);
+          }
+        }
+      });
+
+      stream.on('end', () => {
+        resolve();
+      });
+
+      stream.on('error', (err: Error) => {
+        logger.error(`Stream error for traceId='${traceId}': ${err}`);
+        reject(err);
+      });
+    });
+  }
+
+  /**
+   * Adds a trace to the trace store
+   */
+  async addTrace(input: TraceData): Promise<void> {
+    await axios
+      .post(`${this.telemetryServerUrl}/api/traces/`, input)
+      .catch((err) =>
+        this.httpErrorHandler(err, 'Error writing trace to store.')
+      );
+  }
+
+  /**
+   * Handles an HTTP error.
+   */
+  protected httpErrorHandler(error: AxiosError, message?: string): never {
+    const newError = new GenkitToolsError(message || 'Internal Error');
+
+    if (error.response) {
+      // we got a non-200 response; copy the payload and rethrow
+      newError.data = error.response.data as GenkitError;
+      newError.stack = (error.response?.data as any).message;
+      if ((error.response?.data as any).message) {
+        newError.data.data = {
+          ...newError.data.data,
+          genkitErrorMessage: message,
+          genkitErrorDetails: {
+            stack: (error.response?.data as any).message,
+            traceId: (error.response?.data as any).traceId,
+          },
+        };
+      }
+      throw newError;
+    }
+
+    // We actually have an exception; wrap it and re-throw.
+    throw new GenkitToolsError(message || 'Internal Error', {
+      cause: error.cause,
+    });
+  }
+}
+
+export class RuntimeManager extends BaseRuntimeManager {
   private filenameToRuntimeMap: Record<string, RuntimeInfo> = {};
   private filenameToDevUiMap: Record<string, DevToolsInfo> = {};
   private idToFileMap: Record<string, string> = {};
@@ -75,20 +274,31 @@ export class RuntimeManager {
   private healthCheckInterval?: NodeJS.Timeout;
 
   private constructor(
-    readonly telemetryServerUrl: string | undefined,
+    telemetryServerUrl: string | undefined,
     private manageHealth: boolean,
-    readonly projectRoot: string,
+    projectRoot: string,
     processManager?: ProcessManager,
     disableRealtimeTelemetry?: boolean
   ) {
-    this.processManager = processManager;
-    this.disableRealtimeTelemetry = disableRealtimeTelemetry ?? false;
+    super(
+      telemetryServerUrl,
+      projectRoot,
+      processManager,
+      disableRealtimeTelemetry
+    );
   }
 
   /**
    * Creates a new runtime manager.
    */
-  static async create(options: RuntimeManagerOptions) {
+  static async create(
+    options: RuntimeManagerOptions
+  ): Promise<BaseRuntimeManager> {
+    if (options.experimentalReflectionV2) {
+      const { RuntimeManagerV2 } = await import('./manager-v2');
+      return RuntimeManagerV2.create(options);
+    }
+
     const manager = new RuntimeManager(
       options.telemetryServerUrl,
       options.manageHealth ?? true,
@@ -209,7 +419,7 @@ export class RuntimeManager {
   }
 
   /**
-   * Retrieves all valuess.
+   * Retrieves all values.
    */
   async listValues(
     input: apis.ListValuesRequest
@@ -252,7 +462,8 @@ export class RuntimeManager {
   async runAction(
     input: apis.RunActionRequest,
     streamingCallback?: StreamingCallback<any>,
-    onTraceId?: (traceId: string) => void
+    onTraceId?: (traceId: string) => void,
+    inputStream?: AsyncIterable<any>
   ): Promise<RunActionResponse> {
     const runtime = input.runtimeId
       ? this.getRuntimeById(input.runtimeId)
@@ -462,139 +673,6 @@ export class RuntimeManager {
   }
 
   /**
-   * Retrieves all traces
-   */
-  async listTraces(
-    input: apis.ListTracesRequest
-  ): Promise<apis.ListTracesResponse> {
-    const { limit, continuationToken, filter } = input;
-    let query = '';
-    if (limit) {
-      query += `limit=${limit}`;
-    }
-    if (continuationToken) {
-      if (query !== '') {
-        query += '&';
-      }
-      query += `continuationToken=${continuationToken}`;
-    }
-    if (filter) {
-      if (query !== '') {
-        query += '&';
-      }
-      query += `filter=${encodeURI(JSON.stringify(filter))}`;
-    }
-
-    const response = await axios
-      .get(`${this.telemetryServerUrl}/api/traces?${query}`)
-      .catch((err) =>
-        this.httpErrorHandler(err, `Error listing traces for query='${query}'.`)
-      );
-
-    return apis.ListTracesResponseSchema.parse(response.data);
-  }
-
-  /**
-   * Retrieves a trace for a given ID.
-   */
-  async getTrace(input: apis.GetTraceRequest): Promise<TraceData> {
-    const { traceId } = input;
-    const response = await axios
-      .get(`${this.telemetryServerUrl}/api/traces/${traceId}`)
-      .catch((err) =>
-        this.httpErrorHandler(
-          err,
-          `Error getting trace for traceId='${traceId}'`
-        )
-      );
-
-    return response.data as TraceData;
-  }
-
-  /**
-   * Streams trace updates in real-time from the telemetry server.
-   * Connects to the telemetry server's SSE endpoint and forwards updates via callback.
-   */
-  async streamTrace(
-    input: apis.StreamTraceRequest,
-    streamingCallback: StreamingCallback<any>
-  ): Promise<void> {
-    const { traceId } = input;
-
-    if (!this.telemetryServerUrl) {
-      throw new Error(
-        'Telemetry server URL not configured. Cannot stream trace updates.'
-      );
-    }
-
-    const response = await axios
-      .get(`${this.telemetryServerUrl}/api/traces/${traceId}/stream`, {
-        headers: {
-          Accept: 'text/event-stream',
-        },
-        responseType: 'stream',
-      })
-      .catch((err) =>
-        this.httpErrorHandler(
-          err,
-          `Error streaming trace for traceId='${traceId}'`
-        )
-      );
-
-    const stream = response.data;
-    let buffer = '';
-
-    // Return a promise that resolves when the stream ends
-    return new Promise<void>((resolve, reject) => {
-      stream.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString();
-
-        // Process complete messages (ending with \n\n)
-        while (buffer.includes('\n\n')) {
-          const messageEnd = buffer.indexOf('\n\n');
-          const message = buffer.substring(0, messageEnd).trim();
-          buffer = buffer.substring(messageEnd + 2);
-
-          // Skip empty messages
-          if (!message) {
-            continue;
-          }
-          // Parse SSE data line - strip "data: " prefix
-          try {
-            const jsonData = message.startsWith('data: ')
-              ? message.slice(6)
-              : message;
-            const parsed = JSON.parse(jsonData);
-            streamingCallback(parsed);
-          } catch (err) {
-            logger.error(`Error parsing stream data: ${err}`);
-          }
-        }
-      });
-
-      stream.on('end', () => {
-        resolve();
-      });
-
-      stream.on('error', (err: Error) => {
-        logger.error(`Stream error for traceId='${traceId}': ${err}`);
-        reject(err);
-      });
-    });
-  }
-
-  /**
-   * Adds a trace to the trace store
-   */
-  async addTrace(input: TraceData): Promise<void> {
-    await axios
-      .post(`${this.telemetryServerUrl}/api/traces/`, input)
-      .catch((err) =>
-        this.httpErrorHandler(err, 'Error writing trace to store.')
-      );
-  }
-
-  /**
    * Notifies the runtime of dependencies it may need (e.g. telemetry server URL).
    */
   private async notifyRuntime(runtime: RuntimeInfo) {
@@ -787,35 +865,6 @@ export class RuntimeManager {
       this.eventEmitter.emit(RuntimeEvent.REMOVE, runtime);
       logger.debug(`Removed runtime with id ${runtime.id}.`);
     }
-  }
-
-  /**
-   * Handles an HTTP error.
-   */
-  private httpErrorHandler(error: AxiosError, message?: string): never {
-    const newError = new GenkitToolsError(message || 'Internal Error');
-
-    if (error.response) {
-      // we got a non-200 response; copy the payload and rethrow
-      newError.data = error.response.data as GenkitError;
-      newError.stack = (error.response?.data as any).message;
-      if ((error.response?.data as any).message) {
-        newError.data.data = {
-          ...newError.data.data,
-          genkitErrorMessage: message,
-          genkitErrorDetails: {
-            stack: (error.response?.data as any).message,
-            traceId: (error.response?.data as any).traceId,
-          },
-        };
-      }
-      throw newError;
-    }
-
-    // We actually have an exception; wrap it and re-throw.
-    throw new GenkitToolsError(message || 'Internal Error', {
-      cause: error.cause,
-    });
   }
 
   /**

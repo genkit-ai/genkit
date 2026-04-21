@@ -54,6 +54,7 @@ dependencies = [
   "pillow>=12.1.1",
   "typing_extensions>=4.0",
   "strenum>=0.4.15; python_version < '3.11'",
+
   "dotpromptz>=0.1.5",
   "uvicorn>=0.34.0",
   "uvloop>=0.21.0; sys_platform != 'win32'",
@@ -75,10 +76,9 @@ license = "Apache-2.0"
 name = "genkit"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.5.1"
+version = "0.5.2"
 
 [project.optional-dependencies]
-dev-local-vectorstore = ["genkit-plugin-dev-local-vectorstore"]
 flask                 = ["genkit-plugin-flask"]
 google-cloud          = ["genkit-plugin-google-cloud"]
 google-genai          = ["genkit-plugin-google-genai"]
@@ -87,11 +87,11 @@ openai                = ["genkit-plugin-compat-oai"]
 vertex-ai             = ["genkit-plugin-vertex-ai"]
 
 [project.urls]
-"Bug Tracker"   = "https://github.com/firebase/genkit/issues"
-"Changelog"     = "https://github.com/firebase/genkit/blob/main/py/packages/genkit/CHANGELOG.md"
+"Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
+"Changelog"     = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit/CHANGELOG.md"
 "Documentation" = "https://firebase.google.com/docs/genkit"
-"Homepage"      = "https://github.com/firebase/genkit"
-"Repository"    = "https://github.com/firebase/genkit/tree/main/py"
+"Homepage"      = "https://github.com/genkit-ai/genkit"
+"Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
 
 [build-system]
 build-backend = "hatchling.build"
@@ -106,7 +106,6 @@ testpaths  = ["tests"]
 
 [tool.uv.sources]
 genkit-plugin-compat-oai            = { workspace = true }
-genkit-plugin-dev-local-vectorstore = { workspace = true }
 genkit-plugin-flask                 = { workspace = true }
 genkit-plugin-google-genai          = { workspace = true }
 genkit-plugin-ollama                = { workspace = true }

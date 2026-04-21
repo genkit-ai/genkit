@@ -19,15 +19,11 @@ package googlegenai
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"reflect"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -40,47 +36,13 @@ import (
 	"google.golang.org/genai"
 )
 
-const (
-	// Tool name regex
-	toolNameRegex = "^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$"
-)
-
 var (
-	// BasicText describes model capabilities for text-only Gemini models.
-	BasicText = ai.ModelSupports{
-		Multiturn:  true,
-		Tools:      true,
-		ToolChoice: true,
-		SystemRole: true,
-		Media:      false,
-	}
-
-	//  Multimodal describes model capabilities for multimodal Gemini models.
-	Multimodal = ai.ModelSupports{
-		Multiturn:   true,
-		Tools:       true,
-		ToolChoice:  true,
-		SystemRole:  true,
-		Media:       true,
-		Constrained: ai.ConstrainedSupportNoTools,
-	}
-
 	// Attribution header
 	xGoogApiClientHeader = http.CanonicalHeaderKey("x-goog-api-client")
 	genkitClientHeader   = http.Header{
 		xGoogApiClientHeader: {fmt.Sprintf("genkit-go/%s", internal.Version)},
 	}
 )
-
-// EmbedOptions are options for the Vertex AI embedder.
-// Set [ai.EmbedRequest.Options] to a value of type *[EmbedOptions].
-type EmbedOptions struct {
-	// Document title.
-	Title string `json:"title,omitempty"`
-	// Task type: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, and so forth.
-	// See the Vertex AI text embedding docs.
-	TaskType string `json:"task_type,omitempty"`
-}
 
 // configToMap converts a config struct to a map[string]any.
 func configToMap(config any) map[string]any {
@@ -113,37 +75,37 @@ func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, er
 		var err error
 		result, err = base.MapToStruct[genai.GenerateContentConfig](config)
 		if err != nil {
-			return nil, err
+			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
 		}
 	case nil:
 		// Empty but valid config
 	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateContentConfig. Ensure you are using the correct ModelRef helper (e.g., ModelRef) or passing the correct configuration struct.", input.Config), nil)
 	}
 
 	return &result, nil
 }
 
-// newModel creates a model without registering it
+// newModel creates a model without registering it.
 func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	var config any
-	config = &genai.GenerateContentConfig{}
-	if strings.Contains(name, "imagen") {
-		config = &genai.GenerateImagesConfig{}
-	} else if vi, fnd := supportedVideoModels[name]; fnd {
-		config = &genai.GenerateVideosConfig{}
-		opts = vi
+	mt := ClassifyModel(name)
+
+	if opts.ConfigSchema == nil {
+		if config := mt.DefaultConfig(); config != nil {
+			opts.ConfigSchema = configToMap(config)
+		}
 	}
+
 	meta := &ai.ModelOptions{
 		Label:        opts.Label,
 		Supports:     opts.Supports,
 		Versions:     opts.Versions,
-		ConfigSchema: configToMap(config),
+		ConfigSchema: opts.ConfigSchema,
 		Stage:        opts.Stage,
 	}
 
@@ -152,13 +114,14 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		switch config.(type) {
-		case *genai.GenerateImagesConfig:
+		switch mt {
+		case ModelTypeImagen:
 			return generateImage(ctx, client, name, input, cb)
 		default:
 			return generate(ctx, client, name, input, cb)
 		}
 	}
+
 	// the gemini api doesn't support downloading media from http(s)
 	if opts.Supports.Media {
 		fn = core.ChainMiddleware(ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
@@ -182,49 +145,8 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
 }
 
-// newEmbedder creates an embedder without registering it
-func newEmbedder(client *genai.Client, name string, embedOpts *ai.EmbedderOptions) ai.Embedder {
-	provider := googleAIProvider
-	if client.ClientConfig().Backend == genai.BackendVertexAI {
-		provider = vertexAIProvider
-	}
-
-	if embedOpts.ConfigSchema == nil {
-		embedOpts.ConfigSchema = core.InferSchemaMap(genai.EmbedContentConfig{})
-	}
-
-	return ai.NewEmbedder(api.NewName(provider, name), embedOpts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-		var content []*genai.Content
-		var embedConfig *genai.EmbedContentConfig
-
-		if config, ok := req.Options.(*genai.EmbedContentConfig); ok {
-			embedConfig = config
-		}
-
-		for _, doc := range req.Input {
-			parts, err := toGeminiParts(doc.Content)
-			if err != nil {
-				return nil, err
-			}
-			content = append(content, &genai.Content{
-				Parts: parts,
-			})
-		}
-
-		r, err := genai.Models.EmbedContent(*client.Models, ctx, name, content, embedConfig)
-		if err != nil {
-			return nil, err
-		}
-		var res ai.EmbedResponse
-		for _, emb := range r.Embeddings {
-			res.Embeddings = append(res.Embeddings, &ai.Embedding{Embedding: emb.Values})
-		}
-		return &res, nil
-	})
-}
-
-// Generate requests generate call to the specified model with the provided
-// configuration
+// generate requests generate call to the specified model with the provided
+// configuration.
 func generate(
 	ctx context.Context,
 	client *genai.Client,
@@ -415,7 +337,7 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 		gcc.Tools = mergeTools(append(gcc.Tools, tools...))
 
 		// Then set up the tool configuration based on ToolChoice
-		tc, err := toGeminiToolChoice(input.ToolChoice, input.Tools)
+		tc, err := toGeminiToolChoice(gcc.ToolConfig, input.ToolChoice, input.Tools)
 		if err != nil {
 			return nil, err
 		}
@@ -445,344 +367,6 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	}
 
 	return gcc, nil
-}
-
-// toGeminiTools translates a slice of [ai.ToolDefinition] to a slice of [genai.Tool].
-func toGeminiTools(inTools []*ai.ToolDefinition) ([]*genai.Tool, error) {
-	var outTools []*genai.Tool
-	functions := []*genai.FunctionDeclaration{}
-
-	for _, t := range inTools {
-		if !validToolName(t.Name) {
-			return nil, fmt.Errorf(`invalid tool name: %q, must start with a letter or an underscore, must be alphanumeric, underscores, dots or dashes with a max length of 64 chars`, t.Name)
-		}
-		inputSchema, err := toGeminiSchema(t.InputSchema, t.InputSchema)
-		if err != nil {
-			return nil, err
-		}
-		fd := &genai.FunctionDeclaration{
-			Name:        t.Name,
-			Parameters:  inputSchema,
-			Description: t.Description,
-		}
-		functions = append(functions, fd)
-	}
-
-	if len(functions) > 0 {
-		outTools = append(outTools, &genai.Tool{
-			FunctionDeclarations: functions,
-		})
-	}
-
-	return outTools, nil
-}
-
-// toGeminiFunctionResponsePart translates a slice of [ai.Part] to a slice of [genai.FunctionResponsePart]
-func toGeminiFunctionResponsePart(parts []*ai.Part) ([]*genai.FunctionResponsePart, error) {
-	frp := []*genai.FunctionResponsePart{}
-	for _, p := range parts {
-		switch {
-		case p.IsData():
-			contentType, data, err := uri.Data(p)
-			if err != nil {
-				return nil, err
-			}
-			frp = append(frp, genai.NewFunctionResponsePartFromBytes(data, contentType))
-		case p.IsMedia():
-			if strings.HasPrefix(p.Text, "data:") {
-				contentType, data, err := uri.Data(p)
-				if err != nil {
-					return nil, err
-				}
-				frp = append(frp, genai.NewFunctionResponsePartFromBytes(data, contentType))
-				continue
-			}
-			frp = append(frp, genai.NewFunctionResponsePartFromURI(p.Text, p.ContentType))
-		default:
-			return nil, fmt.Errorf("unsupported function response part type: %d", p.Kind)
-		}
-	}
-	return frp, nil
-}
-
-// mergeTools consolidates all FunctionDeclarations into a single Tool
-// while preserving non-function tools (Retrieval, GoogleSearch, CodeExecution, etc.)
-func mergeTools(ts []*genai.Tool) []*genai.Tool {
-	var decls []*genai.FunctionDeclaration
-	var out []*genai.Tool
-
-	for _, t := range ts {
-		if t == nil {
-			continue
-		}
-		if len(t.FunctionDeclarations) == 0 {
-			out = append(out, t)
-			continue
-		}
-		decls = append(decls, t.FunctionDeclarations...)
-		if cpy := cloneToolWithoutFunctions(t); cpy != nil && !reflect.ValueOf(*cpy).IsZero() {
-			out = append(out, cpy)
-		}
-	}
-
-	if len(decls) > 0 {
-		out = append([]*genai.Tool{{FunctionDeclarations: decls}}, out...)
-	}
-	return out
-}
-
-func cloneToolWithoutFunctions(t *genai.Tool) *genai.Tool {
-	if t == nil {
-		return nil
-	}
-	clone := *t
-	clone.FunctionDeclarations = nil
-	return &clone
-}
-
-// toGeminiSchema translates a map representing a standard JSON schema to a more
-// limited [genai.Schema].
-func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) (*genai.Schema, error) {
-	// this covers genkitSchema == nil and {}
-	// genkitSchema will be {} if it's any
-	if len(genkitSchema) == 0 {
-		return nil, nil
-	}
-	if v, ok := genkitSchema["$ref"]; ok {
-		ref, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid $ref value: not a string")
-		}
-		s, err := resolveRef(originalSchema, ref)
-		if err != nil {
-			return nil, err
-		}
-		return toGeminiSchema(originalSchema, s)
-	}
-
-	// Handle "anyOf" subschemas by finding the first valid schema definition
-	if v, ok := genkitSchema["anyOf"]; ok {
-		if anyOfList, isList := v.([]map[string]any); isList {
-			for _, subSchema := range anyOfList {
-				if subSchemaType, hasType := subSchema["type"]; hasType {
-					if typeStr, isString := subSchemaType.(string); isString && typeStr != "null" {
-						if title, ok := genkitSchema["title"]; ok {
-							subSchema["title"] = title
-						}
-						if description, ok := genkitSchema["description"]; ok {
-							subSchema["description"] = description
-						}
-						// Found a schema like: {"type": "string"}
-						return toGeminiSchema(originalSchema, subSchema)
-					}
-				}
-			}
-		}
-	}
-
-	schema := &genai.Schema{}
-	typeVal, ok := genkitSchema["type"]
-	if !ok {
-		return nil, fmt.Errorf("schema is missing the 'type' field: %#v", genkitSchema)
-	}
-
-	typeStr, ok := typeVal.(string)
-	if !ok {
-		return nil, fmt.Errorf("schema 'type' field is not a string, but %T", typeVal)
-	}
-
-	switch typeStr {
-	case "string":
-		schema.Type = genai.TypeString
-	case "float64", "number":
-		schema.Type = genai.TypeNumber
-	case "integer":
-		schema.Type = genai.TypeInteger
-	case "boolean":
-		schema.Type = genai.TypeBoolean
-	case "object":
-		schema.Type = genai.TypeObject
-	case "array":
-		schema.Type = genai.TypeArray
-	default:
-		return nil, fmt.Errorf("schema type %q not allowed", genkitSchema["type"])
-	}
-	if v, ok := genkitSchema["required"]; ok {
-		schema.Required = castToStringArray(v)
-	}
-	if v, ok := genkitSchema["propertyOrdering"]; ok {
-		schema.PropertyOrdering = castToStringArray(v)
-	}
-	if v, ok := genkitSchema["description"]; ok {
-		schema.Description = v.(string)
-	}
-	if v, ok := genkitSchema["format"]; ok {
-		schema.Format = v.(string)
-	}
-	if v, ok := genkitSchema["title"]; ok {
-		schema.Title = v.(string)
-	}
-	if v, ok := genkitSchema["minItems"]; ok {
-		if i64, ok := castToInt64(v); ok {
-			schema.MinItems = genai.Ptr(i64)
-		}
-	}
-	if v, ok := genkitSchema["maxItems"]; ok {
-		if i64, ok := castToInt64(v); ok {
-			schema.MaxItems = genai.Ptr(i64)
-		}
-	}
-	if v, ok := genkitSchema["maximum"]; ok {
-		if f64, ok := castToFloat64(v); ok {
-			schema.Maximum = genai.Ptr(f64)
-		}
-	}
-	if v, ok := genkitSchema["minimum"]; ok {
-		if f64, ok := castToFloat64(v); ok {
-			schema.Minimum = genai.Ptr(f64)
-		}
-	}
-	if v, ok := genkitSchema["enum"]; ok {
-		schema.Enum = castToStringArray(v)
-	}
-	if v, ok := genkitSchema["items"]; ok {
-		items, err := toGeminiSchema(originalSchema, v.(map[string]any))
-		if err != nil {
-			return nil, err
-		}
-		schema.Items = items
-	}
-	if val, ok := genkitSchema["properties"]; ok {
-		props := map[string]*genai.Schema{}
-		for k, v := range val.(map[string]any) {
-			p, err := toGeminiSchema(originalSchema, v.(map[string]any))
-			if err != nil {
-				return nil, err
-			}
-			props[k] = p
-		}
-		schema.Properties = props
-	}
-	// Nullable -- not supported in jsonschema.Schema
-
-	return schema, nil
-}
-
-func resolveRef(originalSchema map[string]any, ref string) (map[string]any, error) {
-	tkns := strings.Split(ref, "/")
-	// refs look like: $/ref/foo -- we need the foo part
-	name := tkns[len(tkns)-1]
-	if defs, ok := originalSchema["$defs"].(map[string]any); ok {
-		if def, ok := defs[name].(map[string]any); ok {
-			return def, nil
-		}
-	}
-	// definitions (legacy)
-	if defs, ok := originalSchema["definitions"].(map[string]any); ok {
-		if def, ok := defs[name].(map[string]any); ok {
-			return def, nil
-		}
-	}
-	return nil, fmt.Errorf("unable to resolve schema reference")
-}
-
-// castToStringArray converts either []any or []string to []string, filtering non-strings.
-// This handles enum values from JSON Schema which may come as either type depending on unmarshaling.
-// Filter out non-string types from if v is []any type.
-func castToStringArray(v any) []string {
-	switch a := v.(type) {
-	case []string:
-		// Return a shallow copy to avoid aliasing
-		out := make([]string, 0, len(a))
-		for _, s := range a {
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []any:
-		var out []string
-		for _, it := range a {
-			if s, ok := it.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-// castToInt64 converts v to int64 when possible.
-func castToInt64(v any) (int64, bool) {
-	switch t := v.(type) {
-	case int:
-		return int64(t), true
-	case int64:
-		return t, true
-	case float64:
-		return int64(t), true
-	case string:
-		if i, err := strconv.ParseInt(t, 10, 64); err == nil {
-			return i, true
-		}
-	case json.Number:
-		if i, err := t.Int64(); err == nil {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-// castToFloat64 converts v to float64 when possible.
-func castToFloat64(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		return t, true
-	case int:
-		return float64(t), true
-	case int64:
-		return float64(t), true
-	case string:
-		if f, err := strconv.ParseFloat(t, 64); err == nil {
-			return f, true
-		}
-	case json.Number:
-		if f, err := t.Float64(); err == nil {
-			return f, true
-		}
-	}
-	return 0, false
-}
-
-func toGeminiToolChoice(toolChoice ai.ToolChoice, tools []*ai.ToolDefinition) (*genai.ToolConfig, error) {
-	var mode genai.FunctionCallingConfigMode
-	switch toolChoice {
-	case "":
-		return nil, nil
-	case ai.ToolChoiceAuto:
-		mode = genai.FunctionCallingConfigModeAuto
-	case ai.ToolChoiceRequired:
-		mode = genai.FunctionCallingConfigModeAny
-	case ai.ToolChoiceNone:
-		mode = genai.FunctionCallingConfigModeNone
-	default:
-		return nil, fmt.Errorf("tool choice mode %q not supported", toolChoice)
-	}
-
-	var toolNames []string
-	// Per docs, only set AllowedToolNames with mode set to ANY.
-	if mode == genai.FunctionCallingConfigModeAny {
-		for _, t := range tools {
-			toolNames = append(toolNames, t.Name)
-		}
-	}
-	return &genai.ToolConfig{
-		FunctionCallingConfig: &genai.FunctionCallingConfig{
-			Mode:                 mode,
-			AllowedFunctionNames: toolNames,
-		},
-	}, nil
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.
@@ -865,14 +449,14 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 		}
 		if part.CodeExecutionResult != nil {
 			partFound++
-			p = NewCodeExecutionResultPart(
+			p = newCodeExecutionResultPart(
 				string(part.CodeExecutionResult.Outcome),
 				part.CodeExecutionResult.Output,
 			)
 		}
 		if part.ExecutableCode != nil {
 			partFound++
-			p = NewExecutableCodePart(
+			p = newExecutableCodePart(
 				string(part.ExecutableCode.Language),
 				part.ExecutableCode.Code,
 			)
@@ -897,7 +481,7 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 	return m, nil
 }
 
-// Translate from a genai.GenerateContentResponse to a ai.ModelResponse.
+// translateResponse translates from a genai.GenerateContentResponse to a ai.ModelResponse.
 func translateResponse(resp *genai.GenerateContentResponse) (*ai.ModelResponse, error) {
 	var r *ai.ModelResponse
 	var err error
@@ -1008,144 +592,36 @@ func toGeminiPart(p *ai.Part) (*genai.Part, error) {
 			}
 		}
 		fc := genai.NewPartFromFunctionCall(toolReq.Name, input)
-		// Restore ThoughtSignature if present in metadata
+		// Restore ThoughtSignature if present in metadata.
 		if p.Metadata != nil {
-			if sig, ok := p.Metadata["signature"].([]byte); ok {
-				fc.ThoughtSignature = sig
-			}
+			fc.ThoughtSignature = metadataSignature(p.Metadata)
 		}
 		return fc, nil
 	default:
 		return nil, fmt.Errorf("unknown part in the request: %q", p.Kind)
 	}
 
+	// Restore ThoughtSignature if present in metadata.
 	if p.Metadata != nil {
-		if sig, ok := p.Metadata["signature"].([]byte); ok {
-			gp.ThoughtSignature = sig
-		}
+		gp.ThoughtSignature = metadataSignature(p.Metadata)
 	}
 
 	return gp, nil
 }
 
-// validToolName checks whether the provided tool name matches the
-// following criteria:
-// - Start with a letter or an underscore
-// - Must be alphanumeric and can include underscores, dots or dashes
-// - Maximum length of 64 chars
-func validToolName(n string) bool {
-	re := regexp.MustCompile(toolNameRegex)
-
-	return re.MatchString(n)
-}
-
-// CodeExecutionResult represents the result of a code execution.
-type CodeExecutionResult struct {
-	Outcome string `json:"outcome"`
-	Output  string `json:"output"`
-}
-
-// ExecutableCode represents executable code.
-type ExecutableCode struct {
-	Language string `json:"language"`
-	Code     string `json:"code"`
-}
-
-// NewCodeExecutionResultPart returns a Part containing the result of code execution.
-func NewCodeExecutionResultPart(outcome string, output string) *ai.Part {
-	return ai.NewCustomPart(map[string]any{
-		"codeExecutionResult": map[string]any{
-			"outcome": outcome,
-			"output":  output,
-		},
-	})
-}
-
-// NewExecutableCodePart returns a Part containing executable code.
-func NewExecutableCodePart(language string, code string) *ai.Part {
-	return ai.NewCustomPart(map[string]any{
-		"executableCode": map[string]any{
-			"language": language,
-			"code":     code,
-		},
-	})
-}
-
-// ToCodeExecutionResult tries to convert an ai.Part to a CodeExecutionResult.
-// Returns nil if the part doesn't contain code execution results.
-func ToCodeExecutionResult(part *ai.Part) *CodeExecutionResult {
-	if !part.IsCustom() {
-		return nil
-	}
-
-	codeExec, ok := part.Custom["codeExecutionResult"]
-	if !ok {
-		return nil
-	}
-
-	result, ok := codeExec.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	outcome, _ := result["outcome"].(string)
-	output, _ := result["output"].(string)
-
-	return &CodeExecutionResult{
-		Outcome: outcome,
-		Output:  output,
-	}
-}
-
-// ToExecutableCode tries to convert an ai.Part to an ExecutableCode.
-// Returns nil if the part doesn't contain executable code.
-func ToExecutableCode(part *ai.Part) *ExecutableCode {
-	if !part.IsCustom() {
-		return nil
-	}
-
-	execCode, ok := part.Custom["executableCode"]
-	if !ok {
-		return nil
-	}
-
-	code, ok := execCode.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	language, _ := code["language"].(string)
-	codeStr, _ := code["code"].(string)
-
-	return &ExecutableCode{
-		Language: language,
-		Code:     codeStr,
-	}
-}
-
-// HasCodeExecution checks if a message contains code execution results or executable code.
-func HasCodeExecution(msg *ai.Message) bool {
-	return GetCodeExecutionResult(msg) != nil || GetExecutableCode(msg) != nil
-}
-
-// GetExecutableCode returns the first executable code from a message.
-// Returns nil if the message doesn't contain executable code.
-func GetExecutableCode(msg *ai.Message) *ExecutableCode {
-	for _, part := range msg.Content {
-		if code := ToExecutableCode(part); code != nil {
-			return code
+// metadataSignature extracts the thought signature from part metadata.
+// It handles both []byte (original value) and string (base64-encoded
+// after a JSON clone roundtrip).
+func metadataSignature(metadata map[string]any) []byte {
+	switch sig := metadata["signature"].(type) {
+	case []byte:
+		return sig
+	case string:
+		decoded, err := base64.StdEncoding.DecodeString(sig)
+		if err != nil {
+			return nil
 		}
-	}
-	return nil
-}
-
-// GetCodeExecutionResult returns the first code execution result from a message.
-// Returns nil if the message doesn't contain a code execution result.
-func GetCodeExecutionResult(msg *ai.Message) *CodeExecutionResult {
-	for _, part := range msg.Content {
-		if result := ToCodeExecutionResult(part); result != nil {
-			return result
-		}
+		return decoded
 	}
 	return nil
 }

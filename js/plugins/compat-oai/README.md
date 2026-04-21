@@ -192,15 +192,15 @@ export const customModelFlow = ai.defineFlow(
 
 ## Contributing
 
-Want to contribute to the project? That's awesome! Head over to our [Contribution Guidelines](https://github.com/firebase/genkit/blob/main/CONTRIBUTING.md).
+Want to contribute to the project? That's awesome! Head over to our [Contribution Guidelines](https://github.com/genkit-ai/genkit/blob/main/CONTRIBUTING.md).
 
 ## Need help?
 
  - [Genkit Discord](https://genkit.dev/discord)
- - [Github Issues](https://github.com/firebase/genkit/issues)
+ - [Github Issues](https://github.com/genkit-ai/genkit/issues)
 
 ## License
 
-This project is licensed under the [Apache 2.0 License](https://github.com/firebase/genkit/blob/main/LICENSE).
+This project is licensed under the [Apache 2.0 License](https://github.com/genkit-ai/genkit/blob/main/LICENSE).
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202%2E0-lightgrey.svg)](https://github.com/firebase/genkit/blob/main/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202%2E0-lightgrey.svg)](https://github.com/genkit-ai/genkit/blob/main/LICENSE)

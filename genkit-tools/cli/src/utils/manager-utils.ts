@@ -20,6 +20,7 @@ import {
 } from '@genkit-ai/telemetry-server';
 import type { Status } from '@genkit-ai/tools-common';
 import {
+  BaseRuntimeManager,
   ProcessManager,
   RuntimeEvent,
   RuntimeManager,
@@ -60,12 +61,16 @@ export async function startManager(options: {
   projectRoot: string;
   manageHealth?: boolean;
   corsOrigin?: string;
-}): Promise<RuntimeManager> {
+  experimentalReflectionV2?: boolean;
+  reflectionV2Port?: number;
+}): Promise<BaseRuntimeManager> {
   const telemetryServerUrl = await resolveTelemetryServer(options);
   const manager = RuntimeManager.create({
     telemetryServerUrl,
     manageHealth: options.manageHealth,
     projectRoot: options.projectRoot,
+    experimentalReflectionV2: options.experimentalReflectionV2,
+    reflectionV2Port: options.reflectionV2Port,
   });
   return manager;
 }
@@ -77,6 +82,43 @@ export interface DevProcessManagerOptions {
   timeout?: number;
   cwd?: string;
   corsOrigin?: string;
+  experimentalReflectionV2?: boolean;
+  envVars?: Record<string, string>;
+  reflectionV2Port?: number;
+  telemetryServerUrl?: string;
+}
+
+export async function getDevEnvVars(
+  projectRoot: string,
+  options?: DevProcessManagerOptions
+): Promise<{
+  envVars: Record<string, string>;
+  reflectionV2Port?: number;
+  telemetryServerUrl: string;
+}> {
+  const telemetryServerUrl = await resolveTelemetryServer({
+    projectRoot,
+    corsOrigin: options?.corsOrigin,
+  });
+  const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
+  const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
+
+  let reflectionV2Port: number | undefined;
+  const envVars: Record<string, string> = {
+    GENKIT_TELEMETRY_SERVER: telemetryServerUrl,
+    GENKIT_ENV: 'dev',
+  };
+
+  if (experimentalReflectionV2) {
+    reflectionV2Port = await getPort({ port: makeRange(3200, 3400) });
+    envVars.GENKIT_REFLECTION_V2_SERVER = `ws://localhost:${reflectionV2Port}`;
+  }
+
+  if (!disableRealtimeTelemetry) {
+    envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
+  }
+
+  return { envVars, reflectionV2Port, telemetryServerUrl };
 }
 
 export async function startDevProcessManager(
@@ -84,19 +126,20 @@ export async function startDevProcessManager(
   command: string,
   args: string[],
   options?: DevProcessManagerOptions
-): Promise<{ manager: RuntimeManager; processPromise: Promise<void> }> {
-  const telemetryServerUrl = await resolveTelemetryServer({
-    projectRoot,
-    corsOrigin: options?.corsOrigin,
-  });
+): Promise<{ manager: BaseRuntimeManager; processPromise: Promise<void> }> {
+  const { envVars, reflectionV2Port, telemetryServerUrl } =
+    options?.envVars &&
+    options?.telemetryServerUrl &&
+    (!options?.experimentalReflectionV2 || options?.reflectionV2Port)
+      ? {
+          envVars: options.envVars,
+          reflectionV2Port: options.reflectionV2Port,
+          telemetryServerUrl: options.telemetryServerUrl,
+        }
+      : await getDevEnvVars(projectRoot, options);
+
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
-  const envVars: Record<string, string> = {
-    GENKIT_TELEMETRY_SERVER: telemetryServerUrl,
-    GENKIT_ENV: 'dev',
-  };
-  if (!disableRealtimeTelemetry) {
-    envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
-  }
+  const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
 
   const processManager = new ProcessManager(command, args, envVars);
   const manager = await RuntimeManager.create({
@@ -105,6 +148,8 @@ export async function startDevProcessManager(
     projectRoot,
     processManager,
     disableRealtimeTelemetry,
+    experimentalReflectionV2,
+    reflectionV2Port,
   });
   const processPromise = processManager.start({ ...options });
 
@@ -120,7 +165,7 @@ export async function startDevProcessManager(
  * Rejects if the process exits or if the timeout is reached.
  */
 export async function waitForRuntime(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   processPromise: Promise<void>,
   timeoutMs: number = 30000
 ): Promise<void> {
@@ -173,9 +218,9 @@ export async function waitForRuntime(
  */
 export async function runWithManager(
   projectRoot: string,
-  fn: (manager: RuntimeManager) => Promise<void>
+  fn: (manager: BaseRuntimeManager) => Promise<void>
 ) {
-  let manager: RuntimeManager;
+  let manager: BaseRuntimeManager;
   try {
     manager = await startManager({ projectRoot, manageHealth: false }); // Don't manage health in this case.
   } catch (e) {

@@ -27,26 +27,18 @@ See:
 import json
 from typing import Any
 
+import structlog
+
 from anthropic import AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
-from genkit.ai import ActionRunContext
-from genkit.blocks.model import get_basic_usage_stats
-from genkit.core.logging import get_logger
-from genkit.plugins.anthropic.model_info import get_model_info
-from genkit.plugins.anthropic.utils import (
-    build_cache_usage,
-    get_cache_control,
-    maybe_strip_fences,
-    to_anthropic_media,
-)
-from genkit.types import (
+from genkit import (
     FinishReason,
-    GenerateRequest,
-    GenerateResponse,
-    GenerateResponseChunk,
-    GenerationUsage,
     MediaPart,
     Message,
+    ModelRequest,
+    ModelResponse,
+    ModelResponseChunk,
+    ModelUsage,
     Part,
     Role,
     TextPart,
@@ -54,8 +46,17 @@ from genkit.types import (
     ToolRequestPart,
     ToolResponsePart,
 )
+from genkit.model import get_basic_usage_stats
+from genkit.plugin_api import ActionRunContext
+from genkit.plugins.anthropic.model_info import get_model_info
+from genkit.plugins.anthropic.utils import (
+    build_cache_usage,
+    get_cache_control,
+    maybe_strip_fences,
+    to_anthropic_media,
+)
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
@@ -107,7 +108,7 @@ class AnthropicModel:
         self.model_name = model_info.versions[0] if model_info.versions else model_name
         self.client = client
 
-    async def generate(self, request: GenerateRequest, ctx: ActionRunContext | None = None) -> GenerateResponse:
+    async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
         """Generate response from Anthropic.
 
         Args:
@@ -155,13 +156,13 @@ class AnthropicModel:
         # Build usage with cache-aware token counts.
         usage = self._build_usage(response, basic_usage)
 
-        return GenerateResponse(
+        return ModelResponse(
             message=response_message,
             usage=usage,
             finish_reason=finish_reason,
         )
 
-    def _build_usage(self, response: AnthropicMessage, basic_usage: GenerationUsage) -> GenerationUsage:
+    def _build_usage(self, response: AnthropicMessage, basic_usage: ModelUsage) -> ModelUsage:
         """Build usage stats including cache read/write token counts.
 
         Delegates to :func:`utils.build_cache_usage` for the actual
@@ -172,7 +173,7 @@ class AnthropicModel:
             basic_usage: Basic character/image usage from message content.
 
         Returns:
-            GenerationUsage with token and character counts.
+            ModelUsage with token and character counts.
         """
         return build_cache_usage(
             input_tokens=response.usage.input_tokens,
@@ -182,7 +183,7 @@ class AnthropicModel:
             cache_read_input_tokens=getattr(response.usage, 'cache_read_input_tokens', None) or 0,
         )
 
-    def _build_params(self, request: GenerateRequest) -> dict[str, Any]:
+    def _build_params(self, request: ModelRequest) -> dict[str, Any]:
         """Build Anthropic API parameters."""
         config = request.config
         params: dict[str, Any] = {}
@@ -191,7 +192,7 @@ class AnthropicModel:
             params = config.copy()
         elif config:
             if hasattr(config, 'model_dump'):
-                params = config.model_dump(exclude_none=True)
+                params = config.model_dump(exclude_none=True, by_alias=False)
             else:
                 params = {k: v for k, v in vars(config).items() if v is not None}
 
@@ -233,21 +234,21 @@ class AnthropicModel:
         system = self._extract_system(request.messages)
 
         # Handle JSON output constraint
-        if request.output and request.output.format == 'json':
+        if request.output_format == 'json':
             supports_json = 'json' in (self._model_info.supports.output or []) if self._model_info.supports else False
-            if request.output.schema and supports_json:
+            if request.output_schema and supports_json:
                 # Use native structured outputs via output_config.
                 params['output_config'] = {
                     'format': {
                         'type': 'json_schema',
-                        'schema': _to_anthropic_schema(request.output.schema),
+                        'schema': _to_anthropic_schema(request.output_schema),
                     }
                 }
             else:
                 # Fall back to system prompt instruction.
                 instruction = '\n\nOutput valid JSON. Do not wrap the JSON in markdown code fences.'
-                if request.output.schema:
-                    schema_str = json.dumps(request.output.schema, indent=2)
+                if request.output_schema:
+                    schema_str = json.dumps(request.output_schema, indent=2)
                     instruction += f'\n\nFollow this JSON schema:\n{schema_str}'
                 system = (system or '') + instruction
 
@@ -285,7 +286,7 @@ class AnthropicModel:
         3. ``content_block_stop``
 
         We track in-progress tool calls and emit a
-        :class:`GenerateResponseChunk` containing the tool request when
+        :class:`ModelResponseChunk` containing the tool request when
         the block finishes.
         """
         # Track in-progress tool-use blocks by index.
@@ -308,7 +309,7 @@ class AnthropicModel:
                     delta = chunk.delta
                     if getattr(delta, 'type', None) == 'text_delta' and hasattr(delta, 'text'):
                         ctx.send_chunk(
-                            GenerateResponseChunk(
+                            ModelResponseChunk(
                                 role=Role.MODEL,
                                 index=0,
                                 content=[Part(root=TextPart(text=str(delta.text)))],
@@ -330,7 +331,7 @@ class AnthropicModel:
                             except (json.JSONDecodeError, TypeError):
                                 tool_input = tool_info['input_json']
                         ctx.send_chunk(
-                            GenerateResponseChunk(
+                            ModelResponseChunk(
                                 role=Role.MODEL,
                                 index=0,
                                 content=[

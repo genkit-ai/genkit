@@ -21,15 +21,13 @@ from typing import cast
 
 import pytest
 
-from genkit.blocks.generate import generate_action
-from genkit.blocks.resource import ResourceInput, ResourceOutput, define_resource, resource
-from genkit.core.action import ActionRunContext
-from genkit.core.registry import ActionKind, Registry
-from genkit.core.typing import (
-    GenerateActionOptions,
-    GenerateRequest,
-    GenerateResponse,
-    Message,
+from genkit import Message, ModelResponse
+from genkit._ai._generate import generate_action
+from genkit._ai._resource import ResourceInput, ResourceOutput, define_resource, resource
+from genkit._core._action import ActionRunContext
+from genkit._core._model import GenerateActionOptions, ModelRequest
+from genkit._core._registry import ActionKind, Registry
+from genkit._core._typing import (
     Part,
     Resource1,
     ResourcePart,
@@ -50,13 +48,13 @@ async def test_generate_with_resources() -> None:
     define_resource(registry, {'uri': 'test://foo'}, my_resource)
 
     # 2. Register a mock model
-    async def mock_model(input: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
+    async def mock_model(input: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         # Verify docs are EMPTY (not auto-populated)
         assert not input.docs
         # Access via root because DocumentPart is a RootModel
         # Verify the message content was hydrated (replaced resource part with text part)
         assert input.messages[0].content[0].root.text == 'Resource content for test://foo'
-        return GenerateResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))
 
     registry.register_action(ActionKind.MODEL, 'mock-model', mock_model)
 
@@ -78,7 +76,7 @@ async def test_dynamic_action_provider_resource() -> None:
     registry = Registry()
 
     # Register a dynamic provider that handles any "dynamic://*" uri
-    def provider_fn(input: dict[str, object], ctx: ActionRunContext) -> object:
+    async def provider_fn(input: dict[str, object], ctx: ActionRunContext) -> object:
         kind = cast(ActionKind, input['kind'])
         name = cast(str, input['name'])
         if kind == ActionKind.RESOURCE and name.startswith('dynamic://'):
@@ -96,12 +94,12 @@ async def test_dynamic_action_provider_resource() -> None:
 
     # Register mock model
     # Register mock model
-    async def mock_model(input: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
+    async def mock_model(input: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         # Verify docs are empty
         assert not input.docs
         # Verify dynamic hydration
         assert input.messages[0].content[0].root.text == 'Dynamic content for dynamic://bar'
-        return GenerateResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Done'))]))
 
     registry.register_action(ActionKind.MODEL, 'mock-model', mock_model)
 

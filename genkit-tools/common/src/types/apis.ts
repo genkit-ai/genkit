@@ -43,6 +43,7 @@ export const TraceQueryFilterSchema = z.object({
   gte: z.record(z.string(), z.number()).optional(),
   lt: z.record(z.string(), z.number()).optional(),
   lte: z.record(z.string(), z.number()).optional(),
+  contains: z.record(z.string(), FilterValueSchema).optional(),
 });
 
 export type TraceQueryFilter = z.infer<typeof TraceQueryFilterSchema>;

@@ -324,16 +324,19 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
     const body = {
       model: mappedModelName,
-      max_tokens:
-        request.config?.maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
       messages,
       system: system as BetaTextBlockParam[],
-      stop_sequences: request.config?.stopSequences,
+      stop_sequences: stopSequences,
       temperature: request.config?.temperature,
       top_k: topK,
       top_p: topP,
@@ -381,17 +384,20 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
     const body = {
       model: mappedModelName,
-      max_tokens:
-        request.config?.maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
       messages,
       stream: true,
       system: system as BetaTextBlockParam[],
-      stop_sequences: request.config?.stopSequences,
+      stop_sequences: stopSequences,
       temperature: request.config?.temperature,
       top_k: topK,
       top_p: topP,

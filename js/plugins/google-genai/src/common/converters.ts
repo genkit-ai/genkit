@@ -34,6 +34,7 @@ import {
   Schema,
   SchemaType,
   VideoMetadata,
+  isObject,
 } from './types.js';
 
 export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
@@ -73,9 +74,13 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
   }
   if (propertyType === 'object') {
     const nestedProperties = {};
-    Object.keys(property.properties).forEach((key) => {
-      nestedProperties[key] = toGeminiSchemaProperty(property.properties[key]);
-    });
+    if (property.properties) {
+      Object.keys(property.properties).forEach((key) => {
+        nestedProperties[key] = toGeminiSchemaProperty(
+          property.properties[key]
+        );
+      });
+    }
     return {
       ...baseSchema,
       type: SchemaType.OBJECT,
@@ -139,21 +144,21 @@ function toGeminiMedia(part: Part): GeminiPart {
     media.mediaResolution = { ...part.metadata.mediaResolution };
   }
 
-  return maybeAddGeminiThoughtSignature(part, media);
+  return maybeAddGeminiThoughtSignatureAndMetadata(part, media);
 }
 
 function toGeminiToolRequest(part: Part): GeminiPart {
   if (!part.toolRequest?.input) {
     throw Error('Invalid ToolRequestPart: input was missing.');
   }
-  const functionCall: GeminiPart['functionCall'] = {
+  let functionCall: GeminiPart['functionCall'] = {
     name: part.toolRequest.name,
     args: part.toolRequest.input,
   };
   if (part.toolRequest.ref) {
     functionCall.id = part.toolRequest.ref;
   }
-  return maybeAddGeminiThoughtSignature(part, { functionCall });
+  return maybeAddGeminiThoughtSignatureAndMetadata(part, { functionCall });
 }
 
 function toGeminiToolResponse(part: Part): GeminiPart {
@@ -173,7 +178,7 @@ function toGeminiToolResponse(part: Part): GeminiPart {
   if (part.toolResponse.ref) {
     functionResponse.id = part.toolResponse.ref;
   }
-  return maybeAddGeminiThoughtSignature(part, {
+  return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     functionResponse,
   });
 }
@@ -183,38 +188,70 @@ function toGeminiReasoning(part: Part): GeminiPart {
   if (part.reasoning?.length) {
     out.text = part.reasoning;
   }
-  return maybeAddGeminiThoughtSignature(part, out);
+  return maybeAddGeminiThoughtSignatureAndMetadata(part, out);
 }
 
 function toGeminiCustom(part: Part): GeminiPart {
   if (part.custom?.codeExecutionResult) {
-    return maybeAddGeminiThoughtSignature(part, {
+    return maybeAddGeminiThoughtSignatureAndMetadata(part, {
       codeExecutionResult: part.custom.codeExecutionResult,
     });
   }
   if (part.custom?.executableCode) {
-    return maybeAddGeminiThoughtSignature(part, {
+    return maybeAddGeminiThoughtSignatureAndMetadata(part, {
       executableCode: part.custom.executableCode,
+    });
+  }
+  if (part.custom?.geminiToolCall) {
+    return maybeAddGeminiThoughtSignatureAndMetadata(part, {
+      toolCall: part.custom.geminiToolCall as any,
+    });
+  }
+  if (part.custom?.geminiToolResponse) {
+    return maybeAddGeminiThoughtSignatureAndMetadata(part, {
+      toolResponse: part.custom.geminiToolResponse as any,
     });
   }
   throw new Error('Unsupported Custom Part type');
 }
 
 function toGeminiText(part: Part): GeminiPart {
-  return maybeAddGeminiThoughtSignature(part, { text: part.text ?? '' });
+  return maybeAddGeminiThoughtSignatureAndMetadata(part, {
+    text: part.text ?? '',
+  });
 }
 
-function maybeAddGeminiThoughtSignature(
+/**
+ * Propagates thought signatures and plugin-specific part metadata from Genkit to Gemini.
+ *
+ * We nest arbitrary plugin-specific metadata under `part.metadata.metadata` to safely isolate it
+ * from Genkit's other metadata fields (e.g. videoMetadata) that are parsed individually.
+ */
+function maybeAddGeminiThoughtSignatureAndMetadata(
   part: Part,
   geminiPart: GeminiPart
 ): GeminiPart {
-  if (part.metadata?.thoughtSignature) {
-    return {
-      ...geminiPart,
-      thoughtSignature: part.metadata.thoughtSignature as string,
-    };
+  let updatedPart = geminiPart;
+
+  if (part.metadata) {
+    const { thoughtSignature, metadata } = part.metadata;
+
+    if (thoughtSignature) {
+      updatedPart = {
+        ...updatedPart,
+        thoughtSignature: thoughtSignature as string,
+      };
+    }
+
+    if (isObject(metadata) && Object.keys(metadata).length > 0) {
+      updatedPart = {
+        ...updatedPart,
+        partMetadata: metadata,
+      };
+    }
   }
-  return geminiPart;
+
+  return updatedPart;
 }
 
 function toGeminiPart(part: Part): GeminiPart {
@@ -353,21 +390,41 @@ function fromGeminiFinishReason(
   }
 }
 
-function maybeAddThoughtSignature(geminiPart: GeminiPart, part: Part): Part {
+/**
+ * Propagates thought signatures and plugin-specific part metadata from Gemini to Genkit.
+ *
+ * We nest the Gemini `partMetadata` response under `part.metadata.metadata` to cleanly
+ * separate arbitrary API metadata from Genkit's top-level native Part configurations.
+ */
+function maybeAddThoughtSignatureAndMetadata(
+  geminiPart: GeminiPart,
+  part: Part
+): Part {
+  let metadata: Record<string, any> = { ...part?.metadata };
+  let hasMetadata = Object.keys(metadata).length > 0;
+
   if (geminiPart.thoughtSignature) {
+    metadata.thoughtSignature = geminiPart.thoughtSignature;
+    hasMetadata = true;
+  }
+
+  if (geminiPart.partMetadata) {
+    metadata.metadata = { ...geminiPart.partMetadata };
+    hasMetadata = true;
+  }
+
+  if (hasMetadata) {
     return {
       ...part,
-      metadata: {
-        ...part?.metadata,
-        thoughtSignature: geminiPart.thoughtSignature,
-      },
+      metadata,
     };
   }
+
   return part;
 }
 
 function fromGeminiThought(part: GeminiPart): Part {
-  return maybeAddThoughtSignature(part, {
+  return maybeAddThoughtSignatureAndMetadata(part, {
     reasoning: part.text || '',
   });
 }
@@ -385,7 +442,7 @@ function fromGeminiInlineData(part: GeminiPart): Part {
   // Combine data and mimeType into a data URL
   const dataUrl = `data:${mimeType};base64,${data}`;
 
-  return maybeAddThoughtSignature(part, {
+  return maybeAddThoughtSignatureAndMetadata(part, {
     media: {
       url: dataUrl,
       contentType: mimeType,
@@ -404,7 +461,7 @@ function fromGeminiFileData(part: GeminiPart): Part {
     );
   }
 
-  return maybeAddThoughtSignature(part, {
+  return maybeAddThoughtSignatureAndMetadata(part, {
     media: {
       url: part.fileData?.fileUri,
       contentType: part.fileData?.mimeType,
@@ -494,7 +551,7 @@ function fromGeminiFunctionCall(
 
   const toolRequest: Part = { toolRequest: req as ToolRequest };
 
-  return maybeAddThoughtSignature(part, toolRequest);
+  return maybeAddThoughtSignatureAndMetadata(part, toolRequest);
 }
 
 function handleFunctionCallPartials(
@@ -549,23 +606,29 @@ function fromGeminiFunctionResponse(part: GeminiPart): Part {
       'Invalid Gemini Function Call Part: missing function call data'
     );
   }
+
+  let output: unknown = part.functionResponse.response;
+  if (isObject(output) && 'name' in output && 'content' in output) {
+    output = output.content;
+  }
+
   const toolResponse: Part = {
     toolResponse: {
       name: part.functionResponse.name.replace(/__/g, '/'), // restore slashes
-      output: part.functionResponse.response,
+      output,
     },
   };
   if (part.functionResponse.id) {
-    toolResponse.toolResponse.ref = part.functionResponse.id;
+    toolResponse.toolResponse!.ref = part.functionResponse.id;
   }
-  return maybeAddThoughtSignature(part, toolResponse);
+  return maybeAddThoughtSignatureAndMetadata(part, toolResponse);
 }
 
 function fromExecutableCode(part: GeminiPart): Part {
   if (!part.executableCode) {
     throw new Error('Invalid GeminiPart: missing executableCode');
   }
-  return maybeAddThoughtSignature(part, {
+  return maybeAddThoughtSignatureAndMetadata(part, {
     custom: {
       executableCode: {
         language: part.executableCode.language,
@@ -579,7 +642,7 @@ function fromCodeExecutionResult(part: GeminiPart): Part {
   if (!part.codeExecutionResult) {
     throw new Error('Invalid GeminiPart: missing codeExecutionResult');
   }
-  return maybeAddThoughtSignature(part, {
+  return maybeAddThoughtSignatureAndMetadata(part, {
     custom: {
       codeExecutionResult: {
         outcome: part.codeExecutionResult.outcome,
@@ -590,7 +653,35 @@ function fromCodeExecutionResult(part: GeminiPart): Part {
 }
 
 function fromGeminiText(part: GeminiPart): Part {
-  return maybeAddThoughtSignature(part, { text: part.text } as TextPart);
+  return maybeAddThoughtSignatureAndMetadata(part, {
+    text: part.text,
+  } as TextPart);
+}
+
+function fromGeminiToolCall(part: GeminiPart): Part {
+  if (!part.toolCall) {
+    throw new Error(
+      'Invalid Gemini Function Call Part: missing tool call data'
+    );
+  }
+  return maybeAddThoughtSignatureAndMetadata(part, {
+    custom: {
+      geminiToolCall: part.toolCall,
+    },
+  });
+}
+
+function fromGeminiToolResponse(part: GeminiPart): Part {
+  if (!part.toolResponse) {
+    throw new Error(
+      'Invalid Gemini Function Call Part: missing tool response data'
+    );
+  }
+  return maybeAddThoughtSignatureAndMetadata(part, {
+    custom: {
+      geminiToolResponse: part.toolResponse,
+    },
+  });
 }
 
 function fromGeminiPart(
@@ -603,8 +694,11 @@ function fromGeminiPart(
   if (part.fileData) return fromGeminiFileData(part);
   if (part.functionCall) return fromGeminiFunctionCall(part, previousChunks);
   if (part.functionResponse) return fromGeminiFunctionResponse(part);
+  if (part.toolCall) return fromGeminiToolCall(part);
+  if (part.toolResponse) return fromGeminiToolResponse(part);
   if (part.executableCode) return fromExecutableCode(part);
   if (part.codeExecutionResult) return fromCodeExecutionResult(part);
+  if (part.thoughtSignature) return fromGeminiThought(part as any);
 
   throw new Error('Unsupported GeminiPart type ' + JSON.stringify(part));
 }
@@ -633,3 +727,5 @@ export function fromGeminiCandidate(
 
   return genkitCandidate;
 }
+
+export const TEST_ONLY = { fromGeminiPart, toGeminiPart };

@@ -19,12 +19,12 @@
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/next": "workspace:*",
     "genkit": "workspace:*",
-    "next": "^15.4.10",
+    "next": "^15.5.14",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/react": "19.2.7",
     "rimraf": "^6.0.1",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

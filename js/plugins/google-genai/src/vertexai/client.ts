@@ -18,6 +18,10 @@ import { GenkitError, StatusName } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GoogleAuth } from 'google-auth-library';
 import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from '../common/interaction-types.js';
+import {
   extractErrMsg,
   getGenkitClientHeader,
   processStream,
@@ -56,6 +60,27 @@ export async function listModels(
   const response = await makeRequest(url, fetchOptions);
   const modelResponse = (await response.json()) as ListModelsResponse;
   return modelResponse.publisherModels;
+}
+
+export async function createInteraction(
+  createInteractionRequest: CreateInteractionRequest,
+  clientOptions: ClientOptions
+): Promise<GeminiInteraction> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: `interactions`,
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'POST',
+    clientOptions,
+    body: JSON.stringify(createInteractionRequest),
+  });
+
+  const response = await makeRequest(url, fetchOptions);
+
+  return await response.json();
 }
 
 export async function generateContent(
@@ -363,10 +388,29 @@ async function makeRequest(
     if (!response.ok) {
       let errorText = await response.text();
       let errorMessage = errorText;
+      let errorDetail: unknown;
       try {
         const json = JSON.parse(errorText);
+        errorDetail = json;
         if (json.error && json.error.message) {
           errorMessage = json.error.message;
+          if (Array.isArray(json.error.details)) {
+            const detailsText = json.error.details
+              .map((d: any) => {
+                if (d.detail && typeof d.detail === 'string') {
+                  const match = d.detail.match(
+                    /\[ORIGINAL ERROR\]\s*(?:generic::[^:]+:\s*)?(.*?)(?:\s+\[|\s+\d+\s+\{|$)/
+                  );
+                  return match ? match[1].trim() : d.detail;
+                }
+                return JSON.stringify(d);
+              })
+              .filter(Boolean)
+              .join('\n');
+            if (detailsText) {
+              errorMessage += `\nDetails: ${detailsText}`;
+            }
+          }
         }
       } catch (e) {
         // Not JSON or expected format, use the raw text
@@ -389,6 +433,7 @@ async function makeRequest(
       throw new GenkitError({
         status,
         message: `Error fetching from ${url}: [${response.status} ${response.statusText}] ${errorMessage}`,
+        detail: errorDetail,
       });
     }
     return response;

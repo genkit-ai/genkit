@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 
 from opentelemetry.trace import TraceFlags
 
+from genkit.plugin_api import to_display_path
 from genkit.plugins.google_cloud.telemetry.utils import (
     MAX_LOG_CONTENT_CHARS,
     MAX_PATH_CHARS,
@@ -33,7 +34,6 @@ from genkit.plugins.google_cloud.telemetry.utils import (
     extract_error_stack,
     extract_outer_feature_name_from_path,
     extract_outer_flow_name_from_path,
-    to_display_path,
     truncate,
     truncate_path,
 )
@@ -297,29 +297,27 @@ class TestCreateCommonLogAttributes:
 # to_display_path()
 # ---------------------------------------------------------------------------
 class TestToDisplayPath:
-    """Tests for ToDisplayPath."""
+    """Tests for to_display_path (now in genkit.plugin_api)."""
 
     def test_simple_flow_path(self) -> None:
         """Simple flow path."""
         assert to_display_path('/{myFlow,t:flow}') == 'myFlow'
 
     def test_nested_path(self) -> None:
-        """Nested path."""
+        """Nested path uses ' > ' separator (matching JS)."""
         result = to_display_path('/{myFlow,t:flow}/{step,t:flowStep}')
-        assert result == 'myFlow/step'
+        assert result == 'myFlow > step'
 
     def test_three_level_path(self) -> None:
         """Three level path."""
         result = to_display_path('/{myFlow,t:flow}/{step,t:flowStep}/{googleai/gemini-pro,t:action,s:model}')
-        # The function extracts the name part before the first comma in braces,
-        # but nested slashes create extra segments.
-        assert 'myFlow' in result
-        assert 'step' in result
+        assert result == 'myFlow > step > googleai/gemini-pro'
 
     def test_empty_string_returns_empty(self) -> None:
         """Empty string returns empty."""
         assert to_display_path('') == ''
 
-    def test_plain_segments_preserved(self) -> None:
-        """Plain segments preserved."""
-        assert to_display_path('foo/bar') == 'foo/bar'
+    def test_plain_segments_not_matched(self) -> None:
+        """Plain segments without type annotations are not extracted."""
+        # The regex only matches {name,t:type} patterns
+        assert to_display_path('foo/bar') == ''

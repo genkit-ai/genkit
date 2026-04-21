@@ -36,7 +36,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry.util.types import Attributes
 
-from genkit.core.trace.adjusting_exporter import AdjustingTraceExporter, RedactedSpan
+from genkit._core._trace._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 
 
 class MockSpanExporter(SpanExporter):

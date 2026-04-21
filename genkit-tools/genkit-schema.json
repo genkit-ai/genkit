@@ -410,6 +410,49 @@
       ],
       "additionalProperties": false
     },
+    "MiddlewareDesc": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "configSchema": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "MiddlewareRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "config": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
     "CandidateError": {
       "type": "object",
       "properties": {
@@ -564,6 +607,12 @@
             "type": "string"
           }
         },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "toolChoice": {
           "type": "string",
           "enum": [
@@ -606,6 +655,12 @@
         },
         "stepName": {
           "type": "string"
+        },
+        "use": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MiddlewareRef"
+          }
         }
       },
       "required": [
@@ -741,28 +796,38 @@
       "type": "object",
       "properties": {
         "version": {
-          "type": "string"
+          "type": "string",
+          "description": "A specific version of a model family, e.g. `gemini-2.5-flash` for the `googleai` family."
         },
         "temperature": {
-          "type": "number"
+          "type": "number",
+          "description": "Controls the degree of randomness in token selection. A lower value is good for a more predictable response. A higher value leads to more diverse or unexpected results."
         },
         "maxOutputTokens": {
-          "type": "number"
+          "type": "number",
+          "description": "The maximum number of tokens to include in the response."
         },
         "topK": {
-          "type": "number"
+          "type": "number",
+          "description": "The maximum number of tokens to consider when sampling."
         },
         "topP": {
-          "type": "number"
+          "type": "number",
+          "description": "Decides how many possible words to consider. A higher value means that the model looks at more possible words, even the less likely ones, which makes the generated text more diverse."
         },
         "stopSequences": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Set of character sequences (up to 5) that will stop output generation."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "API Key to use for the model call, overrides API key provided in plugin config."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": true
     },
     "GenerationUsage": {
       "type": "object",
@@ -950,6 +1015,19 @@
       },
       "additionalProperties": false
     },
+    "ModelReference": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "config": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
     "ModelRequest": {
       "type": "object",
       "properties": {
@@ -1046,6 +1124,10 @@
           "items": {
             "$ref": "#/$defs/Part"
           }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
         }
       },
       "additionalProperties": false
@@ -1503,6 +1585,282 @@
       },
       "required": [
         "documents"
+      ],
+      "additionalProperties": false
+    },
+    "ActionMetadata": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "actionType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": {},
+        "inputJsonSchema": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false,
+              "description": "A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object."
+        },
+        "outputSchema": {},
+        "outputJsonSchema": {
+          "$ref": "#/$defs/ActionMetadata/properties/inputJsonSchema",
+          "description": "A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object."
+        },
+        "streamSchema": {},
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ActionMetadata/properties/metadata/additionalProperties/anyOf/0"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionCancelActionParams": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "traceId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionCancelActionResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionConfigureParams": {
+      "type": "object",
+      "properties": {
+        "telemetryServerUrl": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReflectionEndInputStreamParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionListActionsResponse": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ActionMetadata"
+          }
+        }
+      },
+      "required": [
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionListValuesParams": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionListValuesResponse": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionRegisterParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "genkitVersion": {
+          "type": "string"
+        },
+        "reflectionApiSpecVersion": {
+          "type": "number"
+        },
+        "envs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "pid"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionRunActionParams": {
+      "type": "object",
+      "properties": {
+        "runtimeId": {
+          "type": "string",
+          "description": "ID of the Genkit runtime to run the action on. Typically $pid-$port."
+        },
+        "key": {
+          "type": "string",
+          "description": "Action key that consists of the action type and ID."
+        },
+        "input": {
+          "description": "An input with the type that this action expects."
+        },
+        "context": {
+          "description": "Additional runtime context data (ex. auth context data)."
+        },
+        "telemetryLabels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Labels to be applied to telemetry data."
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "streamInput": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionRunActionStateParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "object",
+          "properties": {
+            "traceId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionSendInputStreamChunkParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "chunk": {}
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionStreamChunkParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "chunk": {}
+      },
+      "required": [
+        "requestId"
       ],
       "additionalProperties": false
     },

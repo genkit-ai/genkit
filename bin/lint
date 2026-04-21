@@ -59,7 +59,7 @@ run_check() {
 # Type checkers
 run_check "🔍 Ty Type Check"      uv run --directory "${PY_DIR}" ty check .
 run_check "🔍 Pyrefly Type Check"  uv run --directory "${PY_DIR}" pyrefly check .
-run_check "🔍 Pyright Type Check"  uv run --directory "${PY_DIR}" pyright packages/
+run_check "🔍 Pyright Type Check"  bash -c "cd \"${PY_DIR}\" && uv run pyright packages/"
 
 # Security
 run_check "🔒 Security Checks"     "${PY_DIR}/bin/run_python_security_checks"

@@ -23,11 +23,11 @@ import { JSONSchema7, z, type Genkit, type ToolAction } from 'genkit';
 import { logger } from 'genkit/logging';
 
 const toText = (c: CallToolResult['content']) =>
-  c.map((p) => p.text || '').join('');
+  c.map((p) => (p.type === 'text' ? p.text : '')).join('');
 
 function processResult(result: CallToolResult) {
   if (result.isError) return { error: toText(result.content) };
-  if (result.content.every((c) => !!c.text)) {
+  if (result.content.every((c) => c.type === 'text' && !!c.text)) {
     const text = toText(result.content);
     if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
       try {

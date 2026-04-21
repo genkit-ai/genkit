@@ -64,7 +64,7 @@ const reservationTool = ai.defineTool(
 
 // [START chat]
 const chat = ai.chat({
-  model: googleAI.model('gemini-2.5-pro'),
+  model: googleAI.model('gemini-pro-latest'),
   system:
     "You are an AI customer service agent for Pavel's Cafe. Use the tools " +
     'available to you to help the customer. If you cannot help the ' +

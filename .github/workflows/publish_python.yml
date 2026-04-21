@@ -54,13 +54,13 @@ jobs:
             py/packages/genkit
             py/plugins/anthropic
             py/plugins/compat-oai
-            py/plugins/dev-local-vectorstore
             py/plugins/google-cloud
             py/plugins/google-genai
             py/plugins/ollama
-            py/plugins/firebase
+            py/plugins/fastapi
             py/plugins/flask
             py/plugins/vertex-ai
+            py/plugins/evaluators
           )
 
           FAILED=()
@@ -77,6 +77,7 @@ jobs:
 
           if [ ${#FAILED[@]} -gt 0 ]; then
             echo "::error::Failed packages: ${FAILED[*]}"
+            exit 1
           fi
 
       - name: Publish to PyPI
@@ -98,5 +99,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#py/v}"
+          [[ "$VERSION" == "$TAG" ]] && VERSION="${TAG#release/py/}"
           pip install "genkit==${VERSION}"
           python -c "from genkit.ai import Genkit; print('ok')"

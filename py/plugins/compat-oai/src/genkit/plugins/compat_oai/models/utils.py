@@ -23,10 +23,10 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from genkit.types import (
-    GenerateRequest,
+from genkit import (
     MediaPart,
     Message,
+    ModelRequest,
     Part,
     ReasoningPart,
     Role,
@@ -58,7 +58,7 @@ def strip_markdown_fences(text: str) -> str:
     return text
 
 
-def _find_text(request: GenerateRequest) -> str | None:
+def _find_text(request: ModelRequest) -> str | None:
     """Find the first text content from the first message, if any.
 
     Args:
@@ -76,7 +76,7 @@ def _find_text(request: GenerateRequest) -> str | None:
     )
 
 
-def _extract_text(request: GenerateRequest) -> str:
+def _extract_text(request: ModelRequest) -> str:
     """Extract text content from the first message.
 
     Args:
@@ -160,8 +160,8 @@ def decode_data_uri_bytes(url: str) -> bytes:
         raise ValueError('Invalid base64 data provided in media URL') from e
 
 
-def extract_config_dict(request: GenerateRequest) -> dict[str, Any]:
-    """Extract the config from a GenerateRequest as a mutable dictionary.
+def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
+    """Extract the config from a ModelRequest as a mutable dictionary.
 
     Handles both dict configs and Pydantic model configs uniformly.
 
@@ -180,7 +180,7 @@ def extract_config_dict(request: GenerateRequest) -> dict[str, Any]:
     return {}
 
 
-def _extract_media(request: GenerateRequest) -> tuple[str, str]:
+def _extract_media(request: ModelRequest) -> tuple[str, str]:
     """Extract media content from the first message.
 
     Finds the first part with a MediaPart root and returns its URL and

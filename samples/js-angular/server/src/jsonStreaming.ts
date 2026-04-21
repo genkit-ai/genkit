@@ -43,7 +43,7 @@ export const streamCharacters = ai.defineFlow(
   },
   async (count, { sendChunk }) => {
     const { response, stream } = await ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       output: {
         format: 'json',
         schema: GameCharactersSchema,

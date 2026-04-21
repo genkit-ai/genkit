@@ -402,7 +402,7 @@ components for use with Genkit's action system, tracing, and Dev UI.
 
   - Documentation: https://genkit.dev
   - Go Getting Started: https://genkit.dev/go/docs/get-started-go
-  - Samples: https://github.com/firebase/genkit/tree/main/go/samples
-  - GitHub: https://github.com/firebase/genkit
+  - Samples: https://github.com/genkit-ai/genkit/tree/main/go/samples
+  - GitHub: https://github.com/genkit-ai/genkit
 */
 package genkit

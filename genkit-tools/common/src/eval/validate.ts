@@ -17,7 +17,7 @@
 import Ajv, { type ErrorObject, type JSONSchemaType } from 'ajv';
 import addFormats from 'ajv-formats';
 import { getDatasetStore } from '.';
-import type { RuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager';
 import {
   InferenceDatasetSchema,
   type Action,
@@ -35,7 +35,7 @@ type JSONSchema = JSONSchemaType<any> | any;
  * reflection API.
  */
 export async function validateSchema(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   request: ValidateDataRequest
 ): Promise<ValidateDataResponse> {
   const { dataSource, actionRef } = request;
@@ -125,7 +125,7 @@ function toErrorDetail(error: ErrorObject): ErrorDetail {
 }
 
 async function getAction(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   actionRef: string
 ): Promise<Action | undefined> {
   const actions = await manager.listActions();

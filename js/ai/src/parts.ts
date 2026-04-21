@@ -37,6 +37,11 @@ export const TextPartSchema = EmptyPartSchema.extend({
 });
 
 /**
+ * Text part.
+ */
+export type TextPart = z.infer<typeof TextPartSchema>;
+
+/**
  * Zod schema for a reasoning part.
  */
 export const ReasoningPartSchema = EmptyPartSchema.extend({
@@ -45,9 +50,9 @@ export const ReasoningPartSchema = EmptyPartSchema.extend({
 });
 
 /**
- * Text part.
+ * Reasoning part.
  */
-export type TextPart = z.infer<typeof TextPartSchema>;
+export type ReasoningPart = z.infer<typeof ReasoningPartSchema>;
 
 /**
  * Zod schema of media.
@@ -176,12 +181,29 @@ export const ResourcePartSchema = EmptyPartSchema.extend({
  */
 export type ResourcePart = z.infer<typeof ResourcePartSchema>;
 
-export const PartSchema = z.union([TextPartSchema, MediaPartSchema]);
+/**
+ * Zod schema of a message part.
+ */
+export const PartSchema = z.union([
+  TextPartSchema,
+  MediaPartSchema,
+  ToolRequestPartSchema,
+  ToolResponsePartSchema,
+  DataPartSchema,
+  CustomPartSchema,
+  ReasoningPartSchema,
+  ResourcePartSchema,
+]);
+
+/**
+ * Message part.
+ */
 export type Part = z.infer<typeof PartSchema>;
 
 export const MultipartToolResponseSchema = z.object({
   output: z.unknown().optional(),
   content: z.array(PartSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export type MultipartToolResponse = z.infer<typeof MultipartToolResponseSchema>;

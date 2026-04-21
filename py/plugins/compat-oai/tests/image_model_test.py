@@ -22,6 +22,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from genkit import (
+    MediaPart,
+    Message,
+    ModelRequest,
+    Part,
+    Role,
+    TextPart,
+)
 from genkit.plugins.compat_oai.models.image import (
     SUPPORTED_IMAGE_MODELS,
     OpenAIImageModel,
@@ -29,22 +37,14 @@ from genkit.plugins.compat_oai.models.image import (
     _to_generate_response,
     _to_image_generate_params,
 )
-from genkit.types import (
-    GenerateRequest,
-    MediaPart,
-    Message,
-    Part,
-    Role,
-    TextPart,
-)
 
 
 class TestExtractPromptText:
-    """Tests for extracting text from GenerateRequest messages."""
+    """Tests for extracting text from ModelRequest messages."""
 
     def test_extracts_text_from_first_message(self) -> None:
         """Verify text extraction from a simple single-message request."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='a sunset'))]),
             ],
@@ -54,13 +54,13 @@ class TestExtractPromptText:
 
     def test_raises_on_empty_messages(self) -> None:
         """Verify ValueError when messages list is empty."""
-        request = GenerateRequest(messages=[])
+        request = ModelRequest(messages=[])
         with pytest.raises(ValueError, match='No messages found'):
             _extract_prompt_text(request)
 
     def test_raises_on_no_text_content(self) -> None:
         """Verify ValueError when message has no text parts."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[]),
             ],
@@ -70,11 +70,11 @@ class TestExtractPromptText:
 
 
 class TestToImageGenerateParams:
-    """Tests for converting GenerateRequest to OpenAI image params."""
+    """Tests for converting ModelRequest to OpenAI image params."""
 
     def test_basic_params(self) -> None:
         """Verify required params are set with correct defaults."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='a cat'))]),
             ],
@@ -86,7 +86,7 @@ class TestToImageGenerateParams:
 
     def test_config_passthrough(self) -> None:
         """Verify image-specific config options pass through."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='a dog'))]),
             ],
@@ -99,20 +99,20 @@ class TestToImageGenerateParams:
 
     def test_strips_standard_genai_config(self) -> None:
         """Verify standard GenAI keys are stripped from params."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
             ],
-            config={'temperature': 0.5, 'topK': 40, 'topP': 0.9},
+            config={'temperature': 0.5, 'top_k': 40, 'top_p': 0.9},
         )
         got = _to_image_generate_params('dall-e-3', request)
         assert 'temperature' not in got
-        assert 'topK' not in got
-        assert 'topP' not in got
+        assert 'top_k' not in got
+        assert 'top_p' not in got
 
     def test_version_override(self) -> None:
         """Verify model version override via config."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
             ],
@@ -122,8 +122,8 @@ class TestToImageGenerateParams:
         assert got['model'] == 'dall-e-3-custom'
 
 
-class TestToGenerateResponse:
-    """Tests for converting OpenAI ImagesResponse to GenerateResponse."""
+class TestToModelResponse:
+    """Tests for converting OpenAI ImagesResponse to ModelResponse."""
 
     def test_empty_data(self) -> None:
         """Verify empty image data produces empty content."""
@@ -213,7 +213,7 @@ class TestOpenAIImageModel:
         mock_client.images.generate = AsyncMock(return_value=mock_response)
 
         model = OpenAIImageModel('dall-e-3', mock_client)
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='a mountain'))]),
             ],

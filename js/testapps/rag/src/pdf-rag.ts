@@ -117,7 +117,7 @@ export const synthesizeQuestions = ai.defineFlow(
     const questions: string[] = [];
     for (let i = 0; i < chunks.length; i++) {
       const qResponse = await ai.generate({
-        model: googleAI.model('gemini-2.5-flash'),
+        model: googleAI.model('gemini-flash-latest'),
         prompt: {
           text: `Generate one question about the text below: ${chunks[i]}`,
         },

@@ -262,6 +262,17 @@ func TestConvertRequest(t *testing.T) {
 			})
 		}
 	})
+	t.Run("invalid config map", func(t *testing.T) {
+		req := ai.ModelRequest{
+			Config: map[string]any{
+				"temperature": "not a number", // This should fail map->struct conversion
+			},
+		}
+		_, err := toGeminiRequest(&req, nil)
+		if err == nil {
+			t.Fatal("expected error for invalid config map")
+		}
+	})
 	t.Run("convert tools with valid tool", func(t *testing.T) {
 		tools := []*ai.ToolDefinition{tool}
 		gt, err := toGeminiTools(tools)

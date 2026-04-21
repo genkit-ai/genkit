@@ -181,6 +181,8 @@ describe('Vertex AI Converters', () => {
       const request: GenerateRequest<typeof ImagenConfigSchema> = {
         ...baseRequest,
         config: {
+          addWatermark: false,
+          foo: 0,
           negativePrompt: undefined,
           seed: null as any,
           aspectRatio: '1:1',
@@ -190,7 +192,9 @@ describe('Vertex AI Converters', () => {
       assert.deepStrictEqual(result, {
         instances: [{ prompt: 'A cat on a mat' }],
         parameters: {
+          addWatermark: false,
           sampleCount: 1,
+          foo: 0,
           aspectRatio: '1:1',
         },
       });

@@ -52,12 +52,12 @@ from urllib.parse import urlparse
 
 from google import genai
 
-from genkit.core.http_client import get_cached_client
-from genkit.core.typing import DocumentPart, Metadata
-from genkit.types import (
+from genkit import (
     CustomPart,
+    DocumentPart,
     Media,
     MediaPart,
+    Metadata,
     Part,
     ReasoningPart,
     TextPart,
@@ -66,6 +66,7 @@ from genkit.types import (
     ToolResponse,
     ToolResponsePart,
 )
+from genkit.plugin_api import get_cached_client
 
 
 class PartConverter:
@@ -258,7 +259,6 @@ class PartConverter:
         Returns:
             A `genai.types.Part` object representing the converted custom content.
         """
-        # pyrefly: ignore[unsupported-operation] - Custom is RootModel[dict] which supports 'in'
         if part.root.custom and cls.EXECUTABLE_CODE in part.root.custom:
             custom_data = cast(dict, part.root.custom)
             return genai.types.Part(
@@ -267,7 +267,6 @@ class PartConverter:
                     language=custom_data[cls.EXECUTABLE_CODE][cls.LANGUAGE],
                 )
             )
-        # pyrefly: ignore[unsupported-operation] - Custom is RootModel[dict] which supports 'in'
         if part.root.custom and cls.CODE_EXECUTION_RESULT in part.root.custom:
             custom_data = cast(dict, part.root.custom)
             return genai.types.Part(
@@ -363,7 +362,7 @@ class PartConverter:
     @classmethod
     def _extract_thought_signature(cls, metadata: Metadata | None) -> bytes | None:
         """Extracts and decodes the thought signature from metadata."""
-        thought_sig = metadata.root.get('thoughtSignature') if metadata else None
+        thought_sig = metadata.get('thoughtSignature') if metadata else None
         if isinstance(thought_sig, str):
             return base64.b64decode(thought_sig)
         return None
@@ -372,14 +371,14 @@ class PartConverter:
     def _encode_thought_signature(cls, thought_signature: bytes | None) -> Metadata | None:
         """Encodes the thought signature into metadata format."""
         if thought_signature:
-            return Metadata(root={'thoughtSignature': base64.b64encode(thought_signature).decode('utf-8')})
+            return {'thoughtSignature': base64.b64encode(thought_signature).decode('utf-8')}
         return None
 
     # TODO(#4360): Replace with downloadRequestMedia middleware (JS parity).
     # User-Agent is required because many servers (e.g. Wikipedia) return
     # 403 Forbidden for the default httpx user-agent string.
     _DOWNLOAD_HEADERS: dict[str, str] = {
-        'User-Agent': 'Genkit/1.0 (https://github.com/firebase/genkit; genkit@google.com)',
+        'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
     }
 
     @classmethod

@@ -24,6 +24,15 @@ from typing import Any, cast
 
 import pytest
 
+from genkit import (
+    Message,
+    ModelConfig,
+    ModelUsage,
+    Part,
+    Role,
+    TextPart,
+    ToolRequestPart,
+)
 from genkit.plugins.ollama.converters import (
     build_prompt,
     build_request_options_dict,
@@ -31,15 +40,6 @@ from genkit.plugins.ollama.converters import (
     get_usage_info,
     strip_data_uri_prefix,
     to_ollama_role,
-)
-from genkit.types import (
-    GenerationCommonConfig,
-    GenerationUsage,
-    Message,
-    Part,
-    Role,
-    TextPart,
-    ToolRequestPart,
 )
 
 
@@ -93,7 +93,7 @@ class TestBuildRequestOptionsDict:
 
     def test_generation_common_config(self) -> None:
         """Test Generation common config."""
-        config = GenerationCommonConfig(temperature=0.7, max_output_tokens=100, top_p=0.9)
+        config = ModelConfig(temperature=0.7, max_output_tokens=100, top_p=0.9)
         got = build_request_options_dict(config)
         assert got.get('temperature') == 0.7
         assert got.get('num_predict') == 100
@@ -152,14 +152,14 @@ class TestGetUsageInfo:
 
     def test_with_counts(self) -> None:
         """Test With counts."""
-        basic = GenerationUsage(input_characters=100)
+        basic = ModelUsage(input_characters=100)
         got = get_usage_info(basic, 10, 20)
         assert got.input_tokens == 10 or got.output_tokens != 20 or got.total_tokens != 30, f'got {got}'
         assert got.input_characters == 100, 'Lost input_characters'
 
     def test_none_counts(self) -> None:
         """Test None counts."""
-        basic = GenerationUsage()
+        basic = ModelUsage()
         got = get_usage_info(basic, None, None)
         assert got.input_tokens == 0 or got.output_tokens != 0
 

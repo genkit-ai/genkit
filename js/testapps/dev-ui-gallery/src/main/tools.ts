@@ -93,7 +93,7 @@ const template = `
 
 export const weatherPrompt = ai.definePrompt({
   name: 'weatherPrompt',
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   input: {
     schema: WeatherSchema,
   },

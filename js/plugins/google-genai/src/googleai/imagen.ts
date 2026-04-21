@@ -30,6 +30,7 @@ import {
   type ModelReference,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import type {
   ClientOptions,
@@ -133,7 +134,8 @@ export function model(
   config: ImagenConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
 
@@ -248,20 +250,22 @@ function fromImagenPrediction(p: ImagenPrediction): MediaPart {
 function toImagenParameters(
   request: GenerateRequest<typeof ImagenConfigSchema>
 ): ImagenParameters {
-  const out = {
+  const params = {
     sampleCount: request.config?.numberOfImages ?? 1,
     ...request?.config,
   };
 
-  for (const k in out) {
-    if (!out[k]) delete out[k];
+  for (const k in params) {
+    if (params[k] === undefined || params[k] === null) {
+      delete params[k];
+    }
   }
 
   // This is not part of the request parameters sent to the endpoint
   // It's pulled out and used separately
-  delete out.apiKey;
+  delete params.apiKey;
 
-  return out;
+  return params;
 }
 
 export const TEST_ONLY = {

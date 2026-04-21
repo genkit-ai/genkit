@@ -377,6 +377,28 @@ ai.defineFlow('transcribe', async () => {
   return text;
 });
 
+// translation sample
+ai.defineFlow('translate', async () => {
+  const audioFile = fs.readFileSync('audio-korean.mp3');
+
+  const { text } = await ai.generate({
+    model: openAI.model('whisper-1', {
+      translate: true,
+      temperature: 0.5,
+    }),
+    prompt: [
+      {
+        media: {
+          contentType: 'audio/mp3',
+          url: `data:audio/mp3;base64,${audioFile.toString('base64')}`,
+        },
+      },
+    ],
+  });
+
+  return text;
+});
+
 // PDF file input example
 ai.defineFlow(
   {

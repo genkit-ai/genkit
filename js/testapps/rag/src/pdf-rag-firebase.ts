@@ -124,7 +124,7 @@ export const pdfQAFirebase = ai.defineFlow(
       context: docs.map((d) => d.text).join('\n\n'),
     });
     const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: augmentedPrompt,
     });
 
@@ -160,7 +160,7 @@ const indexConfig = {
   collection: 'pdf-qa',
   contentField: 'facts',
   vectorField: 'embedding',
-  embedder: googleAI.embedder('text-embedding-004'),
+  embedder: googleAI.embedder('gemini-embedding-001'),
 };
 
 const chunkingConfig = {

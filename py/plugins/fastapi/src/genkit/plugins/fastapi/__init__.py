@@ -19,27 +19,26 @@
 This plugin provides FastAPI integration for Genkit, enabling you to expose
 Genkit flows as HTTP endpoints in a FastAPI application.
 
+The Dev UI reflection server starts automatically in a background thread when
+``GENKIT_ENV=dev`` is set — no lifespan wiring needed.
+
 Example:
     ```python
     from fastapi import FastAPI
     from genkit import Genkit
-    from genkit.plugins.fastapi import genkit_fastapi_handler, genkit_lifespan
+    from genkit.plugins.fastapi import genkit_fastapi_handler
     from genkit.plugins.google_genai import GoogleAI
 
     ai = Genkit(plugins=[GoogleAI()])
-    app = FastAPI(lifespan=genkit_lifespan(ai))
+    app = FastAPI()
 
 
+    @app.post('/chat', response_model=None)
+    @genkit_fastapi_handler(ai)
     @ai.flow()
     async def chat_flow(prompt: str) -> str:
         response = await ai.generate(prompt=prompt)
         return response.text
-
-
-    @app.post('/chat')
-    @genkit_fastapi_handler(ai)
-    async def chat():
-        return chat_flow
     ```
 
 Running:
@@ -53,7 +52,6 @@ Running:
 """
 
 from .handler import genkit_fastapi_handler
-from .lifespan import genkit_lifespan
 
 
 def package_name() -> str:
@@ -61,4 +59,4 @@ def package_name() -> str:
     return 'genkit.plugins.fastapi'
 
 
-__all__ = ['package_name', 'genkit_fastapi_handler', 'genkit_lifespan']
+__all__ = ['package_name', 'genkit_fastapi_handler']

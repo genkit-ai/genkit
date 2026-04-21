@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 import type {
   GenerateRequest,
   GenerateResponseData,
@@ -41,7 +42,7 @@ export type TranscriptionRequestBuilder = (
   params: TranscriptionCreateParams
 ) => void;
 
-export const TRANSCRIPTION_MODEL_INFO = {
+export const TRANSCRIPTION_MODEL_INFO: ModelInfo = {
   supports: {
     media: true,
     output: ['text', 'json'],

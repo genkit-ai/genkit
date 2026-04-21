@@ -217,7 +217,9 @@ function toImagenParameters(
   };
 
   for (const k in params) {
-    if (!params[k]) delete params[k];
+    if (params[k] === undefined || params[k] === null) {
+      delete params[k];
+    }
   }
 
   return params;

@@ -9,7 +9,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.29.0",
+  "version": "1.33.0-rc.1",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -20,7 +20,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/langchain"
   },
   "author": "genkit",
@@ -40,7 +40,7 @@
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^4.9.0"
+    "typescript": "^5.9.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {

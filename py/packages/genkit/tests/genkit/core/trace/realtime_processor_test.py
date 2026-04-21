@@ -27,7 +27,7 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
-from genkit.core.trace.realtime_processor import RealtimeSpanProcessor
+from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
 
 
 class MockSpanExporter(SpanExporter):
@@ -71,9 +71,9 @@ def test_realtime_processor_exports_on_start() -> None:
     # Call on_start
     processor.on_start(mock_span)
 
-    # Verify span was exported
+    # Verify span was exported (on_start passes list)
     assert len(exporter.exported_spans) == 1
-    assert exporter.exported_spans[0] == [mock_span]
+    assert list(exporter.exported_spans[0]) == [mock_span]
 
 
 def test_realtime_processor_exports_on_end() -> None:
@@ -90,9 +90,9 @@ def test_realtime_processor_exports_on_end() -> None:
     # Call on_end
     processor.on_end(mock_span)
 
-    # Verify span was exported
+    # Verify span was exported (SimpleSpanProcessor passes tuple)
     assert len(exporter.exported_spans) == 1
-    assert exporter.exported_spans[0] == [mock_span]
+    assert list(exporter.exported_spans[0]) == [mock_span]
 
 
 def test_realtime_processor_exports_twice_for_full_lifecycle() -> None:
@@ -112,35 +112,18 @@ def test_realtime_processor_exports_twice_for_full_lifecycle() -> None:
     processor.on_start(mock_span_start)
     processor.on_end(mock_span_end)
 
-    # Verify span was exported twice
+    # Verify span was exported twice (on_start uses list, on_end uses tuple)
     assert len(exporter.exported_spans) == 2
-    assert exporter.exported_spans[0] == [mock_span_start]
-    assert exporter.exported_spans[1] == [mock_span_end]
+    assert list(exporter.exported_spans[0]) == [mock_span_start]
+    assert list(exporter.exported_spans[1]) == [mock_span_end]
 
 
-def test_realtime_processor_force_flush_delegates_to_exporter() -> None:
-    """Test that force_flush is delegated to the underlying exporter."""
+def test_realtime_processor_force_flush() -> None:
+    """Test that force_flush works (inherited from SimpleSpanProcessor)."""
     exporter = MockSpanExporter()
     processor = RealtimeSpanProcessor(exporter)
 
-    # Call force_flush with custom timeout
     result = processor.force_flush(timeout_millis=5000)
-
-    # Verify delegation
-    assert result is True
-    assert exporter.force_flush_called is True
-    assert exporter.force_flush_timeout == 5000
-
-
-def test_realtime_processor_force_flush_returns_true_if_exporter_lacks_method() -> None:
-    """Test that force_flush returns True if exporter doesn't have the method."""
-    # Create a minimal exporter without force_flush
-    mock_exporter = MagicMock(spec=['export', 'shutdown'])
-
-    processor = RealtimeSpanProcessor(mock_exporter)
-
-    # Call force_flush - should return True even without exporter support
-    result = processor.force_flush()
 
     assert result is True
 
@@ -170,7 +153,7 @@ def test_realtime_processor_on_start_with_parent_context() -> None:
 
     # Verify span was still exported
     assert len(exporter.exported_spans) == 1
-    assert exporter.exported_spans[0] == [mock_span]
+    assert list(exporter.exported_spans[0]) == [mock_span]
 
 
 def test_realtime_processor_multiple_spans() -> None:

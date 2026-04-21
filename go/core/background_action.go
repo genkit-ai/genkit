@@ -33,12 +33,12 @@ type CancelOpFunc[Out any] = func(ctx context.Context, op *Operation[Out]) (*Ope
 
 // Operation represents a long-running operation started by a background action.
 type Operation[Out any] struct {
-	Action   string         // Key of the action that created this operation.
-	ID       string         // ID of the operation.
-	Done     bool           // Whether the operation is complete.
-	Output   Out            // Result when done.
-	Error    error          // Error if the operation failed.
-	Metadata map[string]any // Additional metadata.
+	Action   string         `json:"action"`             // Key of the action that created this operation.
+	ID       string         `json:"id"`                 // ID of the operation.
+	Done     bool           `json:"done"`               // Whether the operation is complete.
+	Output   Out            `json:"output,omitempty"`   // Result when done.
+	Error    error          `json:"error,omitempty"`    // Error if the operation failed.
+	Metadata map[string]any `json:"metadata,omitempty"` // Additional metadata.
 }
 
 // BackgroundActionDef is a background action that can be used to start, check, and cancel background operations.

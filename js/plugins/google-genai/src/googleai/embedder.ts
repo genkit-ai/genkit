@@ -24,6 +24,8 @@ import {
 } from 'genkit';
 import { embedderRef } from 'genkit/embedder';
 import { embedder as pluginEmbedder } from 'genkit/plugin';
+import { toGeminiMessage } from '../common/converters.js';
+import { isKnownKey } from '../common/utils.js';
 import { embedContent } from './client.js';
 import {
   ClientOptions,
@@ -86,22 +88,42 @@ function commonRef(
 const GENERIC_MODEL = commonRef('embedder');
 
 const KNOWN_MODELS = {
+  'gemini-embedding-2-preview': commonRef('gemini-embedding-2-preview', {
+    dimensions: 3072,
+    supports: {
+      input: ['text', 'image', 'video'],
+    },
+  }),
   'gemini-embedding-001': commonRef('gemini-embedding-001'),
-};
+} as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+export type EmbedderModelName = `gemini-embedding-${string}`;
+export function isEmbedderName(value: string): value is EmbedderModelName {
+  return value.startsWith('gemini-embedding-');
+}
 
 export function model(
   version: string,
   config: EmbeddingConfig = {}
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    const known = KNOWN_MODELS[name];
+    return embedderRef({
+      name: known.name,
+      info: known.info,
+      configSchema: known.configSchema,
+      config,
+    });
+  }
+
   return embedderRef({
     name: `googleai/${name}`,
-    config,
+    info: { ...GENERIC_MODEL.info },
     configSchema: GENERIC_MODEL.configSchema,
-    info: {
-      ...GENERIC_MODEL.info,
-    },
+    config,
   });
 }
 
@@ -159,10 +181,7 @@ export function defineEmbedder(
             {
               taskType: request.options?.taskType,
               title: request.options?.title,
-              content: {
-                role: '',
-                parts: [{ text: doc.text }],
-              },
+              content: toGeminiMessage({ role: 'user', content: doc.content }),
               outputDimensionality: request.options?.outputDimensionality,
             } as EmbedContentRequest,
             clientOptions

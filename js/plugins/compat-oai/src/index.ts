@@ -45,6 +45,12 @@ export {
   openAIModelRunner,
   type ModelRequestBuilder,
 } from './model.js';
+export {
+  TranslationConfigSchema,
+  compatOaiTranslationModelRef,
+  defineCompatOpenAITranslationModel,
+  type TranslationRequestBuilder,
+} from './translate.js';
 
 export interface PluginOptions extends Partial<Omit<ClientOptions, 'apiKey'>> {
   apiKey?: ClientOptions['apiKey'] | false;

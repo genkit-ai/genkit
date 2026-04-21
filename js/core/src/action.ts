@@ -52,6 +52,7 @@ export interface ActionMetadata<
   S extends z.ZodTypeAny = z.ZodTypeAny,
 > {
   actionType?: ActionType;
+  key?: string;
   name: string;
   description?: string;
   inputSchema?: I;
@@ -63,6 +64,7 @@ export interface ActionMetadata<
 }
 
 export const ActionMetadataSchema = z.object({
+  key: z.string().optional(),
   actionType: z.string().optional(),
   name: z.string(),
   description: z.string().optional(),
@@ -173,19 +175,18 @@ export type Action<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
-  RunOptions extends ActionRunOptions<S> = ActionRunOptions<S>,
+  RunOptions extends ActionRunOptions<z.infer<S>> = ActionRunOptions<
+    z.infer<S>
+  >,
 > = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
   __action: ActionMetadata<I, O, S>;
   __registry?: Registry;
   run(
     input?: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>>
+    options?: RunOptions
   ): Promise<ActionResult<z.infer<O>>>;
 
-  stream(
-    input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>>
-  ): StreamingResponse<O, S>;
+  stream(input?: z.infer<I>, opts?: RunOptions): StreamingResponse<O, S>;
 };
 
 /**
@@ -320,6 +321,7 @@ export function action<
       ? config.name
       : `${config.name.pluginId}/${config.name.actionId}`;
   const actionMetadata = {
+    key: `/${config.actionType}/${actionName}`,
     name: actionName,
     description: config.description,
     inputSchema: config.inputSchema,
@@ -349,6 +351,7 @@ export function action<
     });
     let traceId;
     let spanId;
+    const genkitKey = actionFn.__action.key;
     let output = await runInNewSpan(
       {
         metadata: {
@@ -357,6 +360,7 @@ export function action<
         labels: {
           [SPAN_TYPE_ATTR]: 'action',
           'genkit:metadata:subtype': config.actionType,
+          ...(genkitKey ? { 'genkit:key': genkitKey } : {}),
           ...options?.telemetryLabels,
         },
       },
@@ -501,7 +505,7 @@ export function defineAction<
   if (isInRuntimeContext()) {
     throw new Error(
       'Cannot define new actions at runtime.\n' +
-        'See: https://github.com/firebase/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
+        'See: https://github.com/genkit-ai/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
     );
   }
   const act = action(config, async (i: I, options): Promise<z.infer<O>> => {
@@ -546,6 +550,7 @@ export function defineActionAsync<
         }
       );
       act.__action.actionType = actionType;
+      act.__action.key = `/${actionType}/${actionName}`;
       onInit?.(act);
       return act;
     })

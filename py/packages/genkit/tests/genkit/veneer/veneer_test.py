@@ -6,35 +6,41 @@
 """Tests for the action module."""
 
 import json
-from typing import Any, cast
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit.ai import Genkit, Output, ToolRunContext, tool_response
-from genkit.blocks.document import Document
-from genkit.blocks.formats.types import FormatDef, Formatter, FormatterConfig
-from genkit.blocks.model import MessageWrapper, ModelMiddlewareNext, text_from_message
-from genkit.core.action import ActionRunContext
-from genkit.core.action.types import ActionKind
-from genkit.core.typing import (
+from genkit import (
+    Document,
+    Genkit,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    ToolRunContext,
+    tool_response,
+)
+from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
+from genkit._ai._model import text_from_message
+from genkit._ai._testing import (
+    EchoModel,
+    ProgrammableModel,
+    define_echo_model,
+    define_programmable_model,
+)
+from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._model import ModelRequest
+from genkit._core._typing import (
     BaseDataPoint,
     Details,
-    DocumentData,
     DocumentPart,
     EvalFnResponse,
     EvalRequest,
     EvalResponse,
     FinishReason,
-    GenerateRequest,
-    GenerateResponse,
-    GenerateResponseChunk,
-    Message,
-    Metadata,
     ModelInfo,
-    OutputConfig,
     Part,
-    RetrieverResponse,
     Role,
     Score,
     Supports,
@@ -45,12 +51,6 @@ from genkit.core.typing import (
     ToolRequestPart,
     ToolResponse,
     ToolResponsePart,
-)
-from genkit.testing import (
-    EchoModel,
-    ProgrammableModel,
-    define_echo_model,
-    define_programmable_model,
 )
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -79,9 +79,9 @@ async def test_generate_uses_default_model(setup_test: SetupFixture) -> None:
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(prompt='hi', config={'temperature': 11})
+    stream_result = ai.generate_stream(prompt='hi', config={'temperature': 11})
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -125,9 +125,9 @@ async def test_generate_with_explicit_model(setup_test: SetupFixture) -> None:
 
     assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
 
-    _, response = ai.generate_stream(model='echoModel', prompt='hi', config={'temperature': 11})
+    stream_result = ai.generate_stream(model='echoModel', prompt='hi', config={'temperature': 11})
 
-    assert (await response).text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11.0}'
 
 
 @pytest.mark.asyncio
@@ -147,13 +147,13 @@ async def test_generate_with_part_prompt(setup_test: SetupFixture) -> None:
 
     want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
 
-    response = await ai.generate(prompt=Part(root=TextPart(text='hi')), config={'temperature': 11})
+    response = await ai.generate(prompt=[Part(root=TextPart(text='hi'))], config={'temperature': 11})
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(prompt=Part(root=TextPart(text='hi')), config={'temperature': 11})
+    stream_result = ai.generate_stream(prompt=[Part(root=TextPart(text='hi'))], config={'temperature': 11})
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -170,12 +170,12 @@ async def test_generate_with_part_list_prompt(setup_test: SetupFixture) -> None:
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         prompt=[Part(root=TextPart(text='hello')), Part(root=TextPart(text='world'))],
         config={'temperature': 11},
     )
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -189,9 +189,9 @@ async def test_generate_with_str_system(setup_test: SetupFixture) -> None:
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(system='talk like pirate', prompt='hi', config={'temperature': 11})
+    stream_result = ai.generate_stream(system='talk like pirate', prompt='hi', config={'temperature': 11})
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -202,20 +202,20 @@ async def test_generate_with_part_system(setup_test: SetupFixture) -> None:
     want_txt = '[ECHO] system: "talk like pirate" user: "hi" {"temperature":11.0}'
 
     response = await ai.generate(
-        system=Part(root=TextPart(text='talk like pirate')),
+        system=[Part(root=TextPart(text='talk like pirate'))],
         prompt='hi',
         config={'temperature': 11},
     )
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(
-        system=Part(root=TextPart(text='talk like pirate')),
+    stream_result = ai.generate_stream(
+        system=[Part(root=TextPart(text='talk like pirate'))],
         prompt='hi',
         config={'temperature': 11},
     )
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -233,13 +233,13 @@ async def test_generate_with_part_list_system(setup_test: SetupFixture) -> None:
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         system=[Part(root=TextPart(text='talk')), Part(root=TextPart(text='like pirate'))],
         prompt='hi',
         config={'temperature': 11},
     )
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -259,7 +259,7 @@ async def test_generate_with_messages(setup_test: SetupFixture) -> None:
 
     assert response.text == '[ECHO] user: "hi" {"temperature":11.0}'
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         messages=[
             Message(
                 role=Role.USER,
@@ -269,7 +269,7 @@ async def test_generate_with_messages(setup_test: SetupFixture) -> None:
         config={'temperature': 11},
     )
 
-    assert (await response).text == '[ECHO] user: "hi" {"temperature":11.0}'
+    assert (await stream_result.response).text == '[ECHO] user: "hi" {"temperature":11.0}'
 
 
 @pytest.mark.asyncio
@@ -298,7 +298,7 @@ async def test_generate_with_system_prompt_messages(
 
     assert response.text == want_txt
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         system='talk like pirate',
         prompt='hi again',
         messages=[
@@ -313,7 +313,7 @@ async def test_generate_with_system_prompt_messages(
         ],
     )
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
 
 
 @pytest.mark.asyncio
@@ -325,7 +325,7 @@ async def test_generate_with_tools(setup_test: SetupFixture) -> None:
         value: int | None = Field(None, description='value field')
 
     @ai.tool(name='testTool')
-    def test_tool(input: ToolInput) -> int:
+    async def test_tool(input: ToolInput) -> int:
         """The tool."""
         return input.value or 0
 
@@ -362,14 +362,14 @@ async def test_generate_with_tools(setup_test: SetupFixture) -> None:
     assert echo.last_request is not None
     assert echo.last_request.tools == want_request
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
         tool_choice=ToolChoice.REQUIRED,
         tools=['testTool'],
     )
 
-    assert (await response).text == want_txt
+    assert (await stream_result.response).text == want_txt
     assert echo.last_request is not None
     assert echo.last_request.tools == want_request
 
@@ -385,16 +385,16 @@ async def test_generate_with_interrupting_tools(
         value: int | None = Field(None, description='value field')
 
     @ai.tool(name='test_tool')
-    def test_tool(input: ToolInput) -> int:
+    async def test_tool(input: ToolInput) -> int:
         """The tool."""
         return (input.value or 0) + 7
 
     @ai.tool(name='test_interrupt')
-    def test_interrupt(input: ToolInput, ctx: ToolRunContext) -> None:
+    async def test_interrupt(input: ToolInput, ctx: ToolRunContext) -> None:
         """The interrupt."""
         ctx.interrupt({'banana': 'yes please'})
 
-    tool_request_msg = MessageWrapper(
+    tool_request_msg = Message(
         Message(
             role=Role.MODEL,
             content=[
@@ -407,13 +407,13 @@ async def test_generate_with_interrupting_tools(
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=tool_request_msg,
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='tool called'))]),
         )
@@ -463,7 +463,7 @@ async def test_generate_with_interrupting_tools(
     ]
 
     assert response.text == 'call these tools'
-    assert response.message == MessageWrapper(
+    assert response.message == Message(
         Message(
             role=Role.MODEL,
             content=[
@@ -471,13 +471,13 @@ async def test_generate_with_interrupting_tools(
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='123', name='test_interrupt', input={'value': 5}),
-                        metadata=Metadata(root={'interrupt': {'banana': 'yes please'}}),
+                        metadata={'interrupt': {'banana': 'yes please'}},
                     )
                 ),
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='234', name='test_tool', input={'value': 5}),
-                        metadata=Metadata(root={'pendingOutput': 12}),
+                        metadata={'pendingOutput': 12},
                     )
                 ),
             ],
@@ -498,16 +498,16 @@ async def test_generate_with_interrupt_respond(
         value: int | None = Field(None, description='value field')
 
     @ai.tool(name='test_tool')
-    def test_tool(input: ToolInput) -> int:
+    async def test_tool(input: ToolInput) -> int:
         """The tool."""
         return (input.value or 0) + 7
 
     @ai.tool(name='test_interrupt')
-    def test_interrupt(input: ToolInput, ctx: ToolRunContext) -> None:
+    async def test_interrupt(input: ToolInput, ctx: ToolRunContext) -> None:
         """The interrupt."""
         ctx.interrupt({'banana': 'yes please'})
 
-    tool_request_msg = MessageWrapper(
+    tool_request_msg = Message(
         Message(
             role=Role.MODEL,
             content=[
@@ -520,13 +520,13 @@ async def test_generate_with_interrupt_respond(
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=tool_request_msg,
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='tool called'))]),
         )
@@ -543,14 +543,14 @@ async def test_generate_with_interrupt_respond(
         Part(
             root=ToolRequestPart(
                 tool_request=ToolRequest(ref='123', name='test_interrupt', input={'value': 5}),
-                metadata=Metadata(root={'interrupt': {'banana': 'yes please'}}),
-            )
+                metadata={'interrupt': {'banana': 'yes please'}},
+            ),
         ).root,
         Part(
             root=ToolRequestPart(
                 tool_request=ToolRequest(ref='234', name='test_tool', input={'value': 5}),
-                metadata=Metadata(root={'pendingOutput': 12}),
-            )
+                metadata={'pendingOutput': 12},
+            ),
         ).root,
     ]
 
@@ -566,13 +566,13 @@ async def test_generate_with_interrupt_respond(
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='123', name='test_interrupt', input={'value': 5}),
-                        metadata=Metadata(root={'interrupt': {'banana': 'yes please'}}),
+                        metadata={'interrupt': {'banana': 'yes please'}},
                     )
                 ),
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='234', name='test_tool', input={'value': 5}),
-                        metadata=Metadata(root={'pendingOutput': 12}),
+                        metadata={'pendingOutput': 12},
                     )
                 ),
             ],
@@ -600,13 +600,13 @@ async def test_generate_with_interrupt_respond(
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='123', name='test_interrupt', input={'value': 5}),
-                        metadata=Metadata(root={'resolvedInterrupt': {'banana': 'yes please'}}),
+                        metadata={'resolvedInterrupt': {'banana': 'yes please'}},
                     )
                 ),
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='234', name='test_tool', input={'value': 5}),
-                        metadata=Metadata(root={'pendingOutput': 12}),
+                        metadata={'pendingOutput': 12},
                     )
                 ),
             ],
@@ -618,13 +618,13 @@ async def test_generate_with_interrupt_respond(
                 Part(
                     root=ToolResponsePart(
                         tool_response=ToolResponse(ref='123', name='test_interrupt', output={'bar': 2}),
-                        metadata=Metadata(root={'interruptResponse': True}),
+                        metadata={'interruptResponse': True},
                     )
                 ),
                 Part(
                     root=ToolResponsePart(
                         tool_response=ToolResponse(ref='234', name='test_tool', output=12),
-                        metadata=Metadata(root={'source': 'pending'}),
+                        metadata={'source': 'pending'},
                     )
                 ),
             ],
@@ -647,11 +647,11 @@ async def test_generate_with_tools_and_output(setup_test: SetupFixture) -> None:
         value: int | None = Field(None, description='value field')
 
     @ai.tool(name='testTool')
-    def test_tool(input: ToolInput) -> str:
+    async def test_tool(input: ToolInput) -> str:
         """The tool."""
         return 'abc'
 
-    tool_request_msg = MessageWrapper(
+    tool_request_msg = Message(
         Message(
             role=Role.MODEL,
             content=[
@@ -660,13 +660,13 @@ async def test_generate_with_tools_and_output(setup_test: SetupFixture) -> None:
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=tool_request_msg,
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='tool called'))]),
         )
@@ -719,11 +719,11 @@ async def test_generate_stream_with_tools(setup_test: SetupFixture) -> None:
         value: int | None = Field(None, description='value field')
 
     @ai.tool(name='testTool')
-    def test_tool(input: ToolInput) -> str:
+    async def test_tool(input: ToolInput) -> str:
         """The tool."""
         return 'abc'
 
-    tool_request_msg = MessageWrapper(
+    tool_request_msg = Message(
         Message(
             role=Role.MODEL,
             content=[
@@ -732,28 +732,28 @@ async def test_generate_stream_with_tools(setup_test: SetupFixture) -> None:
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=tool_request_msg,
         )
     )
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='tool called'))]),
         )
     )
     pm.chunks = [
         [
-            GenerateResponseChunk(
+            ModelResponseChunk(
                 role=Role(tool_request_msg.role),
                 content=tool_request_msg.content,
             )
         ],
-        [GenerateResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='tool called'))])],
+        [ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='tool called'))])],
     ]
 
-    stream, aresponse = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='programmableModel',
         prompt='hi',
         tool_choice=ToolChoice.REQUIRED,
@@ -761,7 +761,7 @@ async def test_generate_stream_with_tools(setup_test: SetupFixture) -> None:
     )
 
     chunks = []
-    async for chunk in stream:
+    async for chunk in stream_result.stream:
         summary = ''
         if chunk.role:
             summary += f'{chunk.role} '
@@ -771,7 +771,7 @@ async def test_generate_stream_with_tools(setup_test: SetupFixture) -> None:
                 summary += f' {p.root.text}'
         chunks.append(summary)
 
-    response = await aresponse
+    response = await stream_result.response
 
     assert response.text == 'tool called'
     assert response.request is not None
@@ -797,21 +797,21 @@ async def test_generate_stream_no_need_to_await_response(
     ai, _, pm, *_ = setup_test
 
     pm.responses.append(
-        GenerateResponse(
+        ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='something else'))]),
         )
     )
     pm.chunks = [
         [
-            GenerateResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='h'))]),
-            GenerateResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='i'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='h'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='i'))]),
         ],
     ]
 
-    stream, _ = ai.generate_stream(model='programmableModel', prompt='do it')
+    stream_result = ai.generate_stream(model='programmableModel', prompt='do it')
     chunks = ''
-    async for chunk in stream:
+    async for chunk in stream_result.stream:
         chunks += chunk.text
     assert chunks == 'hi'
 
@@ -825,54 +825,59 @@ async def test_generate_with_output(setup_test: SetupFixture) -> None:
         foo: int | None = Field(None, description='foo field')
         bar: str | None = Field(None, description='bar field')
 
-    want = GenerateRequest(
+    _schema = {
+        'properties': {
+            'foo': {
+                'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                'default': None,
+                'description': 'foo field',
+                'title': 'Foo',
+            },
+            'bar': {
+                'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                'default': None,
+                'description': 'bar field',
+                'title': 'Bar',
+            },
+        },
+        'title': 'TestSchema',
+        'type': 'object',
+    }
+    want = ModelRequest(
         messages=[
             Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
         ],
-        config={},
+        config={},  # type: ignore[arg-type]
         tools=[],
-        output=OutputConfig(
-            format='json',
-            schema={
-                'properties': {
-                    'foo': {
-                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'foo field',
-                        'title': 'Foo',
-                    },
-                    'bar': {
-                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'bar field',
-                        'title': 'Bar',
-                    },
-                },
-                'title': 'TestSchema',
-                'type': 'object',
-            },
-            constrained=True,
-            content_type='application/json',
-        ),
+        output_format='json',
+        output_schema=_schema,
+        output_constrained=True,
+        output_content_type='application/json',
     )
 
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema, format='json', content_type='application/json', constrained=True),
-        output_instructions=False,
+        output_schema=TestSchema,
+        output_format='json',
+        output_content_type='application/json',
+        output_constrained=True,
+        output_instructions='',
     )
 
     assert response.request == want
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema, format='json', content_type='application/json', constrained=True),
-        output_instructions=False,
+        output_schema=TestSchema,
+        output_format='json',
+        output_content_type='application/json',
+        output_constrained=True,
+        output_instructions='',
     )
 
-    assert (await response).request == want
+    assert (await stream_result.response).request == want
 
 
 @pytest.mark.asyncio
@@ -886,53 +891,52 @@ async def test_generate_defaults_to_json_format(
         foo: int | None = Field(None, description='foo field')
         bar: str | None = Field(None, description='bar field')
 
-    want = GenerateRequest(
+    _schema = {
+        'properties': {
+            'foo': {
+                'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                'default': None,
+                'description': 'foo field',
+                'title': 'Foo',
+            },
+            'bar': {
+                'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                'default': None,
+                'description': 'bar field',
+                'title': 'Bar',
+            },
+        },
+        'title': 'TestSchema',
+        'type': 'object',
+    }
+    want = ModelRequest(
         messages=[
             Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
         ],
-        config={},
+        config={},  # type: ignore[arg-type]
         tools=[],
-        output=OutputConfig(
-            format='json',
-            schema={
-                'properties': {
-                    'foo': {
-                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'foo field',
-                        'title': 'Foo',
-                    },
-                    'bar': {
-                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'bar field',
-                        'title': 'Bar',
-                    },
-                },
-                'title': 'TestSchema',
-                'type': 'object',
-            },
-            # these get populated by the format
-            constrained=True,
-            content_type='application/json',
-        ),
+        output_format='json',
+        output_schema=_schema,
+        # these get populated by the format
+        output_constrained=True,
+        output_content_type='application/json',
     )
 
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema),
+        output_schema=TestSchema,
     )
 
     assert response.request == want
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema),
+        output_schema=TestSchema,
     )
 
-    assert (await response).request == want
+    assert (await stream_result.response).request == want
 
 
 @pytest.mark.asyncio
@@ -946,52 +950,52 @@ async def test_generate_json_format_unconstrained(
         foo: int | None = Field(None, description='foo field')
         bar: str | None = Field(None, description='bar field')
 
-    want = GenerateRequest(
+    want = ModelRequest(
         messages=[
             Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
         ],
-        config={},
+        config={},  # type: ignore[arg-type]
         tools=[],
-        output=OutputConfig(
-            format='json',
-            schema={
-                'properties': {
-                    'foo': {
-                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'foo field',
-                        'title': 'Foo',
-                    },
-                    'bar': {
-                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'bar field',
-                        'title': 'Bar',
-                    },
+        output_format='json',
+        output_schema={
+            'properties': {
+                'foo': {
+                    'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                    'default': None,
+                    'description': 'foo field',
+                    'title': 'Foo',
                 },
-                'title': 'TestSchema',
-                'type': 'object',
+                'bar': {
+                    'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                    'default': None,
+                    'description': 'bar field',
+                    'title': 'Bar',
+                },
             },
-            constrained=False,
-            content_type='application/json',
-        ),
+            'title': 'TestSchema',
+            'type': 'object',
+        },
+        output_constrained=False,
+        output_content_type='application/json',
     )
 
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema, constrained=False),
+        output_schema=TestSchema,
+        output_constrained=False,
     )
 
     assert response.request == want
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema, constrained=False),
+        output_schema=TestSchema,
+        output_constrained=False,
     )
 
-    assert (await response).request == want
+    assert (await stream_result.response).request == want
 
 
 @pytest.mark.asyncio
@@ -1001,10 +1005,12 @@ async def test_generate_with_middleware(
     """When middleware is provided, applies it."""
     ai, *_ = setup_test
 
-    async def pre_middle(req: GenerateRequest, ctx: ActionRunContext, next: ModelMiddlewareNext) -> GenerateResponse:
+    async def pre_middle(
+        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
+    ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in req.messages)
         return await next(
-            GenerateRequest(
+            ModelRequest(
                 messages=[
                     Message(role=Role.USER, content=[Part(root=TextPart(text=f'PRE {txt}'))]),
                 ],
@@ -1012,11 +1018,13 @@ async def test_generate_with_middleware(
             ctx,
         )
 
-    async def post_middle(req: GenerateRequest, ctx: ActionRunContext, next: ModelMiddlewareNext) -> GenerateResponse:
-        resp: GenerateResponse = await next(req, ctx)
+    async def post_middle(
+        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
+    ) -> ModelResponse:
+        resp: ModelResponse = await next(req, ctx)
         assert resp.message is not None
         txt = text_from_message(resp.message)
-        return GenerateResponse(
+        return ModelResponse(
             finish_reason=resp.finish_reason,
             message=Message(role=Role.USER, content=[Part(root=TextPart(text=f'{txt} POST'))]),
         )
@@ -1027,9 +1035,9 @@ async def test_generate_with_middleware(
 
     assert response.text == want
 
-    _, response = ai.generate_stream(model='echoModel', prompt='hi', use=[pre_middle, post_middle])
+    stream_result = ai.generate_stream(model='echoModel', prompt='hi', use=[pre_middle, post_middle])
 
-    assert (await response).text == want
+    assert (await stream_result.response).text == want
 
 
 @pytest.mark.asyncio
@@ -1040,11 +1048,11 @@ async def test_generate_passes_through_current_action_context(
     ai, *_ = setup_test
 
     async def inject_context(
-        req: GenerateRequest, ctx: ActionRunContext, next: ModelMiddlewareNext
-    ) -> GenerateResponse:
+        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
+    ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in req.messages)
         return await next(
-            GenerateRequest(
+            ModelRequest(
                 messages=[
                     Message(
                         role=Role.USER,
@@ -1055,11 +1063,11 @@ async def test_generate_passes_through_current_action_context(
             ctx,
         )
 
-    async def action_fn() -> GenerateResponse:
+    async def action_fn() -> ModelResponse:
         return await ai.generate(model='echoModel', prompt='hi', use=[inject_context])
 
     action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
-    action_response = await action.arun(context={'foo': 'bar'})
+    action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'foo': 'bar'}"'''
 
@@ -1072,11 +1080,11 @@ async def test_generate_uses_explicitly_passed_in_context(
     ai, *_ = setup_test
 
     async def inject_context(
-        req: GenerateRequest, ctx: ActionRunContext, next: ModelMiddlewareNext
-    ) -> GenerateResponse:
+        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
+    ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in req.messages)
         return await next(
-            GenerateRequest(
+            ModelRequest(
                 messages=[
                     Message(
                         role=Role.USER,
@@ -1087,7 +1095,7 @@ async def test_generate_uses_explicitly_passed_in_context(
             ctx,
         )
 
-    async def action_fn() -> GenerateResponse:
+    async def action_fn() -> ModelResponse:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
@@ -1096,7 +1104,7 @@ async def test_generate_uses_explicitly_passed_in_context(
         )
 
     action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
-    action_response = await action.arun(context={'foo': 'bar'})
+    action_response = await action.run(context={'foo': 'bar'})
 
     assert action_response.response.text == '''[ECHO] user: "hi {'bar': 'baz'}"'''
 
@@ -1105,14 +1113,30 @@ async def test_generate_uses_explicitly_passed_in_context(
 async def test_generate_json_format_unconstrained_with_instructions(
     setup_test: SetupFixture,
 ) -> None:
-    """When Output is provided, format will default to json."""
+    """When output_instructions is provided, instructions are injected."""
     ai, *_ = setup_test
 
     class TestSchema(BaseModel):
         foo: int | None = Field(None, description='foo field')
         bar: str | None = Field(None, description='bar field')
 
-    want = GenerateRequest(
+    # Explicit instructions text to inject (matches formatter output for this schema)
+    instructions_text = (
+        'Output should be in JSON format and conform to the '
+        'following schema:\n\n```\n{\n  "properties": {\n    '
+        '"foo": {\n      "anyOf": [\n        {\n          '
+        '"type": "integer"\n        },\n        {\n          '
+        '"type": "null"\n        }\n      ],\n      '
+        '"default": null,\n      "description": "foo field",\n      '
+        '"title": "Foo"\n    },\n    "bar": {\n      '
+        '"anyOf": [\n        {\n          "type": "string"\n        },\n        '
+        '{\n          "type": "null"\n        }\n      ],\n      '
+        '"default": null,\n      "description": "bar field",\n      '
+        '"title": "Bar"\n    }\n  },\n  "title": "TestSchema",\n  '
+        '"type": "object"\n}\n```\n'
+    )
+
+    want = ModelRequest(
         messages=[
             Message(
                 role=Role.USER,
@@ -1120,70 +1144,57 @@ async def test_generate_json_format_unconstrained_with_instructions(
                     Part(root=TextPart(text='hi')),
                     Part(
                         root=TextPart(
-                            text=(
-                                'Output should be in JSON format and conform to the '
-                                'following schema:\n\n```\n{\n  "properties": {\n    '
-                                '"foo": {\n      "anyOf": [\n        {\n          '
-                                '"type": "integer"\n        },\n        {\n          '
-                                '"type": "null"\n        }\n      ],\n      '
-                                '"default": null,\n      "description": "foo field",\n      '
-                                '"title": "Foo"\n    },\n    "bar": {\n      '
-                                '"anyOf": [\n        {\n          "type": "string"\n        },\n        '
-                                '{\n          "type": "null"\n        }\n      ],\n      '
-                                '"default": null,\n      "description": "bar field",\n      '
-                                '"title": "Bar"\n    }\n  },\n  "title": "TestSchema",\n  '
-                                '"type": "object"\n}\n```\n'
-                            ),
-                            metadata=Metadata(root={'purpose': 'output'}),
+                            text=instructions_text,
+                            metadata={'purpose': 'output'},
                         )
                     ),
                 ],
             )
         ],
-        config={},
+        config={},  # type: ignore[arg-type]
         tools=[],
-        output=OutputConfig(
-            format='json',
-            schema={
-                'properties': {
-                    'foo': {
-                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'foo field',
-                        'title': 'Foo',
-                    },
-                    'bar': {
-                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'bar field',
-                        'title': 'Bar',
-                    },
+        output_format='json',
+        output_schema={
+            'properties': {
+                'foo': {
+                    'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                    'default': None,
+                    'description': 'foo field',
+                    'title': 'Foo',
                 },
-                'title': 'TestSchema',
-                'type': 'object',
+                'bar': {
+                    'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                    'default': None,
+                    'description': 'bar field',
+                    'title': 'Bar',
+                },
             },
-            constrained=False,
-            content_type='application/json',
-        ),
+            'title': 'TestSchema',
+            'type': 'object',
+        },
+        output_constrained=False,
+        output_content_type='application/json',
     )
 
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema, constrained=False),
-        output_instructions=True,
+        output_schema=TestSchema,
+        output_constrained=False,
+        output_instructions=instructions_text,
     )
 
     assert response.request == want
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        output=Output(schema=TestSchema, constrained=False),
-        output_instructions=True,
+        output_schema=TestSchema,
+        output_constrained=False,
+        output_instructions=instructions_text,
     )
 
-    assert (await response).request == want
+    assert (await stream_result.response).request == want
 
 
 @pytest.mark.asyncio
@@ -1200,7 +1211,7 @@ async def test_generate_simulates_doc_grounding(
             Part(
                 root=TextPart(
                     text='\n\nUse the following information to complete your task:' + '\n\n- [0]: doc content 1\n\n',
-                    metadata=Metadata(root={'purpose': 'context'}),
+                    metadata={'purpose': 'context'},
                 )
             ),
         ],
@@ -1213,24 +1224,24 @@ async def test_generate_simulates_doc_grounding(
                 content=[Part(root=TextPart(text='hi'))],
             ),
         ],
-        docs=[DocumentData(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
+        docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
     )
 
     assert response.request is not None
     assert response.request.messages is not None
     assert response.request.messages[0] == want_msg
 
-    _, response = ai.generate_stream(
+    stream_result = ai.generate_stream(
         messages=[
             Message(
                 role=Role.USER,
                 content=[Part(root=TextPart(text='hi'))],
             ),
         ],
-        docs=[DocumentData(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
+        docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
     )
 
-    resp = await response
+    resp = await stream_result.response
     assert resp.request is not None
     assert resp.request.messages is not None
     assert resp.request.messages[0] == want_msg
@@ -1258,7 +1269,7 @@ class MockBananaFormat(FormatDef):
             parts = [p.root.text or '' for p in msg.content if hasattr(p.root, 'text') and p.root.text]
             return f'banana {"".join(parts)}'  # type: ignore[arg-type]
 
-        def chunk_parser(chunk: GenerateResponseChunk) -> str:
+        def chunk_parser(chunk: ModelResponseChunk) -> str:
             """Parse the chunk."""
             parts = [p.root.text or '' for p in chunk.content if hasattr(p.root, 'text') and p.root.text]
             return f'banana chunk {"".join(parts)}'  # type: ignore[arg-type]
@@ -1288,7 +1299,7 @@ async def test_define_format(setup_test: SetupFixture) -> None:
 
     pm.responses = [
         (
-            GenerateResponse(
+            ModelResponse(
                 finish_reason=FinishReason.STOP,
                 message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='model says'))]),
             )
@@ -1296,29 +1307,30 @@ async def test_define_format(setup_test: SetupFixture) -> None:
     ]
     pm.chunks = [
         [
-            GenerateResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='1'))]),
-            GenerateResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='2'))]),
-            GenerateResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='3'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='1'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='2'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(root=TextPart(text='3'))]),
         ]
     ]
 
     chunks = []
 
-    stream, aresponse = ai.generate_stream(
+    stream_result = ai.generate_stream(
         model='programmableModel',
         prompt='hi',
-        output=Output(schema=TestSchema, format='banana'),
+        output_schema=TestSchema,
+        output_format='banana',
     )
 
-    async for chunk in stream:
+    async for chunk in stream_result.stream:
         chunks.append(chunk.output)
 
-    response = await aresponse
+    response = await stream_result.response
 
     assert response.output == 'banana model says'
     assert chunks == ['banana chunk 1', 'banana chunk 2', 'banana chunk 3']
 
-    assert response.request == GenerateRequest(
+    assert response.request == ModelRequest(
         messages=[
             Message(
                 role=Role.USER,
@@ -1333,38 +1345,35 @@ async def test_define_format(setup_test: SetupFixture) -> None:
                                 '{"type": "null"}], "default": null, "description": "bar field", '
                                 '"title": "Bar"}}, "title": "TestSchema", "type": "object"}'
                             ),
-                            metadata=Metadata(root={'purpose': 'output'}),
+                            metadata={'purpose': 'output'},
                         )
                     ),
                 ],
             ),
         ],
-        config={},
+        config={},  # type: ignore[arg-type]
         tools=[],
-        output=OutputConfig(
-            format='json',
-            schema={
-                'properties': {
-                    'foo': {
-                        'anyOf': [{'type': 'integer'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'foo field',
-                        'title': 'Foo',
-                    },
-                    'bar': {
-                        'anyOf': [{'type': 'string'}, {'type': 'null'}],
-                        'default': None,
-                        'description': 'bar field',
-                        'title': 'Bar',
-                    },
+        output_format='json',
+        output_schema={
+            'properties': {
+                'foo': {
+                    'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                    'default': None,
+                    'description': 'foo field',
+                    'title': 'Foo',
                 },
-                'title': 'TestSchema',
-                'type': 'object',
+                'bar': {
+                    'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                    'default': None,
+                    'description': 'bar field',
+                    'title': 'Bar',
+                },
             },
-            # these get populated by the format
-            constrained=True,
-            content_type='application/banana',
-        ),
+            'title': 'TestSchema',
+            'type': 'object',
+        },
+        output_constrained=True,
+        output_content_type='application/banana',
     )
 
 
@@ -1372,8 +1381,8 @@ def test_define_model_default_metadata(setup_test: SetupFixture) -> None:
     """Test that the define model function works."""
     ai, _, _, *_ = setup_test
 
-    def foo_model_fn(request: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
-        return GenerateResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
+    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
 
     action = ai.define_model(
         name='foo',
@@ -1393,8 +1402,8 @@ def test_define_model_with_schema(setup_test: SetupFixture) -> None:
         field_a: str = Field(description='a field')
         field_b: str = Field(description='b field')
 
-    def foo_model_fn(request: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
-        return GenerateResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
+    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
 
     action = ai.define_model(
         name='foo',
@@ -1430,8 +1439,8 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     """Test that the define model function with info works."""
     ai, _, _, *_ = setup_test
 
-    def foo_model_fn(request: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
-        return GenerateResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
+    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='banana!'))]))
 
     action = ai.define_model(
         name='foo',
@@ -1444,65 +1453,6 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
             'multiturn': True,
             'tools': True,
         },
-    }
-
-
-def test_define_retriever_default_metadata(setup_test: SetupFixture) -> None:
-    """Test that the define retriever function works."""
-    ai, _, _, *_ = setup_test
-
-    def my_retriever(doc: Document, config: dict[str, Any] | None = None) -> RetrieverResponse:
-        return RetrieverResponse(documents=[Document.from_text('Hello'), Document.from_text('World')])
-
-    action = ai.define_retriever(
-        name='fooRetriever',
-        fn=my_retriever,
-    )
-
-    assert action.metadata['retriever'] == {
-        'label': 'fooRetriever',
-    }
-
-
-def test_define_retriever_with_schema(setup_test: SetupFixture) -> None:
-    """Test that the define retriever function with schema works."""
-    ai, _, _, *_ = setup_test
-
-    class Config(BaseModel):
-        field_a: str = Field(description='a field')
-        field_b: str = Field(description='b field')
-
-    def my_retriever(doc: Document, config: dict[str, Any] | None = None) -> RetrieverResponse:
-        return RetrieverResponse(documents=[Document.from_text('Hello'), Document.from_text('World')])
-
-    action = ai.define_retriever(
-        name='fooRetriever',
-        fn=my_retriever,
-        config_schema=Config,
-    )
-
-    assert action.metadata['retriever'] == {
-        'customOptions': {
-            'properties': {
-                'field_a': {
-                    'description': 'a field',
-                    'title': 'Field A',
-                    'type': 'string',
-                },
-                'field_b': {
-                    'description': 'b field',
-                    'title': 'Field B',
-                    'type': 'string',
-                },
-            },
-            'required': [
-                'field_a',
-                'field_b',
-            ],
-            'title': 'Config',
-            'type': 'object',
-        },
-        'label': 'fooRetriever',
     }
 
 
@@ -1611,27 +1561,27 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
 
 @pytest.mark.asyncio
 async def test_define_sync_flow(setup_test: SetupFixture) -> None:
-    """Test defining a synchronous flow."""
+    """Test defining an async flow (renamed from sync test - sync flows no longer supported)."""
     ai, _, _, *_ = setup_test
 
-    @cast(Any, ai.flow())
-    def my_flow(input: str, ctx: ActionRunContext | None = None) -> str:
-        if ctx:
-            ctx.send_chunk(1)
-            ctx.send_chunk(2)
-            ctx.send_chunk(3)
+    @ai.flow()
+    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+        # Use ctx.send_chunk() for streaming
+        ctx.send_chunk(1)
+        ctx.send_chunk(2)
+        ctx.send_chunk(3)
         return input
 
-    assert my_flow('banana') == 'banana'
+    assert (await my_flow('banana')) == 'banana'
 
-    stream, response = my_flow.stream('banana2')
+    result = my_flow.stream('banana2')
 
     chunks = []
-    async for chunk in stream:
+    async for chunk in result.stream:
         chunks.append(chunk)
 
     assert chunks == [1, 2, 3]
-    assert (await response).response == 'banana2'
+    assert await result.response == 'banana2'
 
 
 @pytest.mark.asyncio
@@ -1640,23 +1590,23 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext | None = None) -> str:
-        if ctx:
-            ctx.send_chunk(1)
-            ctx.send_chunk(2)
-            ctx.send_chunk(3)
+    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+        # Use ctx.send_chunk() for streaming
+        ctx.send_chunk(1)
+        ctx.send_chunk(2)
+        ctx.send_chunk(3)
         return input
 
     assert (await my_flow('banana')) == 'banana'
 
-    stream, response = my_flow.stream('banana2')
+    result = my_flow.stream('banana2')
 
     chunks = []
-    async for chunk in stream:
+    async for chunk in result.stream:
         chunks.append(chunk)
 
     assert chunks == [1, 2, 3]
-    assert (await response).response == 'banana2'
+    assert await result.response == 'banana2'
 
 
 @pytest.mark.asyncio

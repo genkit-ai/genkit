@@ -36,7 +36,7 @@ const ai = genkit({
   ],
 });
 
-export const anthropicModel = ai.defineFlow(
+export const anthropicSonnet4Model = ai.defineFlow(
   {
     name: 'claude-sonnet-4 - toolCallingFlow',
     inputSchema: z.string().default('Paris, France'),
@@ -62,13 +62,61 @@ export const anthropicModel = ai.defineFlow(
   }
 );
 
+export const anthropicSonnet46Model = ai.defineFlow(
+  {
+    name: 'claude-sonnet-4-6 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-4-6'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicOpus46Model = ai.defineFlow(
+  {
+    name: 'claude-opus-4-6 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-opus-4-6'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
 export const llamaModel = ai.defineFlow(
   {
     name: 'llama4 - basicFlow',
     outputSchema: z.string(),
     streamSchema: z.any(),
   },
-  async (location, { sendChunk }) => {
+  async (_input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
       model: vertexModelGarden.model(
         'meta/llama-4-maverick-17b-128e-instruct-maas'

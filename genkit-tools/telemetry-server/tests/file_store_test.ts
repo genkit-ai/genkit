@@ -601,6 +601,72 @@ describe('index', () => {
     );
   });
 
+  it('should support contains filters (case-insensitive)', () => {
+    const spanA = span(TRACE_ID_1, SPAN_A, 100, 100);
+    spanA.displayName = 'Flow with Banana';
+    spanA.attributes['genkit:type'] = 'FruitFlow';
+
+    const spanB = span(TRACE_ID_2, SPAN_B, 200, 200);
+    spanB.displayName = 'Another Apple Flow';
+    spanB.attributes['genkit:type'] = 'fruitflow';
+
+    const spanC = span(TRACE_ID_3, SPAN_C, 200, 200);
+    spanC.displayName = 'Cherry Flow';
+    spanC.attributes['genkit:type'] = 'Other';
+
+    index.add({
+      traceId: TRACE_ID_1,
+      spans: { [SPAN_A]: spanA },
+    } as TraceData);
+    index.add({
+      traceId: TRACE_ID_2,
+      spans: { [SPAN_B]: spanB },
+    } as TraceData);
+    index.add({
+      traceId: TRACE_ID_3,
+      spans: { [SPAN_C]: spanC },
+    } as TraceData);
+
+    // Test basic contains (case-insensitive)
+    assert.deepStrictEqual(
+      index
+        .search({
+          limit: 5,
+          filter: {
+            contains: { name: 'apple' },
+          },
+        })
+        .data.map((d) => d.id),
+      [TRACE_ID_2]
+    );
+
+    // Test contains with array (OR behavior)
+    assert.deepStrictEqual(
+      index
+        .search({
+          limit: 5,
+          filter: {
+            contains: { name: ['BANANA', 'cherry'] },
+          },
+        })
+        .data.map((d) => d.id),
+      [TRACE_ID_3, TRACE_ID_1]
+    );
+
+    // Test contains on type
+    assert.deepStrictEqual(
+      index
+        .search({
+          limit: 5,
+          filter: {
+            contains: { type: 'FRUIT' },
+          },
+        })
+        .data.map((d) => d.id),
+      [TRACE_ID_2, TRACE_ID_1]
+    );
+  });
+
   it('should support mixed type array filters (number and string)', () => {
     const spanA = span(TRACE_ID_1, SPAN_A, 100, 100);
     spanA.displayName = 'flowA';

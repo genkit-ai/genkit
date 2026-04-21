@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -32,9 +31,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/firebase/genkit/go/internal/base"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
-	"github.com/invopop/jsonschema"
 )
 
 const (
@@ -191,7 +188,7 @@ func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelO
 		Label:        opts.Label,
 		Supports:     opts.Supports,
 		Versions:     opts.Versions,
-		ConfigSchema: configToMap(config),
+		ConfigSchema: ant.ConfigSchema(config),
 		Stage:        opts.Stage,
 	}
 
@@ -205,7 +202,7 @@ func newModel(client anthropic.Client, name, apiModelName string, opts ai.ModelO
 		input *ai.ModelRequest,
 		cb func(context.Context, *ai.ModelResponseChunk) error,
 	) (*ai.ModelResponse, error) {
-		return ant.Generate(ctx, client, targetModel, input, cb)
+		return ant.Generate(ctx, client, provider, targetModel, input, cb)
 	}
 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
@@ -240,44 +237,4 @@ func resolveModelID(id string, availableModels []string) (string, bool) {
 	}
 
 	return "", false
-}
-
-// configToMap converts a config struct to a map[string]any.
-func configToMap(config any) map[string]any {
-	r := jsonschema.Reflector{
-		DoNotReference:             true, // Prevent $ref usage
-		AllowAdditionalProperties:  false,
-		ExpandedStruct:             true,
-		RequiredFromJSONSchemaTags: true,
-	}
-	// The anthropic SDK uses a number of wrapper types for float, int, etc.
-	// By default, jsonschema will treat these as objects, but we want to
-	// treat them as their underlying primitive types.
-	r.Mapper = func(r reflect.Type) *jsonschema.Schema {
-		if r.Name() == "Opt[float64]" {
-			return &jsonschema.Schema{
-				Type: "number",
-			}
-		}
-		if r.Name() == "Opt[int64]" {
-			return &jsonschema.Schema{
-				Type: "integer",
-			}
-		}
-		if r.Name() == "Opt[string]" {
-			return &jsonschema.Schema{
-				Type: "string",
-			}
-		}
-		if r.Name() == "Opt[bool]" {
-			return &jsonschema.Schema{
-				Type: "boolean",
-			}
-		}
-		return nil
-	}
-	schema := r.Reflect(config)
-	result := base.SchemaAsMap(schema)
-
-	return result
 }

@@ -18,18 +18,23 @@
 """OpenAI OpenAI API Compatible Plugin for Genkit."""
 
 import enum
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 from openai import AsyncOpenAI
 from openai.types import Model
 
-from genkit.ai import Plugin
-from genkit.blocks.embedding import EmbedderOptions, EmbedderSupports, embedder_action_metadata
-from genkit.blocks.model import model_action_metadata
-from genkit.core.action import Action, ActionMetadata
-from genkit.core.action.types import ActionKind
-from genkit.core.schema import to_json_schema
-from genkit.core.typing import GenerationCommonConfig
+from genkit import Embedding, EmbedRequest, EmbedResponse, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit.model import ModelConfig, model_action_metadata
+from genkit.plugin_api import (
+    Action,
+    ActionKind,
+    ActionMetadata,
+    ActionRunContext,
+    Plugin,
+    loop_local_client,
+    to_json_schema,
+)
 from genkit.plugins.compat_oai.models import (
     SUPPORTED_EMBEDDING_MODELS,
     SUPPORTED_IMAGE_MODELS,
@@ -45,7 +50,6 @@ from genkit.plugins.compat_oai.models import (
 )
 from genkit.plugins.compat_oai.models.model_info import get_default_openai_model_info
 from genkit.plugins.compat_oai.typing import OpenAIConfig
-from genkit.types import Embedding, EmbedRequest, EmbedResponse, ModelInfo, Supports
 
 
 def open_ai_name(name: str) -> str:
@@ -176,7 +180,7 @@ def _multimodal_action_metadata(
     """
     return model_action_metadata(
         name=open_ai_name(name),
-        config_schema=GenerationCommonConfig,
+        config_schema=ModelConfig,
         info=_get_multimodal_info_dict(name, model_type, supported_models),
     )
 
@@ -205,7 +209,8 @@ class OpenAI(Plugin):
                            other configuration settings required by OpenAI's API.
         """
         self._openai_params = openai_params
-        self._async_client = AsyncOpenAI(**openai_params)
+        self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**self._openai_params))
+        self._list_actions_cache: list[ActionMetadata] | None = None
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -309,13 +314,16 @@ class OpenAI(Plugin):
         clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
 
         # Create the model handler
-        openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._async_client))
         model_info = self.get_model_info(clean_name) or {}
+
+        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            openai_model = OpenAIModelHandler(OpenAIModel(clean_name, self._runtime_client()))
+            return await openai_model.generate(request, ctx)
 
         return Action(
             kind=ActionKind.MODEL,
             name=name,
-            fn=openai_model.generate,
+            fn=_generate,
             metadata={
                 'model': {
                     **model_info,
@@ -343,13 +351,16 @@ class OpenAI(Plugin):
             Action object for the model.
         """
         clean_name = name.replace('openai/', '') if name.startswith('openai/') else name
-        model_instance = model_class(clean_name, self._async_client)
         info_dict = _get_multimodal_info_dict(clean_name, model_type, supported_models)
+
+        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            model_instance = model_class(clean_name, self._runtime_client())
+            return await model_instance.generate(request, ctx)
 
         return Action(
             kind=ActionKind.MODEL,
             name=name,
-            fn=model_instance.generate,
+            fn=_generate,
             metadata={'model': info_dict},
         )
 
@@ -385,22 +396,41 @@ class OpenAI(Plugin):
                 )
                 texts.append(doc_text)
 
-            # Get optional parameters with proper types
-            dimensions = None
-            encoding_format = None
+            # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
+            dimensions: int | None = None
+            encoding_format: Literal['base64', 'float'] | None = None
             if request.options:
                 if dim_val := request.options.get('dimensions'):
                     dimensions = int(dim_val)
-                if enc_val := request.options.get('encodingFormat'):
-                    encoding_format = str(enc_val) if enc_val in ('float', 'base64') else None
+                enc_val = request.options.get('encodingFormat')
+                if enc_val in ('float', 'base64'):
+                    encoding_format = cast(Literal['base64', 'float'], enc_val)
 
-            # Create embeddings for each document
-            response = await self._async_client.embeddings.create(
-                model=clean_name,
-                input=texts,
-                dimensions=dimensions,  # type: ignore[arg-type]
-                encoding_format=encoding_format,  # type: ignore[arg-type]
-            )
+            # Call with only non-None optional params to satisfy strict typings
+            if dimensions is not None and encoding_format is not None:
+                response = await self._runtime_client().embeddings.create(
+                    model=clean_name,
+                    input=texts,
+                    dimensions=dimensions,
+                    encoding_format=encoding_format,
+                )
+            elif dimensions is not None:
+                response = await self._runtime_client().embeddings.create(
+                    model=clean_name,
+                    input=texts,
+                    dimensions=dimensions,
+                )
+            elif encoding_format is not None:
+                response = await self._runtime_client().embeddings.create(
+                    model=clean_name,
+                    input=texts,
+                    encoding_format=encoding_format,
+                )
+            else:
+                response = await self._runtime_client().embeddings.create(
+                    model=clean_name,
+                    input=texts,
+                )
 
             # Convert OpenAI response to Genkit format
             embeddings = [Embedding(embedding=item.embedding) for item in response.data]
@@ -429,8 +459,11 @@ class OpenAI(Plugin):
         Returns:
             list[ActionMetadata]: A list of ActionMetadata objects.
         """
+        if self._list_actions_cache is not None:
+            return self._list_actions_cache
+
         actions: list[ActionMetadata] = []
-        models_ = await self._async_client.models.list()
+        models_ = await self._runtime_client().models.list()
         models: list[Model] = models_.data
         for model in models:
             name = model.id
@@ -452,7 +485,7 @@ class OpenAI(Plugin):
                 actions.append(
                     model_action_metadata(
                         name=open_ai_name(name),
-                        config_schema=GenerationCommonConfig,
+                        config_schema=ModelConfig,
                         info={
                             'label': f'OpenAI - {name}',
                             'supports': Supports(
@@ -463,6 +496,7 @@ class OpenAI(Plugin):
                         },
                     )
                 )
+        self._list_actions_cache = actions
         return actions
 
 

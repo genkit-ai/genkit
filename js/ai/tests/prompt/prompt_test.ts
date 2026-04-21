@@ -59,7 +59,7 @@ describe('prompt', () => {
       },
       async (request, opts) => {
         // Store the abortSignal for verification
-        (defineModel as any).__test__lastAbortSignal = request.abortSignal;
+        (defineModel as any).__test__lastAbortSignal = opts.abortSignal;
         return {
           message: {
             role: 'model',

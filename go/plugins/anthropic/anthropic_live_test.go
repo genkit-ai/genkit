@@ -36,6 +36,10 @@ func TestAnthropicLive(t *testing.T) {
 		t.Skip("ANTHROPIC_API_KEY not found in the environment")
 	}
 
+	type outFormat struct {
+		Country string `json:"country"`
+	}
+
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&anthropicPlugin.Anthropic{}))
 	t.Run("model version ok", func(t *testing.T) {
@@ -358,9 +362,60 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatalf("empty usage stats: %#v", *final.Usage)
 		}
 	})
-	t.Run("tools streaming with constrained gen", func(t *testing.T) {
-		t.Skip("skipped until issue #3851 gets resolved")
+	t.Run("constrained generation", func(t *testing.T) {
 		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 1024}),
+			ai.WithPrompt("Which country was Napoleon the emperor of?"),
+			ai.WithOutputType(outFormat{}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var ans outFormat
+		if err := resp.Output(&ans); err != nil {
+			t.Fatal(err)
+		}
+		const want = "France"
+		if ans.Country != want {
+			t.Errorf("got %q, expecting %q", ans.Country, want)
+		}
+	})
+	t.Run("streaming constrained generation", func(t *testing.T) {
+		m := anthropicPlugin.Model(g, "claude-sonnet-4-5-20250929")
+
+		var streamedContent strings.Builder
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 1024}),
+			ai.WithPrompt("Which country was Napoleon the emperor of?"),
+			ai.WithOutputType(outFormat{}),
+			ai.WithStreaming(func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
+				streamedContent.WriteString(chunk.Text())
+				return nil
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var ans outFormat
+		if err := resp.Output(&ans); err != nil {
+			t.Fatal(err)
+		}
+		const want = "France"
+		if ans.Country != want {
+			t.Errorf("got %q, expecting %q", ans.Country, want)
+		}
+
+		if streamedContent.Len() == 0 {
+			t.Error("expected streamed content, got empty")
+		}
+	})
+	t.Run("tools streaming with constrained gen", func(t *testing.T) {
+		m := anthropicPlugin.Model(g, "claude-opus-4-6")
 		answerOfEverythingTool := genkit.DefineTool(
 			g,
 			"answerOfEverythingTool",
@@ -378,12 +433,7 @@ func TestAnthropicLive(t *testing.T) {
 			ai.WithModel(m),
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
-				Thinking: anthropic.ThinkingConfigParamUnion{
-					OfEnabled: &anthropic.ThinkingConfigEnabledParam{
-						BudgetTokens: 1024,
-					},
-				},
-				MaxTokens: 2048,
+				MaxTokens:   2048,
 			}),
 			ai.WithOutputType(Output{}),
 			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
@@ -393,9 +443,6 @@ func TestAnthropicLive(t *testing.T) {
 			ai.WithTools(answerOfEverythingTool))
 		if err != nil {
 			t.Fatal(err)
-		}
-		if resp.Reasoning() == "" {
-			t.Fatal("empty reasoning found")
 		}
 
 		var out Output

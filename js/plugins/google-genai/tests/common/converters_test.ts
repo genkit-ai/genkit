@@ -13,10 +13,15 @@ limitations under the License.
 */
 import * as assert from 'assert';
 import { z } from 'genkit';
-import type { CandidateData, MessageData } from 'genkit/model';
+import type {
+  CandidateData,
+  Part as GenkitPart,
+  MessageData,
+} from 'genkit/model';
 import { toJsonSchema } from 'genkit/schema';
 import { describe, it } from 'node:test';
 import {
+  TEST_ONLY,
   applyGeminiPartialArgs,
   fromGeminiCandidate,
   toGeminiFunctionModeEnum,
@@ -26,8 +31,8 @@ import {
 } from '../../src/common/converters.js';
 import type {
   FunctionCall,
+  Part as GeminiPart,
   GenerateContentCandidate,
-  Part,
 } from '../../src/common/types.js';
 import {
   ExecutableCodeLanguage,
@@ -425,6 +430,132 @@ describe('toGeminiMessage', () => {
       () => toGeminiMessage(inputMessage as MessageData),
       /Must supply a (`)?contentType(`)? when sending File URIs to Gemini/
     );
+  });
+});
+
+describe('fromGeminiParts', () => {
+  it('should transform toolCall, toolResponse, and functionCall with thoughtSignatures correctly', () => {
+    const parts = [
+      {
+        thoughtSignature: 'AAAAA=',
+        toolCall: {
+          toolType: 'GOOGLE_SEARCH_WEB',
+          args: {
+            queries: ['northernmost city in Canada'],
+          },
+          id: 'a111',
+        },
+      },
+      {
+        thoughtSignature: 'BBBBB=',
+        toolResponse: {
+          toolType: 'GOOGLE_SEARCH_WEB',
+          response: {
+            search_suggestions: '<tags>stuff</tags>\n',
+          },
+          id: 'a111',
+        },
+      },
+      {
+        functionCall: {
+          name: 'getWeather',
+          args: {
+            location: 'Iqaluit, NU',
+          },
+          id: 'b222',
+        },
+        thoughtSignature: 'CCCCC=',
+      },
+    ];
+
+    const result = fromGeminiCandidate({
+      index: 0,
+      content: { role: 'model', parts: parts as any },
+      finishReason: 'STOP' as any,
+    });
+
+    assert.deepStrictEqual(result.message.content, [
+      {
+        custom: {
+          geminiToolCall: {
+            toolType: 'GOOGLE_SEARCH_WEB',
+            id: 'a111',
+            args: {
+              queries: ['northernmost city in Canada'],
+            },
+          },
+        },
+        metadata: { thoughtSignature: 'AAAAA=' },
+      },
+      {
+        custom: {
+          geminiToolResponse: {
+            toolType: 'GOOGLE_SEARCH_WEB',
+            id: 'a111',
+            response: {
+              search_suggestions: '<tags>stuff</tags>\n',
+            },
+          },
+        },
+        metadata: { thoughtSignature: 'BBBBB=' },
+      },
+      {
+        toolRequest: {
+          name: 'getWeather',
+          ref: 'b222',
+          input: {
+            location: 'Iqaluit, NU',
+          },
+        },
+        metadata: { thoughtSignature: 'CCCCC=' },
+      },
+    ]);
+  });
+});
+
+describe('toGeminiRole fallback and exceptions', () => {
+  it('should throw an error for system role if model does not support it', () => {
+    const inputMessage: MessageData = {
+      role: 'system',
+      content: [{ text: 'You are a bot.' }],
+    };
+    assert.throws(
+      () => toGeminiMessage(inputMessage),
+      /system role is not supported/
+    );
+  });
+
+  it('should throw an error for system role if model explicitly flags systemRole as false', () => {
+    const inputMessage: MessageData = {
+      role: 'system',
+      content: [{ text: 'You are a bot.' }],
+    };
+    const mockModel: any = { info: { supports: { systemRole: false } } };
+    assert.throws(
+      () => toGeminiMessage(inputMessage, mockModel),
+      /system role is not supported/
+    );
+  });
+
+  it('should throw an error for system role if model supports it but it is passed through toGeminiMessage', () => {
+    const inputMessage: MessageData = {
+      role: 'system',
+      content: [{ text: 'You are a bot.' }],
+    };
+    const mockModel: any = { info: { supports: { systemRole: true } } };
+    assert.throws(
+      () => toGeminiMessage(inputMessage, mockModel),
+      /system role is only supported for a single message in the first position/
+    );
+  });
+
+  it('should default unknown roles to user', () => {
+    const inputMessage: any = {
+      role: 'unknown_role',
+      content: [{ text: 'Hello.' }],
+    };
+    const result = toGeminiMessage(inputMessage);
+    assert.strictEqual(result.role, 'user');
   });
 });
 
@@ -1027,6 +1158,125 @@ describe('fromGeminiCandidate', () => {
   });
 });
 
+describe('Part conversions back and forth', () => {
+  it('should be symmetric for Genkit Part -> Gemini Part -> Genkit Part', () => {
+    const genkitParts: GenkitPart[] = [
+      { text: 'hello' },
+      {
+        media: { url: 'data:image/png;base64,123', contentType: 'image/png' },
+      },
+      {
+        media: { url: 'gs://bucket/file.png', contentType: 'image/png' },
+      },
+      {
+        toolRequest: { name: 'myTool', input: { arg: 1 }, ref: 'ref1' },
+      },
+      {
+        toolResponse: { name: 'myTool', output: { res: 2 }, ref: 'ref1' },
+      },
+      {
+        reasoning: 'I think therefore I am',
+        metadata: { thoughtSignature: 'sig123' },
+      },
+      {
+        custom: {
+          executableCode: {
+            language: ExecutableCodeLanguage.PYTHON,
+            code: 'print("hello")',
+          },
+        },
+      },
+      {
+        custom: {
+          codeExecutionResult: {
+            outcome: Outcome.OUTCOME_OK,
+            output: 'hello\\n',
+          },
+        },
+      },
+      {
+        custom: {
+          geminiToolCall: {
+            toolType: 'GOOGLE_SEARCH_WEB',
+            args: { queries: ['Canada'] },
+            id: 'a111',
+          },
+        },
+        metadata: { metadata: { foo: 'bar' } },
+      },
+      {
+        custom: {
+          geminiToolResponse: {
+            toolType: 'GOOGLE_SEARCH_WEB',
+            response: { results: [] },
+            id: 'a111',
+          },
+        },
+      },
+    ];
+
+    for (const part of genkitParts) {
+      const geminiPart = TEST_ONLY.toGeminiPart(part);
+      const convertedBack = TEST_ONLY.fromGeminiPart(geminiPart);
+      assert.deepStrictEqual(convertedBack, part);
+    }
+  });
+
+  it('should be symmetric for Gemini Part -> Genkit Part -> Gemini Part', () => {
+    const geminiParts: GeminiPart[] = [
+      { text: 'hello' },
+      { inlineData: { mimeType: 'image/png', data: '123' } },
+      { fileData: { mimeType: 'image/png', fileUri: 'gs://bucket/file.png' } },
+      { functionCall: { name: 'myTool', args: { arg: 1 }, id: 'ref1' } },
+      {
+        functionResponse: {
+          name: 'myTool',
+          response: { name: 'myTool', content: { res: 2 } },
+          id: 'ref1',
+        },
+      },
+      {
+        thought: true,
+        text: 'I think therefore I am',
+        thoughtSignature: 'sig123',
+      },
+      {
+        executableCode: {
+          language: ExecutableCodeLanguage.PYTHON,
+          code: 'print("hello")',
+        },
+      },
+      {
+        codeExecutionResult: {
+          outcome: Outcome.OUTCOME_OK,
+          output: 'hello\\n',
+        },
+      },
+      {
+        toolCall: {
+          toolType: 'GOOGLE_SEARCH_WEB',
+          args: { queries: ['Canada'] },
+          id: 'a111',
+        },
+        partMetadata: { foo: 'bar' },
+      },
+      {
+        toolResponse: {
+          toolType: 'GOOGLE_SEARCH_WEB',
+          response: { results: [] },
+          id: 'a111',
+        },
+      },
+    ];
+
+    for (const part of geminiParts) {
+      const genkitPart = TEST_ONLY.fromGeminiPart(part);
+      const convertedBack = TEST_ONLY.toGeminiPart(genkitPart);
+      assert.deepStrictEqual(convertedBack, part);
+    }
+  });
+});
+
 describe('toGeminiTool', () => {
   it('should convert Genkit tool to Gemini FunctionDeclaration', async () => {
     const got = toGeminiTool({
@@ -1111,6 +1361,20 @@ describe('toGeminiTool', () => {
       parameters: undefined,
     };
     assert.deepStrictEqual(got, want);
+  });
+
+  it('should throw an error for unsupported schema types', () => {
+    assert.throws(
+      () =>
+        toGeminiTool({
+          name: 'badSchemaTool',
+          description: 'A tool with an invalid schema type',
+          inputSchema: {
+            type: 'function', // This maps to an invalid SchemaType enum
+          } as any,
+        }),
+      /Unsupported property type FUNCTION/
+    );
   });
 });
 
@@ -1255,13 +1519,13 @@ describe('applyGeminiPartialArgs', () => {
         name: 'test',
         args: test.initialArgs,
       };
-      const part: Part = {
+      const part: GeminiPart = {
         functionCall: {
           name: 'test',
           args: {},
           partialArgs: test.partialArgs,
         },
-      };
+      } as GeminiPart;
       applyGeminiPartialArgs(
         functionCall.args!,
         part.functionCall?.partialArgs!

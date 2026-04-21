@@ -6,7 +6,6 @@ package googlegenai
 import (
 	"context"
 	"fmt"
-	"log"
 	"slices"
 	"strings"
 
@@ -14,33 +13,90 @@ import (
 	"google.golang.org/genai"
 )
 
+// Model capability definitions - these describe what different model types support.
+var (
+	// BasicText describes model capabilities for text-only Gemini models.
+	BasicText = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		ToolChoice: true,
+		SystemRole: true,
+		Media:      false,
+	}
+
+	// Multimodal describes model capabilities for multimodal Gemini models.
+	Multimodal = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		ToolChoice:  true,
+		SystemRole:  true,
+		Media:       true,
+		Constrained: ai.ConstrainedSupportNoTools,
+	}
+
+	// Media describes model capabilities for image generation models (Imagen).
+	Media = ai.ModelSupports{
+		Multiturn:  false,
+		Tools:      false,
+		SystemRole: false,
+		Media:      true,
+		Output:     []string{"media"},
+	}
+
+	// VeoSupports describes model capabilities for video generation models (Veo).
+	VeoSupports = ai.ModelSupports{
+		Media:       true,
+		Multiturn:   false,
+		Tools:       false,
+		SystemRole:  false,
+		Output:      []string{"media"},
+		LongRunning: true,
+	}
+)
+
+// Default options for unknown models of each type.
+var (
+	defaultGeminiOpts = ai.ModelOptions{
+		Supports:     &Multimodal,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(genai.GenerateContentConfig{}),
+	}
+
+	defaultImagenOpts = ai.ModelOptions{
+		Supports:     &Media,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(genai.GenerateImagesConfig{}),
+	}
+
+	defaultVeoOpts = ai.ModelOptions{
+		Supports:     &VeoSupports,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(genai.GenerateVideosConfig{}),
+	}
+
+	defaultEmbedOpts = ai.EmbedderOptions{
+		Supports:   &ai.EmbedderSupports{Input: []string{"text"}},
+		Dimensions: 768,
+	}
+)
+
 const (
-	gemini15Flash   = "gemini-1.5-flash"
-	gemini15Pro     = "gemini-1.5-pro"
-	gemini15Flash8b = "gemini-1.5-flash-8b"
+	gemini20Flash     = "gemini-2.0-flash"
+	gemini20FlashExp  = "gemini-2.0-flash-exp"
+	gemini20FlashLite = "gemini-2.0-flash-lite"
 
-	gemini20Flash                = "gemini-2.0-flash"
-	gemini20FlashExp             = "gemini-2.0-flash-exp"
-	gemini20FlashLite            = "gemini-2.0-flash-lite"
-	gemini20FlashLitePrev        = "gemini-2.0-flash-lite-preview"
-	gemini20ProExp0205           = "gemini-2.0-pro-exp-02-05"
-	gemini20FlashThinkingExp0121 = "gemini-2.0-flash-thinking-exp-01-21"
-	gemini20FlashPrevImageGen    = "gemini-2.0-flash-preview-image-generation"
+	gemini25Flash     = "gemini-2.5-flash"
+	gemini25FlashLite = "gemini-2.5-flash-lite"
 
-	gemini25Flash             = "gemini-2.5-flash"
-	gemini25FlashLite         = "gemini-2.5-flash-lite"
-	gemini25FlashLitePrev0617 = "gemini-2.5-flash-lite-preview-06-17"
-
-	gemini25Pro            = "gemini-2.5-pro"
-	gemini25ProExp0325     = "gemini-2.5-pro-exp-03-25"
-	gemini25ProPreview0325 = "gemini-2.5-pro-preview-03-25"
-	gemini25ProPreview0506 = "gemini-2.5-pro-preview-05-06"
+	gemini25Pro = "gemini-2.5-pro"
 
 	imagen3Generate001     = "imagen-3.0-generate-001"
-	imagen3Generate002     = "imagen-3.0-generate-002"
 	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
 
-	textembedding004                  = "text-embedding-004"
+	veo20Generate001     = "veo-2.0-generate-001"
+	veo30Generate001     = "veo-3.0-generate-001"
+	veo30FastGenerate001 = "veo-3.0-fast-generate-001"
+
 	embedding001                      = "embedding-001"
 	textembeddinggecko003             = "textembedding-gecko@003"
 	textembeddinggecko002             = "textembedding-gecko@002"
@@ -48,33 +104,19 @@ const (
 	textembeddinggeckomultilingual001 = "textembedding-gecko-multilingual@001"
 	textmultilingualembedding002      = "text-multilingual-embedding-002"
 	multimodalembedding               = "multimodalembedding"
-	veo20Generate001                  = "veo-2.0-generate-001"
-	veo30Generate001                  = "veo-3.0-generate-001"
-	veo30FastGenerate001              = "veo-3.0-fast-generate-001"
 )
 
 var (
 	// eventually, Vertex AI and Google AI models will match, in the meantime,
 	// keep them sepparated
 	vertexAIModels = []string{
-		gemini15Flash,
-		gemini15Pro,
 		gemini20Flash,
 		gemini20FlashLite,
-		gemini20FlashLitePrev,
-		gemini20ProExp0205,
-		gemini20FlashThinkingExp0121,
-		gemini20FlashPrevImageGen,
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
-		gemini25FlashLitePrev0617,
-		gemini25ProExp0325,
-		gemini25ProPreview0325,
-		gemini25ProPreview0506,
 
 		imagen3Generate001,
-		imagen3Generate002,
 		imagen3FastGenerate001,
 
 		veo20Generate001,
@@ -83,24 +125,11 @@ var (
 	}
 
 	googleAIModels = []string{
-		gemini15Flash,
-		gemini15Pro,
-		gemini15Flash8b,
 		gemini20Flash,
 		gemini20FlashExp,
-		gemini20FlashLitePrev,
-		gemini20ProExp0205,
-		gemini20FlashThinkingExp0121,
-		gemini20FlashPrevImageGen,
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
-		gemini25FlashLitePrev0617,
-		gemini25ProExp0325,
-		gemini25ProPreview0325,
-		gemini25ProPreview0506,
-
-		imagen3Generate002,
 
 		veo20Generate001,
 		veo30Generate001,
@@ -108,35 +137,6 @@ var (
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
-		gemini15Flash: {
-			Label: "Gemini 1.5 Flash",
-			Versions: []string{
-				"gemini-1.5-flash-latest",
-				"gemini-1.5-flash-001",
-				"gemini-1.5-flash-002",
-			},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageStable,
-		},
-		gemini15Pro: {
-			Label: "Gemini 1.5 Pro",
-			Versions: []string{
-				"gemini-1.5-pro-latest",
-				"gemini-1.5-pro-001",
-				"gemini-1.5-pro-002",
-			},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageStable,
-		},
-		gemini15Flash8b: {
-			Label: "Gemini 1.5 Flash 8B",
-			Versions: []string{
-				"gemini-1.5-flash-8b-latest",
-				"gemini-1.5-flash-8b-001",
-			},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageStable,
-		},
 		gemini20Flash: {
 			Label: "Gemini 2.0 Flash",
 			Versions: []string{
@@ -144,12 +144,6 @@ var (
 			},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
-		},
-		gemini20FlashExp: {
-			Label:    "Gemini 2.0 Flash Exp",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
 		},
 		gemini20FlashLite: {
 			Label: "Gemini 2.0 Flash Lite",
@@ -159,32 +153,14 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
-		gemini20FlashLitePrev: {
-			Label:    "Gemini 2.0 Flash Lite Preview 02-05",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
-		gemini20ProExp0205: {
-			Label:    "Gemini 2.0 Pro Exp 02-05",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
-		gemini20FlashThinkingExp0121: {
-			Label:    "Gemini 2.0 Flash Thinking Exp 01-21",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
-		gemini20FlashPrevImageGen: {
-			Label:    "Gemini 2.0 Flash Preview Image Generation",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
 		gemini25Flash: {
 			Label:    "Gemini 2.5 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini25FlashLite: {
+			Label:    "Gemini 2.5 Flash Lite",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
@@ -195,47 +171,11 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
-		gemini25ProExp0325: {
-			Label:    "Gemini 2.5 Pro Exp 03-25",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
-		gemini25ProPreview0325: {
-			Label:    "Gemini 2.5 Pro Preview 03-25",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
-		gemini25ProPreview0506: {
-			Label:    "Gemini 2.5 Pro Preview 05-06",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
-		gemini25FlashLite: {
-			Label:    "Gemini 2.5 Flash Lite",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageStable,
-		},
-		gemini25FlashLitePrev0617: {
-			Label:    "Gemini 2.5 Flash Lite Preview 06-17",
-			Versions: []string{},
-			Supports: &Multimodal,
-			Stage:    ai.ModelStageUnstable,
-		},
 	}
 
 	supportedImagenModels = map[string]ai.ModelOptions{
 		imagen3Generate001: {
 			Label:    "Imagen 3 Generate 001",
-			Versions: []string{},
-			Supports: &Media,
-			Stage:    ai.ModelStageStable,
-		},
-		imagen3Generate002: {
-			Label:    "Imagen 3 Generate 002",
 			Versions: []string{},
 			Supports: &Media,
 			Stage:    ai.ModelStageStable,
@@ -250,54 +190,26 @@ var (
 
 	supportedVideoModels = map[string]ai.ModelOptions{
 		veo20Generate001: {
-			Label:    "Google AI - Veo 2.0 Generate 001",
+			Label:    "Veo 2.0 Generate 001",
 			Versions: []string{},
-			Supports: &ai.ModelSupports{
-				Media:       true,
-				Multiturn:   false,
-				Tools:       false,
-				SystemRole:  false,
-				Output:      []string{"media"},
-				LongRunning: true,
-			},
-			Stage: ai.ModelStageStable,
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
 		},
 		veo30Generate001: {
-			Label:    "Google AI - Veo 3.0 Generate 001",
+			Label:    "Veo 3.0 Generate 001",
 			Versions: []string{},
-			Supports: &ai.ModelSupports{
-				Media:       true,
-				Multiturn:   false,
-				Tools:       false,
-				SystemRole:  false,
-				Output:      []string{"media"},
-				LongRunning: true,
-			},
-			Stage: ai.ModelStageStable,
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
 		},
 		veo30FastGenerate001: {
-			Label:    "Google AI - Veo 3.0 Fast Generate 001",
+			Label:    "Veo 3.0 Fast Generate 001",
 			Versions: []string{},
-			Supports: &ai.ModelSupports{
-				Media:       true,
-				Multiturn:   false,
-				Tools:       false,
-				SystemRole:  false,
-				Output:      []string{"media"},
-				LongRunning: true,
-			},
-			Stage: ai.ModelStageStable,
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
 		},
 	}
 
-	googleAIEmbedderConfig = map[string]ai.EmbedderOptions{
-		textembedding004: {
-			Dimensions: 768,
-			Label:      "Google Gen AI - Text Embedding 001",
-			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
-			},
-		},
+	embedderConfig = map[string]ai.EmbedderOptions{
 		embedding001: {
 			Dimensions: 768,
 			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
@@ -354,44 +266,88 @@ var (
 	}
 )
 
+// GetModelOptions returns ModelOptions for a model name with provider-prefixed label.
+func GetModelOptions(name, provider string) ai.ModelOptions {
+	mt := ClassifyModel(name)
+	var opts ai.ModelOptions
+	var ok bool
+
+	switch mt {
+	case ModelTypeGemini:
+		opts, ok = supportedGeminiModels[name]
+		if !ok {
+			opts = defaultGeminiOpts
+		}
+	case ModelTypeImagen:
+		opts, ok = supportedImagenModels[name]
+		if !ok {
+			opts = defaultImagenOpts
+		}
+	case ModelTypeVeo:
+		opts, ok = supportedVideoModels[name]
+		if !ok {
+			opts = defaultVeoOpts
+		}
+	default:
+		opts = defaultGeminiOpts
+	}
+
+	if opts.ConfigSchema == nil {
+		if cfg := mt.DefaultConfig(); cfg != nil {
+			opts.ConfigSchema = configToMap(cfg)
+		}
+	}
+
+	// Set label with provider prefix
+	prefix := googleAILabelPrefix
+	if provider == vertexAIProvider {
+		prefix = vertexAILabelPrefix
+	}
+	if opts.Label == "" {
+		opts.Label = name
+	}
+	opts.Label = fmt.Sprintf("%s - %s", prefix, opts.Label)
+
+	return opts
+}
+
+// GetEmbedderOptions returns EmbedderOptions for an embedder name with provider-prefixed label.
+func GetEmbedderOptions(name, provider string) ai.EmbedderOptions {
+	opts, ok := embedderConfig[name]
+	if !ok {
+		opts = defaultEmbedOpts
+	}
+
+	prefix := googleAILabelPrefix
+	if provider == vertexAIProvider {
+		prefix = vertexAILabelPrefix
+	}
+	if opts.Label == "" {
+		opts.Label = name
+	}
+	opts.Label = fmt.Sprintf("%s - %s", prefix, opts.Label)
+
+	return opts
+}
+
 // listModels returns a map of supported models and their capabilities
-// based on the detected backend
+// based on the detected backend.
 func listModels(provider string) (map[string]ai.ModelOptions, error) {
 	var names []string
-	var prefix string
 
 	switch provider {
 	case googleAIProvider:
 		names = googleAIModels
-		prefix = googleAILabelPrefix
 	case vertexAIProvider:
 		names = vertexAIModels
-		prefix = vertexAILabelPrefix
 	default:
 		return nil, fmt.Errorf("unknown provider detected %s", provider)
 	}
 
-	models := make(map[string]ai.ModelOptions, 0)
+	models := make(map[string]ai.ModelOptions, len(names))
 	for _, n := range names {
-		var m ai.ModelOptions
-		var ok bool
-		if strings.HasPrefix(n, "image") {
-			m, ok = supportedImagenModels[n]
-		} else if strings.HasPrefix(n, "veo") {
-			m, ok = supportedVideoModels[n]
-		} else {
-			m, ok = supportedGeminiModels[n]
-		}
-		if !ok {
-			return nil, fmt.Errorf("model %s not found for provider %s", n, provider)
-		}
-		models[n] = ai.ModelOptions{
-			Label:        prefix + " - " + m.Label,
-			Versions:     m.Versions,
-			Supports:     m.Supports,
-			ConfigSchema: m.ConfigSchema,
-			Stage:        m.Stage,
-		}
+		opts := GetModelOptions(n, provider)
+		models[n] = opts
 	}
 
 	return models, nil
@@ -406,62 +362,38 @@ type genaiModels struct {
 }
 
 // listGenaiModels returns a list of supported models and embedders from the
-// Go Genai SDK
+// Go Genai SDK, categorized by model type.
 func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, error) {
 	models := genaiModels{}
-	allowedModels := []string{"gemini", "gemma"}
 
 	for item, err := range client.Models.All(ctx) {
-		var name string
-		var description string
 		if err != nil {
-			log.Fatal(err)
+			return genaiModels{}, fmt.Errorf("failed to list models: %w", err)
 		}
-		switch {
-		case strings.HasPrefix(item.Name, "publishers/google/models/"):
-			name = strings.TrimPrefix(item.Name, "publishers/google/models/")
-		case strings.HasPrefix(item.Name, "models/"):
-			name = strings.TrimPrefix(item.Name, "models/")
-		default:
-			continue
-		}
-		description = strings.ToLower(item.Description)
-		if strings.Contains(description, "deprecated") {
-			continue
-		}
+
+		name := strings.TrimPrefix(item.Name, "publishers/google/")
+		name = strings.TrimPrefix(name, "models/")
+
 		// The Vertex AI backend does not populate SupportedActions,
-		// so fall back to name-based categorization when it's empty.
-		if len(item.SupportedActions) > 0 {
-			if slices.Contains(item.SupportedActions, "embedContent") {
-				models.embedders = append(models.embedders, name)
-				continue
-			}
-			if slices.Contains(item.SupportedActions, "predict") && strings.Contains(name, "imagen") {
-				models.imagen = append(models.imagen, name)
-				continue
-			}
-			if slices.Contains(item.SupportedActions, "generateContent") {
-				found := slices.ContainsFunc(allowedModels, func(s string) bool {
-					return strings.Contains(name, s)
-				})
-				if found {
-					models.gemini = append(models.gemini, name)
-				}
-			}
-		} else {
-			switch {
-			case strings.Contains(name, "embedding") || strings.Contains(name, "embed"):
-				models.embedders = append(models.embedders, name)
-			case strings.Contains(name, "imagen"):
-				models.imagen = append(models.imagen, name)
-			default:
-				found := slices.ContainsFunc(allowedModels, func(s string) bool {
-					return strings.Contains(name, s)
-				})
-				if found {
-					models.gemini = append(models.gemini, name)
-				}
-			}
+		// so we fall back to name-based categorization.
+		if slices.Contains(item.SupportedActions, "embedContent") || strings.Contains(name, "embed") {
+			models.embedders = append(models.embedders, name)
+			continue
+		}
+
+		if strings.Contains(name, "imagen") {
+			models.imagen = append(models.imagen, name)
+			continue
+		}
+
+		if strings.Contains(name, "veo") {
+			models.veo = append(models.veo, name)
+			continue
+		}
+
+		// Only include models with known generative prefixes.
+		if strings.HasPrefix(name, "gemini") || strings.HasPrefix(name, "gemma") {
+			models.gemini = append(models.gemini, name)
 		}
 	}
 

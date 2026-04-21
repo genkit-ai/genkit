@@ -366,7 +366,7 @@ describe('Vertex AI Gemini', () => {
             },
           },
         };
-        const model = defineModel('gemini-3-pro-preview', clientOptions);
+        const model = defineModel('gemini-3.1-pro-preview', clientOptions);
         await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(

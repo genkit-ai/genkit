@@ -23,6 +23,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from genkit import (
+    Media,
+    MediaPart,
+    Message,
+    ModelRequest,
+    Part,
+    Role,
+    TextPart,
+)
 from genkit.plugins.compat_oai.models.audio import (
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
@@ -35,23 +44,14 @@ from genkit.plugins.compat_oai.models.audio import (
     _to_tts_params,
     _to_tts_response,
 )
-from genkit.types import (
-    GenerateRequest,
-    Media,
-    MediaPart,
-    Message,
-    Part,
-    Role,
-    TextPart,
-)
 
 
 class TestExtractText:
-    """Tests for extracting text from GenerateRequest."""
+    """Tests for extracting text from ModelRequest."""
 
     def test_extracts_text(self) -> None:
         """Verify text extraction from a simple request."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Hello'))]),
             ],
@@ -61,17 +61,17 @@ class TestExtractText:
 
     def test_raises_on_empty(self) -> None:
         """Verify ValueError when messages list is empty."""
-        request = GenerateRequest(messages=[])
+        request = ModelRequest(messages=[])
         with pytest.raises(ValueError, match='No messages found'):
             _extract_text(request)
 
 
 class TestExtractMedia:
-    """Tests for extracting media URLs from GenerateRequest."""
+    """Tests for extracting media URLs from ModelRequest."""
 
     def test_extracts_media_url(self) -> None:
         """Verify media URL and content type extraction."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -94,7 +94,7 @@ class TestExtractMedia:
 
     def test_raises_on_no_media(self) -> None:
         """Verify ValueError when no media content is found."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='no media'))]),
             ],
@@ -104,11 +104,11 @@ class TestExtractMedia:
 
 
 class TestToTTSParams:
-    """Tests for converting GenerateRequest to TTS params."""
+    """Tests for converting ModelRequest to TTS params."""
 
     def test_basic_params(self) -> None:
         """Verify required TTS params with defaults."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Say hello'))]),
             ],
@@ -120,7 +120,7 @@ class TestToTTSParams:
 
     def test_custom_voice(self) -> None:
         """Verify custom voice config is applied."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
             ],
@@ -131,19 +131,19 @@ class TestToTTSParams:
 
     def test_strips_standard_config(self) -> None:
         """Verify standard GenAI keys are stripped."""
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='test'))]),
             ],
-            config={'temperature': 0.5, 'topK': 40},
+            config={'temperature': 0.5, 'top_k': 40},
         )
         got = _to_tts_params('tts-1', request)
         assert 'temperature' not in got
-        assert 'topK' not in got
+        assert 'top_k' not in got
 
 
 class TestToTTSResponse:
-    """Tests for converting speech response to GenerateResponse."""
+    """Tests for converting speech response to ModelResponse."""
 
     def test_converts_audio_to_media_part(self) -> None:
         """Verify audio bytes are encoded as base64 data URI."""
@@ -172,12 +172,12 @@ class TestToTTSResponse:
 
 
 class TestToSTTParams:
-    """Tests for converting GenerateRequest to STT params."""
+    """Tests for converting ModelRequest to STT params."""
 
     def test_basic_params(self) -> None:
         """Verify required STT params from audio media input."""
         audio_data = base64.b64encode(b'fake audio').decode('ascii')
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -201,7 +201,7 @@ class TestToSTTParams:
     def test_with_prompt_context(self) -> None:
         """Verify prompt text is included when present alongside media."""
         audio_data = base64.b64encode(b'fake audio').decode('ascii')
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,
@@ -224,7 +224,7 @@ class TestToSTTParams:
 
 
 class TestToSTTResponse:
-    """Tests for converting transcription result to GenerateResponse."""
+    """Tests for converting transcription result to ModelResponse."""
 
     def test_transcription_object(self) -> None:
         """Verify Transcription object is converted to text part."""
@@ -285,7 +285,7 @@ class TestOpenAITTSModel:
         mock_client.audio.speech.create = AsyncMock(return_value=mock_response)
 
         model = OpenAITTSModel('tts-1', mock_client)
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(role=Role.USER, content=[Part(root=TextPart(text='Say hello'))]),
             ],
@@ -316,7 +316,7 @@ class TestOpenAISTTModel:
 
         model = OpenAISTTModel('whisper-1', mock_client)
         audio_data = base64.b64encode(b'fake audio').decode('ascii')
-        request = GenerateRequest(
+        request = ModelRequest(
             messages=[
                 Message(
                     role=Role.USER,

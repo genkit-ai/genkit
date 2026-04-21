@@ -16,24 +16,27 @@
 
 """Tests for Anthropic plugin."""
 
-from unittest.mock import patch
+import asyncio
+import queue
+import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from genkit.core.registry import ActionKind
-from genkit.plugins.anthropic import Anthropic, anthropic_name
-from genkit.plugins.anthropic.model_info import (
-    SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
-    get_model_info,
-)
-from genkit.types import (
-    GenerateRequest,
-    GenerationCommonConfig,
+from genkit import (
+    ActionKind,
     Message,
+    ModelConfig,
+    ModelRequest,
     Part,
     Role,
     TextPart,
     ToolDefinition,
+)
+from genkit.plugins.anthropic import Anthropic, anthropic_name
+from genkit.plugins.anthropic.model_info import (
+    SUPPORTED_ANTHROPIC_MODELS as SUPPORTED_MODELS,
+    get_model_info,
 )
 
 
@@ -45,7 +48,11 @@ def test_anthropic_name() -> None:
 def test_init_with_api_key() -> None:
     """Test plugin initialization with API key."""
     plugin = Anthropic(api_key='test-key')
-    assert plugin._anthropic_client.api_key == 'test-key'
+
+    async def _get_api_key() -> str | None:
+        return plugin._runtime_client().api_key
+
+    assert asyncio.run(_get_api_key()) == 'test-key'
     assert plugin.models == list(SUPPORTED_MODELS.keys())
 
 
@@ -55,14 +62,22 @@ def test_init_without_api_key_raises() -> None:
         # AsyncAnthropic allows initialization without API key
         # Error only occurs when making actual API calls
         plugin = Anthropic()
-        assert plugin._anthropic_client is not None
+
+        async def _has_client() -> bool:
+            return plugin._runtime_client() is not None
+
+        assert asyncio.run(_has_client())
 
 
 def test_init_with_env_var() -> None:
     """Test plugin initialization with environment variable."""
     with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'env-key'}):
         plugin = Anthropic()
-        assert plugin._anthropic_client.api_key == 'env-key'
+
+        async def _get_api_key() -> str | None:
+            return plugin._runtime_client().api_key
+
+        assert asyncio.run(_get_api_key()) == 'env-key'
 
 
 def test_custom_models() -> None:
@@ -92,6 +107,47 @@ async def test_resolve_action_model() -> None:
     assert action is not None
     assert action.name == 'anthropic/claude-sonnet-4'
     assert action.kind == ActionKind.MODEL
+
+
+@patch('genkit.plugins.anthropic.plugin.AsyncAnthropic')
+@pytest.mark.asyncio
+async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
+    """Runtime Anthropic clients are cached per event loop."""
+    created: list[object] = []
+
+    def _new_client(**kwargs: object) -> object:  # noqa: ANN003
+        _ = kwargs
+        client = object()
+        created.append(client)
+        return client
+
+    mock_client_ctor.side_effect = _new_client
+    plugin = Anthropic(api_key='test-key')
+
+    first = plugin._runtime_client()
+    second = plugin._runtime_client()
+    assert first is second
+
+    q: queue.Queue[object] = queue.Queue()
+
+    def _other_thread() -> None:
+        async def _get_client() -> object:
+            return plugin._runtime_client()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            q.put(loop.run_until_complete(_get_client()))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_other_thread, daemon=True)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive()
+
+    other_loop_client = q.get_nowait()
+    assert other_loop_client is not first
 
 
 def test_supported_models() -> None:
@@ -130,16 +186,16 @@ def test_get_model_info_unknown() -> None:
     assert info.supports.tools is True
 
 
-def _create_sample_request() -> GenerateRequest:
+def _create_sample_request() -> ModelRequest:
     """Create a sample generation request for testing."""
-    return GenerateRequest(
+    return ModelRequest(
         messages=[
             Message(
                 role=Role.USER,
                 content=[Part(root=TextPart(text='Hello, how are you?'))],
             )
         ],
-        config=GenerationCommonConfig(),
+        config=ModelConfig(),
         tools=[
             ToolDefinition(
                 name='get_weather',

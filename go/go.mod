@@ -17,8 +17,9 @@ require (
 	firebase.google.com/go/v4 v4.15.2
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.52.0
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace v1.27.0
-	github.com/anthropics/anthropic-sdk-go v1.19.0
+	github.com/anthropics/anthropic-sdk-go v1.23.0
 	github.com/blues/jsonata-go v1.5.4
+	github.com/coder/websocket v1.8.14
 	github.com/goccy/go-yaml v1.17.1
 	github.com/google/dotprompt/go v0.0.0-20251014011017-8d056e027254
 	github.com/google/go-cmp v0.7.0
@@ -40,7 +41,7 @@ require (
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0
 	golang.org/x/tools v0.34.0
 	google.golang.org/api v0.236.0
-	google.golang.org/genai v1.41.0
+	google.golang.org/genai v1.51.0
 )
 
 require (

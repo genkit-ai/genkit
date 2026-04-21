@@ -20,12 +20,23 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
+import structlog
 from openai import AsyncOpenAI
 from openai.lib._pydantic import _ensure_strict_json_schema
 
-from genkit.core.action._action import ActionRunContext
-from genkit.core.logging import get_logger
-from genkit.core.typing import GenerationCommonConfig as CoreGenerationCommonConfig
+from genkit import (
+    Message,
+    ModelConfig,
+    ModelRequest,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    ReasoningPart,
+    Role,
+    TextPart,
+    ToolDefinition,
+)
+from genkit.plugin_api import ActionRunContext
 from genkit.plugins.compat_oai.models.model_info import SUPPORTED_OPENAI_MODELS
 from genkit.plugins.compat_oai.models.utils import (
     DictMessageAdapter,
@@ -34,21 +45,8 @@ from genkit.plugins.compat_oai.models.utils import (
     strip_markdown_fences,
 )
 from genkit.plugins.compat_oai.typing import OpenAIConfig, SupportedOutputFormat
-from genkit.types import (
-    GenerateRequest,
-    GenerateResponse,
-    GenerateResponseChunk,
-    GenerationCommonConfig,
-    Message,
-    OutputConfig,
-    Part,
-    ReasoningPart,
-    Role,
-    TextPart,
-    ToolDefinition,
-)
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class OpenAIModel:
@@ -121,7 +119,7 @@ class OpenAIModel:
             result.append(function_call)
         return result
 
-    def _needs_schema_in_prompt(self, output: OutputConfig) -> bool:
+    def _needs_schema_in_prompt(self, request: ModelRequest) -> bool:
         """Check whether the schema must be injected into the prompt.
 
         Models that only support ``json_object`` mode (e.g. DeepSeek) never
@@ -130,21 +128,21 @@ class OpenAIModel:
         knows what structure to produce.
 
         Args:
-            output: The output configuration.
+            request: The model request with output_format and output_schema.
 
         Returns:
             True when the schema should be injected into the messages.
         """
-        if output.format != 'json' or not output.schema:
+        if request.output_format != 'json' or not request.output_schema:
             return False
         # DeepSeek models use json_object mode — schema never reaches the API.
         return self._model.startswith('deepseek')
 
-    def _get_response_format(self, output: OutputConfig) -> dict | None:
+    def _get_response_format(self, request: ModelRequest) -> dict | None:
         """Determines the response format configuration based on the output settings.
 
         Args:
-            output: The output configuration specifying the desired format and optional schema.
+            request: The model request with output_format and output_schema.
 
         Returns:
             A dictionary representing the response format, which may include:
@@ -152,17 +150,19 @@ class OpenAIModel:
             - 'type': 'json_object' if the model supports JSON mode and no schema is provided.
             - 'type': 'text' as the default fallback.
         """
-        if output.format == 'json':
+        if request.output_format == 'json':
             # DeepSeek models: always use 'json_object' (schema is injected
             # into the prompt by _get_openai_request_config instead).
             if self._model.startswith('deepseek'):
                 return {'type': 'json_object'}
-            if output.schema:
+            if request.output_schema:
                 return {
                     'type': 'json_schema',
                     'json_schema': {
-                        'name': output.schema.get('title', 'Response'),
-                        'schema': _ensure_strict_json_schema(output.schema, path=(), root=output.schema),
+                        'name': request.output_schema.get('title', 'Response'),
+                        'schema': _ensure_strict_json_schema(
+                            request.output_schema, path=(), root=request.output_schema
+                        ),
                         'strict': True,
                     },
                 }
@@ -173,7 +173,7 @@ class OpenAIModel:
 
         return {'type': 'text'}
 
-    def _clean_json_response(self, response: 'GenerateResponse', request: 'GenerateRequest') -> 'GenerateResponse':
+    def _clean_json_response(self, response: ModelResponse, request: ModelRequest) -> ModelResponse:
         """Strip markdown fences from JSON responses for json_object-mode models.
 
         Only applies when the model uses ``json_object`` mode (e.g. DeepSeek)
@@ -186,12 +186,7 @@ class OpenAIModel:
         Returns:
             The response with cleaned text parts, or the original response.
         """
-        if (
-            not request.output
-            or request.output.format != 'json'
-            or not self._model.startswith('deepseek')
-            or response.message is None
-        ):
+        if request.output_format != 'json' or not self._model.startswith('deepseek') or response.message is None:
             return response
 
         cleaned_parts: list[Part] = []
@@ -208,7 +203,7 @@ class OpenAIModel:
                 cleaned_parts.append(part)
 
         if changed:
-            return GenerateResponse(
+            return ModelResponse(
                 request=request,
                 message=Message(role=response.message.role, content=cleaned_parts),
                 finish_reason=response.finish_reason,
@@ -244,7 +239,7 @@ class OpenAIModel:
             ),
         }
 
-    async def _get_openai_request_config(self, request: GenerateRequest) -> dict:
+    async def _get_openai_request_config(self, request: ModelRequest) -> dict:
         """Get the OpenAI request configuration.
 
         Args:
@@ -257,8 +252,8 @@ class OpenAIModel:
 
         # For models that only support json_object mode, inject the schema
         # into the messages so the model knows the expected output structure.
-        if request.output and self._needs_schema_in_prompt(request.output) and request.output.schema:
-            schema_msg = self._build_schema_instruction(request.output.schema)
+        if self._needs_schema_in_prompt(request) and request.output_schema:
+            schema_msg = self._build_schema_instruction(request.output_schema)
             messages = [schema_msg, *messages]
 
         openai_config: dict[str, Any] = {
@@ -272,8 +267,8 @@ class OpenAIModel:
             openai_config['tool_choice'] = 'none'
         elif request.tool_choice:
             openai_config['tool_choice'] = request.tool_choice
-        if request.output:
-            response_format = self._get_response_format(request.output)
+        if request.output_format:
+            response_format = self._get_response_format(request)
             if response_format:
                 # pyrefly: ignore[bad-typed-dict-key] - response_format dict is valid for OpenAI API
                 openai_config['response_format'] = response_format
@@ -281,14 +276,14 @@ class OpenAIModel:
             openai_config.update(**request.config.model_dump(exclude_none=True))
         return openai_config
 
-    async def _generate(self, request: GenerateRequest) -> GenerateResponse:
+    async def _generate(self, request: ModelRequest) -> ModelResponse:
         """Processes the request using OpenAI's chat completion API and returns the generated response.
 
         Args:
-            request: The GenerateRequest object containing the input text and configuration.
+            request: The ModelRequest object containing the input text and configuration.
 
         Returns:
-            A GenerateResponse object containing the generated message.
+            A ModelResponse object containing the generated message.
         """
         openai_config = await self._get_openai_request_config(request=request)
         logger.debug('OpenAI generate request', model=self._model, streaming=False)
@@ -299,23 +294,23 @@ class OpenAIModel:
             finish_reason=str(response.choices[0].finish_reason) if response.choices else None,
         )
 
-        result = GenerateResponse(
+        result = ModelResponse(
             request=request,
             message=MessageConverter.to_genkit(MessageAdapter(response.choices[0].message)),
         )
         return self._clean_json_response(result, request)
 
     async def _generate_stream(
-        self, request: GenerateRequest, callback: Callable[[GenerateResponseChunk], None]
-    ) -> GenerateResponse:
+        self, request: ModelRequest, callback: Callable[[ModelResponseChunk], None]
+    ) -> ModelResponse:
         """Streams responses from the OpenAI client and sends chunks to a callback.
 
         Args:
-            request: The GenerateRequest object containing generation parameters.
-            callback: A function to receive streamed GenerateResponseChunk objects.
+            request: The ModelRequest object containing generation parameters.
+            callback: A function to receive streamed ModelResponseChunk objects.
 
         Returns:
-            GenerateResponse: A final message with accumulated content after streaming is complete.
+            ModelResponse: A final message with accumulated content after streaming is complete.
         """
         openai_config = await self._get_openai_request_config(request=request)
         openai_config['stream'] = True
@@ -332,7 +327,7 @@ class OpenAIModel:
                 message = MessageConverter.to_genkit(MessageAdapter(delta))
                 accumulated_content.extend(message.content)
                 callback(
-                    GenerateResponseChunk(
+                    ModelResponseChunk(
                         role=Role.MODEL,
                         content=message.content,
                     )
@@ -345,7 +340,7 @@ class OpenAIModel:
                 reasoning_part = Part(root=ReasoningPart(reasoning=reasoning_text))
                 accumulated_content.append(reasoning_part)
                 callback(
-                    GenerateResponseChunk(
+                    ModelResponseChunk(
                         role=Role.MODEL,
                         content=[reasoning_part],
                     )
@@ -368,7 +363,7 @@ class OpenAIModel:
                     )
                     for tool_call in delta.tool_calls
                 ]
-                callback(GenerateResponseChunk(role=Role.MODEL, content=content))
+                callback(ModelResponseChunk(role=Role.MODEL, content=content))
 
         if tool_calls:
             message = MessageConverter.to_genkit(
@@ -376,13 +371,13 @@ class OpenAIModel:
             )
             accumulated_content.extend(message.content)
 
-        result = GenerateResponse(
+        result = ModelResponse(
             request=request,
             message=Message(role=Role.MODEL, content=accumulated_content),
         )
         return self._clean_json_response(result, request)
 
-    async def generate(self, request: GenerateRequest, ctx: ActionRunContext) -> GenerateResponse:
+    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
         """Processes the request using OpenAI's chat completion API.
 
         Args:
@@ -390,7 +385,7 @@ class OpenAIModel:
             ctx: The context of the action run.
 
         Returns:
-            A GenerateResponse containing the model's response.
+            A ModelResponse containing the model's response.
         """
         request.config = self.normalize_config(request.config)
 
@@ -406,7 +401,7 @@ class OpenAIModel:
         if isinstance(config, OpenAIConfig):
             return config
 
-        if isinstance(config, (GenerationCommonConfig, CoreGenerationCommonConfig)):
+        if isinstance(config, (ModelConfig, ModelConfig)):
             return OpenAIConfig(
                 temperature=config.temperature,
                 max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
@@ -416,11 +411,8 @@ class OpenAIModel:
 
         if isinstance(config, dict):
             config_dict = cast(dict[str, Any], config)
-            if config_dict.get('topK'):
-                del config_dict['topK']
-            if config_dict.get('topP'):
-                config_dict['top_p'] = config_dict['topP']
-                del config_dict['topP']
+            if config_dict.get('top_k'):
+                del config_dict['top_k']
             return OpenAIConfig(**config_dict)
 
         raise ValueError(f'Expected request.config to be a dict or OpenAIConfig, got {type(config).__name__}.')

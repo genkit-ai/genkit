@@ -1,7 +1,1 @@
-py/ @huangjeff5
-go/ @apascal07
-.github/ @pavelgj @apascal07
-genkit-tools/ @MichaelDoyle @ssbushi @pavelgj
-js/ @ssbushi @pavelgj @ifielker
-scripts/ @pavelgj
-bin/ @pavelgj @huangjeff5
+.github/ @genkit-ai/genkit-googlers

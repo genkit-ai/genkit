@@ -34,7 +34,7 @@ import { modelName as stripPrefix } from '../../../src/modelgarden/v2/utils';
 
 describe('vertexModelGarden.model helper', () => {
   it('should return an Anthropic model reference', () => {
-    const modelName = 'claude-3-haiku@20240307';
+    const modelName = 'claude-haiku-4-5@20251001';
     const model = vertexModelGarden.model(modelName);
     assert.ok(isAnthropicModelName(stripPrefix(model.name)));
     assert.strictEqual(model.name, `vertex-model-garden/${modelName}`);
@@ -42,7 +42,7 @@ describe('vertexModelGarden.model helper', () => {
   });
 
   it('should return a Mistral model reference', () => {
-    const modelName = 'mistral-large-2411';
+    const modelName = 'mistral-medium-3';
     const model = vertexModelGarden.model(modelName);
     assert.ok(isMistralModelName(stripPrefix(model.name)));
     assert.strictEqual(model.name, `vertex-model-garden/${modelName}`);
@@ -50,7 +50,7 @@ describe('vertexModelGarden.model helper', () => {
   });
 
   it('should return a Llama model reference', () => {
-    const modelName = 'meta/llama-3.1-8b-instruct-maas';
+    const modelName = 'meta/llama-4-maverick-17b-128e-instruct-maas';
     const model = vertexModelGarden.model(modelName);
     assert.ok(isLlamaModelName(stripPrefix(model.name)));
     assert.strictEqual(model.name, `vertex-model-garden/${modelName}`);

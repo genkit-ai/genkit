@@ -20,9 +20,9 @@ import hashlib
 import json
 
 import structlog
+from google.genai import types as genai_types
 
-from genkit.core.error import GenkitError
-from genkit.core.typing import GenerateRequest
+from genkit import GenkitError, ModelRequest
 from genkit.plugins.google_genai.models.context_caching.constants import (
     CONTEXT_CACHE_SUPPORTED_MODELS,
     INVALID_ARGUMENT_MESSAGES,
@@ -31,23 +31,32 @@ from genkit.plugins.google_genai.models.context_caching.constants import (
 logger = structlog.getLogger(__name__)
 
 
-def generate_cache_key(request: GenerateRequest) -> str:
-    """Generates context cache key by hashing the given request instance.
+def generate_cache_key(contents: list[genai_types.Content], model_name: str) -> str:
+    """Generates a cache key by hashing the cached prefix contents and model name.
+
+    Only the prefix slice (messages up to and including the cache marker) is
+    hashed, so two requests with the same cached prefix but different trailing
+    messages correctly reuse the same cache entry.
 
     Args:
-        request: `GenerateRequest` instance to hash
+        contents: The prefix content objects to be cached.
+        model_name: Name of the model — included in the key to prevent
+            cross-model cache collisions when multiple models are used
+            in the same session.
 
     Returns:
         Generated cache key string
     """
-    return hashlib.sha256(json.dumps(request.model_dump(), sort_keys=True).encode()).hexdigest()
+    serialized = [c.model_dump() for c in contents]
+    payload = {'model': model_name, 'contents': serialized}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def validate_context_cache_request(request: GenerateRequest, model_name: str) -> bool:
+def validate_context_cache_request(request: ModelRequest, model_name: str) -> bool:
     """Verifies that the context cache request could be processed for the request.
 
     Args:
-        request: `GenerateRequest` instance to check
+        request: `ModelRequest` instance to check
         model_name: Name of the generation model to check
 
     Returns:

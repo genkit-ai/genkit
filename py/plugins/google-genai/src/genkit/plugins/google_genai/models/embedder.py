@@ -17,7 +17,7 @@
 """Google-Genai embedder model."""
 
 import sys
-from typing import Any, cast
+from typing import cast
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -27,8 +27,8 @@ else:
 from google import genai
 from google.genai import types as genai_types
 
+from genkit import Embedding, EmbedRequest, EmbedResponse
 from genkit.plugins.google_genai.models.utils import PartConverter
-from genkit.types import Embedding, EmbedRequest, EmbedResponse
 
 
 class VertexEmbeddingModels(StrEnum):
@@ -63,9 +63,16 @@ class EmbeddingTaskType(StrEnum):
     FACT_VERIFICATION = 'FACT_VERIFICATION'
 
 
-def default_embedder_info(name: str) -> dict[str, Any]:
-    """Returns default info for embedders given a name."""
-    return {'dimensions': 768, 'label': f'Google AI - {name}', 'supports': {'input': ['text']}}
+# Static dimensions for known embedders.
+EMBEDDER_DIMENSIONS: dict[str, int] = {
+    # Google AI
+    'gemini-embedding-2-preview': 3072,
+    'gemini-embedding-001': 3072,
+    # Vertex AI
+    'text-embedding-005': 768,
+    'text-multilingual-embedding-002': 768,
+    'multimodalembedding@001': 768,
+}
 
 
 class Embedder:
