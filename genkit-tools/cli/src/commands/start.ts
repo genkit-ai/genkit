@@ -75,9 +75,6 @@ export const start = new Command('start')
     });
     const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
 
-    // Ensure subsequent calls to resolveTelemetryServer reuse this instance
-    process.env.GENKIT_TELEMETRY_SERVER = telemetryServerUrl;
-
     if (options.writeEnvFile) {
       const content = Object.entries(envVars)
         .map(([k, v]) => `${k}=${v}`)
@@ -112,6 +109,7 @@ export const start = new Command('start')
         corsOrigin: options.corsOrigin,
         experimentalReflectionV2: options.experimentalReflectionV2,
         reflectionV2Port,
+        telemetryServerUrl,
       });
       processPromise = new Promise(() => {});
     }
