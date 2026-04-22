@@ -19,12 +19,14 @@ import type {
   EvalInputDataset,
   TraceData,
 } from '@genkit-ai/tools-common';
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import {
   findProjectRoot,
   generateTestCaseId,
   getEvalExtractors,
   logger,
 } from '@genkit-ai/tools-common/utils';
+import * as clc from 'colorette';
 import { Command } from 'commander';
 import { writeFile } from 'fs/promises';
 import { runWithManager } from '../utils/manager-utils';
@@ -46,10 +48,18 @@ export const evalExtractData = new Command('eval:extractData')
   .option('--maxRows <maxRows>', 'maximum number of rows', '100')
   .option('--label [label]', 'label flow run in this batch')
   .action(async (flowName: string, options: EvalDatasetOptions) => {
-    await runWithManager(await findProjectRoot(), async (manager) => {
+    const dashDashIndex = process.argv.indexOf('--');
+    let runtimeCommand: string[] | undefined;
+    if (dashDashIndex !== -1) {
+      runtimeCommand = process.argv.slice(dashDashIndex + 1);
+    }
+
+    const projectRoot = await findProjectRoot();
+
+    const runAction = async (manager: BaseRuntimeManager) => {
       const extractors = await getEvalExtractors(`/flow/${flowName}`);
 
-      logger.info(`Extracting trace data '/flow/${flowName}'...`);
+      logger.debug(`Extracting trace data '/flow/${flowName}'...`);
       let dataset: EvalInputDataset = [];
       let continuationToken = undefined;
       while (dataset.length < Number.parseInt(options.maxRows)) {
@@ -99,16 +109,19 @@ export const evalExtractData = new Command('eval:extractData')
       }
 
       if (options.output) {
-        logger.info(`Writing data to '${options.output}'...`);
+        logger.debug(`Writing data to '${options.output}'...`);
         await writeFile(
           options.output,
           JSON.stringify(dataset, undefined, '  ')
         );
       } else {
-        logger.info(`Results will not be written to file.`);
-        logger.info(`Results: ${JSON.stringify(dataset, undefined, '  ')}`);
+        logger.debug(`Results will not be written to file.`);
+        logger.info(clc.green('Results:'));
+        logger.info(JSON.stringify(dataset, undefined, '  '));
       }
-    });
+    };
+
+    await runWithManager(projectRoot, runAction, { runtimeCommand });
   });
 
 function toArray(input: any) {
