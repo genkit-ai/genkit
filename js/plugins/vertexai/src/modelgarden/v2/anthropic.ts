@@ -23,6 +23,7 @@ import type {
   TextBlock,
   TextBlockParam,
   TextDelta,
+  ThinkingBlock,
   Tool,
   ToolResultBlockParam,
   ToolUseBlock,
@@ -51,8 +52,55 @@ import { getGenkitClientHeader } from '../../common/index.js';
 import { PluginOptions } from './types.js';
 import { checkModelName } from './utils.js';
 
+export const ThinkingConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    budgetTokens: z.number().min(1_024).optional(),
+    adaptive: z.boolean().optional(),
+    display: z.enum(['summarized', 'omitted']).optional(),
+  })
+  .passthrough()
+  .superRefine((value, ctx) => {
+    if (value.enabled && value.adaptive) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['adaptive'],
+        message:
+          'Cannot use both enabled and adaptive thinking modes simultaneously',
+      });
+    }
+
+    if (value.enabled) {
+      if (value.budgetTokens === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['budgetTokens'],
+          message: 'budgetTokens is required when thinking is enabled',
+        });
+      } else if (!Number.isInteger(value.budgetTokens)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['budgetTokens'],
+          message: 'budgetTokens must be an integer',
+        });
+      }
+    }
+  });
+
 export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
   location: z.string().optional(),
+  thinking: ThinkingConfigSchema.optional().describe(
+    'The thinking configuration to use for the request. Thinking is a feature that allows the model to think about the request and provide a better response.'
+  ),
+  output_config: z
+    .object({
+      effort: z.enum(['low', 'medium', 'high', 'xhigh']).optional(),
+    })
+    .passthrough()
+    .describe(
+      'Configuration for output generation, such as setting the effort parameter.'
+    )
+    .optional(),
 }).passthrough();
 export type AnthropicConfigSchemaType = typeof AnthropicConfigSchema;
 export type AnthropicConfig = z.infer<AnthropicConfigSchemaType>;
@@ -83,6 +131,7 @@ function commonRef(
 export const GENERIC_MODEL = commonRef('anthropic');
 
 export const KNOWN_MODELS = {
+  'claude-opus-4-7': commonRef('claude-opus-4-7'),
   'claude-sonnet-4-6': commonRef('claude-sonnet-4-6'),
   'claude-opus-4-6': commonRef('claude-opus-4-6'),
   'claude-haiku-4-5@20251001': commonRef('claude-haiku-4-5@20251001'),
@@ -228,12 +277,27 @@ export function toAnthropicRequest(
       });
     }
   }
+  const {
+    location,
+    version,
+    maxOutputTokens,
+    stopSequences,
+    temperature,
+    topK,
+    topP,
+    thinking,
+    output_config,
+    ...restConfig
+  } = input.config ?? {};
+
   const request = {
     model,
     messages,
     // https://docs.anthropic.com/claude/docs/models-overview#model-comparison
-    max_tokens: input.config?.maxOutputTokens ?? 4096,
-  } as MessageCreateParamsBase;
+    max_tokens: maxOutputTokens ?? 4096,
+    ...restConfig,
+  } as MessageCreateParamsBase & Record<string, any>;
+
   if (system) {
     request['system'] = system;
   }
@@ -246,19 +310,67 @@ export function toAnthropicRequest(
       };
     }) as Array<Tool>;
   }
-  if (input.config?.stopSequences) {
-    request.stop_sequences = input.config?.stopSequences;
+  if (stopSequences) {
+    request.stop_sequences = stopSequences;
   }
-  if (input.config?.temperature) {
-    request.temperature = input.config?.temperature;
+  if (temperature !== undefined) {
+    request.temperature = temperature;
   }
-  if (input.config?.topK) {
-    request.top_k = input.config?.topK;
+  if (topK !== undefined) {
+    request.top_k = topK;
   }
-  if (input.config?.topP) {
-    request.top_p = input.config?.topP;
+  if (topP !== undefined) {
+    request.top_p = topP;
   }
+
+  if (thinking) {
+    const anthropicThinking = toAnthropicThinking(thinking);
+    if (anthropicThinking) {
+      request.thinking = anthropicThinking;
+    }
+  }
+
+  if (output_config) {
+    request.output_config = output_config;
+  }
+
   return request;
+}
+
+function toAnthropicThinking(
+  config: z.infer<typeof ThinkingConfigSchema> | undefined
+):
+  | { type: 'enabled'; budget_tokens: number }
+  | { type: 'disabled' }
+  | { type: 'adaptive'; display?: 'summarized' | 'omitted' }
+  | undefined {
+  if (!config) return undefined;
+
+  const { enabled, budgetTokens, adaptive, display } = config;
+
+  if (adaptive === true) {
+    return {
+      type: 'adaptive',
+      ...(display !== undefined && { display }),
+    };
+  }
+
+  if (enabled === true) {
+    if (budgetTokens === undefined) {
+      throw new Error('budgetTokens is required when thinking is enabled');
+    }
+    return { type: 'enabled', budget_tokens: budgetTokens };
+  }
+
+  if (enabled === false) {
+    return { type: 'disabled' };
+  }
+
+  if (budgetTokens !== undefined) {
+    return { type: 'enabled', budget_tokens: budgetTokens };
+  }
+
+  return undefined;
 }
 
 function toAnthropicContent(
@@ -316,9 +428,7 @@ function toAnthropicRole(role): 'user' | 'assistant' {
 }
 
 function fromAnthropicTextPart(part: TextBlock): Part {
-  return {
-    text: part.text,
-  };
+  return { text: part.text };
 }
 
 function fromAnthropicToolCallPart(part: ToolUseBlock): Part {
@@ -331,13 +441,29 @@ function fromAnthropicToolCallPart(part: ToolUseBlock): Part {
   };
 }
 
+function fromAnthropicThinkingPart(part: ThinkingBlock): Part {
+  if (part.signature !== undefined) {
+    return {
+      reasoning: part.thinking,
+      metadata: { thoughtSignature: part.signature },
+    };
+  }
+  return { reasoning: part.thinking };
+}
+
 // Converts an Anthropic part to a Genkit part.
 function fromAnthropicPart(part: AnthropicContent): Part {
   if (part.type === 'text') return fromAnthropicTextPart(part);
-  if (part.type === 'tool_use') return fromAnthropicToolCallPart(part);
-  throw new Error(
-    'Part type is unsupported/corrupted. Either data is missing or type cannot be inferred from type.'
+  if (part.type === 'tool_use')
+    return fromAnthropicToolCallPart(part as ToolUseBlock);
+  if (part.type === 'thinking')
+    return fromAnthropicThinkingPart(part as ThinkingBlock);
+
+  const unknownType = (part as { type: string }).type;
+  console.warn(
+    `Unexpected Anthropic content block type: ${unknownType}. Returning empty text.`
   );
+  return { text: '' };
 }
 
 // Converts an Anthropic response to a Genkit response.
@@ -350,6 +476,7 @@ export function fromAnthropicResponse(
     role: 'model',
     content: parts.map(fromAnthropicPart),
   };
+
   return {
     message,
     finishReason: toGenkitFinishReason(
@@ -365,10 +492,20 @@ export function fromAnthropicResponse(
       model: response.model,
       type: response.type,
     },
+    raw: response,
     usage: {
       ...getBasicUsageStats(input.messages, message),
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
+      custom: {
+        cache_creation_input_tokens:
+          response.usage.cache_creation_input_tokens ?? 0,
+        cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
+        ephemeral_5m_input_tokens:
+          response.usage.cache_creation?.ephemeral_5m_input_tokens ?? 0,
+        ephemeral_1h_input_tokens:
+          response.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0,
+      },
     },
   };
 }
@@ -392,7 +529,7 @@ function toGenkitFinishReason(
   }
 }
 
-function toAnthropicToolRequest(tool: Record<string, any>): ToolUseBlock {
+function toAnthropicToolRequest(tool: Record<string, any>): ToolUseBlockParam {
   if (!tool.name) {
     throw new Error('Tool name is required');
   }
@@ -405,7 +542,7 @@ function toAnthropicToolRequest(tool: Record<string, any>): ToolUseBlock {
       and the name must be between 1 and 64 characters long.`
     );
   }
-  const declaration: ToolUseBlock = {
+  const declaration: ToolUseBlockParam = {
     type: 'tool_use',
     id: tool.ref,
     name: tool.name,
