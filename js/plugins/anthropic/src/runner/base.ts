@@ -327,7 +327,7 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
 
     if (enabled === true) {
       if (budgetTokens === undefined) {
-        return undefined;
+        throw new Error('budgetTokens is required when thinking is enabled');
       }
       return { type: 'enabled', budget_tokens: budgetTokens };
     }

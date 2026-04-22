@@ -423,7 +423,7 @@ function toGenkitFinishReason(
   }
 }
 
-function toAnthropicToolRequest(tool: Record<string, any>): ToolUseBlock {
+function toAnthropicToolRequest(tool: Record<string, any>): ToolUseBlockParam {
   if (!tool.name) {
     throw new Error('Tool name is required');
   }
@@ -436,7 +436,7 @@ function toAnthropicToolRequest(tool: Record<string, any>): ToolUseBlock {
       and the name must be between 1 and 64 characters long.`
     );
   }
-  const declaration: ToolUseBlock = {
+  const declaration: ToolUseBlockParam = {
     type: 'tool_use',
     id: tool.ref,
     name: tool.name,
