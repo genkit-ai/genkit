@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from 'genkit';
+import { ExecutablePrompt, z } from 'genkit';
 import { triageAgent } from '../agents';
 import { ai } from '../config/genkit';
 
@@ -22,13 +22,36 @@ export const flow = ai.defineFlow(
   {
     name: 'multiAgentMultiModel',
     inputSchema: z.object({
-      userInput: z.string(),
+      userInput: z
+        .string()
+        .default('I want to buy an UltraBook Air, can you help me with this?'),
     }),
     outputSchema: z.string(),
   },
   async (input) => {
-    const chat = ai.chat(triageAgent);
-    const response = await chat.send(input.userInput);
-    return response.text;
+    let currentAgent: ExecutablePrompt<any> = triageAgent;
+    let textInput = input.userInput;
+    const history: any[] = [];
+
+    while (true) {
+      history.push({ role: 'user' as const, content: [{ text: textInput }] });
+      const response = await currentAgent(textInput, { messages: history });
+
+      if (response.finishReason === 'interrupted') {
+        const interrupt = response.interrupts.find(
+          (i) => i.toolRequest?.name === 'transferToAgent'
+        );
+        if (interrupt) {
+          const agentName = (interrupt.toolRequest.input as any).agentName;
+
+          // Resolve the target prompt specialist agent
+          currentAgent = ai.prompt(agentName);
+          textInput = 'Please continue with the new specialist.';
+          continue;
+        }
+      }
+
+      return response.text;
+    }
   }
 );
