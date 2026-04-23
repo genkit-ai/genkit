@@ -17,6 +17,7 @@
 package googlegenai
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -46,5 +47,82 @@ func TestTranslateImagenResponse(t *testing.T) {
 	}
 	if res.Message.Content[0].ContentType != "image/png" {
 		t.Errorf("expected content type image/png, got %s", res.Message.Content[0].ContentType)
+	}
+}
+
+// TestTranslateImagenCandidatesPartialResults covers the candidates that carry
+// no inline bytes: an entry filtered by Responsible AI has a nil Image, and a
+// request that wrote to Cloud Storage gets a URI instead.
+func TestTranslateImagenCandidatesPartialResults(t *testing.T) {
+	t.Parallel()
+
+	res := translateImagenCandidates([]*genai.GeneratedImage{
+		{RAIFilteredReason: "filtered for safety"},
+		nil,
+		{Image: &genai.Image{MIMEType: "image/png", GCSURI: "gs://bucket/out-0.png"}},
+		{Image: &genai.Image{MIMEType: "image/png", ImageBytes: []byte("fake-image-data")}},
+	})
+
+	if res.FinishReason != ai.FinishReasonStop {
+		t.Errorf("finish reason = %s, want %s", res.FinishReason, ai.FinishReasonStop)
+	}
+	if len(res.Message.Content) != 2 {
+		t.Fatalf("content parts = %d, want 2", len(res.Message.Content))
+	}
+	if got, want := res.Message.Content[0].Text, "gs://bucket/out-0.png"; got != want {
+		t.Errorf("gcs part url = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(res.Message.Content[1].Text, "data:image/png;base64,") {
+		t.Errorf("inline part = %q, want a data URL", res.Message.Content[1].Text)
+	}
+}
+
+// TestTranslateImagenCandidatesAllFiltered checks that a response whose every
+// candidate was filtered comes back blocked, carrying the reasons, rather than
+// as an empty but successful response.
+//
+// The Vertex converter always populates image, so a filtered candidate arrives
+// with an empty Image rather than a nil one; the nil case is what the Gemini
+// API path can produce. Both have to count as filtered.
+func TestTranslateImagenCandidatesAllFiltered(t *testing.T) {
+	t.Parallel()
+
+	res := translateImagenCandidates([]*genai.GeneratedImage{
+		{Image: &genai.Image{}, RAIFilteredReason: "reason one"},
+		{RAIFilteredReason: "reason two"},
+	})
+
+	if res.FinishReason != ai.FinishReasonBlocked {
+		t.Errorf("finish reason = %s, want %s", res.FinishReason, ai.FinishReasonBlocked)
+	}
+	if len(res.Message.Content) != 0 {
+		t.Errorf("content parts = %d, want 0", len(res.Message.Content))
+	}
+	for _, want := range []string{"reason one", "reason two"} {
+		if !strings.Contains(res.FinishMessage, want) {
+			t.Errorf("finish message = %q, want it to mention %q", res.FinishMessage, want)
+		}
+	}
+}
+
+// TestTranslateImagenCandidatesPartiallyFiltered checks that dropping some of
+// the requested images is reported: the surviving images still make it a
+// successful response, but the reasons are not thrown away.
+func TestTranslateImagenCandidatesPartiallyFiltered(t *testing.T) {
+	t.Parallel()
+
+	res := translateImagenCandidates([]*genai.GeneratedImage{
+		{Image: &genai.Image{}, RAIFilteredReason: "one was filtered"},
+		{Image: &genai.Image{MIMEType: "image/png", ImageBytes: []byte("fake-image-data")}},
+	})
+
+	if res.FinishReason != ai.FinishReasonStop {
+		t.Errorf("finish reason = %s, want %s", res.FinishReason, ai.FinishReasonStop)
+	}
+	if len(res.Message.Content) != 1 {
+		t.Fatalf("content parts = %d, want 1", len(res.Message.Content))
+	}
+	if !strings.Contains(res.FinishMessage, "one was filtered") {
+		t.Errorf("finish message = %q, want it to report the filtered image", res.FinishMessage)
 	}
 }

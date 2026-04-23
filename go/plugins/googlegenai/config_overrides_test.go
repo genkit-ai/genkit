@@ -20,9 +20,10 @@ type curated struct {
 
 func curatedConfigs() map[string]curated {
 	return map[string]curated{
-		"Gemini": {configToMap(genai.GenerateContentConfig{}), gccOverrides},
-		"Imagen": {configToMap(genai.GenerateImagesConfig{}), gicOverrides},
-		"Veo":    {configToMap(genai.GenerateVideosConfig{}), gvcOverrides},
+		"Gemini":       {configToMap(genai.GenerateContentConfig{}), gccOverrides},
+		"Imagen":       {configToMap(genai.GenerateImagesConfig{}), gicOverrides},
+		"Veo":          {configToMap(genai.GenerateVideosConfig{}), gvcOverrides},
+		"VirtualTryOn": {configToMap(genai.RecontextImageConfig{}), ricOverrides},
 	}
 }
 

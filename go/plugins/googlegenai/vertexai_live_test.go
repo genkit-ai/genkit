@@ -17,6 +17,7 @@
 package googlegenai_test
 
 import (
+	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
@@ -124,5 +125,50 @@ func TestVertexAILive(t *testing.T) {
 
 	t.Run("plugin-level apiVersion override", func(t *testing.T) {
 		sayHello(t, &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"})
+	})
+
+	t.Run("virtual try-on registration", func(t *testing.T) {
+		if googlegenai.VertexAIModel(g, "virtual-try-on-001") == nil {
+			t.Fatal("virtual-try-on-001 model was not registered")
+		}
+	})
+
+	t.Run("virtual try-on generation", func(t *testing.T) {
+		personPath := os.Getenv("GENKIT_VERTEX_VTO_PERSON_IMAGE")
+		productPath := os.Getenv("GENKIT_VERTEX_VTO_PRODUCT_IMAGE")
+		if personPath == "" || productPath == "" {
+			t.Skip("GENKIT_VERTEX_VTO_PERSON_IMAGE and GENKIT_VERTEX_VTO_PRODUCT_IMAGE must point to local JPEG/PNG files")
+		}
+		personData, err := os.ReadFile(personPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		productData, err := os.ReadFile(productPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mime := "image/jpeg"
+		if strings.HasSuffix(strings.ToLower(personPath), ".png") {
+			mime = "image/png"
+		}
+		personPart := ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(personData))
+		personPart.Metadata = map[string]any{"type": googlegenai.PartMetadataTypePersonImage}
+		productPart := ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(productData))
+		productPart.Metadata = map[string]any{"type": googlegenai.PartMetadataTypeProductImage}
+
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(googlegenai.VertexAIModel(g, "virtual-try-on-001")),
+			ai.WithMessages(ai.NewUserMessage(personPart, productPart)),
+			ai.WithConfig(&genai.RecontextImageConfig{NumberOfImages: genai.Ptr[int32](1)}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range resp.Message.Content {
+			if part.Kind == ai.PartMedia && strings.HasPrefix(part.ContentType, "image/") {
+				return
+			}
+		}
+		t.Error("no image media part found in VTO response")
 	})
 }
