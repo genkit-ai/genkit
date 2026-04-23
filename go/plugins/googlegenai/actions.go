@@ -40,6 +40,11 @@ func listActions(ctx context.Context, client *genai.Client, c catalog) []api.Act
 		actions = append(actions, newVeoModel(client, name, c.modelOptions(name)).Desc())
 	}
 
+	// Virtual try-on models
+	for _, name := range models.virtualTryOn {
+		actions = append(actions, newModel(client, name, c.modelOptions(name)).Desc())
+	}
+
 	// Embedders
 	for _, name := range models.embedders {
 		opts := c.embedderOptions(name)
