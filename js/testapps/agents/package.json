@@ -1,0 +1,18 @@
+{
+  "name": "agents-testapp",
+  "version": "1.0.0",
+  "description": "Testapp for Session Flows Agents",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
+  },
+  "dependencies": {
+    "@genkit-ai/google-genai": "workspace:*",
+    "genkit": "workspace:*",
+    "express": "^4.20.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

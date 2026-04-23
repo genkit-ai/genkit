@@ -15,34 +15,47 @@
  */
 
 import {
-  defineInterrupt,
-  defineResource,
-  generateOperation,
   GenerateOptions,
   GenerateResponseData,
   GenerationCommonConfigSchema,
-  ResourceAction,
-  ResourceFn,
-  ResourceOptions,
+  defineInterrupt,
+  defineResource,
+  defineSessionFlow,
+  defineSessionFlowFromPrompt,
+  generateOperation,
   type InterruptConfig,
+  type ResourceAction,
+  type ResourceFn,
+  type ResourceOptions,
+  type SessionFlowFn,
   type ToolAction,
 } from '@genkit-ai/ai';
 
 import { defineFormat } from '@genkit-ai/ai/formats';
-
 import {
-  getCurrentSession,
+  InMemorySessionStore,
   Session,
   SessionError,
-  type SessionData,
-  type SessionOptions,
+  getCurrentSession,
+  type SessionSnapshot,
+  type SessionState,
+  type SessionStore,
+  type SessionStoreOptions,
+  type SnapshotCallback,
 } from '@genkit-ai/ai/session';
+
 import { type Operation, type z } from '@genkit-ai/core';
-import { v4 as uuidv4 } from 'uuid';
 import type { Formatter } from './formats';
 import { Genkit, type GenkitOptions } from './genkit';
 
-export type { GenkitOptions as GenkitBetaOptions }; // in case they drift later
+export { InMemorySessionStore };
+export type {
+  GenkitOptions as GenkitBetaOptions,
+  SessionSnapshot,
+  SessionState,
+  SessionStore,
+  SessionStoreOptions,
+};
 
 /**
  * WARNING: these APIs are considered unstable and subject to frequent breaking changes that may not honor semver.
@@ -70,40 +83,34 @@ export class GenkitBeta extends Genkit {
   }
 
   /**
-   * Create a session for this environment.
-   */
-  createSession<S = any>(options?: SessionOptions<S>): Session<S> {
-    const sessionId = options?.sessionId?.trim() || uuidv4();
-    const sessionData: SessionData = {
-      id: sessionId,
-      state: options?.initialState,
-    };
-    return new Session(this.registry, {
-      id: sessionId,
-      sessionData,
-      store: options?.store,
-    });
-  }
-
-  /**
-   * Loads a session from the store.
+   * Defines and registers a session flow.
    *
    * @beta
    */
-  async loadSession(
-    sessionId: string,
-    options: SessionOptions
-  ): Promise<Session> {
-    if (!options.store) {
-      throw new Error('options.store is required');
-    }
-    const sessionData = await options.store.get(sessionId);
+  defineSessionFlow<Stream = unknown, State = unknown>(
+    config: {
+      name: string;
+      description?: string;
+      store?: SessionStore<State>;
+      snapshotCallback?: SnapshotCallback<State>;
+    },
+    fn: SessionFlowFn<Stream, State>
+  ) {
+    return defineSessionFlow<Stream, State>(this.registry, config, fn);
+  }
 
-    return new Session(this.registry, {
-      id: sessionId,
-      sessionData,
-      store: options.store,
-    });
+  /**
+   * Defines and registers a session flow from a Prompt template.
+   *
+   * @beta
+   */
+  defineSessionFlowFromPrompt<PromptIn = unknown, State = unknown>(config: {
+    promptName: string;
+    defaultInput: PromptIn;
+    store?: SessionStore<State, PromptIn>;
+    snapshotCallback?: SnapshotCallback<State>;
+  }) {
+    return defineSessionFlowFromPrompt<PromptIn, State>(this.registry, config);
   }
 
   /**
@@ -116,7 +123,7 @@ export class GenkitBeta extends Genkit {
     if (!currentSession) {
       throw new SessionError('not running within a session');
     }
-    return currentSession as Session;
+    return currentSession as any as Session<S>;
   }
 
   /**
@@ -217,6 +224,7 @@ export class GenkitBeta extends Genkit {
    * await ai.generate({
    *   prompt: [{ resource: 'my://resource/value' }]
    * })
+   * ```
    */
   defineResource(opts: ResourceOptions, fn: ResourceFn): ResourceAction {
     return defineResource(this.registry, opts, fn);

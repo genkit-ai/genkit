@@ -121,11 +121,7 @@ export {
   type ToolResponse,
   type ToolResponsePart,
 } from '@genkit-ai/ai';
-export {
-  Session,
-  type SessionData,
-  type SessionStore,
-} from '@genkit-ai/ai/session';
+export { Session, type SessionStore } from '@genkit-ai/ai/session';
 export { dynamicTool, tool } from '@genkit-ai/ai/tool';
 export {
   GENKIT_CLIENT_HEADER,

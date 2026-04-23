@@ -308,7 +308,8 @@ function definePromptAsync<
         let docs: DocumentData[] | undefined;
         if (typeof resolvedOptions.docs === 'function') {
           docs = await resolvedOptions.docs(input, {
-            state: session?.state,
+            state: session?.getCustom(),
+
             context: renderOptions?.context || getContext() || {},
           });
         } else {
@@ -535,7 +536,7 @@ async function renderSystemPrompt<
       role: 'system',
       content: normalizeParts(
         await options.system(input, {
-          state: session?.state,
+          state: session?.getCustom(),
           context: renderOptions?.context || getContext() || {},
         })
       ),
@@ -581,7 +582,7 @@ async function renderMessages<
     if (typeof options.messages === 'function') {
       messages.push(
         ...(await options.messages(input, {
-          state: session?.state,
+          state: session?.getCustom(),
           context: renderOptions?.context || getContext() || {},
           history: renderOptions?.messages,
         }))
@@ -597,7 +598,7 @@ async function renderMessages<
         input,
         context: {
           ...(renderOptions?.context || getContext()),
-          state: session?.state,
+          state: session?.getCustom(),
         },
         messages: renderOptions?.messages?.map((m) =>
           Message.parseData(m)
@@ -636,7 +637,7 @@ async function renderUserPrompt<
       role: 'user',
       content: normalizeParts(
         await options.prompt(input, {
-          state: session?.state,
+          state: session?.getCustom(),
           context: renderOptions?.context || getContext() || {},
         })
       ),
@@ -708,7 +709,7 @@ async function renderDotpromptToParts<
     input,
     context: {
       ...(renderOptions?.context || getContext()),
-      state: session?.state,
+      state: session?.getCustom(),
     },
   });
   if (renderred.messages.length !== 1) {
