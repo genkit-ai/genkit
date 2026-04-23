@@ -31,7 +31,7 @@ import type {
   ToolResponsePart,
 } from '../model.js';
 import { MultipartToolResponseSchema, ToolResponse } from '../parts.js';
-import { isPromptAction } from '../prompt.js';
+
 import {
   ToolInterruptError,
   isToolRequest,
@@ -107,23 +107,7 @@ export async function resolveToolRequest(
     });
   }
 
-  // if it's a prompt action, go ahead and render the preamble
-  if (isPromptAction(tool)) {
-    const metadata = tool.__action.metadata as Record<string, any>;
-    const preamble = {
-      ...(await tool(part.toolRequest.input)),
-      model: metadata.prompt?.model,
-    };
-    const response = {
-      toolResponse: {
-        name: part.toolRequest.name,
-        ref: part.toolRequest.ref,
-        output: `transferred to ${part.toolRequest.name}`,
-      },
-    };
 
-    return { preamble, response };
-  }
 
   const dispatch = async (
     index: number,
@@ -211,13 +195,12 @@ export async function resolveToolRequests(
 ): Promise<{
   revisedModelMessage?: MessageData;
   toolMessage?: MessageData;
-  transferPreamble?: GenerateActionOptions;
 }> {
   const toolMap = toToolMap(tools);
 
   const responseParts: ToolResponsePart[] = [];
   let hasInterrupts = false;
-  let transferPreamble: GenerateActionOptions | undefined;
+
 
   const revisedModelMessage = {
     ...generatedMessage,
@@ -228,23 +211,14 @@ export async function resolveToolRequests(
     revisedModelMessage.content.map(async (part, i) => {
       if (!part.toolRequest) return; // skip non-tool-request parts
 
-      const { preamble, response, interrupt } = await resolveToolRequest(
+      const { response, interrupt } = await resolveToolRequest(
         rawRequest,
         part as ToolRequestPart,
         toolMap,
         middleware
       );
 
-      if (preamble) {
-        if (transferPreamble) {
-          throw new GenkitError({
-            status: 'INVALID_ARGUMENT',
-            message: `Model attempted to transfer to multiple prompt tools.`,
-          });
-        }
 
-        transferPreamble = preamble;
-      }
 
       if (response) {
         responseParts.push(response!);
@@ -266,14 +240,15 @@ export async function resolveToolRequests(
     return { revisedModelMessage };
   }
 
-  if (responseParts.length === 0 && !transferPreamble) {
+  if (responseParts.length === 0) {
+
     return {};
   }
 
   return {
     toolMessage: { role: 'tool', content: responseParts },
-    transferPreamble,
   };
+
 }
 
 function findCorrespondingToolRequest(
