@@ -21,6 +21,22 @@ import (
 	"github.com/firebase/genkit/go/plugins/internal"
 )
 
+// provider is the shared registration namespace for every Vertex AI Model
+// Garden plugin in this package (Anthropic, Llama, Mistral). Their models
+// are all registered as "vertexai/<model>" so users see a single namespace.
+// Each plugin's own Name() ("vertex-model-garden-<plugin>") is distinct from
+// this registration prefix.
+//
+// Note that this collides with the main googlegenai.VertexAI plugin, whose
+// Name() is also "vertexai" — model-name prefixes overlap, but plugin names
+// do not. Consequence: dynamic resolution of an unknown "vertexai/<name>" is
+// routed to googlegenai.VertexAI, not to the modelgarden plugins.
+//
+// TODO: in the next major version, switch to per-plugin prefixes
+// (e.g. "vertex-model-garden-anthropic/<model>") so the model namespace
+// matches the plugin that owns it.
+const provider = "vertexai"
+
 // AnthropicModels is a list of models supported in VertexAI
 // Keep this list updated since models cannot be dynamically listed
 // if we are authenticating with Google Credentials

@@ -79,7 +79,7 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 		location, projectID, location,
 	)
 
-	m.oai.Provider = mistralPluginName
+	m.oai.Provider = provider
 	m.oai.Opts = []option.RequestOption{
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(httpClient),

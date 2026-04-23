@@ -80,7 +80,7 @@ func (l *Llama) Init(ctx context.Context) []api.Action {
 		location, projectID, location,
 	)
 
-	l.oai.Provider = llamaPluginName
+	l.oai.Provider = provider
 	l.oai.Opts = []option.RequestOption{
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(httpClient),
