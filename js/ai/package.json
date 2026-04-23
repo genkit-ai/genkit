@@ -111,12 +111,6 @@
       "import": "./lib/reranker.mjs",
       "default": "./lib/reranker.js"
     },
-    "./chat": {
-      "types": "./lib/chat.d.ts",
-      "require": "./lib/chat.js",
-      "import": "./lib/chat.mjs",
-      "default": "./lib/chat.js"
-    },
     "./session": {
       "types": "./lib/session.d.ts",
       "require": "./lib/session.js",
