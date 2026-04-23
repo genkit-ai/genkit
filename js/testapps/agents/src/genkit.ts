@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,22 +14,10 @@
  * limitations under the License.
  */
 
-export {
-  InMemoryStreamManager,
-  StreamNotFoundError,
-  type ActionStreamInput,
-  type ActionStreamSubscriber,
-  type StreamManager,
-} from '@genkit-ai/core';
-export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
-export * from './common.js';
-export {
-  GenkitBeta,
-  InMemorySessionStore,
-  genkit,
-  type GenkitBetaOptions,
-  type SessionSnapshot,
-  type SessionState,
-  type SessionStore,
-  type SessionStoreOptions,
-} from './genkit-beta.js';
+import { googleAI } from '@genkit-ai/google-genai';
+import { genkit } from 'genkit/beta';
+
+export const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
+});

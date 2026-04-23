@@ -1055,6 +1055,22 @@ importers:
         specifier: '>=12.2'
         version: 13.7.0(encoding@0.1.13)
 
+  testapps/agents:
+    dependencies:
+      '@genkit-ai/google-genai':
+        specifier: workspace:*
+        version: link:../../plugins/google-genai
+      express:
+        specifier: ^4.20.0
+        version: 4.22.1
+      genkit:
+        specifier: workspace:*
+        version: link:../../genkit
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   testapps/anthropic:
     dependencies:
       '@anthropic-ai/sdk':

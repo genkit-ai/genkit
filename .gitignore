@@ -51,6 +51,8 @@ js/testapps/flow-simple-ai/photo.mp4
 js/plugins/firebase/database-debug.log
 js/plugins/firebase/firestore-debug.log
 .firebaserc
+js/testapps/agents/.snapshots/
+js/testapps/agents/.snapshots-pruning/
 
 # auto-generated
 /js/core/src/__codegen
