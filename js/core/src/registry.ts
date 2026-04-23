@@ -56,6 +56,8 @@ const ACTION_TYPES = [
   'tool.v2',
   'util',
   'resource',
+  'session-flow',
+  'session-flow-snapshot',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 
