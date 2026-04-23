@@ -125,4 +125,25 @@ func TestVertexAILive(t *testing.T) {
 	t.Run("plugin-level apiVersion override", func(t *testing.T) {
 		sayHello(t, &googlegenai.VertexAI{ProjectID: projectID, Location: location, APIVersion: "v1"})
 	})
+
+	t.Run("lyria music generation", func(t *testing.T) {
+		m := googlegenai.VertexAIModel(g, "lyria-002")
+		if m == nil {
+			t.Fatal("lyria-002 model was not registered")
+		}
+		resp, err := genkit.Generate(t.Context(), g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserTextMessage("A short upbeat jazz piano riff")),
+			ai.WithConfig(&googlegenai.LyriaConfig{SampleCount: 1}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, part := range resp.Message.Content {
+			if part.Kind == ai.PartMedia && strings.HasPrefix(part.ContentType, "audio/") {
+				return
+			}
+		}
+		t.Error("no audio media part found in Lyria response")
+	})
 }
