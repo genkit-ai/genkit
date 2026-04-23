@@ -83,6 +83,29 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 
+	t.Run("opus 4.5", func(t *testing.T) {
+		m := modelgarden.AnthropicModel(g, "claude-opus-4-5@20251101")
+		if m == nil {
+			t.Fatal("claude-opus-4-5@20251101 model was not registered")
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
+			ai.WithModel(m),
+			ai.WithSystem("talk to me like an evil pirate and say ARR several times but be very short"),
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("I'm a fish"))),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(resp.Text(), "ARR") {
+			t.Fatalf("not a pirate :( :%s", resp.Text())
+		}
+	})
+
 	t.Run("media content", func(t *testing.T) {
 		i, err := fetchImgAsBase64()
 		if err != nil {
