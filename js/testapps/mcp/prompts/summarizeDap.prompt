@@ -1,0 +1,10 @@
+---
+model: googleai/gemini-flash-latest
+tools:
+  - getTime
+  - /dynamic-action-provider/test-mcp-manager:tool/fs/read_file
+---
+
+{{role "user"}}
+
+summarize contents of hello-world.txt (in '/Users/padamata/Documents/git/du4/genkit/js/testapps/mcp/test-workspace')
