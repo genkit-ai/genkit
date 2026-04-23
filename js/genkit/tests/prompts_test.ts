@@ -1440,5 +1440,3 @@ describe('prompt', () => {
     assert.deepStrictEqual(output, { message: 'hello' });
   });
 });
-
-

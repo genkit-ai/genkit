@@ -229,8 +229,6 @@ export function shouldInjectFormatInstructions(
   );
 }
 
-
-
 async function generateActionImpl(
   registry: Registry,
   args: {
@@ -523,14 +521,12 @@ async function generateActionTurn(
     );
   }
 
-  const { revisedModelMessage, toolMessage } =
-    await resolveToolRequests(
-      rawRequest,
-      generatedMessage,
-      tools,
-      middleware || []
-    );
-
+  const { revisedModelMessage, toolMessage } = await resolveToolRequests(
+    rawRequest,
+    generatedMessage,
+    tools,
+    middleware || []
+  );
 
   // if an interrupt message is returned, stop the tool loop and return a response
   if (revisedModelMessage) {
@@ -561,7 +557,6 @@ async function generateActionTurn(
 
     messages,
   };
-
 
   // then recursively call for another loop
   return await generateHelper(registry, {

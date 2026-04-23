@@ -107,8 +107,6 @@ export async function resolveToolRequest(
     });
   }
 
-
-
   const dispatch = async (
     index: number,
     req: ToolRequestPart,
@@ -201,7 +199,6 @@ export async function resolveToolRequests(
   const responseParts: ToolResponsePart[] = [];
   let hasInterrupts = false;
 
-
   const revisedModelMessage = {
     ...generatedMessage,
     content: [...generatedMessage.content],
@@ -217,8 +214,6 @@ export async function resolveToolRequests(
         toolMap,
         middleware
       );
-
-
 
       if (response) {
         responseParts.push(response!);
@@ -241,14 +236,12 @@ export async function resolveToolRequests(
   }
 
   if (responseParts.length === 0) {
-
     return {};
   }
 
   return {
     toolMessage: { role: 'tool', content: responseParts },
   };
-
 }
 
 function findCorrespondingToolRequest(

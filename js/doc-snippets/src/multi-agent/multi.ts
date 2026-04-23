@@ -53,8 +53,3 @@ const triageAgent = ai.definePrompt({
   the available tools, politely explain so.`,
 });
 // [END agents]
-
-// [START chat]
-// Start a chat session, initially with the triage agent
-const chat = ai.chat(triageAgent);
-// [END chat]
