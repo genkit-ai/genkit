@@ -60,9 +60,6 @@ func (m *Mistral) Name() string { return mistralPluginName }
 // Init initializes the Vertex AI Model Garden Mistral plugin and registers
 // all known Mistral/Codestral MaaS models.
 func (m *Mistral) Init(ctx context.Context) []api.Action {
-	if m == nil {
-		m = &Mistral{}
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.initted {

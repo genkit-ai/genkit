@@ -61,9 +61,6 @@ func (l *Llama) Name() string { return llamaPluginName }
 // known Llama MaaS models. After calling Init you may call DefineModel to
 // register additional Llama models.
 func (l *Llama) Init(ctx context.Context) []api.Action {
-	if l == nil {
-		l = &Llama{}
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.initted {
