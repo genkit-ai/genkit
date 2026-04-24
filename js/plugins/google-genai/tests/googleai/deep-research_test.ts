@@ -413,6 +413,7 @@ describe('Deep Research', () => {
               name: 'MyServer',
               url: 'http://localhost:8080',
               headers: { Authorization: 'Bearer token' },
+              allowedTools: ['tool1', 'tool2'],
             },
           ],
         },
@@ -439,6 +440,7 @@ describe('Deep Research', () => {
           name: 'MyServer',
           url: 'http://localhost:8080',
           headers: { Authorization: 'Bearer token' },
+          allowed_tools: ['tool1', 'tool2'],
         },
       ]);
     });

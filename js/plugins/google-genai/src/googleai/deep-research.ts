@@ -129,7 +129,7 @@ export const DeepResearchConfigSchema = z
             name: z.string().optional(),
             url: z.string(),
             headers: z.record(z.string()).optional(),
-            allowed_tools: z.array(z.string()).optional(),
+            allowedTools: z.array(z.string()).optional(),
           })
           .passthrough()
       )
@@ -328,9 +328,11 @@ export function defineModel(
       }
       if (mcpServers) {
         for (const mcpServer of mcpServers) {
+          const { allowedTools, ...restMcp } = mcpServer;
           tools.push({
             type: 'mcp_server',
-            ...mcpServer,
+            ...restMcp,
+            ...(allowedTools ? { allowed_tools: allowedTools } : {}),
           } as InteractionTool);
         }
       }
