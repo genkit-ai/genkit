@@ -26,10 +26,57 @@ import {
   defineSessionFlow,
   defineSessionFlowFromPrompt,
 } from '../src/session-flow.js';
-import { InMemorySessionStore, Session } from '../src/session.js';
+import {
+  InMemorySessionStore,
+  Session,
+  type SessionSnapshot,
+} from '../src/session.js';
 import { defineEchoModel } from './helpers.js';
 
 initNodeFeatures();
+
+/**
+ * Returns a Promise that resolves once the given snapshotId reaches targetStatus
+ * in the store. Rejects after timeoutMs if the status is never reached.
+ */
+function waitForSnapshotStatus<S, I>(
+  store: InMemorySessionStore<S, I>,
+  snapshotId: string,
+  targetStatus: NonNullable<SessionSnapshot<S, I>['status']>,
+  timeoutMs = 5000
+): Promise<SessionSnapshot<S, I>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `Timed out waiting for snapshot ${snapshotId} to reach status "${targetStatus}"`
+          )
+        ),
+      timeoutMs
+    );
+
+    const unsubscribeFn = store.onSnapshotStateChange(
+      snapshotId,
+      (snap) => {
+        if (snap.status === targetStatus) {
+          clearTimeout(timer);
+          if (typeof unsubscribeFn === 'function') unsubscribeFn();
+          resolve(snap);
+        }
+      }
+    );
+
+    // Check in case already at the target status.
+    store.getSnapshot(snapshotId).then((snap) => {
+      if (snap?.status === targetStatus) {
+        clearTimeout(timer);
+        if (typeof unsubscribeFn === 'function') unsubscribeFn();
+        resolve(snap);
+      }
+    });
+  });
+}
 
 describe('SessionFlow', () => {
   describe('Session', () => {
@@ -67,6 +114,41 @@ describe('SessionFlow', () => {
       // Add with different name should append
       session.addArtifacts([{ name: 'art2', parts: [{ text: 'content3' }] }]);
       assert.strictEqual(session.getArtifacts().length, 2);
+    });
+
+    it('should process all artifacts in a batch without dropping any', () => {
+      const session = new Session({});
+      session.addArtifacts([{ name: 'art1', parts: [{ text: 'v1' }] }]);
+
+      // Replace art1 and add art2 and art3 in the same batch.
+      session.addArtifacts([
+        { name: 'art1', parts: [{ text: 'v2' }] },
+        { name: 'art2', parts: [{ text: 'new' }] },
+        { name: 'art3', parts: [{ text: 'another' }] },
+      ]);
+
+      const arts = session.getArtifacts();
+      assert.strictEqual(arts.length, 3);
+      assert.strictEqual(arts.find((a) => a.name === 'art1')?.parts[0].text, 'v2');
+      assert.strictEqual(arts.find((a) => a.name === 'art2')?.parts[0].text, 'new');
+      assert.strictEqual(arts.find((a) => a.name === 'art3')?.parts[0].text, 'another');
+    });
+
+    it('should emit artifactAdded for new and artifactUpdated for replaced', () => {
+      const session = new Session({});
+      const added: string[] = [];
+      const updated: string[] = [];
+      session.on('artifactAdded', (a: { name?: string }) => added.push(a.name ?? ''));
+      session.on('artifactUpdated', (a: { name?: string }) => updated.push(a.name ?? ''));
+
+      session.addArtifacts([{ name: 'art1', parts: [] }]);
+      session.addArtifacts([
+        { name: 'art1', parts: [] }, // replace
+        { name: 'art2', parts: [] }, // new
+      ]);
+
+      assert.deepStrictEqual(added, ['art1', 'art2']);
+      assert.deepStrictEqual(updated, ['art1']);
     });
 
     it('should increment version on mutation', () => {
@@ -209,11 +291,20 @@ describe('SessionFlow', () => {
 
       await runner.run(async () => {});
 
-      // Wait, how do we verify it didn't snapshot?
-      // We can check if onEndTurn was called with undefined snapshotId.
-      // Or we can check the store is empty.
-      const keys = Array.from((store as any).snapshots.keys());
-      assert.strictEqual(keys.length, 0);
+      // Verify the store is empty (callback suppressed all snapshots).
+      const onEndTurnSnapshotId = await new Promise<string | undefined>(
+        (resolve) => {
+          const r = new SessionRunner(session, inputGen(), {
+            store,
+            onEndTurn: resolve,
+          });
+          r.run(async () => {}).catch(() => {});
+        }
+      );
+      // The callback-suppressed runner should have produced no entries.
+      const keys = Array.from((store as any).snapshots.keys()) as string[];
+      // Only the snapshot from the second (non-callback) runner should exist.
+      assert.ok(keys.every((k) => k === onEndTurnSnapshotId));
     });
   });
 
@@ -282,6 +373,36 @@ describe('SessionFlow', () => {
       const artChunks = chunks.filter((c) => !!c.artifact);
       assert.strictEqual(artChunks.length, 1);
       assert.strictEqual(artChunks[0].artifact?.name, 'testArt');
+    });
+
+    it('should stream artifactUpdated chunks when an artifact is replaced', async () => {
+      const registry = new Registry();
+
+      const flow = defineSessionFlow(
+        registry,
+        { name: 'testArtifactUpdateFlow' },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.session.addArtifacts([{ name: 'a', parts: [{ text: 'v1' }] }]);
+            sess.session.addArtifacts([{ name: 'a', parts: [{ text: 'v2' }] }]);
+          });
+          return {};
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({ messages: [{ role: 'user', content: [{ text: 'go' }] }] });
+      session.close();
+
+      const chunks: SessionFlowStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const artChunks = chunks.filter((c) => !!c.artifact);
+      assert.strictEqual(artChunks.length, 2);
+      assert.strictEqual(artChunks[0].artifact?.parts[0].text, 'v1');
+      assert.strictEqual(artChunks[1].artifact?.parts[0].text, 'v2');
     });
   });
 
@@ -356,16 +477,8 @@ describe('SessionFlow', () => {
       resolvePromise();
       session.close();
 
-      let snapDone: any | undefined;
-      for (let i = 0; i < 20; i++) {
-        snapDone = await store.getSnapshot(snapshotId!);
-        if (snapDone?.status === 'done') {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-
-      assert.strictEqual(snapDone?.status, 'done');
+      const snapDone = await waitForSnapshotStatus(store, snapshotId!, 'done');
+      assert.strictEqual(snapDone.status, 'done');
     });
 
     it('should abort a detached session flow', async () => {
@@ -408,9 +521,7 @@ describe('SessionFlow', () => {
 
       const snapAborted = await store.getSnapshot(snapshotId!);
       assert.strictEqual(snapAborted?.status, 'aborted');
-
-      // wait for AbortSignal to fire in event loop
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // AbortController.abort() fires onabort synchronously, so no delay needed.
       assert.strictEqual(aborted, true);
     });
 
@@ -484,18 +595,14 @@ describe('SessionFlow', () => {
       resolvePromise();
       session.close();
 
-      let snapFailed: SessionSnapshot<any, any> | undefined;
-      for (let i = 0; i < 20; i++) {
-        snapFailed = await store.getSnapshot(snapshotId!);
-        if (snapFailed?.status === 'failed') {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-
-      assert.strictEqual(snapFailed?.status, 'failed');
+      const snapFailed = await waitForSnapshotStatus(
+        store,
+        snapshotId!,
+        'failed'
+      );
+      assert.strictEqual(snapFailed.status, 'failed');
       assert.strictEqual(
-        snapFailed?.error?.message,
+        snapFailed.error?.message,
         'intentional background failure'
       );
     });
@@ -672,16 +779,68 @@ describe('SessionFlow', () => {
       const output = await session.output;
       assert.ok(output.snapshotId);
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const snap = await store.getSnapshot(output.snapshotId!);
-      assert.ok(snap?.state.messages);
-      assert.strictEqual(snap?.state.messages.length, 1);
+      const snapDone = await waitForSnapshotStatus(
+        store,
+        output.snapshotId!,
+        'done'
+      );
+      assert.ok(snapDone.state.messages);
+      assert.strictEqual(snapDone.state.messages.length, 1);
       assert.strictEqual(
-        snap?.state.messages[0].content[0].text,
+        snapDone.state.messages[0].content[0].text,
         'appended message'
       );
 
       session.close();
+    });
+
+    it('should accumulate message history across multiple turns in one invocation', async () => {
+      const registry = new Registry();
+      defineEchoModel(registry);
+      definePrompt(registry, {
+        name: 'multiTurnAccumPrompt',
+        model: 'echoModel',
+        config: { temperature: 1 },
+        system: 'sys',
+      });
+
+      const flow = defineSessionFlowFromPrompt(registry, {
+        promptName: 'multiTurnAccumPrompt',
+        defaultInput: {},
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'turn1' }] }],
+      });
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'turn2' }] }],
+      });
+      session.close();
+
+      const chunks: SessionFlowStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      // Two turns must have completed.
+      const turnEndChunks = chunks.filter((c) => c.turnEnd !== undefined);
+      assert.strictEqual(turnEndChunks.length, 2);
+
+      const output = await session.output;
+      assert.strictEqual(output.message?.role, 'model');
+
+      // The second-turn echo should contain the first model reply in its history,
+      // proving the session history was passed to the second generate call.
+      const turn2Text = output.message?.content.map((c) => c.text).join('') ?? '';
+      assert.ok(
+        turn2Text.includes('Echo:'),
+        `Expected second turn to be an echo response, got: ${turn2Text}`
+      );
+
+      // Model chunks must have been emitted for both turns.
+      const modelChunks = chunks.filter((c) => c.modelChunk !== undefined);
+      assert.ok(modelChunks.length >= 2, 'Expected model chunks from both turns');
     });
 
     it('should process all pre-queued messages in the background after detaching', async () => {
@@ -717,8 +876,14 @@ describe('SessionFlow', () => {
       const output = await session.output;
       assert.ok(output.snapshotId);
 
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      assert.strictEqual(processedCount, 3);
+      // Detach-only messages are not forwarded to the runner — 2 turns, not 3.
+      const snapDone = await waitForSnapshotStatus(
+        store,
+        output.snapshotId!,
+        'done'
+      );
+      assert.strictEqual(snapDone.status, 'done');
+      assert.strictEqual(processedCount, 2);
 
       session.close();
     });

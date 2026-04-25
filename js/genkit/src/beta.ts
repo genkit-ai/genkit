@@ -24,12 +24,18 @@ export {
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
 export {
+  FileSessionStore,
   GenkitBeta,
   InMemorySessionStore,
+  SessionRunner,
   genkit,
   type GenkitBetaOptions,
+  type SessionFlowFn,
+  type SessionFlowStreamChunk,
   type SessionSnapshot,
   type SessionState,
   type SessionStore,
   type SessionStoreOptions,
+  type SnapshotCallback,
+  type SnapshotContext,
 } from './genkit-beta.js';

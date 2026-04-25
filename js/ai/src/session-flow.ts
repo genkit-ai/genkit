@@ -21,6 +21,7 @@ import {
   getContext,
   z,
   type Action,
+  type ActionContext,
   type ActionFnArg,
   type BidiAction,
 } from '@genkit-ai/core';
@@ -104,10 +105,12 @@ export const SessionFlowStreamChunkSchema = z.object({
 
 /**
  * Streamed chunk emitted during session flow execution.
+ * The `Stream` parameter types the `status` field for custom status payloads.
  */
-export type SessionFlowStreamChunk<Stream = unknown> = z.infer<
-  typeof SessionFlowStreamChunkSchema
->;
+export type SessionFlowStreamChunk<Stream = unknown> = Omit<
+  z.infer<typeof SessionFlowStreamChunkSchema>,
+  'status'
+> & { status?: Stream };
 
 /**
  * Schema for final results of a session flow execution.
@@ -151,9 +154,8 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
   turnIndex: number = 0;
   public onEndTurn?: (snapshotId?: string) => void;
   public onDetach?: (snapshotId: string) => void;
-  public isClientManagedState?: boolean;
   public newSnapshotId?: string;
-  private snapshotCallback?: SnapshotCallback<State>;
+  private snapshotCallback?: SnapshotCallback<State, InputVariables>;
   private lastSnapshot?: SessionSnapshot<State, InputVariables>;
 
   private lastSnapshotVersion: number = 0;
@@ -164,13 +166,12 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
     session: Session<State, InputVariables>,
     inputCh: AsyncIterable<SessionFlowInput>,
     options?: {
-      snapshotCallback?: SnapshotCallback<State>;
+      snapshotCallback?: SnapshotCallback<State, InputVariables>;
       lastSnapshot?: SessionSnapshot<State, InputVariables>;
       store?: SessionStore<State, InputVariables>;
       onEndTurn?: (snapshotId?: string) => void;
       onDetach?: (snapshotId: string) => void;
       newSnapshotId?: string;
-      isClientManagedState?: boolean;
     }
   ) {
     this.session = session;
@@ -182,7 +183,6 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
     this.onEndTurn = options?.onEndTurn;
     this.onDetach = options?.onDetach;
     this.newSnapshotId = options?.newSnapshotId;
-    this.isClientManagedState = options?.isClientManagedState;
   }
 
   /**
@@ -195,6 +195,7 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
       }
 
       const turnSnapshotId = this.newSnapshotId || crypto.randomUUID();
+      this.newSnapshotId = undefined;
 
       try {
         await fn(input);
@@ -274,8 +275,10 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
     if (this.snapshotCallback && !this.isDetached) {
       if (
         !this.snapshotCallback({
-          state: currentState as SessionState<State>,
-          prevState: prevState as SessionState<State> | undefined,
+          state: currentState as SessionState<State, InputVariables>,
+          prevState: prevState as
+            | SessionState<State, InputVariables>
+            | undefined,
           turnIndex: this.turnIndex,
           event: event,
         })
@@ -311,7 +314,7 @@ export type SessionFlowFn<Stream, State, InputVariables = unknown> = (
   options: {
     sendChunk: (chunk: SessionFlowStreamChunk<Stream>) => void;
     abortSignal?: AbortSignal;
-    context?: any;
+    context?: ActionContext;
   }
 ) => Promise<SessionFlowResult>;
 
@@ -354,7 +357,7 @@ export function defineSessionFlow<
     name: string;
     description?: string;
     store?: SessionStore<State, InputVariables>;
-    snapshotCallback?: SnapshotCallback<State>;
+    snapshotCallback?: SnapshotCallback<State, InputVariables>;
   },
   fn: SessionFlowFn<Stream, State, InputVariables>
 ): SessionFlow<State, InputVariables> {
@@ -456,8 +459,17 @@ export function defineSessionFlow<
                   runner.onDetach(turnSnapshotId);
                 }
               }
+              // Only forward to runner if the input carries a payload beyond the
+              // detach directive; a detach-only message has no turn to process.
+              const hasPayload = !!(
+                input.messages?.length || input.toolRestarts?.length
+              );
+              if (hasPayload) {
+                runnerInputChannel.send(input);
+              }
+            } else {
+              runnerInputChannel.send(input);
             }
-            runnerInputChannel.send(input);
           }
           runnerInputChannel.close();
         } catch (e) {
@@ -471,8 +483,8 @@ export function defineSessionFlow<
         {
           store,
           snapshotCallback: config.snapshotCallback,
-          isClientManagedState: !config.store,
           lastSnapshot: snapshot,
+          newSnapshotId: init?.newSnapshotId,
           onDetach: (snapshotId) => {
             detachedSnapshotId = snapshotId;
             if (resolveDetach) {
@@ -501,11 +513,13 @@ export function defineSessionFlow<
         }
       );
 
-      session.on('artifactAdded', (a: Artifact) => {
+      const sendArtifactChunk = (a: Artifact) => {
         if (!runner.isDetached) {
           arg.sendChunk({ artifact: a });
         }
-      });
+      };
+      session.on('artifactAdded', sendArtifactChunk);
+      session.on('artifactUpdated', sendArtifactChunk);
 
       const sendChunk = (chunk: SessionFlowStreamChunk<Stream>) => {
         if (!runner.isDetached) {
@@ -524,6 +538,8 @@ export function defineSessionFlow<
           return { result, finalSnapshotId };
         } finally {
           if (unsubscribe) unsubscribe();
+          session.off('artifactAdded', sendArtifactChunk);
+          session.off('artifactUpdated', sendArtifactChunk);
         }
       })();
 
@@ -564,9 +580,15 @@ export function defineSessionFlow<
       outputSchema: z.any(), // SessionSnapshot Schema
     },
     async (snapshotId) => {
-      const store =
-        config.store || new InMemorySessionStore<State, InputVariables>();
-      return await store.getSnapshot(snapshotId, { context: getContext() });
+      if (!config.store) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
+        });
+      }
+      return await config.store.getSnapshot(snapshotId, {
+        context: getContext(),
+      });
     }
   );
 
@@ -576,19 +598,22 @@ export function defineSessionFlow<
       name: `${config.name}__abort`,
       description: `Aborts ${config.name} session flow by snapshotId`,
       actionType: 'session-flow',
-
       inputSchema: z.string(),
       outputSchema: z.void(),
     },
     async (snapshotId) => {
-      const store =
-        config.store || new InMemorySessionStore<State, InputVariables>();
-      const snapshot = await store.getSnapshot(snapshotId, {
+      if (!config.store) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `abort requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
+        });
+      }
+      const snapshot = await config.store.getSnapshot(snapshotId, {
         context: getContext(),
       });
       if (snapshot) {
         snapshot.status = 'aborted';
-        await store.saveSnapshot(snapshot, { context: getContext() });
+        await config.store.saveSnapshot(snapshot, { context: getContext() });
       }
     }
   );
@@ -598,17 +623,25 @@ export function defineSessionFlow<
       snapshotId: string,
       options?: SessionStoreOptions
     ) => {
-      const store =
-        config.store || new InMemorySessionStore<State, InputVariables>();
-      return await store.getSnapshot(snapshotId, options);
+      if (!config.store) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
+        });
+      }
+      return await config.store.getSnapshot(snapshotId, options);
     },
     abort: async (snapshotId: string, options?: SessionStoreOptions) => {
-      const store =
-        config.store || new InMemorySessionStore<State, InputVariables>();
-      const snapshot = await store.getSnapshot(snapshotId, options);
+      if (!config.store) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: `abort requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
+        });
+      }
+      const snapshot = await config.store.getSnapshot(snapshotId, options);
       if (snapshot) {
         snapshot.status = 'aborted';
-        await store.saveSnapshot(snapshot, options);
+        await config.store.saveSnapshot(snapshot, options);
       }
     },
     getSnapshotDataAction:
@@ -637,25 +670,31 @@ export function defineSessionFlowFromPrompt<
     promptName: string;
     defaultInput: PromptIn;
     store?: SessionStore<State, PromptIn>;
-    snapshotCallback?: SnapshotCallback<State>;
+    snapshotCallback?: SnapshotCallback<State, PromptIn>;
   }
 ) {
+  let cachedPromptAction: PromptAction | undefined;
+
   const fn: SessionFlowFn<any, State, PromptIn> = async (
     sess,
-    { sendChunk }
+    { sendChunk, abortSignal }
   ) => {
     await sess.run(async (input) => {
       const promptInput =
         sess.session.getState().inputVariables || config.defaultInput;
 
-      const promptAction = (await registry.lookupAction(
-        `/prompt/${config.promptName}`
-      )) as PromptAction;
-      if (!promptAction) {
-        throw new Error(`Prompt ${config.promptName} not found`);
+      if (!cachedPromptAction) {
+        cachedPromptAction = (await registry.lookupAction(
+          `/prompt/${config.promptName}`
+        )) as PromptAction;
+        if (!cachedPromptAction) {
+          throw new Error(
+            `Prompt '${config.promptName}' not found. Ensure it is defined before the session flow is invoked.`
+          );
+        }
       }
 
-      const genOpts = await promptAction.__executablePrompt.render(
+      const genOpts = await cachedPromptAction.__executablePrompt.render(
         promptInput as unknown as z.ZodTypeAny
       );
 
@@ -678,7 +717,7 @@ export function defineSessionFlowFromPrompt<
         };
       }
 
-      const result = generateStream(registry, genOpts);
+      const result = generateStream(registry, { ...genOpts, abortSignal });
 
       for await (const chunk of result.stream) {
         sendChunk({ modelChunk: chunk });

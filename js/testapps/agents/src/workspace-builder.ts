@@ -72,9 +72,10 @@ export const testWorkspaceAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text) => {
-    const res = await workspaceAgent({
-      messages: [{ role: 'user' as const, content: [{ text }] }],
-    });
-    return res;
+    const res = await workspaceAgent.run(
+      { messages: [{ role: 'user' as const, content: [{ text }] }] },
+      { init: {} }
+    );
+    return res.result;
   }
 );
