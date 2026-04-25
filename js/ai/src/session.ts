@@ -17,6 +17,9 @@
 import { getAsyncContext, z, type ActionContext } from '@genkit-ai/core';
 import { EventEmitter } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
+import * as fs from 'fs';
+import * as fsp from 'fs/promises';
+import * as path from 'path';
 import { MessageData, MessageSchema } from './model-types.js';
 
 import { PartSchema } from './model-types.js';
@@ -78,8 +81,8 @@ export interface SnapshotContext<S = unknown, I = unknown> {
 /**
  * Callback triggered before a snapshot is saved. Return false to reject persistence.
  */
-export type SnapshotCallback<S = unknown> = (
-  ctx: SnapshotContext<S>
+export type SnapshotCallback<S = unknown, I = unknown> = (
+  ctx: SnapshotContext<S, I>
 ) => boolean;
 
 /**
@@ -142,7 +145,7 @@ export class Session<S = unknown, I = unknown> extends EventEmitter {
    * Returns a deep copy of the current session state.
    */
   getState(): SessionState<S, I> {
-    return JSON.parse(JSON.stringify(this.state));
+    return structuredClone(this.state);
   }
 
   /**
@@ -192,27 +195,35 @@ export class Session<S = unknown, I = unknown> extends EventEmitter {
 
   /**
    * Adds artifacts to the session, deduplicating items by name.
+   * Emits 'artifactAdded' for new artifacts and 'artifactUpdated' for replacements.
    */
   addArtifacts(artifacts: Artifact[]) {
     const existing = this.state.artifacts || [];
+    const added: Artifact[] = [];
+    const updated: Artifact[] = [];
+
     for (const a of artifacts) {
-      let replaced = false;
       if (a.name) {
         const idx = existing.findIndex((e) => e.name === a.name);
         if (idx >= 0) {
           existing[idx] = a;
-          replaced = true;
-          break;
+          updated.push(a);
+          continue;
         }
       }
-      if (!replaced) {
-        existing.push(a);
-      }
+      existing.push(a);
+      added.push(a);
     }
+
     this.state.artifacts = existing;
-    this.version++;
-    for (const a of artifacts) {
+    if (added.length + updated.length > 0) {
+      this.version++;
+    }
+    for (const a of added) {
       this.emit('artifactAdded', a);
+    }
+    for (const a of updated) {
+      this.emit('artifactUpdated', a);
     }
   }
 
@@ -249,21 +260,18 @@ export class InMemorySessionStore<S = unknown, I = unknown>
   ): Promise<SessionSnapshot<S, I> | undefined> {
     const snap = this.snapshots.get(snapshotId);
     if (!snap) return undefined;
-    return JSON.parse(JSON.stringify(snap));
+    return structuredClone(snap);
   }
 
   async saveSnapshot(
     snapshot: SessionSnapshot<S, I>,
     options?: SessionStoreOptions
   ): Promise<void> {
-    this.snapshots.set(
-      snapshot.snapshotId,
-      JSON.parse(JSON.stringify(snapshot))
-    );
+    this.snapshots.set(snapshot.snapshotId, structuredClone(snapshot));
     const snapshotListeners = this.listeners.get(snapshot.snapshotId);
     if (snapshotListeners) {
       for (const listener of snapshotListeners) {
-        listener(JSON.parse(JSON.stringify(snapshot)));
+        listener(structuredClone(snapshot));
       }
     }
   }
@@ -313,5 +321,117 @@ export function getCurrentSession<S = any>(
 export class SessionError extends Error {
   constructor(msg: string) {
     super(msg);
+  }
+}
+
+// Only UUID-shaped IDs are accepted to prevent path traversal.
+const SAFE_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A Node.js file-system backed session snapshot store.
+ *
+ * Each snapshot is persisted as a JSON file under `dirPath/<prefix>/<snapshotId>.json`.
+ * Only UUID-formatted snapshot IDs are accepted to prevent path traversal.
+ */
+export class FileSessionStore<S = unknown, I = unknown>
+  implements SessionStore<S, I>
+{
+  private dirPath: string;
+  private maxPersistedChainLength?: number;
+  private snapshotPathPrefix?: (
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ) => string;
+
+  /**
+   * @param dirPath Directory where snapshot JSON files are stored.
+   * @param options.maxPersistedChainLength When set, snapshots older than this
+   *   many entries in a chain are automatically deleted on each save.
+   * @param options.snapshotPathPrefix Returns a sub-directory prefix per
+   *   snapshot, useful for multi-tenant isolation. Defaults to `"global"`.
+   */
+  constructor(
+    dirPath: string,
+    options?: {
+      maxPersistedChainLength?: number;
+      snapshotPathPrefix?: (
+        snapshotId: string,
+        options?: SessionStoreOptions
+      ) => string;
+    }
+  ) {
+    this.dirPath = path.resolve(dirPath);
+    fs.mkdirSync(this.dirPath, { recursive: true });
+    this.maxPersistedChainLength = options?.maxPersistedChainLength;
+    this.snapshotPathPrefix = options?.snapshotPathPrefix;
+  }
+
+  private validateId(snapshotId: string): void {
+    if (!SAFE_ID_PATTERN.test(snapshotId)) {
+      throw new Error(`Invalid snapshotId: "${snapshotId}"`);
+    }
+  }
+
+  private async ensureDir(dir: string): Promise<void> {
+    await fsp.mkdir(dir, { recursive: true });
+  }
+
+  private async getFilePath(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<string> {
+    this.validateId(snapshotId);
+    const prefix = this.snapshotPathPrefix
+      ? this.snapshotPathPrefix(snapshotId, options)
+      : 'global';
+    const dir = path.join(this.dirPath, prefix);
+    await this.ensureDir(dir);
+    return path.join(dir, `${snapshotId}.json`);
+  }
+
+  async getSnapshot(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<SessionSnapshot<S, I> | undefined> {
+    const filePath = await this.getFilePath(snapshotId, options);
+    try {
+      const fileContents = await fsp.readFile(filePath, 'utf-8');
+      return JSON.parse(fileContents) as SessionSnapshot<S, I>;
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw e;
+    }
+  }
+
+  async saveSnapshot(
+    snapshot: SessionSnapshot<S, I>,
+    options?: SessionStoreOptions
+  ): Promise<void> {
+    const filePath = await this.getFilePath(snapshot.snapshotId, options);
+    await fsp.writeFile(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+
+    if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
+      let current: SessionSnapshot<S, I> | undefined = snapshot;
+      const chain: string[] = [];
+
+      while (current) {
+        chain.push(current.snapshotId);
+        if (current.parentId) {
+          current = await this.getSnapshot(current.parentId, options);
+        } else {
+          break;
+        }
+      }
+
+      if (chain.length > this.maxPersistedChainLength) {
+        for (let i = this.maxPersistedChainLength; i < chain.length; i++) {
+          const pathToDelete = await this.getFilePath(chain[i], options);
+          await fsp.unlink(pathToDelete).catch((e: unknown) => {
+            if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          });
+        }
+      }
+    }
   }
 }

@@ -51,17 +51,9 @@ export const testClientStateAgent = ai.defineFlow(
   {
     name: 'testClientStateAgent',
     inputSchema: z.object({
+      // `state` is the full SessionState returned from a prior turn; omit on
+      // first call. The client owns this blob and must echo it back each turn.
       state: z.any().optional(),
-      messages: z.array(MessageSchema).default([
-        {
-          role: 'user',
-          content: [{ text: 'foo' }],
-        },
-        {
-          role: 'model',
-          content: [{ text: 'bar' }],
-        },
-      ]),
       text: z.string().default('Hello, increment the turn count!'),
     }),
 
@@ -74,22 +66,16 @@ export const testClientStateAgent = ai.defineFlow(
       },
       {
         init: {
-          state: {
-            ...input.state,
-            messages: input.messages,
-          },
+          // Resume from the state returned by the previous turn, or start fresh.
+          state: input.state,
         },
         onChunk: sendChunk,
       }
     );
+    // Return the updated state so the caller can pass it back on the next turn.
     return {
-      init: {
-        state: {
-          ...input.state,
-          messages: input.messages,
-        },
-      },
-      result: res,
+      state: res.result.state,
+      message: res.result.message,
     };
   }
 );
