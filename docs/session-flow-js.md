@@ -1,6 +1,6 @@
 # Design Document: Session Flows in JS/TS
 
-**Status**: Proposed  
+**Status**: Implemented  
 **Authors**: Antigravity  
 **Target Package**: `@genkit-ai/ai` and `@genkit-ai/core`  
 

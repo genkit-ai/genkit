@@ -16,127 +16,11 @@
 
 import * as fs from 'fs';
 import { z } from 'genkit';
-import {
-  SessionSnapshot,
-  SessionStore,
-  SessionStoreOptions,
-} from 'genkit/beta';
+import { FileSessionStore } from 'genkit/beta';
 import * as path from 'path';
 import { ai } from './genkit.js';
 
-export class FileSessionStore<S = unknown, I = unknown>
-  implements SessionStore<S, I>
-{
-  private dirPath: string;
-  private maxPersistedChainLength?: number;
-  private snapshotPathPrefix?: (
-    snapshotId: string,
-    options?: SessionStoreOptions
-  ) => string;
-
-  /**
-   * Creates a local file-system based session snapshot store.
-   *
-   * @param dirPath The local directory path where JSON snapshots will be stored.
-   * @param options Configuration options for persistence behaviour.
-   * @param options.maxPersistedChainLength Optional limit enforcing the maximum length of a snapshot chain.
-   *   Once the history of a snapshot chain exceeds this length, older snapshots will be unlinked.
-   */
-  constructor(
-    dirPath: string,
-    options?: {
-      maxPersistedChainLength?: number;
-      snapshotPathPrefix?: (
-        snapshotId: string,
-        options?: SessionStoreOptions
-      ) => string;
-    }
-  ) {
-    this.dirPath = path.resolve(dirPath);
-    if (!fs.existsSync(this.dirPath)) {
-      fs.mkdirSync(this.dirPath, { recursive: true });
-    }
-    this.maxPersistedChainLength = options?.maxPersistedChainLength;
-    this.snapshotPathPrefix = options?.snapshotPathPrefix;
-  }
-
-  private getFilePath(
-    snapshotId: string,
-    options?: SessionStoreOptions
-  ): string {
-    const prefix = this.snapshotPathPrefix
-      ? this.snapshotPathPrefix(snapshotId, options)
-      : 'global';
-    const dir = path.join(this.dirPath, prefix);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    return path.join(dir, `${snapshotId}.json`);
-  }
-
-  /**
-   * Retrieves a snapshot from the file system by its snapshotId.
-   *
-   * @param snapshotId The UUID of the snapshot to load.
-   * @returns The reconstructed SessionSnapshot, or undefined if not found.
-   */
-  async getSnapshot(
-    snapshotId: string,
-    options?: SessionStoreOptions
-  ): Promise<SessionSnapshot<S, I> | undefined> {
-    const filePath = this.getFilePath(snapshotId, options);
-    if (!fs.existsSync(filePath)) {
-      return undefined;
-    }
-    const fileContents = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(fileContents) as SessionSnapshot<S, I>;
-  }
-
-  /**
-   * Saves a new snapshot to the file system.
-   * If a maxPersistedChainLength is specified, this will also walk back the `parentId`
-   * chain and automatically prune (delete) older snapshots that exceed the history length.
-   *
-   * @param snapshot The SessionSnapshot instance to store.
-   */
-  async saveSnapshot(
-    snapshot: SessionSnapshot<S, I>,
-    options?: SessionStoreOptions
-  ): Promise<void> {
-    const filePath = this.getFilePath(snapshot.snapshotId, options);
-    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
-
-    if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
-      let currentSnapshot: SessionSnapshot<S, I> | undefined = snapshot;
-      let chainLength = 0;
-      const chain: string[] = [];
-
-      while (currentSnapshot) {
-        chain.push(currentSnapshot.snapshotId);
-        chainLength++;
-        if (currentSnapshot.parentId) {
-          currentSnapshot = await this.getSnapshot(
-            currentSnapshot.parentId,
-            options
-          );
-        } else {
-          break;
-        }
-      }
-
-      if (chainLength > this.maxPersistedChainLength) {
-        // delete snapshots beyond the allowed length
-        for (let i = this.maxPersistedChainLength; i < chainLength; i++) {
-          const snapshotIdToDelete = chain[i];
-          const pathToDelete = this.getFilePath(snapshotIdToDelete, options);
-          if (fs.existsSync(pathToDelete)) {
-            fs.unlinkSync(pathToDelete);
-          }
-        }
-      }
-    }
-  }
-}
+export { FileSessionStore };
 
 export const fileStore = new FileSessionStore<any, any>('./.snapshots');
 
@@ -269,18 +153,13 @@ export const testFileStoreChainPruningAgent = ai.defineFlow(
       { init: { snapshotId: snap3 } }
     );
 
-    // verify that snapshot 1 is deleted but 2, 3, 4 are still there
-    const snap1Exists = fs.existsSync(
-      path.join('./.snapshots-pruning', `${snap1}.json`)
-    );
-    const snap2Exists = fs.existsSync(
-      path.join('./.snapshots-pruning', `${snap2}.json`)
-    );
-    const snap3Exists = fs.existsSync(
-      path.join('./.snapshots-pruning', `${snap3}.json`)
-    );
+    // Snapshots are stored under <dirPath>/global/<snapshotId>.json
+    const snapshotDir = path.join('./.snapshots-pruning', 'global');
+    const snap1Exists = fs.existsSync(path.join(snapshotDir, `${snap1}.json`));
+    const snap2Exists = fs.existsSync(path.join(snapshotDir, `${snap2}.json`));
+    const snap3Exists = fs.existsSync(path.join(snapshotDir, `${snap3}.json`));
     const snap4Exists = fs.existsSync(
-      path.join('./.snapshots-pruning', `${turn4.result.snapshotId}.json`)
+      path.join(snapshotDir, `${turn4.result.snapshotId}.json`)
     );
 
     return {

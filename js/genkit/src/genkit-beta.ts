@@ -18,6 +18,7 @@ import {
   GenerateOptions,
   GenerateResponseData,
   GenerationCommonConfigSchema,
+  SessionRunner,
   defineInterrupt,
   defineResource,
   defineSessionFlow,
@@ -28,11 +29,13 @@ import {
   type ResourceFn,
   type ResourceOptions,
   type SessionFlowFn,
+  type SessionFlowStreamChunk,
   type ToolAction,
 } from '@genkit-ai/ai';
 
 import { defineFormat } from '@genkit-ai/ai/formats';
 import {
+  FileSessionStore,
   InMemorySessionStore,
   Session,
   SessionError,
@@ -42,19 +45,24 @@ import {
   type SessionStore,
   type SessionStoreOptions,
   type SnapshotCallback,
+  type SnapshotContext,
 } from '@genkit-ai/ai/session';
 
 import { type Operation, type z } from '@genkit-ai/core';
 import type { Formatter } from './formats';
 import { Genkit, type GenkitOptions } from './genkit';
 
-export { InMemorySessionStore };
+export { FileSessionStore, InMemorySessionStore, SessionRunner };
 export type {
   GenkitOptions as GenkitBetaOptions,
+  SessionFlowFn,
+  SessionFlowStreamChunk,
   SessionSnapshot,
   SessionState,
   SessionStore,
   SessionStoreOptions,
+  SnapshotCallback,
+  SnapshotContext,
 };
 
 /**
@@ -87,16 +95,20 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineSessionFlow<Stream = unknown, State = unknown>(
+  defineSessionFlow<Stream = unknown, State = unknown, InputVariables = unknown>(
     config: {
       name: string;
       description?: string;
-      store?: SessionStore<State>;
-      snapshotCallback?: SnapshotCallback<State>;
+      store?: SessionStore<State, InputVariables>;
+      snapshotCallback?: SnapshotCallback<State, InputVariables>;
     },
-    fn: SessionFlowFn<Stream, State>
+    fn: SessionFlowFn<Stream, State, InputVariables>
   ) {
-    return defineSessionFlow<Stream, State>(this.registry, config, fn);
+    return defineSessionFlow<Stream, State, InputVariables>(
+      this.registry,
+      config,
+      fn
+    );
   }
 
   /**
@@ -108,7 +120,7 @@ export class GenkitBeta extends Genkit {
     promptName: string;
     defaultInput: PromptIn;
     store?: SessionStore<State, PromptIn>;
-    snapshotCallback?: SnapshotCallback<State>;
+    snapshotCallback?: SnapshotCallback<State, PromptIn>;
   }) {
     return defineSessionFlowFromPrompt<PromptIn, State>(this.registry, config);
   }
