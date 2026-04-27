@@ -31,7 +31,9 @@ import {
   Session,
   type SessionSnapshot,
 } from '../src/session.js';
-import { defineEchoModel } from './helpers.js';
+import { defineEchoModel, defineProgrammableModel } from './helpers.js';
+import { interrupt } from '../src/tool.js';
+import { z } from '@genkit-ai/core';
 
 initNodeFeatures();
 
@@ -841,6 +843,89 @@ describe('SessionFlow', () => {
       // Model chunks must have been emitted for both turns.
       const modelChunks = chunks.filter((c) => c.modelChunk !== undefined);
       assert.ok(modelChunks.length >= 2, 'Expected model chunks from both turns');
+    });
+
+    it('should successfully handle native tool interrupts and tool response resumption', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const store = new InMemorySessionStore<{}>();
+
+      const pm = defineProgrammableModel(registry, undefined, 'interruptModel');
+      
+      const myInterrupt = interrupt({
+        name: 'myInterrupt',
+        description: 'Ask user',
+        inputSchema: z.object({ query: z.string() }),
+        outputSchema: z.object({ answer: z.string() }),
+      });
+      registry.registerAction('tool', myInterrupt);
+
+      definePrompt(registry, {
+        name: 'interruptPrompt',
+        model: 'interruptModel',
+        tools: ['myInterrupt'],
+        config: { temperature: 1 },
+      });
+
+      const flow = defineSessionFlowFromPrompt(registry, {
+        promptName: 'interruptPrompt',
+        defaultInput: {},
+        store,
+      });
+
+      // Phase 1: User says hello, model responds with a toolRequest (interrupt)
+      pm.handleResponse = async () => {
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'myInterrupt', input: { query: 'yes?' }, ref: '123' } }],
+          },
+          finishReason: 'stop',
+        };
+      };
+
+      const session1 = flow.streamBidi({});
+      session1.send({ messages: [{ role: 'user', content: [{ text: 'hello' }] }] });
+      session1.close(); // IMPORTANT: close the stream so it doesn't hang!
+
+      for await (const chunk of session1.stream) {}
+      const output1 = await session1.output;
+
+      assert.ok(output1.snapshotId);
+      assert.ok(output1.message);
+      assert.ok(output1.message.content[0].toolRequest);
+      assert.strictEqual(output1.message.content[0].toolRequest.name, 'myInterrupt');
+
+      // Phase 2: Resume with the tool response
+      pm.handleResponse = async (req) => {
+        // Assert that the resumed request contains the tool response!
+        const lastMsg = req.messages[req.messages.length - 1];
+        assert.strictEqual(lastMsg.role, 'tool');
+        assert.strictEqual((lastMsg.content[0] as any).toolResponse.output.answer, 'yes indeed');
+
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'Task completed successfully!' }],
+          },
+          finishReason: 'stop',
+        };
+      };
+
+      const session2 = flow.streamBidi({ snapshotId: output1.snapshotId });
+      session2.send({
+        messages: [{
+          role: 'tool',
+          content: [{ toolResponse: { name: 'myInterrupt', ref: '123', output: { answer: 'yes indeed' } } }],
+        }],
+      });
+      session2.close(); // IMPORTANT: close the stream so it doesn't hang!
+
+      for await (const chunk of session2.stream) {}
+      const output2 = await session2.output;
+
+      assert.strictEqual(output2.message?.role, 'model');
+      assert.strictEqual(output2.message?.content[0].text, 'Task completed successfully!');
     });
 
     it('should process all pre-queued messages in the background after detaching', async () => {
