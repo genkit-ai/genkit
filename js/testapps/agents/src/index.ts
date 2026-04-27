@@ -55,4 +55,8 @@ console.log(
   'Loaded pruning flow:',
   testFileStoreChainPruningAgent.__action.name
 );
+import { testBankingAgent, bankingAgent } from './interrupt-agent.js';
+console.log('Loaded interrupt flow:', testBankingAgent.__action.name);
+console.log('Loaded interrupt agent:', bankingAgent.__action.name);
 export * from './abort-agent.js';
+export * from './interrupt-agent.js';
