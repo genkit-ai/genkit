@@ -167,6 +167,85 @@ describe('toGeminiMessage', () => {
     },
     {
       should:
+        'should transform genkit message (tool response with missing output and mixed content) correctly',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'screenshot',
+              ref: '1',
+              content: [
+                { text: 'this is a test' },
+                {
+                  media: {
+                    contentType: 'image/png',
+                    url: 'data:image/png;base64,SHORTENED_BASE64_DATA',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'function',
+        parts: [
+          {
+            functionResponse: {
+              id: '1',
+              name: 'screenshot',
+              response: {
+                name: 'screenshot',
+                content: { text: 'this is a test' },
+              },
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: 'SHORTENED_BASE64_DATA',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    {
+      should:
+        'should transform genkit message (tool response with output object and text content) correctly',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'screenshot',
+              ref: '2',
+              output: { status: 'ok' },
+              content: [{ text: 'this is a test' }],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'function',
+        parts: [
+          {
+            functionResponse: {
+              id: '2',
+              name: 'screenshot',
+              response: {
+                name: 'screenshot',
+                content: { status: 'ok', text: 'this is a test' },
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      should:
         'should transform genkit message (inline base64 image content) correctly',
       inputMessage: {
         role: 'user',

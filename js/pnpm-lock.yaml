@@ -815,8 +815,8 @@ importers:
   plugins/mcp:
     dependencies:
       '@modelcontextprotocol/sdk':
-        specifier: ^1.13.0
-        version: 1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+        specifier: ^1.29.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       genkit:
         specifier: workspace:^
         version: link:../../genkit
@@ -1096,7 +1096,7 @@ importers:
         version: link:../../plugins/google-genai
       '@google/genai':
         specifier: ^1.30.0
-        version: 1.44.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))
+        version: 1.44.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76))
       express:
         specifier: ^4.20.0
         version: 4.22.1
@@ -1616,8 +1616,8 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/vertexai
       '@modelcontextprotocol/sdk':
-        specifier: ^1.13.0
-        version: 1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+        specifier: ^1.29.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       express:
         specifier: ^5.1.0
         version: 5.2.1
@@ -3662,8 +3662,8 @@ packages:
   '@mistralai/mistralai-gcp@1.7.0':
     resolution: {integrity: sha512-0RsClXspFiPUE4/9aBQXxNVjXDYFxkASXR/pxnX+2N689DF1d5Fx6Ax+tXH/n3K87iSevO2qBTprvUOwmF/ApQ==}
 
-  '@modelcontextprotocol/sdk@1.27.1':
-    resolution: {integrity: sha512-sr6GbP+4edBwFndLbM60gf07z0FQ79gaExpnsjMGePXqFcSSb7t6iscpjk9DhFhwd+mTEQrzNafGP8/iGGFYaA==}
+  '@modelcontextprotocol/sdk@1.29.0':
+    resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -10029,14 +10029,14 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google/genai@1.44.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))':
+  '@google/genai@1.44.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76))':
     dependencies:
       google-auth-library: 10.6.1
       p-retry: 4.6.2
       protobufjs: 7.5.4
       ws: 8.19.0
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -10487,7 +10487,7 @@ snapshots:
       - encoding
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)':
+  '@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)':
     dependencies:
       '@hono/node-server': 1.19.11(hono@4.12.7)
       ajv: 8.18.0
@@ -10513,7 +10513,7 @@ snapshots:
 
   '@modelcontextprotocol/server-everything@2025.12.18(@cfworker/json-schema@4.1.1)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       cors: 2.8.6
       express: 5.2.1
       jszip: 3.10.1
@@ -10525,7 +10525,7 @@ snapshots:
 
   '@modelcontextprotocol/server-filesystem@2025.12.18(@cfworker/json-schema@4.1.1)(zod@3.25.76)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       diff: 5.2.2
       glob: 10.5.0
       minimatch: 10.2.4

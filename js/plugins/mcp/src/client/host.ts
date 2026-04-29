@@ -20,13 +20,14 @@ import {
   type DynamicResourceAction,
   type ExecutablePrompt,
   type Genkit,
+  type MultipartToolAction,
   type PromptGenerateOptions,
   type ToolAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GenkitMcpClient, McpServerConfig } from './client.js';
 
-export interface McpHostOptions {
+export interface McpHostOptions<M extends boolean = false> {
   /**
    * An optional client name for this MCP host. This name is advertised to MCP Servers
    * as the connecting client name. Defaults to 'genkit-mcp'.
@@ -52,13 +53,19 @@ export interface McpHostOptions {
    */
   rawToolResponses?: boolean;
 
+  /** If true, tools will be registered as multipart tool.v2 actions. */
+  multipart?: M;
+
   /**
    * When provided, each connected MCP server will be sent the roots specified here. Overridden by any specific roots sent in the `mcpServers` config for a given server.
    */
   roots?: Root[];
 }
 
-export type McpHostOptionsWithCache = Omit<McpHostOptions, 'name'> & {
+export type McpHostOptionsWithCache<M extends boolean = false> = Omit<
+  McpHostOptions<M>,
+  'name'
+> & {
   /**
    * A client name for this MCP host. This name is advertised to MCP Servers
    * as the connecting client name.
@@ -92,9 +99,9 @@ interface ClientState {
  * It allows for dynamic registration of tools from all connected and enabled MCP servers
  * into a Genkit instance.
  */
-export class GenkitMcpHost {
+export class GenkitMcpHost<Multipart extends boolean = false> {
   name: string;
-  private _clients: Record<string, GenkitMcpClient> = {};
+  private _clients: Record<string, GenkitMcpClient<Multipart>> = {};
   private _clientStates: Record<string, ClientState> = {};
   private _readyListeners: {
     resolve: () => void;
@@ -104,10 +111,12 @@ export class GenkitMcpHost {
   private _dynamicActionProvider: DynamicActionProviderAction | undefined;
   private roots: Root[] | undefined;
   rawToolResponses?: boolean;
+  multipart?: Multipart;
 
-  constructor(options: McpHostOptions) {
+  constructor(options: McpHostOptions<Multipart>) {
     this.name = options.name || 'genkit-mcp';
     this.rawToolResponses = options.rawToolResponses;
+    this.multipart = options.multipart;
     this.roots = options.roots;
 
     if (options.mcpServers) {
@@ -165,11 +174,12 @@ export class GenkitMcpHost {
       `[MCP Host] Connecting to MCP server '${serverName}' in host '${this.name}'.`
     );
     try {
-      const client = new GenkitMcpClient({
+      const client = new GenkitMcpClient<Multipart>({
         name: this.name,
         serverName: serverName,
         mcpServer: { ...config, roots: config.roots || this.roots },
         rawToolResponses: this.rawToolResponses,
+        multipart: this.multipart,
       });
       this._clients[serverName] = client;
     } catch (e) {
@@ -353,16 +363,20 @@ export class GenkitMcpHost {
    * @returns A Promise that resolves to an array of `ToolAction` from all
    * active MCP clients.
    */
-  async getActiveTools(ai: Genkit): Promise<ToolAction[]> {
+  async getActiveTools(
+    ai: Genkit
+  ): Promise<(Multipart extends true ? MultipartToolAction : ToolAction)[]> {
     await this.ready();
-    let allTools: ToolAction[] = [];
+    let allTools: (Multipart extends true
+      ? MultipartToolAction
+      : ToolAction)[] = [];
 
     for (const serverName in this._clients) {
       const client = this._clients[serverName];
       if (client.isEnabled() && !this.hasError(serverName)) {
         try {
           const tools = await client.getActiveTools(ai);
-          allTools.push(...tools);
+          allTools.push(...(tools as any));
         } catch (e) {
           logger.error(
             `Error fetching active tools from client ${serverName}.`,
@@ -510,7 +524,7 @@ export class GenkitMcpHost {
   /**
    * Returns an array of all active clients.
    */
-  get activeClients(): GenkitMcpClient[] {
+  get activeClients(): GenkitMcpClient<Multipart>[] {
     return Object.values(this._clients).filter((c) => c.isEnabled());
   }
 

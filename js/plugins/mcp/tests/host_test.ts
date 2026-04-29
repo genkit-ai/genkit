@@ -251,11 +251,162 @@ describe('createMcpHost', () => {
         ],
       };
 
-      const tool = (await clientHost.getActiveTools(ai))[0];
+      const tool: ToolAction = (await clientHost.getActiveTools(ai))[0];
       const response = await tool({
         foo: 'bar',
       });
       assert.deepStrictEqual(response, 'yep {"foo":"bar"}');
+    });
+
+    it('should call the multipart tool', async () => {
+      const multipartHost = createMcpHost({
+        name: 'test-multipart-host',
+        multipart: true,
+        mcpServers: {
+          'test-server': {
+            transport: fakeTransport,
+          },
+        },
+      });
+      await multipartHost.ready();
+
+      fakeTransport.callToolResult = {
+        content: [
+          {
+            type: 'text',
+            text: 'yep {"foo":"bar"}',
+          },
+          {
+            type: 'image',
+            data: 'base64data',
+            mimeType: 'image/png',
+          },
+          {
+            type: 'resource',
+            resource: {
+              uri: 'file:///foo.txt',
+              text: 'hello resource',
+            },
+          },
+          {
+            type: 'resource',
+            resource: {
+              uri: 'file:///blob.bin',
+              blob: 'base64blob',
+              mimeType: 'application/octet-stream',
+            },
+          },
+        ],
+        _meta: {
+          someData: true,
+        },
+      };
+
+      const tools = await multipartHost.getActiveTools(ai);
+      const tool = tools[0];
+      const response = await tool(
+        { foo: 'bar' },
+        { context: { mcp: { _meta: { soMeta: true } } } }
+      );
+
+      assert.deepStrictEqual(response, {
+        content: [
+          { text: 'yep {"foo":"bar"}' },
+          {
+            media: {
+              url: 'data:image/png;base64,base64data',
+              contentType: 'image/png',
+            },
+          },
+          { text: 'Resource (file:///foo.txt):\nhello resource' },
+          {
+            media: {
+              url: 'data:application/octet-stream;base64,base64blob',
+              contentType: 'application/octet-stream',
+            },
+          },
+          { text: '{"soMeta":true}' },
+        ],
+        metadata: {
+          someData: true,
+        },
+      });
+    });
+
+    it('should call the multipart tool and handle errors', async () => {
+      const multipartHost = createMcpHost({
+        name: 'test-multipart-host',
+        multipart: true,
+        mcpServers: {
+          'test-server': {
+            transport: fakeTransport,
+          },
+        },
+      });
+      await multipartHost.ready();
+
+      fakeTransport.callToolResult = {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: 'Simulated tool failure',
+          },
+        ],
+        _meta: {
+          errorCode: 500,
+        },
+      };
+
+      const tools = await multipartHost.getActiveTools(ai);
+      const tool = tools[0];
+      const response = await tool({ foo: 'bar' });
+
+      assert.deepStrictEqual(response, {
+        output: { error: 'Simulated tool failure' },
+        metadata: {
+          errorCode: 500,
+        },
+      });
+    });
+
+    it('should return raw tool response when rawToolResponses is true alongside multipart', async () => {
+      const multipartHost = createMcpHost({
+        name: 'test-multipart-host',
+        multipart: true,
+        rawToolResponses: true,
+        mcpServers: {
+          'test-server': {
+            transport: fakeTransport,
+          },
+        },
+      });
+      await multipartHost.ready();
+
+      fakeTransport.callToolResult = {
+        content: [
+          {
+            type: 'text',
+            text: 'yep {"foo":"bar"}',
+          },
+        ],
+      };
+
+      const tools = await multipartHost.getActiveTools(ai);
+      const tool = tools[0];
+      const response = await tool({ foo: 'bar' });
+
+      // Genkit output schema for multipart expects `{ output: ... }` when returning raw responses
+      assert.deepStrictEqual(response, {
+        output: {
+          content: [
+            {
+              type: 'text',
+              text: 'yep {"foo":"bar"}',
+            },
+          ],
+        },
+      });
     });
   });
 

@@ -162,21 +162,55 @@ function toGeminiToolRequest(part: Part): GeminiPart {
 }
 
 function toGeminiToolResponse(part: Part): GeminiPart {
-  if (!part.toolResponse?.output) {
-    throw Error('Invalid ToolResponsePart: output was missing.');
+  if (part.toolResponse?.output === undefined && !part.toolResponse?.content) {
+    throw Error(
+      'Invalid ToolResponsePart: output or content must be provided.'
+    );
   }
+
+  let responseContent: any = part.toolResponse?.output;
+
+  const functionResponseParts: GeminiPart[] = [];
+  if (part.toolResponse?.content) {
+    const texts: string[] = [];
+    for (const p of part.toolResponse.content) {
+      if (typeof p.text === 'string') {
+        texts.push(p.text);
+      } else if (p.media) {
+        functionResponseParts.push(toGeminiPart(p));
+      }
+    }
+
+    if (texts.length > 0) {
+      if (responseContent === undefined) {
+        responseContent = { text: texts.join('\n') };
+      } else if (
+        typeof responseContent === 'object' &&
+        responseContent !== null
+      ) {
+        responseContent = { ...responseContent, text: texts.join('\n') };
+      }
+    }
+  }
+
+  if (responseContent === undefined) {
+    responseContent = {};
+  }
+
   const functionResponse: GeminiPart['functionResponse'] = {
-    name: part.toolResponse.name,
+    name: part.toolResponse!.name,
     response: {
-      name: part.toolResponse.name,
-      content: part.toolResponse.output,
+      name: part.toolResponse!.name,
+      content: responseContent,
     },
   };
-  if (part.toolResponse.content) {
-    functionResponse.parts = part.toolResponse.content.map(toGeminiPart);
+
+  if (functionResponseParts.length > 0) {
+    functionResponse.parts = functionResponseParts;
   }
-  if (part.toolResponse.ref) {
-    functionResponse.id = part.toolResponse.ref;
+
+  if (part.toolResponse!.ref) {
+    functionResponse.id = part.toolResponse!.ref;
   }
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     functionResponse,

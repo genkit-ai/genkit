@@ -20,6 +20,7 @@ export {
   interrupt,
   toToolDefinition,
   tool,
+  type MultipartToolAction,
   type ToolAction,
   type ToolArgument,
   type ToolConfig,
