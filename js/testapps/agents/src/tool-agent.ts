@@ -16,6 +16,7 @@
 
 import { z } from 'genkit';
 import { ai } from './genkit.js';
+import { FileSessionStore } from 'genkit/beta';
 
 export const getWeather = ai.defineTool(
   {
@@ -25,7 +26,7 @@ export const getWeather = ai.defineTool(
     outputSchema: z.object({ weather: z.string() }),
   },
   async (input) => {
-    return { weather: `Sunny in ${input.location}` };
+    return { weather: `Sunny in ${input.location}`, temperature: '71F' };
   }
 );
 
@@ -39,6 +40,7 @@ export const weatherPrompt = ai.definePrompt({
 });
 
 export const weatherAgent = ai.defineSessionFlowFromPrompt({
+  store: new FileSessionStore('./.snapshots'),
   promptName: 'weatherPrompt',
   defaultInput: { name: 'Bratwurst' },
 });

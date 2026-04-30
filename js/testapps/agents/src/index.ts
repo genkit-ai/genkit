@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { expressHandler } from '@genkit-ai/express';
+import express from 'express';
+
 import { demonstrateBranching, nameAgent } from './branching-agent.js';
 import {
   clientStateAgent,
@@ -35,6 +38,10 @@ import {
   testFileStoreChainPruningAgent,
 } from './file-store.js';
 
+import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
+import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
+
+// Log loaded agents/flows (existing behavior)
 console.log('Loaded agent:', simpleAgent.__action.name);
 console.log('Loaded flow:', testSimpleAgent.__action.name);
 console.log('Loaded prompt agent:', translatorAgent.__action.name);
@@ -55,8 +62,59 @@ console.log(
   'Loaded pruning flow:',
   testFileStoreChainPruningAgent.__action.name
 );
-import { testBankingAgent, bankingAgent } from './interrupt-agent.js';
 console.log('Loaded interrupt flow:', testBankingAgent.__action.name);
 console.log('Loaded interrupt agent:', bankingAgent.__action.name);
-export * from './abort-agent.js';
+console.log('Loaded background agent:', backgroundAgent.__action.name);
+console.log('Loaded background flow:', testBackgroundAgent.__action.name);
+
+export * from './background-agent.js';
 export * from './interrupt-agent.js';
+
+// ---------------------------------------------------------------------------
+// Express server — exposes session flows for the web UI
+// ---------------------------------------------------------------------------
+const app = express();
+app.use(express.json());
+
+// CORS for Vite dev server
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Accept, X-Genkit-Stream-Id'
+  );
+  res.header('Access-Control-Expose-Headers', 'X-Genkit-Stream-Id');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (_req.method === 'OPTIONS') {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
+// Expose session flows
+app.post('/api/simpleAgent', expressHandler(simpleAgent as any));
+app.post('/api/translatorAgent', expressHandler(translatorAgent as any));
+app.post('/api/weatherAgent', expressHandler(weatherAgent as any));
+app.post('/api/weatherAgent/state', expressHandler(weatherAgent.getSnapshotDataAction));
+app.post('/api/clientStateAgent', expressHandler(clientStateAgent as any));
+app.post('/api/bankingAgent', expressHandler(bankingAgent as any));
+app.post('/api/workspaceAgent', expressHandler(workspaceAgent as any));
+app.post('/api/backgroundAgent', expressHandler(backgroundAgent as any));
+app.post('/api/backgroundAgent/state', expressHandler(backgroundAgent.getSnapshotDataAction));
+app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortSessionFlowAction));
+
+// Also expose the test flows for programmatic testing
+app.post('/api/testSimpleAgent', expressHandler(testSimpleAgent));
+app.post('/api/testTranslatorAgent', expressHandler(testTranslatorAgent));
+app.post('/api/testWeatherAgent', expressHandler(testWeatherAgent));
+app.post('/api/testClientStateAgent', expressHandler(testClientStateAgent));
+app.post('/api/testBankingAgent', expressHandler(testBankingAgent));
+app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
+app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
+
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
+app.listen(PORT, () => {
+  console.log(`\n🚀 Express server running on http://localhost:${PORT}`);
+  console.log(`   Web UI: run "cd web && npm run dev" then open http://localhost:5173\n`);
+});

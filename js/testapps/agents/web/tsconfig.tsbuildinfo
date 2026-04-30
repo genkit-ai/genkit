@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/agents.ts","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/components/artifactspanel.tsx","./src/components/chatpanel.tsx","./src/components/interruptdialog.tsx","./src/components/messagebubble.tsx","./src/components/sidebar.tsx"],"version":"5.8.3"}

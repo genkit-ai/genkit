@@ -14,38 +14,37 @@
  * limitations under the License.
  */
 
-import { MessageSchema, z } from 'genkit';
+/**
+ * Client-managed state weather agent — same as the regular weather agent but
+ * with NO server-side store. The client owns the session state blob and must
+ * echo it back on every subsequent turn via `init: { state }`.
+ *
+ * This demonstrates that tool-calling and multi-turn work just fine without
+ * a server store — the session history lives in the state blob that the
+ * client round-trips.
+ */
+
+import { z } from 'genkit';
 import { ai } from './genkit.js';
 
-export const clientStateAgent = ai.defineSessionFlow(
-  { name: 'clientStateAgent' }, // No store!
-  async (sess, { sendChunk }) => {
-    await sess.run(async (input) => {
-      const text =
-        input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
-      const currentCustom = (sess.session.getCustom() as any) || { count: 0 };
+// Reuse the same getWeather tool from tool-agent.
+import { getWeather } from './tool-agent.js';
 
-      const newCustom = { ...currentCustom };
-      newCustom.count = (currentCustom.count || 0) + 1;
-      sess.session.updateCustom(() => newCustom);
+export const clientWeatherPrompt = ai.definePrompt({
+  name: 'clientWeatherPrompt',
+  model: 'googleai/gemini-2.5-flash',
+  input: { schema: z.object({ name: z.string() }) },
+  system:
+    'You are a helpful weather assistant for {{ name }}. Use the getWeather tool to look up weather. Be concise.',
+  tools: [getWeather],
+});
 
-      sendChunk({
-        modelChunk: {
-          content: [
-            {
-              text: `Processed: ${text}. In-memory Turn count: ${newCustom.count}`,
-            },
-          ],
-        },
-      });
-    });
-
-    const msgs = sess.session.getMessages();
-    return {
-      message: msgs[msgs.length - 1],
-    };
-  }
-);
+// No store — client-managed state!
+export const clientStateAgent = ai.defineSessionFlowFromPrompt({
+  promptName: 'clientWeatherPrompt',
+  defaultInput: { name: 'Friend' },
+  // No `store` property → stateless. The client must round-trip the `state` blob.
+});
 
 export const testClientStateAgent = ai.defineFlow(
   {
@@ -54,9 +53,8 @@ export const testClientStateAgent = ai.defineFlow(
       // `state` is the full SessionState returned from a prior turn; omit on
       // first call. The client owns this blob and must echo it back each turn.
       state: z.any().optional(),
-      text: z.string().default('Hello, increment the turn count!'),
+      text: z.string().default('What is the weather in Tokyo?'),
     }),
-
     outputSchema: z.any(),
   },
   async (input, { sendChunk }) => {

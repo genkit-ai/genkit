@@ -1,0 +1,985 @@
+/* Reset & base */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+    Ubuntu, sans-serif;
+  background: #0f0f10;
+  color: #e4e4e7;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+}
+
+/* ---- Sidebar ---- */
+.sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: #18181b;
+  border-right: 1px solid #27272a;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  overflow-y: auto;
+}
+
+.sidebar-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  padding: 0 16px;
+  color: #fbbf24;
+}
+
+.sidebar-subtitle {
+  font-size: 0.75rem;
+  color: #71717a;
+  padding: 2px 16px 16px;
+}
+
+.nav-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  text-decoration: none;
+  color: #a1a1aa;
+  border-left: 3px solid transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  font-size: 0.875rem;
+}
+
+.nav-item:hover {
+  background: #27272a;
+  color: #f4f4f5;
+}
+
+.nav-item.active {
+  background: #1e293b;
+  border-left-color: #fbbf24;
+  color: #f4f4f5;
+  font-weight: 600;
+}
+
+.nav-icon {
+  font-size: 1.1rem;
+}
+
+.nav-label {
+  white-space: nowrap;
+}
+
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #27272a;
+}
+
+.sidebar-hint {
+  font-size: 0.7rem;
+  color: #52525b;
+  line-height: 1.4;
+}
+
+.sidebar-hint code {
+  color: #71717a;
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+}
+
+/* ---- Main area ---- */
+.main {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---- Chat panel (used by ChatUI) ---- */
+.chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid #27272a;
+  background: #18181b;
+}
+
+.chat-header h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f4f4f5;
+}
+
+.chat-desc {
+  font-size: 0.75rem;
+  color: #71717a;
+}
+
+.chat-desc code {
+  color: #a1a1aa;
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
+
+/* ---- Messages ---- */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty-state {
+  color: #52525b;
+  text-align: center;
+  margin-top: 40%;
+  font-size: 0.9rem;
+}
+
+.message {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #27272a;
+  align-self: flex-start;
+}
+
+.message-user {
+  background: #1e40af;
+  align-self: flex-end;
+}
+
+.message-system {
+  background: #422006;
+  align-self: center;
+  font-style: italic;
+  max-width: 90%;
+}
+
+.message-tool {
+  background: #1a1a2e;
+  border: 1px solid #2d2d5e;
+  align-self: center;
+  max-width: 90%;
+  font-size: 0.8rem;
+}
+
+.message-tool .message-role {
+  color: #818cf8;
+}
+
+.message-text-mono {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.8rem;
+}
+
+.message-role {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #71717a;
+  margin-bottom: 4px;
+}
+
+.message-user .message-role {
+  color: #93c5fd;
+}
+
+.message-text {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message-text.streaming {
+  color: #d4d4d8;
+}
+
+.message-text.loading {
+  color: #71717a;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* ---- Input area ---- */
+.chat-input-area {
+  padding: 12px 24px;
+  border-top: 1px solid #27272a;
+  background: #18181b;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.chat-input {
+  flex: 1;
+  resize: none;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #27272a;
+  color: #f4f4f5;
+  padding: 10px 12px;
+  font-size: 0.875rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.chat-input:focus {
+  border-color: #fbbf24;
+}
+
+.chat-input:disabled {
+  opacity: 0.5;
+}
+
+/* ---- Buttons ---- */
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-send {
+  background: #fbbf24;
+  color: #18181b;
+}
+
+.btn-send:hover:not(:disabled) {
+  background: #f59e0b;
+}
+
+.btn-approve {
+  background: #16a34a;
+  color: white;
+}
+
+.btn-approve:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.btn-deny {
+  background: #dc2626;
+  color: white;
+}
+
+.btn-deny:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+/* ---- Interrupt dialog ---- */
+.interrupt-dialog {
+  margin: 0 24px;
+  padding: 16px;
+  background: #422006;
+  border: 1px solid #92400e;
+  border-radius: 12px;
+}
+
+.interrupt-dialog h3 {
+  margin-bottom: 8px;
+  color: #fbbf24;
+}
+
+.interrupt-dialog p {
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+}
+
+.interrupt-feedback {
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  background: #27272a;
+  color: #f4f4f5;
+  font-family: inherit;
+  font-size: 0.8rem;
+  resize: vertical;
+  min-height: 40px;
+}
+
+.interrupt-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ================================================================
+   Translator page
+   ================================================================ */
+.translator-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.translator-controls {
+  padding: 12px 24px;
+  border-bottom: 1px solid #27272a;
+  background: #18181b;
+}
+
+.translator-controls label {
+  font-size: 0.85rem;
+  color: #a1a1aa;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.translator-controls select {
+  background: #27272a;
+  color: #f4f4f5;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+}
+
+.translator-controls select:focus {
+  border-color: #fbbf24;
+}
+
+.translator-panels {
+  flex: 1;
+  display: flex;
+  gap: 1px;
+  background: #27272a;
+  overflow: hidden;
+}
+
+.translator-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #0f0f10;
+  padding: 16px 20px;
+  overflow: hidden;
+}
+
+.translator-panel h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #71717a;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.translator-textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #18181b;
+  color: #f4f4f5;
+  padding: 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.translator-textarea:focus {
+  border-color: #fbbf24;
+}
+
+.translator-textarea:disabled {
+  opacity: 0.5;
+}
+
+.translator-output {
+  flex: 1;
+  padding: 12px;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #d4d4d8;
+}
+
+.loading-text {
+  color: #71717a;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.error-text {
+  color: #f87171;
+}
+
+.translator-actions {
+  padding: 12px 24px;
+  border-top: 1px solid #27272a;
+  background: #18181b;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.translator-hint {
+  font-size: 0.75rem;
+  color: #52525b;
+}
+
+/* ================================================================
+   Client State page — side-by-side chat + state inspector
+   ================================================================ */
+.client-state-layout {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.state-inspector {
+  width: 320px;
+  min-width: 280px;
+  background: #18181b;
+  border-left: 1px solid #27272a;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.state-inspector h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 8px;
+}
+
+.state-inspector-hint {
+  font-size: 0.75rem;
+  color: #71717a;
+  line-height: 1.4;
+  margin-bottom: 12px;
+}
+
+.state-inspector-hint code {
+  color: #a1a1aa;
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
+
+.state-inspector-json {
+  flex: 1;
+  background: #0f0f10;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 0.75rem;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: #a1a1aa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+}
+
+/* ================================================================
+   Workspace Builder — side-by-side chat + artifacts
+   ================================================================ */
+.workspace-layout {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.artifacts-sidebar {
+  width: 360px;
+  min-width: 300px;
+  background: #18181b;
+  border-left: 1px solid #27272a;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.artifacts-sidebar h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #a78bfa;
+  margin-bottom: 12px;
+}
+
+.artifacts-empty {
+  font-size: 0.8rem;
+  color: #52525b;
+  font-style: italic;
+}
+
+.artifact {
+  margin-bottom: 12px;
+}
+
+.artifact-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #c4b5fd;
+  margin-bottom: 4px;
+}
+
+.artifact-content {
+  font-size: 0.75rem;
+  background: #0f0f10;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #27272a;
+  overflow-x: auto;
+  color: #a1a1aa;
+  max-height: 200px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* ================================================================
+   Background Agent — task submission + polling + result
+   ================================================================ */
+.background-layout {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.background-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 0 0 24px;
+}
+
+.background-form {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.background-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #a1a1aa;
+}
+
+.background-input {
+  resize: none;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #18181b;
+  color: #f4f4f5;
+  padding: 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.background-input:focus {
+  border-color: #fbbf24;
+}
+
+.background-input:disabled {
+  opacity: 0.5;
+}
+
+.background-status {
+  padding: 48px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.background-status-icon {
+  font-size: 3rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.background-status h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f4f4f5;
+}
+
+.background-status-detail {
+  font-size: 0.85rem;
+  color: #71717a;
+  max-width: 400px;
+}
+
+.background-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.background-meta code {
+  font-size: 0.7rem;
+  color: #a1a1aa;
+  background: #27272a;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.background-poll-count {
+  font-size: 0.75rem;
+  color: #52525b;
+}
+
+.background-result {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.background-result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.background-status-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+}
+
+.background-status-badge.done {
+  background: #14532d;
+  color: #4ade80;
+}
+
+.background-status-badge.failed {
+  background: #450a0a;
+  color: #f87171;
+}
+
+.background-status-badge.aborted {
+  background: #451a03;
+  color: #fb923c;
+}
+
+.background-snapshot-id {
+  font-size: 0.65rem;
+  color: #71717a;
+  background: #27272a;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.background-report {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 20px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: #d4d4d8;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+
+/* Markdown rendering inside reports */
+.markdown-body h1 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #f4f4f5;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #27272a;
+}
+
+.markdown-body h2 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #fbbf24;
+  margin: 24px 0 12px;
+}
+
+.markdown-body h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e4e4e7;
+  margin: 20px 0 8px;
+}
+
+.markdown-body h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #a1a1aa;
+  margin: 16px 0 6px;
+}
+
+.markdown-body p {
+  margin: 0 0 12px;
+  line-height: 1.7;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0 0 12px;
+  padding-left: 24px;
+}
+
+.markdown-body li {
+  margin-bottom: 4px;
+  line-height: 1.6;
+}
+
+.markdown-body strong {
+  color: #f4f4f5;
+  font-weight: 600;
+}
+
+.markdown-body em {
+  color: #a1a1aa;
+}
+
+.markdown-body code {
+  background: #27272a;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: #d4d4d8;
+}
+
+.markdown-body pre {
+  background: #0f0f10;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 0 0 12px;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid #fbbf24;
+  margin: 0 0 12px;
+  padding: 4px 16px;
+  color: #a1a1aa;
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid #27272a;
+  margin: 20px 0;
+}
+
+.background-error {
+  color: #f87171;
+  font-size: 0.85rem;
+}
+
+/* ================================================================
+   Shared info sidebar — reusable "How It Works" panel
+   ================================================================ */
+.info-sidebar {
+  width: 320px;
+  min-width: 280px;
+  background: #18181b;
+  border-left: 1px solid #27272a;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 16px;
+}
+
+.info-sidebar h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 4px;
+}
+
+.info-sidebar h4 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #a1a1aa;
+  margin: 0;
+}
+
+.info-sidebar ol,
+.info-sidebar ul {
+  padding-left: 20px;
+  font-size: 0.78rem;
+  color: #a1a1aa;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.info-sidebar li code {
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: #d4d4d8;
+}
+
+.info-sidebar p {
+  font-size: 0.78rem;
+  color: #a1a1aa;
+  line-height: 1.5;
+}
+
+.info-sidebar p code {
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: #d4d4d8;
+}
+
+.info-sidebar pre {
+  font-size: 0.7rem;
+  background: #0f0f10;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #27272a;
+  color: #a1a1aa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  overflow-x: auto;
+}
+
+/* Generic layout: content + info sidebar */
+.page-with-sidebar {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Backward compat aliases */
+.background-info { /* same as info-sidebar */ }
+
+.background-steps {
+  padding-left: 20px;
+  font-size: 0.78rem;
+  color: #a1a1aa;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.background-steps code {
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: #d4d4d8;
+}
+
+.background-status-list {
+  list-style: none;
+  padding: 0;
+  font-size: 0.78rem;
+  color: #a1a1aa;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.background-status-list code {
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: #d4d4d8;
+}
+
+.background-code {
+  font-size: 0.7rem;
+  background: #0f0f10;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #27272a;
+  color: #a1a1aa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  overflow-x: auto;
+}
