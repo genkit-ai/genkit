@@ -380,22 +380,26 @@ body {
 }
 
 /* ================================================================
-   Translator page
+   Prompt Variables page
    ================================================================ */
-.translator-page {
+.pv-page {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
-.translator-controls {
+.pv-controls {
   padding: 12px 24px;
   border-bottom: 1px solid #27272a;
   background: #18181b;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.translator-controls label {
+.pv-controls label {
   font-size: 0.85rem;
   color: #a1a1aa;
   display: flex;
@@ -403,7 +407,15 @@ body {
   gap: 8px;
 }
 
-.translator-controls select {
+.pv-control-label {
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+.pv-controls select {
   background: #27272a;
   color: #f4f4f5;
   border: 1px solid #3f3f46;
@@ -414,19 +426,52 @@ body {
   outline: none;
 }
 
-.translator-controls select:focus {
+.pv-controls select:focus {
   border-color: #fbbf24;
 }
 
-.translator-panels {
+.pv-vars-changed {
+  font-size: 0.75rem;
+  color: #fb923c;
+  font-weight: 500;
+}
+
+.pv-prompt-preview {
+  margin: 0 24px;
+  padding: 8px 0;
+}
+
+.pv-prompt-preview summary {
+  font-size: 0.8rem;
+  color: #a1a1aa;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pv-prompt-code {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  background: #0f0f10;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #27272a;
+  color: #a1a1aa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  overflow-x: auto;
+}
+
+.pv-panels {
   flex: 1;
   display: flex;
   gap: 1px;
   background: #27272a;
   overflow: hidden;
+  min-height: 200px;
 }
 
-.translator-panel {
+.pv-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -435,7 +480,7 @@ body {
   overflow: hidden;
 }
 
-.translator-panel h3 {
+.pv-panel h3 {
   font-size: 0.85rem;
   font-weight: 600;
   color: #71717a;
@@ -444,7 +489,7 @@ body {
   letter-spacing: 0.05em;
 }
 
-.translator-textarea {
+.pv-textarea {
   flex: 1;
   resize: none;
   border: 1px solid #3f3f46;
@@ -459,15 +504,15 @@ body {
   transition: border-color 0.15s;
 }
 
-.translator-textarea:focus {
+.pv-textarea:focus {
   border-color: #fbbf24;
 }
 
-.translator-textarea:disabled {
+.pv-textarea:disabled {
   opacity: 0.5;
 }
 
-.translator-output {
+.pv-output {
   flex: 1;
   padding: 12px;
   background: #18181b;
@@ -490,7 +535,7 @@ body {
   color: #f87171;
 }
 
-.translator-actions {
+.pv-actions {
   padding: 12px 24px;
   border-top: 1px solid #27272a;
   background: #18181b;
@@ -499,7 +544,7 @@ body {
   gap: 12px;
 }
 
-.translator-hint {
+.pv-hint {
   font-size: 0.75rem;
   color: #52525b;
 }

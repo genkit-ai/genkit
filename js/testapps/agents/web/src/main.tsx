@@ -6,7 +6,7 @@ import './App.css';
 
 // Lazy-load each page so the imports stay self-contained.
 import WeatherChat from './pages/WeatherChat';
-import Translator from './pages/Translator';
+import PromptVariables from './pages/PromptVariables';
 import ClientState from './pages/ClientState';
 import BankingInterrupt from './pages/BankingInterrupt';
 import WorkspaceBuilder from './pages/WorkspaceBuilder';
@@ -21,7 +21,7 @@ createRoot(document.getElementById('root')!).render(
           <Route index element={<Navigate to="/weather" replace />} />
           <Route path="weather" element={<WeatherChat />} />
           <Route path="weather/:snapshotId" element={<WeatherChat />} />
-          <Route path="translator" element={<Translator />} />
+          <Route path="prompt-variables" element={<PromptVariables />} />
           <Route path="client-state" element={<ClientState />} />
           <Route path="banking" element={<BankingInterrupt />} />
           <Route path="workspace" element={<WorkspaceBuilder />} />
