@@ -338,10 +338,10 @@ export interface SessionFlow<State = unknown, InputVariables = unknown>
     options?: SessionStoreOptions
   ): Promise<SessionSnapshot<State, InputVariables> | undefined>;
 
-  abort(snapshotId: string, options?: SessionStoreOptions): Promise<void>;
+  abort(snapshotId: string, options?: SessionStoreOptions): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State, InputVariables>;
-  readonly abortSessionFlowAction: Action<z.ZodString, z.ZodVoid>;
+  readonly abortSessionFlowAction: Action<z.ZodString, z.ZodType<string | undefined>>;
 }
 
 /**
@@ -596,10 +596,10 @@ export function defineSessionFlow<
     registry,
     {
       name: `${config.name}__abort`,
-      description: `Aborts ${config.name} session flow by snapshotId`,
+      description: `Aborts ${config.name} session flow by snapshotId. Returns the previous status of the snapshot before it was set to 'aborted', or undefined if the snapshot was not found.`,
       actionType: 'session-flow',
       inputSchema: z.string(),
-      outputSchema: z.void(),
+      outputSchema: z.string().optional(),
     },
     async (snapshotId) => {
       if (!config.store) {
@@ -612,9 +612,12 @@ export function defineSessionFlow<
         context: getContext(),
       });
       if (snapshot) {
+        const previousStatus = snapshot.status;
         snapshot.status = 'aborted';
         await config.store.saveSnapshot(snapshot, { context: getContext() });
+        return previousStatus;
       }
+      return undefined;
     }
   );
 
@@ -640,9 +643,12 @@ export function defineSessionFlow<
       }
       const snapshot = await config.store.getSnapshot(snapshotId, options);
       if (snapshot) {
+        const previousStatus = snapshot.status;
         snapshot.status = 'aborted';
         await config.store.saveSnapshot(snapshot, options);
+        return previousStatus;
       }
+      return undefined;
     },
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<
@@ -651,7 +657,7 @@ export function defineSessionFlow<
       >,
     abortSessionFlowAction: abortSessionFlowAction as unknown as Action<
       z.ZodString,
-      z.ZodVoid
+      z.ZodType<string | undefined>
     >,
   });
 

@@ -519,12 +519,72 @@ describe('SessionFlow', () => {
       const snapshotId = output.snapshotId;
       assert.ok(snapshotId);
 
-      await flow.abort(snapshotId!);
+      const previousStatus = await flow.abort(snapshotId!);
 
+      assert.strictEqual(previousStatus, 'pending');
       const snapAborted = await store.getSnapshot(snapshotId!);
       assert.strictEqual(snapAborted?.status, 'aborted');
       // AbortController.abort() fires onabort synchronously, so no delay needed.
       assert.strictEqual(aborted, true);
+    });
+
+    it('should return "done" when aborting an already-completed flow', async () => {
+      const store = new InMemorySessionStore<{ foo: string }>();
+
+      const flow = defineSessionFlow<{ foo: string }>(
+        new Registry(),
+        {
+          name: 'abortDoneTest',
+          store,
+        },
+        async (sess) => {
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'hi' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+      const output = await session.output;
+      assert.ok(output.snapshotId);
+
+      // Snapshot should be 'done' now
+      const snapBefore = await store.getSnapshot(output.snapshotId!);
+      assert.strictEqual(snapBefore?.status, 'done');
+
+      const previousStatus = await flow.abort(output.snapshotId!);
+      assert.strictEqual(previousStatus, 'done');
+
+      const snapAfter = await store.getSnapshot(output.snapshotId!);
+      assert.strictEqual(snapAfter?.status, 'aborted');
+    });
+
+    it('should return undefined when aborting a non-existent snapshot', async () => {
+      const store = new InMemorySessionStore<{ foo: string }>();
+
+      const flow = defineSessionFlow<{ foo: string }>(
+        new Registry(),
+        {
+          name: 'abortMissingTest',
+          store,
+        },
+        async (sess) => {
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'hi' }] },
+          };
+        }
+      );
+
+      const previousStatus = await flow.abort('non-existent-id');
+      assert.strictEqual(previousStatus, undefined);
     });
 
     it('should throw error when detach is requested without session store', async () => {
@@ -610,11 +670,12 @@ describe('SessionFlow', () => {
     });
 
     it('should mark snapshot aborted even without subscription support', async () => {
-      class LegacyStore extends InMemorySessionStore {
-        override onSnapshotStateChange = undefined;
-      }
-
-      const store = new LegacyStore();
+      const baseStore = new InMemorySessionStore();
+      const store = Object.assign(Object.create(baseStore), {
+        onSnapshotStateChange: undefined,
+        getSnapshot: baseStore.getSnapshot.bind(baseStore),
+        saveSnapshot: baseStore.saveSnapshot.bind(baseStore),
+      }) as InMemorySessionStore;
       const flow = defineSessionFlow<{ foo: string }>(
         new Registry(),
         {
