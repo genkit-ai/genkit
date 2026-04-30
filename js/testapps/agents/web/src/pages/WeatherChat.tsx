@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { runFlow, streamFlow } from 'genkit/beta/client';
 import { ChatUI, type Message } from '../components/ChatUI';
 
@@ -224,6 +224,13 @@ export default function WeatherChat() {
         streamingText={streamingText}
         loading={loading}
         onSend={handleSend}
+        headerAction={
+          snapshotIdRef.current ? (
+            <Link to="/weather" className="btn btn-new-session" reloadDocument>
+              ✨ New Session
+            </Link>
+          ) : null
+        }
       />
 
       <aside className="info-sidebar">

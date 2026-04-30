@@ -130,10 +130,34 @@ body {
   background: #18181b;
 }
 
+.chat-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .chat-header h2 {
   font-size: 1.1rem;
   font-weight: 600;
   color: #f4f4f5;
+}
+
+.btn-new-session {
+  background: #27272a;
+  color: #fbbf24;
+  font-size: 0.75rem;
+  padding: 5px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1px solid #3f3f46;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-new-session:hover {
+  background: #3f3f46;
+  border-color: #fbbf24;
 }
 
 .chat-desc {
@@ -983,3 +1007,109 @@ body {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
   overflow-x: auto;
 }
+
+/* ================================================================
+   Branching Chat — Variant Picker
+   ================================================================ */
+
+.variant-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  color: #a1a1aa;
+  font-size: 0.85rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.variant-loading-icon {
+  font-size: 1.4rem;
+}
+
+.variant-picker {
+  padding: 12px 16px 16px;
+}
+
+.variant-picker-label {
+  font-size: 0.78rem;
+  color: #a1a1aa;
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.variant-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.variant-card {
+  background: #1e1e22;
+  border: 1px solid #3f3f46;
+  border-radius: 10px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: #e4e4e7;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+
+.variant-card:hover {
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 1px #fbbf2433;
+  transform: translateY(-1px);
+}
+
+.variant-card:active {
+  transform: translateY(0);
+}
+
+.variant-card-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: #27272a;
+  color: #fbbf24;
+  font-weight: 700;
+  font-size: 0.8rem;
+  margin: 12px 12px 0;
+}
+
+.variant-card-text {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #d4d4d8;
+  white-space: pre-wrap;
+}
+
+.variant-card-action {
+  padding: 8px 12px;
+  border-top: 1px solid #27272a;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fbbf24;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.variant-card:hover .variant-card-action {
+  opacity: 1;
+}
+
+.chat-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: #71717a;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
