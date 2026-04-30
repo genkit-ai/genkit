@@ -167,7 +167,7 @@ async def test_dap_tool_resolved_in_generate() -> None:
 
     assert response.text == 'done'
     assert call_log == ['hello']
-    # Postcondition: resolving/running the tool via the child registry + DAP still does not
+    # Postcondition: resolving/running the tool via DAP still does not
     # persist `echo` under the root registry as a static tool (same check as above).
     assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
 

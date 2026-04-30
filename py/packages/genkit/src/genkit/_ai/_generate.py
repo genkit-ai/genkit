@@ -208,19 +208,17 @@ async def _generate_action(
     context: dict[str, Any] | None = None,
 ) -> ModelResponse:
     """Execute a generation request with tool calling and middleware support."""
-    effective_registry = registry if registry.is_child else registry.new_child()
-
     tools_in = raw_request.tools
     if tools_in:
         raw_request = raw_request.model_copy()
-        raw_request.tools = await expand_wildcard_tools(effective_registry, tools_in)
+        raw_request.tools = await expand_wildcard_tools(registry, tools_in)
 
-    model, tools, format_def = await resolve_parameters(effective_registry, raw_request)
+    model, tools, format_def = await resolve_parameters(registry, raw_request)
 
     raw_request, formatter = apply_format(raw_request, format_def)
 
     if raw_request.resources:
-        raw_request = await apply_resources(effective_registry, raw_request)
+        raw_request = await apply_resources(registry, raw_request)
 
     assert_valid_tool_names(tools)
 
@@ -228,7 +226,7 @@ async def _generate_action(
         revised_request,
         interrupted_response,
         resumed_tool_message,
-    ) = await _resolve_resume_options(effective_registry, raw_request)
+    ) = await _resolve_resume_options(registry, raw_request)
 
     # NOTE: in the future we should make it possible to interrupt a restart, but
     # at the moment it's too complicated because it's not clear how to return a
@@ -431,7 +429,7 @@ async def _generate_action(
         revised_model_msg,
         tool_msg,
         transfer_preamble,
-    ) = await resolve_tool_requests(effective_registry, raw_request, generated_msg)
+    ) = await resolve_tool_requests(registry, raw_request, generated_msg)
 
     # if an interrupt message is returned, stop the tool loop and return a
     # response.
@@ -465,7 +463,7 @@ async def _generate_action(
 
     # then recursively call for another loop
     return await _generate_action(
-        effective_registry,
+        registry,
         raw_request=next_request,
         # middleware: middleware,
         current_turn=current_turn + 1,
