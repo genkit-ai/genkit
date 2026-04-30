@@ -37,6 +37,12 @@
 //	curl -N -X POST http://localhost:8080/recipePromptFlow \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"dish": "tacos", "cuisine": "Mexican", "servingSize": 4}}'
+//
+// Test an agent flow (with all middleware: retry, fallback, filesystem, skills):
+//
+//	curl -N -X POST http://localhost:8080/agentPromptFlow \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": "what files are in my current directory?"}'
 package main
 
 import (
@@ -49,6 +55,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/middleware"
 	"github.com/firebase/genkit/go/plugins/server"
 	"google.golang.org/genai"
 )
@@ -94,7 +101,7 @@ func main() {
 	// Config parameter, the Google AI plugin will get the API key from the
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the recommended
 	// practice.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}, &middleware.Middleware{}))
 
 	// Define schemas for the expected input and output types so that the Dotprompt files can reference them.
 	// Alternatively, you can specify the JSON schema by hand in the Dotprompt metadata.
@@ -113,6 +120,8 @@ func main() {
 	DefineStructuredJokeWithDotprompt(g)
 	DefineRecipeWithInlinePrompt(g)
 	DefineRecipeWithDotprompt(g)
+	DefineAgentWithInlinePrompt(g)
+	DefineAgentWithDotprompt(g)
 
 	// Optionally, start a web server to make the flows callable via HTTP.
 	mux := http.NewServeMux()
@@ -309,4 +318,64 @@ func newIngredientFilter() func([]*Ingredient) []*Ingredient {
 		}
 		return
 	}
+}
+
+// DefineAgentWithInlinePrompt demonstrates attaching multiple middlewares
+// (Retry, Fallback, Filesystem, and Skills) directly to a prompt definition.
+// This creates a highly capable and resilient prompt that is also fully
+// transparent in the Dev UI metadata.
+func DefineAgentWithInlinePrompt(g *genkit.Genkit) {
+	agentPrompt := genkit.DefinePrompt(
+		g, "agent.code",
+		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithPrompt("{{query}}"),
+		ai.WithUse(
+			&middleware.Retry{MaxRetries: 2},
+			&middleware.Fallback{
+				Models: []ai.ModelRef{
+					googlegenai.ModelRef("googleai/gemini-2.0-flash-lite", nil),
+				},
+			},
+			&middleware.Filesystem{RootDir: "."},
+			&middleware.Skills{SkillPaths: []string{"./skills"}},
+		),
+	)
+
+	genkit.DefineStreamingFlow(g, "agentPromptFlow",
+		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
+			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"query": query}))
+			for result, err := range stream {
+				if err != nil {
+					return "", fmt.Errorf("agent error: %w", err)
+				}
+				if result.Done {
+					return result.Response.Text(), nil
+				}
+				sendChunk(ctx, result.Chunk.Text())
+			}
+			return "", nil
+		},
+	)
+}
+
+// DefineAgentWithDotprompt demonstrates loading a prompt from a .prompt file
+// that includes a full suite of middleware configuration in its YAML frontmatter.
+func DefineAgentWithDotprompt(g *genkit.Genkit) {
+	genkit.DefineStreamingFlow(g, "agentDotpromptFlow",
+		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
+			// The "agent" prompt file includes all middleware in its frontmatter.
+			agentPrompt := genkit.LookupPrompt(g, "agent")
+			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"query": query}))
+			for result, err := range stream {
+				if err != nil {
+					return "", fmt.Errorf("agent error: %w", err)
+				}
+				if result.Done {
+					return result.Response.Text(), nil
+				}
+				sendChunk(ctx, result.Chunk.Text())
+			}
+			return "", nil
+		},
+	)
 }

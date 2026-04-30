@@ -1,0 +1,20 @@
+---
+model: googleai/gemini-2.5-flash
+use:
+  - name: genkit-middleware/retry
+    config:
+      maxRetries: 2
+  - name: genkit-middleware/fallback
+    config:
+      models:
+        - googleai/gemini-2.5-flash-lite
+  - name: genkit-middleware/filesystem
+    config:
+      rootDirectory: .
+  - name: genkit-middleware/skills
+    config:
+      skillPaths:
+        - ./skills
+---
+
+{{query}}
