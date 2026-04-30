@@ -30,18 +30,14 @@ import { ai } from './genkit.js';
 // Reuse the same getWeather tool from tool-agent.
 import { getWeather } from './tool-agent.js';
 
-export const clientWeatherPrompt = ai.definePrompt({
+// No store — client-managed state!
+export const clientStateAgent = ai.defineAgent({
   name: 'clientWeatherPrompt',
   model: 'googleai/gemini-2.5-flash',
   input: { schema: z.object({ name: z.string() }) },
   system:
     'You are a helpful weather assistant for {{ name }}. Use the getWeather tool to look up weather. Be concise.',
   tools: [getWeather],
-});
-
-// No store — client-managed state!
-export const clientStateAgent = ai.defineSessionFlowFromPrompt({
-  promptName: 'clientWeatherPrompt',
   defaultInput: { name: 'Friend' },
   // No `store` property → stateless. The client must round-trip the `state` blob.
 });

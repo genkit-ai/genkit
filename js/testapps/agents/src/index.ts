@@ -102,7 +102,7 @@ app.post('/api/bankingAgent', expressHandler(bankingAgent as any));
 app.post('/api/workspaceAgent', expressHandler(workspaceAgent as any));
 app.post('/api/backgroundAgent', expressHandler(backgroundAgent as any));
 app.post('/api/backgroundAgent/state', expressHandler(backgroundAgent.getSnapshotDataAction));
-app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortSessionFlowAction));
+app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortAgentAction));
 app.post('/api/branchingAgent', expressHandler(nameAgent as any));
 app.post('/api/branchingAgent/state', expressHandler(nameAgent.getSnapshotDataAction));
 

@@ -8,7 +8,7 @@ import Markdown from 'react-markdown';
 // Demonstrates:
 //   • `detach: true` — submit a task to run in the background
 //   • Polling `getSnapshotDataAction` for status updates
-//   • Aborting a background task via `abortSessionFlowAction`
+//   • Aborting a background task via `abortAgentAction`
 //   • Non-chat UI: task submission → status polling → result display
 //
 // The key pattern: the server returns a snapshotId immediately, then the

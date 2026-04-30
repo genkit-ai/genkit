@@ -17,7 +17,7 @@
 import { tool, z } from 'genkit';
 import { ai } from './genkit.js';
 
-export const workspaceAgent = ai.defineSessionFlow(
+export const workspaceAgent = ai.defineCustomAgent(
   { name: 'workspaceAgent' },
   async (sess, { sendChunk }) => {
     const emitArtifactTool = tool(

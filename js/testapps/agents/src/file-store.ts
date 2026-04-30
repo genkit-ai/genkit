@@ -140,15 +140,13 @@ export class FileSessionStore<S = unknown, I = unknown>
 
 export const fileStore = new FileSessionStore<any, any>('./.snapshots');
 
-export const fileStorePrompt = ai.definePrompt({
+// defineAgent registers the prompt internally, so pruningAgent can also
+// reference it by name via definePromptAgent.
+export const fileStoreAgent = ai.defineAgent({
   name: 'fileStorePrompt',
   model: 'googleai/gemini-flash-lite-latest',
   input: { schema: z.object({ userName: z.string() }) },
   system: `You are a personal logbook assistant. Always address the user by the name {{ userName }}.`,
-});
-
-export const fileStoreAgent = ai.defineSessionFlowFromPrompt({
-  promptName: 'fileStorePrompt',
   defaultInput: { userName: 'Stranger' },
   store: fileStore,
 });
@@ -212,7 +210,7 @@ export const pruningStore = new FileSessionStore<any, any>(
   }
 );
 
-export const pruningAgent = ai.defineSessionFlowFromPrompt({
+export const pruningAgent = ai.definePromptAgent({
   promptName: 'fileStorePrompt',
   defaultInput: { userName: 'Stranger' },
   store: pruningStore,

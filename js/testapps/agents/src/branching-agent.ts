@@ -20,18 +20,13 @@ import { ai } from './genkit.js';
 
 export const branchingStore = new InMemorySessionStore();
 
-export const namePrompt = ai.definePrompt({
+export const nameAgent = ai.defineAgent({
   name: 'namePrompt',
   model: 'googleai/gemini-flash-lite-latest',
   input: { schema: z.object({}) },
   system:
     'You are a friendly assistant. Keep track of the user name and answer their questions about it. ' +
     'Be very terse in your responses, extremely. If one word will do, use one word. No punctuation unless needed.',
-});
-
-export const nameAgent = ai.defineSessionFlowFromPrompt({
-  promptName: 'namePrompt',
-  defaultInput: {},
   store: branchingStore,
 });
 
