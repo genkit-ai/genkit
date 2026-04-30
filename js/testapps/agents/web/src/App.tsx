@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { to: '/banking', icon: '🏦', label: 'Banking (Interrupt)' },
   { to: '/workspace', icon: '🛠️', label: 'Workspace Builder' },
   { to: '/background', icon: '⏳', label: 'Background (Detach)' },
+  { to: '/branching', icon: '🔀', label: 'Branching (Variants)' },
 ];
 
 export default function App() {

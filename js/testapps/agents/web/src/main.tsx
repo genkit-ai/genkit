@@ -11,6 +11,7 @@ import ClientState from './pages/ClientState';
 import BankingInterrupt from './pages/BankingInterrupt';
 import WorkspaceBuilder from './pages/WorkspaceBuilder';
 import BackgroundAgent from './pages/BackgroundAgent';
+import BranchingChat from './pages/BranchingChat';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -25,6 +26,8 @@ createRoot(document.getElementById('root')!).render(
           <Route path="banking" element={<BankingInterrupt />} />
           <Route path="workspace" element={<WorkspaceBuilder />} />
           <Route path="background" element={<BackgroundAgent />} />
+          <Route path="branching" element={<BranchingChat />} />
+          <Route path="branching/:snapshotId" element={<BranchingChat />} />
         </Route>
       </Routes>
     </BrowserRouter>

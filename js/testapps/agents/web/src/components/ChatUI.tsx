@@ -27,6 +27,8 @@ interface Props {
   inputDisabled?: boolean;
   /** Optional extra content rendered between messages and input (e.g. interrupt dialog, artifacts). */
   children?: React.ReactNode;
+  /** Optional action element rendered in the header (e.g. "New Session" button). */
+  headerAction?: React.ReactNode;
 }
 
 export function ChatUI({
@@ -38,6 +40,7 @@ export function ChatUI({
   onSend,
   inputDisabled,
   children,
+  headerAction,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -70,7 +73,10 @@ export function ChatUI({
   return (
     <div className="chat-panel">
       <div className="chat-header">
-        <h2>{title}</h2>
+        <div className="chat-header-top">
+          <h2>{title}</h2>
+          {headerAction && <div className="chat-header-action">{headerAction}</div>}
+        </div>
         {description && <span className="chat-desc">{description}</span>}
       </div>
 

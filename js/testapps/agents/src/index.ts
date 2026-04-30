@@ -103,6 +103,8 @@ app.post('/api/workspaceAgent', expressHandler(workspaceAgent as any));
 app.post('/api/backgroundAgent', expressHandler(backgroundAgent as any));
 app.post('/api/backgroundAgent/state', expressHandler(backgroundAgent.getSnapshotDataAction));
 app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortSessionFlowAction));
+app.post('/api/branchingAgent', expressHandler(nameAgent as any));
+app.post('/api/branchingAgent/state', expressHandler(nameAgent.getSnapshotDataAction));
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testSimpleAgent', expressHandler(testSimpleAgent));
