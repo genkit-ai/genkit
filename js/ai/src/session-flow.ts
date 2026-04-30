@@ -46,6 +46,7 @@ import {
   SessionStateSchema,
   SessionStore,
   SnapshotCallback,
+  runWithSession,
   type SessionStoreOptions,
 } from './session.js';
 
@@ -529,11 +530,11 @@ export function defineSessionFlow<
 
       const flowPromise = (async () => {
         try {
-          const result = await fn(runner, {
+          const result = await runWithSession(registry, session, () => fn(runner, {
             sendChunk,
             abortSignal: abortController.signal,
             context: getContext(),
-          });
+          }));
           const finalSnapshotId = await runner.maybeSnapshot('invocationEnd');
           return { result, finalSnapshotId };
         } finally {
