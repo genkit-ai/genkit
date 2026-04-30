@@ -21,9 +21,6 @@ Bidirectional input streaming (``sendInputStreamChunk`` / ``endInputStream``) is
 implemented yet. Requests with an ``id`` receive JSON-RPC ``-32000`` with message
 ``Not implemented`` and ``error.data.stack`` (same pattern as JS ``throw`` in the handler).
 Notifications without ``id`` are ignored except for a debug log.
-
-TODO: ``listActions`` is currently a stub (empty ``actions``); a future change will wire it to
-an updated ``Registry.list_resolvable_actions`` method.
 """
 
 from __future__ import annotations
@@ -326,11 +323,24 @@ class ReflectionServerV2:
             )
 
     async def _handle_list_actions(self, req_id: str | int | None, _: dict[str, Any]) -> None:
-        """Stub: return empty ``actions`` until ``list_resolvable_actions`` is implemented."""
         if req_id is None:
             return
         sid = str(req_id)
-        await self._send_response(sid, {'actions': {}})
+        catalog = await self._registry.list_actions()
+        actions: dict[str, dict[str, Any]] = {}
+        for key, meta in catalog.items():
+            row: dict[str, Any] = {
+                'key': key,
+                'name': meta.name,
+                'actionType': str(meta.action_type) if meta.action_type is not None else None,
+                'description': meta.description,
+                'metadata': meta.metadata,
+                'inputSchema': meta.input_schema if meta.input_schema is not None else meta.input_json_schema,
+                'outputSchema': meta.output_schema if meta.output_schema is not None else meta.output_json_schema,
+                'streamSchema': meta.stream_schema,
+            }
+            actions[key] = {k: v for k, v in row.items() if v is not None}
+        await self._send_response(sid, {'actions': actions})
 
     async def _handle_list_values(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         if req_id is None:

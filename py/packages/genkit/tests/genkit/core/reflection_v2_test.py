@@ -183,8 +183,8 @@ async def test_reflection_server_v2_register_handshake_telemetry(fake_manager: F
 
 
 @pytest.mark.asyncio
-async def test_reflection_server_v2_list_actions_stub(fake_manager: FakeReflectionManager) -> None:
-    """listActions is stubbed (empty map) until list_resolvable_actions is wired."""
+async def test_reflection_server_v2_list_actions(fake_manager: FakeReflectionManager) -> None:
+    """listActions returns the same catalog as :meth:`Registry.list_actions`."""
     registry = Registry()
 
     async def inc(x: int) -> int:
@@ -206,7 +206,19 @@ async def test_reflection_server_v2_list_actions_stub(fake_manager: FakeReflecti
         assert isinstance(result, dict)
         actions = result.get('actions')
         assert isinstance(actions, dict)
-        assert actions == {}
+        assert actions == {
+            '/custom/test/inc': {
+                'key': '/custom/test/inc',
+                'name': 'test/inc',
+                'actionType': 'custom',
+                'inputSchema': {'type': 'integer'},
+                'outputSchema': {'type': 'integer'},
+                'metadata': {
+                    'inputSchema': {'type': 'integer'},
+                    'outputSchema': {'type': 'integer'},
+                },
+            }
+        }
     finally:
         await _stop_client(client, task)
 
