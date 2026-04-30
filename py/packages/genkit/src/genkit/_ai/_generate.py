@@ -37,7 +37,7 @@ from genkit._ai._model import (
     ModelResponseChunk,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
-from genkit._ai._tools import Tool, ToolInterruptError
+from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart
 from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
@@ -862,7 +862,7 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
     Used when building ModelRequest (for example from to_generate_request).
     """
     if isinstance(tool_ref, Tool):
-        return tool_ref.action
+        return tool_ref.action()
 
     if tool_ref.startswith('/'):
         tool = await registry.resolve_action_by_key(tool_ref)
@@ -871,7 +871,7 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
 
     tool = await registry.resolve_action(kind=ActionKind.TOOL, name=tool_ref)
     if tool is None:
-        raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_name}')
+        raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_ref}')
     return tool
 
 
