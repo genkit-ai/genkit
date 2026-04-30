@@ -16,17 +16,17 @@
 
 import { z } from 'genkit';
 import { ai } from './genkit.js';
-import { SessionFlowInit, SessionFlowInput } from '../../../ai/lib/session-flow.js';
+import { AgentInit, AgentInput } from '../../../ai/lib/session-flow.js';
 
 // ---------------------------------------------------------------------------
-// Writer Agent — demonstrates `defineSessionFlowFromPrompt` with multiple
-// prompt input variables.  The system prompt is a Handlebars template that
-// references {{ tone }}, {{ format }}, and {{ audience }}.  At runtime the
-// client can supply any combination of these variables via `init` to reshape
-// the agent's behaviour without changing any server code.
+// Writer Agent — demonstrates `defineAgent` with multiple prompt input
+// variables.  The system prompt is a Handlebars template that references
+// {{ tone }}, {{ format }}, and {{ audience }}.  At runtime the client can
+// supply any combination of these variables via `init` to reshape the
+// agent's behaviour without changing any server code.
 // ---------------------------------------------------------------------------
 
-export const writerPrompt = ai.definePrompt({
+export const writerAgent = ai.defineAgent({
   name: 'writerPrompt',
   model: 'googleai/gemini-flash-latest',
   input: {
@@ -48,10 +48,6 @@ Follow these rules strictly:
 - Always tailor your language and complexity to the target audience.
 
 Help the user with whatever writing task they request.`,
-});
-
-export const writerAgent = ai.defineSessionFlowFromPrompt({
-  promptName: 'writerPrompt',
   defaultInput: {
     tone: 'Professional',
     format: 'Paragraph',
@@ -67,10 +63,10 @@ export const testWriterAgent = ai.defineFlow(
   },
   async (text) => {
     const res = await writerAgent.run(
-      <SessionFlowInput>{
+      <AgentInput>{
         messages: [{ role: 'user', content: [{ text }] }],
       },
-      { init: <SessionFlowInit>{}   }
+      { init: <AgentInit>{}   }
     );
     return res.result;
   }

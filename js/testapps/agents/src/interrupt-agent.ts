@@ -51,17 +51,13 @@ export const transferMoney = ai.defineTool(
   }
 );
 
-export const bankingPrompt = ai.definePrompt({
+export const bankingAgent = ai.defineAgent({
   name: 'bankingPrompt',
   model: 'googleai/gemini-2.5-flash',
   input: { schema: z.object({ request: z.string() }) },
   system:
     'You are a helpful banking assistant. If the user wants to transfer money, ALWAYS use the userApproval interrupt to confirm the details before executing the transferMoney tool.',
   tools: [userApproval, transferMoney],
-});
-
-export const bankingAgent = ai.defineSessionFlowFromPrompt({
-  promptName: 'bankingPrompt',
   defaultInput: { request: 'I need help with my account.' },
   store,
 });

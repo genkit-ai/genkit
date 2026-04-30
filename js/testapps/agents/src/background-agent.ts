@@ -26,7 +26,7 @@ import { ai } from './genkit.js';
 //     the background and return a snapshotId immediately.
 //   • The client can poll `getSnapshotDataAction` to check the status
 //     (pending → done/failed/aborted).
-//   • The client can call `abortSessionFlowAction` to cancel background work.
+//   • The client can call `abortAgentAction` to cancel background work.
 //   • A persistent store is REQUIRED for detach to work — the server needs
 //     somewhere to write the result when the background work completes.
 // ---------------------------------------------------------------------------
@@ -34,10 +34,16 @@ import { ai } from './genkit.js';
 const store = new InMemorySessionStore();
 
 /**
- * Prompt for generating research reports. The model is given a topic and
- * produces a comprehensive, multi-section markdown report.
+ * The background agent. Using defineAgent so the prompt and agent are
+ * defined together — but the key feature here is the `store`, which
+ * enables `detach: true`.
+ *
+ * When the client sends `{ messages: [...], detach: true }`, the server:
+ * 1. Saves a snapshot with status 'pending' and returns the snapshotId.
+ * 2. Continues processing the LLM request in the background.
+ * 3. Updates the snapshot to status 'done' (or 'failed') when complete.
  */
-const reportPrompt = ai.definePrompt({
+export const backgroundAgent = ai.defineAgent({
   name: 'reportPrompt',
   model: 'googleai/gemini-flash-latest',
   system: `You are a senior research analyst. When given a topic, produce a comprehensive research report in markdown format.
@@ -50,22 +56,7 @@ Your report must include:
 - **Conclusion & Recommendations** — Actionable takeaways.
 
 Be thorough, analytical, and evidence-based. Use markdown headings, bullet points, and bold text for structure.`,
-});
-
-/**
- * The background agent session flow. Using defineSessionFlowFromPrompt
- * so the LLM interaction is handled automatically — but the key feature
- * here is the `store`, which enables `detach: true`.
- *
- * When the client sends `{ messages: [...], detach: true }`, the server:
- * 1. Saves a snapshot with status 'pending' and returns the snapshotId.
- * 2. Continues processing the LLM request in the background.
- * 3. Updates the snapshot to status 'done' (or 'failed') when complete.
- */
-export const backgroundAgent = ai.defineSessionFlowFromPrompt({
   store,
-  promptName: 'reportPrompt',
-  defaultInput: {},
 });
 
 /**
