@@ -1072,6 +1072,82 @@ func TestTranslateCandidateThoughtSignature(t *testing.T) {
 	})
 }
 
+// TestTranslateCandidateMultiFieldPart verifies that a single genai.Part with
+// multiple populated fields (e.g. text alongside InlineData, as returned by
+// image-generation models like Nano Banana 2) is split into separate ai.Parts
+// instead of panicking. Regression test for issue #5195.
+func TestTranslateCandidateMultiFieldPart(t *testing.T) {
+	t.Run("text and inline data in the same part", func(t *testing.T) {
+		imageBytes := []byte{0x89, 0x50, 0x4e, 0x47}
+		candidate := &genai.Candidate{
+			FinishReason: genai.FinishReasonStop,
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{
+						Text: "Here is the restored photo.",
+						InlineData: &genai.Blob{
+							MIMEType: "image/png",
+							Data:     imageBytes,
+						},
+					},
+				},
+			},
+		}
+
+		resp, err := translateCandidate(candidate)
+		if err != nil {
+			t.Fatalf("translateCandidate failed: %v", err)
+		}
+
+		if got, want := len(resp.Message.Content), 2; got != want {
+			t.Fatalf("expected %d parts, got %d", want, got)
+		}
+		if !resp.Message.Content[0].IsText() || resp.Message.Content[0].Text != "Here is the restored photo." {
+			t.Errorf("expected first part to be the text, got %#v", resp.Message.Content[0])
+		}
+		if !resp.Message.Content[1].IsMedia() {
+			t.Errorf("expected second part to be media, got %#v", resp.Message.Content[1])
+		}
+	})
+
+	t.Run("signature attaches to the first emitted part only", func(t *testing.T) {
+		testSignature := []byte("multi-part-signature")
+		candidate := &genai.Candidate{
+			FinishReason: genai.FinishReasonStop,
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{
+						Text: "caption",
+						InlineData: &genai.Blob{
+							MIMEType: "image/png",
+							Data:     []byte{0x00},
+						},
+						ThoughtSignature: testSignature,
+					},
+				},
+			},
+		}
+
+		resp, err := translateCandidate(candidate)
+		if err != nil {
+			t.Fatalf("translateCandidate failed: %v", err)
+		}
+
+		if got, want := len(resp.Message.Content), 2; got != want {
+			t.Fatalf("expected %d parts, got %d", want, got)
+		}
+		sig, ok := resp.Message.Content[0].Metadata["signature"].([]byte)
+		if !ok || string(sig) != string(testSignature) {
+			t.Errorf("expected signature on first part, got metadata %#v", resp.Message.Content[0].Metadata)
+		}
+		if _, ok := resp.Message.Content[1].Metadata["signature"]; ok {
+			t.Errorf("did not expect signature on second part, got metadata %#v", resp.Message.Content[1].Metadata)
+		}
+	})
+}
+
 // TestFinishReasonMapping tests the mapping of Gemini finish reasons to Genkit finish reasons.
 func TestFinishReasonMapping(t *testing.T) {
 	testCases := []struct {

@@ -193,7 +193,7 @@ func generate(
 	if cb == nil {
 		resp, err := client.Models.GenerateContent(ctx, model, contents, gcc)
 		if err != nil {
-			return nil, err
+			return nil, wrapAPIError(err)
 		}
 		r, err := translateResponse(resp)
 		if err != nil {
@@ -218,7 +218,7 @@ func generate(
 	for chunk, err := range iter {
 		// abort stream if error found in the iterator items
 		if err != nil {
-			return nil, err
+			return nil, wrapAPIError(err)
 		}
 		for _, c := range chunk.Candidates {
 			tc, err := translateCandidate(c)
@@ -409,73 +409,57 @@ func translateCandidate(cand *genai.Candidate) (*ai.ModelResponse, error) {
 	}
 	msg := &ai.Message{}
 	msg.Role = ai.Role(cand.Content.Role)
-	// iterate over the candidate parts, only one struct member
-	// must be populated, more than one is considered an error
+	// A single genai.Part may have several fields populated at once (e.g.
+	// image-generation models can return text alongside InlineData). Emit a
+	// separate ai.Part for each populated field rather than failing.
 	for _, part := range cand.Content.Parts {
-		var p *ai.Part
-		partFound := 0
+		var emitted []*ai.Part
 
 		if part.Thought {
-			p = ai.NewReasoningPart(part.Text, part.ThoughtSignature)
-			partFound++
-		}
-		if part.Text != "" && !part.Thought {
-			p = ai.NewTextPart(part.Text)
-			partFound++
+			emitted = append(emitted, ai.NewReasoningPart(part.Text, part.ThoughtSignature))
+		} else if part.Text != "" {
+			emitted = append(emitted, ai.NewTextPart(part.Text))
 		}
 		if part.InlineData != nil {
-			partFound++
-			p = ai.NewMediaPart(part.InlineData.MIMEType, "data:"+part.InlineData.MIMEType+";base64,"+base64.StdEncoding.EncodeToString((part.InlineData.Data)))
+			emitted = append(emitted, ai.NewMediaPart(part.InlineData.MIMEType, "data:"+part.InlineData.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(part.InlineData.Data)))
 		}
 		if part.FileData != nil {
-			partFound++
-			p = ai.NewMediaPart(part.FileData.MIMEType, part.FileData.FileURI)
-
+			emitted = append(emitted, ai.NewMediaPart(part.FileData.MIMEType, part.FileData.FileURI))
 		}
 		if part.FunctionCall != nil {
-			partFound++
-			p = ai.NewToolRequestPart(&ai.ToolRequest{
+			emitted = append(emitted, ai.NewToolRequestPart(&ai.ToolRequest{
 				Name:  part.FunctionCall.Name,
 				Input: part.FunctionCall.Args,
-			})
-			// FunctionCall parts may contain a ThoughtSignature that must be preserved
-			// and returned in subsequent requests for the tool call to be valid.
-			if len(part.ThoughtSignature) > 0 {
-				if p.Metadata == nil {
-					p.Metadata = make(map[string]any)
-				}
-				p.Metadata["signature"] = part.ThoughtSignature
-			}
+			}))
 		}
 		if part.CodeExecutionResult != nil {
-			partFound++
-			p = newCodeExecutionResultPart(
+			emitted = append(emitted, newCodeExecutionResultPart(
 				string(part.CodeExecutionResult.Outcome),
 				part.CodeExecutionResult.Output,
-			)
+			))
 		}
 		if part.ExecutableCode != nil {
-			partFound++
-			p = newExecutableCodePart(
+			emitted = append(emitted, newExecutableCodePart(
 				string(part.ExecutableCode.Language),
 				part.ExecutableCode.Code,
-			)
+			))
 		}
-		if partFound > 1 {
-			panic(fmt.Sprintf("expected only 1 content part in response, got %d, part: %#v", partFound, part))
-		}
-		if p == nil {
+
+		if len(emitted) == 0 {
 			continue
 		}
 
+		// Attach the thought signature to the first emitted part so that a
+		// subsequent request round-trips a single signature per genai.Part.
 		if len(part.ThoughtSignature) > 0 {
-			if p.Metadata == nil {
-				p.Metadata = make(map[string]any)
+			first := emitted[0]
+			if first.Metadata == nil {
+				first.Metadata = make(map[string]any)
 			}
-			p.Metadata["signature"] = part.ThoughtSignature
+			first.Metadata["signature"] = part.ThoughtSignature
 		}
 
-		msg.Content = append(msg.Content, p)
+		msg.Content = append(msg.Content, emitted...)
 	}
 	m.Message = msg
 	return m, nil

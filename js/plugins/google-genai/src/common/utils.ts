@@ -619,4 +619,11 @@ export function getGenkitClientHeader() {
   return defaultGetClientHeader();
 }
 
+export function isKnownKey<T extends object>(
+  key: string | number | symbol,
+  obj: T
+): key is keyof T {
+  return key in obj;
+}
+
 export const TEST_ONLY = { aggregateResponses };

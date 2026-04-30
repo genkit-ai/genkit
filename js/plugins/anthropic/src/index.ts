@@ -19,24 +19,24 @@ import Anthropic from '@anthropic-ai/sdk';
 import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
 
 import type { Part } from 'genkit';
-import { ActionMetadata, ModelReference, z } from 'genkit';
-import { ModelAction } from 'genkit/model';
-import { ActionType } from 'genkit/registry';
+import { z, type ActionMetadata, type ModelReference } from 'genkit';
+import { type ModelAction } from 'genkit/model';
+import { type ActionType } from 'genkit/registry';
 import { listActions } from './list.js';
 import {
-  AnthropicConfigSchemaType,
-  ClaudeConfig,
-  ClaudeModelName,
-  KNOWN_CLAUDE_MODELS,
-  KnownClaudeModels,
   claudeModel,
   claudeModelReference,
+  listKnownModels,
+  type ClaudeModelName,
+  type KnownClaudeModels,
 } from './models.js';
 import {
-  InternalPluginOptions,
-  PluginOptions,
   __testClient,
+  type AnthropicConfigSchemaType,
   type AnthropicDocumentOptions,
+  type ClaudeConfig,
+  type InternalPluginOptions,
+  type PluginOptions,
 } from './types.js';
 
 // Re-export types and utilities for consumers
@@ -103,14 +103,7 @@ function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
     name: 'anthropic',
     init: async () => {
       const actions: ModelAction[] = [];
-      for (const name of Object.keys(KNOWN_CLAUDE_MODELS)) {
-        const action = claudeModel({
-          name,
-          client,
-          defaultApiVersion,
-        });
-        actions.push(action);
-      }
+      actions.push(...listKnownModels(client, defaultApiVersion));
       return actions;
     },
     resolve: (actionType: ActionType, name: string) => {

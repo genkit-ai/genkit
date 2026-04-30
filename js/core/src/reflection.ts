@@ -179,16 +179,25 @@ export class ReflectionServer {
           response.status(400).send('Query parameter "type" is required.');
           return;
         }
-        if (type !== 'defaultModel') {
+        if (type !== 'defaultModel' && type !== 'middleware') {
           response
             .status(400)
             .send(
-              `'type' ${type} is not supported. Only 'defaultModel' is supported`
+              `'type' ${type} is not supported. Only 'defaultModel' and 'middleware' are supported`
             );
           return;
         }
         const values = await this.registry.listValues(type as string);
-        response.send(values);
+        const mappedValues: Record<string, any> = {};
+        for (const [key, value] of Object.entries(values)) {
+          mappedValues[key] =
+            value &&
+            (value as any).toJson &&
+            typeof (value as any).toJson === 'function'
+              ? (value as any).toJson()
+              : value;
+        }
+        response.send(mappedValues);
       } catch (err) {
         const { message, stack } = err as Error;
         next({ message, stack });

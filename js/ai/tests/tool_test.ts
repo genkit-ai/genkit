@@ -24,6 +24,8 @@ import {
   defineTool,
   isDynamicTool,
   isMultipartTool,
+  respondTool,
+  restartTool,
   tool,
 } from '../src/tool.js';
 
@@ -456,5 +458,68 @@ describe('defineTool', () => {
     assert.ok(action);
     const result = await action!({});
     assert.deepStrictEqual(result, { output: 'foo' });
+  });
+});
+
+describe('respondTool', () => {
+  it('constructs a ToolResponsePart standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(respondTool(interrupt, 'output'), {
+      toolResponse: {
+        name: 'test',
+        output: 'output',
+      },
+      metadata: {
+        interruptResponse: true,
+      },
+    });
+  });
+
+  it('includes metadata standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(
+      respondTool(interrupt, 'output', { metadata: { extra: 'data' } }),
+      {
+        toolResponse: {
+          name: 'test',
+          output: 'output',
+        },
+        metadata: {
+          interruptResponse: { extra: 'data' },
+        },
+      }
+    );
+  });
+});
+
+describe('restartTool', () => {
+  it('constructs a ToolRequestPart standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(restartTool(interrupt), {
+      toolRequest: {
+        name: 'test',
+        input: {},
+      },
+      metadata: {
+        resumed: true,
+      },
+    });
+  });
+
+  it('allows replacing input standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(
+      restartTool(interrupt, undefined, { replaceInput: 'new' }),
+      {
+        toolRequest: {
+          name: 'test',
+          input: 'new',
+        },
+        metadata: {
+          resumed: true,
+          replacedInput: {},
+        },
+      }
+    );
   });
 });

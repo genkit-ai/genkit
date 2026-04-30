@@ -29,6 +29,7 @@ import {
   type ModelReference,
 } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { veoCheckOperation, veoPredict } from './client.js';
 import {
   ClientOptions,
@@ -128,6 +129,7 @@ const KNOWN_MODELS = {
   'veo-2.0-generate-001': commonRef('veo-2.0-generate-001'),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
 export type VeoModelName = `veo-${string}`;
 export function isVeoModelName(value?: string): value is VeoModelName {
   return !!value?.startsWith('veo-');
@@ -138,6 +140,11 @@ export function model(
   config: VeoConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
+
   return modelRef({
     name: `googleai/${name}`,
     config,

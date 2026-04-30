@@ -998,7 +998,7 @@ class VertexAI(Plugin):
             actions_list.append(
                 ActionMetadata(
                     name=evaluator_name,
-                    kind=ActionKind.EVALUATOR,
+                    action_type=ActionKind.EVALUATOR,
                     input_json_schema=to_json_schema(EvalRequest),
                     output_json_schema=to_json_schema(list[EvalFnResponse]),
                     metadata={'type': 'evaluator'},

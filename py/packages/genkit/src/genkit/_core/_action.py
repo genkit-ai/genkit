@@ -229,18 +229,15 @@ def extract_action_args_and_types(
 # =============================================================================
 
 
+# Attribute name used to attach a ``DynamicActionProvider`` (cache + helpers)
+# onto the placeholder ``Action`` registered for a DAP. The registry only
+# stores the ``Action``; the provider rides along on it as a Python attribute.
+# Code holding the ``Action`` recovers the provider via
+# ``getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)``.
 GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR = '_genkit_dynamic_action_provider'
 
 
-class DapQualifiedName(NamedTuple):
-    """Segments of a DAP-qualified name ``provider:innerKind/innerName``."""
-
-    provider: str
-    inner_kind: str
-    inner_name: str
-
-
-def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
+def parse_dap_qualified_name(name: str) -> tuple[str, str, str] | None:
     """Parse DAP-qualified segment ``provider:innerKind/innerName``.
 
     Used when the action key kind is ``dynamic-action-provider`` and the name
@@ -250,8 +247,9 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     provider segment (``plugin/foo`` is not a valid provider host).
 
     Returns:
-        A :class:`DapQualifiedName` if the string matches; otherwise ``None`` so
-        callers can treat the name as a plain dynamic-action-provider id.
+        ``(provider_name, inner_kind, inner_name)`` if the string matches the
+        pattern; otherwise ``None`` so callers can treat the name as a plain
+        dynamic-action-provider id.
     """
     # Pattern: [provider]:[inner_kind]/[inner_name]; no '/' or ':' in provider.
     match = re.match(r'^([^/:]+):([^/:]+)/(.+)$', name)
@@ -260,7 +258,7 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
         return None
-    return DapQualifiedName(provider, inner_kind, inner_name)
+    return (provider, inner_kind, inner_name)
 
 
 def parse_action_key(key: str) -> tuple[ActionKind, str]:
@@ -565,20 +563,6 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         else:
             self._output_schema = TypeAdapter(object).json_schema()
             self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
-
-
-class ActionMetadata(BaseModel):
-    """Action metadata for registry and reflection."""
-
-    kind: ActionKind
-    name: str
-    description: str | None = None
-    input_schema: object | None = None
-    input_json_schema: dict[str, object] | None = None
-    output_schema: object | None = None
-    output_json_schema: dict[str, object] | None = None
-    stream_schema: object | None = None
-    metadata: dict[str, object] | None = None
 
 
 def _make_tracing_wrapper(

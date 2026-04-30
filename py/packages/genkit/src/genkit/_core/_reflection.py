@@ -147,7 +147,7 @@ def create_reflection_asgi_app(
     active_actions: dict[str, asyncio.Task[Any]] = {}
 
     async def health(_: Request) -> JSONResponse:
-        await registry.list_actions()
+        await registry.initialize_all_plugins()
         return JSONResponse({'status': 'OK'})
 
     async def terminate(_: Request) -> JSONResponse:
@@ -156,8 +156,24 @@ def create_reflection_asgi_app(
         return JSONResponse({'status': 'OK'})
 
     async def actions(_: Request) -> JSONResponse:
-        # Full catalog: list_resolvable_actions (plugins, registered, DAP; merged with parent).
-        return JSONResponse(await registry.list_resolvable_actions(), headers={'x-genkit-version': version})
+        # Full catalog: plugins, registered actions, DAP expansions; merged with parent.
+        actions = await registry.list_actions()
+
+        def omit_none(payload: dict[str, Any]) -> dict[str, Any]:
+            return {key: value for key, value in payload.items() if value is not None}
+
+        response: dict[str, dict[str, Any]] = {}
+        for key, action in actions.items():
+            response[key] = omit_none({
+                'key': key,
+                'name': action.name,
+                'description': action.description,
+                'metadata': action.metadata,
+                'inputSchema': action.input_schema or action.input_json_schema,
+                'outputSchema': action.output_schema or action.output_json_schema,
+            })
+
+        return JSONResponse(response, headers={'x-genkit-version': version})
 
     async def values(req: Request) -> JSONResponse:
         if req.query_params.get('type') != 'defaultModel':
@@ -194,8 +210,8 @@ def create_reflection_asgi_app(
         return await runner.stream_response(version)
 
     async def reflection_startup() -> None:
-        # Eagerly initialize plugins and enumerate concrete actions before handling traffic.
-        await registry.list_actions()
+        # Eagerly initialize plugins so init()-registered actions exist before handling traffic.
+        await registry.initialize_all_plugins()
 
     startup_hooks: list[LifecycleHook] = [reflection_startup]
     if on_startup is not None:

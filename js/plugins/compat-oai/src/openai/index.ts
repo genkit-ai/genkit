@@ -24,8 +24,8 @@ import {
   ModelReference,
   z,
 } from 'genkit';
-import { ResolvableAction, type GenkitPluginV2 } from 'genkit/plugin';
-import { ActionType } from 'genkit/registry';
+import { type GenkitPluginV2, type ResolvableAction } from 'genkit/plugin';
+import { type ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import {
   defineCompatOpenAISpeechModel,

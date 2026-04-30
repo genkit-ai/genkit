@@ -63,6 +63,39 @@ func TestHTTPStatusCode(t *testing.T) {
 	})
 }
 
+func TestStatusFromHTTPCode(t *testing.T) {
+	tests := []struct {
+		code int
+		want StatusName
+	}{
+		{http.StatusOK, OK},
+		{499, CANCELLED},
+		{http.StatusBadRequest, INVALID_ARGUMENT},
+		{http.StatusUnauthorized, UNAUTHENTICATED},
+		{http.StatusForbidden, PERMISSION_DENIED},
+		{http.StatusNotFound, NOT_FOUND},
+		{http.StatusConflict, ABORTED},
+		{http.StatusTooManyRequests, RESOURCE_EXHAUSTED},
+		{http.StatusInternalServerError, INTERNAL},
+		{http.StatusNotImplemented, UNIMPLEMENTED},
+		{http.StatusServiceUnavailable, UNAVAILABLE},
+		{http.StatusGatewayTimeout, DEADLINE_EXCEEDED},
+		// Unmapped 5xx codes fall through to INTERNAL.
+		{http.StatusBadGateway, INTERNAL},
+		{599, INTERNAL},
+		// Unmapped non-5xx codes land on UNKNOWN.
+		{http.StatusTeapot, UNKNOWN},
+		{0, UNKNOWN},
+	}
+	for _, tt := range tests {
+		t.Run(http.StatusText(tt.code), func(t *testing.T) {
+			if got := StatusFromHTTPCode(tt.code); got != tt.want {
+				t.Errorf("StatusFromHTTPCode(%d) = %q, want %q", tt.code, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewStatus(t *testing.T) {
 	t.Run("creates status with name and message", func(t *testing.T) {
 		s := NewStatus(NOT_FOUND, "resource not found")

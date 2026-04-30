@@ -31,7 +31,6 @@ from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
-    ActionMetadata,
     ActionName,
     ActionRunContext,
     SpanAttributeValue,
@@ -39,6 +38,7 @@ from genkit._core._action import (
     parse_action_key,
     parse_dap_qualified_name,
 )
+from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     ModelRequest,
@@ -47,6 +47,7 @@ from genkit._core._model import (
 )
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (
+    ActionMetadata,
     EmbedRequest,
     EmbedResponse,
     EvalRequest,
@@ -81,42 +82,17 @@ ActionFn = (
 )
 
 
-def _reflection_payload_for_registered_action(action: Action) -> dict[str, Any]:
-    key = create_action_key(action.kind, action.name)
-    return {
-        'key': key,
-        'name': action.name,
-        'type': action.kind,
-        'description': action.description,
-        'inputSchema': action.input_schema,
-        'outputSchema': action.output_schema,
-        'metadata': action.metadata,
-    }
-
-
-def _reflection_payload_for_plugin_metadata(meta: ActionMetadata) -> dict[str, Any]:
-    key = f'/{meta.kind}/{meta.name}'
-    return {
-        'key': key,
-        'name': meta.name,
-        'type': meta.kind,
-        'description': meta.description,
-        'inputSchema': meta.input_json_schema,
-        'outputSchema': meta.output_json_schema,
-        'metadata': meta.metadata,
-    }
-
-
-def _reflection_payload_for_dap_metadata(full_key: str, meta: Mapping[str, object]) -> dict[str, Any]:
-    return {
-        'key': full_key,
-        'name': meta.get('name'),
-        'type': meta.get('type'),
-        'description': meta.get('description'),
-        'inputSchema': meta.get('inputSchema') or meta.get('input_json_schema'),
-        'outputSchema': meta.get('outputSchema') or meta.get('output_json_schema'),
-        'metadata': dict(meta),
-    }
+def _action_metadata_for_registered_action(action: Action) -> ActionMetadata:
+    """Build an ``ActionMetadata`` row for a directly-registered :class:`Action`."""
+    return ActionMetadata(
+        key=create_action_key(action.kind, action.name),
+        action_type=action.kind,
+        name=action.name,
+        description=action.description,
+        input_schema=action.input_schema,
+        output_schema=action.output_schema,
+        metadata=dict(action.metadata) if action.metadata else None,
+    )
 
 
 class Registry:
@@ -149,7 +125,6 @@ class Registry:
                 preferred factory rather than passing ``parent`` directly.
         """
         self._parent: Registry | None = parent
-        self._default_model: str | None = None
         self._entries: ActionStore = {}
         self._value_by_kind_and_name: dict[str, dict[str, object]] = {}
         self._schemas_by_name: dict[str, dict[str, object]] = {}
@@ -158,16 +133,19 @@ class Registry:
 
         # Re-entrancy guard for _trigger_lazy_loading.  Prevents infinite
         # recursion when a lazy factory resolves its own action key (see
-        # https://github.com/firebase/genkit/issues/4491).
+        # https://github.com/genkit-ai/genkit/issues/4491).
         self._loading_actions: set[str] = set()
 
         # Dotprompt resolves ``output.schema`` names via the registry's stored schemas.
         # Async resolver avoids thread-pool deadlock in ``resolve_json_schema``.
-        async def async_schema_resolver(name: str) -> dict[str, object] | str:
-            return self.lookup_schema(name) or name
+        async def async_schema_resolver(name: str) -> dict[str, object]:
+            schema = self.lookup_schema(name)
+            if schema is None:
+                raise GenkitError(status='NOT_FOUND', message=f"Schema '{name}' not found")
+            return schema
 
         # Children share the parent's Dotprompt instance (prompts are global).
-        self.dotprompt: Dotprompt = (
+        self._dotprompt: Dotprompt = (
             parent.dotprompt if parent is not None else Dotprompt(schema_resolver=async_schema_resolver)
         )
         # TODO(#4352): Figure out how to set this.
@@ -215,15 +193,15 @@ class Registry:
         return self._parent is not None
 
     @property
-    def default_model(self) -> str | None:
-        """The default model name, falling back to parent if not set locally."""
-        if self._default_model is not None:
-            return self._default_model
-        return self._parent.default_model if self._parent is not None else None
+    def dotprompt(self) -> Dotprompt:
+        """The shared :class:`Dotprompt` instance for this registry tree.
 
-    @default_model.setter
-    def default_model(self, value: str | None) -> None:
-        self._default_model = value
+        Mutations (partials, helpers) propagate to all sibling and descendant
+        registries because the instance is shared. Use :func:`define_partial`
+        and :func:`define_helper` rather than mutating the returned instance
+        directly, so the public surface stays stable.
+        """
+        return self._dotprompt
 
     def register_action(
         self,
@@ -301,117 +279,65 @@ class Registry:
             await self._trigger_lazy_loading(action)
         return actions
 
-    async def list_actions(self) -> dict[str, Action]:
-        """Return every concrete :class:`Action` in ``_entries``, keyed by ``/<kind>/<name>``.
-
-        Ensures plugins are initialized first so ``init()``-registered actions appear.
-        Merges with the parent registry when present; on duplicate keys the child wins.
-        For advertised-only and DAP-expanded metadata (reflection catalog), use
-        :meth:`list_resolvable_actions`.
-
-        Returns:
-            Map of action key string to :class:`Action` instance.
-        """
-        await self.initialize_all_plugins()
-        local: dict[str, Action] = {}
-        for kind in ActionKind.__members__.values():
-            for name, action in (await self.resolve_actions_by_kind(kind)).items():
-                local[create_action_key(kind, name)] = action
-        if self._parent is None:
-            return local
-        parent_actions = await self._parent.list_actions()
-        return {**parent_actions, **local}
-
-    async def list_resolvable_actions(self) -> dict[str, dict[str, Any]]:
+    async def list_actions(self) -> dict[str, ActionMetadata]:
         """Return reflection metadata for plugins, registered actions, and DAP-expanded tools.
 
-        Builds plugin rows from each plugin's ``list_actions()``, then fills registered
-        actions and DAP expansions via :meth:`list_actions` (which initializes plugins).
-        Merges with parent's list_resolvable_actions() output (prefer child entries on duplicate keys).
+        Initializes plugins, advertises plugin rows from each plugin's ``list_actions()``,
+        then fills registered :class:`Action` rows and expands DAP-provided actions. Merges
+        with the parent registry's catalog; entries from this registry win on duplicate keys.
 
         Returns:
-            Map of action key to reflection-style payload dicts (``key``, ``name``, ``type``, etc.).
+            Map of action key string to typed :class:`ActionMetadata`.
         """
-        local: dict[str, dict[str, Any]] = {}
+        await self.initialize_all_plugins()
 
+        catalog: dict[str, ActionMetadata] = {}
+
+        # 1. Plugin-advertised rows: actions the plugin claims it can resolve on demand.
         with self._lock:
             plugins = list(self._plugins.items())
         for plugin_name, plugin in plugins:
             try:
-                plugin_metas = await plugin.list_actions()
+                advertised = await plugin.list_actions()
             except Exception:
                 logger.exception('Error listing actions for plugin %s', plugin_name)
                 continue
-            for meta in plugin_metas or []:
+            for meta in advertised or []:
                 if not meta.name:
                     raise ValueError(f'Invalid ActionMetadata from {plugin_name}: name required')
-                if '/' not in meta.name:
-                    meta = meta.model_copy(update={'name': f'{plugin_name}/{meta.name}'})
-                key = f'/{meta.kind}/{meta.name}'
-                local[key] = _reflection_payload_for_plugin_metadata(meta)
+                if not meta.action_type:
+                    raise ValueError(f'Invalid ActionMetadata from {plugin_name}: action_type required')
+                key = f'/{meta.action_type}/{meta.name}'
+                catalog[key] = meta.model_copy(update={'key': key})
 
-        actions_dict = await self.list_actions()
-        actions = actions_dict.items()
-        for key, action in actions:
-            local[key] = _reflection_payload_for_registered_action(action)
-            dap = getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
-            if dap is None:
-                continue
-            try:
-                # Record keys use the provider action ``name``; see
-                # :meth:`DynamicActionProvider.get_action_metadata_record`.
-                record = await dap.get_action_metadata_record(action.name)
-            except Exception:
-                logger.exception(
-                    'Error listing actions for Dynamic Action Provider %s',
-                    action.name,
-                )
-                continue
-            for record_key, meta in record.items():
-                full_key = create_action_key(ActionKind.DYNAMIC_ACTION_PROVIDER, record_key)
-                local[full_key] = _reflection_payload_for_dap_metadata(full_key, meta)
-                parts = parse_dap_qualified_name(record_key)
-                if parts is None:
+        # 2. Concrete registered actions, plus DAP-expanded actions if the action is a provider.
+        for kind in ActionKind.__members__.values():
+            for name, action in (await self.resolve_actions_by_kind(kind)).items():
+                key = create_action_key(kind, name)
+                catalog[key] = _action_metadata_for_registered_action(action)
+
+                dap = getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+                if dap is None:
                     continue
-                _provider, inner_kind_str, inner_name = parts
                 try:
-                    inner_kind = ActionKind(inner_kind_str)
-                except ValueError:
-                    logger.debug(
-                        "Unrecognized ActionKind '%s' in DAP record key '%s' from provider '%s'",
-                        inner_kind_str,
-                        record_key,
+                    # DAP action keys are prefixed with the provider action's ``name``;
+                    # see :meth:`DynamicActionProvider.list_action_metadata_by_key`.
+                    dap_actions = await dap.list_action_metadata_by_key(action.name)
+                except Exception:
+                    logger.exception(
+                        'Error listing actions for Dynamic Action Provider %s',
                         action.name,
                     )
                     continue
+                # ``list_action_metadata_by_key`` already populates each entry's ``meta.key``
+                # to match its DAP action key, so we can merge straight into the catalog.
+                catalog.update(dap_actions)
 
-                canonical = create_action_key(inner_kind_str, inner_name)
-                if canonical in local:
-                    continue
-                try:
-                    nested = await dap.get_action(inner_kind_str, inner_name)
-                except Exception as e:
-                    logger.debug(
-                        'DAP %s failed resolving nested action %s/%s for canonical catalog row',
-                        action.name,
-                        inner_kind_str,
-                        inner_name,
-                        exc_info=e,
-                    )
-                    nested = None
-                if nested is not None:
-                    local[canonical] = _reflection_payload_for_registered_action(nested)
-                else:
-                    canon_payload = dict(_reflection_payload_for_dap_metadata(full_key, meta))
-                    canon_payload['key'] = canonical
-                    canon_payload['name'] = inner_name
-                    canon_payload['type'] = inner_kind
-                    local[canonical] = canon_payload
-
+        # 3. Merge in parent registry's catalog; entries from this registry win on duplicate keys.
         if self._parent is None:
-            return local
-        parent_resolvable = await self._parent.list_resolvable_actions()
-        return {**parent_resolvable, **local}
+            return catalog
+        parent_catalog = await self._parent.list_actions()
+        return {**parent_catalog, **catalog}
 
     def register_value(self, kind: str, name: str, value: object) -> None:
         """Registers a value with a given kind and name.
@@ -455,17 +381,22 @@ class Registry:
             return local
         return self._parent.lookup_value(kind, name) if self._parent is not None else None
 
-    def list_values(self, kind: str) -> list[str]:
-        """List all values registered for a specific kind.
+    def list_values(self, kind: str) -> dict[str, object]:
+        """List all values registered for a specific kind, merged with the parent registry.
+
+        Entries from this registry win on duplicate names.
 
         Args:
-            kind: The kind of values to list (e.g., "defaultModel").
+            kind: The kind of values to list (e.g., ``"defaultModel"``, ``"format"``).
 
         Returns:
-            A list of registered value names.
+            Map of value name to value object.
         """
         with self._lock:
-            return list(self._value_by_kind_and_name.get(kind, {}).keys())
+            local = dict(self._value_by_kind_and_name.get(kind, {}))
+        if self._parent is None:
+            return local
+        return {**self._parent.list_values(kind), **local}
 
     def register_plugin(self, plugin: Plugin) -> None:
         """Register a plugin with the registry.
@@ -567,7 +498,7 @@ class Registry:
 
         A re-entrancy guard (``_loading_actions``) prevents infinite recursion
         when a factory resolves its own action key during initialization.
-        See https://github.com/firebase/genkit/issues/4491.
+        See https://github.com/genkit-ai/genkit/issues/4491.
         """
         if action is None:
             return None
@@ -679,6 +610,53 @@ class Registry:
                     with self._lock:
                         return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(target))
 
+                # Check cache first - init() might have registered this action
+                with self._lock:
+                    cached_action = self._entries.get(kind, {}).get(target)
+                if cached_action is not None:
+                    successes.append((plugin_name, cached_action))
+                    continue
+
+                action = await plugin.resolve(kind, target)
+                if action is not None:
+                    successes.append((plugin_name, action))
+
+            if len(successes) > 1:
+                plugin_names = [p for p, _ in successes]
+                raise ValueError(
+                    f"Ambiguous {kind} action name '{name}'. "
+                    + f"Matches plugins: {plugin_names}. Use 'plugin/{name}'."
+                )
+
+            if len(successes) == 1:
+                plugin_name, action = successes[0]
+                self.register_action_instance(action, namespace=plugin_name)
+                with self._lock:
+                    return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(f'{plugin_name}/{name}'))
+
+        # Fallback: try dynamic action providers (for MCP, dynamic resources, etc.)
+        # Skip if we're looking up a dynamic action provider itself to avoid recursion
+        if kind != ActionKind.DYNAMIC_ACTION_PROVIDER:
+            with self._lock:
+                if ActionKind.DYNAMIC_ACTION_PROVIDER in self._entries:
+                    providers_dict = self._entries[ActionKind.DYNAMIC_ACTION_PROVIDER]
+                else:
+                    providers_dict = {}
+                providers = list(providers_dict.values())
+            for provider_action in providers:
+                dap = getattr(provider_action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+                if dap is None:
+                    continue
+                try:
+                    resolved = await dap.get_action(str(kind), name)
+                    if resolved is not None:
+                        return resolved
+                except Exception as e:
+                    logger.debug(
+                        f'Dynamic action provider {provider_action.name} failed for {kind}/{name}',
+                        exc_info=e,
+                    )
+
         # Final fallback: delegate to parent registry.
         if self._parent is not None:
             return await self._parent.resolve_action(kind, name)
@@ -703,16 +681,17 @@ class Registry:
             The ``Action`` instance if found, None otherwise.
 
         Raises:
-            ValueError: If the key format is invalid or the kind is not a valid
-                ``ActionKind``.
+            ValueError: If the key format is invalid, the kind is not a valid
+                ``ActionKind``, or an unprefixed name is ambiguous.
         """
         kind, name = parse_action_key(key)
         if kind == ActionKind.DYNAMIC_ACTION_PROVIDER:
             dap_parts = parse_dap_qualified_name(name)
             if dap_parts is not None:
+                provider_name, inner_kind_str, inner_name = dap_parts
                 provider_action = await self.resolve_action(
                     ActionKind.DYNAMIC_ACTION_PROVIDER,
-                    dap_parts.provider,
+                    provider_name,
                 )
                 if provider_action is None:
                     return None
@@ -720,11 +699,11 @@ class Registry:
                 if dap is None:
                     return None
                 try:
-                    resolved = await dap.get_action(dap_parts.inner_kind, dap_parts.inner_name)
+                    resolved = await dap.get_action(inner_kind_str, inner_name)
                 except Exception as e:
                     logger.debug(
-                        f'Dynamic action provider {dap_parts.provider} failed for '
-                        f'qualified key {dap_parts.inner_kind}/{dap_parts.inner_name}',
+                        f'Dynamic action provider {provider_name} failed for '
+                        f'qualified key {inner_kind_str}/{inner_name}',
                         exc_info=e,
                     )
                     return None

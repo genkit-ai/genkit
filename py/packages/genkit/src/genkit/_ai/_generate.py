@@ -158,7 +158,7 @@ def define_generate_action(registry: Registry) -> None:
         ctx: ActionRunContext,
     ) -> ModelResponse:
         on_chunk = cast(Callable[[ModelResponseChunk], None], ctx.streaming_callback) if ctx.is_streaming else None
-        return await generate_action(
+        return await _generate_action(
             registry=registry,
             raw_request=input,
             on_chunk=on_chunk,
@@ -181,7 +181,11 @@ async def generate_action(
     middleware: list[ModelMiddleware] | None = None,
     context: dict[str, Any] | None = None,
 ) -> ModelResponse:
-    """Execute a generation request with tool calling and middleware support."""
+    """Run generation with a util ``generate`` span.
+
+    The registered ``/util/generate`` action calls `_generate_action` directly
+    so reflection runs do not stack another util span on the action span.
+    """
     span_name = 'generate'
     with run_in_new_span(
         SpanMetadata(name=span_name),
@@ -390,9 +394,7 @@ async def _generate_action(
         # No message in response, return as-is
         return response
 
-    # Stamp output format metadata on message for Dev UI rendering.
-    # Mirrors JS GenerateResponse constructor which sets message.metadata.generate.output
-    # so the Dev UI knows to render the output as formatted JSON vs plain text.
+    # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
     out = raw_request.output
     if out and (out.content_type or out.format):
         generate_output: dict[str, str] = {}
@@ -669,7 +671,11 @@ async def resolve_parameters(
     registry: Registry, request: GenerateActionOptions
 ) -> tuple[Action[Any, Any, Any], list[Action[Any, Any, Any]], FormatDef | None]:
     """Resolve model, tools, and format from registry for a generation request."""
-    model = request.model if request.model is not None else registry.default_model
+    model = (
+        request.model
+        if request.model is not None
+        else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    )
     if not model:
         raise Exception('No model configured.')
 

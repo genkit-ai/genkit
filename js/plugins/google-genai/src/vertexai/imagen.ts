@@ -23,6 +23,7 @@ import {
   modelRef,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import { fromImagenResponse, toImagenPredictRequest } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
@@ -267,6 +268,7 @@ export const KNOWN_MODELS = {
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS;
+
 export type ImagenModelName =
   | KnownModels
   | `imagen-${string}`
@@ -283,11 +285,13 @@ export function isImagenModelName(value?: string): value is ImagenModelName {
 export function model(
   version: string,
   config: ImagenConfig = {}
-): ModelReference<typeof ImagenConfigSchema> {
+): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
+
   return modelRef({
     name: `vertexai/${name}`,
     config,

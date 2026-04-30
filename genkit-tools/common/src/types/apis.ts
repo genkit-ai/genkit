@@ -21,6 +21,7 @@ import {
   EvalRunKeySchema,
   InferenceDatasetSchema,
 } from './eval';
+import { LogRecordSchema } from './log';
 import {
   GenerationCommonConfigSchema,
   MessageSchema,
@@ -62,6 +63,28 @@ export const ListTracesResponseSchema = z.object({
 });
 
 export type ListTracesResponse = z.infer<typeof ListTracesResponseSchema>;
+
+export const LogQueryFilterSchema = z.object({
+  traceId: z.string().optional(),
+  spanId: z.string().optional(),
+});
+
+export type LogQueryFilter = z.infer<typeof LogQueryFilterSchema>;
+
+export const ListLogsRequestSchema = z.object({
+  limit: z.number().optional(),
+  continuationToken: z.string().optional(),
+  filter: LogQueryFilterSchema.optional(),
+});
+
+export type ListLogsRequest = z.infer<typeof ListLogsRequestSchema>;
+
+export const ListLogsResponseSchema = z.object({
+  logs: z.array(LogRecordSchema),
+  continuationToken: z.string().optional(),
+});
+
+export type ListLogsResponse = z.infer<typeof ListLogsResponseSchema>;
 
 export const GetTraceRequestSchema = z.object({
   traceId: z.string().describe('ID of the trace.'),

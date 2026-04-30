@@ -11,11 +11,11 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.31.0",
+  "version": "1.33.0",
   "type": "commonjs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/compat-oai"
   },
   "author": "genkit",

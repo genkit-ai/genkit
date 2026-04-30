@@ -48,6 +48,7 @@ from httpx import ASGITransport, AsyncClient
 from genkit._core._action import ActionKind
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
+from genkit._core._typing import ActionMetadata
 
 
 @pytest.fixture
@@ -66,8 +67,8 @@ async def asgi_client(mock_registry: MagicMock) -> AsyncIterator[AsyncClient]:
     Returns:
         An AsyncClient configured to make requests to the test ASGI app.
     """
+    mock_registry.initialize_all_plugins = AsyncMock(return_value=None)
     mock_registry.list_actions = AsyncMock(return_value={})
-    mock_registry.list_resolvable_actions = AsyncMock(return_value={})
     app = create_reflection_asgi_app(mock_registry)
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url='http://test')
@@ -88,22 +89,24 @@ async def test_health_check(asgi_client: AsyncClient) -> None:
 async def test_list_actions(asgi_client: AsyncClient, mock_registry: MagicMock) -> None:
     """Test that the actions list endpoint returns registered actions."""
 
-    async def mock_list_resolvable() -> dict[str, dict[str, object]]:
+    async def mock_list_actions() -> dict[str, ActionMetadata]:
         return {
-            '/custom/action1': {
-                'key': '/custom/action1',
-                'name': 'action1',
-                'type': ActionKind.CUSTOM,
-            }
+            '/custom/action1': ActionMetadata(
+                key='/custom/action1',
+                action_type=ActionKind.CUSTOM,
+                name='action1',
+            )
         }
 
-    mock_registry.list_resolvable_actions = mock_list_resolvable
+    mock_registry.list_actions = mock_list_actions
     response = await asgi_client.get('/api/actions')
     assert response.status_code == 200
     result = response.json()
     assert '/custom/action1' in result
     assert result['/custom/action1']['name'] == 'action1'
-    assert result['/custom/action1']['type'] == 'custom'
+    assert result['/custom/action1']['key'] == '/custom/action1'
+    assert 'type' not in result['/custom/action1']
+    assert 'actionType' not in result['/custom/action1']
 
 
 @pytest.mark.asyncio

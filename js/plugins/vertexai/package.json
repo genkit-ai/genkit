@@ -17,7 +17,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.31.0",
+  "version": "1.33.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -29,14 +29,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/vertexai"
   },
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
-    "@anthropic-ai/vertex-sdk": "^0.14.4",
+    "@anthropic-ai/sdk": "^0.90.0",
+    "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@google-cloud/aiplatform": "^3.23.0",
     "@google-cloud/vertexai": "^1.9.3",
     "@mistralai/mistralai-gcp": "^1.3.5",

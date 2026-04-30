@@ -496,6 +496,23 @@ describe('Google AI Gemini', () => {
         });
       });
 
+      it('passes serviceTier to the API', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            serviceTier: 'flex',
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.serviceTier, 'flex');
+      });
+
       it('passes imageConfig to the API', async () => {
         const model = defineModel(
           'gemini-2.5-flash-image',
@@ -700,6 +717,14 @@ describe('Google AI Gemini', () => {
 
     it('returns a ModelReference for a tts type model string', () => {
       const name = 'gemini-2.5-flash-preview-tts';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `googleai/${name}`);
+      assert.strictEqual(modelRef.info?.supports?.multiturn, false);
+      assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
+    });
+
+    it('returns a ModelReference for gemini-3.1-flash-tts-preview', () => {
+      const name = 'gemini-3.1-flash-tts-preview';
       const modelRef = model(name);
       assert.strictEqual(modelRef.name, `googleai/${name}`);
       assert.strictEqual(modelRef.info?.supports?.multiturn, false);

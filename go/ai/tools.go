@@ -106,6 +106,13 @@ func IsToolInterruptError(err error) (bool, map[string]any) {
 	return false, nil
 }
 
+// NewToolInterruptError creates a tool interrupt error with the given metadata.
+// This is intended for use in middleware that needs to interrupt tool execution
+// without calling the tool itself.
+func NewToolInterruptError(metadata map[string]any) error {
+	return &toolInterruptError{Metadata: metadata}
+}
+
 // InterruptOptions provides configuration for tool interruption.
 type InterruptOptions struct {
 	Metadata map[string]any
@@ -237,14 +244,24 @@ func (tc *ToolContext) IsResumed() bool {
 	return tc.Resumed != nil
 }
 
-// ResumedValue retrieves a typed value from the Resumed metadata.
+// IsToolResumed reports whether the current context is a resumed tool execution.
+// This is intended for use in middleware that needs to distinguish between
+// first-time and restarted tool calls.
+func IsToolResumed(ctx context.Context) bool {
+	return resumedCtxKey.FromContext(ctx) != nil
+}
+
+// ResumedValue retrieves a typed value from the resumed metadata on ctx.
 // Returns the zero value and false if the key doesn't exist or the type doesn't match.
-func ResumedValue[T any](tc *ToolContext, key string) (T, bool) {
+// Accepts either a plain [context.Context] (useful in middleware) or a [*ToolContext],
+// which embeds [context.Context].
+func ResumedValue[T any](ctx context.Context, key string) (T, bool) {
 	var zero T
-	if tc.Resumed == nil {
+	m := resumedCtxKey.FromContext(ctx)
+	if m == nil {
 		return zero, false
 	}
-	v, ok := tc.Resumed[key]
+	v, ok := m[key]
 	if !ok {
 		return zero, false
 	}
