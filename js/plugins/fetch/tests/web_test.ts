@@ -314,6 +314,59 @@ describe('fetchHandler (single action)', () => {
       assert.ok(json.message?.includes('not authorized'));
     });
 
+    it('should pass init data to the action', async () => {
+      const ai = genkit({});
+      const flow = ai.defineFlow(
+        { name: 'flowWithInit', inputSchema: z.string() },
+        async (input) => `input: ${input}`
+      );
+      // Monkey-patch the run method to capture and return init data.
+      const originalRun = flow.run.bind(flow);
+      flow.run = async (input: any, options: any) => {
+        const result = await originalRun(input, options);
+        result.result = `input: ${input}, init: ${JSON.stringify(options?.init)}`;
+        return result;
+      };
+      const request = new Request('http://localhost/flowWithInit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: 'hello',
+          init: { sessionId: 'abc123', temperature: 0.7 },
+        }),
+      });
+      const response = await fetchHandler(flow)(request);
+      assert.strictEqual(response.status, 200);
+      const json = (await response.json()) as { result: string };
+      assert.strictEqual(
+        json.result,
+        'input: hello, init: {"sessionId":"abc123","temperature":0.7}'
+      );
+    });
+
+    it('should pass undefined init when not provided', async () => {
+      const ai = genkit({});
+      const flow = ai.defineFlow(
+        { name: 'flowWithInit', inputSchema: z.string() },
+        async (input) => `input: ${input}`
+      );
+      const originalRun = flow.run.bind(flow);
+      flow.run = async (input: any, options: any) => {
+        const result = await originalRun(input, options);
+        result.result = `input: ${input}, init: ${JSON.stringify(options?.init)}`;
+        return result;
+      };
+      const request = new Request('http://localhost/flowWithInit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: 'hello' }),
+      });
+      const response = await fetchHandler(flow)(request);
+      assert.strictEqual(response.status, 200);
+      const json = (await response.json()) as { result: string };
+      assert.strictEqual(json.result, 'input: hello, init: undefined');
+    });
+
     it('should set x-genkit-trace-id and x-genkit-span-id headers', async () => {
       const ai = genkit({});
       const flow = ai.defineFlow('traceFlow', async () => 'ok');

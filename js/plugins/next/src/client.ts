@@ -31,6 +31,7 @@ export interface RequestData<T> {
   url: string;
   headers?: Record<string, string>;
   input?: T;
+  init?: any;
   streamId?: string;
   abortSignal?: AbortSignal;
 }
