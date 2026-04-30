@@ -94,6 +94,10 @@ type Recipe struct {
 	Difficulty   string        `json:"difficulty" jsonschema:"enum=easy,enum=medium,enum=hard"`
 }
 
+type AgentRequest struct {
+	Query string `json:"query" jsonschema:"description=The user's query or request"`
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -110,6 +114,7 @@ func main() {
 	genkit.DefineSchemaFor[Joke](g)
 	genkit.DefineSchemaFor[RecipeRequest](g)
 	genkit.DefineSchemaFor[Recipe](g)
+	genkit.DefineSchemaFor[AgentRequest](g)
 
 	// TODO: Include partials and helpers.
 
@@ -329,11 +334,24 @@ func DefineAgentWithInlinePrompt(g *genkit.Genkit) {
 		g, "agent.code",
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithPrompt("{{query}}"),
+		ai.WithInputSchema(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "The user's query or request",
+				},
+			},
+			"required": []string{"query"},
+		}),
 		ai.WithUse(
 			&middleware.Retry{MaxRetries: 2},
 			&middleware.Fallback{
 				Models: []ai.ModelRef{
-					googlegenai.ModelRef("googleai/gemini-2.0-flash-lite", nil),
+					ai.NewModelRef("googleai/gemini-2.5-flash-lite", nil),
+					ai.NewModelRef("googleai/gemini-2.5-pro", &genai.GenerateContentConfig{
+						Temperature: genai.Ptr[float32](2.0),
+					}),
 				},
 			},
 			&middleware.Filesystem{RootDir: "."},
@@ -343,7 +361,7 @@ func DefineAgentWithInlinePrompt(g *genkit.Genkit) {
 
 	genkit.DefineStreamingFlow(g, "agentPromptFlow",
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
-			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"query": query}))
+			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(&AgentRequest{Query: query}))
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("agent error: %w", err)
@@ -365,7 +383,7 @@ func DefineAgentWithDotprompt(g *genkit.Genkit) {
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
 			// The "agent" prompt file includes all middleware in its frontmatter.
 			agentPrompt := genkit.LookupPrompt(g, "agent")
-			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(map[string]any{"query": query}))
+			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(&AgentRequest{Query: query}))
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("agent error: %w", err)

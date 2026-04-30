@@ -113,17 +113,8 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		"output":       map[string]any{"schema": p.OutputSchema},
 		"defaultInput": p.DefaultInput,
 		"tools":        tools,
-		"toolChoice":   string(pOpts.ToolChoice),
+		"toolChoice":   pOpts.ToolChoice,
 		"maxTurns":     p.MaxTurns,
-	}
-	var use []any
-	for _, m := range pOpts.commonGenOptions.Use {
-		if md := toMiddlewareMetadata(m); md != nil {
-			use = append(use, md)
-		}
-	}
-	if len(use) > 0 {
-		promptMetadata["use"] = use
 	}
 	if variant != "" {
 		promptMetadata["variant"] = variant
@@ -137,44 +128,6 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 	p.ActionDef = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
 
 	return p
-}
-
-func toMiddlewareMetadata(m any) map[string]any {
-	if m == nil {
-		return nil
-	}
-	if mw, ok := m.(Middleware); ok {
-		name := mw.Name()
-		if name == "inline" {
-			return nil
-		}
-		res := map[string]any{
-			"name": name,
-		}
-		data, _ := json.Marshal(mw)
-		var config map[string]any
-		if err := json.Unmarshal(data, &config); err == nil && len(config) > 0 {
-			res["config"] = config
-		}
-		return res
-	}
-	switch v := m.(type) {
-	case string:
-		return map[string]any{"name": v}
-	case map[string]any:
-		name, _ := v["name"].(string)
-		if name == "" {
-			return nil
-		}
-		res := map[string]any{"name": name}
-		if config, ok := v["config"]; ok && config != nil {
-			if m, ok := config.(map[string]any); !ok || len(m) > 0 {
-				res["config"] = config
-			}
-		}
-		return res
-	}
-	return nil
 }
 
 // LookupPrompt looks up a [Prompt] registered by [DefinePrompt].
@@ -805,31 +758,6 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 	if variant != "" {
 		promptMetadata["variant"] = variant
 	}
-	promptMetadata["name"] = name
-	promptMetadata["model"] = metadata.Model
-	promptMetadata["config"] = metadata.Config
-	promptMetadata["tools"] = metadata.Tools
-	toolChoice := metadata.Raw["toolChoice"]
-	var tc string
-	if v, ok := toolChoice.(string); ok {
-		tc = v
-	} else if v, ok := toolChoice.(ToolChoice); ok {
-		tc = string(v)
-	}
-	promptMetadata["toolChoice"] = tc
-
-	if ur, ok := metadata.Raw["use"].([]any); ok {
-		var use []any
-		for _, m := range ur {
-			if md := toMiddlewareMetadata(m); md != nil {
-				use = append(use, md)
-			}
-		}
-		if len(use) > 0 {
-			promptMetadata["use"] = use
-		}
-	}
-
 	promptOptMetadata["prompt"] = promptMetadata
 	promptOptMetadata["type"] = api.ActionTypeExecutablePrompt
 
@@ -848,10 +776,8 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 		Description: metadata.Description,
 	}
 
-	if v, ok := toolChoice.(string); ok {
-		opts.ToolChoice = ToolChoice(v)
-	} else if v, ok := toolChoice.(ToolChoice); ok {
-		opts.ToolChoice = v
+	if toolChoice, ok := metadata.Raw["toolChoice"].(ToolChoice); ok {
+		opts.ToolChoice = toolChoice
 	}
 
 	if maxTurns, ok := metadata.Raw["maxTurns"].(uint64); ok {
