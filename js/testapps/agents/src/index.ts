@@ -22,7 +22,7 @@ import {
   clientStateAgent,
   testClientStateAgent,
 } from './client-state-agent.js';
-import { testTranslatorAgent, translatorAgent } from './prompt-agent.js';
+import { testWriterAgent, writerAgent } from './prompt-agent.js';
 import { simpleAgent, testSimpleAgent } from './simple-agent.js';
 import {
   testWeatherAgent,
@@ -44,8 +44,8 @@ import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 // Log loaded agents/flows (existing behavior)
 console.log('Loaded agent:', simpleAgent.__action.name);
 console.log('Loaded flow:', testSimpleAgent.__action.name);
-console.log('Loaded prompt agent:', translatorAgent.__action.name);
-console.log('Loaded prompt flow:', testTranslatorAgent.__action.name);
+console.log('Loaded prompt agent:', writerAgent.__action.name);
+console.log('Loaded prompt flow:', testWriterAgent.__action.name);
 console.log('Loaded tool agent:', weatherAgent.__action.name);
 console.log('Loaded tool flow:', testWeatherAgent.__action.name);
 console.log('Loaded tool stream flow:', testWeatherAgentStream.__action.name);
@@ -94,7 +94,7 @@ app.use((_req, res, next) => {
 
 // Expose session flows
 app.post('/api/simpleAgent', expressHandler(simpleAgent as any));
-app.post('/api/translatorAgent', expressHandler(translatorAgent as any));
+app.post('/api/writerAgent', expressHandler(writerAgent as any));
 app.post('/api/weatherAgent', expressHandler(weatherAgent as any));
 app.post('/api/weatherAgent/state', expressHandler(weatherAgent.getSnapshotDataAction));
 app.post('/api/clientStateAgent', expressHandler(clientStateAgent as any));
@@ -108,7 +108,7 @@ app.post('/api/branchingAgent/state', expressHandler(nameAgent.getSnapshotDataAc
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testSimpleAgent', expressHandler(testSimpleAgent));
-app.post('/api/testTranslatorAgent', expressHandler(testTranslatorAgent));
+app.post('/api/testWriterAgent', expressHandler(testWriterAgent));
 app.post('/api/testWeatherAgent', expressHandler(testWeatherAgent));
 app.post('/api/testClientStateAgent', expressHandler(testClientStateAgent));
 app.post('/api/testBankingAgent', expressHandler(testBankingAgent));

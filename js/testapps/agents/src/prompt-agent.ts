@@ -16,32 +16,61 @@
 
 import { z } from 'genkit';
 import { ai } from './genkit.js';
+import { SessionFlowInit, SessionFlowInput } from '../../../ai/lib/session-flow.js';
 
-export const translatorPrompt = ai.definePrompt({
-  name: 'translatorPrompt',
+// ---------------------------------------------------------------------------
+// Writer Agent — demonstrates `defineSessionFlowFromPrompt` with multiple
+// prompt input variables.  The system prompt is a Handlebars template that
+// references {{ tone }}, {{ format }}, and {{ audience }}.  At runtime the
+// client can supply any combination of these variables via `init` to reshape
+// the agent's behaviour without changing any server code.
+// ---------------------------------------------------------------------------
+
+export const writerPrompt = ai.definePrompt({
+  name: 'writerPrompt',
   model: 'googleai/gemini-flash-latest',
-  input: { schema: z.object({ language: z.string() }) },
-  system:
-    'You are a translator. Translate everything the user says to {{ language }}.',
+  input: {
+    schema: z.object({
+      tone: z.string(),
+      format: z.string(),
+      audience: z.string(),
+    }),
+  },
+  system: `You are a versatile writing assistant.
+
+Tone: {{ tone }}
+Format: {{ format }}
+Target audience: {{ audience }}
+
+Follow these rules strictly:
+- Always write in the specified tone.
+- Always structure your response using the specified format.
+- Always tailor your language and complexity to the target audience.
+
+Help the user with whatever writing task they request.`,
 });
 
-export const translatorAgent = ai.defineSessionFlowFromPrompt({
-  promptName: 'translatorPrompt',
-  defaultInput: { language: 'French' },
+export const writerAgent = ai.defineSessionFlowFromPrompt({
+  promptName: 'writerPrompt',
+  defaultInput: {
+    tone: 'Professional',
+    format: 'Paragraph',
+    audience: 'General',
+  },
 });
 
-export const testTranslatorAgent = ai.defineFlow(
+export const testWriterAgent = ai.defineFlow(
   {
-    name: 'testTranslatorAgent',
-    inputSchema: z.string().default('Hello, how are you?'),
+    name: 'testWriterAgent',
+    inputSchema: z.string().default('Write a short intro about AI safety.'),
     outputSchema: z.any(),
   },
   async (text) => {
-    const res = await translatorAgent.run(
-      {
+    const res = await writerAgent.run(
+      <SessionFlowInput>{
         messages: [{ role: 'user', content: [{ text }] }],
       },
-      { init: {} }
+      { init: <SessionFlowInit>{}   }
     );
     return res.result;
   }
