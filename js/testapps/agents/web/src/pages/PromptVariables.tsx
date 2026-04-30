@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { runFlow } from 'genkit/beta/client';
 
 // ---------------------------------------------------------------------------
-// Prompt Variables — showcases `defineSessionFlowFromPrompt` with multiple
+// Prompt Variables — showcases `defineAgent` with multiple
 // runtime input variables (tone, format, audience).
 //
 // Demonstrates:
@@ -142,7 +142,7 @@ export default function PromptVariables() {
           <h2>🎛️ Prompt Variables</h2>
           <span className="chat-desc">
             Adjust prompt input variables at runtime. Uses{' '}
-            <code>defineSessionFlowFromPrompt</code> with{' '}
+            <code>defineAgent</code> with{' '}
             <code>{'{{ tone }}'}</code>, <code>{'{{ format }}'}</code>,{' '}
             <code>{'{{ audience }}'}</code>.
           </span>
@@ -255,8 +255,8 @@ export default function PromptVariables() {
             <code>{'{{ audience }}'}</code>.
           </li>
           <li>
-            <code>defineSessionFlowFromPrompt</code> wraps this prompt into a
-            session flow. The <code>defaultInput</code> provides fallback values
+            <code>defineAgent</code> wraps this prompt into an
+            agent. The <code>defaultInput</code> provides fallback values
             for all three variables.
           </li>
           <li>
@@ -271,24 +271,12 @@ export default function PromptVariables() {
           </li>
         </ol>
 
-        <h4>Prompt Template</h4>
-        <pre>{`ai.definePrompt({
+        <h4>Agent Definition</h4>
+        <pre>{`ai.defineAgent({
   name: 'writerPrompt',
-  input: { schema: z.object({
-    tone: z.string(),
-    format: z.string(),
-    audience: z.string(),
-  }) },
-  system: \`You are a writing assistant.
-Tone: {{ tone }}
-Format: {{ format }}
-Audience: {{ audience }}
-…\`,
-});`}</pre>
-
-        <h4>Session Flow</h4>
-        <pre>{`ai.defineSessionFlowFromPrompt({
-  promptName: 'writerPrompt',
+  model: 'googleai/gemini-flash-latest',
+  input: { schema: z.object({ tone: z.string(), format: z.string(), audience: z.string() }) },
+  system: \`You are a writing assistant. Tone: {{ tone }} …\`,
   defaultInput: {
     tone: 'Professional',
     format: 'Paragraph',
