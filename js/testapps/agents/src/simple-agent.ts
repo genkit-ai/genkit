@@ -17,7 +17,7 @@
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
-export const simpleAgent = ai.defineSessionFlow(
+export const simpleAgent = ai.defineCustomAgent(
   { name: 'simpleAgent' },
   async (sess, { sendChunk }) => {
     await sess.run(async (input) => {
