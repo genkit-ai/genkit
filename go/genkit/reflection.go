@@ -642,6 +642,8 @@ func listActions(g *Genkit) []api.ActionDesc {
 }
 
 // listResolvableActions lists all the registered and resolvable actions.
+// Schema references in the descriptors are resolved to their concrete schemas
+// so that consumers (e.g., the Dev UI) don't have to perform secondary lookups.
 func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	ads := listActions(g)
 	keys := make(map[string]struct{})
@@ -656,6 +658,7 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 
 		for _, desc := range dp.ListActions(ctx) {
 			if _, exists := keys[desc.Name]; !exists {
+				resolveDescSchemas(g.reg, &desc)
 				ads = append(ads, desc)
 				keys[desc.Name] = struct{}{}
 			}
@@ -667,6 +670,18 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	})
 
 	return ads
+}
+
+// resolveDescSchemas best-effort resolves any "genkit:" schema references in
+// the descriptor's InputSchema and OutputSchema. Unresolvable references are
+// left as-is.
+func resolveDescSchemas(r api.Registry, desc *api.ActionDesc) {
+	if resolved, err := core.ResolveSchema(r, desc.InputSchema); err == nil {
+		desc.InputSchema = resolved
+	}
+	if resolved, err := core.ResolveSchema(r, desc.OutputSchema); err == nil {
+		desc.OutputSchema = resolved
+	}
 }
 
 // TODO: Pull these from common types in genkit-tools.
