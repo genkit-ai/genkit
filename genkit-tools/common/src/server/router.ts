@@ -160,6 +160,13 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
         return manager.listTraces(input);
       }),
 
+    /** Retrieves all logs. */
+    listLogs: loggedProcedure
+      .input(apis.ListLogsRequestSchema)
+      .query(async ({ input }) => {
+        return manager.listLogs(input);
+      }),
+
     /** Retrieves a trace for a given ID. */
     getTrace: loggedProcedure
       .input(apis.GetTraceRequestSchema)

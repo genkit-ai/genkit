@@ -13,7 +13,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.31.0",
+  "version": "1.33.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -25,7 +25,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/google-cloud"
   },
   "author": "genkit",

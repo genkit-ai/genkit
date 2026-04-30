@@ -15,6 +15,7 @@
  */
 
 import {
+  LocalFileLogStore,
   LocalFileTraceStore,
   startTelemetryServer,
 } from '@genkit-ai/telemetry-server';
@@ -48,6 +49,10 @@ export async function resolveTelemetryServer(options: {
         storeRoot: options.projectRoot,
         indexRoot: options.projectRoot,
       }),
+      logStore: new LocalFileLogStore({
+        storeRoot: options.projectRoot,
+        indexRoot: options.projectRoot,
+      }),
       corsOrigin: options.corsOrigin,
     });
   }
@@ -63,8 +68,10 @@ export async function startManager(options: {
   corsOrigin?: string;
   experimentalReflectionV2?: boolean;
   reflectionV2Port?: number;
+  telemetryServerUrl?: string;
 }): Promise<BaseRuntimeManager> {
-  const telemetryServerUrl = await resolveTelemetryServer(options);
+  const telemetryServerUrl =
+    options.telemetryServerUrl ?? (await resolveTelemetryServer(options));
   const manager = RuntimeManager.create({
     telemetryServerUrl,
     manageHealth: options.manageHealth,
@@ -216,16 +223,59 @@ export async function waitForRuntime(
 /**
  * Runs the given function with a runtime manager.
  */
+export interface RunWithManagerOptions {
+  /** Command to start the runtime process. If provided, an ephemeral manager is used. */
+  runtimeCommand?: string[];
+}
+
 export async function runWithManager(
   projectRoot: string,
-  fn: (manager: BaseRuntimeManager) => Promise<void>
+  fn: (manager: BaseRuntimeManager) => Promise<void>,
+  options?: RunWithManagerOptions
 ) {
+  const useEphemeral =
+    options?.runtimeCommand && options.runtimeCommand.length > 0;
   let manager: BaseRuntimeManager;
+  const oldLevel = logger.level;
+
   try {
-    manager = await startManager({ projectRoot, manageHealth: false }); // Don't manage health in this case.
+    if (useEphemeral) {
+      const devEnv = await getDevEnvVars(projectRoot, {
+        experimentalReflectionV2: true,
+      });
+      const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
+
+      logger.level = 'warn';
+
+      const result = await startDevProcessManager(
+        projectRoot,
+        options!.runtimeCommand![0],
+        options!.runtimeCommand!.slice(1),
+        {
+          experimentalReflectionV2: true,
+          healthCheck: true,
+          envVars,
+          telemetryServerUrl,
+          reflectionV2Port,
+          nonInteractive: true,
+        }
+      );
+      manager = result.manager;
+    } else {
+      manager = await startManager({
+        projectRoot,
+        manageHealth: false,
+      });
+    }
   } catch (e) {
+    logger.error('Failed to start manager', e);
     process.exit(1);
+  } finally {
+    if (useEphemeral) {
+      logger.level = oldLevel;
+    }
   }
+
   try {
     await fn(manager);
   } catch (err) {
@@ -236,13 +286,17 @@ export async function runWithManager(
       const { code, details, message } = errorStatus;
       logger.error(`\tCode: ${code}`);
       logger.error(`\tMessage: ${message}`);
-      logger.error(
-        `\tTrace: http://localhost:4200/traces/${details.traceId}\n`
-      );
+      if (details?.traceId) {
+        logger.error(`\tTrace ID: ${details.traceId}\n`);
+      }
     } else {
       logger.error(`\tMessage: ${error.data}\n`);
     }
     logger.error('Stack trace:');
     logger.error(`${error.stack}`);
+  } finally {
+    if (manager) {
+      await manager.stop();
+    }
   }
 }

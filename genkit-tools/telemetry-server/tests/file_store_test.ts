@@ -23,6 +23,7 @@ import os from 'os';
 import path from 'path';
 import { Index } from '../src/file-trace-store';
 import {
+  LocalFileLogStore,
   LocalFileTraceStore,
   startTelemetryServer,
   stopTelemetryApi,
@@ -58,6 +59,10 @@ describe('local-file-store', () => {
     await startTelemetryServer({
       port,
       traceStore: new LocalFileTraceStore({
+        storeRoot,
+        indexRoot,
+      }),
+      logStore: new LocalFileLogStore({
         storeRoot,
         indexRoot,
       }),
@@ -1053,6 +1058,10 @@ describe('otlp-endpoint', () => {
         storeRoot,
         indexRoot,
       }),
+      logStore: new LocalFileLogStore({
+        storeRoot,
+        indexRoot,
+      }),
     });
   });
 
@@ -1195,6 +1204,10 @@ describe('otlp-endpoint (with parent)', () => {
     await startTelemetryServer({
       port,
       traceStore: new LocalFileTraceStore({
+        storeRoot,
+        indexRoot,
+      }),
+      logStore: new LocalFileLogStore({
         storeRoot,
         indexRoot,
       }),

@@ -9,8 +9,8 @@ import pytest
 
 from genkit import Message, ModelRequest, ModelResponse, ModelResponseChunk, ModelUsage
 from genkit._ai._model import text_from_content
-from genkit._core._action import ActionMetadata
 from genkit._core._typing import (
+    ActionMetadata,
     DocumentPart,
     Media,
     MediaPart,

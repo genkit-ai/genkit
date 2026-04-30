@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { SpanData, TraceData } from '@genkit-ai/tools-common';
+import { LogRecordData, SpanData, TraceData } from '@genkit-ai/tools-common';
 
 // These interfaces are based on the OTLP JSON format.
 // A full definition can be found at:
@@ -70,8 +70,44 @@ interface OtlpResourceSpan {
   scopeSpans: OtlpScopeSpan[];
 }
 
-interface OtlpPayload {
-  resourceSpans: OtlpResourceSpan[];
+interface OtlpLogRecord {
+  timeUnixNano: string;
+  severityNumber?: number;
+  severityText?: string;
+  body?: OtlpValue;
+  attributes?: OtlpAttribute[];
+  traceId?: string;
+  spanId?: string;
+}
+
+interface OtlpScopeLog {
+  scope: {
+    name: string;
+    version: string;
+  };
+  logRecords: OtlpLogRecord[];
+}
+
+interface OtlpResourceLog {
+  resource: {
+    attributes: OtlpAttribute[];
+    droppedAttributesCount: number;
+  };
+  scopeLogs: OtlpScopeLog[];
+}
+
+export interface OtlpPayload {
+  resourceSpans?: OtlpResourceSpan[];
+  resourceLogs?: OtlpResourceLog[];
+}
+
+export function fromOtlpValue(value: OtlpValue): any {
+  if (value.stringValue !== undefined) return value.stringValue;
+  if (value.intValue !== undefined) return value.intValue;
+  if (value.boolValue !== undefined) return value.boolValue;
+  if (value.arrayValue !== undefined)
+    return value.arrayValue.values.map(fromOtlpValue);
+  return undefined;
 }
 
 function toMillis(nano: string): number {
@@ -81,12 +117,9 @@ function toMillis(nano: string): number {
 function toSpanData(span: OtlpSpan, scope: OtlpScopeSpan['scope']): SpanData {
   const attributes: Record<string, any> = {};
   span.attributes.forEach((attr) => {
-    if (attr.value.stringValue) {
-      attributes[attr.key] = attr.value.stringValue;
-    } else if (attr.value.intValue) {
-      attributes[attr.key] = attr.value.intValue;
-    } else if (attr.value.boolValue) {
-      attributes[attr.key] = attr.value.boolValue;
+    const val = fromOtlpValue(attr.value);
+    if (val !== undefined) {
+      attributes[attr.key] = val;
     }
   });
 
@@ -141,22 +174,74 @@ function toSpanData(span: OtlpSpan, scope: OtlpScopeSpan['scope']): SpanData {
 export function traceDataFromOtlp(otlpData: OtlpPayload): TraceData[] {
   const traces: Record<string, TraceData> = {};
 
-  otlpData.resourceSpans.forEach((resourceSpan) => {
-    resourceSpan.scopeSpans.forEach((scopeSpan) => {
-      scopeSpan.spans.forEach((span) => {
-        if (!traces[span.traceId]) {
-          traces[span.traceId] = {
-            traceId: span.traceId,
-            spans: {},
-          };
-        }
-        traces[span.traceId].spans[span.spanId] = toSpanData(
-          span,
-          scopeSpan.scope
-        );
+  if (otlpData.resourceSpans) {
+    otlpData.resourceSpans.forEach((resourceSpan) => {
+      resourceSpan.scopeSpans.forEach((scopeSpan) => {
+        scopeSpan.spans.forEach((span) => {
+          if (!traces[span.traceId]) {
+            traces[span.traceId] = {
+              traceId: span.traceId,
+              spans: {},
+            };
+          }
+          traces[span.traceId].spans[span.spanId] = toSpanData(
+            span,
+            scopeSpan.scope
+          );
+        });
+      });
+    });
+  }
+
+  return Object.values(traces);
+}
+
+function toLogRecordData(
+  log: OtlpLogRecord,
+  scope: OtlpScopeLog['scope']
+): LogRecordData {
+  const attributes: Record<string, any> = {};
+  if (log.attributes) {
+    log.attributes.forEach((attr) => {
+      const val = fromOtlpValue(attr.value);
+      if (val !== undefined) {
+        attributes[attr.key] = val;
+      }
+    });
+  }
+
+  let body: any = undefined;
+  if (log.body) {
+    body = fromOtlpValue(log.body);
+  }
+
+  return {
+    logId: '', // Server will populate this if empty
+    traceId: log.traceId,
+    spanId: log.spanId,
+    timestamp: toMillis(log.timeUnixNano),
+    severityNumber: log.severityNumber,
+    severityText: log.severityText,
+    body,
+    attributes,
+    instrumentationLibrary: {
+      name: scope.name,
+      version: scope.version,
+    },
+  };
+}
+
+export function logDataFromOtlp(otlpData: OtlpPayload): LogRecordData[] {
+  const logs: LogRecordData[] = [];
+  if (!otlpData.resourceLogs) return logs;
+
+  otlpData.resourceLogs.forEach((resourceLog) => {
+    resourceLog.scopeLogs.forEach((scopeLog) => {
+      scopeLog.logRecords.forEach((log) => {
+        logs.push(toLogRecordData(log, scopeLog.scope));
       });
     });
   });
 
-  return Object.values(traces);
+  return logs;
 }

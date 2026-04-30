@@ -173,7 +173,7 @@ Request body must be JSON with a `data` field: `{ "data": <input> }`. For stream
 
 ## Contributing
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests there.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests there.
 
 More details are in the [Genkit documentation](https://genkit.dev/docs/get-started/).
 

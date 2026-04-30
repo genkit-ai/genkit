@@ -94,17 +94,17 @@ Want to skip the local setup? Click below to try out Genkit using [Project IDX](
 
 Take a look at some samples of Genkit in use:
 
-- ["AI barista"](https://github.com/firebase/genkit/tree/main/samples/js-coffee-shop/) -- demonstrates simple LLM usage
-- [A simple chatbot with a JavaScript frontend](https://github.com/firebase/genkit/tree/main/samples/chatbot/) -- add history to LLM sessions
-- [Restaurant menu Q&A app](https://github.com/firebase/genkit/tree/main/samples/js-menu/) -- this sample shows progressively
+- ["AI barista"](https://github.com/genkit-ai/genkit/tree/main/samples/js-coffee-shop/) -- demonstrates simple LLM usage
+- [A simple chatbot with a JavaScript frontend](https://github.com/genkit-ai/genkit/tree/main/samples/chatbot/) -- add history to LLM sessions
+- [Restaurant menu Q&A app](https://github.com/genkit-ai/genkit/tree/main/samples/js-menu/) -- this sample shows progressively
   more sophisticated versions of a menu understanding app.
-- [Streaming to an Angular frontend](https://github.com/firebase/genkit/tree/main/samples/js-angular/)
+- [Streaming to an Angular frontend](https://github.com/genkit-ai/genkit/tree/main/samples/js-angular/)
 
 ## Connect with us
 
 - **Join the community:** Stay updated, ask questions, and share your work with other Genkit users on our [Discord server](https://discord.gg/qXt5zzQKpc).
 
-- **Provide feedback:** Report issues or suggest new features using our GitHub [issue tracker](https://github.com/firebase/genkit/issues).
+- **Provide feedback:** Report issues or suggest new features using our GitHub [issue tracker](https://github.com/genkit-ai/genkit/issues).
 
 ## Contributing
 
@@ -112,4 +112,4 @@ Contributions to Genkit are welcome and highly appreciated! See our [Contributio
 
 ## Authors
 
-Genkit is built by [Firebase](https://firebase.google.com/products/genkit) with contributions from the [Open Source Community](https://github.com/firebase/genkit/graphs/contributors).
+Genkit is built by [Firebase](https://firebase.google.com/products/genkit) with contributions from the [Open Source Community](https://github.com/genkit-ai/genkit/graphs/contributors).

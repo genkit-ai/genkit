@@ -37,7 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
@@ -139,53 +139,6 @@ class ActionRunner:
         return StreamingResponse(gen(), media_type='text/plain' if self.stream else 'application/json', headers=headers)
 
 
-async def _get_actions_payload(registry: Registry) -> dict[str, dict[str, Any]]:
-    actions: dict[str, dict[str, Any]] = {}
-
-    for kind in ActionKind.__members__.values():
-        for name, action in (await registry.resolve_actions_by_kind(kind)).items():
-            key = f'/{kind}/{name}'
-            actions[key] = {
-                'key': key,
-                'name': action.name,
-                'type': action.kind,
-                'description': action.description,
-                'inputSchema': action.input_schema,
-                'outputSchema': action.output_schema,
-                'metadata': action.metadata,
-            }
-
-    for meta in await registry.list_actions() or []:
-        try:
-            key = f'/{meta.kind}/{meta.name}'
-        except Exception as exc:
-            logger.warning('Skipping invalid plugin metadata: %s', exc)
-            continue
-
-        advertised = {
-            'key': key,
-            'name': meta.name,
-            'type': meta.kind,
-            'description': getattr(meta, 'description', None),
-            'inputSchema': getattr(meta, 'input_json_schema', None),
-            'outputSchema': getattr(meta, 'output_json_schema', None),
-            'metadata': getattr(meta, 'metadata', None),
-        }
-
-        if key not in actions:
-            actions[key] = advertised
-        else:
-            existing = actions[key]
-            for f in ('description', 'inputSchema', 'outputSchema'):
-                if not existing.get(f) and advertised.get(f):
-                    existing[f] = advertised[f]
-            if isinstance(existing.get('metadata'), dict) and isinstance(advertised.get('metadata'), dict):
-                # isinstance checks above guarantee both are dicts, but ty can't narrow .get() results
-                existing['metadata'] = {**advertised['metadata'], **existing['metadata']}  # ty: ignore[invalid-argument-type]
-
-    return actions
-
-
 def create_reflection_asgi_app(
     registry: Registry,
     on_startup: LifecycleHook | None = None,
@@ -195,6 +148,7 @@ def create_reflection_asgi_app(
     active_actions: dict[str, asyncio.Task[Any]] = {}
 
     async def health(_: Request) -> JSONResponse:
+        await registry.initialize_all_plugins()
         return JSONResponse({'status': 'OK'})
 
     async def terminate(_: Request) -> JSONResponse:
@@ -203,7 +157,24 @@ def create_reflection_asgi_app(
         return JSONResponse({'status': 'OK'})
 
     async def actions(_: Request) -> JSONResponse:
-        return JSONResponse(await _get_actions_payload(registry), headers={'x-genkit-version': version})
+        # Full catalog: plugins, registered actions, DAP expansions; merged with parent.
+        actions = await registry.list_actions()
+
+        def omit_none(payload: dict[str, Any]) -> dict[str, Any]:
+            return {key: value for key, value in payload.items() if value is not None}
+
+        response: dict[str, dict[str, Any]] = {}
+        for key, action in actions.items():
+            response[key] = omit_none({
+                'key': key,
+                'name': action.name,
+                'description': action.description,
+                'metadata': action.metadata,
+                'inputSchema': action.input_schema or action.input_json_schema,
+                'outputSchema': action.output_schema or action.output_json_schema,
+            })
+
+        return JSONResponse(response, headers={'x-genkit-version': version})
 
     async def values(req: Request) -> JSONResponse:
         if req.query_params.get('type') != 'defaultModel':
@@ -239,13 +210,13 @@ def create_reflection_asgi_app(
         )
         return await runner.stream_response(version)
 
-    @asynccontextmanager
-    async def lifespan(_: Starlette) -> AsyncIterator[None]:
-        if on_startup is not None:
-            await on_startup()
-        yield
-        if on_shutdown is not None:
-            await on_shutdown()
+    async def reflection_startup() -> None:
+        # Eagerly initialize plugins so init()-registered actions exist before handling traffic.
+        await registry.initialize_all_plugins()
+
+    startup_hooks: list[LifecycleHook] = [reflection_startup]
+    if on_startup is not None:
+        startup_hooks.append(on_startup)
 
     app = Starlette(
         routes=[
@@ -267,7 +238,8 @@ def create_reflection_asgi_app(
                 expose_headers=['X-Genkit-Trace-Id', 'X-Genkit-Span-Id', 'x-genkit-version'],
             )
         ],
-        lifespan=lifespan,
+        on_startup=startup_hooks,
+        on_shutdown=[on_shutdown] if on_shutdown else [],
     )
     app.active_actions = active_actions  # type: ignore[attr-defined]
     return app

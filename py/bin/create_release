@@ -290,7 +290,7 @@ echo "Tag: ${TAG_NAME}"
 if [ "$USE_PR_NOTES" = true ]; then
     echo "Based on PR: #${PR_NUMBER}"
 fi
-echo "Release: https://github.com/firebase/genkit/releases/tag/${TAG_NAME}"
+echo "Release: https://github.com/genkit-ai/genkit/releases/tag/${TAG_NAME}"
 echo ""
 echo -e "${YELLOW}Next steps:${NC}"
 echo "1. Go to Actions → Publish Python Package"

@@ -15,61 +15,42 @@
  */
 
 import {
-  cancelOperation,
-  checkOperation,
+  GenkitAI,
   defineHelper,
   definePartial,
   definePrompt,
   defineTool,
-  embed,
-  evaluate,
   generate,
-  generateStream,
   loadPromptFolder,
   modelRef,
   prompt,
-  rerank,
-  retrieve,
   type BaseDataPointSchema,
   type Document,
   type EmbedderInfo,
-  type EmbedderParams,
-  type Embedding,
-  type EvalResponses,
-  type EvaluatorParams,
   type ExecutablePrompt,
   type GenerateOptions,
   type GenerateRequest,
   type GenerateResponse,
   type GenerateResponseChunk,
   type GenerateResponseData,
-  type GenerateStreamOptions,
   type GenerateStreamResponse,
-  type GenerationCommonConfigSchema,
-  type IndexerParams,
   type ModelArgument,
   type ModelReference,
-  type Part,
   type PromptConfig,
   type PromptGenerateOptions,
-  type RankedDocument,
-  type RerankerParams,
   type RetrieverAction,
   type RetrieverInfo,
-  type RetrieverParams,
   type ToolAction,
   type ToolConfig,
 } from '@genkit-ai/ai';
 import {
   defineEmbedder,
-  embedMany,
   type EmbedderAction,
-  type EmbedderArgument,
   type EmbedderFn,
-  type EmbeddingBatch,
 } from '@genkit-ai/ai/embedder';
 import {
   defineEvaluator,
+  evaluate,
   type EvaluatorAction,
   type EvaluatorFn,
 } from '@genkit-ai/ai/evaluator';
@@ -85,16 +66,21 @@ import {
   type ModelAction,
 } from '@genkit-ai/ai/model';
 import {
+  RankedDocument,
+  RerankerParams,
   defineReranker,
+  rerank,
   type RerankerFn,
   type RerankerInfo,
 } from '@genkit-ai/ai/reranker';
 import {
+  IndexerParams,
+  RetrieverParams,
   defineIndexer,
   defineRetriever,
   defineSimpleRetriever,
   index,
-  type DocumentData,
+  retrieve,
   type IndexerAction,
   type IndexerFn,
   type RetrieverFn,
@@ -109,18 +95,15 @@ import {
 import {
   ActionFnArg,
   GenkitError,
-  Operation,
   ReflectionServer,
   defineDynamicActionProvider,
   defineFlow,
   defineJsonSchema,
   defineSchema,
-  getContext,
   isAction,
   isBackgroundAction,
   isDevEnv,
   registerBackgroundAction,
-  run,
   setClientHeader,
   type Action,
   type ActionContext,
@@ -135,13 +118,17 @@ import {
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import type { HasRegistry } from '@genkit-ai/core/registry';
-import type { BaseEvalDataPointSchema } from './evaluator.js';
+import type {
+  BaseEvalDataPointSchema,
+  EvalResponses,
+  EvaluatorParams,
+} from './evaluator.js';
 import { logger } from './logging.js';
 import {
-  ResolvableAction,
   isPluginV2,
   type GenkitPlugin,
   type GenkitPluginV2,
+  type ResolvableAction,
 } from './plugin.js';
 import { Registry, type ActionType } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
@@ -160,8 +147,8 @@ export type PromptFn<
 export interface GenkitOptions {
   /** List of plugins to load. */
   plugins?: (GenkitPlugin | GenkitPluginV2)[];
-  /** Directory where dotprompts are stored. */
-  promptDir?: string;
+  /** Directory where dotprompts are stored. Set to `null` to disable automatic prompt loading. */
+  promptDir?: string | null;
   /** Default model to use if no model is specified. */
   model?: ModelArgument<any>;
   /** Additional runtime context data for flows and tools. */
@@ -181,11 +168,9 @@ export interface GenkitOptions {
  *
  * There may be multiple Genkit instances in a single codebase.
  */
-export class Genkit implements HasRegistry {
+export class Genkit extends GenkitAI implements HasRegistry {
   /** Developer-configured options. */
   readonly options: GenkitOptions;
-  /** Registry instance that is exclusively modified by this Genkit instance. */
-  readonly registry: Registry;
   /** Reflection server for this registry. May be null if not started. */
   private reflectionServer: ReflectionServer | null = null;
   /** List of flows that have been registered in this instance. */
@@ -196,8 +181,9 @@ export class Genkit implements HasRegistry {
   }
 
   constructor(options?: GenkitOptions) {
+    const registry = new Registry();
+    super(registry);
     this.options = options || {};
-    this.registry = new Registry();
     if (this.options.context) {
       this.registry.context = this.options.context;
     }
@@ -360,7 +346,10 @@ export class Genkit implements HasRegistry {
       `${name}${options?.variant ? `.${options?.variant}` : ''}`,
       prompt(this.registry, name, {
         ...options,
-        dir: this.options.promptDir ?? './prompts',
+        dir:
+          this.options.promptDir === undefined
+            ? './prompts'
+            : this.options.promptDir,
       })
     );
   }
@@ -618,27 +607,6 @@ export class Genkit implements HasRegistry {
   }
 
   /**
-   * Embeds the given `content` using the specified `embedder`.
-   */
-  embed<CustomOptions extends z.ZodTypeAny>(
-    params: EmbedderParams<CustomOptions>
-  ): Promise<Embedding[]> {
-    return embed(this.registry, params);
-  }
-
-  /**
-   * A veneer for interacting with embedder models in bulk.
-   */
-  embedMany<ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny>(params: {
-    embedder: EmbedderArgument<ConfigSchema>;
-    content: string[] | DocumentData[];
-    metadata?: Record<string, unknown>;
-    options?: z.infer<ConfigSchema>;
-  }): Promise<EmbeddingBatch> {
-    return embedMany(this.registry, params);
-  }
-
-  /**
    * Evaluates the given `dataset` using the specified `evaluator`.
    */
   evaluate<
@@ -676,284 +644,6 @@ export class Genkit implements HasRegistry {
   }
 
   /**
-   * Make a generate call to the default model with a simple text prompt.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { text } = await ai.generate('hi');
-   * ```
-   */
-  generate<O extends z.ZodTypeAny = z.ZodTypeAny>(
-    strPrompt: string
-  ): Promise<GenerateResponse<z.infer<O>>>;
-
-  /**
-   * Make a generate call to the default model with a multipart request.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { text } = await ai.generate([
-   *   { media: {url: 'http://....'} },
-   *   { text: 'describe this image' }
-   * ]);
-   * ```
-   */
-  generate<O extends z.ZodTypeAny = z.ZodTypeAny>(
-    parts: Part[]
-  ): Promise<GenerateResponse<z.infer<O>>>;
-
-  /**
-   * Generate calls a generative model based on the provided prompt and configuration. If
-   * `messages` is provided, the generation will include a conversation history in its
-   * request. If `tools` are provided, the generate method will automatically resolve
-   * tool calls returned from the model unless `returnToolRequests` is set to `true`.
-   *
-   * See {@link GenerateOptions} for detailed information about available options.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   * })
-   *
-   * const { text } = await ai.generate({
-   *   system: 'talk like a pirate',
-   *   prompt: [
-   *     { media: { url: 'http://....' } },
-   *     { text: 'describe this image' }
-   *   ],
-   *   messages: conversationHistory,
-   *   tools: [ userInfoLookup ],
-   *   model: googleAI.model('gemini-flash-latest'),
-   * });
-   * ```
-   */
-  generate<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
-  >(
-    opts:
-      | GenerateOptions<O, CustomOptions>
-      | PromiseLike<GenerateOptions<O, CustomOptions>>
-  ): Promise<GenerateResponse<z.infer<O>>>;
-
-  async generate<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
-  >(
-    options:
-      | string
-      | Part[]
-      | GenerateOptions<O, CustomOptions>
-      | PromiseLike<GenerateOptions<O, CustomOptions>>
-  ): Promise<GenerateResponse<z.infer<O>>> {
-    let resolvedOptions: GenerateOptions<O, CustomOptions>;
-    if (options instanceof Promise) {
-      resolvedOptions = await options;
-    } else if (typeof options === 'string' || Array.isArray(options)) {
-      resolvedOptions = {
-        prompt: options,
-      };
-    } else {
-      resolvedOptions = options as GenerateOptions<O, CustomOptions>;
-    }
-    return generate(this.registry, resolvedOptions);
-  }
-
-  /**
-   * Make a streaming generate call to the default model with a simple text prompt.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { response, stream } = ai.generateStream('hi');
-   * for await (const chunk of stream) {
-   *   console.log(chunk.text);
-   * }
-   * console.log((await response).text);
-   * ```
-   */
-  generateStream<O extends z.ZodTypeAny = z.ZodTypeAny>(
-    strPrompt: string
-  ): GenerateStreamResponse<z.infer<O>>;
-
-  /**
-   * Make a streaming generate call to the default model with a multipart request.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { response, stream } = ai.generateStream([
-   *   { media: {url: 'http://....'} },
-   *   { text: 'describe this image' }
-   * ]);
-   * for await (const chunk of stream) {
-   *   console.log(chunk.text);
-   * }
-   * console.log((await response).text);
-   * ```
-   */
-  generateStream<O extends z.ZodTypeAny = z.ZodTypeAny>(
-    parts: Part[]
-  ): GenerateStreamResponse<z.infer<O>>;
-
-  /**
-   * Streaming generate calls a generative model based on the provided prompt and configuration. If
-   * `messages` is provided, the generation will include a conversation history in its
-   * request. If `tools` are provided, the generate method will automatically resolve
-   * tool calls returned from the model unless `returnToolRequests` is set to `true`.
-   *
-   * See {@link GenerateOptions} for detailed information about available options.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   * })
-   *
-   * const { response, stream } = ai.generateStream({
-   *   system: 'talk like a pirate',
-   *   prompt: [
-   *     { media: { url: 'http://....' } },
-   *     { text: 'describe this image' }
-   *   ],
-   *   messages: conversationHistory,
-   *   tools: [ userInfoLookup ],
-   *   model: googleAI.model('gemini-flash-latest'),
-   * });
-   * for await (const chunk of stream) {
-   *   console.log(chunk.text);
-   * }
-   * console.log((await response).text);
-   * ```
-   */
-  generateStream<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
-  >(
-    parts:
-      | GenerateOptions<O, CustomOptions>
-      | PromiseLike<GenerateOptions<O, CustomOptions>>
-  ): GenerateStreamResponse<z.infer<O>>;
-
-  generateStream<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
-  >(
-    options:
-      | string
-      | Part[]
-      | GenerateStreamOptions<O, CustomOptions>
-      | PromiseLike<GenerateStreamOptions<O, CustomOptions>>
-  ): GenerateStreamResponse<z.infer<O>> {
-    if (typeof options === 'string' || Array.isArray(options)) {
-      options = { prompt: options };
-    }
-    return generateStream(this.registry, options);
-  }
-
-  /**
-   * Checks the status of of a given operation. Returns a new operation which will contain the updated status.
-   *
-   * ```ts
-   * let operation = await ai.generateOperation({
-   *   model: googleAI.model('veo-2.0-generate-001'),
-   *   prompt: 'A banana riding a bicycle.',
-   * });
-   *
-   * while (!operation.done) {
-   *   operation = await ai.checkOperation(operation!);
-   *   await new Promise((resolve) => setTimeout(resolve, 5000));
-   * }
-   * ```
-   *
-   * @param operation
-   * @returns
-   */
-  checkOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
-    return checkOperation(this.registry, operation);
-  }
-
-  /**
-   * Cancels a given operation. Returns a new operation which will contain the updated status.
-   *
-   * @param operation
-   * @returns
-   */
-  cancelOperation<T>(operation: Operation<T>): Promise<Operation<T>> {
-    return cancelOperation(this.registry, operation);
-  }
-
-  /**
-   * A flow step that executes the provided function. Each run step is recorded separately in the trace.
-   *
-   * ```ts
-   * ai.defineFlow('hello', async() => {
-   *   await ai.run('step1', async () => {
-   *     // ... step 1
-   *   });
-   *   await ai.run('step2', async () => {
-   *     // ... step 2
-   *   });
-   *   return result;
-   * })
-   * ```
-   */
-  run<T>(name: string, func: () => Promise<T>): Promise<T>;
-
-  /**
-   * A flow step that executes the provided function. Each run step is recorded separately in the trace.
-   *
-   * ```ts
-   * ai.defineFlow('hello', async() => {
-   *   await ai.run('step1', async () => {
-   *     // ... step 1
-   *   });
-   *   await ai.run('step2', async () => {
-   *     // ... step 2
-   *   });
-   *   return result;
-   * })
-   */
-  run<T>(
-    name: string,
-    input: any,
-    func: (input?: any) => Promise<T>
-  ): Promise<T>;
-
-  run<T>(
-    name: string,
-    funcOrInput: () => Promise<T> | any,
-    maybeFunc?: (input?: any) => Promise<T>
-  ): Promise<T> {
-    if (maybeFunc) {
-      return run(name, funcOrInput, maybeFunc, this.registry);
-    }
-    return run(name, funcOrInput, this.registry);
-  }
-
-  /**
-   * Returns current action (or flow) invocation context. Can be used to access things like auth
-   * data set by HTTP server frameworks. If invoked outside of an action (e.g. flow or tool) will
-   * return `undefined`.
-   */
-  currentContext(): ActionContext | undefined {
-    return getContext();
-  }
-
-  /**
    * Configures the Genkit instance.
    */
   private configure() {
@@ -979,6 +669,13 @@ export class Genkit implements HasRegistry {
     plugins.forEach((plugin) => {
       if (isPluginV2(plugin)) {
         logger.debug(`Registering v2 plugin ${plugin.name}...`);
+        plugin.middleware?.()?.forEach((middleware) => {
+          activeRegistry.registerValue(
+            'middleware',
+            middleware.name,
+            middleware
+          );
+        });
         activeRegistry.registerPluginProvider(plugin.name, {
           name: plugin.name,
           async initializer() {

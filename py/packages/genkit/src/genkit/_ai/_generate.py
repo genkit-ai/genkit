@@ -37,8 +37,13 @@ from genkit._ai._model import (
     ModelResponseChunk,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
-from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._ai._tools import Tool, ToolInterruptError
+from genkit._core._action import (
+    GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
+    Action,
+    ActionKind,
+    ActionRunContext,
+)
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions
@@ -59,6 +64,51 @@ from genkit._core._typing import (
 DEFAULT_MAX_TURNS = 5
 
 logger = get_logger(__name__)
+
+
+async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> list[str]:
+    """Expand DAP wildcard tool names into individual registry keys.
+
+    A wildcard has the form ``<provider>:tool/*`` (or ``<provider>:tool/<prefix>*``).
+    Each match becomes a full DAP key
+    ``/dynamic-action-provider/<provider>:<actionType>/<toolName>`` so later resolution
+    stays bound to that provider (no ambiguous bare-name lookup across DAPs).
+
+    Non-wildcard names are passed through unchanged.
+    """
+    expanded: list[str] = []
+    for name in tool_names:
+        if not name.endswith('*') or ':' not in name:
+            expanded.append(name)
+            continue
+
+        colon = name.index(':')
+        provider_name = name[:colon]
+        rest = name[colon + 1 :]  # e.g. "tool/*" or "tool/prefix*"
+
+        provider_action = await registry.resolve_action(ActionKind.DYNAMIC_ACTION_PROVIDER, provider_name)
+        if provider_action is None:
+            expanded.append(name)
+            continue
+
+        dap = getattr(provider_action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+        if dap is None:
+            expanded.append(name)
+            continue
+
+        if '/' not in rest:
+            expanded.append(name)
+            continue
+
+        action_type, action_pattern = rest.split('/', 1)
+        metas = await dap.list_action_metadata(action_type, action_pattern)
+        for meta in metas:
+            tool_name = meta.get('name')
+            if tool_name:
+                tn = str(tool_name)
+                expanded.append(f'/dynamic-action-provider/{provider_name}:{action_type}/{tn}')
+
+    return expanded
 
 
 def tools_to_action_names(
@@ -112,7 +162,7 @@ def define_generate_action(registry: Registry) -> None:
         ctx: ActionRunContext,
     ) -> ModelResponse:
         on_chunk = cast(Callable[[ModelResponseChunk], None], ctx.streaming_callback) if ctx.is_streaming else None
-        return await generate_action(
+        return await _generate_action(
             registry=registry,
             raw_request=input,
             on_chunk=on_chunk,
@@ -135,7 +185,11 @@ async def generate_action(
     middleware: list[ModelMiddleware] | None = None,
     context: dict[str, Any] | None = None,
 ) -> ModelResponse:
-    """Execute a generation request with tool calling and middleware support."""
+    """Run generation with a util ``generate`` span.
+
+    The registered ``/util/generate`` action calls `_generate_action` directly
+    so reflection runs do not stack another util span on the action span.
+    """
     span_name = 'generate'
     with run_in_new_span(
         SpanMetadata(name=span_name),
@@ -162,6 +216,11 @@ async def _generate_action(
     context: dict[str, Any] | None = None,
 ) -> ModelResponse:
     """Execute a generation request with tool calling and middleware support."""
+    tools_in = raw_request.tools
+    if tools_in:
+        raw_request = raw_request.model_copy()
+        raw_request.tools = await expand_wildcard_tools(registry, tools_in)
+
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
     raw_request, formatter = apply_format(raw_request, format_def)
@@ -169,7 +228,7 @@ async def _generate_action(
     if raw_request.resources:
         raw_request = await apply_resources(registry, raw_request)
 
-    assert_valid_tool_names(raw_request)
+    assert_valid_tool_names(tools)
 
     (
         revised_request,
@@ -339,9 +398,7 @@ async def _generate_action(
         # No message in response, return as-is
         return response
 
-    # Stamp output format metadata on message for Dev UI rendering.
-    # Mirrors JS GenerateResponse constructor which sets message.metadata.generate.output
-    # so the Dev UI knows to render the output as formatted JSON vs plain text.
+    # Stamp output format metadata on message so the Dev UI can render formatted JSON vs plain text.
     out = raw_request.output
     if out and (out.content_type or out.format):
         generate_output: dict[str, str] = {}
@@ -588,17 +645,41 @@ async def apply_resources(registry: Registry, raw_request: GenerateActionOptions
     return new_request
 
 
-def assert_valid_tool_names(_raw_request: GenerateActionOptions) -> None:
-    """Validate tool names in the request. (TODO: not yet implemented)."""
-    # TODO(#4338): implement me
-    pass
+def _tool_short_name_for_model(name: str) -> str:
+    """Return the last path segment of a tool name."""
+    if '/' not in name:
+        return name
+    return name[name.rfind('/') + 1 :]
+
+
+def assert_valid_tool_names(tools: list[Action[Any, Any, Any]]) -> None:
+    """Reject overlapping model-facing tool names before the model is called.
+
+    Two resolved tools that share the same short name (segment after the last ``/``)
+    cannot both appear in one generate request.
+    """
+    if not tools:
+        return
+    seen: dict[str, str] = {}
+    for tool in tools:
+        short = _tool_short_name_for_model(tool.name)
+        if short in seen:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(f"Cannot provide two tools with the same name: '{tool.name}' and '{seen[short]}'"),
+            )
+        seen[short] = tool.name
 
 
 async def resolve_parameters(
     registry: Registry, request: GenerateActionOptions
 ) -> tuple[Action[Any, Any, Any], list[Action[Any, Any, Any]], FormatDef | None]:
     """Resolve model, tools, and format from registry for a generation request."""
-    model = request.model if request.model is not None else registry.default_model
+    model = (
+        request.model
+        if request.model is not None
+        else cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
+    )
     if not model:
         raise Exception('No model configured.')
 
@@ -609,7 +690,11 @@ async def resolve_parameters(
     tools: list[Action[Any, Any, Any]] = []
     if request.tools:
         for tool_name in request.tools:
-            tools.append(await resolve_tool(registry, tool_name))
+            try:
+                tool_action = await resolve_tool(registry, tool_name)
+            except GenkitError as e:
+                raise Exception(f'Unable to resolve tool {tool_name}') from e
+            tools.append(tool_action)
 
     format_def: FormatDef | None = None
     if request.output and request.output.format:
@@ -666,7 +751,12 @@ async def resolve_tool_requests(
     tool_dict: dict[str, Action] = {}
     if request.tools:
         for tool_name in request.tools:
-            tool_dict[tool_name] = await resolve_tool(registry, tool_name)
+            tool_action = await resolve_tool(registry, tool_name)
+            tool_dict[tool_name] = tool_action
+            # Model tool calls use ToolDefinition.name (short); wildcard expansion uses full DAP keys.
+            short = tool_action.name
+            if short not in tool_dict:
+                tool_dict[short] = tool_action
 
     revised_model_message = message.model_copy(deep=True)
 
@@ -763,9 +853,23 @@ async def _resolve_tool_request(
         raise
 
 
-async def resolve_tool(registry: Registry, tool_name: str) -> Action:
-    """Resolve a tool action by name from the registry."""
-    tool = await registry.resolve_action(kind=ActionKind.TOOL, name=tool_name)
+async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
+    """Resolve a tool from a registry name or a Tool instance.
+
+    Accepts full action keys (``/dynamic-action-provider/...``), DAP-qualified
+    names (``provider:tool/name``), or plain registered tool names.
+
+    Used when building ModelRequest (for example from to_generate_request).
+    """
+    if isinstance(tool_ref, Tool):
+        return tool_ref.action
+
+    if tool_ref.startswith('/'):
+        tool = await registry.resolve_action_by_key(tool_ref)
+        if tool is not None:
+            return tool
+
+    tool = await registry.resolve_action(kind=ActionKind.TOOL, name=tool_ref)
     if tool is None:
         raise GenkitError(status='NOT_FOUND', message=f'Unable to resolve tool {tool_name}')
     return tool

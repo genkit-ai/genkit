@@ -22,6 +22,7 @@ import {
   type EmbedderReference,
 } from 'genkit/embedder';
 import { embedder as pluginEmbedder } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { embedContent } from './client.js';
 import {
   ClientOptions,
@@ -109,6 +110,7 @@ export const KNOWN_MODELS = {
   }),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
 export type EmbedderModelName = `${string}embedding${string}`;
 export function isEmbedderName(value: string): value is EmbedderModelName {
   return value.includes('embedding');
@@ -119,16 +121,17 @@ export function model(
   config: EmbeddingConfig = {}
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    const known = KNOWN_MODELS[name];
     return embedderRef({
-      name: `vertexai/${name}`,
-      configSchema: EmbeddingConfigSchema,
+      name: known.name,
+      info: known.info,
+      configSchema: known.configSchema,
       config,
-      info: {
-        ...KNOWN_MODELS[name].info,
-      },
     });
   }
+
   if (config.multimodal) {
     // Generic multimodal embedder format
     return embedderRef({

@@ -346,10 +346,28 @@ export class ReflectionServerV2 {
   private async handleListValues(request: JsonRpcRequest) {
     if (!request.id) return;
     const { type } = ReflectionListValuesParamsSchema.parse(request.params);
+    if (type !== 'defaultModel' && type !== 'middleware') {
+      this.sendError(
+        request.id,
+        -32602,
+        `'type' ${type} is not supported. Only 'defaultModel' and 'middleware' are supported`
+      );
+      return;
+    }
     const values = await this.registry.listValues(type);
+    const mappedValues: Record<string, any> = {};
+    for (const [key, value] of Object.entries(values)) {
+      mappedValues[key] =
+        value &&
+        typeof value === 'object' &&
+        'toJson' in value &&
+        typeof (value as any).toJson === 'function'
+          ? (value as any).toJson()
+          : value;
+    }
     this.sendResponse(
       request.id,
-      ReflectionListValuesResponseSchema.parse({ values })
+      ReflectionListValuesResponseSchema.parse({ values: mappedValues })
     );
   }
 
@@ -361,7 +379,7 @@ export class ReflectionServerV2 {
     const action = await this.registry.lookupAction(key);
 
     if (!action) {
-      this.sendError(request.id, 404, `action ${key} not found`);
+      this.sendError(request.id, -32602, `action ${key} not found`);
       return;
     }
 
@@ -476,7 +494,11 @@ export class ReflectionServerV2 {
       this.activeActions.delete(traceId);
       this.sendResponse(request.id, { message: 'Action cancelled' });
     } else {
-      this.sendError(request.id, 404, 'Action not found or already completed');
+      this.sendError(
+        request.id,
+        -32602,
+        'Action not found or already completed'
+      );
     }
   }
 

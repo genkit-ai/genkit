@@ -699,9 +699,8 @@ class Genkit:
 
     def _initialize_registry(self, model: str | None, plugins: list[Plugin] | None) -> None:
         """Initialize the registry with default model and plugins."""
-        self.registry.default_model = model
         if model:
-            self.registry.register_value('defaultModel', model, model)
+            self.registry.register_value('defaultModel', 'defaultModel', model)
         for fmt in built_in_formats:
             self.define_format(fmt)
 
@@ -1184,7 +1183,7 @@ class Genkit:
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
-        resolved_model = model or self.registry.default_model
+        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
         if not resolved_model:
             raise GenkitError(
                 status='INVALID_ARGUMENT',

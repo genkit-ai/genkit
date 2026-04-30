@@ -21,6 +21,10 @@ import {
   suppressTracing,
   type ExportResult,
 } from '@opentelemetry/core';
+import type {
+  LogRecordExporter,
+  ReadableLogRecord,
+} from '@opentelemetry/sdk-logs';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { logger } from '../logging.js';
 import { deleteUndefinedProps } from '../utils.js';
@@ -177,4 +181,106 @@ export class TraceServerExporter implements SpanExporter {
 // Converts an HrTime to milliseconds.
 function transformTime(time: HrTime) {
   return hrTimeToMilliseconds(time);
+}
+
+/**
+ * Exports collected OpenTelemetetry logs to the telemetry server.
+ */
+export class LogServerExporter implements LogRecordExporter {
+  export(
+    logs: ReadableLogRecord[],
+    resultCallback: (result: ExportResult) => void
+  ): void {
+    this._sendLogs(logs, resultCallback);
+  }
+
+  shutdown(): Promise<void> {
+    return this.forceFlush();
+  }
+
+  forceFlush(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  private async _sendLogs(
+    logs: ReadableLogRecord[],
+    done?: (result: ExportResult) => void
+  ): Promise<void> {
+    if (!telemetryServerUrl) {
+      if (done) done({ code: ExportResultCode.SUCCESS });
+      return;
+    }
+
+    try {
+      const scopeLogsMap = new Map<string, any>();
+      for (const log of logs) {
+        const scopeName = log.instrumentationScope.name || 'unknown';
+        if (!scopeLogsMap.has(scopeName)) {
+          scopeLogsMap.set(scopeName, {
+            scope: {
+              name: scopeName,
+              version: log.instrumentationScope.version || '',
+            },
+            logRecords: [],
+          });
+        }
+
+        // TODO: Handle more complex types (arrays, maps, etc.).
+        // See https://opentelemetry.io/docs/specs/otel/common/#anyvalue.
+        const attributes: any[] = [];
+        for (const [k, v] of Object.entries(log.attributes)) {
+          if (typeof v === 'string')
+            attributes.push({ key: k, value: { stringValue: v } });
+          else if (typeof v === 'number')
+            attributes.push({ key: k, value: { intValue: v } });
+          else if (typeof v === 'boolean')
+            attributes.push({ key: k, value: { boolValue: v } });
+        }
+
+        let bodyValue;
+        if (typeof log.body === 'string') bodyValue = { stringValue: log.body };
+        else if (typeof log.body === 'number')
+          bodyValue = { intValue: log.body };
+        else if (typeof log.body === 'boolean')
+          bodyValue = { boolValue: log.body };
+        else bodyValue = { stringValue: JSON.stringify(log.body) };
+
+        scopeLogsMap.get(scopeName).logRecords.push({
+          timeUnixNano: (
+            hrTimeToMilliseconds(log.hrTime) * 1_000_000
+          ).toString(),
+          severityNumber: log.severityNumber,
+          severityText: log.severityText,
+          body: bodyValue,
+          attributes,
+          traceId: log.spanContext?.traceId,
+          spanId: log.spanContext?.spanId,
+        });
+      }
+
+      const payload = {
+        resourceLogs: [
+          {
+            resource: { attributes: [], droppedAttributesCount: 0 },
+            scopeLogs: Array.from(scopeLogsMap.values()),
+          },
+        ],
+      };
+
+      await context.with(suppressTracing(context.active()), () =>
+        fetch(`${telemetryServerUrl}/api/otlp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        })
+      );
+      if (done) done({ code: ExportResultCode.SUCCESS });
+    } catch (e) {
+      logger.error('Failed to export logs', e);
+      if (done) done({ code: ExportResultCode.FAILED });
+    }
+  }
 }

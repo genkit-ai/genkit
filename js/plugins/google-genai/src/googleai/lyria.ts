@@ -23,6 +23,7 @@ import {
   toInteractionTurn,
 } from '../common/interaction-converters.js';
 import { ResponseModality } from '../common/interaction-types.js';
+import { isKnownKey } from '../common/utils.js';
 import { createInteraction } from './client.js';
 import {
   ClientOptions,
@@ -112,9 +113,11 @@ export function model(
   config: LyriaConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name as KnownModels]) {
-    return KNOWN_MODELS[name as KnownModels].withConfig(config);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
   }
+
   return modelRef({
     name: `googleai/${name}`,
     config,

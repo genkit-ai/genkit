@@ -20,6 +20,7 @@
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/middleware": "workspace:*",
     "@google/generative-ai": "^0.15.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
     "body-parser": "^1.20.3",

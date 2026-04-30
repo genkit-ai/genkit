@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { LogStore } from '@genkit-ai/tools-common';
 import {
   TraceDataSchema,
   TraceQueryFilterSchema,
@@ -24,9 +25,10 @@ import cors from 'cors';
 import express from 'express';
 import type * as http from 'http';
 import { BroadcastManager } from './broadcast-manager.js';
-import type { TraceStore } from './types';
-import { traceDataFromOtlp } from './utils/otlp';
+import type { TraceStore } from './types.js';
+import { logDataFromOtlp, traceDataFromOtlp } from './utils/otlp.js';
 
+export { LocalFileLogStore } from './file-log-store.js';
 export { LocalFileTraceStore } from './file-trace-store.js';
 export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types';
 
@@ -39,6 +41,7 @@ const broadcastManager = new BroadcastManager();
 export async function startTelemetryServer(params: {
   port: number;
   traceStore: TraceStore;
+  logStore: LogStore;
   /**
    * Controls the maximum request body size. If this is a number,
    * then the value specifies the number of bytes; if it is a string,
@@ -50,6 +53,8 @@ export async function startTelemetryServer(params: {
   corsOrigin?: string | RegExp;
 }) {
   await params.traceStore.init();
+  await params.logStore.init();
+
   const api = express();
   // Allow all origins and expose trace ID header
   api.use(
@@ -179,13 +184,72 @@ export async function startTelemetryServer(params: {
     }
   });
 
+  api.get('/api/logs', async (request, response, next) => {
+    try {
+      const { limit, continuationToken } = request.query;
+      response.json(
+        await params.logStore.list({
+          limit: limit ? Number.parseInt(limit.toString()) : 100,
+          continuationToken: continuationToken
+            ? continuationToken.toString()
+            : undefined,
+        })
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  api.get('/api/traces/:traceId/logs', async (request, response, next) => {
+    try {
+      const { limit, continuationToken } = request.query;
+      const { traceId } = request.params;
+      response.json(
+        await params.logStore.list({
+          limit: limit ? Number.parseInt(limit.toString()) : 100,
+          continuationToken: continuationToken
+            ? continuationToken.toString()
+            : undefined,
+          traceId,
+        })
+      );
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  api.get(
+    '/api/traces/:traceId/spans/:spanId/logs',
+    async (request, response, next) => {
+      try {
+        const { limit, continuationToken } = request.query;
+        const { traceId, spanId } = request.params;
+        response.json(
+          await params.logStore.list({
+            limit: limit ? Number.parseInt(limit.toString()) : 100,
+            continuationToken: continuationToken
+              ? continuationToken.toString()
+              : undefined,
+            traceId,
+            spanId,
+          })
+        );
+      } catch (e) {
+        next(e);
+      }
+    }
+  );
+
   api.post(
     '/api/otlp/:parentTraceId/:parentSpanId',
     async (request, response) => {
       try {
         const { parentTraceId, parentSpanId } = request.params;
 
-        if (!request.body.resourceSpans?.length) {
+        if (
+          !request.body.resourceSpans?.length &&
+          !request.body.resourceLogs?.length
+        ) {
           // Acknowledge and ignore empty payloads.
           response.status(200).json({});
           return;
@@ -202,6 +266,20 @@ export async function startTelemetryServer(params: {
           }
           await params.traceStore.save(parentTraceId, traceData);
         }
+
+        if (request.body.resourceLogs?.length) {
+          const logs = logDataFromOtlp(request.body);
+          if (logs.length > 0) {
+            for (const log of logs) {
+              log.traceId = parentTraceId;
+              if (!log.spanId) {
+                log.spanId = parentSpanId;
+              }
+            }
+            await params.logStore.save(logs);
+          }
+        }
+
         response.status(200).json({});
       } catch (err) {
         logger.error(`Error processing OTLP payload: ${err}`);
@@ -216,7 +294,10 @@ export async function startTelemetryServer(params: {
 
   api.post('/api/otlp', async (request, response) => {
     try {
-      if (!request.body.resourceSpans?.length) {
+      if (
+        !request.body.resourceSpans?.length &&
+        !request.body.resourceLogs?.length
+      ) {
         // Acknowledge and ignore empty payloads.
         response.status(200).json({});
         return;
@@ -240,6 +321,15 @@ export async function startTelemetryServer(params: {
           broadcastManager.broadcast(traceData.traceId, event);
         }
       }
+
+      // TODO: Add real time support and broadcast log events
+      if (request.body.resourceLogs?.length) {
+        const logs = logDataFromOtlp(request.body);
+        if (logs.length > 0) {
+          await params.logStore.save(logs);
+        }
+      }
+
       response.status(200).json({});
     } catch (err) {
       logger.error(`Error processing OTLP payload: ${err}`);

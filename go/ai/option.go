@@ -109,7 +109,8 @@ type commonGenOptions struct {
 	ToolChoice         ToolChoice        // Whether tool calls are required, disabled, or optional.
 	MaxTurns           int               // Maximum number of tool call iterations.
 	ReturnToolRequests *bool             // Whether to return tool requests instead of making the tool calls and continuing the generation.
-	Middleware         []ModelMiddleware // Middleware to apply to the model request and model response.
+	Middleware         []ModelMiddleware // Deprecated: Use WithUse instead. Middleware to apply to the model request and model response.
+	Use                []Middleware      // Middleware to apply to generation (Generate, Model, and Tool hooks).
 }
 
 type CommonGenOption interface {
@@ -181,6 +182,13 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 		opts.Middleware = o.Middleware
 	}
 
+	if o.Use != nil {
+		if opts.Use != nil {
+			return errors.New("cannot set middleware more than once (WithUse)")
+		}
+		opts.Use = o.Use
+	}
+
 	return nil
 }
 
@@ -233,8 +241,20 @@ func WithModelName(name string) CommonGenOption {
 }
 
 // WithMiddleware sets middleware to apply to the model request.
+//
+// Deprecated: Use [WithUse] instead, which supports Generate, Model, and Tool hooks.
 func WithMiddleware(middleware ...ModelMiddleware) CommonGenOption {
 	return &commonGenOptions{Middleware: middleware}
+}
+
+// WithUse sets middleware to apply to generation. Middleware hooks wrap
+// the generate loop, model calls, and tool executions.
+//
+// Accepts either a middleware config struct (produced by a plugin) or an
+// inline adapter via [MiddlewareFunc]. The chain applies outer-to-inner, so
+// WithUse(A, B) expands to A { B { ... } }.
+func WithUse(middleware ...Middleware) CommonGenOption {
+	return &commonGenOptions{Use: middleware}
 }
 
 // WithMaxTurns sets the maximum number of tool call iterations before erroring.

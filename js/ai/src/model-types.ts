@@ -22,8 +22,13 @@ import {
   ToolResponsePartSchema,
   type Part,
 } from './parts.js';
-
 export { Part, PartSchema };
+
+export const MiddlewareRefSchema: z.ZodTypeAny = z.object({
+  name: z.string(),
+  config: z.any().optional(),
+});
+export type MiddlewareRef = z.infer<typeof MiddlewareRefSchema>;
 
 //
 // IMPORTANT: Please keep type definitions in sync with
@@ -396,5 +401,7 @@ export const GenerateActionOptionsSchema = z.object({
   maxTurns: z.number().optional(),
   /** Custom step name for this generate call to display in trace views. Defaults to "generate". */
   stepName: z.string().optional(),
+  /** Middleware to apply to this generation. */
+  use: z.array(MiddlewareRefSchema).optional(),
 });
 export type GenerateActionOptions = z.infer<typeof GenerateActionOptionsSchema>;

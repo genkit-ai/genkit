@@ -410,7 +410,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             resume_metadata=opts.get('resume_metadata'),
         )
 
-        model = prompt_config.model or self._registry.default_model
+        model = prompt_config.model or cast(str | None, self._registry.lookup_value('defaultModel', 'defaultModel'))
         if model is None:
             raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
@@ -612,7 +612,7 @@ def _resolve_output_schema(
 
 async def to_generate_action_options(registry: Registry, options: PromptConfig) -> GenerateActionOptions:
     """Convert PromptConfig to GenerateActionOptions."""
-    model = options.model or registry.default_model
+    model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 

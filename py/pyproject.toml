@@ -242,7 +242,7 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
-  # TODO(https://github.com/firebase/genkit/issues/4398): Enable PLC0415 after
+  # TODO(https://github.com/genkit-ai/genkit/issues/4398): Enable PLC0415 after
   # completing cleanup of remaining in-function imports in core framework.
   # "PLC0415",
 ]

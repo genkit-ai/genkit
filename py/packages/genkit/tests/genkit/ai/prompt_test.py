@@ -792,7 +792,7 @@ async def test_variant_prompt_loading_does_not_recurse() -> None:
     on its own action key before setting _cached_prompt.  This triggered
     _trigger_lazy_loading() which re-invoked create_prompt_from_file(),
     recursing until RecursionError.
-    See https://github.com/firebase/genkit/issues/4491.
+    See https://github.com/genkit-ai/genkit/issues/4491.
     """
     ai, *_ = setup_test()
 

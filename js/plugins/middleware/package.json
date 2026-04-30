@@ -1,0 +1,55 @@
+{
+  "name": "@genkit-ai/middleware",
+  "description": "Middleware for Genkit",
+  "keywords": [
+    "genkit",
+    "genkit-plugin",
+    "google cloud",
+    "google ai",
+    "ai",
+    "genai",
+    "generative-ai"
+  ],
+  "version": "0.5.0",
+  "type": "commonjs",
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "tsx --test tests/*_test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/middleware"
+  },
+  "author": "genkit",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "genkit": "workspace:^"
+  },
+  "devDependencies": {
+    "@genkit-ai/google-genai": "workspace:^",
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^20.11.16",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  },
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.mjs",
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  },
+  "dependencies": {
+    "mime-types": "^3.0.2"
+  }
+}

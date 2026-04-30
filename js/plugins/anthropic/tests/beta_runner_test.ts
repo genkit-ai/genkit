@@ -24,7 +24,7 @@ import { createMockAnthropicClient } from './mocks/anthropic-client.js';
 describe('BetaRunner.toAnthropicMessageContent', () => {
   function createRunner() {
     return new BetaRunner({
-      name: 'anthropic/claude-3-5-haiku',
+      name: 'anthropic/claude-haiku-4-5',
       client: createMockAnthropicClient(),
     });
   }
@@ -457,7 +457,7 @@ describe('BetaRunner', () => {
   it('should build request bodies with optional config fields', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new BetaRunner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient as Anthropic,
     }) as any;
 
@@ -492,12 +492,12 @@ describe('BetaRunner', () => {
     } satisfies any;
 
     const body = runner.toAnthropicRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       request,
       true
     );
 
-    assert.strictEqual(body.model, 'claude-3-5-haiku-20241022');
+    assert.strictEqual(body.model, 'claude-haiku-4-5');
     assert.ok(Array.isArray(body.system));
     assert.strictEqual(body.max_tokens, 128);
     assert.strictEqual(body.top_k, 4);
@@ -516,7 +516,7 @@ describe('BetaRunner', () => {
     });
 
     const streamingBody = runner.toAnthropicStreamingRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       request,
       true
     );
@@ -528,7 +528,7 @@ describe('BetaRunner', () => {
     });
 
     const disabledBody = runner.toAnthropicRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       {
         messages: [],
         config: {
@@ -543,7 +543,7 @@ describe('BetaRunner', () => {
   it('should throw error if system message contains media', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new BetaRunner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient as Anthropic,
     }) as any;
 
@@ -567,7 +567,7 @@ describe('BetaRunner', () => {
     } satisfies any;
 
     assert.throws(
-      () => runner.toAnthropicRequestBody('claude-3-5-haiku', request, false),
+      () => runner.toAnthropicRequestBody('claude-haiku-4-5', request, false),
       /System messages can only contain text content/
     );
   });
@@ -575,7 +575,7 @@ describe('BetaRunner', () => {
   it('should throw error if system message contains tool requests', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new BetaRunner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient as Anthropic,
     }) as any;
 
@@ -594,7 +594,7 @@ describe('BetaRunner', () => {
     } satisfies any;
 
     assert.throws(
-      () => runner.toAnthropicRequestBody('claude-3-5-haiku', request, false),
+      () => runner.toAnthropicRequestBody('claude-haiku-4-5', request, false),
       /System messages can only contain text content/
     );
   });
@@ -602,7 +602,7 @@ describe('BetaRunner', () => {
   it('should throw error if system message contains tool responses', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new BetaRunner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient as Anthropic,
     }) as any;
 
@@ -621,7 +621,7 @@ describe('BetaRunner', () => {
     } satisfies any;
 
     assert.throws(
-      () => runner.toAnthropicRequestBody('claude-3-5-haiku', request, false),
+      () => runner.toAnthropicRequestBody('claude-haiku-4-5', request, false),
       /System messages can only contain text content/
     );
   });
@@ -629,18 +629,18 @@ describe('BetaRunner', () => {
   it('should not leak maxOutputTokens, stopSequences, version, or apiKey into the request body', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new BetaRunner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient as Anthropic,
     }) as any;
 
     const body = runner.toAnthropicRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       {
         messages: [],
         config: {
           maxOutputTokens: 100,
           stopSequences: ['END'],
-          version: 'claude-3-5-haiku-custom',
+          version: 'claude-haiku-4-5-custom',
           apiKey: 'fake-api-key',
           temperature: 0.5,
         },
@@ -649,7 +649,7 @@ describe('BetaRunner', () => {
     );
 
     assert.deepStrictEqual(body, {
-      model: 'claude-3-5-haiku-custom',
+      model: 'claude-haiku-4-5-custom',
       max_tokens: 100,
       messages: [],
       stop_sequences: ['END'],
@@ -658,7 +658,43 @@ describe('BetaRunner', () => {
         'files-api-2025-04-14',
         'effort-2025-11-24',
         'structured-outputs-2025-11-13',
+        'task-budgets-2026-03-13',
       ],
+    });
+  });
+
+  it('should support Claude Opus 4.7 adaptive thinking and task budgets', () => {
+    const mockClient = createMockAnthropicClient();
+    const runner = new BetaRunner({
+      name: 'claude-opus-4-7',
+      client: mockClient as Anthropic,
+    }) as any;
+
+    const request = {
+      messages: [{ role: 'user', content: [{ text: 'Refactor this.' }] }],
+      output: { format: 'text' },
+      config: {
+        thinking: { adaptive: true, display: 'summarized' },
+        output_config: {
+          effort: 'xhigh',
+          task_budget: { type: 'tokens', total: 64000 },
+        },
+      },
+    } satisfies any;
+
+    const body = runner.toAnthropicRequestBody(
+      'claude-opus-4-7',
+      request,
+      false
+    );
+
+    assert.deepStrictEqual(body.thinking, {
+      type: 'adaptive',
+      display: 'summarized',
+    });
+    assert.deepStrictEqual(body.output_config, {
+      effort: 'xhigh',
+      task_budget: { type: 'tokens', total: 64000 },
     });
   });
 
