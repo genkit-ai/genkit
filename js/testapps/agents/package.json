@@ -5,14 +5,17 @@
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
+    "server": "npx tsx src/index.ts",
     "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
   },
   "dependencies": {
+    "@genkit-ai/express": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "genkit": "workspace:*",
     "express": "^4.20.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "typescript": "^5.9.3"
   }
 }
