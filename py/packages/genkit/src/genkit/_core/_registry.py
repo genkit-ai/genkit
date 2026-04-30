@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, cast
+from collections.abc import Awaitable, Callable
+from typing import cast
 
 from dotpromptz.dotprompt import Dotprompt
 from pydantic import BaseModel
@@ -587,75 +587,29 @@ class Registry:
                 return await self._parent.resolve_action(kind, name)
             return None
 
-        # <plugin name>/<action name>: resolve that plugin.
+        action: Action | None = None
+
+        # Namespaced request
         if '/' in name:
-            plugin_name, action_name = name.split('/', 1)
+            plugin_name, local = name.split('/', 1)
             with self._lock:
                 plugin = self._plugins.get(plugin_name)
 
             if plugin is not None:
                 await self._ensure_plugin_initialized(plugin_name)
 
-                target = f'{plugin_name}/{action_name}'  # normalized
+                target = f'{plugin_name}/{local}'  # normalized
 
                 # Check cache again after init - init() might have registered this action
                 with self._lock:
                     if kind in self._entries and target in self._entries[kind]:
                         return await self._trigger_lazy_loading(self._entries[kind][target])
 
-                # On-demand resolution: target may not have been in init()'s registered set.
                 action = await plugin.resolve(kind, target)
                 if action is not None:
                     self.register_action_instance(action, namespace=plugin_name)
                     with self._lock:
                         return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(target))
-
-                # Check cache first - init() might have registered this action
-                with self._lock:
-                    cached_action = self._entries.get(kind, {}).get(target)
-                if cached_action is not None:
-                    successes.append((plugin_name, cached_action))
-                    continue
-
-                action = await plugin.resolve(kind, target)
-                if action is not None:
-                    successes.append((plugin_name, action))
-
-            if len(successes) > 1:
-                plugin_names = [p for p, _ in successes]
-                raise ValueError(
-                    f"Ambiguous {kind} action name '{name}'. "
-                    + f"Matches plugins: {plugin_names}. Use 'plugin/{name}'."
-                )
-
-            if len(successes) == 1:
-                plugin_name, action = successes[0]
-                self.register_action_instance(action, namespace=plugin_name)
-                with self._lock:
-                    return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(f'{plugin_name}/{name}'))
-
-        # Fallback: try dynamic action providers (for MCP, dynamic resources, etc.)
-        # Skip if we're looking up a dynamic action provider itself to avoid recursion
-        if kind != ActionKind.DYNAMIC_ACTION_PROVIDER:
-            with self._lock:
-                if ActionKind.DYNAMIC_ACTION_PROVIDER in self._entries:
-                    providers_dict = self._entries[ActionKind.DYNAMIC_ACTION_PROVIDER]
-                else:
-                    providers_dict = {}
-                providers = list(providers_dict.values())
-            for provider_action in providers:
-                dap = getattr(provider_action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
-                if dap is None:
-                    continue
-                try:
-                    resolved = await dap.get_action(str(kind), name)
-                    if resolved is not None:
-                        return resolved
-                except Exception as e:
-                    logger.debug(
-                        f'Dynamic action provider {provider_action.name} failed for {kind}/{name}',
-                        exc_info=e,
-                    )
 
         # Final fallback: delegate to parent registry.
         if self._parent is not None:
@@ -688,10 +642,9 @@ class Registry:
         if kind == ActionKind.DYNAMIC_ACTION_PROVIDER:
             dap_parts = parse_dap_qualified_name(name)
             if dap_parts is not None:
-                provider_name, inner_kind_str, inner_name = dap_parts
                 provider_action = await self.resolve_action(
                     ActionKind.DYNAMIC_ACTION_PROVIDER,
-                    provider_name,
+                    dap_parts.provider,
                 )
                 if provider_action is None:
                     return None
@@ -699,11 +652,11 @@ class Registry:
                 if dap is None:
                     return None
                 try:
-                    resolved = await dap.get_action(inner_kind_str, inner_name)
+                    resolved = await dap.get_action(dap_parts.inner_kind, dap_parts.inner_name)
                 except Exception as e:
                     logger.debug(
-                        f'Dynamic action provider {provider_name} failed for '
-                        f'qualified key {inner_kind_str}/{inner_name}',
+                        f'Dynamic action provider {dap_parts.provider} failed for '
+                        f'qualified key {dap_parts.inner_kind}/{dap_parts.inner_name}',
                         exc_info=e,
                     )
                     return None

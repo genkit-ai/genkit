@@ -58,7 +58,7 @@ async def test_resolve_action_by_key_invalid_format() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_action_via_dynamic_action_provider() -> None:
-    """Registry resolves actions supplied only by a DAP via get_action."""
+    """Registry resolves DAP tools only for DAP-qualified names (host:kind/name)."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -76,7 +76,7 @@ async def test_resolve_action_via_dynamic_action_provider() -> None:
 
     define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    got = await registry.resolve_action(ActionKind.TOOL, 'inner-tool')
+    got = await registry.resolve_action(ActionKind.TOOL, 'my-dap:tool/inner-tool')
     assert got is inner
 
 
