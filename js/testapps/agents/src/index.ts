@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { expressHandler } from '@genkit-ai/express';
+import { expressHandler, startFlowServer } from '@genkit-ai/express';
 import express from 'express';
 
 import { demonstrateBranching, nameAgent } from './branching-agent.js';
@@ -22,8 +22,8 @@ import {
   clientStateAgent,
   testClientStateAgent,
 } from './client-state-agent.js';
-import { testWriterAgent, writerAgent } from './prompt-agent.js';
 import { customAgent, testCustomAgent } from './custom-agent.js';
+import { testWriterAgent, writerAgent } from './prompt-agent.js';
 import {
   testWeatherAgent,
   testWeatherAgentStream,
@@ -38,9 +38,14 @@ import {
   testFileStoreChainPruningAgent,
 } from './file-store.js';
 
-import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 import { taskAgent, testTaskAgent } from './custom-state-agent.js';
+import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
+import {
+  orchestratorAgent,
+  testSubAgentDemo,
+  testSubAgentSimple,
+} from './subagent-demo.js';
 
 // Log loaded agents/flows (existing behavior)
 console.log('Loaded custom agent:', customAgent.__action.name);
@@ -69,9 +74,13 @@ console.log('Loaded background agent:', backgroundAgent.__action.name);
 console.log('Loaded background flow:', testBackgroundAgent.__action.name);
 console.log('Loaded task agent:', taskAgent.__action.name);
 console.log('Loaded task flow:', testTaskAgent.__action.name);
+console.log('Loaded orchestrator agent:', orchestratorAgent.__action.name);
+console.log('Loaded sub-agent demo flow:', testSubAgentDemo.__action.name);
+console.log('Loaded sub-agent simple flow:', testSubAgentSimple.__action.name);
 
 export * from './background-agent.js';
 export * from './interrupt-agent.js';
+export * from './subagent-demo.js';
 
 // ---------------------------------------------------------------------------
 // Express server — exposes session flows for the web UI
@@ -99,16 +108,29 @@ app.use((_req, res, next) => {
 app.post('/api/customAgent', expressHandler(customAgent as any));
 app.post('/api/writerAgent', expressHandler(writerAgent as any));
 app.post('/api/weatherAgent', expressHandler(weatherAgent as any));
-app.post('/api/weatherAgent/state', expressHandler(weatherAgent.getSnapshotDataAction));
+app.post(
+  '/api/weatherAgent/state',
+  expressHandler(weatherAgent.getSnapshotDataAction)
+);
 app.post('/api/clientStateAgent', expressHandler(clientStateAgent as any));
 app.post('/api/bankingAgent', expressHandler(bankingAgent as any));
 app.post('/api/workspaceAgent', expressHandler(workspaceAgent as any));
 app.post('/api/backgroundAgent', expressHandler(backgroundAgent as any));
-app.post('/api/backgroundAgent/state', expressHandler(backgroundAgent.getSnapshotDataAction));
-app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortAgentAction));
+app.post(
+  '/api/backgroundAgent/state',
+  expressHandler(backgroundAgent.getSnapshotDataAction)
+);
+app.post(
+  '/api/backgroundAgent/abort',
+  expressHandler(backgroundAgent.abortAgentAction)
+);
 app.post('/api/branchingAgent', expressHandler(nameAgent as any));
-app.post('/api/branchingAgent/state', expressHandler(nameAgent.getSnapshotDataAction));
+app.post(
+  '/api/branchingAgent/state',
+  expressHandler(nameAgent.getSnapshotDataAction)
+);
 app.post('/api/taskAgent', expressHandler(taskAgent as any));
+app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent as any));
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
@@ -123,5 +145,7 @@ app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 app.listen(PORT, () => {
   console.log(`\n🚀 Express server running on http://localhost:${PORT}`);
-  console.log(`   Web UI: run "cd web && npm run dev" then open http://localhost:5173\n`);
+  console.log(
+    `   Web UI: run "cd web && npm run dev" then open http://localhost:5173\n`
+  );
 });

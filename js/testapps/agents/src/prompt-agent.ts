@@ -15,8 +15,8 @@
  */
 
 import { z } from 'genkit';
-import { ai } from './genkit.js';
 import { AgentInit, AgentInput } from '../../../ai/lib/session-flow.js';
+import { ai } from './genkit.js';
 
 // ---------------------------------------------------------------------------
 // Writer Agent — demonstrates `defineAgent` with multiple prompt input
@@ -66,7 +66,7 @@ export const testWriterAgent = ai.defineFlow(
       <AgentInput>{
         messages: [{ role: 'user', content: [{ text }] }],
       },
-      { init: <AgentInit>{}   }
+      { init: <AgentInit>{} }
     );
     return res.result;
   }

@@ -11,6 +11,7 @@
   "dependencies": {
     "@genkit-ai/express": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/middleware": "workspace:*",
     "genkit": "workspace:*",
     "express": "^4.20.0"
   },

@@ -1,6 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+} from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
+import { useCallback, useRef, useState } from 'react';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -176,15 +181,22 @@ export default function TaskTracker() {
                 <div
                   className="task-progress-fill"
                   style={{
-                    width: totalCount > 0 ? `${(doneCount / totalCount) * 100}%` : '0%',
+                    width:
+                      totalCount > 0
+                        ? `${(doneCount / totalCount) * 100}%`
+                        : '0%',
                   }}
                 />
               </div>
             </div>
             <ul className="task-list">
               {tasks.map((task) => (
-                <li key={task.id} className={`task-item ${task.done ? 'task-done' : ''}`}>
-                  <span className="task-checkbox">{task.done ? '✅' : '⬜'}</span>
+                <li
+                  key={task.id}
+                  className={`task-item ${task.done ? 'task-done' : ''}`}>
+                  <span className="task-checkbox">
+                    {task.done ? '✅' : '⬜'}
+                  </span>
                   <span className="task-title">
                     #{task.id}: {task.title}
                   </span>
@@ -218,12 +230,12 @@ export default function TaskTracker() {
             <code>ai.currentSession().updateCustom()</code>.
           </li>
           <li>
-            After each turn, the client reads{' '}
-            <code>result.state.custom</code> to update the task list panel.
+            After each turn, the client reads <code>result.state.custom</code>{' '}
+            to update the task list panel.
           </li>
           <li>
-            The full <code>state</code> blob (messages + custom) is sent back
-            on the next turn via <code>{'init: { state }'}</code>.
+            The full <code>state</code> blob (messages + custom) is sent back on
+            the next turn via <code>{'init: { state }'}</code>.
           </li>
         </ol>
 

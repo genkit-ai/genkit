@@ -1,7 +1,7 @@
+import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
+import { runFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { runFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
 
 // ---------------------------------------------------------------------------
 // Branching Chat — "Pick Your Variant" UI
@@ -112,8 +112,16 @@ export default function BranchingChat() {
       try {
         // Fire two requests in parallel from the same branch point.
         const [resultA, resultB] = await Promise.all([
-          runFlow<AgentOutput, AgentInit>({ url: ENDPOINT, input: msgInput, init }),
-          runFlow<AgentOutput, AgentInit>({ url: ENDPOINT, input: msgInput, init }),
+          runFlow<AgentOutput, AgentInit>({
+            url: ENDPOINT,
+            input: msgInput,
+            init,
+          }),
+          runFlow<AgentOutput, AgentInit>({
+            url: ENDPOINT,
+            input: msgInput,
+            init,
+          }),
         ]);
 
         const textA = extractText(resultA);
@@ -185,7 +193,10 @@ export default function BranchingChat() {
           <div className="chat-header-top">
             <h2>🔀 Branching Chat</h2>
             {snapshotIdRef.current && (
-              <Link to="/branching" className="btn btn-new-session" reloadDocument>
+              <Link
+                to="/branching"
+                className="btn btn-new-session"
+                reloadDocument>
                 ✨ New Session
               </Link>
             )}
@@ -206,7 +217,9 @@ export default function BranchingChat() {
           )}
 
           {messages.map((msg, i) => (
-            <div key={i} className={`message ${msg.role === 'user' ? 'message-user' : ''}`}>
+            <div
+              key={i}
+              className={`message ${msg.role === 'user' ? 'message-user' : ''}`}>
               <div className="message-role">
                 {msg.role === 'user' ? 'You' : 'Model'}
               </div>
@@ -230,16 +243,14 @@ export default function BranchingChat() {
               <div className="variant-cards">
                 <button
                   className="variant-card"
-                  onClick={() => handlePick('a')}
-                >
+                  onClick={() => handlePick('a')}>
                   <div className="variant-card-badge">A</div>
                   <div className="variant-card-text">{variants.a.text}</div>
                   <div className="variant-card-action">Use this ✓</div>
                 </button>
                 <button
                   className="variant-card"
-                  onClick={() => handlePick('b')}
-                >
+                  onClick={() => handlePick('b')}>
                   <div className="variant-card-badge">B</div>
                   <div className="variant-card-text">{variants.b.text}</div>
                   <div className="variant-card-action">Use this ✓</div>
@@ -262,9 +273,7 @@ export default function BranchingChat() {
             className="chat-input"
             type="text"
             placeholder={
-              variants
-                ? 'Pick a variant above first…'
-                : 'Type a message…'
+              variants ? 'Pick a variant above first…' : 'Type a message…'
             }
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -274,8 +283,7 @@ export default function BranchingChat() {
           <button
             className="btn btn-send"
             onClick={() => input.trim() && handleSend(input.trim())}
-            disabled={loading || !!variants || !input.trim()}
-          >
+            disabled={loading || !!variants || !input.trim()}>
             Send
           </button>
         </div>
@@ -295,9 +303,7 @@ export default function BranchingChat() {
             same conversation checkpoint. The LLM's non-determinism produces
             different responses.
           </li>
-          <li>
-            Both variants are displayed side-by-side. The user picks one.
-          </li>
+          <li>Both variants are displayed side-by-side. The user picks one.</li>
           <li>
             The chosen variant's <code>snapshotId</code> becomes the new branch
             point for the next turn and is pushed into the URL for persistence.
