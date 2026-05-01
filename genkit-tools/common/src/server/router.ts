@@ -149,6 +149,7 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
           model: input.model.replace('/model/', ''),
           config: input.config,
           tools: input.tools?.map((toolDefinition) => toolDefinition.name),
+          use: input.use,
         };
         return fromMessages(frontmatter, input.messages);
       }),

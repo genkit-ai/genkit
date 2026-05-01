@@ -22,18 +22,97 @@ export function fromMessages(
   frontmatter: PromptFrontmatter,
   messages: MessageData[]
 ): string {
-  let renderedMessages = '';
+  const cleanFrontmatter = cleanupFrontmatter(frontmatter);
+  const { rendered: renderedMessages, anyOmitted } = renderMessages(messages);
+
+  const header = `---
+${stringify(cleanFrontmatter, {
+  collectionStyle: 'block',
+  aliasDuplicateObjects: false,
+}).trim()}
+---`;
+
+  if (anyOmitted) {
+    return (
+      `${header}
+
+{{! Some advanced message types, such as tool requests/responses, have been omitted from the history. See comments inline for more details. }}
+
+${renderedMessages}`.trimEnd() + '\n'
+    );
+  }
+
+  return (
+    `${header}
+
+${renderedMessages}`.trimEnd() + '\n'
+  );
+}
+
+/**
+ * Renders an array of message data into a Dotprompt template string.
+ */
+function renderMessages(messages: MessageData[]): {
+  rendered: string;
+  anyOmitted: boolean;
+} {
+  let anyOmitted = false;
+  let rendered = '';
+
   messages.forEach((message) => {
-    renderedMessages += `{{role "${message.role}"}}\n`;
-    renderedMessages += message.content.map(partToString);
-    renderedMessages += '\n\n';
+    const hasToolRequest = message.content.some(
+      (p) => (p as any).toolRequest !== undefined
+    );
+    const hasToolResponse = message.content.some(
+      (p) => (p as any).toolResponse !== undefined
+    );
+    const hasSupportedPart = message.content.some(
+      (p) => p.text !== undefined || p.media !== undefined
+    );
+
+    if (hasToolRequest || hasToolResponse || !hasSupportedPart) {
+      anyOmitted = true;
+      let reason = 'unsupported content';
+      if (hasToolRequest) {
+        reason = 'toolRequest';
+      } else if (hasToolResponse) {
+        reason = 'toolResponse';
+      }
+      rendered += `{{! message with role "${message.role}" omitted (${reason}). }}\n\n`;
+    } else {
+      rendered += `{{role "${message.role}"}}\n`;
+      rendered += message.content.map(partToString).join('');
+      rendered += '\n\n';
+    }
   });
 
-  return `---
-${stringify(frontmatter)}
----
+  return { rendered, anyOmitted };
+}
 
-${renderedMessages}`;
+/**
+ * Removes empty arrays, empty objects, and null/undefined values from the
+ * frontmatter to ensure the generated YAML is clean and idiomatic.
+ */
+function cleanupFrontmatter(frontmatter: PromptFrontmatter): any {
+  const clean: any = {};
+  for (const key in frontmatter) {
+    const val = (frontmatter as any)[key];
+    if (val === undefined || val === null) {
+      continue;
+    }
+    if (Array.isArray(val) && val.length === 0) {
+      continue;
+    }
+    if (
+      typeof val === 'object' &&
+      Object.keys(val).length === 0 &&
+      !(val instanceof Date)
+    ) {
+      continue;
+    }
+    clean[key] = val;
+  }
+  return clean;
 }
 
 function partToString(part: Part): string {
@@ -41,11 +120,11 @@ function partToString(part: Part): string {
     return part.text;
   } else if (part.media) {
     return `{{media url:${part.media.url}}}`;
-  } else if (part.toolRequest) {
-    return '<< tool request omitted >>';
-  } else if (part.toolResponse) {
-    return '<< tool response omitted >>';
-  } else {
-    return '';
   }
+
+  const type =
+    Object.keys(part).find(
+      (k) => k !== 'metadata' && (part as any)[k] !== undefined
+    ) || 'unknown';
+  return `{{! ${type} part omitted }}`;
 }

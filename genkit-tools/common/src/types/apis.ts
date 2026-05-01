@@ -22,6 +22,7 @@ import {
   InferenceDatasetSchema,
 } from './eval';
 import { LogRecordSchema } from './log';
+import { MiddlewareRefSchema } from './middleware';
 import {
   GenerationCommonConfigSchema,
   MessageSchema,
@@ -170,6 +171,7 @@ export const CreatePromptRequestSchema = z.object({
   messages: z.array(MessageSchema),
   config: GenerationCommonConfigSchema.passthrough().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
+  use: z.array(MiddlewareRefSchema).optional(),
 });
 
 export type CreatePromptRequest = z.infer<typeof CreatePromptRequestSchema>;
