@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { expressHandler } from '@genkit-ai/express';
+import { expressHandler, startFlowServer } from '@genkit-ai/express';
 import express from 'express';
 
 import { demonstrateBranching, nameAgent } from './branching-agent.js';
@@ -23,6 +23,7 @@ import {
   testClientStateAgent,
 } from './client-state-agent.js';
 import { customAgent, testCustomAgent } from './custom-agent.js';
+import { testWriterAgent, writerAgent } from './prompt-agent.js';
 import {
   testWeatherAgent,
   testWeatherAgentStream,
