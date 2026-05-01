@@ -378,7 +378,7 @@ export function fromOpenAIChoice(
   // Build content array based on what's present in the message
   let content: Part[] = [];
 
-  if (toolRequestParts) {
+  if (toolRequestParts && toolRequestParts.length > 0) {
     content = toolRequestParts as ToolRequestPart[];
   } else {
     // Handle reasoning_content if present
@@ -644,7 +644,7 @@ export function openAIModelRunner(
 
 /**
  * Method to define a new Genkit Model that is compatible with Open AI
- * Chat Completions API. 
+ * Chat Completions API.
  *
  * These models are to be used to chat with a large language model.
  *

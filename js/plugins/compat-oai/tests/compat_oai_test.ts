@@ -543,6 +543,27 @@ describe('fromOpenAiChoice', () => {
         },
       },
     },
+    {
+      should: 'should not ignore content when tool_calls is an empty array',
+      choice: {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: 'I have the answer.',
+          tool_calls: [],
+          refusal: null,
+        },
+        finish_reason: 'stop',
+        logprobs: null,
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [{ text: 'I have the answer.' }],
+        },
+      },
+    },
   ];
 
   for (const test of testCases) {
