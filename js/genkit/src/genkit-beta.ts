@@ -19,17 +19,20 @@ import {
   GenerateResponseData,
   GenerationCommonConfigSchema,
   SessionRunner,
+  defineAgent,
+  defineCustomAgent,
   defineInterrupt,
+  definePromptAgent,
   defineResource,
-  defineSessionFlow,
-  defineSessionFlowFromPrompt,
   generateOperation,
+  type AgentConfig,
+  type AgentFn,
+  type AgentStreamChunk,
   type InterruptConfig,
+  type PromptConfig,
   type ResourceAction,
   type ResourceFn,
   type ResourceOptions,
-  type SessionFlowFn,
-  type SessionFlowStreamChunk,
   type ToolAction,
 } from '@genkit-ai/ai';
 
@@ -55,14 +58,15 @@ import { Genkit, type GenkitOptions } from './genkit';
 export { FileSessionStore, InMemorySessionStore, SessionRunner };
 export type {
   GenkitOptions as GenkitBetaOptions,
-  SessionFlowFn,
-  SessionFlowStreamChunk,
+  AgentFn,
+  AgentStreamChunk,
   SessionSnapshot,
   SessionState,
   SessionStore,
   SessionStoreOptions,
   SnapshotCallback,
   SnapshotContext,
+  PromptConfig,
 };
 
 /**
@@ -91,20 +95,20 @@ export class GenkitBeta extends Genkit {
   }
 
   /**
-   * Defines and registers a session flow.
+   * Defines and registers a custom agent with a custom handler function.
    *
    * @beta
    */
-  defineSessionFlow<Stream = unknown, State = unknown, InputVariables = unknown>(
+  defineCustomAgent<Stream = unknown, State = unknown, InputVariables = unknown>(
     config: {
       name: string;
       description?: string;
       store?: SessionStore<State, InputVariables>;
       snapshotCallback?: SnapshotCallback<State, InputVariables>;
     },
-    fn: SessionFlowFn<Stream, State, InputVariables>
+    fn: AgentFn<Stream, State, InputVariables>
   ) {
-    return defineSessionFlow<Stream, State, InputVariables>(
+    return defineCustomAgent<Stream, State, InputVariables>(
       this.registry,
       config,
       fn
@@ -112,17 +116,42 @@ export class GenkitBeta extends Genkit {
   }
 
   /**
-   * Defines and registers a session flow from a Prompt template.
+   * Defines and registers an agent from an existing Prompt template.
    *
    * @beta
    */
-  defineSessionFlowFromPrompt<PromptIn = unknown, State = unknown>(config: {
+  definePromptAgent<PromptIn = unknown, State = unknown>(config: {
     promptName: string;
-    defaultInput: PromptIn;
+    defaultInput?: PromptIn;
     store?: SessionStore<State, PromptIn>;
     snapshotCallback?: SnapshotCallback<State, PromptIn>;
   }) {
-    return defineSessionFlowFromPrompt<PromptIn, State>(this.registry, config);
+    return definePromptAgent<PromptIn, State>(this.registry, config);
+  }
+
+  /**
+   * Defines and registers an agent by creating a prompt and wiring it into a
+   * multi-turn agent in one step.
+   *
+   * This is a convenience shortcut that combines `definePrompt` and
+   * `definePromptAgent` into a single call.
+   *
+   * ```ts
+   * const myAgent = ai.defineAgent({
+   *   name: 'myAgent',
+   *   model: 'googleai/gemini-2.5-flash',
+   *   system: 'Talk like a pirate.',
+   *   tools: [weatherTool],
+   *   store: new FileSessionStore('./.snapshots'),
+   * });
+   * ```
+   *
+   * @beta
+   */
+  defineAgent<PromptIn = unknown, State = unknown>(
+    config: AgentConfig<PromptIn, State>
+  ) {
+    return defineAgent<PromptIn, State>(this.registry, config);
   }
 
   /**
