@@ -661,30 +661,6 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		}
 	}
 
-	respondParts := []*toolResponsePart{}
-	for _, part := range genOpts.RespondParts {
-		if !part.IsToolResponse() {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Generate: respond part is not a tool response")
-		}
-
-		respondParts = append(respondParts, &toolResponsePart{
-			ToolResponse: part.ToolResponse,
-			Metadata:     part.Metadata,
-		})
-	}
-
-	restartParts := []*toolRequestPart{}
-	for _, part := range genOpts.RestartParts {
-		if !part.IsToolRequest() {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Generate: restart part is not a tool request")
-		}
-
-		restartParts = append(restartParts, &toolRequestPart{
-			ToolRequest: part.ToolRequest,
-			Metadata:    part.Metadata,
-		})
-	}
-
 	actionOpts := &GenerateActionOptions{
 		Model:              modelName,
 		Messages:           messages,
@@ -702,10 +678,10 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		},
 	}
 
-	if len(respondParts) > 0 || len(restartParts) > 0 {
+	if len(genOpts.RespondParts) > 0 || len(genOpts.RestartParts) > 0 {
 		actionOpts.Resume = &GenerateActionResume{
-			Respond: respondParts,
-			Restart: restartParts,
+			Respond: genOpts.RespondParts,
+			Restart: genOpts.RestartParts,
 		}
 	}
 
@@ -1509,6 +1485,17 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc) (*resumeOptionOutput, error) {
 	if genOpts.Resume == nil || (len(genOpts.Resume.Respond) == 0 && len(genOpts.Resume.Restart) == 0) {
 		return &resumeOptionOutput{revisedRequest: genOpts}, nil
+	}
+
+	for _, part := range genOpts.Resume.Respond {
+		if !part.IsToolResponse() {
+			return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumeOption: respond part is not a tool response")
+		}
+	}
+	for _, part := range genOpts.Resume.Restart {
+		if !part.IsToolRequest() {
+			return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumeOption: restart part is not a tool request")
+		}
 	}
 
 	toolDefMap := make(map[string]*ToolDefinition)
