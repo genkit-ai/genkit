@@ -231,15 +231,6 @@ ai.defineFlow('test-error-tool', async (q) => {
   return text;
 });
 
-ai.defineFlow('test-resource-tool', async (q) => {
-  const { text } = await ai.generate({
-    prompt: `call the resource_tool and summarize the text it returns.`,
-    tools: ['test-mcp-manager:tool/inmemory/resource_tool'],
-  });
-
-  return text;
-});
-
 // MCP Controls
 export const controlMcp = ai.defineFlow(
   {

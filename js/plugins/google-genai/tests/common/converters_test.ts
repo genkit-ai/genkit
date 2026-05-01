@@ -197,9 +197,11 @@ describe('toGeminiMessage', () => {
               name: 'screenshot',
               response: {
                 name: 'screenshot',
-                content: { text: 'this is a test' },
               },
               parts: [
+                {
+                  text: 'this is a test',
+                },
                 {
                   inlineData: {
                     mimeType: 'image/png',
@@ -237,8 +239,13 @@ describe('toGeminiMessage', () => {
               name: 'screenshot',
               response: {
                 name: 'screenshot',
-                content: { status: 'ok', text: 'this is a test' },
+                content: { status: 'ok' },
               },
+              parts: [
+                {
+                  text: 'this is a test',
+                },
+              ],
             },
           },
         ],

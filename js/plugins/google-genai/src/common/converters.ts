@@ -27,6 +27,7 @@ import { JSONPath } from 'jsonpath-plus';
 import {
   FunctionCallingMode,
   FunctionDeclaration,
+  FunctionResponse,
   GenerateContentCandidate as GeminiCandidate,
   Content as GeminiContent,
   Part as GeminiPart,
@@ -167,51 +168,22 @@ function toGeminiToolResponse(part: Part): GeminiPart {
       'Invalid ToolResponsePart: output or content must be provided.'
     );
   }
-
-  let responseContent: any = part.toolResponse?.output;
-
-  const functionResponseParts: GeminiPart[] = [];
-  if (part.toolResponse?.content) {
-    const texts: string[] = [];
-    for (const p of part.toolResponse.content) {
-      if (typeof p.text === 'string') {
-        texts.push(p.text);
-      } else if (p.media) {
-        functionResponseParts.push(toGeminiPart(p));
-      }
-    }
-
-    if (texts.length > 0) {
-      if (responseContent === undefined) {
-        responseContent = { text: texts.join('\n') };
-      } else if (
-        typeof responseContent === 'object' &&
-        responseContent !== null
-      ) {
-        responseContent = { ...responseContent, text: texts.join('\n') };
-      }
-    }
-  }
-
-  if (responseContent === undefined) {
-    responseContent = {};
-  }
-
-  const functionResponse: GeminiPart['functionResponse'] = {
+  const functionResponse: FunctionResponse = {
     name: part.toolResponse!.name,
+    ...(part.toolResponse?.ref !== undefined
+      ? { id: part.toolResponse.ref }
+      : {}),
     response: {
       name: part.toolResponse!.name,
-      content: responseContent,
+      ...(part.toolResponse?.output !== undefined
+        ? { content: part.toolResponse.output }
+        : {}),
     },
+    ...(part.toolResponse?.content !== undefined
+      ? { parts: part.toolResponse.content.map(toGeminiPart) }
+      : {}),
   };
 
-  if (functionResponseParts.length > 0) {
-    functionResponse.parts = functionResponseParts;
-  }
-
-  if (part.toolResponse!.ref) {
-    functionResponse.id = part.toolResponse!.ref;
-  }
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     functionResponse,
   });

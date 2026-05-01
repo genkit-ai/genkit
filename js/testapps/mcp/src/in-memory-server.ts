@@ -38,10 +38,6 @@ customMcpServer.registerTool(
           data: IMAGE_B64,
           mimeType: 'image/png',
         },
-        {
-          type: 'text',
-          text: 'Successfully returned the test image',
-        },
       ],
     };
   }
@@ -57,25 +53,6 @@ customMcpServer.registerTool(
         {
           type: 'text',
           text: 'This is a simulated error from the tool.',
-        },
-      ],
-    };
-  }
-);
-
-customMcpServer.registerTool(
-  'resource_tool',
-  { description: 'A tool that returns an embedded resource' },
-  async () => {
-    return {
-      content: [
-        {
-          type: 'resource',
-          resource: {
-            uri: 'test://resource/1',
-            text: 'This is some text inside an embedded resource.',
-            mimeType: 'text/plain',
-          },
         },
       ],
     };
