@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { streamFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -15,7 +16,7 @@ import { ChatUI, type Message } from '../components/ChatUI';
 const ENDPOINT = '/api/workspaceAgent';
 
 interface Artifact {
-  name: string;
+  name?: string;
   parts: Array<{ text?: string }>;
 }
 
@@ -37,21 +38,20 @@ export default function WorkspaceBuilder() {
       setStreamingText('');
 
       // ── Build the request ──────────────────────────────────────────────
-      const input = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
+      const input: AgentInput = {
+        messages: [{ role: 'user', content: [{ text }] }],
       };
 
-      const init = stateRef.current ? { state: stateRef.current } : {};
+      const init: AgentInit = stateRef.current ? { state: stateRef.current } : {};
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow({ url: ENDPOINT, input, init });
+        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
 
         let accumulated = '';
         for await (const chunk of response.stream) {
-          const c = chunk as any;
-          if (c?.modelChunk?.content) {
-            for (const part of c.modelChunk.content) {
+          if (chunk?.modelChunk?.content) {
+            for (const part of chunk.modelChunk.content) {
               if (part.text) {
                 accumulated += part.text;
                 setStreamingText(accumulated);
@@ -61,7 +61,7 @@ export default function WorkspaceBuilder() {
         }
 
         // ── Read the final result ──────────────────────────────────────
-        const result = (await response.output) as any;
+        const result = await response.output;
         setStreamingText('');
 
         // Save session state for the next turn.
@@ -127,7 +127,7 @@ export default function WorkspaceBuilder() {
   );
 }
 
-function extractText(result: any): string {
+function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';
   const msg = result.message;
   if (!msg) return JSON.stringify(result, null, 2);

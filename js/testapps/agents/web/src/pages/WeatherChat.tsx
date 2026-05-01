@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { runFlow, streamFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -114,12 +115,12 @@ export default function WeatherChat() {
       setStreamingText('');
 
       // ── Build the request ──────────────────────────────────────────────
-      const input = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
+      const input: AgentInput = {
+        messages: [{ role: 'user', content: [{ text }] }],
       };
 
       // Prefer state over snapshotId for multi-turn.
-      const init = stateRef.current
+      const init: AgentInit = stateRef.current
         ? { state: stateRef.current }
         : snapshotIdRef.current
           ? { snapshotId: snapshotIdRef.current }
@@ -127,11 +128,11 @@ export default function WeatherChat() {
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow({ url: ENDPOINT, input, init });
+        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
 
         let accumulated = '';
         for await (const chunk of response.stream) {
-          const c = chunk as any;
+          const c = chunk;
           const mc = c?.modelChunk;
           if (!mc) continue;
 
@@ -162,7 +163,7 @@ export default function WeatherChat() {
         }
 
         // ── Read the final result ──────────────────────────────────────
-        const result = (await response.output) as any;
+        const result = await response.output;
         setStreamingText('');
 
         // Save session state for the next turn.
@@ -298,7 +299,7 @@ runFlow({
 // ---------------------------------------------------------------------------
 // Helper: pull displayable text out of a session flow result
 // ---------------------------------------------------------------------------
-function extractText(result: any): string {
+function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';
   const msg = result.message;
   if (!msg) return JSON.stringify(result, null, 2);
