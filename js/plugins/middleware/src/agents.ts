@@ -26,7 +26,9 @@ import { tool, type AgentOutput } from 'genkit/beta';
 export const AgentsOptionsSchema = z.object({
   agents: z
     .array(z.string())
-    .describe('Names of registered agents that can be called as sub-agents.'),
+    .describe(
+      'Names of registered agents that can be called as sub-agents.'
+    ),
   toolName: z
     .string()
     .optional()
@@ -119,7 +121,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             hasArtifacts: z
               .boolean()
               .optional()
-              .describe('Whether the sub-agent produced artifacts.'),
+              .describe(
+                'Whether the sub-agent produced artifacts.'
+              ),
           }),
         },
         async (input) => {
@@ -135,7 +139,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             // Call the agent's run method with the task as a user message.
             const actionResult = await agentAction.run(
               {
-                messages: [{ role: 'user', content: [{ text: input.task }] }],
+                messages: [
+                  { role: 'user', content: [{ text: input.task }] },
+                ],
               },
               { init: {} }
             );
@@ -144,7 +150,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             // Extract text content from the agent's response message.
             const textContent = (agentOutput.message?.content ?? [])
               .map((p) => p.text)
-              .filter((t): t is string => typeof t === 'string' && t.length > 0)
+              .filter(
+                (t): t is string => typeof t === 'string' && t.length > 0
+              )
               .join('\n');
 
             return {
