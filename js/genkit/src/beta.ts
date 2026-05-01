@@ -21,6 +21,7 @@ export {
   type ActionStreamSubscriber,
   type StreamManager,
 } from '@genkit-ai/core';
+export type { AgentInit, AgentInput, AgentOutput } from '@genkit-ai/ai';
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
 export {
