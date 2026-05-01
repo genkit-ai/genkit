@@ -35,7 +35,7 @@ import {
   PartSchema,
 } from './model-types.js';
 import { type ToolRequestPart } from './parts.js';
-import { PromptAction } from './prompt.js';
+import { definePrompt, type PromptAction, type PromptConfig } from './prompt.js';
 import {
   Artifact,
   ArtifactSchema,
@@ -51,36 +51,36 @@ import {
 } from './session.js';
 
 /**
- * Schema for initializing a session flow.
+ * Schema for initializing an agent turn.
  */
-export const SessionFlowInitSchema = z.object({
+export const AgentInitSchema = z.object({
   snapshotId: z.string().optional(),
   newSnapshotId: z.string().optional(),
   state: SessionStateSchema.optional(),
 });
 
 /**
- * Initialization options for a session flow turn.
+ * Initialization options for an agent turn.
  */
-export interface SessionFlowInit<S = unknown, I = unknown> {
+export interface AgentInit<S = unknown, I = unknown> {
   snapshotId?: string;
   newSnapshotId?: string;
   state?: SessionState<S, I>;
 }
 
 /**
- * Schema for session flow input messages and commands.
+ * Schema for agent input messages and commands.
  */
-export const SessionFlowInputSchema = z.object({
+export const AgentInputSchema = z.object({
   messages: z.array(MessageSchema).optional(),
   toolRestarts: z.array(PartSchema).optional(),
   detach: z.boolean().optional(),
 });
 
 /**
- * Input received by a session flow turn.
+ * Input received by an agent turn.
  */
-export type SessionFlowInput = z.infer<typeof SessionFlowInputSchema>;
+export type AgentInput = z.infer<typeof AgentInputSchema>;
 
 /**
  * Schema identifying a turn termination event.
@@ -95,9 +95,9 @@ export const TurnEndSchema = z.object({
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
 /**
- * Schema for stream chunks emitted during a session flow.
+ * Schema for stream chunks emitted during agent execution.
  */
-export const SessionFlowStreamChunkSchema = z.object({
+export const AgentStreamChunkSchema = z.object({
   modelChunk: ModelResponseChunkSchema.optional(),
   status: z.any().optional(),
   artifact: ArtifactSchema.optional(),
@@ -105,31 +105,31 @@ export const SessionFlowStreamChunkSchema = z.object({
 });
 
 /**
- * Streamed chunk emitted during session flow execution.
+ * Streamed chunk emitted during agent execution.
  * The `Stream` parameter types the `status` field for custom status payloads.
  */
-export type SessionFlowStreamChunk<Stream = unknown> = Omit<
-  z.infer<typeof SessionFlowStreamChunkSchema>,
+export type AgentStreamChunk<Stream = unknown> = Omit<
+  z.infer<typeof AgentStreamChunkSchema>,
   'status'
 > & { status?: Stream };
 
 /**
- * Schema for final results of a session flow execution.
+ * Schema for final results of an agent execution.
  */
-export const SessionFlowResultSchema = z.object({
+export const AgentResultSchema = z.object({
   message: MessageSchema.optional(),
   artifacts: z.array(ArtifactSchema).optional(),
 });
 
 /**
- * Result returned upon completing a session flow execution.
+ * Result returned upon completing an agent execution.
  */
-export type SessionFlowResult = z.infer<typeof SessionFlowResultSchema>;
+export type AgentResult = z.infer<typeof AgentResultSchema>;
 
 /**
  * Schema for output returned at turn completion.
  */
-export const SessionFlowOutputSchema = z.object({
+export const AgentOutputSchema = z.object({
   snapshotId: z.string().optional(),
   state: SessionStateSchema.optional(),
   message: MessageSchema.optional(),
@@ -139,7 +139,7 @@ export const SessionFlowOutputSchema = z.object({
 /**
  * Output returned at turn completion.
  */
-export interface SessionFlowOutput<S = unknown> {
+export interface AgentOutput<S = unknown> {
   artifacts?: Artifact[];
   message?: MessageData;
   snapshotId?: string;
@@ -151,7 +151,7 @@ export interface SessionFlowOutput<S = unknown> {
  */
 export class SessionRunner<State = unknown, InputVariables = unknown> {
   readonly session: Session<State, InputVariables>;
-  readonly inputCh: AsyncIterable<SessionFlowInput>;
+  readonly inputCh: AsyncIterable<AgentInput>;
   turnIndex: number = 0;
   public onEndTurn?: (snapshotId?: string) => void;
   public onDetach?: (snapshotId: string) => void;
@@ -165,7 +165,7 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
 
   constructor(
     session: Session<State, InputVariables>,
-    inputCh: AsyncIterable<SessionFlowInput>,
+    inputCh: AsyncIterable<AgentInput>,
     options?: {
       snapshotCallback?: SnapshotCallback<State, InputVariables>;
       lastSnapshot?: SessionSnapshot<State, InputVariables>;
@@ -189,7 +189,7 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
   /**
    * Executes the flow handler against incoming input messages sequentially.
    */
-  async run(fn: (input: SessionFlowInput) => Promise<void>): Promise<void> {
+  async run(fn: (input: AgentInput) => Promise<void>): Promise<void> {
     for await (const input of this.inputCh) {
       if (input.messages) {
         this.session.addMessages(input.messages);
@@ -308,16 +308,16 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
 }
 
 /**
- * Function handler definition for custom Session Flow actions.
+ * Function handler definition for custom agent actions.
  */
-export type SessionFlowFn<Stream, State, InputVariables = unknown> = (
+export type AgentFn<Stream, State, InputVariables = unknown> = (
   sess: SessionRunner<State, InputVariables>,
   options: {
-    sendChunk: (chunk: SessionFlowStreamChunk<Stream>) => void;
+    sendChunk: (chunk: AgentStreamChunk<Stream>) => void;
     abortSignal?: AbortSignal;
     context?: ActionContext;
   }
-) => Promise<SessionFlowResult>;
+) => Promise<AgentResult>;
 
 export type GetSnapshotDataAction<S = unknown, I = unknown> = Action<
   z.ZodString,
@@ -325,14 +325,14 @@ export type GetSnapshotDataAction<S = unknown, I = unknown> = Action<
 >;
 
 /**
- * Represents a configured, registered Session Flow.
+ * Represents a configured, registered Agent.
  */
-export interface SessionFlow<State = unknown, InputVariables = unknown>
+export interface Agent<State = unknown, InputVariables = unknown>
   extends BidiAction<
-    typeof SessionFlowInputSchema,
-    typeof SessionFlowOutputSchema,
-    typeof SessionFlowStreamChunkSchema,
-    typeof SessionFlowInitSchema
+    typeof AgentInputSchema,
+    typeof AgentOutputSchema,
+    typeof AgentStreamChunkSchema,
+    typeof AgentInitSchema
   > {
   getSnapshotData(
     snapshotId: string,
@@ -342,13 +342,13 @@ export interface SessionFlow<State = unknown, InputVariables = unknown>
   abort(snapshotId: string, options?: SessionStoreOptions): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State, InputVariables>;
-  readonly abortSessionFlowAction: Action<z.ZodString, z.ZodType<string | undefined>>;
+  readonly abortAgentAction: Action<z.ZodString, z.ZodType<string | undefined>>;
 }
 
 /**
- * Registers a multi-turn Session Flow action capable of maintaining persistent state.
+ * Registers a multi-turn custom agent action capable of maintaining persistent state.
  */
-export function defineSessionFlow<
+export function defineCustomAgent<
   Stream = unknown,
   State = unknown,
   InputVariables = unknown,
@@ -360,24 +360,24 @@ export function defineSessionFlow<
     store?: SessionStore<State, InputVariables>;
     snapshotCallback?: SnapshotCallback<State, InputVariables>;
   },
-  fn: SessionFlowFn<Stream, State, InputVariables>
-): SessionFlow<State, InputVariables> {
+  fn: AgentFn<Stream, State, InputVariables>
+): Agent<State, InputVariables> {
   const primaryAction = defineBidiAction(
     registry,
     {
       name: config.name,
       description: config.description,
-      actionType: 'session-flow',
-      inputSchema: SessionFlowInputSchema,
-      outputSchema: SessionFlowOutputSchema,
-      streamSchema: SessionFlowStreamChunkSchema,
-      initSchema: SessionFlowInitSchema,
+      actionType: 'agent',
+      inputSchema: AgentInputSchema,
+      outputSchema: AgentOutputSchema,
+      streamSchema: AgentStreamChunkSchema,
+      initSchema: AgentInitSchema,
     },
     async function* (
       arg: ActionFnArg<
-        SessionFlowStreamChunk,
-        SessionFlowInput,
-        SessionFlowInit
+        AgentStreamChunk,
+        AgentInput,
+        AgentInit
       >
     ) {
       const init = arg.init;
@@ -428,7 +428,7 @@ export function defineSessionFlow<
       // We construct an asynchronous proxy channel over the inputStream.
       // This enables immediate interception of `detach: true` directives. Without this proxy,
       // a backlog of pre-queued inputs would have to be resolved sequentially by the runner first.
-      const runnerInputChannel = new Channel<SessionFlowInput>();
+      const runnerInputChannel = new Channel<AgentInput>();
 
       (async () => {
         try {
@@ -522,9 +522,9 @@ export function defineSessionFlow<
       session.on('artifactAdded', sendArtifactChunk);
       session.on('artifactUpdated', sendArtifactChunk);
 
-      const sendChunk = (chunk: SessionFlowStreamChunk<Stream>) => {
+      const sendChunk = (chunk: AgentStreamChunk<Stream>) => {
         if (!runner.isDetached) {
-          arg.sendChunk(chunk as SessionFlowStreamChunk);
+          arg.sendChunk(chunk as AgentStreamChunk);
         }
       };
 
@@ -576,7 +576,7 @@ export function defineSessionFlow<
     {
       name: `${config.name}__getSnapshotData`,
       description: `Gets snapshot data for ${config.name} by snapshotId`,
-      actionType: 'session-flow-snapshot',
+      actionType: 'agent-snapshot',
       inputSchema: z.string(),
       outputSchema: z.any(), // SessionSnapshot Schema
     },
@@ -593,12 +593,12 @@ export function defineSessionFlow<
     }
   );
 
-  const abortSessionFlowAction = defineAction(
+  const abortAgentAction = defineAction(
     registry,
     {
       name: `${config.name}__abort`,
-      description: `Aborts ${config.name} session flow by snapshotId. Returns the previous status of the snapshot before it was set to 'aborted', or undefined if the snapshot was not found.`,
-      actionType: 'session-flow',
+      description: `Aborts ${config.name} agent by snapshotId. Returns the previous status of the snapshot before it was set to 'aborted', or undefined if the snapshot was not found.`,
+      actionType: 'agent',
       inputSchema: z.string(),
       outputSchema: z.string().optional(),
     },
@@ -656,39 +656,39 @@ export function defineSessionFlow<
         State,
         InputVariables
       >,
-    abortSessionFlowAction: abortSessionFlowAction as unknown as Action<
+    abortAgentAction: abortAgentAction as unknown as Action<
       z.ZodString,
       z.ZodType<string | undefined>
     >,
   });
 
-  return composite as unknown as SessionFlow<State, InputVariables>;
+  return composite as unknown as Agent<State, InputVariables>;
 }
 
 /**
- * Registers a Session Flow from an existing PromptAction.
+ * Registers an agent from an existing PromptAction.
  */
-export function defineSessionFlowFromPrompt<
+export function definePromptAgent<
   PromptIn = unknown,
   State = unknown,
 >(
   registry: Registry,
   config: {
     promptName: string;
-    defaultInput: PromptIn;
+    defaultInput?: PromptIn;
     store?: SessionStore<State, PromptIn>;
     snapshotCallback?: SnapshotCallback<State, PromptIn>;
   }
 ) {
   let cachedPromptAction: PromptAction | undefined;
 
-  const fn: SessionFlowFn<any, State, PromptIn> = async (
+  const fn: AgentFn<unknown, State, PromptIn> = async (
     sess,
     { sendChunk, abortSignal }
   ) => {
     await sess.run(async (input) => {
       const promptInput =
-        sess.session.getState().inputVariables || config.defaultInput;
+        sess.session.getState().inputVariables || config.defaultInput || {};
 
       if (!cachedPromptAction) {
         cachedPromptAction = (await registry.lookupAction(
@@ -696,7 +696,7 @@ export function defineSessionFlowFromPrompt<
         )) as PromptAction;
         if (!cachedPromptAction) {
           throw new Error(
-            `Prompt '${config.promptName}' not found. Ensure it is defined before the session flow is invoked.`
+            `Prompt '${config.promptName}' not found. Ensure it is defined before the agent is invoked.`
           );
         }
       }
@@ -765,7 +765,7 @@ export function defineSessionFlowFromPrompt<
     };
   };
 
-  return defineSessionFlow<unknown, State, PromptIn>(
+  return defineCustomAgent<unknown, State, PromptIn>(
     registry,
     {
       name: config.promptName,
@@ -774,4 +774,53 @@ export function defineSessionFlowFromPrompt<
     },
     fn
   );
+}
+
+// ---------------------------------------------------------------------------
+// defineAgent — shortcut that combines definePrompt + definePromptAgent
+// ---------------------------------------------------------------------------
+
+/**
+ * Configuration for `defineAgent`, which combines prompt definition and agent
+ * registration into a single call.
+ */
+export interface AgentConfig<PromptIn = unknown, State = unknown>
+  extends PromptConfig {
+  defaultInput?: PromptIn;
+  store?: SessionStore<State, PromptIn>;
+  snapshotCallback?: SnapshotCallback<State, PromptIn>;
+}
+
+/**
+ * Defines and registers an agent by creating a prompt and wiring it into a
+ * multi-turn agent in one step.
+ *
+ * This is a convenience shortcut for:
+ * ```ts
+ * definePrompt(registry, promptConfig);
+ * definePromptAgent(registry, { promptName: promptConfig.name, ... });
+ * ```
+ */
+export function defineAgent<PromptIn = unknown, State = unknown>(
+  registry: Registry,
+  config: AgentConfig<PromptIn, State>
+): Agent<State, PromptIn> {
+  // Extract prompt-specific fields from the combined config.
+  const {
+    defaultInput,
+    store,
+    snapshotCallback,
+    ...promptConfig
+  } = config;
+
+  // Register the prompt.
+  definePrompt(registry, promptConfig);
+
+  // Wire it into a prompt agent.
+  return definePromptAgent<PromptIn, State>(registry, {
+    promptName: promptConfig.name,
+    defaultInput,
+    store,
+    snapshotCallback,
+  });
 }
