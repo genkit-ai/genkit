@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { streamFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -38,23 +39,23 @@ export default function ClientState() {
       setStreamingText('');
 
       // ── Build the request ──────────────────────────────────────────────
-      const input = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
+      const input: AgentInput = {
+        messages: [{ role: 'user', content: [{ text }] }],
       };
 
       // On the first turn, `init` is empty (no prior state).
       // On subsequent turns, we send back the state blob from the last turn.
       // This is the KEY difference from server-stored flows — we always
       // send `state`, never `snapshotId`.
-      const init = stateRef.current ? { state: stateRef.current } : {};
+      const init: AgentInit = stateRef.current ? { state: stateRef.current } : {};
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow({ url: ENDPOINT, input, init });
+        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
 
         let accumulated = '';
         for await (const chunk of response.stream) {
-          const c = chunk as any;
+          const c = chunk;
           const mc = c?.modelChunk;
           if (!mc) continue;
 
@@ -85,7 +86,7 @@ export default function ClientState() {
         }
 
         // ── Read the final result ──────────────────────────────────────
-        const result = (await response.output) as any;
+        const result = await response.output;
         setStreamingText('');
 
         // Store the state blob for the next turn.
@@ -137,7 +138,7 @@ export default function ClientState() {
   );
 }
 
-function extractText(result: any): string {
+function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';
   const msg = result.message;
   if (!msg) return JSON.stringify(result, null, 2);

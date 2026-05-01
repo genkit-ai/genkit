@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { streamFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk, ToolRequest } from 'genkit/beta';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -17,7 +18,7 @@ import { ChatUI, type Message } from '../components/ChatUI';
 const ENDPOINT = '/api/bankingAgent';
 
 interface PendingInterrupt {
-  ref: string;
+  ref?: string;
   action: string;
   details: string;
   snapshotId: string;
@@ -44,12 +45,12 @@ export default function BankingInterrupt() {
       setLoading(true);
       setStreamingText('');
 
-      const input = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
+      const input: AgentInput = {
+        messages: [{ role: 'user', content: [{ text }] }],
       };
 
       // Prefer state over snapshotId for multi-turn.
-      const init = stateRef.current
+      const init: AgentInit = stateRef.current
         ? { state: stateRef.current }
         : snapshotIdRef.current
           ? { snapshotId: snapshotIdRef.current }
@@ -91,10 +92,10 @@ export default function BankingInterrupt() {
       // ── Build the tool response message ──────────────────────────────
       // To resume an interrupted flow, send a message with role 'tool'
       // containing a toolResponse that matches the interrupt's ref.
-      const input = {
+      const input: AgentInput = {
         messages: [
           {
-            role: 'tool' as const,
+            role: 'tool',
             content: [
               {
                 toolResponse: {
@@ -133,14 +134,13 @@ export default function BankingInterrupt() {
   );
 
   // ── Shared: stream a request and collect chunks ──────────────────────
-  async function streamAndCollect(input: any, init: any): Promise<any> {
-    const response = streamFlow({ url: ENDPOINT, input, init });
+  async function streamAndCollect(input: AgentInput, init: AgentInit): Promise<AgentOutput> {
+    const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
 
     let accumulated = '';
     for await (const chunk of response.stream) {
-      const c = chunk as any;
-      if (c?.modelChunk?.content) {
-        for (const part of c.modelChunk.content) {
+      if (chunk?.modelChunk?.content) {
+        for (const part of chunk.modelChunk.content) {
           if (part.text) {
             accumulated += part.text;
             setStreamingText(accumulated);
@@ -149,7 +149,7 @@ export default function BankingInterrupt() {
       }
     }
 
-    const result = (await response.output) as any;
+    const result = await response.output;
     setStreamingText('');
 
     // Show the model's reply (or the accumulated stream text).
@@ -165,7 +165,7 @@ export default function BankingInterrupt() {
   }
 
   // ── Process a result: update session tracking & detect interrupts ────
-  function processResult(result: any) {
+  function processResult(result: AgentOutput) {
     if (result?.state) stateRef.current = result.state;
     if (result?.snapshotId) snapshotIdRef.current = result.snapshotId;
 
@@ -294,7 +294,7 @@ streamFlow({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function extractText(result: any): string {
+function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';
   const msg = result.message;
   if (!msg) return JSON.stringify(result, null, 2);
@@ -312,16 +312,17 @@ function extractText(result: any): string {
 
 /** Check if the result contains an interrupt (userApproval tool request). */
 function findInterrupt(
-  result: any
-): { ref: string; action: string; details: string } | null {
+  result: AgentOutput
+): { ref?: string; action: string; details: string } | null {
   const msg = result?.message;
   if (!msg) return null;
   for (const p of msg.content || []) {
     if (p.toolRequest?.name === 'userApproval') {
+      const tr = p.toolRequest as ToolRequest;
       return {
-        ref: p.toolRequest.ref,
-        action: p.toolRequest.input?.action || 'Unknown',
-        details: p.toolRequest.input?.details || '',
+        ref: tr.ref,
+        action: (tr.input as any)?.action || 'Unknown',
+        details: (tr.input as any)?.details || '',
       };
     }
   }

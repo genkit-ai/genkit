@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { runFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
 
 // ---------------------------------------------------------------------------
 // Branching Chat — "Pick Your Variant" UI
@@ -99,20 +100,20 @@ export default function BranchingChat() {
       setError(null);
       setVariants(null);
 
-      const msgInput = {
+      const msgInput: AgentInput = {
         messages: [{ role: 'user' as const, content: [{ text }] }],
       };
 
       // Both calls branch from the same snapshotId (or fresh session).
-      const init = snapshotIdRef.current
+      const init: AgentInit = snapshotIdRef.current
         ? { snapshotId: snapshotIdRef.current }
         : {};
 
       try {
         // Fire two requests in parallel from the same branch point.
         const [resultA, resultB] = await Promise.all([
-          runFlow({ url: ENDPOINT, input: msgInput, init }) as Promise<any>,
-          runFlow({ url: ENDPOINT, input: msgInput, init }) as Promise<any>,
+          runFlow<AgentOutput, AgentInit>({ url: ENDPOINT, input: msgInput, init }),
+          runFlow<AgentOutput, AgentInit>({ url: ENDPOINT, input: msgInput, init }),
         ]);
 
         const textA = extractText(resultA);
@@ -341,7 +342,7 @@ const [a, b] = await Promise.all([
 // ---------------------------------------------------------------------------
 // Helper: extract text from a session flow result
 // ---------------------------------------------------------------------------
-function extractText(result: any): string {
+function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';
   const msg = result.message;
   if (!msg) return JSON.stringify(result, null, 2);

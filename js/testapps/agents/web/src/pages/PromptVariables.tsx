@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { runFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
 
 // ---------------------------------------------------------------------------
 // Prompt Variables — showcases `defineAgent` with multiple
@@ -85,14 +86,14 @@ export default function PromptVariables() {
     setResult('');
 
     // ── Build the request ──────────────────────────────────────────────
-    const input = {
-      messages: [{ role: 'user' as const, content: [{ text: sourceText }] }],
+    const input: AgentInput = {
+      messages: [{ role: 'user', content: [{ text: sourceText }] }],
     };
 
     // If any variable changed, start a fresh session.
     // When starting a new session, we pass the current dropdown values.
     // On subsequent turns, we just pass the state to reuse them.
-    let init: Record<string, any> = {};
+    let init: AgentInit = {};
     if (stateRef.current && sessionVarsRef.current === currentVarsKey) {
       init = { state: stateRef.current };
     } else {
@@ -100,7 +101,7 @@ export default function PromptVariables() {
     }
 
     try {
-      const res = (await runFlow({ url: ENDPOINT, input, init })) as any;
+      const res = await runFlow<AgentOutput, AgentInit>({ url: ENDPOINT, input, init });
 
       // Save session state for multi-turn.
       if (res?.state) {

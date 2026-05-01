@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { runFlow } from 'genkit/beta/client';
+import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
 import Markdown from 'react-markdown';
 
 // ---------------------------------------------------------------------------
@@ -101,14 +102,14 @@ export default function BackgroundAgent() {
     try {
       // Send the message with `detach: true`. The server will start
       // processing in the background and return a snapshotId immediately.
-      const result = (await runFlow({
+      const result = await runFlow<AgentOutput, AgentInit>({
         url: ENDPOINT,
         input: {
           messages: [{ role: 'user', content: [{ text: topic.trim() }] }],
           detach: true,
-        },
+        } satisfies AgentInput,
         init: {},
-      })) as any;
+      });
 
       const id = result?.snapshotId;
       if (!id) {
