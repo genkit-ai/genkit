@@ -646,7 +646,10 @@ func listActions(g *Genkit) []api.ActionDesc {
 // so that consumers (e.g., the Dev UI) don't have to perform secondary lookups.
 func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	ads := listActions(g)
-	keys := make(map[string]struct{})
+	keys := make(map[string]struct{}, len(ads))
+	for _, d := range ads {
+		keys[d.Name] = struct{}{}
+	}
 
 	plugins := g.reg.ListPlugins()
 	for _, p := range plugins {
