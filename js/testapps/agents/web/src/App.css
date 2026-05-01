@@ -923,9 +923,9 @@ body {
 
 .markdown-body table {
   border-collapse: collapse;
+  font-size: 0.9rem;
   margin: 12px 0;
   width: 100%;
-  font-size: 0.9rem;
 }
 
 .markdown-body th,
