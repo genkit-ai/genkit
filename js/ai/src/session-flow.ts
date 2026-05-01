@@ -19,6 +19,7 @@ import {
   defineAction,
   defineBidiAction,
   getContext,
+  run,
   z,
   type Action,
   type ActionContext,
@@ -35,7 +36,11 @@ import {
   PartSchema,
 } from './model-types.js';
 import { type ToolRequestPart } from './parts.js';
-import { definePrompt, type PromptAction, type PromptConfig } from './prompt.js';
+import {
+  definePrompt,
+  type PromptAction,
+  type PromptConfig,
+} from './prompt.js';
 import {
   Artifact,
   ArtifactSchema,
@@ -199,21 +204,26 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
       this.newSnapshotId = undefined;
 
       try {
-        await fn(input);
+        await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
+          await fn(input);
 
-        const snapshotId = await this.maybeSnapshot(
-          'turnEnd',
-          'done',
-          undefined,
-          turnSnapshotId
-        );
-        try {
-          if (this.onEndTurn) {
-            this.onEndTurn(snapshotId);
+          const snapshotId = await this.maybeSnapshot(
+            'turnEnd',
+            'done',
+            undefined,
+            turnSnapshotId
+          );
+          try {
+            if (this.onEndTurn) {
+              this.onEndTurn(snapshotId);
+            }
+          } catch (e) {
+            // Stream was closed, absorb exception
           }
-        } catch (e) {
-          // Stream was closed, absorb exception
-        }
+          return {
+            lastSnapshot: this.lastSnapshot,
+          };
+        });
         this.turnIndex++;
       } catch (e: any) {
         const errStatus = e.status || 'INTERNAL';
@@ -339,7 +349,10 @@ export interface Agent<State = unknown, InputVariables = unknown>
     options?: SessionStoreOptions
   ): Promise<SessionSnapshot<State, InputVariables> | undefined>;
 
-  abort(snapshotId: string, options?: SessionStoreOptions): Promise<SessionSnapshot['status'] | undefined>;
+  abort(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State, InputVariables>;
   readonly abortAgentAction: Action<z.ZodString, z.ZodType<string | undefined>>;
@@ -374,11 +387,7 @@ export function defineCustomAgent<
       initSchema: AgentInitSchema,
     },
     async function* (
-      arg: ActionFnArg<
-        AgentStreamChunk,
-        AgentInput,
-        AgentInit
-      >
+      arg: ActionFnArg<AgentStreamChunk, AgentInput, AgentInit>
     ) {
       const init = arg.init;
       const store =
@@ -530,11 +539,13 @@ export function defineCustomAgent<
 
       const flowPromise = (async () => {
         try {
-          const result = await runWithSession(registry, session, () => fn(runner, {
-            sendChunk,
-            abortSignal: abortController.signal,
-            context: getContext(),
-          }));
+          const result = await runWithSession(registry, session, () =>
+            fn(runner, {
+              sendChunk,
+              abortSignal: abortController.signal,
+              context: getContext(),
+            })
+          );
           const finalSnapshotId = await runner.maybeSnapshot('invocationEnd');
           return { result, finalSnapshotId };
         } finally {
@@ -668,10 +679,7 @@ export function defineCustomAgent<
 /**
  * Registers an agent from an existing PromptAction.
  */
-export function definePromptAgent<
-  PromptIn = unknown,
-  State = unknown,
->(
+export function definePromptAgent<PromptIn = unknown, State = unknown>(
   registry: Registry,
   config: {
     promptName: string;
@@ -806,12 +814,7 @@ export function defineAgent<PromptIn = unknown, State = unknown>(
   config: AgentConfig<PromptIn, State>
 ): Agent<State, PromptIn> {
   // Extract prompt-specific fields from the combined config.
-  const {
-    defaultInput,
-    store,
-    snapshotCallback,
-    ...promptConfig
-  } = config;
+  const { defaultInput, store, snapshotCallback, ...promptConfig } = config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
