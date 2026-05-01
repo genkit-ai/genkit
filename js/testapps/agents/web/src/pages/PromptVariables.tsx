@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
-import { runFlow } from 'genkit/beta/client';
 import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
+import { runFlow } from 'genkit/beta/client';
+import { useCallback, useRef, useState } from 'react';
 
 // ---------------------------------------------------------------------------
 // Prompt Variables — showcases `defineAgent` with multiple
@@ -101,7 +101,11 @@ export default function PromptVariables() {
     }
 
     try {
-      const res = await runFlow<AgentOutput, AgentInit>({ url: ENDPOINT, input, init });
+      const res = await runFlow<AgentOutput, AgentInit>({
+        url: ENDPOINT,
+        input,
+        init,
+      });
 
       // Save session state for multi-turn.
       if (res?.state) {
@@ -133,7 +137,8 @@ export default function PromptVariables() {
     }
   };
 
-  const varsChanged = stateRef.current && sessionVarsRef.current !== currentVarsKey;
+  const varsChanged =
+    stateRef.current && sessionVarsRef.current !== currentVarsKey;
 
   return (
     <div className="page-with-sidebar">
@@ -143,9 +148,8 @@ export default function PromptVariables() {
           <h2>🎛️ Prompt Variables</h2>
           <span className="chat-desc">
             Adjust prompt input variables at runtime. Uses{' '}
-            <code>defineAgent</code> with{' '}
-            <code>{'{{ tone }}'}</code>, <code>{'{{ format }}'}</code>,{' '}
-            <code>{'{{ audience }}'}</code>.
+            <code>defineAgent</code> with <code>{'{{ tone }}'}</code>,{' '}
+            <code>{'{{ format }}'}</code>, <code>{'{{ audience }}'}</code>.
           </span>
         </div>
 
@@ -156,10 +160,11 @@ export default function PromptVariables() {
             <select
               value={tone}
               onChange={(e) => setTone(e.target.value)}
-              disabled={loading}
-            >
+              disabled={loading}>
               {TONES.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t}>
+                  {t}
+                </option>
               ))}
             </select>
           </label>
@@ -169,10 +174,11 @@ export default function PromptVariables() {
             <select
               value={format}
               onChange={(e) => setFormat(e.target.value)}
-              disabled={loading}
-            >
+              disabled={loading}>
               {FORMATS.map((f) => (
-                <option key={f} value={f}>{f}</option>
+                <option key={f} value={f}>
+                  {f}
+                </option>
               ))}
             </select>
           </label>
@@ -182,10 +188,11 @@ export default function PromptVariables() {
             <select
               value={audience}
               onChange={(e) => setAudience(e.target.value)}
-              disabled={loading}
-            >
+              disabled={loading}>
               {AUDIENCES.map((a) => (
-                <option key={a} value={a}>{a}</option>
+                <option key={a} value={a}>
+                  {a}
+                </option>
               ))}
             </select>
           </label>
@@ -237,8 +244,7 @@ export default function PromptVariables() {
           <button
             className="btn btn-send"
             onClick={handleSubmit}
-            disabled={loading || !sourceText.trim()}
-          >
+            disabled={loading || !sourceText.trim()}>
             {loading ? 'Generating…' : 'Generate'}
           </button>
           <span className="pv-hint">⌘+Enter to generate</span>
@@ -252,23 +258,23 @@ export default function PromptVariables() {
           <li>
             The backend defines a <strong>Dotprompt</strong> with three input
             variables: <code>{'{{ tone }}'}</code>,{' '}
-            <code>{'{{ format }}'}</code>, and{' '}
-            <code>{'{{ audience }}'}</code>.
+            <code>{'{{ format }}'}</code>, and <code>{'{{ audience }}'}</code>.
           </li>
           <li>
-            <code>defineAgent</code> wraps this prompt into an
-            agent. The <code>defaultInput</code> provides fallback values
-            for all three variables.
+            <code>defineAgent</code> wraps this prompt into an agent. The{' '}
+            <code>defaultInput</code> provides fallback values for all three
+            variables.
           </li>
           <li>
             The client sends the user's message via <code>runFlow()</code>. When
-            starting a new session, the client passes the dropdown values in the 
+            starting a new session, the client passes the dropdown values in the
             <code>init</code> object.
           </li>
           <li>
-            Changing any variable <strong>resets the session</strong>: the client
-            simply passes the new values in <code>init</code> without the{' '}
-            <code>state</code>, causing a fresh session with the new prompt configuration.
+            Changing any variable <strong>resets the session</strong>: the
+            client simply passes the new values in <code>init</code> without the{' '}
+            <code>state</code>, causing a fresh session with the new prompt
+            configuration.
           </li>
         </ol>
 

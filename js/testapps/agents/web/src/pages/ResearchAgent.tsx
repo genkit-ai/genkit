@@ -1,6 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+} from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
+import { useCallback, useRef, useState } from 'react';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -37,7 +42,9 @@ export default function ResearchAgent() {
   const [statusText, setStatusText] = useState<string | null>(null);
 
   // Research state — extracted from result.state.custom each turn
-  const [researchState, setResearchState] = useState<ResearchState | null>(null);
+  const [researchState, setResearchState] = useState<ResearchState | null>(
+    null
+  );
 
   // Session state — round-tripped to the server each turn
   const stateRef = useRef<any>(undefined);
@@ -138,8 +145,7 @@ export default function ResearchAgent() {
         streamingText={streamingText}
         loading={loading}
         onSend={handleSend}
-        renderMarkdown
-      >
+        renderMarkdown>
         {/* Status indicator — shows orchestration progress */}
         {statusText && (
           <div className="research-status-bar">
@@ -153,8 +159,8 @@ export default function ResearchAgent() {
       <aside className="research-sidebar">
         <h3>🔬 Research Process</h3>
         <p className="research-sidebar-hint">
-          Shows the multi-step orchestration: decomposition → research → synthesis.
-          This is only possible with <code>defineCustomAgent</code>.
+          Shows the multi-step orchestration: decomposition → research →
+          synthesis. This is only possible with <code>defineCustomAgent</code>.
         </p>
 
         {!researchState ? (
@@ -171,7 +177,9 @@ export default function ResearchAgent() {
               </p>
               <ol className="research-questions">
                 {researchState.subQuestions.map((q, i) => (
-                  <li key={i} className="research-question">{q}</li>
+                  <li key={i} className="research-question">
+                    {q}
+                  </li>
                 ))}
               </ol>
             </div>
@@ -201,8 +209,8 @@ export default function ResearchAgent() {
         <h4>📋 How It Works</h4>
         <ol className="research-howto">
           <li>
-            Uses <code>defineCustomAgent</code> for full control of the
-            handler — orchestrating multiple model calls.
+            Uses <code>defineCustomAgent</code> for full control of the handler
+            — orchestrating multiple model calls.
           </li>
           <li>
             <strong>Step 1:</strong> Fast model decomposes the question →{' '}
