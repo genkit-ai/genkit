@@ -19,6 +19,7 @@ import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
+import { z } from '@genkit-ai/core';
 import { definePrompt } from '../src/prompt.js';
 import {
   AgentStreamChunk,
@@ -31,9 +32,8 @@ import {
   Session,
   type SessionSnapshot,
 } from '../src/session.js';
-import { defineEchoModel, defineProgrammableModel } from './helpers.js';
 import { interrupt } from '../src/tool.js';
-import { z } from '@genkit-ai/core';
+import { defineEchoModel, defineProgrammableModel } from './helpers.js';
 
 initNodeFeatures();
 
@@ -58,16 +58,13 @@ function waitForSnapshotStatus<S, I>(
       timeoutMs
     );
 
-    const unsubscribeFn = store.onSnapshotStateChange(
-      snapshotId,
-      (snap) => {
-        if (snap.status === targetStatus) {
-          clearTimeout(timer);
-          if (typeof unsubscribeFn === 'function') unsubscribeFn();
-          resolve(snap);
-        }
+    const unsubscribeFn = store.onSnapshotStateChange(snapshotId, (snap) => {
+      if (snap.status === targetStatus) {
+        clearTimeout(timer);
+        if (typeof unsubscribeFn === 'function') unsubscribeFn();
+        resolve(snap);
       }
-    );
+    });
 
     // Check in case already at the target status.
     store.getSnapshot(snapshotId).then((snap) => {
@@ -131,17 +128,30 @@ describe('Agent', () => {
 
       const arts = session.getArtifacts();
       assert.strictEqual(arts.length, 3);
-      assert.strictEqual(arts.find((a) => a.name === 'art1')?.parts[0].text, 'v2');
-      assert.strictEqual(arts.find((a) => a.name === 'art2')?.parts[0].text, 'new');
-      assert.strictEqual(arts.find((a) => a.name === 'art3')?.parts[0].text, 'another');
+      assert.strictEqual(
+        arts.find((a) => a.name === 'art1')?.parts[0].text,
+        'v2'
+      );
+      assert.strictEqual(
+        arts.find((a) => a.name === 'art2')?.parts[0].text,
+        'new'
+      );
+      assert.strictEqual(
+        arts.find((a) => a.name === 'art3')?.parts[0].text,
+        'another'
+      );
     });
 
     it('should emit artifactAdded for new and artifactUpdated for replaced', () => {
       const session = new Session({});
       const added: string[] = [];
       const updated: string[] = [];
-      session.on('artifactAdded', (a: { name?: string }) => added.push(a.name ?? ''));
-      session.on('artifactUpdated', (a: { name?: string }) => updated.push(a.name ?? ''));
+      session.on('artifactAdded', (a: { name?: string }) =>
+        added.push(a.name ?? '')
+      );
+      session.on('artifactUpdated', (a: { name?: string }) =>
+        updated.push(a.name ?? '')
+      );
 
       session.addArtifacts([{ name: 'art1', parts: [] }]);
       session.addArtifacts([
@@ -893,7 +903,8 @@ describe('Agent', () => {
 
       // The second-turn echo should contain the first model reply in its history,
       // proving the session history was passed to the second generate call.
-      const turn2Text = output.message?.content.map((c) => c.text).join('') ?? '';
+      const turn2Text =
+        output.message?.content.map((c) => c.text).join('') ?? '';
       assert.ok(
         turn2Text.includes('Echo:'),
         `Expected second turn to be an echo response, got: ${turn2Text}`
@@ -901,7 +912,10 @@ describe('Agent', () => {
 
       // Model chunks must have been emitted for both turns.
       const modelChunks = chunks.filter((c) => c.modelChunk !== undefined);
-      assert.ok(modelChunks.length >= 2, 'Expected model chunks from both turns');
+      assert.ok(
+        modelChunks.length >= 2,
+        'Expected model chunks from both turns'
+      );
     });
 
     it('should successfully handle native tool interrupts and tool response resumption', async () => {
@@ -910,7 +924,7 @@ describe('Agent', () => {
       const store = new InMemorySessionStore<{}>();
 
       const pm = defineProgrammableModel(registry, undefined, 'interruptModel');
-      
+
       const myInterrupt = interrupt({
         name: 'myInterrupt',
         description: 'Ask user',
@@ -936,30 +950,47 @@ describe('Agent', () => {
         return {
           message: {
             role: 'model',
-            content: [{ toolRequest: { name: 'myInterrupt', input: { query: 'yes?' }, ref: '123' } }],
+            content: [
+              {
+                toolRequest: {
+                  name: 'myInterrupt',
+                  input: { query: 'yes?' },
+                  ref: '123',
+                },
+              },
+            ],
           },
           finishReason: 'stop',
         };
       };
 
       const session1 = flow.streamBidi({});
-      session1.send({ messages: [{ role: 'user', content: [{ text: 'hello' }] }] });
+      session1.send({
+        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      });
       session1.close(); // IMPORTANT: close the stream so it doesn't hang!
 
-      for await (const chunk of session1.stream) {}
+      for await (const chunk of session1.stream) {
+      }
       const output1 = await session1.output;
 
       assert.ok(output1.snapshotId);
       assert.ok(output1.message);
       assert.ok(output1.message.content[0].toolRequest);
-      assert.strictEqual(output1.message.content[0].toolRequest.name, 'myInterrupt');
+      assert.strictEqual(
+        output1.message.content[0].toolRequest.name,
+        'myInterrupt'
+      );
 
       // Phase 2: Resume with the tool response
       pm.handleResponse = async (req) => {
         // Assert that the resumed request contains the tool response!
         const lastMsg = req.messages[req.messages.length - 1];
         assert.strictEqual(lastMsg.role, 'tool');
-        assert.strictEqual((lastMsg.content[0] as any).toolResponse.output.answer, 'yes indeed');
+        assert.strictEqual(
+          (lastMsg.content[0] as any).toolResponse.output.answer,
+          'yes indeed'
+        );
 
         return {
           message: {
@@ -972,18 +1003,32 @@ describe('Agent', () => {
 
       const session2 = flow.streamBidi({ snapshotId: output1.snapshotId });
       session2.send({
-        messages: [{
-          role: 'tool',
-          content: [{ toolResponse: { name: 'myInterrupt', ref: '123', output: { answer: 'yes indeed' } } }],
-        }],
+        messages: [
+          {
+            role: 'tool',
+            content: [
+              {
+                toolResponse: {
+                  name: 'myInterrupt',
+                  ref: '123',
+                  output: { answer: 'yes indeed' },
+                },
+              },
+            ],
+          },
+        ],
       });
       session2.close(); // IMPORTANT: close the stream so it doesn't hang!
 
-      for await (const chunk of session2.stream) {}
+      for await (const chunk of session2.stream) {
+      }
       const output2 = await session2.output;
 
       assert.strictEqual(output2.message?.role, 'model');
-      assert.strictEqual(output2.message?.content[0].text, 'Task completed successfully!');
+      assert.strictEqual(
+        output2.message?.content[0].text,
+        'Task completed successfully!'
+      );
     });
 
     it('should process all pre-queued messages in the background after detaching', async () => {
