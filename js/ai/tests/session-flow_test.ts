@@ -21,10 +21,10 @@ import { describe, it } from 'node:test';
 
 import { definePrompt } from '../src/prompt.js';
 import {
-  SessionFlowStreamChunk,
+  AgentStreamChunk,
   SessionRunner,
-  defineSessionFlow,
-  defineSessionFlowFromPrompt,
+  defineCustomAgent,
+  definePromptAgent,
 } from '../src/session-flow.js';
 import {
   InMemorySessionStore,
@@ -80,7 +80,7 @@ function waitForSnapshotStatus<S, I>(
   });
 }
 
-describe('SessionFlow', () => {
+describe('Agent', () => {
   describe('Session', () => {
     it('should maintain custom state', () => {
       const session = new Session<{ foo: string }>({ custom: { foo: 'bar' } });
@@ -310,11 +310,11 @@ describe('SessionFlow', () => {
     });
   });
 
-  describe('defineSessionFlow', () => {
-    it('should register and execute session flow', async () => {
+  describe('defineCustomAgent', () => {
+    it('should register and execute agent', async () => {
       const registry = new Registry();
 
-      const flow = defineSessionFlow(
+      const flow = defineCustomAgent(
         registry,
         { name: 'testFlow' },
         async (sess, { sendChunk }) => {
@@ -335,7 +335,7 @@ describe('SessionFlow', () => {
       });
       session.close();
 
-      const chunks: SessionFlowStreamChunk[] = [];
+      const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
         chunks.push(chunk);
       }
@@ -348,7 +348,7 @@ describe('SessionFlow', () => {
     it('should automatically stream artifacts added via Session.addArtifacts()', async () => {
       const registry = new Registry();
 
-      const flow = defineSessionFlow(
+      const flow = defineCustomAgent(
         registry,
         { name: 'testEventFlow' },
         async (sess, { sendChunk }) => {
@@ -367,7 +367,7 @@ describe('SessionFlow', () => {
       });
       session.close();
 
-      const chunks: SessionFlowStreamChunk[] = [];
+      const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
         chunks.push(chunk);
       }
@@ -380,7 +380,7 @@ describe('SessionFlow', () => {
     it('should stream artifactUpdated chunks when an artifact is replaced', async () => {
       const registry = new Registry();
 
-      const flow = defineSessionFlow(
+      const flow = defineCustomAgent(
         registry,
         { name: 'testArtifactUpdateFlow' },
         async (sess) => {
@@ -396,7 +396,7 @@ describe('SessionFlow', () => {
       session.send({ messages: [{ role: 'user', content: [{ text: 'go' }] }] });
       session.close();
 
-      const chunks: SessionFlowStreamChunk[] = [];
+      const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
         chunks.push(chunk);
       }
@@ -408,8 +408,8 @@ describe('SessionFlow', () => {
     });
   });
 
-  describe('defineSessionFlowFromPrompt', () => {
-    it('should register and execute session flow from prompt', async () => {
+  describe('definePromptAgent', () => {
+    it('should register and execute agent from prompt', async () => {
       const registry = new Registry();
       defineEchoModel(registry);
       definePrompt(registry, {
@@ -419,9 +419,8 @@ describe('SessionFlow', () => {
         system: 'hello from template',
       });
 
-      const flow = defineSessionFlowFromPrompt(registry, {
+      const flow = definePromptAgent(registry, {
         promptName: 'agent',
-        defaultInput: {},
       });
 
       const session = flow.streamBidi({});
@@ -430,7 +429,7 @@ describe('SessionFlow', () => {
       });
       session.close();
 
-      const chunks: SessionFlowStreamChunk[] = [];
+      const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
         chunks.push(chunk);
       }
@@ -446,7 +445,7 @@ describe('SessionFlow', () => {
         resolvePromise = resolve;
       });
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'detachTest',
@@ -483,11 +482,11 @@ describe('SessionFlow', () => {
       assert.strictEqual(snapDone.status, 'done');
     });
 
-    it('should abort a detached session flow', async () => {
+    it('should abort a detached agent', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let aborted = false;
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'abortTest',
@@ -531,7 +530,7 @@ describe('SessionFlow', () => {
     it('should return "done" when aborting an already-completed flow', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'abortDoneTest',
@@ -568,7 +567,7 @@ describe('SessionFlow', () => {
     it('should return undefined when aborting a non-existent snapshot', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'abortMissingTest',
@@ -588,7 +587,7 @@ describe('SessionFlow', () => {
     });
 
     it('should throw error when detach is requested without session store', async () => {
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'noStoreTest',
@@ -626,7 +625,7 @@ describe('SessionFlow', () => {
         resolvePromise = resolve;
       });
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'detachErrorTest',
@@ -676,7 +675,7 @@ describe('SessionFlow', () => {
         getSnapshot: baseStore.getSnapshot.bind(baseStore),
         saveSnapshot: baseStore.saveSnapshot.bind(baseStore),
       }) as InMemorySessionStore;
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'legacyStoreTest',
@@ -708,7 +707,7 @@ describe('SessionFlow', () => {
 
     it('should fetch snapshot data via companion action', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'companionActionFlow',
@@ -735,7 +734,7 @@ describe('SessionFlow', () => {
 
     it('should chain parentId properly across session snapshots', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'lineageTest',
@@ -778,7 +777,7 @@ describe('SessionFlow', () => {
         releasePromise = resolve;
       });
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'immediateDetachTest',
@@ -816,7 +815,7 @@ describe('SessionFlow', () => {
 
     it('should process messages even when detach is present in the same payload', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'mixedPayloadTest',
@@ -867,9 +866,8 @@ describe('SessionFlow', () => {
         system: 'sys',
       });
 
-      const flow = defineSessionFlowFromPrompt(registry, {
+      const flow = definePromptAgent(registry, {
         promptName: 'multiTurnAccumPrompt',
-        defaultInput: {},
       });
 
       const session = flow.streamBidi({});
@@ -881,7 +879,7 @@ describe('SessionFlow', () => {
       });
       session.close();
 
-      const chunks: SessionFlowStreamChunk[] = [];
+      const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
         chunks.push(chunk);
       }
@@ -928,9 +926,8 @@ describe('SessionFlow', () => {
         config: { temperature: 1 },
       });
 
-      const flow = defineSessionFlowFromPrompt(registry, {
+      const flow = definePromptAgent(registry, {
         promptName: 'interruptPrompt',
-        defaultInput: {},
         store,
       });
 
@@ -993,7 +990,7 @@ describe('SessionFlow', () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let processedCount = 0;
 
-      const flow = defineSessionFlow<{ foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'sequentialBackgroundTest',
