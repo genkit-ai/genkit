@@ -209,7 +209,7 @@ describe('toOpenAiTextAndMedia', () => {
 describe('toOpenAiMessages', () => {
   const testCases = [
     {
-      should: 'should transform tool request content correctly',
+      should: 'transform tool request content correctly',
       inputMessages: [
         {
           role: 'model',
@@ -241,7 +241,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform tool response text content correctly',
+      should: 'transform tool response text content correctly',
       inputMessages: [
         {
           role: 'tool',
@@ -265,7 +265,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform tool response json content correctly',
+      should: 'transform tool response json content correctly',
       inputMessages: [
         {
           role: 'tool',
@@ -289,7 +289,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform text content correctly',
+      should: 'transform text content correctly',
       inputMessages: [
         { role: 'user', content: [{ text: 'hi' }] },
         { role: 'model', content: [{ text: 'how can I help you?' }] },
@@ -302,7 +302,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform multi-modal (text + media) content correctly',
+      should: 'transform multi-modal (text + media) content correctly',
       inputMessages: [
         {
           role: 'user',
@@ -334,7 +334,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform system messages correctly',
+      should: 'transform system messages correctly',
       inputMessages: [
         { role: 'system', content: [{ text: 'system message' }] },
       ],
@@ -423,7 +423,7 @@ describe('fromOpenAiChoice', () => {
     expectedOutput: GenerateResponseData;
   }[] = [
     {
-      should: 'should work with text',
+      should: 'work with text',
       choice: {
         index: 0,
         message: {
@@ -443,7 +443,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should work with json',
+      should: 'work with json',
       choice: {
         index: 0,
         message: {
@@ -464,7 +464,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should work with tools',
+      should: 'work with tools',
       choice: {
         index: 0,
         message: {
@@ -502,7 +502,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should work with reasoning_content',
+      should: 'work with reasoning_content',
       choice: {
         index: 0,
         message: {
@@ -523,7 +523,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should work with both reasoning_content and content',
+      should: 'work with both reasoning_content and content',
       choice: {
         index: 0,
         message: {
@@ -544,7 +544,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should not ignore content when tool_calls is an empty array',
+      should: 'not ignore content when tool_calls is an empty array',
       choice: {
         index: 0,
         message: {
@@ -582,7 +582,7 @@ describe('fromOpenAiChunkChoice', () => {
     expectedOutput: GenerateResponseData;
   }[] = [
     {
-      should: 'should work with text',
+      should: 'work with text',
       chunkChoice: {
         index: 0,
         delta: {
@@ -600,7 +600,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'should work with json',
+      should: 'work with json',
       chunkChoice: {
         index: 0,
         delta: {
@@ -620,7 +620,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'should work with tools',
+      should: 'work with tools',
       chunkChoice: {
         index: 0,
         delta: {
@@ -656,7 +656,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'should work with reasoning_content',
+      should: 'work with reasoning_content',
       chunkChoice: {
         index: 0,
         delta: {
@@ -674,7 +674,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'should work with both reasoning_content and content',
+      should: 'work with both reasoning_content and content',
       chunkChoice: {
         index: 0,
         delta: {

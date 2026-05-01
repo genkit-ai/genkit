@@ -426,7 +426,7 @@ export function fromOpenAIChunkChoice(
   // Build content array based on what's present in the delta
   let content: Part[] = [];
 
-  if (toolRequestParts) {
+  if (toolRequestParts && toolRequestParts.length > 0) {
     content = toolRequestParts as ToolRequestPart[];
   } else {
     // Handle reasoning_content if present
