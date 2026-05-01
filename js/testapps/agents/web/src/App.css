@@ -1363,3 +1363,199 @@ body {
   margin-top: 6px;
 }
 
+/* ================================================================
+   Research Agent — multi-step orchestration panel
+   ================================================================ */
+
+.research-layout {
+  display: flex;
+  height: 100%;
+  gap: 0;
+}
+
+.research-layout > .chat-container {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Status bar — shows orchestration progress ── */
+.research-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #1a1a2e;
+  border: 1px solid #2d2d5e;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: #818cf8;
+  margin: 0 16px 8px;
+  animation: research-pulse 2s ease-in-out infinite;
+}
+
+@keyframes research-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+.research-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #818cf8;
+  animation: research-dot-blink 1s ease-in-out infinite;
+}
+
+@keyframes research-dot-blink {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* ── Sidebar — research process panel ── */
+.research-sidebar {
+  width: 380px;
+  min-width: 320px;
+  background: #18181b;
+  border-left: 1px solid #27272a;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.research-sidebar h3 {
+  font-size: 1.1rem;
+  margin-bottom: 4px;
+}
+
+.research-sidebar h4 {
+  font-size: 0.9rem;
+  margin-top: 12px;
+  margin-bottom: 6px;
+  color: #e4e4e7;
+}
+
+.research-sidebar-hint {
+  font-size: 0.75rem;
+  color: #71717a;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.research-sidebar-hint code {
+  color: #c4b5fd;
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
+
+.research-empty {
+  padding: 24px;
+  text-align: center;
+  color: #52525b;
+  font-size: 0.85rem;
+  border: 1px dashed #27272a;
+  border-radius: 8px;
+}
+
+/* ── Research sections ── */
+.research-section {
+  margin-bottom: 16px;
+}
+
+.research-section-hint {
+  font-size: 0.7rem;
+  color: #52525b;
+  margin-bottom: 8px;
+}
+
+.research-section-hint code {
+  color: #a78bfa;
+  background: #27272a;
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+}
+
+.research-questions {
+  padding-left: 20px;
+  font-size: 0.8rem;
+  color: #d4d4d8;
+  line-height: 1.5;
+}
+
+.research-question {
+  margin-bottom: 4px;
+  padding: 4px 0;
+}
+
+/* ── Sub-answer details ── */
+.research-answer {
+  margin-bottom: 8px;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.research-answer-q {
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: #e4e4e7;
+  cursor: pointer;
+  background: #1c1c20;
+  font-weight: 500;
+}
+
+.research-answer-q:hover {
+  background: #27272a;
+}
+
+.research-answer-text {
+  padding: 10px 12px;
+  font-size: 0.75rem;
+  color: #a1a1aa;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.research-divider {
+  border: none;
+  border-top: 1px solid #27272a;
+  margin: 16px 0 8px;
+}
+
+.research-howto {
+  font-size: 0.75rem;
+  color: #a1a1aa;
+  line-height: 1.5;
+  padding-left: 16px;
+}
+
+.research-howto li {
+  margin-bottom: 6px;
+}
+
+.research-howto code {
+  color: #c4b5fd;
+  background: #27272a;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
+
+.research-code {
+  background: #0f0f10;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 0.7rem;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  color: #a1a1aa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  margin-top: 6px;
+}
+
