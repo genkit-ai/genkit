@@ -57,16 +57,16 @@ import { Genkit, type GenkitOptions } from './genkit';
 
 export { FileSessionStore, InMemorySessionStore, SessionRunner };
 export type {
-  GenkitOptions as GenkitBetaOptions,
   AgentFn,
   AgentStreamChunk,
+  GenkitOptions as GenkitBetaOptions,
+  PromptConfig,
   SessionSnapshot,
   SessionState,
   SessionStore,
   SessionStoreOptions,
   SnapshotCallback,
   SnapshotContext,
-  PromptConfig,
 };
 
 /**
@@ -99,7 +99,11 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineCustomAgent<Stream = unknown, State = unknown, InputVariables = unknown>(
+  defineCustomAgent<
+    Stream = unknown,
+    State = unknown,
+    InputVariables = unknown,
+  >(
     config: {
       name: string;
       description?: string;
