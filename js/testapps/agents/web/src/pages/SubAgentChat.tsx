@@ -137,8 +137,8 @@ export default function SubAgentChat() {
           </li>
           <li>
             When the model calls <code>call_agent</code>, the middleware
-            intercepts it, runs the sub-agent via its <code>.run()</code> method,
-            and returns the sub-agent's response as the tool result.
+            intercepts it, runs the sub-agent via its <code>.run()</code>{' '}
+            method, and returns the sub-agent's response as the tool result.
           </li>
           <li>
             The orchestrator synthesizes sub-agent responses into a final answer
@@ -194,9 +194,9 @@ const orchestrator = ai.defineAgent({
         <p>
           The <code>agents</code> middleware from{' '}
           <code>@genkit-ai/middleware</code> resolves sub-agents from the
-          registry (<code>/agent/name</code>), calls their{' '}
-          <code>.run()</code> method with the delegated task, and extracts the
-          text response. Interrupts from sub-agents propagate up automatically.
+          registry (<code>/agent/name</code>), calls their <code>.run()</code>{' '}
+          method with the delegated task, and extracts the text response.
+          Interrupts from sub-agents propagate up automatically.
         </p>
       </aside>
     </div>

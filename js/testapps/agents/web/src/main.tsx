@@ -11,9 +11,9 @@ import BranchingChat from './pages/BranchingChat';
 import ClientState from './pages/ClientState';
 import PromptVariables from './pages/PromptVariables';
 import ResearchAgent from './pages/ResearchAgent';
+import SubAgentChat from './pages/SubAgentChat';
 import TaskTracker from './pages/TaskTracker';
 import WeatherChat from './pages/WeatherChat';
-import SubAgentChat from './pages/SubAgentChat';
 import WorkspaceBuilder from './pages/WorkspaceBuilder';
 
 createRoot(document.getElementById('root')!).render(

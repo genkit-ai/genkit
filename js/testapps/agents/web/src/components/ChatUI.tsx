@@ -126,7 +126,9 @@ export function ChatUI({
             <div className="message-text streaming">
               {renderMarkdown ? (
                 <div className="markdown-body">
-                  <Markdown remarkPlugins={[remarkGfm]}>{streamingText}</Markdown>
+                  <Markdown remarkPlugins={[remarkGfm]}>
+                    {streamingText}
+                  </Markdown>
                   <span>▊</span>
                 </div>
               ) : (

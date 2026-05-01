@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { expressHandler, startFlowServer } from '@genkit-ai/express';
+import { expressHandler } from '@genkit-ai/express';
 import express from 'express';
 
 import { demonstrateBranching, nameAgent } from './branching-agent.js';
@@ -105,17 +105,17 @@ app.use((_req, res, next) => {
 });
 
 // Expose session flows
-app.post('/api/customAgent', expressHandler(customAgent as any));
-app.post('/api/writerAgent', expressHandler(writerAgent as any));
-app.post('/api/weatherAgent', expressHandler(weatherAgent as any));
+app.post('/api/customAgent', expressHandler(customAgent));
+app.post('/api/writerAgent', expressHandler(writerAgent));
+app.post('/api/weatherAgent', expressHandler(weatherAgent));
 app.post(
   '/api/weatherAgent/state',
   expressHandler(weatherAgent.getSnapshotDataAction)
 );
-app.post('/api/clientStateAgent', expressHandler(clientStateAgent as any));
-app.post('/api/bankingAgent', expressHandler(bankingAgent as any));
-app.post('/api/workspaceAgent', expressHandler(workspaceAgent as any));
-app.post('/api/backgroundAgent', expressHandler(backgroundAgent as any));
+app.post('/api/clientStateAgent', expressHandler(clientStateAgent));
+app.post('/api/bankingAgent', expressHandler(bankingAgent));
+app.post('/api/workspaceAgent', expressHandler(workspaceAgent));
+app.post('/api/backgroundAgent', expressHandler(backgroundAgent));
 app.post(
   '/api/backgroundAgent/state',
   expressHandler(backgroundAgent.getSnapshotDataAction)
@@ -124,13 +124,13 @@ app.post(
   '/api/backgroundAgent/abort',
   expressHandler(backgroundAgent.abortAgentAction)
 );
-app.post('/api/branchingAgent', expressHandler(nameAgent as any));
+app.post('/api/branchingAgent', expressHandler(nameAgent));
 app.post(
   '/api/branchingAgent/state',
   expressHandler(nameAgent.getSnapshotDataAction)
 );
-app.post('/api/taskAgent', expressHandler(taskAgent as any));
-app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent as any));
+app.post('/api/taskAgent', expressHandler(taskAgent));
+app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent));
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
