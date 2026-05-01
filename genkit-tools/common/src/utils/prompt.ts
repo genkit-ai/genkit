@@ -60,14 +60,13 @@ function renderMessages(messages: MessageData[]): {
   let rendered = '';
 
   messages.forEach((message) => {
-    const hasToolRequest = message.content.some(
-      (p) => (p as any).toolRequest !== undefined
-    );
-    const hasToolResponse = message.content.some(
-      (p) => (p as any).toolResponse !== undefined
-    );
-    const hasSupportedPart = message.content.some(
-      (p) => p.text !== undefined || p.media !== undefined
+    const hasToolRequest = message.content.some((p) => 'toolRequest' in p);
+    const hasToolResponse = message.content.some((p) => 'toolResponse' in p);
+    const hasSupportedPart =
+      message.content.length === 0 ||
+      message.content.some((p) => 'text' in p || 'media' in p);
+    const hasUnsupportedPart = message.content.some(
+      (p) => !('text' in p) && !('media' in p)
     );
 
     if (hasToolRequest || hasToolResponse || !hasSupportedPart) {
@@ -80,6 +79,9 @@ function renderMessages(messages: MessageData[]): {
       }
       rendered += `{{! message with role "${message.role}" omitted (${reason}). }}\n\n`;
     } else {
+      if (hasUnsupportedPart) {
+        anyOmitted = true;
+      }
       rendered += `{{role "${message.role}"}}\n`;
       rendered += message.content.map(partToString).join('');
       rendered += '\n\n';
@@ -94,37 +96,41 @@ function renderMessages(messages: MessageData[]): {
  * frontmatter to ensure the generated YAML is clean and idiomatic.
  */
 function cleanupFrontmatter(frontmatter: PromptFrontmatter): any {
-  const clean: any = {};
-  for (const key in frontmatter) {
-    const val = (frontmatter as any)[key];
-    if (val === undefined || val === null) {
-      continue;
-    }
-    if (Array.isArray(val) && val.length === 0) {
-      continue;
-    }
-    if (
-      typeof val === 'object' &&
-      Object.keys(val).length === 0 &&
-      !(val instanceof Date)
-    ) {
-      continue;
-    }
-    clean[key] = val;
+  return recursiveCleanup(frontmatter) || {};
+}
+
+function recursiveCleanup(val: any): any {
+  if (Array.isArray(val)) {
+    const cleaned = val
+      .map(recursiveCleanup)
+      .filter((v) => v !== undefined && v !== null);
+    return cleaned.length > 0 ? cleaned : undefined;
   }
-  return clean;
+  if (val !== null && typeof val === 'object' && !(val instanceof Date)) {
+    const cleaned: any = {};
+    let hasProps = false;
+    for (const key in val) {
+      const v = recursiveCleanup(val[key]);
+      if (v !== undefined && v !== null) {
+        cleaned[key] = v;
+        hasProps = true;
+      }
+    }
+    return hasProps ? cleaned : undefined;
+  }
+  return val === null || val === undefined ? undefined : val;
 }
 
 function partToString(part: Part): string {
-  if (part.text) {
+  if ('text' in part && part.text !== undefined) {
     return part.text;
-  } else if (part.media) {
+  } else if ('media' in part && part.media !== undefined) {
     return `{{media url:${part.media.url}}}`;
   }
 
   const type =
     Object.keys(part).find(
-      (k) => k !== 'metadata' && (part as any)[k] !== undefined
+      (k) => k !== 'metadata' && part[k as keyof Part] !== undefined
     ) || 'unknown';
   return `{{! ${type} part omitted }}`;
 }

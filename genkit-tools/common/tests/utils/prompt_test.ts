@@ -148,8 +148,36 @@ describe('fromMessages', () => {
       'model: model\n' +
       '---\n' +
       '\n' +
+      '{{! Some advanced message types, such as tool requests/responses, have been omitted from the history. See comments inline for more details. }}\n' +
+      '\n' +
       '{{role "user"}}\n' +
       'Here is data: {{! data part omitted }} and more text.\n';
+
+    expect(fromMessages(frontmatter, messages)).toStrictEqual(expected);
+  });
+
+  it('recursively cleans empty objects and arrays from frontmatter', () => {
+    const frontmatter: any = {
+      model: 'googleai/gemini-pro',
+      use: [
+        {
+          name: 'fallback',
+          config: {},
+        },
+      ],
+      tools: [],
+      config: {
+        safetySettings: [],
+      },
+    };
+    const messages: any[] = [];
+
+    const expected =
+      '---\n' +
+      'model: googleai/gemini-pro\n' +
+      'use:\n' +
+      '  - name: fallback\n' +
+      '---\n';
 
     expect(fromMessages(frontmatter, messages)).toStrictEqual(expected);
   });
