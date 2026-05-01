@@ -12,7 +12,58 @@ pnpm add @genkit-ai/middleware
 
 ## Available Middlewares
 
-### 1. FileSystem Middleware (`filesystem`)
+### 1. Agents Middleware (`agents`)
+
+Enables sub-agent delegation by injecting a `call_agent` tool that allows the model to delegate tasks to registered sub-agents. When the model calls the tool, the middleware intercepts the call, runs the specified sub-agent via `ai.generate()`, and returns its response as the tool result.
+
+**Key behaviors:**
+- Injects a system prompt describing available sub-agents
+- Sub-agent interrupts propagate up as `ToolInterruptError` with metadata identifying the source agent
+- Errors from sub-agents are returned as tool responses (not thrown), allowing the model to self-correct
+
+```typescript
+import { genkit } from 'genkit';
+import { agents } from '@genkit-ai/middleware';
+
+const ai = genkit({ ... });
+
+// Define sub-agents
+const researcher = ai.defineAgent({
+  name: 'researcher',
+  model: 'gemini-2.5-flash',
+  system: 'You are a research assistant.',
+  tools: [webSearchTool],
+});
+
+const coder = ai.defineAgent({
+  name: 'coder',
+  model: 'gemini-2.5-flash',
+  system: 'You are an expert programmer.',
+});
+
+// Main orchestrator agent delegates to sub-agents
+const orchestrator = ai.defineAgent({
+  name: 'orchestrator',
+  model: 'gemini-2.5-flash',
+  system: 'Delegate research to the researcher and coding to the coder.',
+  use: [
+    agents({ agents: ['researcher', 'coder'] })
+  ]
+});
+```
+
+You can also customize the tool name:
+
+```typescript
+use: [
+  agents({
+    agents: ['researcher', 'coder'],
+    toolName: 'delegate_to_agent' // default: 'call_agent'
+  })
+]
+```
+
+### 2. FileSystem Middleware (`filesystem`)
 
 Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `search_and_replace`). All operations are safely restricted to a specified root directory. Note that write operations require setting `allowWriteAccess: true` in the middleware configuration.
 
@@ -31,7 +82,7 @@ const response = await ai.generate({
 });
 ```
 
-### 2. Skills Middleware (`skills`)
+### 3. Skills Middleware (`skills`)
 
 Automatically scans a directory for `SKILL.md` files (and their YAML frontmatter) and injects them into the system prompt. It also provides a `use_skill` tool the model can use to retrieve more specific skills on demand.
 
@@ -49,7 +100,7 @@ const response = await ai.generate({
 });
 ```
 
-### 3. Tool Approval Middleware (`toolApproval`)
+### 4. Tool Approval Middleware (`toolApproval`)
 
 Restricts execution of tools to an approved list. If the model attempts to call an unapproved tool, it throws a `ToolInterruptError` allowing you to prompt the user for manual confirmation before resuming.
 
@@ -85,7 +136,7 @@ if (response.finishReason === 'interrupted') {
 }
 ```
 
-### 4. Retry Middleware (`retry`)
+### 5. Retry Middleware (`retry`)
 
 Automatically retries failed model generations on transient error codes (like `RESOURCE_EXHAUSTED`, `UNAVAILABLE`) using exponential backoff with jitter.
 
@@ -108,7 +159,7 @@ const response = await ai.generate({
 });
 ```
 
-### 5. Fallback Middleware (`fallback`)
+### 6. Fallback Middleware (`fallback`)
 
 Automatically switches to a different model if the primary model fails on a specific set of error codes. Useful for falling back to a smaller/faster model when a large model exceeds quota limits.
 
