@@ -14,56 +14,62 @@
  * limitations under the License.
  */
 
-import { tool, z } from 'genkit';
+/**
+ * Workspace Builder — artifact production via defineAgent
+ *
+ * Demonstrates:
+ *   • Using `defineAgent` with a tool that emits artifacts
+ *   • `ai.currentSession().addArtifacts()` from inside a tool handler
+ *   • Artifacts are automatically returned in `result.artifacts`
+ *   • No need for `defineCustomAgent` — the standard agent API handles
+ *     model calls, tool dispatch, streaming, and message management
+ */
+
+import { z } from 'genkit';
 import { ai } from './genkit.js';
 
-export const workspaceAgent = ai.defineCustomAgent(
-  { name: 'workspaceAgent' },
-  async (sess, { sendChunk }) => {
-    const emitArtifactTool = tool(
-      {
-        name: 'emitArtifact',
-        description:
-          'Call this tool to emit a generated code file to the user workspace.',
-        inputSchema: z.object({ name: z.string(), content: z.string() }),
-        outputSchema: z.object({ status: z.string() }),
-      },
-      async (input) => {
-        const artifact = {
-          name: input.name,
-          parts: [{ text: input.content }],
-        };
-        ai.currentSession().addArtifacts([artifact]);
-        return { status: `Artifact ${input.name} emitted successfully.` };
-      }
-    );
+// ---------------------------------------------------------------------------
+// Tool — emits a generated code file as an artifact
+// ---------------------------------------------------------------------------
 
-    await sess.run(async (input) => {
-      const text =
-        input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
-
-      // Let's call the default model directly!
-      const resStream = ai.generateStream({
-        prompt: text,
-        messages: sess.session.getMessages(),
-        tools: [emitArtifactTool],
-      });
-
-      for await (const chunk of resStream.stream) {
-        sendChunk({ modelChunk: chunk });
-      }
-
-      const res = await resStream.response;
-      sess.session.addMessages([res.message!]);
-    });
-
-    const msgs = sess.session.getMessages();
-    return {
-      artifacts: sess.session.getArtifacts(),
-      message: msgs[msgs.length - 1],
+const emitArtifact = ai.defineTool(
+  {
+    name: 'emitArtifact',
+    description:
+      'Call this tool to emit a generated code file to the user workspace.',
+    inputSchema: z.object({ name: z.string(), content: z.string() }),
+    outputSchema: z.object({ status: z.string() }),
+  },
+  async (input) => {
+    const artifact = {
+      name: input.name,
+      parts: [{ text: input.content }],
     };
+    ai.currentSession().addArtifacts([artifact]);
+    return { status: `Artifact ${input.name} emitted successfully.` };
   }
 );
+
+// ---------------------------------------------------------------------------
+// Agent — uses defineAgent (the standard shortcut API)
+// ---------------------------------------------------------------------------
+
+export const workspaceAgent = ai.defineAgent({
+  name: 'workspacePrompt',
+  model: 'googleai/gemini-2.5-flash',
+  system: `You are a helpful code generation assistant. When the user asks you to create a file, use the emitArtifact tool to produce it.
+
+Rules:
+- Use the emitArtifact tool to create files. Pass the filename as "name" and the full file content as "content".
+- You can create multiple files in a single turn if requested.
+- After emitting artifacts, briefly confirm what you created.
+- If the user asks you to modify a previously created file, emit a new artifact with the same name and updated content.`,
+  tools: [emitArtifact],
+});
+
+// ---------------------------------------------------------------------------
+// Test flow
+// ---------------------------------------------------------------------------
 
 export const testWorkspaceAgent = ai.defineFlow(
   {
@@ -71,10 +77,10 @@ export const testWorkspaceAgent = ai.defineFlow(
     inputSchema: z.string().default('Write poem.txt with a poem about genkit'),
     outputSchema: z.any(),
   },
-  async (text) => {
+  async (text, { sendChunk }) => {
     const res = await workspaceAgent.run(
       { messages: [{ role: 'user' as const, content: [{ text }] }] },
-      { init: {} }
+      { init: {}, onChunk: sendChunk }
     );
     return res.result;
   }

@@ -7,12 +7,13 @@ import { NavLink, Outlet } from 'react-router-dom';
 const NAV_ITEMS = [
   { to: '/weather', icon: '🌤️', label: 'Weather Chat' },
   { to: '/client-state', icon: '🌤️', label: 'Weather Chat (Stateless)' },
-  { to: '/prompt-variables', icon: '�️', label: 'Prompt Variables' },
+  { to: '/prompt-variables', icon: '✏️', label: 'Prompt Variables' },
   { to: '/banking', icon: '🏦', label: 'Banking (Interrupt)' },
   { to: '/workspace', icon: '🛠️', label: 'Workspace Builder' },
   { to: '/background', icon: '⏳', label: 'Background (Detach)' },
   { to: '/branching', icon: '🔀', label: 'Branching (Variants)' },
   { to: '/tasks', icon: '✅', label: 'Task Tracker (Custom State)' },
+  { to: '/research', icon: '🔬', label: 'Research (Custom Agent)' },
 ];
 
 export default function App() {

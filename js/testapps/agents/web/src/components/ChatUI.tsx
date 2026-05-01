@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import Markdown from 'react-markdown';
 
 // ---------------------------------------------------------------------------
 // Shared chat chrome — renders messages, input box, and send button.
@@ -29,6 +30,8 @@ interface Props {
   children?: React.ReactNode;
   /** Optional action element rendered in the header (e.g. "New Session" button). */
   headerAction?: React.ReactNode;
+  /** Render model messages as markdown instead of plain text. */
+  renderMarkdown?: boolean;
 }
 
 export function ChatUI({
@@ -41,6 +44,7 @@ export function ChatUI({
   inputDisabled,
   children,
   headerAction,
+  renderMarkdown,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -97,12 +101,18 @@ export function ChatUI({
             >
               <div className="message-role">{m.role}</div>
               <div className={`message-text ${isTool ? 'message-text-mono' : ''}`}>
-                {m.text.split('\n').map((line, j) => (
-                  <span key={j}>
-                    {line}
-                    {j < m.text.split('\n').length - 1 && <br />}
-                  </span>
-                ))}
+                {renderMarkdown && m.role === 'model' ? (
+                  <div className="markdown-body">
+                    <Markdown>{m.text}</Markdown>
+                  </div>
+                ) : (
+                  m.text.split('\n').map((line, j) => (
+                    <span key={j}>
+                      {line}
+                      {j < m.text.split('\n').length - 1 && <br />}
+                    </span>
+                  ))
+                )}
               </div>
             </div>
           );
@@ -110,7 +120,16 @@ export function ChatUI({
         {streamingText && (
           <div className="message">
             <div className="message-role">model</div>
-            <div className="message-text streaming">{streamingText}▊</div>
+            <div className="message-text streaming">
+              {renderMarkdown ? (
+                <div className="markdown-body">
+                  <Markdown>{streamingText}</Markdown>
+                  <span>▊</span>
+                </div>
+              ) : (
+                <>{streamingText}▊</>
+              )}
+            </div>
           </div>
         )}
         {loading && !streamingText && (
