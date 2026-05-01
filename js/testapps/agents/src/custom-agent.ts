@@ -69,7 +69,10 @@ export const customAgent = ai.defineCustomAgent(
           ? '\nConversation history:\n' +
             priorMessages
               .slice(0, -1) // Exclude the current user message (already in `userText`)
-              .map((m) => `${m.role}: ${m.content.map((c) => c.text || '').join('')}`)
+              .map(
+                (m) =>
+                  `${m.role}: ${m.content.map((c) => c.text || '').join('')}`
+              )
               .join('\n') +
             '\n'
           : '';
@@ -99,7 +102,9 @@ User question: "${userText}"`,
 
       for (let i = 0; i < subQuestions.length; i++) {
         const q = subQuestions[i];
-        sendChunk({ status: `Researching (${i + 1}/${subQuestions.length}): ${q}` });
+        sendChunk({
+          status: `Researching (${i + 1}/${subQuestions.length}): ${q}`,
+        });
 
         const research = await ai.generate({
           model: 'googleai/gemini-flash-latest',
@@ -121,7 +126,9 @@ Question: ${q}`,
       sendChunk({ status: 'Synthesizing final response…' });
 
       const researchContext = subAnswers
-        .map((sa, i) => `### Sub-question ${i + 1}: ${sa.question}\n${sa.answer}`)
+        .map(
+          (sa, i) => `### Sub-question ${i + 1}: ${sa.question}\n${sa.answer}`
+        )
         .join('\n\n');
 
       const synthesisStream = ai.generateStream({
@@ -170,7 +177,9 @@ export const testCustomAgent = ai.defineFlow(
     name: 'testCustomAgent',
     inputSchema: z
       .string()
-      .default('What are the environmental and economic impacts of electric vehicles?'),
+      .default(
+        'What are the environmental and economic impacts of electric vehicles?'
+      ),
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {

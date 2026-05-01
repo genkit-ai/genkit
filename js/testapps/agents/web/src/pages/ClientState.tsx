@@ -1,6 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+} from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
+import { useCallback, useRef, useState } from 'react';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -27,7 +32,9 @@ export default function ClientState() {
 
   // The client owns this state blob. It's returned by the server on every
   // turn and must be sent back on the next turn via `init: { state }`.
-  const [stateDisplay, setStateDisplay] = useState<string>('(no state yet — first turn will create it)');
+  const [stateDisplay, setStateDisplay] = useState<string>(
+    '(no state yet — first turn will create it)'
+  );
   const stateRef = useRef<any>(undefined);
 
   const handleSend = useCallback(
@@ -47,11 +54,17 @@ export default function ClientState() {
       // On subsequent turns, we send back the state blob from the last turn.
       // This is the KEY difference from server-stored flows — we always
       // send `state`, never `snapshotId`.
-      const init: AgentInit = stateRef.current ? { state: stateRef.current } : {};
+      const init: AgentInit = stateRef.current
+        ? { state: stateRef.current }
+        : {};
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
+        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+          url: ENDPOINT,
+          input,
+          init,
+        });
 
         let accumulated = '';
         for await (const chunk of response.stream) {
@@ -127,10 +140,10 @@ export default function ClientState() {
       <aside className="state-inspector">
         <h3>📦 Session State (client-owned)</h3>
         <p className="state-inspector-hint">
-          This is the raw <code>state</code> blob returned by the server.
-          It contains the full message history, custom data, and artifacts.
-          The client stores it and sends it back on every subsequent turn
-          via <code>init: {'{ state }'}</code>.
+          This is the raw <code>state</code> blob returned by the server. It
+          contains the full message history, custom data, and artifacts. The
+          client stores it and sends it back on every subsequent turn via{' '}
+          <code>init: {'{ state }'}</code>.
         </p>
         <pre className="state-inspector-json">{stateDisplay}</pre>
       </aside>

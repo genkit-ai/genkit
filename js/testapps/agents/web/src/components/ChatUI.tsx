@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // ---------------------------------------------------------------------------
 // Shared chat chrome — renders messages, input box, and send button.
@@ -79,7 +80,9 @@ export function ChatUI({
       <div className="chat-header">
         <div className="chat-header-top">
           <h2>{title}</h2>
-          {headerAction && <div className="chat-header-action">{headerAction}</div>}
+          {headerAction && (
+            <div className="chat-header-action">{headerAction}</div>
+          )}
         </div>
         {description && <span className="chat-desc">{description}</span>}
       </div>
@@ -97,13 +100,13 @@ export function ChatUI({
           return (
             <div
               key={i}
-              className={`message ${isUser ? 'message-user' : ''} ${isSystem ? 'message-system' : ''} ${isTool ? 'message-tool' : ''}`}
-            >
+              className={`message ${isUser ? 'message-user' : ''} ${isSystem ? 'message-system' : ''} ${isTool ? 'message-tool' : ''}`}>
               <div className="message-role">{m.role}</div>
-              <div className={`message-text ${isTool ? 'message-text-mono' : ''}`}>
+              <div
+                className={`message-text ${isTool ? 'message-text-mono' : ''}`}>
                 {renderMarkdown && m.role === 'model' ? (
                   <div className="markdown-body">
-                    <Markdown>{m.text}</Markdown>
+                    <Markdown remarkPlugins={[remarkGfm]}>{m.text}</Markdown>
                   </div>
                 ) : (
                   m.text.split('\n').map((line, j) => (
@@ -123,7 +126,7 @@ export function ChatUI({
             <div className="message-text streaming">
               {renderMarkdown ? (
                 <div className="markdown-body">
-                  <Markdown>{streamingText}</Markdown>
+                  <Markdown remarkPlugins={[remarkGfm]}>{streamingText}</Markdown>
                   <span>▊</span>
                 </div>
               ) : (
@@ -154,8 +157,7 @@ export function ChatUI({
         <button
           className="btn btn-send"
           onClick={handleSend}
-          disabled={disabled}
-        >
+          disabled={disabled}>
           Send
         </button>
       </div>

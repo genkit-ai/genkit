@@ -1,6 +1,12 @@
-import { useCallback, useRef, useState } from 'react';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+  ToolRequest,
+} from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk, ToolRequest } from 'genkit/beta';
+import { useCallback, useRef, useState } from 'react';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -134,8 +140,15 @@ export default function BankingInterrupt() {
   );
 
   // ── Shared: stream a request and collect chunks ──────────────────────
-  async function streamAndCollect(input: AgentInput, init: AgentInit): Promise<AgentOutput> {
-    const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
+  async function streamAndCollect(
+    input: AgentInput,
+    init: AgentInit
+  ): Promise<AgentOutput> {
+    const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+      url: ENDPOINT,
+      input,
+      init,
+    });
 
     let accumulated = '';
     for await (const chunk of response.stream) {
@@ -185,8 +198,7 @@ export default function BankingInterrupt() {
         streamingText={streamingText}
         loading={loading}
         onSend={handleSend}
-        inputDisabled={!!interrupt}
-      >
+        inputDisabled={!!interrupt}>
         {/* Inline approval dialog — shown when the agent pauses for approval */}
         {interrupt && (
           <div className="interrupt-dialog">
@@ -207,14 +219,12 @@ export default function BankingInterrupt() {
             <div className="interrupt-buttons">
               <button
                 className="btn btn-approve"
-                onClick={() => handleInterruptResponse(true)}
-              >
+                onClick={() => handleInterruptResponse(true)}>
                 Approve
               </button>
               <button
                 className="btn btn-deny"
-                onClick={() => handleInterruptResponse(false)}
-              >
+                onClick={() => handleInterruptResponse(false)}>
                 Deny
               </button>
             </div>
@@ -230,9 +240,9 @@ export default function BankingInterrupt() {
             <code>streamFlow()</code>.
           </li>
           <li>
-            The model decides to call the <code>userApproval</code> tool. Instead
-            of a final answer, the result contains a <code>toolRequest</code>{' '}
-            with the action details.
+            The model decides to call the <code>userApproval</code> tool.
+            Instead of a final answer, the result contains a{' '}
+            <code>toolRequest</code> with the action details.
           </li>
           <li>
             The client detects the <code>toolRequest</code> and shows an inline
@@ -241,8 +251,8 @@ export default function BankingInterrupt() {
           <li>
             When the user approves or denies, the client sends a{' '}
             <code>toolResponse</code> message with{' '}
-            <code>{'init: { snapshotId }'}</code> to <strong>resume</strong> from
-            the exact point where the flow paused.
+            <code>{'init: { snapshotId }'}</code> to <strong>resume</strong>{' '}
+            from the exact point where the flow paused.
           </li>
           <li>
             The model processes the approval result and returns a final
@@ -280,8 +290,8 @@ streamFlow({
 
         <h4>Interrupt Pattern</h4>
         <p>
-          The interrupt pattern uses <strong>tool calls as control flow</strong>.
-          The <code>userApproval</code> tool never executes server-side — it
+          The interrupt pattern uses <strong>tool calls as control flow</strong>
+          . The <code>userApproval</code> tool never executes server-side — it
           exists solely to pause the flow and hand control back to the client.
           The client's <code>toolResponse</code> resumes execution.
         </p>

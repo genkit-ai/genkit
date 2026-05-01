@@ -1,7 +1,12 @@
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+} from 'genkit/beta';
+import { runFlow, streamFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { runFlow, streamFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -128,7 +133,11 @@ export default function WeatherChat() {
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
+        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+          url: ENDPOINT,
+          input,
+          init,
+        });
 
         let accumulated = '';
         for await (const chunk of response.stream) {
@@ -242,8 +251,9 @@ export default function WeatherChat() {
             arrive as they're generated.
           </li>
           <li>
-            The model can invoke <strong>tools</strong> (e.g. <code>getWeather</code>).
-            Tool calls and responses render inline in the chat.
+            The model can invoke <strong>tools</strong> (e.g.{' '}
+            <code>getWeather</code>). Tool calls and responses render inline in
+            the chat.
           </li>
           <li>
             Each response returns a <code>state</code> object and a{' '}

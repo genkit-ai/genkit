@@ -15,8 +15,8 @@
  */
 
 import { z } from 'genkit';
-import { ai } from './genkit.js';
 import { FileSessionStore } from 'genkit/beta';
+import { ai } from './genkit.js';
 
 export const getWeather = ai.defineTool(
   {
@@ -32,7 +32,7 @@ export const getWeather = ai.defineTool(
 
 export const weatherAgent = ai.defineAgent({
   name: 'weatherPrompt',
-  model: 'googleai/gemini-2.5-flash',
+  model: 'googleai/gemini-flash-latest',
   input: { schema: z.object({ name: z.string() }) },
   system:
     'You are an assistant helping {{ name }} with weather information. Use the getWeather tool.',
@@ -54,7 +54,10 @@ export const testWeatherAgent = ai.defineFlow(
       {
         messages: [{ role: 'user', content: [{ text }] }],
       },
-      { onChunk: sendChunk }
+      {
+        onChunk: sendChunk,
+        init: { state: { inputVariables: { name: 'Pavel' } } },
+      }
     );
     return res.result;
   }

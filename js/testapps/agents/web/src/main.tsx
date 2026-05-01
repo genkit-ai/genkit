@@ -5,15 +5,16 @@ import App from './App';
 import './App.css';
 
 // Lazy-load each page so the imports stay self-contained.
-import WeatherChat from './pages/WeatherChat';
-import PromptVariables from './pages/PromptVariables';
-import ClientState from './pages/ClientState';
-import BankingInterrupt from './pages/BankingInterrupt';
-import WorkspaceBuilder from './pages/WorkspaceBuilder';
 import BackgroundAgent from './pages/BackgroundAgent';
+import BankingInterrupt from './pages/BankingInterrupt';
 import BranchingChat from './pages/BranchingChat';
-import TaskTracker from './pages/TaskTracker';
+import ClientState from './pages/ClientState';
+import PromptVariables from './pages/PromptVariables';
 import ResearchAgent from './pages/ResearchAgent';
+import TaskTracker from './pages/TaskTracker';
+import WeatherChat from './pages/WeatherChat';
+import SubAgentChat from './pages/SubAgentChat';
+import WorkspaceBuilder from './pages/WorkspaceBuilder';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -32,6 +33,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="branching/:snapshotId" element={<BranchingChat />} />
           <Route path="tasks" element={<TaskTracker />} />
           <Route path="research" element={<ResearchAgent />} />
+          <Route path="subagents" element={<SubAgentChat />} />
         </Route>
       </Routes>
     </BrowserRouter>

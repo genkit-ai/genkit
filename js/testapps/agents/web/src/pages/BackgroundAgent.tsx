@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
-import { runFlow } from 'genkit/beta/client';
 import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
+import { runFlow } from 'genkit/beta/client';
+import { useCallback, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,13 @@ const ENDPOINT = '/api/backgroundAgent';
 const STATE_ENDPOINT = '/api/backgroundAgent/state';
 const ABORT_ENDPOINT = '/api/backgroundAgent/abort';
 
-type TaskStatus = 'idle' | 'submitting' | 'pending' | 'done' | 'failed' | 'aborted';
+type TaskStatus =
+  | 'idle'
+  | 'submitting'
+  | 'pending'
+  | 'done'
+  | 'failed'
+  | 'aborted';
 
 export default function BackgroundAgent() {
   const [topic, setTopic] = useState('');
@@ -114,7 +120,9 @@ export default function BackgroundAgent() {
       const id = result?.snapshotId;
       if (!id) {
         setStatus('failed');
-        setError('Server did not return a snapshotId. Detach may not be supported.');
+        setError(
+          'Server did not return a snapshotId. Detach may not be supported.'
+        );
         return;
       }
 
@@ -157,8 +165,8 @@ export default function BackgroundAgent() {
         <div className="chat-header">
           <h2>Background Agent</h2>
           <span className="chat-desc">
-            Submit a task to run in the background. The server returns immediately
-            while processing continues — poll for the result.
+            Submit a task to run in the background. The server returns
+            immediately while processing continues — poll for the result.
           </span>
         </div>
 
@@ -180,9 +188,10 @@ export default function BackgroundAgent() {
             <button
               className="btn btn-send"
               onClick={handleSubmit}
-              disabled={!topic.trim() || status === 'submitting'}
-            >
-              {status === 'submitting' ? 'Submitting…' : '🚀 Generate Report (Background)'}
+              disabled={!topic.trim() || status === 'submitting'}>
+              {status === 'submitting'
+                ? 'Submitting…'
+                : '🚀 Generate Report (Background)'}
             </button>
           </div>
         )}
@@ -198,9 +207,7 @@ export default function BackgroundAgent() {
             </p>
             <div className="background-meta">
               <code>snapshotId: {snapshotId}</code>
-              <span className="background-poll-count">
-                Polls: {pollCount}
-              </span>
+              <span className="background-poll-count">Polls: {pollCount}</span>
             </div>
             <button className="btn btn-deny" onClick={handleAbort}>
               ✋ Abort
@@ -213,9 +220,7 @@ export default function BackgroundAgent() {
           <div className="background-result">
             <div className="background-result-header">
               <span className="background-status-badge done">✅ Complete</span>
-              <code className="background-snapshot-id">
-                {snapshotId}
-              </code>
+              <code className="background-snapshot-id">{snapshotId}</code>
               <button className="btn btn-send" onClick={handleReset}>
                 New Report
               </button>
@@ -230,9 +235,7 @@ export default function BackgroundAgent() {
         {(status === 'failed' || status === 'aborted') && (
           <div className="background-result">
             <div className="background-result-header">
-              <span
-                className={`background-status-badge ${status}`}
-              >
+              <span className={`background-status-badge ${status}`}>
                 {status === 'aborted' ? '🛑 Aborted' : '❌ Failed'}
               </span>
               {snapshotId && (
@@ -252,11 +255,12 @@ export default function BackgroundAgent() {
         <h3>📋 How It Works</h3>
         <ol>
           <li>
-            Client sends <code>{'{ detach: true }'}</code> with the input message.
+            Client sends <code>{'{ detach: true }'}</code> with the input
+            message.
           </li>
           <li>
-            Server saves a snapshot with status <code>"pending"</code> and returns
-            the <code>snapshotId</code> immediately.
+            Server saves a snapshot with status <code>"pending"</code> and
+            returns the <code>snapshotId</code> immediately.
           </li>
           <li>
             The LLM request continues running in the background on the server.
@@ -266,17 +270,25 @@ export default function BackgroundAgent() {
             2 seconds.
           </li>
           <li>
-            When <code>status === "done"</code>, the report is extracted from the
-            snapshot's message history.
+            When <code>status === "done"</code>, the report is extracted from
+            the snapshot's message history.
           </li>
         </ol>
 
         <h4>Status Values</h4>
         <ul className="background-status-list">
-          <li><code>pending</code> — still processing</li>
-          <li><code>done</code> — completed successfully</li>
-          <li><code>failed</code> — error during processing</li>
-          <li><code>aborted</code> — cancelled by the client</li>
+          <li>
+            <code>pending</code> — still processing
+          </li>
+          <li>
+            <code>done</code> — completed successfully
+          </li>
+          <li>
+            <code>failed</code> — error during processing
+          </li>
+          <li>
+            <code>aborted</code> — cancelled by the client
+          </li>
         </ul>
 
         <h4>Key APIs</h4>

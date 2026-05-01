@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { to: '/branching', icon: '🔀', label: 'Branching (Variants)' },
   { to: '/tasks', icon: '✅', label: 'Task Tracker (Custom State)' },
   { to: '/research', icon: '🔬', label: 'Research (Custom Agent)' },
+  { to: '/subagents', icon: '🤝', label: 'Sub-Agent Delegation' },
 ];
 
 export default function App() {
@@ -30,8 +31,7 @@ export default function App() {
               to={item.to}
               className={({ isActive }) =>
                 `nav-item ${isActive ? 'active' : ''}`
-              }
-            >
+              }>
               <span className="nav-icon">{item.icon}</span>
               <span className="nav-label">{item.label}</span>
             </NavLink>

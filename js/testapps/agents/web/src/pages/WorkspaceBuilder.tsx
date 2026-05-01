@@ -1,6 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+} from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
-import type { AgentInit, AgentInput, AgentOutput, AgentStreamChunk } from 'genkit/beta';
+import { useCallback, useRef, useState } from 'react';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -42,11 +47,17 @@ export default function WorkspaceBuilder() {
         messages: [{ role: 'user', content: [{ text }] }],
       };
 
-      const init: AgentInit = stateRef.current ? { state: stateRef.current } : {};
+      const init: AgentInit = stateRef.current
+        ? { state: stateRef.current }
+        : {};
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({ url: ENDPOINT, input, init });
+        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
+          url: ENDPOINT,
+          input,
+          init,
+        });
 
         let accumulated = '';
         for await (const chunk of response.stream) {

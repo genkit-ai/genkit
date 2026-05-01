@@ -22,7 +22,8 @@ const store = new InMemorySessionStore<{}>();
 
 export const userApproval = ai.defineInterrupt({
   name: 'userApproval',
-  description: 'Ask the user for approval before proceeding with a sensitive action.',
+  description:
+    'Ask the user for approval before proceeding with a sensitive action.',
   inputSchema: z.object({
     action: z.string().describe('The action to be approved'),
     details: z.string().describe('Details about the action'),
@@ -53,7 +54,7 @@ export const transferMoney = ai.defineTool(
 
 export const bankingAgent = ai.defineAgent({
   name: 'bankingPrompt',
-  model: 'googleai/gemini-2.5-flash',
+  model: 'googleai/gemini-flash-latest',
   input: { schema: z.object({ request: z.string() }) },
   system:
     'You are a helpful banking assistant. If the user wants to transfer money, ALWAYS use the userApproval interrupt to confirm the details before executing the transferMoney tool.',
@@ -80,28 +81,30 @@ export const testBankingAgent = ai.defineFlow(
     }
 
     let output = await session.output;
-    
+
     // Check if the agent paused for approval
     const lastMessage = output.message;
-    const approvalRequest = lastMessage?.content.find(p => p.toolRequest?.name === 'userApproval');
+    const approvalRequest = lastMessage?.content.find(
+      (p) => p.toolRequest?.name === 'userApproval'
+    );
 
     if (approvalRequest && approvalRequest.toolRequest) {
       sendChunk({ status: 'Agent interrupted! Requesting user approval...' });
-      
+
       // Simulate user approval
       const approvalResponse = {
         toolResponse: {
           name: 'userApproval',
           ref: approvalRequest.toolRequest.ref,
           output: { approved: true, feedback: 'Looks good' },
-        }
+        },
       };
 
       // Create a new session attached to the interrupted flow's snapshot
       session = bankingAgent.streamBidi({ snapshotId: output.snapshotId });
-      
+
       // Send the approval back to the flow using toolRestarts
-      // Alternatively, we can pass it as a tool message. 
+      // Alternatively, we can pass it as a tool message.
       session.send({
         messages: [{ role: 'tool', content: [approvalResponse] }],
       });
