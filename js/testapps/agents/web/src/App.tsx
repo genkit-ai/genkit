@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { to: '/workspace', icon: '🛠️', label: 'Workspace Builder' },
   { to: '/background', icon: '⏳', label: 'Background (Detach)' },
   { to: '/branching', icon: '🔀', label: 'Branching (Variants)' },
+  { to: '/tasks', icon: '✅', label: 'Task Tracker (Custom State)' },
 ];
 
 export default function App() {

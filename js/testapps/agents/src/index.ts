@@ -40,6 +40,7 @@ import {
 
 import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
+import { taskAgent, testTaskAgent } from './custom-state-agent.js';
 
 // Log loaded agents/flows (existing behavior)
 console.log('Loaded agent:', simpleAgent.__action.name);
@@ -66,6 +67,8 @@ console.log('Loaded interrupt flow:', testBankingAgent.__action.name);
 console.log('Loaded interrupt agent:', bankingAgent.__action.name);
 console.log('Loaded background agent:', backgroundAgent.__action.name);
 console.log('Loaded background flow:', testBackgroundAgent.__action.name);
+console.log('Loaded task agent:', taskAgent.__action.name);
+console.log('Loaded task flow:', testTaskAgent.__action.name);
 
 export * from './background-agent.js';
 export * from './interrupt-agent.js';
@@ -105,6 +108,7 @@ app.post('/api/backgroundAgent/state', expressHandler(backgroundAgent.getSnapsho
 app.post('/api/backgroundAgent/abort', expressHandler(backgroundAgent.abortAgentAction));
 app.post('/api/branchingAgent', expressHandler(nameAgent as any));
 app.post('/api/branchingAgent/state', expressHandler(nameAgent.getSnapshotDataAction));
+app.post('/api/taskAgent', expressHandler(taskAgent as any));
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testSimpleAgent', expressHandler(testSimpleAgent));
@@ -114,6 +118,7 @@ app.post('/api/testClientStateAgent', expressHandler(testClientStateAgent));
 app.post('/api/testBankingAgent', expressHandler(testBankingAgent));
 app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
 app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
+app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 app.listen(PORT, () => {
