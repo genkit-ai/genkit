@@ -117,7 +117,10 @@ func toGeminiToolChoice(toolConfig *genai.ToolConfig, toolChoice ai.ToolChoice, 
 	var mode genai.FunctionCallingConfigMode
 	switch toolChoice {
 	case "":
-		return nil, nil
+		// No ToolChoice was set; leave whatever ToolConfig the user supplied
+		// via config alone so RetrievalConfig and IncludeServerSideToolInvocations
+		// survive instead of being clobbered to nil.
+		return toolConfig, nil
 	case ai.ToolChoiceAuto:
 		mode = genai.FunctionCallingConfigModeAuto
 	case ai.ToolChoiceRequired:

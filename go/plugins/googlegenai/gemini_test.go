@@ -623,6 +623,42 @@ func TestToolMerging(t *testing.T) {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
+
+	t.Run("preserves user ToolConfig when no ToolChoice is set", func(t *testing.T) {
+		// Regression: passing ai.WithTools() without ai.WithToolChoice() used
+		// to clobber gcc.ToolConfig to nil, dropping any RetrievalConfig or
+		// IncludeServerSideToolInvocations the user supplied.
+		userToolConfig := &genai.ToolConfig{
+			RetrievalConfig: &genai.RetrievalConfig{
+				LanguageCode: "en-US",
+			},
+			IncludeServerSideToolInvocations: genai.Ptr(true),
+		}
+		req := &ai.ModelRequest{
+			Config: genai.GenerateContentConfig{
+				Temperature: genai.Ptr[float32](0.5),
+				ToolConfig:  userToolConfig,
+			},
+			Tools: []*ai.ToolDefinition{genkitTool},
+			Messages: []*ai.Message{
+				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
+			},
+		}
+
+		gcc, err := toGeminiRequest(req, nil)
+		if err != nil {
+			t.Fatalf("toGeminiRequest failed: %v", err)
+		}
+		if gcc.ToolConfig == nil {
+			t.Fatal("ToolConfig was dropped; expected user-supplied fields to be preserved")
+		}
+		if gcc.ToolConfig.RetrievalConfig == nil || gcc.ToolConfig.RetrievalConfig.LanguageCode != "en-US" {
+			t.Errorf("RetrievalConfig not preserved: %#v", gcc.ToolConfig.RetrievalConfig)
+		}
+		if gcc.ToolConfig.IncludeServerSideToolInvocations == nil || !*gcc.ToolConfig.IncludeServerSideToolInvocations {
+			t.Errorf("IncludeServerSideToolInvocations not preserved: %#v", gcc.ToolConfig.IncludeServerSideToolInvocations)
+		}
+	})
 }
 
 func TestValidToolName(t *testing.T) {
