@@ -702,3 +702,39 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 }
 
 var testCtx = context.Background()
+
+// --- middlewareRefArg: lazy reference used by the dotprompt loader ---
+
+func TestConfigsToRefs_StripsLazyAdapter(t *testing.T) {
+	refs, err := configsToRefs([]Middleware{
+		middlewareRefArg{name: "test/foo"},
+		middlewareRefArg{name: "test/bar", config: map[string]any{"k": "v"}},
+		counterConfig{},
+	})
+	assertNoError(t, err)
+	if len(refs) != 3 {
+		t.Fatalf("got %d refs, want 3", len(refs))
+	}
+
+	if refs[0].Name != "test/foo" || refs[0].Config != nil {
+		t.Errorf("name-only adapter: got {Name:%q Config:%v}, want {test/foo nil}", refs[0].Name, refs[0].Config)
+	}
+
+	cfg, ok := refs[1].Config.(map[string]any)
+	if refs[1].Name != "test/bar" || !ok || cfg["k"] != "v" {
+		t.Errorf("adapter with config: got {Name:%q Config:%v}, want {test/bar map[k:v]}", refs[1].Name, refs[1].Config)
+	}
+
+	if _, ok := refs[2].Config.(Middleware); !ok {
+		t.Errorf("regular middleware ref: Config should retain Middleware value for fast path, got %T", refs[2].Config)
+	}
+}
+
+func TestMiddlewareRefArg_NewErrors(t *testing.T) {
+	// Defensive: configsToRefs strips the adapter, so resolveRefs should
+	// never call New on it. If routing ever regresses, fail loudly instead
+	// of silently producing nil hooks.
+	if _, err := (middlewareRefArg{name: "x"}).New(testCtx); err == nil {
+		t.Fatal("expected middlewareRefArg.New to return an error")
+	}
+}
