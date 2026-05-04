@@ -4,6 +4,8 @@
 package googlegenai
 
 import (
+	"sort"
+	"strings"
 	"testing"
 
 	"google.golang.org/genai"
@@ -13,11 +15,26 @@ import (
 // the Gemini chat config drops fields the plugin manages on the user's behalf
 // and adds the curated descriptions used by the Genkit Developer UI.
 func TestConfigToMap_GenerateContentConfig(t *testing.T) {
-	props := schemaProps(t, configToMap(genai.GenerateContentConfig{}))
+	schema := configToMap(genai.GenerateContentConfig{})
+	props := schemaProps(t, schema)
 
 	for _, hidden := range gccOverrides.hidden {
-		if _, present := props[hidden]; present {
-			t.Errorf("hidden field %q must not appear in the Gemini config schema", hidden)
+		assertHidden(t, "Gemini", schema, hidden)
+	}
+
+	// Sanity: built-in API tools still surface in tools[]'s item shape so the
+	// dev UI can let users enable them. Only functionDeclarations should have
+	// been removed from there.
+	if toolItem := navigate(schema, "tools", "items"); toolItem != nil {
+		if itemProps, ok := toolItem["properties"].(map[string]any); ok {
+			for _, expected := range []string{"googleSearch", "retrieval", "codeExecution"} {
+				if _, ok := itemProps[expected]; !ok {
+					t.Errorf("Gemini schema: tools[].%s should remain visible — got %v", expected, keys(itemProps))
+				}
+			}
+			if _, ok := itemProps["functionDeclarations"]; ok {
+				t.Error("Gemini schema: tools[].functionDeclarations should be hidden")
+			}
 		}
 	}
 
@@ -70,4 +87,59 @@ func checkDescriptions(t *testing.T, label string, props map[string]any, want ma
 			t.Errorf("%s schema: description for %q\n got: %q\nwant: %q", label, name, got, desc)
 		}
 	}
+}
+
+// assertHidden checks that a top-level or slash-path property is absent from
+// the resolved schema map.
+func assertHidden(t *testing.T, label string, schema map[string]any, path string) {
+	t.Helper()
+	parts := strings.Split(path, "/")
+	leaf := parts[len(parts)-1]
+	parentParts := parts[:len(parts)-1]
+	parent := schema
+	if len(parentParts) > 0 {
+		parent = navigate(schema, parentParts...)
+	}
+	if parent == nil {
+		return // upstream removed the parent — nothing to assert
+	}
+	props, _ := parent["properties"].(map[string]any)
+	if props == nil && len(parentParts) == 0 {
+		t.Fatalf("%s schema missing top-level properties", label)
+	}
+	if _, present := props[leaf]; present {
+		t.Errorf("%s schema: %q must be hidden — found in properties %v", label, path, keys(props))
+	}
+}
+
+// navigate descends a JSON Schema map by walking `properties` for ordinary
+// names and `items` for arrays. Returns nil if the path doesn't resolve.
+func navigate(schema map[string]any, parts ...string) map[string]any {
+	cur := schema
+	for _, part := range parts {
+		if cur == nil {
+			return nil
+		}
+		if part == "items" {
+			next, _ := cur["items"].(map[string]any)
+			cur = next
+			continue
+		}
+		props, _ := cur["properties"].(map[string]any)
+		if props == nil {
+			return nil
+		}
+		next, _ := props[part].(map[string]any)
+		cur = next
+	}
+	return cur
+}
+
+func keys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
