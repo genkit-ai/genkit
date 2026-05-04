@@ -57,6 +57,7 @@ func configToMap(config any) map[string]any {
 	}
 
 	schema := r.Reflect(config)
+	applyConfigOverrides(schema, overridesFor(config))
 	result := base.SchemaAsMap(schema)
 	return result
 }
