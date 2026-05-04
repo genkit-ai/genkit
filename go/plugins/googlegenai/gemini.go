@@ -305,6 +305,11 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	if gcc.ResponseJsonSchema != nil {
 		return nil, errors.New("response JSON schema must be set using Genkit feature: ai.WithOutputSchema()")
 	}
+	for _, t := range gcc.Tools {
+		if t != nil && len(t.FunctionDeclarations) > 0 {
+			return nil, errors.New("custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for built-in API tools (GoogleSearch, Retrieval, CodeExecution, etc.)")
+		}
+	}
 
 	// Set response MIME type and schema based on output format.
 	// Gemini supports constrained output with application/json and text/x.enum.

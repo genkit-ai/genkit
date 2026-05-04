@@ -45,6 +45,7 @@ var gccOverrides = configOverrides{
 		"speechConfig":               "Configures speech generation when the model is asked to produce audio.",
 		"safetySettings":             "Adjust how likely you are to see responses that could be harmful. Content is blocked based on the probability that it is harmful.",
 		"toolConfig":                 "Tool configuration shared across all tools the model has access to. Use this to constrain function calling mode or configure retrieval.",
+		"tools":                      "Built-in API tools (GoogleSearch, Retrieval, CodeExecution, etc.) made available to the model. Custom function tools must be registered via ai.WithTools() instead, which wires them up to the Genkit runtime.",
 		"labels":                     "User-defined metadata to break down billed charges.",
 		"modelArmorConfig":           "Settings for prompt and response sanitization via Model Armor. If set, safetySettings must not be set.",
 		"modelSelectionConfig":       "Configures model selection (e.g. feature priority).",

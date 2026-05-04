@@ -223,8 +223,19 @@ func TestConvertRequest(t *testing.T) {
 				},
 				err: errors.New("system instruction should be set using Genkit features"),
 			},
-			// Note: FunctionDeclarations in config.Tools are now allowed and merged
-			// with ai.WithTools() declarations instead of being rejected.
+			{
+				name: "use custom function tools outside genkit",
+				cfg: genai.GenerateContentConfig{
+					Tools: []*genai.Tool{
+						{
+							FunctionDeclarations: []*genai.FunctionDeclaration{
+								{Name: "myCustomTool", Description: "x"},
+							},
+						},
+					},
+				},
+				err: errors.New("custom function tools should be set using Genkit features"),
+			},
 			{
 				name: "use cache outside genkit",
 				cfg: genai.GenerateContentConfig{
@@ -585,21 +596,20 @@ func TestToolMerging(t *testing.T) {
 		}
 	})
 
-	t.Run("merges FunctionDeclarations from config with Genkit tools", func(t *testing.T) {
-		// This tests the case where FunctionDeclarations exist in both
-		// config.Tools AND input.Tools - they should all be merged.
-		configFuncDecl := &genai.FunctionDeclaration{
-			Name:        "config_function",
-			Description: "A function from config",
-		}
-
+	t.Run("rejects FunctionDeclarations in config tools", func(t *testing.T) {
+		// Custom function tools must go through ai.WithTools() so they are
+		// registered with the Genkit tool registry. Passing them via config
+		// would skip registration and the model would call something with no
+		// handler attached.
 		req := &ai.ModelRequest{
 			Config: genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.5),
 				Tools: []*genai.Tool{
 					{
-						FunctionDeclarations: []*genai.FunctionDeclaration{configFuncDecl},
-						GoogleSearch:         &genai.GoogleSearch{}, // hybrid tool
+						FunctionDeclarations: []*genai.FunctionDeclaration{
+							{Name: "config_function", Description: "A function from config"},
+						},
+						GoogleSearch: &genai.GoogleSearch{},
 					},
 				},
 			},
@@ -609,33 +619,8 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
-		if err != nil {
-			t.Fatalf("toGeminiRequest failed: %v", err)
-		}
-
-		// Should have: 1 tool with all FunctionDeclarations, 1 tool with GoogleSearch
-		hasGoogleSearch := false
-		funcDeclCount := 0
-		var funcNames []string
-
-		for _, tool := range gcc.Tools {
-			if tool.GoogleSearch != nil {
-				hasGoogleSearch = true
-			}
-			if tool.FunctionDeclarations != nil {
-				for _, fd := range tool.FunctionDeclarations {
-					funcDeclCount++
-					funcNames = append(funcNames, fd.Name)
-				}
-			}
-		}
-
-		if !hasGoogleSearch {
-			t.Error("GoogleSearch was dropped during merge")
-		}
-		if funcDeclCount != 2 {
-			t.Errorf("expected 2 function declarations (1 from config + 1 from input.Tools), got %d: %v", funcDeclCount, funcNames)
+		if _, err := toGeminiRequest(req, nil); err == nil {
+			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
 }
