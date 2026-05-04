@@ -5,7 +5,6 @@ package googlegenai
 
 import (
 	"sort"
-	"strings"
 	"testing"
 
 	"google.golang.org/genai"
@@ -25,7 +24,7 @@ func TestConfigToMap_GenerateContentConfig(t *testing.T) {
 	// Sanity: built-in API tools still surface in tools[]'s item shape so the
 	// dev UI can let users enable them. Only functionDeclarations should have
 	// been removed from there.
-	if toolItem := navigate(schema, "tools", "items"); toolItem != nil {
+	if toolItem := navigate(schema, "tools", "[]"); toolItem != nil {
 		if itemProps, ok := toolItem["properties"].(map[string]any); ok {
 			for _, expected := range []string{"googleSearch", "retrieval", "codeExecution"} {
 				if _, ok := itemProps[expected]; !ok {
@@ -89,22 +88,21 @@ func checkDescriptions(t *testing.T, label string, props map[string]any, want ma
 	}
 }
 
-// assertHidden checks that a top-level or slash-path property is absent from
-// the resolved schema map.
+// assertHidden checks that a top-level or nested property (per parseHidePath
+// notation) is absent from the resolved schema map.
 func assertHidden(t *testing.T, label string, schema map[string]any, path string) {
 	t.Helper()
-	parts := strings.Split(path, "/")
-	leaf := parts[len(parts)-1]
-	parentParts := parts[:len(parts)-1]
+	steps := parseHidePath(path)
+	leaf := steps[len(steps)-1]
 	parent := schema
-	if len(parentParts) > 0 {
-		parent = navigate(schema, parentParts...)
+	if len(steps) > 1 {
+		parent = navigate(schema, steps[:len(steps)-1]...)
 	}
 	if parent == nil {
 		return // upstream removed the parent — nothing to assert
 	}
 	props, _ := parent["properties"].(map[string]any)
-	if props == nil && len(parentParts) == 0 {
+	if props == nil && len(steps) == 1 {
 		t.Fatalf("%s schema missing top-level properties", label)
 	}
 	if _, present := props[leaf]; present {
@@ -113,14 +111,15 @@ func assertHidden(t *testing.T, label string, schema map[string]any, path string
 }
 
 // navigate descends a JSON Schema map by walking `properties` for ordinary
-// names and `items` for arrays. Returns nil if the path doesn't resolve.
-func navigate(schema map[string]any, parts ...string) map[string]any {
+// step names and `items` for "[]" steps. Returns nil if the path doesn't
+// resolve.
+func navigate(schema map[string]any, steps ...string) map[string]any {
 	cur := schema
-	for _, part := range parts {
+	for _, step := range steps {
 		if cur == nil {
 			return nil
 		}
-		if part == "items" {
+		if step == "[]" {
 			next, _ := cur["items"].(map[string]any)
 			cur = next
 			continue
@@ -129,7 +128,7 @@ func navigate(schema map[string]any, parts ...string) map[string]any {
 		if props == nil {
 			return nil
 		}
-		next, _ := props[part].(map[string]any)
+		next, _ := props[step].(map[string]any)
 		cur = next
 	}
 	return cur

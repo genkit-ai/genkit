@@ -20,9 +20,9 @@ type configOverrides struct {
 	// field's tooltip in the dev UI. Top-level only.
 	descriptions map[string]string
 	// hidden lists JSON property paths to remove from the schema. Each entry
-	// is either a top-level property name ("systemInstruction") or a slash
-	// path that descends through array `items` and nested `properties`
-	// ("tools/items/functionDeclarations"). Use this for fields the plugin
+	// is either a top-level property name ("systemInstruction") or a dotted
+	// path with "[]" denoting a descent into an array's item shape
+	// ("tools[].functionDeclarations"). Use this for fields the plugin
 	// rejects at runtime or that the Genkit framework manages directly.
 	hidden []string
 }
@@ -58,12 +58,12 @@ var gccOverrides = configOverrides{
 	},
 	hidden: []string{
 		// Managed by Genkit primitives; the plugin rejects these when set.
-		"systemInstruction",                // ai.WithSystemPrompt
-		"cachedContent",                    // ai.WithCacheTTL
-		"responseSchema",                   // ai.WithOutputType / ai.WithOutputSchema
-		"responseMimeType",                 // ai.WithOutputType / ai.WithOutputSchema
-		"responseJsonSchema",               // ai.WithOutputSchema
-		"tools/items/functionDeclarations", // ai.WithTools (built-in API tools on Tool stay visible)
+		"systemInstruction",            // ai.WithSystemPrompt
+		"cachedContent",                // ai.WithCacheTTL
+		"responseSchema",               // ai.WithOutputType / ai.WithOutputSchema
+		"responseMimeType",             // ai.WithOutputType / ai.WithOutputSchema
+		"responseJsonSchema",           // ai.WithOutputSchema
+		"tools[].functionDeclarations", // ai.WithTools (built-in API tools on Tool stay visible)
 		// Pinned to 1 by the plugin; the API only supports a single candidate.
 		"candidateCount",
 	},
@@ -114,7 +114,7 @@ var gvcOverrides = configOverrides{
 }
 
 // applyConfigOverrides mutates schema in place: removes hidden properties
-// (top-level or via slash paths) and writes descriptions onto the
+// (top-level or nested via parseHidePath) and writes descriptions onto the
 // remaining top-level ones.
 func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 	if schema == nil || schema.Properties == nil {
@@ -122,12 +122,11 @@ func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 	}
 	hideTop := make(map[string]struct{})
 	for _, path := range o.hidden {
-		if !strings.Contains(path, "/") {
-			hideTop[path] = struct{}{}
-			schema.Properties.Delete(path)
-			continue
+		steps := parseHidePath(path)
+		if len(steps) == 1 {
+			hideTop[steps[0]] = struct{}{}
 		}
-		deleteAtPath(schema, strings.Split(path, "/"))
+		deleteAtPath(schema, steps)
 	}
 	if len(hideTop) > 0 && len(schema.Required) > 0 {
 		kept := schema.Required[:0]
@@ -145,31 +144,56 @@ func applyConfigOverrides(schema *jsonschema.Schema, o configOverrides) {
 	}
 }
 
-// deleteAtPath descends through `items` and nested `properties` to remove a
-// leaf property. Silently no-ops when the path doesn't exist (the upstream
-// SDK may have renamed or removed the field).
-func deleteAtPath(schema *jsonschema.Schema, parts []string) {
+// parseHidePath splits a hidden-list entry into navigation steps. Each step
+// is either a property name or the literal "[]" meaning "descend into an
+// array's item schema." Examples:
+//
+//	"systemInstruction"             -> ["systemInstruction"]
+//	"tools[].functionDeclarations"  -> ["tools", "[]", "functionDeclarations"]
+//	"foo[].bar[].baz"               -> ["foo", "[]", "bar", "[]", "baz"]
+func parseHidePath(path string) []string {
+	var steps []string
+	for _, tok := range strings.Split(path, ".") {
+		if name := strings.TrimSuffix(tok, "[]"); name != tok {
+			steps = append(steps, name, "[]")
+		} else {
+			steps = append(steps, tok)
+		}
+	}
+	return steps
+}
+
+// deleteAtPath descends through `items` (for "[]" steps) and `properties`
+// (for named steps) to remove a leaf property. Silently no-ops when the
+// path doesn't resolve — upstream SDK renames just stop applying the hide
+// rather than panicking.
+func deleteAtPath(schema *jsonschema.Schema, steps []string) {
+	if len(steps) == 0 {
+		return
+	}
 	cur := schema
-	for _, part := range parts[:len(parts)-1] {
+	for _, step := range steps[:len(steps)-1] {
 		if cur == nil {
 			return
 		}
-		if part == "items" {
+		if step == "[]" {
 			cur = cur.Items
 			continue
 		}
 		if cur.Properties == nil {
 			return
 		}
-		next, ok := cur.Properties.Get(part)
+		next, ok := cur.Properties.Get(step)
 		if !ok {
 			return
 		}
 		cur = next
 	}
-	if cur != nil && cur.Properties != nil {
-		cur.Properties.Delete(parts[len(parts)-1])
+	leaf := steps[len(steps)-1]
+	if leaf == "[]" || cur == nil || cur.Properties == nil {
+		return
 	}
+	cur.Properties.Delete(leaf)
 }
 
 // overridesFor returns the overrides matching a given config struct value,
