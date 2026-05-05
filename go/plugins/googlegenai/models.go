@@ -93,9 +93,13 @@ const (
 	imagen3Generate001     = "imagen-3.0-generate-001"
 	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
 
-	veo20Generate001     = "veo-2.0-generate-001"
-	veo30Generate001     = "veo-3.0-generate-001"
-	veo30FastGenerate001 = "veo-3.0-fast-generate-001"
+	veo20Generate001         = "veo-2.0-generate-001"
+	veo30Generate001         = "veo-3.0-generate-001"
+	veo30FastGenerate001     = "veo-3.0-fast-generate-001"
+	veo31Generate001         = "veo-3.1-generate-001"
+	veo31FastGenerate001     = "veo-3.1-fast-generate-001"
+	veo31GeneratePreview     = "veo-3.1-generate-preview"
+	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 
 	embedding001                      = "embedding-001"
 	textembeddinggecko003             = "textembedding-gecko@003"
@@ -122,6 +126,8 @@ var (
 		veo20Generate001,
 		veo30Generate001,
 		veo30FastGenerate001,
+		veo31Generate001,
+		veo31FastGenerate001,
 	}
 
 	googleAIModels = []string{
@@ -134,6 +140,8 @@ var (
 		veo20Generate001,
 		veo30Generate001,
 		veo30FastGenerate001,
+		veo31GeneratePreview,
+		veo31FastGeneratePreview,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
@@ -206,6 +214,30 @@ var (
 			Versions: []string{},
 			Supports: &VeoSupports,
 			Stage:    ai.ModelStageStable,
+		},
+		veo31Generate001: {
+			Label:    "Veo 3.1 Generate 001",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		veo31FastGenerate001: {
+			Label:    "Veo 3.1 Fast Generate 001",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		veo31GeneratePreview: {
+			Label:    "Veo 3.1 Generate Preview",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		veo31FastGeneratePreview: {
+			Label:    "Veo 3.1 Fast Generate Preview",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageUnstable,
 		},
 	}
 
