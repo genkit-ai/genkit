@@ -255,7 +255,9 @@ export function fromInteractionContent(content: Content): Part {
       return fromFunctionResultContent(content);
     default:
       // We need the 'any' because currently this is an exhaustive list
-      throw new Error(`Unsupported content type: ${(content as any).type}`);
+      throw new Error(
+        `Unsupported content type: ${(content as any).type}. Raw content: ${JSON.stringify(content)}`
+      );
   }
 }
 
@@ -285,13 +287,17 @@ function fromTextContent(content: TextContent): Part {
 
 function fromImageContent(content: ImageContent): Part {
   const part = fromMediaContent(content);
-  part.metadata = { resolution: content.resolution };
+  if (content.resolution !== undefined) {
+    part.metadata = { resolution: content.resolution };
+  }
   return part;
 }
 
 function fromVideoContent(content: VideoContent): Part {
   const part = fromMediaContent(content);
-  part.metadata = { resolution: content.resolution };
+  if (content.resolution !== undefined) {
+    part.metadata = { resolution: content.resolution };
+  }
   return part;
 }
 
@@ -351,6 +357,7 @@ export function fromInteractionSync(
       content: [],
     },
     custom: interaction,
+    raw: interaction,
   };
 
   if (interaction.status === 'cancelled') {
@@ -362,7 +369,9 @@ export function fromInteractionSync(
 
   const outputs = interaction.outputs;
   if (outputs?.length) {
-    response.message!.content = outputs.map(fromInteractionContent);
+    response.message!.content = outputs
+      .filter((o) => o && Object.keys(o).length > 0)
+      .map(fromInteractionContent);
 
     if (interaction.usage) {
       response.usage = {
@@ -433,7 +442,9 @@ export function fromInteraction<T extends Object>(
     op.done = true;
     const outputs = interaction.outputs;
     if (outputs?.length) {
-      const content = outputs.map(fromInteractionContent);
+      const content = outputs
+        .filter((o) => o && Object.keys(o).length > 0)
+        .map(fromInteractionContent);
       op.output = {
         finishReason: 'stop',
         message: {
@@ -441,6 +452,7 @@ export function fromInteraction<T extends Object>(
           content,
         },
         custom: interaction,
+        raw: interaction,
       };
       if (interaction.usage) {
         op.output.usage = {

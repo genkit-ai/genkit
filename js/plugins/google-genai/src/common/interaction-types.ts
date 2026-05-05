@@ -41,12 +41,41 @@ export declare interface InteractionCodeExecutionTool {
 }
 
 /**
+ * A tool that can be used by the model to read and summarize web page content.
+ */
+export declare interface InteractionUrlContextTool {
+  type: 'url_context';
+}
+
+/**
+ * A tool that can be used by the model to search uploaded document corpora.
+ */
+export declare interface InteractionFileSearchTool {
+  type: 'file_search';
+  file_search_store_names?: string[];
+}
+
+/**
+ * A tool that can be used by the model to connect to remote MCP servers.
+ */
+export declare interface InteractionMcpServerTool {
+  type: 'mcp_server';
+  name?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  allowed_tools?: string[];
+}
+
+/**
  * A tool that can be used by the model.
  */
 export declare type InteractionTool =
   | InteractionFunctionTool
   | InteractionGoogleSearchTool
-  | InteractionCodeExecutionTool;
+  | InteractionCodeExecutionTool
+  | InteractionUrlContextTool
+  | InteractionFileSearchTool
+  | InteractionMcpServerTool;
 
 /**
  * Citation information for model-generated content.
@@ -294,6 +323,10 @@ export declare interface DeepResearchAgentConfig {
   type: 'deep-research';
   /** Whether to include thought summaries in the response. */
   thinking_summaries?: 'auto' | 'none';
+  /** Visualization allows the agent to generate charts and graphs to support its findings. */
+  visualization?: 'auto' | 'off';
+  /** Collaborative planning allows you to review and refine the research plan before execution. */
+  collaborative_planning?: boolean;
 }
 
 /**

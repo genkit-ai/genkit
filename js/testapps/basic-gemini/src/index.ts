@@ -42,6 +42,46 @@ const ai = genkit({
   ],
 });
 
+ai.defineFlow('deep-research-visualization', async (_, { sendChunk }) => {
+  let { operation } = await ai.generate({
+    model: googleAI.model('deep-research-preview-04-2026'),
+    prompt:
+      'Analyze global semiconductor market trends. Include graphics showing market share changes.',
+    config: {
+      visualization: 'AUTO',
+    },
+  });
+
+  if (!operation) throw new Error('No operation returned');
+
+  while (!operation.done) {
+    sendChunk('check status of operation ' + operation.id);
+    operation = await ai.checkOperation(operation);
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  }
+  return operation.output?.message?.content;
+});
+
+ai.defineFlow('deep-research-code-execution', async (_, { sendChunk }) => {
+  let { operation } = await ai.generate({
+    model: googleAI.model('deep-research-preview-04-2026'),
+    prompt:
+      'Start with 1. Add 3, then divide by 2. Take that answer, and continue adding 3 and dividing by 2 to each successive answer and tell me the first 20 terms in the sequence',
+    config: {
+      codeExecution: true,
+    },
+  });
+
+  if (!operation) throw new Error('No operation returned');
+
+  while (!operation.done) {
+    sendChunk('check status of operation ' + operation.id);
+    operation = await ai.checkOperation(operation);
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  }
+  return operation.output?.message?.content;
+});
+
 ai.defineFlow('maps-grounding', async () => {
   const { text, raw } = await ai.generate({
     model: googleAI.model('gemini-3.1-pro-preview'),
@@ -1066,6 +1106,101 @@ ai.defineFlow('deep-research-multi-turn', async (_, { sendChunk }) => {
   }
 
   return op2.output?.message?.content.find((p) => !!p.text)?.text;
+});
+
+ai.defineFlow('deep-research-preview', async (_, { sendChunk }) => {
+  const storeName = await createFileSearchStore();
+  await uploadBlobToFileSearchStore(storeName);
+
+  let { operation } = await ai.generate({
+    model: googleAI.model('deep-research-preview-04-2026'),
+    prompt:
+      'Analyze the differences between the character in the provided document and modern quantum computing principles. Create a chart to visualize the comparison.',
+    config: {
+      visualization: 'AUTO',
+      googleSearch: true,
+      codeExecution: true,
+      fileSearch: {
+        fileSearchStoreNames: [storeName],
+      },
+    },
+  });
+
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+
+  while (!operation.done) {
+    sendChunk('check status of operation ' + operation.id);
+    operation = await ai.checkOperation(operation);
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  }
+
+  await deleteFileSearchStore(storeName);
+
+  if (operation.error) {
+    sendChunk('Error: ' + operation.error.message);
+    throw new Error('failed to deep research: ' + operation.error.message);
+  }
+
+  return operation.output?.message?.content;
+});
+
+ai.defineFlow('deep-research-collaboration', async (_, { sendChunk }) => {
+  sendChunk('--- Turn 1: Requesting a Plan ---');
+  let { operation } = await ai.generate({
+    model: googleAI.model('deep-research-preview-04-2026'),
+    prompt: 'I want to research the history of artificial intelligence.',
+    config: {
+      collaborativePlanning: true,
+      thinkingSummaries: 'AUTO',
+      store: true,
+    },
+  });
+
+  if (!operation) throw new Error('No operation returned');
+
+  while (!operation.done) {
+    sendChunk('Turn 1 status: ' + operation.id);
+    operation = await ai.checkOperation(operation);
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  }
+
+  if (operation.error) {
+    throw new Error('Turn 1 failed: ' + operation.error.message);
+  }
+
+  const response1 = operation.output?.message?.content.find(
+    (p) => !!p.text
+  )?.text;
+  sendChunk('Proposed Plan: ' + response1);
+
+  sendChunk('\n--- Turn 2: Approving and Executing Plan ---');
+  const interactionId = operation.id;
+
+  let { operation: op2 } = await ai.generate({
+    model: googleAI.model('deep-research-max-preview-04-2026'),
+    prompt: 'Looks great! Proceed with the research.',
+    config: {
+      collaborativePlanning: false,
+      thinkingSummaries: 'AUTO',
+      previousInteractionId: interactionId,
+    },
+  });
+
+  if (!op2) throw new Error('No operation returned for turn 2');
+
+  while (!op2.done) {
+    sendChunk('Turn 2 status: ' + op2.id);
+    op2 = await ai.checkOperation(op2);
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  }
+
+  if (op2.error) {
+    throw new Error('Turn 2 failed: ' + op2.error.message);
+  }
+
+  return op2.output?.message?.content;
 });
 
 // Deep research cancel example
