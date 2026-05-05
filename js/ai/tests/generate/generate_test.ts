@@ -22,10 +22,12 @@ import { beforeEach, describe, it } from 'node:test';
 import {
   generate,
   generateStream,
+  normalizeMiddleware,
   toGenerateActionOptions,
   toGenerateRequest,
   type GenerateOptions,
 } from '../../src/generate.js';
+import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   defineModel,
   type ModelAction,
@@ -961,5 +963,66 @@ describe('generate', () => {
 
     const context = JSON.parse(response.text.substring('Context: '.length));
     assert.deepStrictEqual(context.val, ['A', 'B']);
+  });
+});
+
+describe('normalizeMiddleware', () => {
+  it('handles legacy functional middleware by wrapping it', async () => {
+    const registry = new Registry();
+    const legacyMw = async (req: any, next: any) => {
+      return next(req);
+    };
+
+    const refs = await normalizeMiddleware(registry, [legacyMw]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.match(refs[0].name, /^dynamic-middleware-\d+-/);
+
+    const registered = await registry.lookupValue<any>(
+      'middleware',
+      refs[0].name
+    );
+    assert.ok(registered);
+  });
+
+  it('handles MiddlewareRef objects created by calling middleware', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+
+    // Call it to get a MiddlewareRef
+    const refs = await normalizeMiddleware(registry, [myMw()]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].name, 'myMw');
+
+    const registered = await registry.lookupValue<any>('middleware', 'myMw');
+    assert.ok(registered);
+  });
+
+  it('handles MiddlewareRef objects', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+    registry.registerValue('middleware', 'myMw', myMw);
+
+    const refs = await normalizeMiddleware(registry, [{ name: 'myMw' }]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].name, 'myMw');
+  });
+
+  it('throws when uncalled middleware definition is passed as a function', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+
+    // Pass the definition function itself, which has .instantiate and .plugin
+    await assert.rejects(
+      async () => {
+        await normalizeMiddleware(registry, [myMw as any]);
+      },
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+      }
+    );
   });
 });

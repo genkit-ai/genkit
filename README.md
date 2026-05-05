@@ -144,7 +144,7 @@ Key features:
 
 - [**Join us on Discord**](https://discord.gg/qXt5zzQKpc) – Get help, share
 ideas, and chat with other developers.
-- [**Contribute on GitHub**](https://github.com/firebase/genkit/issues) – Report
+- [**Contribute on GitHub**](https://github.com/genkit-ai/genkit/issues) – Report
 bugs, suggest features, or explore the source code.
 - [**Contribute to Documentation and Samples**](https://github.com/genkit-ai/) – Report
 issues in Genkit's [documentation](https://github.com/genkit-ai/docsite), or contribute to the [samples](https://github.com/genkit-ai/samples).
@@ -157,4 +157,4 @@ Contributions to Genkit are welcome and highly appreciated! See our [Contributio
 
 ## Authors
 
-Genkit is built by [Firebase](https://firebase.google.com/) with contributions from the [Open Source Community](https://github.com/firebase/genkit/graphs/contributors).
+Genkit is built by [Firebase](https://firebase.google.com/) with contributions from the [Open Source Community](https://github.com/genkit-ai/genkit/graphs/contributors).

@@ -33,6 +33,7 @@ import {
   CreateInteractionRequest,
   ResponseModality,
 } from '../common/interaction-types.js';
+import { isKnownKey } from '../common/utils.js';
 import { createInteraction, lyriaPredict } from './client.js';
 import { fromLyriaResponse, toLyriaPredictRequest } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
@@ -154,11 +155,6 @@ const KNOWN_LYRIA_LEGACY_MODELS = {
 } as const;
 export type KnownLyriaLegacyModels = keyof typeof KNOWN_LYRIA_LEGACY_MODELS; // For autocorrect
 export type LyriaLegacyModelName = `lyria-002`;
-export function isLyriaLegacyModelName(
-  value?: string
-): value is LyriaLegacyModelName {
-  return 'lyria-002' === value;
-}
 
 const KNOWN_LYRIA_INTERACTIONS_MODELS = {
   'lyria-3-clip-preview': commonRef('lyria-3-clip-preview'),
@@ -183,13 +179,9 @@ export function model(
   config: ConfigSchema = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (isLyriaLegacyModelName(name)) {
-    return modelRef({
-      name: `vertexai/${name}`,
-      config,
-      configSchema: LyriaConfigSchema,
-      info: KNOWN_LYRIA_LEGACY_MODELS[name].info || { ...GENERIC_MODEL.info },
-    });
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
   }
 
   return modelRef({

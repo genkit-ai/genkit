@@ -305,8 +305,19 @@ func (a *ActionDef[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, i
 }
 
 // Desc returns a descriptor of the action with resolved schema references.
+// Schema references that cannot be resolved (e.g., the action is not yet registered,
+// or the referenced schema has not been defined) are returned as-is.
 func (a *ActionDef[In, Out, Stream]) Desc() api.ActionDesc {
-	return *a.desc
+	desc := *a.desc
+	if a.registry != nil {
+		if resolved, err := ResolveSchema(a.registry, desc.InputSchema); err == nil {
+			desc.InputSchema = resolved
+		}
+		if resolved, err := ResolveSchema(a.registry, desc.OutputSchema); err == nil {
+			desc.OutputSchema = resolved
+		}
+	}
+	return desc
 }
 
 // Register registers the action with the given registry.

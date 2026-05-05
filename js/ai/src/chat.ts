@@ -28,10 +28,12 @@ import {
   type GenerateResponseChunk,
   type GenerateStreamOptions,
   type GenerateStreamResponse,
-  type GenerationCommonConfigSchema,
+} from './generate.js';
+import {
+  GenerationCommonConfigSchema,
   type MessageData,
-  type Part,
-} from './index.js';
+} from './model-types.js';
+import { type Part } from './parts.js';
 import {
   runWithSession,
   type BaseGenerateOptions,

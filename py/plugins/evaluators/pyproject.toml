@@ -41,8 +41,8 @@ requires-python = ">=3.10"
 version = "0.5.2"
 
 [project.urls]
-"Homepage" = "https://github.com/firebase/genkit"
-"Repository" = "https://github.com/firebase/genkit/tree/main/py"
+"Homepage" = "https://github.com/genkit-ai/genkit"
+"Repository" = "https://github.com/genkit-ai/genkit/tree/main/py"
 
 [build-system]
 build-backend = "hatchling.build"

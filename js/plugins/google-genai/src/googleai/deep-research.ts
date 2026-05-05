@@ -32,7 +32,7 @@ import {
   InteractionTool,
   ResponseModality,
 } from '../common/interaction-types.js';
-import { cleanSchema } from '../common/utils.js';
+import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
   cancelInteraction,
   createInteraction,
@@ -141,9 +141,11 @@ export function model(
   config: DeepResearchConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
+
   return modelRef({
     name: `googleai/${name}`,
     config,

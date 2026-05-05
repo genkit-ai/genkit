@@ -45,9 +45,10 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from genkit._core._action import ActionKind, ActionMetadata
+from genkit._core._action import ActionKind
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
+from genkit._core._typing import ActionMetadata
 
 
 @pytest.fixture
@@ -66,6 +67,8 @@ async def asgi_client(mock_registry: MagicMock) -> AsyncIterator[AsyncClient]:
     Returns:
         An AsyncClient configured to make requests to the test ASGI app.
     """
+    mock_registry.initialize_all_plugins = AsyncMock(return_value=None)
+    mock_registry.list_actions = AsyncMock(return_value={})
     app = create_reflection_asgi_app(mock_registry)
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url='http://test')
@@ -86,27 +89,24 @@ async def test_health_check(asgi_client: AsyncClient) -> None:
 async def test_list_actions(asgi_client: AsyncClient, mock_registry: MagicMock) -> None:
     """Test that the actions list endpoint returns registered actions."""
 
-    # Mock the async list_actions method to return a list of ActionMetadata
-    async def mock_list_actions_async(allowed_kinds: list[ActionKind] | None = None) -> list[ActionMetadata]:
-        return [
-            ActionMetadata(
-                kind=ActionKind.CUSTOM,
+    async def mock_list_actions() -> dict[str, ActionMetadata]:
+        return {
+            '/custom/action1': ActionMetadata(
+                key='/custom/action1',
+                action_type=ActionKind.CUSTOM,
                 name='action1',
             )
-        ]
+        }
 
-    # Mock resolve_actions_by_kind to return empty dict (no registered actions in this test)
-    async def mock_resolve_actions_by_kind(kind: ActionKind) -> dict:
-        return {}
-
-    mock_registry.list_actions = mock_list_actions_async
-    mock_registry.resolve_actions_by_kind = mock_resolve_actions_by_kind
+    mock_registry.list_actions = mock_list_actions
     response = await asgi_client.get('/api/actions')
     assert response.status_code == 200
     result = response.json()
     assert '/custom/action1' in result
     assert result['/custom/action1']['name'] == 'action1'
-    assert result['/custom/action1']['type'] == 'custom'
+    assert result['/custom/action1']['key'] == '/custom/action1'
+    assert 'type' not in result['/custom/action1']
+    assert 'actionType' not in result['/custom/action1']
 
 
 @pytest.mark.asyncio
@@ -193,11 +193,11 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
         input: object = None,
         on_chunk: object | None = None,
         context: object | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> MagicMock:
         if on_trace_start:
-            on_trace_start('test_trace_id', 'test_span_id')
+            await on_trace_start('test_trace_id', 'test_span_id')
         return mock_output
 
     mock_action.run.side_effect = side_effect
@@ -272,11 +272,11 @@ async def test_run_action_streaming(
         input: object = None,
         on_chunk: object | None = None,
         context: object | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> MagicMock:
         if on_trace_start:
-            on_trace_start('stream_trace_id', 'stream_span_id')
+            await on_trace_start('stream_trace_id', 'stream_span_id')
         if on_chunk:
             on_chunk_fn = cast(Callable[[object], Awaitable[None]], on_chunk)
             await on_chunk_fn({'chunk': 1})
@@ -325,11 +325,11 @@ async def test_run_action_streaming_primitive_types(
         input: object = None,
         on_chunk: object | None = None,
         context: object | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> MagicMock:
         if on_trace_start:
-            on_trace_start('stream_trace_id', 'stream_span_id')
+            await on_trace_start('stream_trace_id', 'stream_span_id')
         if on_chunk:
             on_chunk_fn = cast(Callable[[object], None], on_chunk)
             for chunk in chunks:

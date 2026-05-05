@@ -19,6 +19,13 @@ import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 import {
+  fallback,
+  filesystem,
+  retry,
+  skills,
+  toolApproval,
+} from '@genkit-ai/middleware';
+import {
   VertexAIEvaluationMetricType,
   vertexAIEvaluation,
 } from '@genkit-ai/vertexai/evaluation';
@@ -172,5 +179,12 @@ export const ai = genkit({
         GenkitMetric.MALICIOUSNESS,
       ],
     }),
+
+    //middleware
+    fallback.plugin(),
+    filesystem.plugin(),
+    retry.plugin(),
+    skills.plugin(),
+    toolApproval.plugin(),
   ],
 });

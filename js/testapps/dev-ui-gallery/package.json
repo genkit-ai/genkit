@@ -28,6 +28,7 @@
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/middleware": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "firebase-admin": ">=12.2",
     "firebase-functions": "^6.3.1",

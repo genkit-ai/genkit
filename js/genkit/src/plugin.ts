@@ -14,15 +14,17 @@
  * limitations under the License.
  */
 
+import type { GenerateMiddleware } from '@genkit-ai/ai';
+import { type GenkitPluginV2 } from '@genkit-ai/ai';
 import { type ModelAction } from '@genkit-ai/ai/model';
 import {
   GenkitError,
-  type Action,
   type ActionMetadata,
-  type BackgroundAction,
+  type ResolvableAction,
 } from '@genkit-ai/core';
 import type { Genkit } from './genkit.js';
 import type { ActionType } from './registry.js';
+
 export { embedder, embedderActionMetadata } from '@genkit-ai/ai/embedder';
 export { evaluator } from '@genkit-ai/ai/evaluator';
 export {
@@ -32,27 +34,13 @@ export {
 } from '@genkit-ai/ai/model';
 export { reranker } from '@genkit-ai/ai/reranker';
 export { indexer, retriever } from '@genkit-ai/ai/retriever';
+export { type GenerateMiddleware, type GenkitPluginV2, type ResolvableAction };
+
 export interface PluginProvider {
   name: string;
   initializer: () => void | Promise<void>;
   resolver?: (action: ActionType, target: string) => Promise<void>;
   listActions?: () => Promise<ActionMetadata[]>;
-}
-
-export type ResolvableAction = Action | BackgroundAction;
-
-export interface GenkitPluginV2 {
-  version: 'v2';
-  name: string;
-  init?: () => ResolvableAction[] | Promise<ResolvableAction[]>;
-  resolve?: (
-    actionType: ActionType,
-    name: string
-  ) => ResolvableAction | undefined | Promise<ResolvableAction | undefined>;
-  list?: () => ActionMetadata[] | Promise<ActionMetadata[]>;
-
-  // A shortcut for resolving a model.
-  model(name: string): Promise<ModelAction>;
 }
 
 export type GenkitPlugin = (genkit: Genkit) => PluginProvider;
@@ -116,6 +104,13 @@ export class GenkitPluginV2Instance implements Required<GenkitPluginV2> {
       return [];
     }
     return this.plugin.list();
+  }
+
+  middleware(): GenerateMiddleware<any, any>[] {
+    if (!this.plugin.middleware) {
+      return [];
+    }
+    return this.plugin.middleware();
   }
 
   resolve(

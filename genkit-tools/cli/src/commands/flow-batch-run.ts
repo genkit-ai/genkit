@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
+import * as clc from 'colorette';
 import { Command } from 'commander';
 import { readFile, writeFile } from 'fs/promises';
 import { runWithManager } from '../utils/manager-utils';
@@ -43,8 +45,31 @@ export const flowBatchRun = new Command('flow:batchRun')
       fileName: string,
       options: FlowBatchRunOptions
     ) => {
-      await runWithManager(await findProjectRoot(), async (manager) => {
-        const inputData = JSON.parse(await readFile(fileName, 'utf8')) as any[];
+      const dashDashIndex = process.argv.indexOf('--');
+      let runtimeCommand: string[] | undefined;
+      let actualFileName: string | undefined = fileName;
+
+      // Commander removes the '--' separator from flowBatchRun.args.
+      // We find '--' in process.argv to determine which arguments belong to the runtime command.
+      if (dashDashIndex !== -1) {
+        const numArgsAfterDashDash = process.argv.length - dashDashIndex - 1;
+        runtimeCommand = flowBatchRun.args.slice(-numArgsAfterDashDash);
+        const commandArgs = flowBatchRun.args.slice(
+          0,
+          flowBatchRun.args.length - numArgsAfterDashDash
+        );
+        actualFileName = commandArgs[1];
+      }
+
+      const projectRoot = await findProjectRoot();
+
+      const runAction = async (manager: BaseRuntimeManager) => {
+        if (!actualFileName) {
+          throw new Error('Missing required argument <inputFileName>');
+        }
+        const inputData = JSON.parse(
+          await readFile(actualFileName, 'utf8')
+        ) as any[];
         let input = inputData;
         if (inputData.length === 0) {
           throw new Error('batch input data must be a non-empty array');
@@ -56,7 +81,7 @@ export const flowBatchRun = new Command('flow:batchRun')
 
         const outputValues = [] as { input: any; output: any }[];
         for (const data of input) {
-          logger.info(`Running '/flow/${flowName}'...`);
+          logger.debug(`Running '/flow/${flowName}'...`);
           const response = await manager.runAction({
             key: `/flow/${flowName}`,
             input: data,
@@ -65,9 +90,19 @@ export const flowBatchRun = new Command('flow:batchRun')
               ? { batchRun: options.label }
               : undefined,
           });
-          logger.info(
-            'Result:\n' + JSON.stringify(response.result, undefined, '  ')
-          );
+
+          logger.info(clc.green('Result:'));
+          const resultOutput =
+            typeof response.result === 'string'
+              ? response.result
+              : JSON.stringify(response.result, undefined, '  ');
+          logger.info(resultOutput);
+          if (response.telemetry?.traceId) {
+            logger.info(
+              `${clc.cyan('Trace ID:')} ${response.telemetry.traceId}`
+            );
+          }
+
           outputValues.push({
             input: data,
             output: response.result,
@@ -80,6 +115,8 @@ export const flowBatchRun = new Command('flow:batchRun')
             JSON.stringify(outputValues, undefined, ' ')
           );
         }
-      });
+      };
+
+      await runWithManager(projectRoot, runAction, { runtimeCommand });
     }
   );

@@ -26,6 +26,7 @@ const EXPORTED_TYPE_MODULES = [
   '../common/src/types/embedder.ts',
   '../common/src/types/evaluator.ts',
   '../common/src/types/error.ts',
+  '../common/src/types/middleware.ts',
   '../common/src/types/model.ts',
   '../common/src/types/parts.ts',
   '../common/src/types/reranker.ts',

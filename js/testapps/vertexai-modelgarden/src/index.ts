@@ -62,6 +62,33 @@ export const anthropicSonnet4Model = ai.defineFlow(
   }
 );
 
+export const anthropicSonnet45ThinkingModel = ai.defineFlow(
+  {
+    name: 'claude-sonnet-4-5 - thinking',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-4-5'),
+      config: {
+        location: 'us-east5',
+        thinking: {
+          enabled: true,
+          budgetTokens: 2000,
+        },
+      },
+      prompt: `You are a helpful assistant. Please think step-by-step and solve for x: 3x^2 - 14x + 8 = 0. Show all of your reasoning clearly.`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
 export const anthropicSonnet46Model = ai.defineFlow(
   {
     name: 'claude-sonnet-4-6 - basic',
@@ -76,6 +103,36 @@ export const anthropicSonnet46Model = ai.defineFlow(
         location: 'global',
       },
       prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicOpus47Model = ai.defineFlow(
+  {
+    name: 'claude-opus-4-7 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-opus-4-7'),
+      config: {
+        location: 'global',
+        thinking: {
+          adaptive: true,
+          display: 'summarized',
+        },
+        output_config: {
+          effort: 'xhigh',
+        },
+      },
+      prompt: `You are a helpful assistant. Write a Sonnet about a sunny day`,
     });
 
     for await (const chunk of stream) {

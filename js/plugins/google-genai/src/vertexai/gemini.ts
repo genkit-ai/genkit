@@ -36,6 +36,7 @@ import {
   toGeminiSystemInstruction,
   toGeminiTool,
 } from '../common/converters.js';
+import { isKnownKey } from '../common/utils.js';
 import {
   generateContent,
   generateContentStream,
@@ -293,6 +294,14 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     })
     .passthrough()
     .optional(),
+  payGo: z
+    .enum(['priority', 'priority-only', 'flex', 'flex-only'])
+    .describe(
+      'PayGo consumption options. Priority provides more consistent performance than Standard PayGo. ' +
+        'Flex is a cost-effective option for non-critical workloads. ' +
+        'The "-only" options use only PayGo and no Provisioned Throughput.'
+    )
+    .optional(),
   thinkingConfig: z
     .object({
       includeThoughts: z
@@ -474,6 +483,10 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
+
   if (isImageModelName(name)) {
     return modelRef({
       name: `vertexai/${name}`,
@@ -594,6 +607,7 @@ export function defineModel(
         location,
         safetySettings,
         labels: labelsFromConfig,
+        payGo,
         ...restOfConfig
       } = requestConfig;
 
@@ -601,6 +615,25 @@ export function defineModel(
         location,
         apiKey: apiKeyFromConfig,
       });
+
+      if (payGo) {
+        const payGoHeaders: Record<string, string> = {};
+        if (payGo === 'priority') {
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'priority';
+        } else if (payGo === 'priority-only') {
+          payGoHeaders['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'priority';
+        } else if (payGo === 'flex') {
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
+        } else if (payGo === 'flex-only') {
+          payGoHeaders['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
+        }
+        clientOpt.customHeaders = {
+          ...clientOpt.customHeaders,
+          ...payGoHeaders,
+        };
+      }
 
       const labels = toGeminiLabels(labelsFromConfig);
 

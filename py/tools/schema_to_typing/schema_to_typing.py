@@ -131,6 +131,31 @@ def _models_allowing_extra(schema: dict) -> set[str]:
     return result
 
 
+def _typed_map_aliases(defs: dict) -> dict[str, str]:
+    """Inline object schemas with typed scalar ``additionalProperties`` -> Python dict alias.
+
+    e.g. ``ReflectionRunActionParams.telemetryLabels``:
+      ``{type: object, additionalProperties: {type: string}}`` -> ``dict[str, str]``.
+
+    Emitting these as type aliases (mirroring ``Metadata`` / ``Custom``) keeps the
+    symbol exported and importable while letting callers pass plain Python dicts —
+    a class with no fields and ``extra='forbid'`` would reject every key on the
+    Dev UI's ``{'genkitx:ignore-trace': 'true'}`` payload.
+    """
+
+    result: dict[str, str] = {}
+    for name, defn in defs.items():
+        if not isinstance(defn, dict) or defn.get('type') != 'object':
+            continue
+        ap = defn.get('additionalProperties')
+        if not isinstance(ap, dict):
+            continue
+        ap_type = ap.get('type')
+        if isinstance(ap_type, str) and ap_type in PRIM:
+            result[name] = f'dict[str, {PRIM[ap_type]}]'
+    return result
+
+
 def _extract_inline_classes(schema: dict) -> dict[str, dict]:
     """Extract inline object schemas to named classes (e.g. Score.details -> Details)."""
     result = {}
@@ -289,6 +314,7 @@ def generate(schema_path: Path, _out: Path) -> str:
     defs = dict(schema.get('$defs', {}))
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
     allow_extra = _models_allowing_extra(schema)
+    typed_map_aliases = _typed_map_aliases(defs)
     out = [HEADER.format(year=datetime.now().year, schema_name=schema_path.name)]
     emitted = set()
 
@@ -317,6 +343,13 @@ def generate(schema_path: Path, _out: Path) -> str:
         elif name == 'Custom':
             out.extend([
                 'Custom = dict[str, Any]  # type alias for flexible custom data',
+                '',
+            ])
+        elif name in typed_map_aliases:
+            # Typed string-keyed maps (e.g. TelemetryLabels: dict[str, str]). Emitting as a
+            # type alias keeps the symbol exported and lets callers pass plain dicts.
+            out.extend([
+                f'{class_name} = {typed_map_aliases[name]}  # type alias for {name.lower()} (typed string map)',
                 '',
             ])
         elif name in TRANSFORMATIONS and (cfg := TRANSFORMATIONS[name]).get('omit'):

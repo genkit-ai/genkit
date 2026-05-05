@@ -32,8 +32,20 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 )
+
+// genkitCtxKey is the context key for the Genkit instance.
+var genkitCtxKey = base.NewContextKey[*Genkit]()
+
+// FromContext returns the [*Genkit] instance stored in the context.
+// This is set automatically by [Generate] and related functions.
+// Middleware implementations can use this to access the Genkit instance
+// during generation.
+func FromContext(ctx context.Context) *Genkit {
+	return genkitCtxKey.FromContext(ctx)
+}
 
 // Genkit encapsulates a Genkit instance, providing access to its registry,
 // configuration, and core functionalities. It serves as the central hub for
@@ -221,6 +233,16 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 			action.Register(r)
 		}
 		r.RegisterPlugin(plugin.Name(), plugin)
+
+		if mp, ok := plugin.(ai.MiddlewarePlugin); ok {
+			descs, err := mp.Middlewares(ctx)
+			if err != nil {
+				panic(fmt.Errorf("genkit.Init: plugin %q Middlewares failed: %w", plugin.Name(), err))
+			}
+			for _, d := range descs {
+				d.Register(r)
+			}
+		}
 	}
 
 	ai.ConfigureFormats(r)
@@ -242,14 +264,20 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
 
-		go func() {
-			if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
-				return
-			}
-			if err := <-errCh; err != nil {
-				slog.Error("reflection server error", "err", err)
-			}
-		}()
+		if v2URL := os.Getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
+			// V2: connect to the CLI's WebSocket server.
+			go startReflectionServerV2(ctx, g, reflectionServerV2Options{URL: v2URL}, errCh, serverStartCh)
+		} else {
+			// V1: start an HTTP reflection server.
+			go func() {
+				if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
+					return
+				}
+				if err := <-errCh; err != nil {
+					slog.Error("reflection server error", "err", err)
+				}
+			}()
+		}
 
 		select {
 		case err := <-errCh:
@@ -680,6 +708,68 @@ func LookupTool(g *Genkit, name string) ai.Tool {
 	return ai.LookupTool(g.reg, name)
 }
 
+// DefineMiddleware registers a middleware descriptor with the Genkit instance
+// and returns the resulting [*ai.MiddlewareDesc]. Registered middleware is
+// surfaced to the Dev UI and addressable by name for cross-runtime dispatch.
+//
+// This is the path for application code that declares its own middleware
+// directly. Plugins should instead construct descriptors with [ai.NewMiddleware]
+// (no registration) and return them from [ai.MiddlewarePlugin.Middlewares];
+// [Init] registers those descriptors during plugin setup.
+//
+// The `description` is a human-readable explanation shown in the Dev UI. The
+// `prototype` is a value of a type that implements [ai.Middleware]. Its
+// [ai.Middleware.Name] method supplies the registered name, and its fields
+// (both exported JSON config and unexported plugin-level state) are captured
+// by a value-copy inside the descriptor so JSON-dispatched invocations
+// preserve prototype state across calls.
+//
+// For pure Go use, registration is not strictly required: passing a middleware
+// config directly to [ai.WithUse] invokes its [ai.Middleware.New] method on
+// the local fast path without a registry lookup. Registration is what makes
+// the middleware visible to the Dev UI and callable from other runtimes. For
+// ad-hoc one-off middleware that doesn't need Dev UI visibility, use
+// [ai.MiddlewareFunc] instead of defining a type.
+//
+// Example:
+//
+//	type Trace struct {
+//		Label string `json:"label,omitempty"`
+//	}
+//
+//	func (Trace) Name() string { return "mine/trace" }
+//
+//	func (t Trace) New(ctx context.Context) (*ai.Hooks, error) {
+//		return &ai.Hooks{
+//			WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
+//				start := time.Now()
+//				resp, err := next(ctx, p)
+//				log.Printf("[%s] model call took %s", t.Label, time.Since(start))
+//				return resp, err
+//			},
+//		}, nil
+//	}
+//
+//	// Register so it appears in the Dev UI and can be called by name:
+//	genkit.DefineMiddleware(g, "logs model call latency", Trace{})
+//
+//	// Use it per-call:
+//	resp, err := genkit.Generate(ctx, g,
+//		ai.WithPrompt("hello"),
+//		ai.WithUse(Trace{Label: "debug"}),
+//	)
+func DefineMiddleware[M ai.Middleware](g *Genkit, description string, prototype M) *ai.MiddlewareDesc {
+	return ai.DefineMiddleware(g.reg, description, prototype)
+}
+
+// LookupMiddleware retrieves a registered middleware descriptor by its name.
+// It returns the descriptor if found, or `nil` if no middleware with the
+// given name is registered (e.g., via [DefineMiddleware] or through a
+// plugin's [ai.MiddlewarePlugin.Middlewares] method).
+func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
+	return ai.LookupMiddleware(g.reg, name)
+}
+
 // DefinePrompt defines a prompt programmatically, registers it as a [core.Action]
 // of type Prompt, and returns an executable [ai.Prompt].
 //
@@ -957,7 +1047,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 //	fmt.Println(resp.Text())
 func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
-	return ai.Generate(ctx, g.reg, opts...)
+	return ai.Generate(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateStream generates a model response and streams the output.
@@ -989,7 +1079,7 @@ func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.Mo
 //		}
 //	}
 func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.ModelStreamValue, error] {
-	return ai.GenerateStream(ctx, g.reg, opts...)
+	return ai.GenerateStream(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateOperation performs a model generation request using a flexible set of options
@@ -1026,7 +1116,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 //	// Get the result of the operation
 //	fmt.Println(op.Output.Text())
 func GenerateOperation(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelOperation, error) {
-	return ai.GenerateOperation(ctx, g.reg, opts...)
+	return ai.GenerateOperation(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // CheckModelOperation checks the status of a background model operation by looking up the model and calling its Check method.
@@ -1051,7 +1141,7 @@ func CheckModelOperation(ctx context.Context, g *Genkit, op *ai.ModelOperation) 
 //	}
 //	fmt.Println(joke)
 func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (string, error) {
-	return ai.GenerateText(ctx, g.reg, opts...)
+	return ai.GenerateText(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateData performs a model generation request, expecting structured output
@@ -1080,7 +1170,7 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 //
 //	log.Printf("Book: %+v\n", book) // Output: Book: {Title:The Hitchhiker's Guide to the Galaxy Author:Douglas Adams Year:1979}
 func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*Out, *ai.ModelResponse, error) {
-	return ai.GenerateData[Out](ctx, g.reg, opts...)
+	return ai.GenerateData[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateDataStream generates a model response with streaming and returns strongly-typed output.
@@ -1119,7 +1209,7 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 //		}
 //	}
 func GenerateDataStream[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.StreamValue[Out, Out], error] {
-	return ai.GenerateDataStream[Out](ctx, g.reg, opts...)
+	return ai.GenerateDataStream[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // Retrieve performs a document retrieval request using a flexible set of options

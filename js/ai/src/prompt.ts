@@ -18,6 +18,7 @@ import {
   GenkitError,
   defineActionAsync,
   getContext,
+  isAction,
   stripUndefinedProps,
   type Action,
   type ActionAsyncParams,
@@ -49,6 +50,7 @@ import {
 import { Message } from './message.js';
 import {
   GenerateActionOptionsSchema,
+  MiddlewareRef,
   type GenerateActionOptions,
   type GenerateRequest,
   type GenerateRequestSchema,
@@ -128,7 +130,7 @@ export interface PromptConfig<
   metadata?: Record<string, any>;
   tools?: ToolArgument[];
   toolChoice?: ToolChoice;
-  use?: ModelMiddleware[];
+  use?: (ModelMiddleware | MiddlewareRef)[];
   context?: ActionContext;
 }
 
@@ -439,6 +441,12 @@ function promptMetadata(options: PromptConfig<any, any, any>) {
         ? options.name.split('.')[0]
         : options.name,
       model: modelName(options.model),
+      tools: (options.tools ?? []).map(toolName).filter(Boolean) as string[],
+      toolChoice: options.toolChoice,
+      use: (options.use ?? []).map(toMiddlewareMetadata).filter(Boolean) as {
+        name: string;
+        config?: any;
+      }[],
     },
     type: 'prompt',
   };
@@ -679,6 +687,35 @@ function modelName(
   return (modelArg as ModelAction).__action.name;
 }
 
+function toolName(tool: ToolArgument): string | undefined {
+  if (typeof tool === 'string') {
+    return tool;
+  }
+  if (isAction(tool)) {
+    return tool.__action.name;
+  }
+  if (isExecutablePrompt(tool)) {
+    return tool.ref.name;
+  }
+  return undefined;
+}
+
+function toMiddlewareMetadata(
+  middleware: any
+): { name: string; config?: any } | undefined {
+  if (typeof middleware === 'string') {
+    return { name: middleware };
+  }
+  if (
+    typeof middleware === 'object' &&
+    middleware !== null &&
+    middleware.name
+  ) {
+    return { name: middleware.name, config: middleware.config };
+  }
+  return undefined;
+}
+
 function normalizeParts(parts: string | Part | Part[]): Part[] {
   if (Array.isArray(parts)) return parts;
   if (typeof parts === 'string') {
@@ -838,6 +875,13 @@ function loadPrompt(
         type: 'prompt',
         prompt: {
           ...promptMetadata,
+          use: (Array.isArray(promptMetadata.raw?.['use'])
+            ? promptMetadata.raw?.['use']
+            : []
+          )
+            .map(toMiddlewareMetadata)
+            .filter(Boolean),
+          toolChoice: promptMetadata.raw?.['toolChoice'],
           template: parsedPrompt.template,
         },
       };
@@ -862,6 +906,7 @@ function loadPrompt(
         maxTurns: promptMetadata.raw?.['maxTurns'],
         toolChoice: promptMetadata.raw?.['toolChoice'],
         returnToolRequests: promptMetadata.raw?.['returnToolRequests'],
+        use: promptMetadata.raw?.['use'],
         messages: parsedPrompt.template,
       };
     })
@@ -875,7 +920,7 @@ export async function prompt<
 >(
   registry: Registry,
   name: string,
-  options?: { variant?: string; dir?: string }
+  options?: { variant?: string; dir?: string | null }
 ): Promise<ExecutablePrompt<I, O, CustomOptions>> {
   return await lookupPrompt<I, O, CustomOptions>(
     registry,

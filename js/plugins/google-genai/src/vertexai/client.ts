@@ -337,12 +337,14 @@ function getAbortSignal(clientOptions: ClientOptions): AbortSignal | undefined {
 }
 
 async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
+  const customHeaders = clientOptions.customHeaders || {};
   if (clientOptions.kind == 'express') {
     const headers: HeadersInit = {
       'x-goog-api-key': calculateApiKey(clientOptions.apiKey, undefined),
       'Content-Type': 'application/json',
       'X-Goog-Api-Client': getGenkitClientHeader(),
       'User-Agent': getGenkitClientHeader(),
+      ...customHeaders,
     };
     return headers;
   } else {
@@ -353,6 +355,7 @@ async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
       'Content-Type': 'application/json',
       'X-Goog-Api-Client': getGenkitClientHeader(),
       'User-Agent': getGenkitClientHeader(),
+      ...customHeaders,
     };
     if (clientOptions.apiKey) {
       headers['x-goog-api-key'] = clientOptions.apiKey;

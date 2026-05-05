@@ -23,7 +23,7 @@ import json
 import os
 import signal
 import threading
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,7 +37,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
@@ -47,16 +47,6 @@ from genkit._core._registry import Registry
 logger = get_logger(__name__)
 
 LifecycleHook = Callable[[], Awaitable[None]]
-
-
-def _encode_reflection_json(payload: dict[str, Any]) -> bytes:
-    """Encode reflection JSON for Dev UI; tolerate non-JSON-native metadata values."""
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        allow_nan=False,
-        default=str,
-    ).encode('utf-8')
 
 
 @dataclass
@@ -84,7 +74,7 @@ class ActionRunner:
     trace_id: str | None = None
     span_id: str | None = None
 
-    def on_trace_start(self, tid: str, sid: str) -> None:
+    async def on_trace_start(self, tid: str, sid: str) -> None:
         self.trace_id, self.span_id = tid, sid
         if task := asyncio.current_task():
             self.active_actions[tid] = task
@@ -150,63 +140,6 @@ class ActionRunner:
         return StreamingResponse(gen(), media_type='text/plain' if self.stream else 'application/json', headers=headers)
 
 
-async def _get_actions_payload(registry: Registry) -> dict[str, dict[str, Any]]:
-    actions: dict[str, dict[str, Any]] = {}
-
-    for kind in ActionKind.__members__.values():
-        for name, action in (await registry.resolve_actions_by_kind(kind)).items():
-            key = f'/{kind}/{name}'
-            actions[key] = {
-                'key': key,
-                'name': action.name,
-                'type': action.kind,
-                'description': action.description,
-                'inputSchema': action.input_schema,
-                'outputSchema': action.output_schema,
-                'metadata': action.metadata,
-            }
-
-    plugin_action_list: list[Any] = []
-    try:
-        plugin_action_list = await registry.list_actions() or []
-    except Exception as e:
-        logger.warning(
-            'registry.list_actions failed; continuing with registered actions only: %s',
-            e,
-            exc_info=True,
-        )
-
-    for meta in plugin_action_list:
-        try:
-            key = f'/{meta.kind}/{meta.name}'
-        except Exception as exc:
-            logger.warning('Skipping invalid plugin metadata: %s', exc)
-            continue
-
-        advertised = {
-            'key': key,
-            'name': meta.name,
-            'type': meta.kind,
-            'description': getattr(meta, 'description', None),
-            'inputSchema': getattr(meta, 'input_json_schema', None),
-            'outputSchema': getattr(meta, 'output_json_schema', None),
-            'metadata': getattr(meta, 'metadata', None),
-        }
-
-        if key not in actions:
-            actions[key] = advertised
-        else:
-            existing = actions[key]
-            for f in ('description', 'inputSchema', 'outputSchema'):
-                if not existing.get(f) and advertised.get(f):
-                    existing[f] = advertised[f]
-            if isinstance(existing.get('metadata'), dict) and isinstance(advertised.get('metadata'), dict):
-                # isinstance checks above guarantee both are dicts, but ty can't narrow .get() results
-                existing['metadata'] = {**advertised['metadata'], **existing['metadata']}  # ty: ignore[invalid-argument-type]
-
-    return actions
-
-
 def create_reflection_asgi_app(
     registry: Registry,
     on_startup: LifecycleHook | None = None,
@@ -216,6 +149,7 @@ def create_reflection_asgi_app(
     active_actions: dict[str, asyncio.Task[Any]] = {}
 
     async def health(_: Request) -> JSONResponse:
+        await registry.initialize_all_plugins()
         return JSONResponse({'status': 'OK'})
 
     async def terminate(_: Request) -> JSONResponse:
@@ -225,8 +159,22 @@ def create_reflection_asgi_app(
 
     async def actions(_: Request) -> Response:
         try:
-            payload = await _get_actions_payload(registry)
-            body = _encode_reflection_json(payload)
+            actions_map = await registry.list_actions()
+
+            def omit_none(payload: dict[str, Any]) -> dict[str, Any]:
+                return {key: value for key, value in payload.items() if value is not None}
+
+            response: dict[str, dict[str, Any]] = {}
+            for key, action in actions_map.items():
+                response[key] = omit_none({
+                    'key': key,
+                    'name': action.name,
+                    'description': action.description,
+                    'metadata': action.metadata,
+                    'inputSchema': action.input_schema or action.input_json_schema,
+                    'outputSchema': action.output_schema or action.output_json_schema,
+                })
+            return JSONResponse(response, headers={'x-genkit-version': version})
         except Exception:
             logger.exception('Reflection /api/actions failed')
             return JSONResponse(
@@ -234,11 +182,6 @@ def create_reflection_asgi_app(
                 status_code=500,
                 headers={'x-genkit-version': version},
             )
-        return Response(
-            content=body,
-            media_type='application/json',
-            headers={'x-genkit-version': version},
-        )
 
     async def values(req: Request) -> Response:
         raw = req.query_params.get('type')
@@ -268,7 +211,7 @@ def create_reflection_asgi_app(
                     else:
                         serialized[key] = val
                 raw_values = serialized
-            body = _encode_reflection_json(raw_values)
+            return JSONResponse(raw_values, headers={'x-genkit-version': version})
         except Exception:
             logger.exception('Reflection /api/values failed')
             return JSONResponse(
@@ -276,11 +219,6 @@ def create_reflection_asgi_app(
                 status_code=500,
                 headers={'x-genkit-version': version},
             )
-        return Response(
-            content=body,
-            media_type='application/json',
-            headers={'x-genkit-version': version},
-        )
 
     async def envs(_: Request) -> JSONResponse:
         return JSONResponse(['dev'])
@@ -312,7 +250,9 @@ def create_reflection_asgi_app(
         return await runner.stream_response(version)
 
     @asynccontextmanager
-    async def lifespan(_: Starlette) -> AsyncGenerator[None, None]:
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        # Eagerly initialize plugins so init()-registered actions exist before handling traffic.
+        await registry.initialize_all_plugins()
         if on_startup is not None:
             await on_startup()
         yield

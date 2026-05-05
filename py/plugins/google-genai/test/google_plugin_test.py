@@ -158,15 +158,15 @@ async def test_googleai_initialize(mock_client_cls: MagicMock) -> None:
 
     # init returns known models and embedders
     assert len(result) > 0, 'Should initialize with known models and embedders'
-    assert all(hasattr(action, 'kind') for action in result), 'All actions should have a kind'
+    assert all(action.action_type is not None for action in result), 'All actions should have an action_type'
     assert all(hasattr(action, 'name') for action in result), 'All actions should have a name'
     assert all(action.name.startswith('googleai/') for action in result), (
         "All actions should be namespaced with 'googleai/'"
     )
 
     # Verify we have both models and embedders
-    model_actions = [a for a in result if a.kind == ActionKind.MODEL]
-    embedder_actions = [a for a in result if a.kind == ActionKind.EMBEDDER]
+    model_actions = [a for a in result if a.action_type == ActionKind.MODEL]
+    embedder_actions = [a for a in result if a.action_type == ActionKind.EMBEDDER]
     assert len(model_actions) > 0, 'Should have at least one model'
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
@@ -286,7 +286,7 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     # Check Embedder
     action2 = next(a for a in result if a.name == googleai_name('gemini-embedding-001'))
     assert action2 is not None
-    assert action2.kind == ActionKind.EMBEDDER
+    assert action2.action_type == ActionKind.EMBEDDER
 
     # Check TTS
     action3 = next(a for a in result if a.name == googleai_name('gemini-2.0-flash-tts'))
@@ -592,7 +592,7 @@ async def test_vertexai_initialize(vertexai_plugin_instance: VertexAI) -> None:
     result = await plugin.list_actions()
 
     assert len(result) > 0, 'Should initialize with known models and embedders'
-    assert all(hasattr(action, 'kind') for action in result), 'All actions should have a kind'
+    assert all(action.action_type is not None for action in result), 'All actions should have an action_type'
 
     # ... (rest of test unchanged)
 
@@ -602,8 +602,8 @@ async def test_vertexai_initialize(vertexai_plugin_instance: VertexAI) -> None:
     )
 
     # Verify we have both models and embedders
-    model_actions = [a for a in result if a.kind == ActionKind.MODEL]
-    embedder_actions = [a for a in result if a.kind == ActionKind.EMBEDDER]
+    model_actions = [a for a in result if a.action_type == ActionKind.MODEL]
+    embedder_actions = [a for a in result if a.action_type == ActionKind.EMBEDDER]
     assert len(model_actions) > 0, 'Should have at least one model'
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
@@ -795,7 +795,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     # Verify Imagen
     action3 = next(a for a in result if a.name == vertexai_name('imagen-3.0-generate-001'))
     assert action3 is not None
-    assert action3.kind == ActionKind.MODEL
+    assert action3.action_type == ActionKind.MODEL
 
     # Verify Veo
     action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))

@@ -26,11 +26,11 @@ from typing import Any
 import pytest
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Plugin, Role, TextPart, middleware_plugin
-from genkit._core._action import Action, ActionMetadata, ActionRunContext
+from genkit._core._action import Action, ActionRunContext
 from genkit._core._middleware._base import BaseMiddleware
 from genkit._core._model import ModelHookParams, ModelRequest
 from genkit._core._registry import ActionKind
-from genkit._core._typing import FinishReason, MiddlewareRef
+from genkit._core._typing import ActionMetadata, FinishReason, MiddlewareRef
 from genkit.middleware import MiddlewareDesc, new_middleware
 
 
@@ -67,7 +67,7 @@ class AsyncResolveOnlyPlugin(Plugin):
         """List available actions."""
         return [
             ActionMetadata(
-                kind=ActionKind.MODEL,
+                action_type=ActionKind.MODEL,
                 name=f'{self.name}/lazy-model',
             )
         ]
@@ -106,7 +106,7 @@ class AsyncInitPlugin(Plugin):
         """List available actions."""
         return [
             ActionMetadata(
-                kind=ActionKind.MODEL,
+                action_type=ActionKind.MODEL,
                 name=f'{self.name}/init-model',
             )
         ]

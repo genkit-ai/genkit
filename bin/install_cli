@@ -44,7 +44,7 @@
 #   https://genkit.dev/docs/devtools
 #
 # Please report bugs / issues with this script on GitHub.
-#   https://github.com/firebase/genkit
+#   https://github.com/genkit-ai/genkit
 #
 
 : ==========================================
@@ -308,7 +308,7 @@ esac
 # and close.
 if [[ -z "$MACHINE" ]]; then
     echo "Your operating system is not supported, if you think it should be please file a bug."
-    echo "https://github.com/firebase/genkit/"
+    echo "https://github.com/genkit-ai/genkit/"
     echo "-- All done!"
 
     send_analytics_event "missing_platform_${UNAME}_${ARCH}"
@@ -324,7 +324,7 @@ echo "-- Downloading binary from $DOWNLOAD_URL"
 if ! curl -o "/tmp/genkit_standalone.tmp" --fail -L --progress-bar "$DOWNLOAD_URL"; then
     echo "Something went wrong. Failed to download binary from $DOWNLOAD_URL"
     echo "Please file a bug with your system information on GitHub."
-    echo "https://github.com/firebase/genkit/"
+    echo "https://github.com/genkit-ai/genkit/"
 
     send_analytics_event download_failure
 
@@ -379,7 +379,7 @@ VERSION=$("$GENKIT_BINARY" --version 2>"$VERBOSE_STDERR")
 if [[ -z "$VERSION" ]]; then
     echo "Something went wrong, genkit has not been installed."
     echo "Please file a bug with your system information on GitHub."
-    echo "https://github.com/firebase/genkit/"
+    echo "https://github.com/genkit-ai/genkit/"
     echo "-- All done!"
 
     send_analytics_event binary_check_failure
