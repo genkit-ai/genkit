@@ -613,7 +613,7 @@ export function defineCustomAgent<
     {
       name: `${config.name}__abort`,
       description: `Aborts ${config.name} agent by snapshotId. Returns the previous status of the snapshot before it was set to 'aborted', or undefined if the snapshot was not found.`,
-      actionType: 'agent',
+      actionType: 'agent-abort',
       inputSchema: z.string(),
       outputSchema: z.string().optional(),
     },
