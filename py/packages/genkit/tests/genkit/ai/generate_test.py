@@ -15,7 +15,7 @@ import yaml
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelResponse, ModelResponseChunk
-from genkit._ai._generate import generate_action
+from genkit._ai._generate import _augment_with_context, generate_action
 from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._testing import (
     ProgrammableModel,
@@ -151,6 +151,152 @@ async def test_simulates_doc_grounding(
                     metadata={'purpose': 'context'},
                 )
             ),
+        ],
+    )
+
+
+# Unit tests for the private ``_augment_with_context`` helper exercised end-to-end by
+# ``test_simulates_doc_grounding`` above. These pin down the helper's edge cases without
+# going through the full generate pipeline.
+def test_augment_with_context_ignores_no_docs() -> None:
+    """No docs -> request returned unchanged (same object identity)."""
+    req = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+        ],
+    )
+
+    transformed_req = _augment_with_context(req)
+
+    assert transformed_req is req
+
+
+def test_augment_with_context_adds_docs_as_context() -> None:
+    """Docs are injected as a context-purpose part appended to the last user message."""
+    req = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))]),
+        ],
+        docs=[
+            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+            Document(content=[DocumentPart(root=TextPart(text='doc content 2'))]),
+        ],
+    )
+
+    transformed_req = _augment_with_context(req)
+
+    assert transformed_req == ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='hi')),
+                    Part(
+                        root=TextPart(
+                            text='\n\nUse the following information to complete '
+                            + 'your task:\n\n'
+                            + '- [0]: doc content 1\n'
+                            + '- [1]: doc content 2\n\n',
+                            metadata={'purpose': 'context'},
+                        )
+                    ),
+                ],
+            )
+        ],
+        docs=[
+            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+            Document(content=[DocumentPart(root=TextPart(text='doc content 2'))]),
+        ],
+    )
+
+
+def test_augment_with_context_does_not_mutate_input() -> None:
+    """Input request and its messages are not mutated; helper returns a deepcopy."""
+    original_user_msg = Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])
+    req = ModelRequest(
+        messages=[original_user_msg],
+        docs=[Document(content=[DocumentPart(root=TextPart(text='doc content 1'))])],
+    )
+    original_content_len = len(original_user_msg.content)
+
+    transformed_req = _augment_with_context(req)
+
+    assert transformed_req is not req
+    assert transformed_req.messages[0] is not original_user_msg
+    assert len(original_user_msg.content) == original_content_len  # original untouched
+    assert len(transformed_req.messages[0].content) == original_content_len + 1
+
+
+def test_augment_with_context_should_not_modify_non_pending_part() -> None:
+    """An existing non-pending context part means the request is returned unchanged."""
+    req = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(
+                        root=TextPart(
+                            text='this is already context',
+                            metadata={'purpose': 'context'},
+                        )
+                    ),
+                    Part(root=TextPart(text='hi')),
+                ],
+            ),
+        ],
+        docs=[
+            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+        ],
+    )
+
+    transformed_req = _augment_with_context(req)
+
+    assert transformed_req is req
+
+
+def test_augment_with_context_with_purpose_part() -> None:
+    """A pending purpose=context part is replaced with the rendered docs context."""
+    req = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(
+                        root=TextPart(
+                            text='insert context here',
+                            metadata={'purpose': 'context', 'pending': True},
+                        )
+                    ),
+                    Part(root=TextPart(text='hi')),
+                ],
+            ),
+        ],
+        docs=[
+            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
+        ],
+    )
+
+    transformed_req = _augment_with_context(req)
+
+    assert transformed_req == ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(
+                        root=TextPart(
+                            text='\n\nUse the following information to complete '
+                            + 'your task:\n\n'
+                            + '- [0]: doc content 1\n\n',
+                            metadata={'purpose': 'context'},
+                        )
+                    ),
+                    Part(root=TextPart(text='hi')),
+                ],
+            )
+        ],
+        docs=[
+            Document(content=[DocumentPart(root=TextPart(text='doc content 1'))]),
         ],
     )
 

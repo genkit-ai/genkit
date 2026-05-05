@@ -32,6 +32,7 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    text_from_content,
 )
 from genkit._ai._resource import ResourceArgument, ResourceInput, find_matching_resource, resolve_resources
 from genkit._ai._tools import Interrupt, Tool, run_tool_after_restart
@@ -43,9 +44,9 @@ from genkit._core._action import (
 )
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._middleware._augment_with_context import augment_with_context
 from genkit._core._middleware._base import BaseMiddleware, MiddlewareDesc
 from genkit._core._model import (
+    Document,
     GenerateActionOptions,
     GenerateHookParams,
     ModelHookParams,
@@ -59,6 +60,7 @@ from genkit._core._typing import (
     Part,
     Role,
     SpanMetadata,
+    TextPart,
     ToolDefinition,
     ToolRequest,
     ToolRequestPart,
@@ -223,6 +225,78 @@ def tools_to_action_names(
         else:
             names.append(t.name)
     return names
+
+
+_CONTEXT_PREFACE = '\n\nUse the following information to complete your task:\n\n'
+
+
+def _last_user_message(messages: list[Message]) -> Message | None:
+    """Find the last user message in a list."""
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == 'user':
+            return messages[i]
+    return None
+
+
+def _context_item_template(d: Document, index: int) -> str:
+    """Render a document as a citation line for context injection."""
+    out = '- '
+    ref = (d.metadata and (d.metadata.get('ref') or d.metadata.get('id'))) or index
+    out += f'[{ref}]: '
+    out += text_from_content(d.content) + '\n'
+    return out
+
+
+def _augment_with_context(
+    request: ModelRequest,
+    *,
+    preface: str | None = _CONTEXT_PREFACE,
+    item_template: Callable[[Document, int], str] | None = None,
+    citation_key: str | None = None,
+) -> ModelRequest:
+    """Return a deepcopy of ``request`` with ``request.docs`` injected as a context part on the last user message.
+
+    No-op (returns ``request`` unchanged) when there are no docs, no user message, or the last user message
+    already has a non-pending ``purpose: 'context'`` part.
+    """
+    if not request.docs:
+        return request
+
+    user_message = _last_user_message(request.messages)
+    if user_message is None:
+        return request
+
+    context_part_index = -1
+    for i, part in enumerate(user_message.content):
+        part_metadata = part.root.metadata if hasattr(part.root, 'metadata') else None
+        if isinstance(part_metadata, dict) and part_metadata.get('purpose') == 'context':
+            context_part_index = i
+            break
+
+    if context_part_index >= 0:
+        existing_meta = user_message.content[context_part_index].root.metadata
+        if not (isinstance(existing_meta, dict) and existing_meta.get('pending')):
+            return request
+
+    template = item_template or _context_item_template
+    out = preface or ''
+    for i, doc_data in enumerate(request.docs):
+        doc = Document(content=doc_data.content, metadata=doc_data.metadata)
+        if citation_key and doc.metadata:
+            doc.metadata['ref'] = doc.metadata.get(citation_key, i)
+        out += template(doc, i)
+    out += '\n'
+
+    text_part = Part(root=TextPart(text=out, metadata={'purpose': 'context'}))
+
+    new_req = copy.deepcopy(request)
+    new_user = _last_user_message(new_req.messages)
+    assert new_user is not None  # mirrors the guard above; deepcopy preserves structure
+    if context_part_index >= 0:
+        new_user.content[context_part_index] = text_part
+    else:
+        new_user.content.append(text_part)
+    return new_req
 
 
 # Matches data URIs: everything up to the first comma is the media-type +
@@ -406,19 +480,12 @@ async def _generate_action(
     if not middleware:
         middleware = []
 
-    supports_context = False
-    if model.metadata:
-        model_info = model.metadata.get('model')
-        if model_info and isinstance(model_info, dict):
-            model_info_dict = cast(dict[str, object], model_info)
-            supports_info = model_info_dict.get('supports')
-            if supports_info and isinstance(supports_info, dict):
-                supports_dict = cast(dict[str, object], supports_info)
-                supports_context = bool(supports_dict.get('context'))
-    # if it doesn't support contextm inject context middleware
+    # Inject ``request.docs`` as a context part on the last user message. Always runs when
+    # docs are present; we do not gate on ``model.metadata.supports.context`` capability.
+    if request.docs:
+        request = _augment_with_context(request)
+
     normalized_mw: list[BaseMiddleware] = list(middleware)
-    if raw_request.docs and not supports_context:
-        normalized_mw.append(augment_with_context())
 
     async def dispatch_generate(
         params: GenerateHookParams,
@@ -592,9 +659,6 @@ async def _generate_action(
             next_request = apply_transfer_preamble(next_request, transfer_preamble)
 
         # then recursively call for another loop.
-        # Pass the original `middleware` (not `normalized_mw`) so the next turn re-derives
-        # `normalized_mw` from the same base, instead of accumulating an extra
-        # `augment_with_context()` instance per turn.
         return await _generate_action(
             registry,
             raw_request=next_request,
