@@ -128,9 +128,11 @@ from genkit.plugins.google_genai.models.gemini import (
     google_model_info,
 )
 from genkit.plugins.google_genai.models.imagen import (
+    GOOGLEAI_KNOWN_IMAGEN_MODELS,
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
     ImagenConfigSchema,
     ImagenModel,
+    googleai_image_model_info,
     vertexai_image_model_info,
 )
 from genkit.plugins.google_genai.models.veo import (
@@ -419,8 +421,10 @@ class GoogleAI(Plugin):
         for name in genai_models.gemini:
             actions.append(self._resolve_model(googleai_name(name)))
 
-        # Imagen Models
-        for name in genai_models.imagen:
+        # Imagen Models: union the SDK-discovered list with the hardcoded
+        # Google AI known-model list so users can select Imagen 4 even when
+        # the SDK's models.list() doesn't surface them.
+        for name in dict.fromkeys(genai_models.imagen + list(GOOGLEAI_KNOWN_IMAGEN_MODELS)):
             actions.append(self._resolve_model(googleai_name(name)))
 
         # Veo Models (background models)
@@ -571,7 +575,7 @@ class GoogleAI(Plugin):
 
         # Determine model type and create model metadata/config schema
         if clean_name.lower().startswith('image'):
-            model_ref = vertexai_image_model_info(clean_name)
+            model_ref = googleai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = ImagenConfigSchema
         else:
@@ -632,11 +636,11 @@ class GoogleAI(Plugin):
                 )
             )
 
-        for name in genai_models.imagen:
+        for name in dict.fromkeys(genai_models.imagen + list(GOOGLEAI_KNOWN_IMAGEN_MODELS)):
             actions_list.append(
                 model_action_metadata(
                     name=googleai_name(name),
-                    info=vertexai_image_model_info(name).model_dump(by_alias=True),
+                    info=googleai_image_model_info(name).model_dump(by_alias=True),
                     config_schema=ImagenConfigSchema,
                 )
             )

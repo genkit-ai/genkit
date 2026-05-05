@@ -58,6 +58,20 @@ class ImagenVersion(StrEnum):
     IMAGEN3 = 'imagen-3.0-generate-002'
     IMAGEN3_FAST = 'imagen-3.0-fast-generate-001'
     IMAGEN2 = 'imagegeneration@006'
+    IMAGEN4 = 'imagen-4.0-generate-001'
+    IMAGEN4_FAST = 'imagen-4.0-fast-generate-001'
+    IMAGEN4_ULTRA = 'imagen-4.0-ultra-generate-001'
+
+
+# Imagen models available on the Google AI (Gemini API) backend. Hardcoded
+# here because the SDK's client.models.list() does not always surface them on
+# every environment, and they must be visible in Init / list_actions to be
+# selectable from user code.
+GOOGLEAI_KNOWN_IMAGEN_MODELS: tuple[str, ...] = (
+    ImagenVersion.IMAGEN4,
+    ImagenVersion.IMAGEN4_FAST,
+    ImagenVersion.IMAGEN4_ULTRA,
+)
 
 
 SUPPORTED_MODELS = {
@@ -91,6 +105,36 @@ SUPPORTED_MODELS = {
             output=['media'],
         ),
     ),
+    ImagenVersion.IMAGEN4: ModelInfo(
+        label='Google AI - Imagen 4',
+        supports=Supports(
+            media=True,
+            multiturn=False,
+            tools=False,
+            system_role=True,
+            output=['media'],
+        ),
+    ),
+    ImagenVersion.IMAGEN4_FAST: ModelInfo(
+        label='Google AI - Imagen 4 Fast',
+        supports=Supports(
+            media=True,
+            multiturn=False,
+            tools=False,
+            system_role=True,
+            output=['media'],
+        ),
+    ),
+    ImagenVersion.IMAGEN4_ULTRA: ModelInfo(
+        label='Google AI - Imagen 4 Ultra',
+        supports=Supports(
+            media=True,
+            multiturn=False,
+            tools=False,
+            system_role=True,
+            output=['media'],
+        ),
+    ),
 }
 
 DEFAULT_IMAGE_SUPPORT = Supports(
@@ -105,10 +149,7 @@ DEFAULT_IMAGE_SUPPORT = Supports(
 def vertexai_image_model_info(
     version: str,
 ) -> ModelInfo:
-    """Generates a ModelInfo object.
-
-    This function tries to get the best ModelInfo Supports
-    for the given version.
+    """Generates a ModelInfo object for the Vertex AI backend.
 
     Args:
         version: Version of the model.
@@ -118,6 +159,23 @@ def vertexai_image_model_info(
     """
     return ModelInfo(
         label=f'Vertex AI - {version}',
+        supports=DEFAULT_IMAGE_SUPPORT,
+    )
+
+
+def googleai_image_model_info(
+    version: str,
+) -> ModelInfo:
+    """Generates a ModelInfo object for the Google AI (Gemini API) backend.
+
+    Args:
+        version: Version of the model.
+
+    Returns:
+        ModelInfo object with a Google AI-prefixed label.
+    """
+    return ModelInfo(
+        label=f'Google AI - {version}',
         supports=DEFAULT_IMAGE_SUPPORT,
     )
 

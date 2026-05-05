@@ -42,6 +42,7 @@ from genkit.plugins.google_genai.google import (
     googleai_name,
     vertexai_name,
 )
+from genkit.plugins.google_genai.models.imagen import GOOGLEAI_KNOWN_IMAGEN_MODELS
 
 
 def test_googleai_name() -> None:
@@ -185,7 +186,7 @@ async def test_googleai_resolve_imagen_model(mock_list_models: MagicMock, mock_c
 @patch('genkit.plugins.google_genai.google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI init registers Imagen models from dynamic discovery."""
+    """Test GoogleAI init registers Imagen models from dynamic discovery and the hardcoded Imagen 4 list."""
     models = GenaiModels()
     models.imagen = ['imagen-3.0-generate-002']
     mock_list_models.return_value = models
@@ -194,9 +195,11 @@ async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock
     actions = await plugin.init()
 
     imagen_actions = [a for a in actions if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
-    assert imagen_actions[0].kind == ActionKind.MODEL
+    names = {a.name for a in imagen_actions}
+    expected = {'googleai/imagen-3.0-generate-002'} | {googleai_name(m) for m in GOOGLEAI_KNOWN_IMAGEN_MODELS}
+    assert names == expected
+    for a in imagen_actions:
+        assert a.kind == ActionKind.MODEL
 
 
 @patch('genkit.plugins.google_genai.google.genai.client.Client')
@@ -212,8 +215,9 @@ async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock
     actions_list = await plugin.list_actions()
 
     imagen_actions = [a for a in actions_list if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
+    names = {a.name for a in imagen_actions}
+    expected = {'googleai/imagen-3.0-generate-002'} | {googleai_name(m) for m in GOOGLEAI_KNOWN_IMAGEN_MODELS}
+    assert names == expected
 
 
 @patch('genkit.plugins.google_genai.google.genai.client.Client')
