@@ -99,10 +99,7 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineCustomAgent<
-    Stream = unknown,
-    State = unknown,
-  >(
+  defineCustomAgent<Stream = unknown, State = unknown>(
     config: {
       name: string;
       description?: string;
@@ -111,11 +108,7 @@ export class GenkitBeta extends Genkit {
     },
     fn: AgentFn<Stream, State>
   ) {
-    return defineCustomAgent<Stream, State>(
-      this.registry,
-      config,
-      fn
-    );
+    return defineCustomAgent<Stream, State>(this.registry, config, fn);
   }
 
   /**
@@ -150,9 +143,7 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineAgent<State = unknown>(
-    config: AgentConfig<State>
-  ) {
+  defineAgent<State = unknown>(config: AgentConfig<State>) {
     return defineAgent<State>(this.registry, config);
   }
 

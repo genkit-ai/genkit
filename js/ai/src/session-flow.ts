@@ -287,9 +287,7 @@ export class SessionRunner<State = unknown> {
       if (
         !this.snapshotCallback({
           state: currentState as SessionState<State>,
-          prevState: prevState as
-            | SessionState<State>
-            | undefined,
+          prevState: prevState as SessionState<State> | undefined,
           turnIndex: this.turnIndex,
           event: event,
         })
@@ -361,10 +359,7 @@ export interface Agent<State = unknown>
 /**
  * Registers a multi-turn custom agent action capable of maintaining persistent state.
  */
-export function defineCustomAgent<
-  Stream = unknown,
-  State = unknown,
->(
+export function defineCustomAgent<Stream = unknown, State = unknown>(
   registry: Registry,
   config: {
     name: string;
@@ -386,15 +381,14 @@ export function defineCustomAgent<
       initSchema: AgentInitSchema,
       metadata: {
         stateManagement: config.store ? 'server' : 'client',
-        abortable: !!(config.store?.onSnapshotStateChange),
+        abortable: !!config.store?.onSnapshotStateChange,
       },
     },
     async function* (
       arg: ActionFnArg<AgentStreamChunk, AgentInput, AgentInit>
     ) {
       const init = arg.init;
-      const store =
-        config.store || new InMemorySessionStore<State>();
+      const store = config.store || new InMemorySessionStore<State>();
 
       let session: Session<State>;
 
@@ -407,13 +401,9 @@ export function defineCustomAgent<
         if (!snapshot) {
           throw new Error(`Snapshot ${init.snapshotId} not found`);
         }
-        session = new Session<State>(
-          snapshot.state as SessionState<State>
-        );
+        session = new Session<State>(snapshot.state as SessionState<State>);
       } else if (init?.state && !config.store) {
-        session = new Session<State>(
-          init.state as SessionState<State>
-        );
+        session = new Session<State>(init.state as SessionState<State>);
       } else {
         session = new Session<State>({
           custom: {} as State,
@@ -490,41 +480,37 @@ export function defineCustomAgent<
         }
       })();
 
-      runner = new SessionRunner<State>(
-        session,
-        runnerInputChannel,
-        {
-          store,
-          snapshotCallback: config.snapshotCallback,
-          lastSnapshot: snapshot,
-          newSnapshotId: init?.newSnapshotId,
-          onDetach: (snapshotId) => {
-            detachedSnapshotId = snapshotId;
-            if (resolveDetach) {
-              resolveDetach();
-            }
+      runner = new SessionRunner<State>(session, runnerInputChannel, {
+        store,
+        snapshotCallback: config.snapshotCallback,
+        lastSnapshot: snapshot,
+        newSnapshotId: init?.newSnapshotId,
+        onDetach: (snapshotId) => {
+          detachedSnapshotId = snapshotId;
+          if (resolveDetach) {
+            resolveDetach();
+          }
 
-            if (store.onSnapshotStateChange) {
-              unsubscribe = store.onSnapshotStateChange(
-                snapshotId,
-                (snap) => {
-                  if (snap.status === 'aborted') {
-                    abortController.abort();
-                    if (unsubscribe) unsubscribe();
-                  }
-                },
-                { context: getContext() }
-              );
-            }
-          },
+          if (store.onSnapshotStateChange) {
+            unsubscribe = store.onSnapshotStateChange(
+              snapshotId,
+              (snap) => {
+                if (snap.status === 'aborted') {
+                  abortController.abort();
+                  if (unsubscribe) unsubscribe();
+                }
+              },
+              { context: getContext() }
+            );
+          }
+        },
 
-          onEndTurn: (snapshotId) => {
-            if (!runner.isDetached) {
-              arg.sendChunk({ turnEnd: { snapshotId } });
-            }
-          },
-        }
-      );
+        onEndTurn: (snapshotId) => {
+          if (!runner.isDetached) {
+            arg.sendChunk({ turnEnd: { snapshotId } });
+          }
+        },
+      });
 
       const sendArtifactChunk = (a: Artifact) => {
         if (!runner.isDetached) {
@@ -636,7 +622,7 @@ export function defineCustomAgent<
     }
   );
 
-      const composite = Object.assign(primaryAction, {
+  const composite = Object.assign(primaryAction, {
     getSnapshotData: async (
       snapshotId: string,
       options?: SessionStoreOptions
@@ -790,8 +776,7 @@ export function definePromptAgent<State = unknown>(
  * Configuration for `defineAgent`, which combines prompt definition and agent
  * registration into a single call.
  */
-export interface AgentConfig<State = unknown>
-  extends PromptConfig {
+export interface AgentConfig<State = unknown> extends PromptConfig {
   store?: SessionStore<State>;
   snapshotCallback?: SnapshotCallback<State>;
 }

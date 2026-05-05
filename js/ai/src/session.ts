@@ -243,9 +243,7 @@ export class Session<S = unknown> extends EventEmitter {
 /**
  * In-memory implementation of persistent Session Store.
  */
-export class InMemorySessionStore<S = unknown>
-  implements SessionStore<S>
-{
+export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
   private snapshots = new Map<string, SessionSnapshot<S>>();
   private listeners = new Map<
     string,
@@ -332,9 +330,7 @@ const SAFE_ID_PATTERN =
  * Each snapshot is persisted as a JSON file under `dirPath/<prefix>/<snapshotId>.json`.
  * Only UUID-formatted snapshot IDs are accepted to prevent path traversal.
  */
-export class FileSessionStore<S = unknown>
-  implements SessionStore<S>
-{
+export class FileSessionStore<S = unknown> implements SessionStore<S> {
   private dirPath: string;
   private maxPersistedChainLength?: number;
   private snapshotPathPrefix?: (

@@ -373,7 +373,8 @@ describe('Agent', () => {
       });
       session.close();
 
-      for await (const _ of session.stream) {}
+      for await (const _ of session.stream) {
+      }
       const output = await session.output;
 
       // Verify state was NOT seeded from init.state
@@ -381,10 +382,7 @@ describe('Agent', () => {
       assert.ok(snapshot);
       // Only the message sent via input should be present, not the stale history
       assert.strictEqual(snapshot!.state.messages!.length, 1);
-      assert.strictEqual(
-        snapshot!.state.messages![0].content[0].text,
-        'hello'
-      );
+      assert.strictEqual(snapshot!.state.messages![0].content[0].text, 'hello');
       // Custom state should be empty default, not the init.state value
       assert.deepStrictEqual(snapshot!.state.custom, {});
     });
@@ -417,7 +415,8 @@ describe('Agent', () => {
       });
       session.close();
 
-      for await (const _ of session.stream) {}
+      for await (const _ of session.stream) {
+      }
       const output = await session.output;
 
       // State should include the seeded state plus the new message
@@ -429,10 +428,7 @@ describe('Agent', () => {
         output.state!.messages![0].content[0].text,
         'prior msg'
       );
-      assert.strictEqual(
-        output.state!.messages![1].content[0].text,
-        'hello'
-      );
+      assert.strictEqual(output.state!.messages![1].content[0].text, 'hello');
     });
 
     it('should set server stateManagement and abortable=false when store lacks onSnapshotStateChange', () => {
