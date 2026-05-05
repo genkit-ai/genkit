@@ -1099,4 +1099,83 @@ describe('ReflectionServerV2', () => {
     await server.start();
     await actionRun;
   });
+
+  it('should pass init param from runAction to the action handler', async () => {
+    const initAction = action(
+      {
+        name: 'initAction',
+        inputSchema: z.string(),
+        outputSchema: z.object({
+          receivedInput: z.string(),
+          receivedInit: z.object({ sessionId: z.string() }),
+        }),
+        initSchema: z.object({ sessionId: z.string() }),
+        actionType: 'custom',
+      },
+      async (input, { init }) => {
+        return { receivedInput: input, receivedInit: init };
+      }
+    );
+    registry.registerAction('custom', initAction);
+
+    const actionRun = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error('init action timeout')),
+        3000
+      );
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          try {
+            const msg = JSON.parse(data.toString());
+            if (msg.method === 'register') {
+              ws.send(
+                JSON.stringify({
+                  jsonrpc: '2.0',
+                  result: {},
+                  id: msg.id,
+                })
+              );
+              ws.send(
+                JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'runAction',
+                  params: {
+                    key: '/custom/initAction',
+                    input: 'hello',
+                    init: { sessionId: 'sess-42' },
+                    stream: false,
+                  },
+                  id: 'init-1',
+                })
+              );
+            } else if (msg.id === 'init-1') {
+              if (msg.error) {
+                reject(
+                  new Error(
+                    `init action error: ${JSON.stringify(msg.error)}`
+                  )
+                );
+                return;
+              }
+              assert.deepStrictEqual(msg.result.result, {
+                receivedInput: 'hello',
+                receivedInit: { sessionId: 'sess-42' },
+              });
+              clearTimeout(timeout);
+              resolve();
+            }
+          } catch (e) {
+            clearTimeout(timeout);
+            reject(e);
+          }
+        });
+      });
+    });
+
+    server = new ReflectionServerV2(registry, {
+      url: `ws://localhost:${port}`,
+    });
+    await server.start();
+    await actionRun;
+  });
 });

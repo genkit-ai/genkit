@@ -118,6 +118,12 @@ export const RunActionRequestSchema = z.object({
     .any()
     .optional()
     .describe('An input with the type that this action expects.'),
+  init: z
+    .any()
+    .optional()
+    .describe(
+      'Initialization parameters to establish long running session states.'
+    ),
   context: z
     .any()
     .optional()

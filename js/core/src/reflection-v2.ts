@@ -378,7 +378,7 @@ export class ReflectionServerV2 {
   private async handleRunAction(request: JsonRpcRequest) {
     if (!request.id) return;
 
-    const { key, input, context, telemetryLabels, stream, streamInput } =
+    const { key, input, init, context, telemetryLabels, stream, streamInput } =
       ReflectionRunActionParamsSchema.parse(request.params);
     const action = await this.registry.lookupAction(key);
 
@@ -427,6 +427,7 @@ export class ReflectionServerV2 {
 
         const result = await action.run(input, {
           context,
+          init,
           onChunk: callback,
           telemetryLabels,
           onTraceStart: onTraceStartCallback,
@@ -446,6 +447,7 @@ export class ReflectionServerV2 {
       } else {
         const result = await action.run(input, {
           context,
+          init,
           telemetryLabels,
           onTraceStart: onTraceStartCallback,
           abortSignal: abortController.signal,
