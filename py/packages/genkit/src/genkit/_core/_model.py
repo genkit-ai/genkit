@@ -22,7 +22,7 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
@@ -615,10 +615,3 @@ GenerateActionOptions.model_rebuild(
         'Role': Role,
     }
 )
-
-# Type aliases for model middleware (Any is intentional - middleware is type-agnostic)
-# Middleware can have two signatures:
-#   Simple (3 params): (req, ctx, next) -> response
-#   Streaming (4 params): (req, ctx, on_chunk, next) -> response
-# The framework detects which signature is used based on parameter count.
-ModelMiddleware = Callable[..., Awaitable[ModelResponse[Any]]]
