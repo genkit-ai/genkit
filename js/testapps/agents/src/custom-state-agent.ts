@@ -152,7 +152,7 @@ const removeTask = ai.defineTool(
 // Custom state works seamlessly — tools call ai.currentSession().updateCustom()
 // ---------------------------------------------------------------------------
 
-export const taskAgent = ai.defineAgent<{}, TaskState>({
+export const taskAgent = ai.defineAgent<TaskState>({
   name: 'taskPrompt',
   model: 'googleai/gemini-flash-latest',
   system: `You are a concise task management assistant. Help the user manage their task list.

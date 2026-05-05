@@ -192,12 +192,9 @@ export const testFileStoreAgent = ai.defineFlow(
     };
   }
 );
-export const pruningStore = new FileSessionStore<any>(
-  './.snapshots-pruning',
-  {
-    maxPersistedChainLength: 3,
-  }
-);
+export const pruningStore = new FileSessionStore<any>('./.snapshots-pruning', {
+  maxPersistedChainLength: 3,
+});
 
 export const pruningAgent = ai.definePromptAgent({
   promptName: 'fileStorePrompt',
