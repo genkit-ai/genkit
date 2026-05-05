@@ -23,7 +23,6 @@ import {
   testClientStateAgent,
 } from './client-state-agent.js';
 import { customAgent, testCustomAgent } from './custom-agent.js';
-import { testWriterAgent, writerAgent } from './prompt-agent.js';
 import {
   testWeatherAgent,
   testWeatherAgentStream,
@@ -50,8 +49,6 @@ import {
 // Log loaded agents/flows (existing behavior)
 console.log('Loaded custom agent:', customAgent.__action.name);
 console.log('Loaded custom flow:', testCustomAgent.__action.name);
-console.log('Loaded prompt agent:', writerAgent.__action.name);
-console.log('Loaded prompt flow:', testWriterAgent.__action.name);
 console.log('Loaded tool agent:', weatherAgent.__action.name);
 console.log('Loaded tool flow:', testWeatherAgent.__action.name);
 console.log('Loaded tool stream flow:', testWeatherAgentStream.__action.name);
@@ -106,7 +103,6 @@ app.use((_req, res, next) => {
 
 // Expose session flows
 app.post('/api/customAgent', expressHandler(customAgent));
-app.post('/api/writerAgent', expressHandler(writerAgent));
 app.post('/api/weatherAgent', expressHandler(weatherAgent));
 app.post(
   '/api/weatherAgent/state',
@@ -134,7 +130,6 @@ app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent));
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
-app.post('/api/testWriterAgent', expressHandler(testWriterAgent));
 app.post('/api/testWeatherAgent', expressHandler(testWeatherAgent));
 app.post('/api/testClientStateAgent', expressHandler(testClientStateAgent));
 app.post('/api/testBankingAgent', expressHandler(testBankingAgent));

@@ -34,11 +34,9 @@ import { getWeather } from './tool-agent.js';
 export const clientStateAgent = ai.defineAgent({
   name: 'clientWeatherPrompt',
   model: 'googleai/gemini-flash-latest',
-  input: { schema: z.object({ name: z.string() }) },
   system:
-    'You are a helpful weather assistant for {{ name }}. Use the getWeather tool to look up weather. Be concise.',
+    'You are a helpful weather assistant. Use the getWeather tool to look up weather. Be concise.',
   tools: [getWeather],
-  defaultInput: { name: 'Friend' },
   // No `store` property → stateless. The client must round-trip the `state` blob.
 });
 

@@ -9,7 +9,6 @@ import BackgroundAgent from './pages/BackgroundAgent';
 import BankingInterrupt from './pages/BankingInterrupt';
 import BranchingChat from './pages/BranchingChat';
 import ClientState from './pages/ClientState';
-import PromptVariables from './pages/PromptVariables';
 import ResearchAgent from './pages/ResearchAgent';
 import SubAgentChat from './pages/SubAgentChat';
 import TaskTracker from './pages/TaskTracker';
@@ -24,7 +23,6 @@ createRoot(document.getElementById('root')!).render(
           <Route index element={<Navigate to="/weather" replace />} />
           <Route path="weather" element={<WeatherChat />} />
           <Route path="weather/:snapshotId" element={<WeatherChat />} />
-          <Route path="prompt-variables" element={<PromptVariables />} />
           <Route path="client-state" element={<ClientState />} />
           <Route path="banking" element={<BankingInterrupt />} />
           <Route path="workspace" element={<WorkspaceBuilder />} />

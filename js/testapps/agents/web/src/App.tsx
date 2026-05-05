@@ -7,7 +7,6 @@ import { NavLink, Outlet } from 'react-router-dom';
 const NAV_ITEMS = [
   { to: '/weather', icon: '🌤️', label: 'Weather Chat' },
   { to: '/client-state', icon: '🌤️', label: 'Weather Chat (Stateless)' },
-  { to: '/prompt-variables', icon: '✏️', label: 'Prompt Variables' },
   { to: '/banking', icon: '🏦', label: 'Banking (Interrupt)' },
   { to: '/workspace', icon: '🛠️', label: 'Workspace Builder' },
   { to: '/background', icon: '⏳', label: 'Background (Detach)' },

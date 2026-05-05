@@ -138,16 +138,14 @@ export class FileSessionStore<S = unknown, I = unknown>
   }
 }
 
-export const fileStore = new FileSessionStore<any, any>('./.snapshots');
+export const fileStore = new FileSessionStore<any>('./.snapshots');
 
 // defineAgent registers the prompt internally, so pruningAgent can also
 // reference it by name via definePromptAgent.
 export const fileStoreAgent = ai.defineAgent({
   name: 'fileStorePrompt',
   model: 'googleai/gemini-flash-lite-latest',
-  input: { schema: z.object({ userName: z.string() }) },
-  system: `You are a personal logbook assistant. Always address the user by the name {{ userName }}.`,
-  defaultInput: { userName: 'Stranger' },
+  system: `You are a personal logbook assistant.`,
   store: fileStore,
 });
 
@@ -172,16 +170,7 @@ export const testFileStoreAgent = ai.defineFlow(
           },
         ],
       },
-      {
-        init: {
-          state: {
-            inputVariables: { userName },
-            custom: {},
-            messages: [],
-            artifacts: [],
-          },
-        },
-      }
+      {}
     );
 
     const snapshotId1 = turn1.result.snapshotId!;
@@ -203,7 +192,7 @@ export const testFileStoreAgent = ai.defineFlow(
     };
   }
 );
-export const pruningStore = new FileSessionStore<any, any>(
+export const pruningStore = new FileSessionStore<any>(
   './.snapshots-pruning',
   {
     maxPersistedChainLength: 3,
@@ -212,7 +201,6 @@ export const pruningStore = new FileSessionStore<any, any>(
 
 export const pruningAgent = ai.definePromptAgent({
   promptName: 'fileStorePrompt',
-  defaultInput: { userName: 'Stranger' },
   store: pruningStore,
 });
 
@@ -228,16 +216,7 @@ export const testFileStoreChainPruningAgent = ai.defineFlow(
       {
         messages: [{ role: 'user', content: [{ text: 'Turn 1' }] }],
       },
-      {
-        init: {
-          state: {
-            inputVariables: { userName },
-            custom: {},
-            messages: [],
-            artifacts: [],
-          },
-        },
-      }
+      {}
     );
     const snap1 = turn1.result.snapshotId!;
 

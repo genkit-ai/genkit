@@ -33,11 +33,9 @@ export const getWeather = ai.defineTool(
 export const weatherAgent = ai.defineAgent({
   name: 'weatherPrompt',
   model: 'googleai/gemini-flash-latest',
-  input: { schema: z.object({ name: z.string() }) },
   system:
-    'You are an assistant helping {{ name }} with weather information. Use the getWeather tool.',
+    'You are an assistant helping with weather information. Use the getWeather tool.',
   tools: [getWeather],
-  defaultInput: { name: 'Bratwurst' },
   store: new FileSessionStore('./.snapshots'),
 });
 
@@ -56,7 +54,6 @@ export const testWeatherAgent = ai.defineFlow(
       },
       {
         onChunk: sendChunk,
-        init: { state: { inputVariables: { name: 'Pavel' } } },
       }
     );
     return res.result;
