@@ -23,7 +23,6 @@ import {
   testClientStateAgent,
 } from './client-state-agent.js';
 import { customAgent, testCustomAgent } from './custom-agent.js';
-import { testWriterAgent, writerAgent } from './prompt-agent.js';
 import {
   testWeatherAgent,
   testWeatherAgentStream,
