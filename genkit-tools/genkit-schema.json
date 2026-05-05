@@ -23,7 +23,7 @@
       ],
       "additionalProperties": false
     },
-    "SessionFlowInit": {
+    "AgentInit": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -35,7 +35,7 @@
       },
       "additionalProperties": false
     },
-    "SessionFlowInput": {
+    "AgentInput": {
       "type": "object",
       "properties": {
         "messages": {
@@ -53,7 +53,7 @@
       },
       "additionalProperties": false
     },
-    "SessionFlowOutput": {
+    "AgentOutput": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -74,7 +74,7 @@
       },
       "additionalProperties": false
     },
-    "SessionFlowResult": {
+    "AgentResult": {
       "type": "object",
       "properties": {
         "message": {
@@ -89,7 +89,7 @@
       },
       "additionalProperties": false
     },
-    "SessionFlowStreamChunk": {
+    "AgentStreamChunk": {
       "type": "object",
       "properties": {
         "modelChunk": {

@@ -418,26 +418,114 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 	return core.DefineBidiFlow(g.reg, name, fn)
 }
 
-// DefineSessionFlow defines a custom session flow with full control over the
-// conversation loop, registers it as a [core.Action] of type Flow, and
-// returns an [aix.SessionFlow].
+// DefineAgent defines an agent that wraps a prompt defined inline from the
+// given options, registers both under name as actions on the registry, and
+// returns an [aix.Agent].
 //
 // Experimental: This API is under active development and may change in any
 // minor version release.
 //
-// An SessionFlow is a stateful, multi-turn conversational flow. It builds on
+// An Agent is a stateful, multi-turn conversational flow. It builds on
 // bidirectional streaming to enable ongoing conversations where each turn's
 // input and output are streamed between client and server. The framework
 // handles session state, conversation history, and optional snapshot
 // persistence automatically.
 //
+// opts is a mixed list of [ai.PromptOption] values (which configure the
+// underlying prompt) and [aix.AgentOption] values (which configure the agent
+// itself). The State type parameter must be specified explicitly: use [any]
+// when no typed Custom state is needed; use [Foo] when an
+// [aix.SessionStore[Foo]] is provided. Mismatches panic at definition time.
+//
+// For an agent backed by an existing prompt, use [DefinePromptAgent]. For
+// full control over the per-turn loop, use [DefineCustomAgent].
+//
+// # Options
+//
+//   - any [ai.PromptOption]: e.g., [ai.WithModel], [ai.WithSystem], [ai.WithTools]
+//   - [aix.WithSessionStore]: Enable snapshot persistence
+//   - [aix.WithSnapshotCallback]: Control when snapshots are created
+//   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
+//
+// Example:
+//
+//	chatAgent := genkit.DefineAgent[any](g, "chat",
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
+//		ai.WithSystem("You are a helpful assistant."),
+//		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
+//	)
+//
+//	conn, err := chatAgent.StreamBidi(ctx)
+//	if err != nil {
+//		// handle error
+//	}
+//	conn.SendText("Hello!")
+//	for chunk, err := range conn.Receive() {
+//		if chunk.TurnEnd != nil {
+//			break
+//		}
+//		fmt.Print(chunk.ModelChunk.Text())
+//	}
+//	conn.Close()
+func DefineAgent[State any](
+	g *Genkit,
+	name string,
+	opts ...aix.AgentDefineOption[State],
+) *aix.Agent[any, State] {
+	return aix.DefineAgent(g.reg, name, opts...)
+}
+
+// DefinePromptAgent defines an agent backed by a prompt already registered
+// with the registry (via [DefinePrompt] or loaded from a .prompt file). The
+// agent is registered under the same name as the prompt.
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+//
+// defaultInput is used to render the prompt unless the invocation overrides
+// it via [aix.WithInputVariables]. PromptIn is captured for runtime
+// input-variable type conversion.
+//
+// For an agent that defines its prompt inline, use [DefineAgent]. For full
+// control over the per-turn loop, use [DefineCustomAgent].
+//
+// Type parameters:
+//   - State: Type for user-defined state persisted in snapshots
+//   - PromptIn: The prompt input type (inferred from defaultInput)
+//
+// Example:
+//
+//	type ChatInput struct {
+//		Personality string `json:"personality"`
+//	}
+//
+//	chatAgent := genkit.DefinePromptAgent[any](g, "chat",
+//		ChatInput{Personality: "a sarcastic pirate"},
+//		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
+//	)
+func DefinePromptAgent[State, PromptIn any](
+	g *Genkit,
+	promptName string,
+	defaultInput PromptIn,
+	opts ...aix.AgentOption[State],
+) *aix.Agent[any, State] {
+	return aix.DefinePromptAgent(g.reg, promptName, defaultInput, opts...)
+}
+
+// DefineCustomAgent defines an agent with full control over the conversation
+// loop, registers it as a [core.Action] of type Flow, and returns an
+// [aix.Agent].
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+//
 // The provided function fn receives a [aix.Responder] for streaming output
-// to the client and an [aix.SessionRunner] for accessing conversation state.
-// Call [aix.SessionRunner.Run] to enter the turn loop, which blocks until the
+// to the client and an [aix.AgentSession] for accessing conversation state.
+// Call [aix.AgentSession.Run] to enter the turn loop, which blocks until the
 // client sends the next message.
 //
-// For prompt-backed agents that follow a standard render-generate-stream loop,
-// use [DefineSessionFlowFromPrompt] instead.
+// For agents backed by a prompt, use [DefineAgent] (inline) or
+// [DefinePromptAgent] (existing prompt) instead.
 //
 // # Options
 //
@@ -451,11 +539,10 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 //
 // Example:
 //
-//	chatAgent := genkit.DefineSessionFlow(g, "chat",
-//		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+//	chatAgent := genkit.DefineCustomAgent(g, "chat",
+//		func(ctx context.Context, resp aix.Responder[any], sess *aix.AgentSession[any]) (*aix.AgentResult, error) {
 //			var lastMessage *ai.Message
-//			err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
-//				sess.AddMessages(input.Messages...)
+//			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) error {
 //				for result, err := range genkit.GenerateStream(ctx, g,
 //					ai.WithModelName("googleai/gemini-3-flash-preview"),
 //					ai.WithMessages(sess.Messages()...),
@@ -475,100 +562,16 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 //			if err != nil {
 //				return nil, err
 //			}
-//			return &aix.SessionFlowResult{Message: lastMessage}, nil
+//			return &aix.AgentResult{Message: lastMessage}, nil
 //		},
 //	)
-//
-//	// Start a conversation:
-//	conn, err := chatAgent.StreamBidi(ctx)
-//	if err != nil {
-//		// handle error
-//	}
-//
-//	// Send a message and stream the response:
-//	conn.SendText("Hello!")
-//	for chunk, err := range conn.Receive() {
-//		if chunk.TurnEnd != nil {
-//			break
-//		}
-//		fmt.Print(chunk.ModelChunk.Text())
-//	}
-//	conn.Close()
-func DefineSessionFlow[Stream, State any](
+func DefineCustomAgent[Stream, State any](
 	g *Genkit,
 	name string,
-	fn aix.SessionFlowFunc[Stream, State],
-	opts ...aix.SessionFlowOption[State],
-) *aix.SessionFlow[Stream, State] {
-	return aix.DefineSessionFlow(g.reg, name, fn, opts...)
-}
-
-// DefineSessionFlowFromPrompt defines a prompt-backed session flow, registers it as a
-// [core.Action] of type Flow, and returns an [aix.SessionFlow].
-//
-// Experimental: This API is under active development and may change in any
-// minor version release.
-//
-// This is a higher-level alternative to [DefineSessionFlow] for agents backed
-// by a prompt (defined via [DefinePrompt] or loaded from a .prompt file). The
-// conversation loop is handled automatically: each turn renders the prompt,
-// appends conversation history, calls the model with streaming, and updates
-// session state.
-//
-// The prompt is looked up by promptName from the registry. The defaultInput
-// provides template variables for prompt rendering (e.g., personality, tone)
-// and can be overridden per invocation via [aix.WithInputVariables].
-//
-// DefineSessionFlowFromPrompt accepts the same options as [DefineSessionFlow]. See
-// [DefineSessionFlow] for available options.
-//
-// Type parameters:
-//   - State: Type for user-defined state persisted in snapshots
-//   - PromptIn: The prompt input type (inferred from defaultInput)
-//
-// Example:
-//
-//	// Given a .prompt file "chat.prompt" loaded via WithPromptDir:
-//	//   ---
-//	//   model: googleai/gemini-3-flash-preview
-//	//   input:
-//	//     schema:
-//	//       personality: string
-//	//   ---
-//	//   {{role "system"}}
-//	//   You are {{personality}}.
-//
-//	type ChatInput struct {
-//		Personality string `json:"personality"`
-//	}
-//
-//	chatAgent := genkit.DefineSessionFlowFromPrompt(g, "chat",
-//		ChatInput{Personality: "a helpful assistant"},
-//		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
-//	)
-//
-//	// Start a conversation:
-//	conn, err := chatAgent.StreamBidi(ctx)
-//	if err != nil {
-//		// handle error
-//	}
-//
-//	// Send a message and stream the response:
-//	conn.SendText("Hello!")
-//	for chunk, err := range conn.Receive() {
-//		if chunk.TurnEnd != nil {
-//			break
-//		}
-//		fmt.Print(chunk.ModelChunk.Text())
-//	}
-//	conn.Close()
-func DefineSessionFlowFromPrompt[State, PromptIn any](
-	g *Genkit,
-	promptName string,
-	defaultInput PromptIn,
-	opts ...aix.SessionFlowOption[State],
-) *aix.SessionFlow[any, State] {
-	return aix.DefineSessionFlowFromPrompt(g.reg, promptName, defaultInput, opts...)
+	fn aix.AgentFunc[Stream, State],
+	opts ...aix.AgentOption[State],
+) *aix.Agent[Stream, State] {
+	return aix.DefineCustomAgent(g.reg, name, fn, opts...)
 }
 
 // Run executes the given function `fn` within the context of the current flow run,
