@@ -321,6 +321,45 @@ describe('Agent', () => {
   });
 
   describe('defineCustomAgent', () => {
+    it('should set client stateManagement and abortable=false when no store is provided', () => {
+      const registry = new Registry();
+      const agent = defineCustomAgent(
+        registry,
+        { name: 'noStoreMetadataTest' },
+        async () => ({ artifacts: [] })
+      );
+      assert.strictEqual(agent.__action.metadata?.stateManagement, 'client');
+      assert.strictEqual(agent.__action.metadata?.abortable, false);
+    });
+
+    it('should set server stateManagement and abortable=true when store with onSnapshotStateChange is provided', () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore();
+      const agent = defineCustomAgent(
+        registry,
+        { name: 'fullStoreMetadataTest', store },
+        async () => ({ artifacts: [] })
+      );
+      assert.strictEqual(agent.__action.metadata?.stateManagement, 'server');
+      assert.strictEqual(agent.__action.metadata?.abortable, true);
+    });
+
+    it('should set server stateManagement and abortable=false when store lacks onSnapshotStateChange', () => {
+      const registry = new Registry();
+      const store: any = {
+        getSnapshot: async () => undefined,
+        saveSnapshot: async () => {},
+        // no onSnapshotStateChange
+      };
+      const agent = defineCustomAgent(
+        registry,
+        { name: 'noAbortStoreMetadataTest', store },
+        async () => ({ artifacts: [] })
+      );
+      assert.strictEqual(agent.__action.metadata?.stateManagement, 'server');
+      assert.strictEqual(agent.__action.metadata?.abortable, false);
+    });
+
     it('should register and execute agent', async () => {
       const registry = new Registry();
 
