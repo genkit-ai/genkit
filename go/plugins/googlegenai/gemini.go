@@ -145,6 +145,26 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 	return ai.NewModel(api.NewName(provider, name), meta, fn)
 }
 
+// resolveVertexModelName prepares a model name for the google.golang.org/genai
+// SDK. The SDK transforms most names into `publishers/google/models/NAME`,
+// which is wrong for tuned endpoints. For a short-form tuned endpoint name
+// (`endpoints/ID`), this expands it to the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID` using the client's
+// configured project and location. Other names are returned unchanged.
+func resolveVertexModelName(client *genai.Client, name string) string {
+	if !isTunedGeminiName(name) {
+		return name
+	}
+	if strings.HasPrefix(name, "projects/") {
+		return name
+	}
+	cc := client.ClientConfig()
+	if cc.Backend != genai.BackendVertexAI || cc.Project == "" || cc.Location == "" {
+		return name
+	}
+	return fmt.Sprintf("projects/%s/locations/%s/%s", cc.Project, cc.Location, name)
+}
+
 // generate requests generate call to the specified model with the provided
 // configuration.
 func generate(
@@ -157,6 +177,7 @@ func generate(
 	if model == "" {
 		return nil, errors.New("model not provided")
 	}
+	model = resolveVertexModelName(client, model)
 
 	cache, err := handleCache(ctx, client, input, model)
 	if err != nil {

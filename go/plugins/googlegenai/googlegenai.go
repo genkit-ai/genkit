@@ -207,24 +207,33 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 // The second argument describes the capability of the model.
 // Use [IsDefinedModel] to determine if a model is already defined.
 // After [Init] is called, only the known models are defined.
+//
+// Tuned Gemini endpoints are accepted in either the short form
+// `endpoints/ID` or the full resource path
+// `projects/PROJECT/locations/LOCATION/endpoints/ID`. When opts is nil the
+// caller gets the default Gemini capability set.
 func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.initted {
 		return nil, errors.New("VertexAI plugin not initialized")
 	}
-	models, err := listModels(vertexAIProvider)
-	if err != nil {
-		return nil, err
-	}
 
 	if opts == nil {
-		var ok bool
-		modelOpts, ok := models[name]
-		if !ok {
-			return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+		if isTunedGeminiName(name) {
+			defaults := GetModelOptions(name, vertexAIProvider)
+			opts = &defaults
+		} else {
+			models, err := listModels(vertexAIProvider)
+			if err != nil {
+				return nil, err
+			}
+			modelOpts, ok := models[name]
+			if !ok {
+				return nil, fmt.Errorf("VertexAI.DefineModel: called with unknown model %q and nil ModelOptions", name)
+			}
+			opts = &modelOpts
 		}
-		opts = &modelOpts
 	}
 
 	return newModel(v.gclient, name, *opts), nil
