@@ -98,7 +98,7 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware._base import BaseMiddleware
 from genkit._core._middleware._generate_middleware import (
     MiddlewareDesc,
-    new_middleware as _build_middleware_desc,
+    new_middleware,
     register_builtin_middleware,
 )
 from genkit._core._model import Document
@@ -408,7 +408,7 @@ class Genkit:
         Returns:
             The ``MiddlewareDesc`` instance.
         """
-        return _build_middleware_desc(middleware_cls)
+        return new_middleware(middleware_cls)
 
     def define_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
         """Register a middleware class on this app and return the resulting descriptor.
@@ -424,7 +424,7 @@ class Genkit:
             The registered ``MiddlewareDesc``; also available via
             ``registry.lookup_value('middleware', cls.name)``.
         """
-        desc = _build_middleware_desc(middleware_cls)
+        desc = new_middleware(middleware_cls)
         self.registry.register_value('middleware', desc.name, desc)
         return desc
 

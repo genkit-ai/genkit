@@ -21,10 +21,10 @@ the app. Chain ordering: middleware is applied first-in, outermost.
 
 Example usage:
     from genkit import Genkit, MiddlewareRef
-    from genkit.middleware import BaseMiddleware, middleware_plugin, new_middleware
+    from genkit.middleware import BaseMiddleware, new_middleware, middleware_plugin
 
-    class MyMw(BaseMiddleware):
-        name = "my_mw"
+    class MyMiddleware(BaseMiddleware):
+        name = "my_middleware"
         ...
 
     ai = Genkit(plugins=[middleware_plugin([new_middleware(MyMw)])])
@@ -36,7 +36,6 @@ Example usage:
     )
 """
 
-from genkit._core._middleware._augment_with_context import augment_with_context
 from genkit._core._middleware._base import (
     BaseMiddleware,
     MiddlewareDesc,
@@ -51,7 +50,6 @@ __all__ = [
     'MiddlewareDesc',
     'ModelHookParams',
     'ToolHookParams',
-    'augment_with_context',
     'middleware_plugin',
     'new_middleware',
 ]

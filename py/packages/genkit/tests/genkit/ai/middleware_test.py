@@ -29,7 +29,7 @@ from genkit._core._typing import (
     Role,
     TextPart,
 )
-from genkit.middleware import augment_with_context
+from genkit._core._middleware._augment_with_context import augment_with_context
 
 
 async def run_augmenter(req: ModelRequest) -> ModelRequest:
