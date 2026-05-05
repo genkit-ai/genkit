@@ -977,6 +977,64 @@ def is_gemma_model(name: str) -> bool:
     return name.startswith('gemma-')
 
 
+def is_tuned_gemini_name(name: str) -> bool:
+    """Check whether a model name refers to a Vertex AI tuned Gemini endpoint.
+
+    Accepts both the short form (``endpoints/ID``) and the fully qualified
+    resource path (``projects/PROJECT/locations/LOCATION/endpoints/ID``).
+    Mirrors ``isTunedGeminiName`` in the Go plugin.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a tuned endpoint name.
+
+    Example:
+        >>> is_tuned_gemini_name('endpoints/1234567890')
+        True
+        >>> is_tuned_gemini_name('projects/p/locations/us-central1/endpoints/9')
+        True
+        >>> is_tuned_gemini_name('gemini-2.5-flash')
+        False
+    """
+    if name.startswith('endpoints/'):
+        return True
+    return name.startswith('projects/') and '/endpoints/' in name
+
+
+def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
+    """Prepare a model name for the google-genai SDK.
+
+    The SDK's internal model-name transformer prefixes unqualified names with
+    ``publishers/google/models/``, which is wrong for tuned endpoints. For a
+    short-form ``endpoints/ID`` this expands to the fully qualified
+    ``projects/PROJECT/locations/LOCATION/endpoints/ID`` using the client's
+    configured project and location so the SDK passes it through unchanged.
+    Non-tuned names are returned as-is. Mirrors
+    ``gemini.go:resolveVertexModelName`` in the Go plugin.
+
+    Args:
+        client: The genai.Client whose project/location to use.
+        name: The incoming model name.
+
+    Returns:
+        A name safe to hand to ``client.aio.models.generate_content``.
+    """
+    if not is_tuned_gemini_name(name):
+        return name
+    if name.startswith('projects/'):
+        return name
+    api_client = getattr(client, '_api_client', None)
+    if api_client is None or not getattr(api_client, 'vertexai', False):
+        return name
+    project = getattr(api_client, 'project', None) or ''
+    location = getattr(api_client, 'location', None) or ''
+    if not project or not location:
+        return name
+    return f'projects/{project}/locations/{location}/{name}'
+
+
 def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
     """Get the appropriate config schema for a dynamically discovered model.
 
@@ -1359,7 +1417,7 @@ class GeminiModel:
         client = client or self._client
         try:
             response = await client.aio.models.generate_content(
-                model=model_name,
+                model=resolve_vertex_model_name(client, model_name),
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
@@ -1483,7 +1541,7 @@ class GeminiModel:
         client = client or self._client
         try:
             generator = await client.aio.models.generate_content_stream(
-                model=model_name,
+                model=resolve_vertex_model_name(client, model_name),
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
