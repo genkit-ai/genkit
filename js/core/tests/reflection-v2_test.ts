@@ -1151,9 +1151,7 @@ describe('ReflectionServerV2', () => {
             } else if (msg.id === 'init-1') {
               if (msg.error) {
                 reject(
-                  new Error(
-                    `init action error: ${JSON.stringify(msg.error)}`
-                  )
+                  new Error(`init action error: ${JSON.stringify(msg.error)}`)
                 );
                 return;
               }
