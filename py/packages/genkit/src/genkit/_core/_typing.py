@@ -29,7 +29,9 @@ from pydantic.alias_generators import to_camel
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
 
-warnings.filterwarnings('ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning)
+warnings.filterwarnings(
+    'ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning
+)
 
 
 class EvalStatusEnum(StrEnum):
@@ -38,6 +40,7 @@ class EvalStatusEnum(StrEnum):
     UNKNOWN = 'UNKNOWN'
     PASS = 'PASS'
     FAIL = 'FAIL'
+
 
 class FinishReason(StrEnum):
     """FinishReason data type class."""
@@ -49,6 +52,7 @@ class FinishReason(StrEnum):
     OTHER = 'other'
     UNKNOWN = 'unknown'
 
+
 class Role(StrEnum):
     """Role data type class."""
 
@@ -57,43 +61,58 @@ class Role(StrEnum):
     MODEL = 'model'
     TOOL = 'tool'
 
+
 class Schema(GenkitModel):
     """Model for schema data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
 
 class ConfigSchema(GenkitModel):
     """Model for configschema data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
 
 Metadata = dict[str, Any]  # type alias for flexible metadata
 
 Custom = dict[str, Any]  # type alias for flexible custom data
 
+
 class DocumentData(GenkitModel):
     """Model for documentdata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     content: list[DocumentPart] = Field(...)
     metadata: Metadata | None = None
 
+
 class EmbedRequest(GenkitModel):
     """Model for embedrequest data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     input: list[DocumentData] = Field(...)
     options: Any | None = Field(default=None)
 
+
 class EmbedResponse(GenkitModel):
     """Model for embedresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     embeddings: list[Embedding] = Field(...)
 
+
 class Embedding(GenkitModel):
     """Model for embedding data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     embedding: list[float] = Field(...)
     metadata: Metadata | None = None
 
+
 class BaseDataPoint(GenkitModel):
     """Model for basedatapoint data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     input: Any | None = Field(default=None)
     output: Any | None = Field(default=None)
@@ -102,8 +121,10 @@ class BaseDataPoint(GenkitModel):
     test_case_id: str | None = None
     trace_ids: list[str] | None = None
 
+
 class BaseEvalDataPoint(GenkitModel):
     """Model for baseevaldatapoint data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     input: Any | None = Field(default=None)
     output: Any | None = Field(default=None)
@@ -112,8 +133,10 @@ class BaseEvalDataPoint(GenkitModel):
     test_case_id: str = Field(...)
     trace_ids: list[str] | None = None
 
+
 class EvalFnResponse(GenkitModel):
     """Model for evalfnresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     sample_index: float | None = None
     test_case_id: str = Field(...)
@@ -121,15 +144,19 @@ class EvalFnResponse(GenkitModel):
     span_id: str | None = None
     evaluation: Score = Field(...)
 
+
 class EvalRequest(GenkitModel):
     """Model for evalrequest data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     dataset: list[BaseDataPoint] = Field(...)
     eval_run_id: str = Field(...)
     options: Any | None = Field(default=None)
 
+
 class Score(GenkitModel):
     """Model for score data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     id: str | None = None
     score: bool | float | str | None = Field(default=None)
@@ -137,37 +164,47 @@ class Score(GenkitModel):
     error: str | None = None
     details: Details | None = None
 
+
 class GenkitError(GenkitModel):
     """Model for genkiterror data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     message: str = Field(...)
     stack: str | None = None
     details: Any | None = Field(default=None)
     data: Data | None = None
 
+
 class MiddlewareDescData(GenkitModel):
     """Model for middlewaredescdata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     description: str | None = None
     config_schema: Any | ConfigSchema | None = Field(default=None)
     metadata: Metadata | None = None
 
+
 class MiddlewareRef(GenkitModel):
     """Model for middlewareref data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     config: Any | None = Field(default=None)
 
+
 class CandidateError(GenkitModel):
     """Model for candidateerror data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     index: float = Field(...)
     code: Literal['blocked', 'other', 'unknown'] = Field(...)
     message: str | None = None
 
+
 class Candidate(GenkitModel):
     """Model for candidate data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     index: float = Field(...)
     message: MessageData = Field(...)
@@ -176,8 +213,10 @@ class Candidate(GenkitModel):
     finish_message: str | None = None
     custom: Any | None = Field(default=None)
 
+
 class CustomPart(GenkitModel):
     """Model for custompart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Any | None = Field(default=None)
@@ -189,8 +228,10 @@ class CustomPart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Any | None = Field(default=None)
 
+
 class DataPart(GenkitModel):
     """Model for datapart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Any | None = Field(default=None)
@@ -202,8 +243,10 @@ class DataPart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Any | None = Field(default=None)
 
+
 class GenerateActionOptionsData(GenkitModel):
     """Model for generateactionoptionsdata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     model: str | None = None
     docs: list[DocumentData] | None = None
@@ -218,8 +261,10 @@ class GenerateActionOptionsData(GenkitModel):
     step_name: str | None = None
     use: list[MiddlewareRef] | None = None
 
+
 class GenerateActionOutputConfig(GenkitModel):
     """Model for generateactionoutputconfig data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     format: str | None = None
     content_type: str | None = None
@@ -229,8 +274,10 @@ class GenerateActionOutputConfig(GenkitModel):
     # Store Pydantic type for runtime validation (excluded from JSON)
     schema_type: Any = Field(default=None, exclude=True)
 
+
 class GenerateResponseChunk(GenkitModel):
     """Model for generateresponsechunk data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Role | None = None
     index: float | None = None
@@ -238,8 +285,10 @@ class GenerateResponseChunk(GenkitModel):
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
 
+
 class GenerationCommonConfig(GenkitModel):
     """Model for generationcommonconfig data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     version: str | None = None
     temperature: float | None = None
@@ -249,8 +298,10 @@ class GenerationCommonConfig(GenkitModel):
     stop_sequences: list[str] | None = None
     api_key: str | None = None
 
+
 class GenerationUsage(GenkitModel):
     """Model for generationusage data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     input_tokens: float | None = None
     output_tokens: float | None = None
@@ -267,8 +318,10 @@ class GenerationUsage(GenkitModel):
     thoughts_tokens: float | None = None
     cached_content_tokens: float | None = None
 
+
 class MediaPart(GenkitModel):
     """Model for mediapart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Media = Field(...)
@@ -280,15 +333,19 @@ class MediaPart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Any | None = Field(default=None)
 
+
 class MessageData(GenkitModel):
     """Model for messagedata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Role | str = Field(...)
     content: list[Part] = Field(...)
     metadata: Metadata | None = None
 
+
 class ModelInfo(GenkitModel):
     """Model for modelinfo data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     versions: list[str] | None = None
     label: str | None = None
@@ -296,14 +353,18 @@ class ModelInfo(GenkitModel):
     supports: Supports | None = None
     stage: Stage | None = None
 
+
 class ModelReference(GenkitModel):
     """Model for modelreference data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     config: Any | None = Field(default=None)
 
+
 class ModelResponseChunk(GenkitModel):
     """Model for modelresponsechunk data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     role: Any | None = Field(default=None)
     index: float | None = None
@@ -311,15 +372,19 @@ class ModelResponseChunk(GenkitModel):
     custom: Any | None = Field(default=None)
     aggregated: bool | None = None
 
+
 class MultipartToolResponse(GenkitModel):
     """Model for multiparttoolresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     output: Any | None = Field(default=None)
     content: list[Part] | None = None
     metadata: Metadata | None = None
 
+
 class Operation(GenkitModel):
     """Model for operation data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     action: str | None = None
     id: str = Field(...)
@@ -328,16 +393,22 @@ class Operation(GenkitModel):
     error: Error | None = None
     metadata: Metadata | None = None
 
+
 class OutputConfig(GenkitModel):
     """Model for outputconfig data."""
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=())
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
+    )
     format: str | None = None
     schema_: dict[str, Any] | None = None
     constrained: bool | None = None
     content_type: str | None = None
 
+
 class ReasoningPart(GenkitModel):
     """Model for reasoningpart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Any | None = Field(default=None)
@@ -349,8 +420,10 @@ class ReasoningPart(GenkitModel):
     reasoning: str = Field(...)
     resource: Any | None = Field(default=None)
 
+
 class ResourcePart(GenkitModel):
     """Model for resourcepart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Any | None = Field(default=None)
@@ -362,8 +435,10 @@ class ResourcePart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Resource = Field(...)
 
+
 class TextPart(GenkitModel):
     """Model for textpart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: str = Field(...)
     media: Any | None = Field(default=None)
@@ -375,17 +450,25 @@ class TextPart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Any | None = Field(default=None)
 
+
 class ToolDefinition(GenkitModel):
     """Model for tooldefinition data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     description: str = Field(...)
-    input_schema: Any | dict[str, Any] | None = Field(default=None, description='Valid JSON Schema representing the input of the tool.')
-    output_schema: Any | dict[str, Any] | None = Field(default=None, description='Valid JSON Schema describing the output of the tool.')
+    input_schema: Any | dict[str, Any] | None = Field(
+        default=None, description='Valid JSON Schema representing the input of the tool.'
+    )
+    output_schema: Any | dict[str, Any] | None = Field(
+        default=None, description='Valid JSON Schema describing the output of the tool.'
+    )
     metadata: Metadata | None = None
+
 
 class ToolRequestPart(GenkitModel):
     """Model for toolrequestpart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Any | None = Field(default=None)
@@ -397,8 +480,10 @@ class ToolRequestPart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Any | None = Field(default=None)
 
+
 class ToolResponsePart(GenkitModel):
     """Model for toolresponsepart data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     text: Any | None = Field(default=None)
     media: Any | None = Field(default=None)
@@ -410,79 +495,107 @@ class ToolResponsePart(GenkitModel):
     reasoning: Any | None = Field(default=None)
     resource: Any | None = Field(default=None)
 
+
 class Media(GenkitModel):
     """Model for media data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     content_type: str | None = None
     url: str = Field(...)
 
+
 class ToolRequest(GenkitModel):
     """Model for toolrequest data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     ref: str | None = None
     name: str = Field(...)
     input: Any | None = Field(default=None)
     partial: bool | None = None
 
+
 class ToolResponse(GenkitModel):
     """Model for toolresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     ref: str | None = None
     name: str = Field(...)
     output: Any | None = Field(default=None)
     content: list[Any] | None = None
 
+
 class ActionMetadata(GenkitModel):
     """Model for actionmetadata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     key: str | None = None
     action_type: str | None = None
     name: str = Field(...)
     description: str | None = None
     input_schema: Any | None = Field(default=None)
-    input_json_schema: Any | dict[str, Any] | None = Field(default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.')
+    input_json_schema: Any | dict[str, Any] | None = Field(
+        default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
+    )
     output_schema: Any | None = Field(default=None)
-    output_json_schema: Any | None = Field(default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.')
+    output_json_schema: Any | None = Field(
+        default=None, description='A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.'
+    )
     stream_schema: Any | None = Field(default=None)
     metadata: Metadata | None = None
 
+
 class ReflectionCancelActionParams(GenkitModel):
     """Model for reflectioncancelactionparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str = Field(...)
 
+
 class ReflectionCancelActionResponse(GenkitModel):
     """Model for reflectioncancelactionresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     message: str = Field(...)
 
+
 class ReflectionConfigureParams(GenkitModel):
     """Model for reflectionconfigureparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     telemetry_server_url: str | None = None
 
+
 class ReflectionEndInputStreamParams(GenkitModel):
     """Model for reflectionendinputstreamparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     request_id: str = Field(...)
 
+
 class ReflectionListActionsResponse(GenkitModel):
     """Model for reflectionlistactionsresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     actions: Actions = Field(...)
 
+
 class ReflectionListValuesParams(GenkitModel):
     """Model for reflectionlistvaluesparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     type: str = Field(...)
 
+
 class ReflectionListValuesResponse(GenkitModel):
     """Model for reflectionlistvaluesresponse data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     values: Values = Field(...)
 
+
 class ReflectionRegisterParams(GenkitModel):
     """Model for reflectionregisterparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     id: str = Field(...)
     pid: float = Field(...)
@@ -491,8 +604,10 @@ class ReflectionRegisterParams(GenkitModel):
     reflection_api_spec_version: float | None = None
     envs: list[str] | None = None
 
+
 class ReflectionRunActionParams(GenkitModel):
     """Model for reflectionrunactionparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     runtime_id: str | None = None
     key: str = Field(..., description='Action key that consists of the action type and ID.')
@@ -502,56 +617,74 @@ class ReflectionRunActionParams(GenkitModel):
     stream: bool | None = None
     stream_input: bool | None = None
 
+
 class ReflectionRunActionStateParams(GenkitModel):
     """Model for reflectionrunactionstateparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     request_id: str = Field(...)
     state: State | None = None
 
+
 class ReflectionSendInputStreamChunkParams(GenkitModel):
     """Model for reflectionsendinputstreamchunkparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     request_id: str = Field(...)
     chunk: Any | None = Field(default=None)
+
 
 class ReflectionStreamChunkParams(GenkitModel):
     """Model for reflectionstreamchunkparams data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     request_id: str = Field(...)
     chunk: Any | None = Field(default=None)
 
+
 class InstrumentationLibrary(GenkitModel):
     """Model for instrumentationlibrary data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     version: str | None = None
     schema_url: str | None = None
 
+
 class Link(GenkitModel):
     """Model for link data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     context: SpanContext | None = None
     attributes: Attributes | None = None
     dropped_attributes_count: float | None = None
 
+
 class PathMetadata(GenkitModel):
     """Model for pathmetadata data."""
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True, frozen=True)
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='forbid', populate_by_name=True, frozen=True
+    )
     path: str = Field(...)
     status: str = Field(...)
     error: str | None = None
     latency: float = Field(...)
 
+
 class SpanContext(GenkitModel):
     """Model for spancontext data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str = Field(...)
     span_id: str = Field(...)
     is_remote: bool | None = None
     trace_flags: float = Field(...)
 
+
 class SpanData(GenkitModel):
     """Model for spandata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     span_id: str = Field(...)
     trace_id: str = Field(...)
@@ -568,15 +701,19 @@ class SpanData(GenkitModel):
     time_events: TimeEvents | None = None
     truncated: bool | None = None
 
+
 class SpanEndEvent(GenkitModel):
     """Model for spanendevent data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str = Field(...)
     span: SpanData = Field(...)
     type: str = Field(...)
 
+
 class SpanMetadata(GenkitModel):
     """Model for spanmetadata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
     state: Literal['success', 'error'] | None = None
@@ -586,33 +723,43 @@ class SpanMetadata(GenkitModel):
     metadata: Metadata | None = None
     path: str | None = None
 
+
 class SpanStartEvent(GenkitModel):
     """Model for spanstartevent data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str = Field(...)
     span: SpanData = Field(...)
     type: str = Field(...)
 
+
 class SpanStatus(GenkitModel):
     """Model for spanstatus data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     code: float = Field(...)
     message: str | None = None
 
+
 class SpantEventBase(GenkitModel):
     """Model for spanteventbase data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str = Field(...)
     span: SpanData = Field(...)
 
+
 class TimeEvent(GenkitModel):
     """Model for timeevent data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     time: float = Field(...)
     annotation: Annotation = Field(...)
 
+
 class TraceData(GenkitModel):
     """Model for tracedata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str = Field(...)
     display_name: str | None = None
@@ -620,39 +767,51 @@ class TraceData(GenkitModel):
     end_time: float | None = None
     spans: Spans = Field(...)
 
+
 class TraceMetadata(GenkitModel):
     """Model for tracemetadata data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     feature_name: str | None = None
     paths: list[PathMetadata] | None = None
     timestamp: float = Field(...)
 
+
 class Details(GenkitModel):
     """Model for details data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     reasoning: str | None = None
 
+
 class Data(GenkitModel):
     """Model for data data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     genkit_error_message: str | None = None
     genkit_error_details: GenkitErrorDetails | None = None
 
+
 class GenkitErrorDetails(GenkitModel):
     """Model for genkiterrordetails data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     stack: str | None = None
     trace_id: str = Field(...)
 
+
 class Resume(GenkitModel):
     """Model for resume data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     respond: list[ToolResponsePart] | None = None
     restart: list[ToolRequestPart] | None = None
     metadata: Metadata | None = None
 
+
 class Supports(GenkitModel):
     """Model for supports data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     multiturn: bool | None = None
     media: bool | None = None
@@ -665,96 +824,130 @@ class Supports(GenkitModel):
     tool_choice: bool | None = None
     long_running: bool | None = None
 
+
 class Error(GenkitModel):
     """Model for error data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
     message: str = Field(...)
 
+
 class Resource(GenkitModel):
     """Model for resource data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     uri: str = Field(...)
 
+
 class Actions(GenkitModel):
     """Model for actions data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
 
 class Values(GenkitModel):
     """Model for values data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
 
 TelemetryLabels = dict[str, str]  # type alias for telemetrylabels (typed string map)
 
+
 class State(GenkitModel):
     """Model for state data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     trace_id: str | None = None
 
+
 class Attributes(GenkitModel):
     """Model for attributes data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
 
 class SameProcessAsParentSpan(GenkitModel):
     """Model for sameprocessasparentspan data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     value: bool = Field(...)
 
+
 class TimeEvents(GenkitModel):
     """Model for timeevents data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     time_event: list[TimeEvent] | None = None
 
+
 class Annotation(GenkitModel):
     """Model for annotation data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     attributes: Attributes = Field(...)
     description: str = Field(...)
 
+
 class Spans(GenkitModel):
     """Model for spans data."""
+
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
 
 class DocumentPart(RootModel[TextPart | MediaPart]):
     """Root model for DocumentPart union (Part(root=X), DocumentPart(root=X))."""
 
-class Part(RootModel[TextPart | MediaPart | ToolRequestPart | ToolResponsePart | DataPart | CustomPart | ReasoningPart | ResourcePart]):
+
+class Part(
+    RootModel[
+        TextPart | MediaPart | ToolRequestPart | ToolResponsePart | DataPart | CustomPart | ReasoningPart | ResourcePart
+    ]
+):
     """Root model for Part union (Part(root=X), DocumentPart(root=X))."""
+
 
 TraceEvent = SpanStartEvent | SpanEndEvent
 
+
 class EvalResponse(RootModel[list[EvalFnResponse]]):
     """Root model for evalresponse."""
+
     root: list[EvalFnResponse]
 
 
 class Constrained(StrEnum):
     """Constrained generation support (none, all, no-tools)."""
 
-    NONE = "none"
-    ALL = "all"
-    NO_TOOLS = "no-tools"
+    NONE = 'none'
+    ALL = 'all'
+    NO_TOOLS = 'no-tools'
+
 
 class Stage(StrEnum):
     """Model stage (featured, stable, unstable, legacy, deprecated)."""
 
-    FEATURED = "featured"
-    STABLE = "stable"
-    UNSTABLE = "unstable"
-    LEGACY = "legacy"
-    DEPRECATED = "deprecated"
+    FEATURED = 'featured'
+    STABLE = 'stable'
+    UNSTABLE = 'unstable'
+    LEGACY = 'legacy'
+    DEPRECATED = 'deprecated'
+
 
 class ToolChoice(StrEnum):
     """Tool choice for generation (auto, required, none)."""
 
-    AUTO = "auto"
-    REQUIRED = "required"
-    NONE = "none"
+    AUTO = 'auto'
+    REQUIRED = 'required'
+    NONE = 'none'
+
 
 class MediaModel(RootModel[Any]):
     """Wrapper for media content (flexible structure)."""
 
+
 class Text(RootModel[str]):
     """Plain text content."""
 
-Resource1 = Resource  # alias for Resource (resource with uri)
 
+Resource1 = Resource  # alias for Resource (resource with uri)

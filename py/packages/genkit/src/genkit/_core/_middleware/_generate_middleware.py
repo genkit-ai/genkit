@@ -30,6 +30,7 @@ from ._base import (
     new_middleware,
 )
 
+
 def builtin_middleware_descs() -> list[MiddlewareDesc]:
     """Stock middleware descriptors; empty until the built-in middleware PR lands."""
     return []

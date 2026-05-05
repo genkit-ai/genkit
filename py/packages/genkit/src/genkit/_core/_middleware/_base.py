@@ -184,7 +184,7 @@ class MiddlewareDesc(MiddlewareDescData):
         name: str,
         description: str | None = None,
         config_schema: object | None = None,
-        metadata: object | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         _validate_middleware_key_segment(name, label='MiddlewareDesc name')
         super().__init__(

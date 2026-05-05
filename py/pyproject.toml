@@ -261,6 +261,7 @@ select = [
 "packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
+"packages/genkit/src/genkit/_core/_middleware/_generate_middleware.py" = ["F401"]
 "packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
 # Test files don't need docstrings; test method names are self-documenting
 "**/tests/**/*.py" = ["D", "ANN401"]

@@ -23,7 +23,6 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._ai._tools import Interrupt
-from genkit._core._action import ActionRunContext
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._typing import (
     DocumentPart,
@@ -196,7 +195,8 @@ def test_generate_action_options_use_is_middleware_ref_only() -> None:
     """
     # ``GenerateActionOptions.use`` is validated with ``mode='before'`` and rejects
     # non-ref entries by raising ``TypeError``; pydantic rewraps that as ``ValidationError``.
-    with pytest.raises((ValidationError, TypeError)):
+    expected: tuple[type[BaseException], ...] = (ValidationError, TypeError)
+    with pytest.raises(expected):
         GenerateActionOptions(
             model='echoModel',
             messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
