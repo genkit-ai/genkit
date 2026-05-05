@@ -372,16 +372,20 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	var runGenerate func(context.Context, *GenerateParams) (*ModelResponse, error)
 
 	runGenerate = func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
-		req := params.Request
-		currentTurn := params.Iteration
-		messageIndex := params.MessageIndex
+		name := params.Options.StepName
+		if name == "" {
+			name = "generate"
+		}
 		spanMetadata := &tracing.SpanMetadata{
-			Name:    "generate",
+			Name:    name,
 			Type:    "util",
 			Subtype: "util",
 		}
 
-		return tracing.RunInNewSpan(ctx, spanMetadata, req, func(ctx context.Context, req *ModelRequest) (*ModelResponse, error) {
+		return tracing.RunInNewSpan(ctx, spanMetadata, params.Options, func(ctx context.Context, _ *GenerateActionOptions) (*ModelResponse, error) {
+			req := params.Request
+			currentTurn := params.Iteration
+			messageIndex := params.MessageIndex
 			var wrappedCb ModelStreamCallback
 			currentRole := RoleModel
 			currentIndex := messageIndex
@@ -694,6 +698,7 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		ToolChoice:         genOpts.ToolChoice,
 		Docs:               genOpts.Documents,
 		ReturnToolRequests: genOpts.ReturnToolRequests != nil && *genOpts.ReturnToolRequests,
+		StepName:           genOpts.StepName,
 		Output: &GenerateActionOutputConfig{
 			JsonSchema:   genOpts.OutputSchema,
 			Format:       genOpts.OutputFormat,
