@@ -184,7 +184,7 @@ async def test_reflection_server_v2_register_handshake_telemetry(fake_manager: F
 
 @pytest.mark.asyncio
 async def test_reflection_server_v2_list_actions(fake_manager: FakeReflectionManager) -> None:
-    """listActions returns the same catalog as :meth:`Registry.list_actions`."""
+    """listActions returns the same action map as HTTP reflection (:func:`_get_actions_payload`)."""
     registry = Registry()
 
     async def inc(x: int) -> int:
@@ -476,3 +476,57 @@ async def test_reflection_server_v2_method_not_found(fake_manager: FakeReflectio
         assert err.get('code') == JSON_RPC_METHOD_NOT_FOUND
     finally:
         await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_omits_data_for_simple_errors(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Plain validation errors omit ``error.data`` to match JS / Go reflection-v2.
+
+    JS's ``JSON.stringify`` drops ``undefined`` props and Go's struct uses
+    ``json:",omitempty"`` on ``Data``, so ``sendError(id, code, message)`` with
+    no extra payload produces a frame without a ``data`` key at all. Only
+    handlers that assemble a Status-shaped payload (runAction errors) emit one.
+    """
+
+    registry = Registry()
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'unknownMethod',
+            'id': 'e1',
+        })
+        resp = await fake_manager.read_rpc()
+        err = resp.get('error') or {}
+        assert err.get('code') == JSON_RPC_METHOD_NOT_FOUND
+        assert 'data' not in err, 'error.data must be omitted for plain JSON-RPC errors'
+
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/model/missing', 'input': {}},
+            'id': 'e2',
+        })
+        resp = await fake_manager.read_rpc()
+        err = resp.get('error') or {}
+        assert err.get('code') == JSON_RPC_INVALID_PARAMS
+        assert 'not found' in str(err.get('message', '')).lower()
+        assert 'data' not in err, 'error.data must be omitted when no Status payload is built'
+    finally:
+        await _stop_client(client, task)
+
+
+def test_reflection_run_action_params_accepts_dev_ui_telemetry_labels() -> None:
+    """Dev UI sends telemetryLabels as a string record (e.g. genkitx:ignore-trace)."""
+
+    from genkit._core._typing import ReflectionRunActionParams
+
+    p = ReflectionRunActionParams.model_validate({
+        'key': '/executable-prompt/story',
+        'telemetryLabels': {'genkitx:ignore-trace': 'true'},
+    })
+    assert p.telemetry_labels == {'genkitx:ignore-trace': 'true'}

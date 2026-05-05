@@ -38,7 +38,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
 from genkit._core._constants import GENKIT_VERSION
-from genkit._core._error import StatusCodes, get_reflection_json
+from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
@@ -69,6 +69,18 @@ RECONNECT_MAX_DELAY_S = 5.0
 WRITE_TIMEOUT_S = 5.0
 
 
+def _coerce_json_rpc_message(message: object) -> str:
+    """JSON-RPC and RuntimeManagerV2 require ``error.message`` to be a string."""
+    if isinstance(message, str):
+        return message
+    if message is None:
+        return 'Unknown error'
+    try:
+        return json.dumps(message, default=str)
+    except TypeError:
+        return str(message)
+
+
 class JsonRpcCallError(Exception):
     """Error returned in a JSON-RPC response for a request we originated."""
 
@@ -83,6 +95,10 @@ def _chunk_for_json(chunk: object) -> object:
     if isinstance(chunk, BaseModel):
         return json.loads(chunk.model_dump_json())
     return chunk
+
+
+def _omit_none(payload: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in payload.items() if v is not None}
 
 
 class ReflectionServerV2:
@@ -178,10 +194,11 @@ class ReflectionServerV2:
         self,
         req_id: str,
         code: int,
-        message: str,
+        message: object,
         data: object | None = None,
     ) -> None:
-        err: dict[str, Any] = {'code': code, 'message': message}
+        """Emit a JSON-RPC error."""
+        err: dict[str, Any] = {'code': code, 'message': _coerce_json_rpc_message(message)}
         if data is not None:
             err['data'] = data
         await self._send_message({'jsonrpc': '2.0', 'error': err, 'id': req_id})
@@ -327,19 +344,18 @@ class ReflectionServerV2:
             return
         sid = str(req_id)
         catalog = await self._registry.list_actions()
-        actions: dict[str, dict[str, Any]] = {}
-        for key, meta in catalog.items():
-            row: dict[str, Any] = {
+        actions = {
+            key: _omit_none({
                 'key': key,
                 'name': meta.name,
-                'actionType': str(meta.action_type) if meta.action_type is not None else None,
+                'actionType': meta.action_type,
                 'description': meta.description,
                 'metadata': meta.metadata,
-                'inputSchema': meta.input_schema if meta.input_schema is not None else meta.input_json_schema,
-                'outputSchema': meta.output_schema if meta.output_schema is not None else meta.output_json_schema,
-                'streamSchema': meta.stream_schema,
-            }
-            actions[key] = {k: v for k, v in row.items() if v is not None}
+                'inputSchema': meta.input_schema or meta.input_json_schema,
+                'outputSchema': meta.output_schema or meta.output_json_schema,
+            })
+            for key, meta in catalog.items()
+        }
         await self._send_response(sid, {'actions': actions})
 
     async def _handle_list_values(self, req_id: str | int | None, params: dict[str, Any]) -> None:
@@ -460,8 +476,7 @@ class ReflectionServerV2:
 
         labels: dict[str, object] | None = None
         if p.telemetry_labels is not None:
-            dumped = p.telemetry_labels.model_dump(exclude_none=True)
-            labels = {str(k): v for k, v in dumped.items()} if dumped else None
+            labels = {str(k): v for k, v in p.telemetry_labels.items()}
 
         try:
             output = await action.run(
@@ -479,10 +494,12 @@ class ReflectionServerV2:
                 result_body = output.response.model_dump(by_alias=True, exclude_none=True)
             else:
                 result_body = output.response
-            await self._send_response(
-                sid,
-                {'result': result_body, 'telemetry': {'traceId': output.trace_id}},
-            )
+            # Omit telemetry or traceId when absent — Dev UI parses with Zod; null traceId fails
+            # z.string().optional() and would surface as HTTP 500 with an empty error body.
+            success_body: dict[str, Any] = {'result': result_body}
+            if output.trace_id:
+                success_body['telemetry'] = {'traceId': output.trace_id}
+            await self._send_response(sid, success_body)
         except asyncio.CancelledError:
             err_details: dict[str, Any] = {}
             if trace_holder[0]:
@@ -497,19 +514,29 @@ class ReflectionServerV2:
             return
         except Exception as e:
             logger.exception('reflection V2: runAction error')
+            # Wire contract requires ``details`` to carry only ``stack`` and ``traceId``
+            # (see ``GenkitErrorSchema.data.genkitErrorDetails`` in genkit-tools); anything
+            # else in ``GenkitError.details`` is runtime-internal and gets dropped.
+            #
+            # ``stack``: prefer the value the error already carries (set by ``GenkitError``
+            # and copied through by ``get_reflection_json``); fall back to formatting the
+            # live traceback so plain Python exceptions still surface a useful frame.
             ref = get_reflection_json(e)
-            err_data = {'code': ref.code, 'message': ref.message}
-            details_map: dict[str, Any] = {}
-            if ref.details:
-                d = ref.details.model_dump(by_alias=True, exclude_none=True)
-                details_map = {k: v for k, v in d.items() if v is not None}
-            if trace_holder[0]:
-                details_map['traceId'] = trace_holder[0]
-            if e.__traceback__ and not details_map.get('stack'):
-                details_map['stack'] = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-            if details_map:
-                err_data['details'] = details_map
-            await self._send_error(sid, JSON_RPC_SERVER_ERROR, ref.message, err_data)
+            stack = ref.details.stack if ref.details else None
+            if not stack and e.__traceback__:
+                stack = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+            tid = trace_holder[0] or (ref.details.trace_id if ref.details else None)
+            status = ReflectionError(
+                code=ref.code,
+                message=_coerce_json_rpc_message(ref.message),
+                details=ReflectionErrorDetails(stack=stack, trace_id=tid) if (stack or tid) else None,
+            )
+            await self._send_error(
+                sid,
+                JSON_RPC_SERVER_ERROR,
+                status.message,
+                status.model_dump(by_alias=True, exclude_none=True),
+            )
         finally:
             tid = trace_holder[0]
             if tid:

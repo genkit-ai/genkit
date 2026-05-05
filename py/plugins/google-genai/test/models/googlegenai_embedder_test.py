@@ -20,11 +20,7 @@ import pytest
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit import (
-    Document,
-    EmbedRequest,
-    EmbedResponse,
-)
+from genkit import Document, EmbedRequest, EmbedResponse
 from genkit.plugins.google_genai.models.embedder import (
     Embedder,
     GeminiEmbeddingModels,
@@ -57,3 +53,13 @@ async def test_embedding(mocker: MockerFixture, version: GeminiEmbeddingModels) 
     assert isinstance(response, EmbedResponse)
     assert len(response.embeddings) == 1
     assert response.embeddings[0].embedding == embedding_values
+
+
+@pytest.mark.asyncio
+async def test_embedding_rejects_empty_input(mocker: MockerFixture) -> None:
+    """Empty input must not call the API (avoids opaque BatchEmbedContents errors)."""
+    googleai_client_mock = mocker.AsyncMock()
+    embedder = Embedder(GeminiEmbeddingModels.GEMINI_EMBEDDING_001, googleai_client_mock)
+    with pytest.raises(ValueError, match='Embed request input is empty'):
+        await embedder.generate(EmbedRequest(input=[]))
+    googleai_client_mock.aio.models.embed_content.assert_not_called()

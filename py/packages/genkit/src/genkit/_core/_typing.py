@@ -851,10 +851,7 @@ class Values(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
 
-class TelemetryLabels(GenkitModel):
-    """Model for telemetrylabels data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+TelemetryLabels = dict[str, str]  # type alias for telemetrylabels (typed string map)
 
 
 class State(GenkitModel):
