@@ -42,7 +42,6 @@ export const SessionStateSchema = z.object({
   messages: z.array(MessageSchema).optional(),
   custom: z.any().optional(),
   artifacts: z.array(ArtifactSchema).optional(),
-  inputVariables: z.any().optional(),
 });
 ```
 
@@ -136,29 +135,27 @@ export function defineCustomAgent<Stream = any, State = any>(
 Ergonomic shortcut for standard prompt-backed loop orchestration. Automatically manages history, tool restarts, and renders prompts. References a prompt defined separately via `definePrompt`.
 
 ```ts
-export function definePromptAgent<PromptIn = any, State = any>(
+export function definePromptAgent<State = any>(
   registry: Registry,
   config: {
     promptName: string;
-    defaultInput: PromptIn;
     store?: SessionStore<State>;
   }
-): Agent<any, State>;
+): Agent<State>;
 ```
 
 ### 5.3 `defineAgent`
-The most ergonomic API — combines `definePrompt` and `definePromptAgent` into a single flat config. The config accepts all `PromptConfig` fields (name, model, system, tools, input, etc.) plus agent-specific fields (`defaultInput`, `store`, `snapshotCallback`).
+The most ergonomic API — combines `definePrompt` and `definePromptAgent` into a single flat config. The config accepts all `PromptConfig` fields (name, model, system, tools, etc.) plus agent-specific fields (`store`, `snapshotCallback`).
 
 ```ts
-export function defineAgent<PromptIn = unknown, State = unknown>(
+export function defineAgent<State = unknown>(
   registry: Registry,
-  config: AgentConfig<PromptIn, State>
-): Agent<State, PromptIn>;
+  config: AgentConfig<State>
+): Agent<State>;
 
-export interface AgentConfig<PromptIn = unknown, State = unknown> extends PromptConfig {
-  defaultInput: PromptIn;
-  store?: SessionStore<State, PromptIn>;
-  snapshotCallback?: SnapshotCallback<State, PromptIn>;
+export interface AgentConfig<State = unknown> extends PromptConfig {
+  store?: SessionStore<State>;
+  snapshotCallback?: SnapshotCallback<State>;
 }
 ```
 
@@ -179,7 +176,7 @@ export interface AgentConfig<PromptIn = unknown, State = unknown> extends Prompt
    - Construct the `SessionRunner` orchestrator.
    - Integrate snapshot event callbacks into execution loops.
 3. **Phase 3: Prompt Engine Hooks**
-   - Adapt prompt templates to read overridden session `inputVariables`.
+   - Integrate prompt rendering into agent execution loops.
 4. **Phase 4: Verification**
    - Test state retention between single-turn `.run()` bounds.
    - Simulate client disconnections over `.streamBidi()`.

@@ -55,25 +55,23 @@ export const SessionStateSchema = z.object({
   messages: z.array(MessageSchema).optional(),
   custom: z.any().optional(),
   artifacts: z.array(ArtifactSchema).optional(),
-  inputVariables: z.any().optional(),
 });
 
 /**
  * State persisted for a session across turns.
  */
-export interface SessionState<S = unknown, I = unknown> {
+export interface SessionState<S = unknown> {
   messages?: MessageData[];
   custom?: S;
   artifacts?: Artifact[];
-  inputVariables?: I;
 }
 
 /**
  * The execution context provided to a snapshot callback.
  */
-export interface SnapshotContext<S = unknown, I = unknown> {
-  state: SessionState<S, I>;
-  prevState?: SessionState<S, I>;
+export interface SnapshotContext<S = unknown> {
+  state: SessionState<S>;
+  prevState?: SessionState<S>;
   turnIndex: number;
   event: 'turnEnd' | 'invocationEnd';
 }
@@ -81,19 +79,19 @@ export interface SnapshotContext<S = unknown, I = unknown> {
 /**
  * Callback triggered before a snapshot is saved. Return false to reject persistence.
  */
-export type SnapshotCallback<S = unknown, I = unknown> = (
-  ctx: SnapshotContext<S, I>
+export type SnapshotCallback<S = unknown> = (
+  ctx: SnapshotContext<S>
 ) => boolean;
 
 /**
  * Saved snapshot of a session's state at a given event point.
  */
-export interface SessionSnapshot<S = unknown, I = unknown> {
+export interface SessionSnapshot<S = unknown> {
   snapshotId: string;
   parentId?: string;
   createdAt: string;
   event: 'turnEnd' | 'invocationEnd';
-  state: SessionState<S, I>;
+  state: SessionState<S>;
   status?: 'pending' | 'done' | 'failed' | 'aborted';
 
   error?: {
@@ -113,18 +111,18 @@ export interface SessionStoreOptions {
 /**
  * Interface for persistent session snapshot storage.
  */
-export interface SessionStore<S = unknown, I = unknown> {
+export interface SessionStore<S = unknown> {
   getSnapshot(
     snapshotId: string,
     options?: SessionStoreOptions
-  ): Promise<SessionSnapshot<S, I> | undefined>;
+  ): Promise<SessionSnapshot<S> | undefined>;
   saveSnapshot(
-    snapshot: SessionSnapshot<S, I>,
+    snapshot: SessionSnapshot<S>,
     options?: SessionStoreOptions
   ): Promise<void>;
   onSnapshotStateChange?(
     snapshotId: string,
-    callback: (snapshot: SessionSnapshot<S, I>) => void,
+    callback: (snapshot: SessionSnapshot<S>) => void,
     options?: SessionStoreOptions
   ): void | (() => void);
 }
@@ -132,11 +130,11 @@ export interface SessionStore<S = unknown, I = unknown> {
 /**
  * State manager for a session turn, tracking messages, custom state, and artifacts.
  */
-export class Session<S = unknown, I = unknown> extends EventEmitter {
-  private state: SessionState<S, I>;
+export class Session<S = unknown> extends EventEmitter {
+  private state: SessionState<S>;
   private version: number = 0;
 
-  constructor(initialState: SessionState<S, I>) {
+  constructor(initialState: SessionState<S>) {
     super();
     this.state = initialState;
   }
@@ -144,7 +142,7 @@ export class Session<S = unknown, I = unknown> extends EventEmitter {
   /**
    * Returns a deep copy of the current session state.
    */
-  getState(): SessionState<S, I> {
+  getState(): SessionState<S> {
     return structuredClone(this.state);
   }
 
@@ -245,26 +243,26 @@ export class Session<S = unknown, I = unknown> extends EventEmitter {
 /**
  * In-memory implementation of persistent Session Store.
  */
-export class InMemorySessionStore<S = unknown, I = unknown>
-  implements SessionStore<S, I>
+export class InMemorySessionStore<S = unknown>
+  implements SessionStore<S>
 {
-  private snapshots = new Map<string, SessionSnapshot<S, I>>();
+  private snapshots = new Map<string, SessionSnapshot<S>>();
   private listeners = new Map<
     string,
-    Array<(snapshot: SessionSnapshot<S, I>) => void>
+    Array<(snapshot: SessionSnapshot<S>) => void>
   >();
 
   async getSnapshot(
     snapshotId: string,
     options?: SessionStoreOptions
-  ): Promise<SessionSnapshot<S, I> | undefined> {
+  ): Promise<SessionSnapshot<S> | undefined> {
     const snap = this.snapshots.get(snapshotId);
     if (!snap) return undefined;
     return structuredClone(snap);
   }
 
   async saveSnapshot(
-    snapshot: SessionSnapshot<S, I>,
+    snapshot: SessionSnapshot<S>,
     options?: SessionStoreOptions
   ): Promise<void> {
     this.snapshots.set(snapshot.snapshotId, structuredClone(snapshot));
@@ -278,7 +276,7 @@ export class InMemorySessionStore<S = unknown, I = unknown>
 
   onSnapshotStateChange(
     snapshotId: string,
-    callback: (snapshot: SessionSnapshot<S, I>) => void,
+    callback: (snapshot: SessionSnapshot<S>) => void,
     options?: SessionStoreOptions
   ): void | (() => void) {
     if (!this.listeners.has(snapshotId)) {
@@ -334,8 +332,8 @@ const SAFE_ID_PATTERN =
  * Each snapshot is persisted as a JSON file under `dirPath/<prefix>/<snapshotId>.json`.
  * Only UUID-formatted snapshot IDs are accepted to prevent path traversal.
  */
-export class FileSessionStore<S = unknown, I = unknown>
-  implements SessionStore<S, I>
+export class FileSessionStore<S = unknown>
+  implements SessionStore<S>
 {
   private dirPath: string;
   private maxPersistedChainLength?: number;
@@ -393,11 +391,11 @@ export class FileSessionStore<S = unknown, I = unknown>
   async getSnapshot(
     snapshotId: string,
     options?: SessionStoreOptions
-  ): Promise<SessionSnapshot<S, I> | undefined> {
+  ): Promise<SessionSnapshot<S> | undefined> {
     const filePath = await this.getFilePath(snapshotId, options);
     try {
       const fileContents = await fsp.readFile(filePath, 'utf-8');
-      return JSON.parse(fileContents) as SessionSnapshot<S, I>;
+      return JSON.parse(fileContents) as SessionSnapshot<S>;
     } catch (e: unknown) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
       throw e;
@@ -405,14 +403,14 @@ export class FileSessionStore<S = unknown, I = unknown>
   }
 
   async saveSnapshot(
-    snapshot: SessionSnapshot<S, I>,
+    snapshot: SessionSnapshot<S>,
     options?: SessionStoreOptions
   ): Promise<void> {
     const filePath = await this.getFilePath(snapshot.snapshotId, options);
     await fsp.writeFile(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
 
     if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
-      let current: SessionSnapshot<S, I> | undefined = snapshot;
+      let current: SessionSnapshot<S> | undefined = snapshot;
       const chain: string[] = [];
 
       while (current) {

@@ -67,10 +67,10 @@ export const AgentInitSchema = z.object({
 /**
  * Initialization options for an agent turn.
  */
-export interface AgentInit<S = unknown, I = unknown> {
+export interface AgentInit<S = unknown> {
   snapshotId?: string;
   newSnapshotId?: string;
-  state?: SessionState<S, I>;
+  state?: SessionState<S>;
 }
 
 /**
@@ -154,27 +154,27 @@ export interface AgentOutput<S = unknown> {
 /**
  * Executor responsible for running turns over input streams and persisting state.
  */
-export class SessionRunner<State = unknown, InputVariables = unknown> {
-  readonly session: Session<State, InputVariables>;
+export class SessionRunner<State = unknown> {
+  readonly session: Session<State>;
   readonly inputCh: AsyncIterable<AgentInput>;
   turnIndex: number = 0;
   public onEndTurn?: (snapshotId?: string) => void;
   public onDetach?: (snapshotId: string) => void;
   public newSnapshotId?: string;
-  private snapshotCallback?: SnapshotCallback<State, InputVariables>;
-  private lastSnapshot?: SessionSnapshot<State, InputVariables>;
+  private snapshotCallback?: SnapshotCallback<State>;
+  private lastSnapshot?: SessionSnapshot<State>;
 
   private lastSnapshotVersion: number = 0;
-  private store?: SessionStore<State, InputVariables>;
+  private store?: SessionStore<State>;
   public isDetached: boolean = false;
 
   constructor(
-    session: Session<State, InputVariables>,
+    session: Session<State>,
     inputCh: AsyncIterable<AgentInput>,
     options?: {
-      snapshotCallback?: SnapshotCallback<State, InputVariables>;
-      lastSnapshot?: SessionSnapshot<State, InputVariables>;
-      store?: SessionStore<State, InputVariables>;
+      snapshotCallback?: SnapshotCallback<State>;
+      lastSnapshot?: SessionSnapshot<State>;
+      store?: SessionStore<State>;
       onEndTurn?: (snapshotId?: string) => void;
       onDetach?: (snapshotId: string) => void;
       newSnapshotId?: string;
@@ -286,9 +286,9 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
     if (this.snapshotCallback && !this.isDetached) {
       if (
         !this.snapshotCallback({
-          state: currentState as SessionState<State, InputVariables>,
+          state: currentState as SessionState<State>,
           prevState: prevState as
-            | SessionState<State, InputVariables>
+            | SessionState<State>
             | undefined,
           turnIndex: this.turnIndex,
           event: event,
@@ -298,11 +298,11 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
       }
     }
 
-    const snapshot: SessionSnapshot<State, InputVariables> = {
+    const snapshot: SessionSnapshot<State> = {
       snapshotId: snapshotId || this.newSnapshotId || crypto.randomUUID(),
       createdAt: new Date().toISOString(),
       event: event,
-      state: currentState as SessionState<State, InputVariables>,
+      state: currentState as SessionState<State>,
       parentId: this.lastSnapshot?.snapshotId,
       status,
       error,
@@ -320,8 +320,8 @@ export class SessionRunner<State = unknown, InputVariables = unknown> {
 /**
  * Function handler definition for custom agent actions.
  */
-export type AgentFn<Stream, State, InputVariables = unknown> = (
-  sess: SessionRunner<State, InputVariables>,
+export type AgentFn<Stream, State> = (
+  sess: SessionRunner<State>,
   options: {
     sendChunk: (chunk: AgentStreamChunk<Stream>) => void;
     abortSignal?: AbortSignal;
@@ -329,15 +329,15 @@ export type AgentFn<Stream, State, InputVariables = unknown> = (
   }
 ) => Promise<AgentResult>;
 
-export type GetSnapshotDataAction<S = unknown, I = unknown> = Action<
+export type GetSnapshotDataAction<S = unknown> = Action<
   z.ZodString,
-  z.ZodType<SessionSnapshot<S, I>>
+  z.ZodType<SessionSnapshot<S>>
 >;
 
 /**
  * Represents a configured, registered Agent.
  */
-export interface Agent<State = unknown, InputVariables = unknown>
+export interface Agent<State = unknown>
   extends BidiAction<
     typeof AgentInputSchema,
     typeof AgentOutputSchema,
@@ -347,14 +347,14 @@ export interface Agent<State = unknown, InputVariables = unknown>
   getSnapshotData(
     snapshotId: string,
     options?: SessionStoreOptions
-  ): Promise<SessionSnapshot<State, InputVariables> | undefined>;
+  ): Promise<SessionSnapshot<State> | undefined>;
 
   abort(
     snapshotId: string,
     options?: SessionStoreOptions
   ): Promise<SessionSnapshot['status'] | undefined>;
 
-  readonly getSnapshotDataAction: GetSnapshotDataAction<State, InputVariables>;
+  readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
   readonly abortAgentAction: Action<z.ZodString, z.ZodType<string | undefined>>;
 }
 
@@ -364,17 +364,16 @@ export interface Agent<State = unknown, InputVariables = unknown>
 export function defineCustomAgent<
   Stream = unknown,
   State = unknown,
-  InputVariables = unknown,
 >(
   registry: Registry,
   config: {
     name: string;
     description?: string;
-    store?: SessionStore<State, InputVariables>;
-    snapshotCallback?: SnapshotCallback<State, InputVariables>;
+    store?: SessionStore<State>;
+    snapshotCallback?: SnapshotCallback<State>;
   },
-  fn: AgentFn<Stream, State, InputVariables>
-): Agent<State, InputVariables> {
+  fn: AgentFn<Stream, State>
+): Agent<State> {
   const primaryAction = defineBidiAction(
     registry,
     {
@@ -395,11 +394,11 @@ export function defineCustomAgent<
     ) {
       const init = arg.init;
       const store =
-        config.store || new InMemorySessionStore<State, InputVariables>();
+        config.store || new InMemorySessionStore<State>();
 
-      let session: Session<State, InputVariables>;
+      let session: Session<State>;
 
-      let snapshot: SessionSnapshot<State, InputVariables> | undefined;
+      let snapshot: SessionSnapshot<State> | undefined;
 
       if (init?.snapshotId) {
         snapshot = await store.getSnapshot(init.snapshotId, {
@@ -408,15 +407,15 @@ export function defineCustomAgent<
         if (!snapshot) {
           throw new Error(`Snapshot ${init.snapshotId} not found`);
         }
-        session = new Session<State, InputVariables>(
-          snapshot.state as SessionState<State, InputVariables>
+        session = new Session<State>(
+          snapshot.state as SessionState<State>
         );
-      } else if (init?.state) {
-        session = new Session<State, InputVariables>(
-          init.state as SessionState<State, InputVariables>
+      } else if (init?.state && !config.store) {
+        session = new Session<State>(
+          init.state as SessionState<State>
         );
       } else {
-        session = new Session<State, InputVariables>({
+        session = new Session<State>({
           custom: {} as State,
           artifacts: [],
           messages: [],
@@ -436,7 +435,7 @@ export function defineCustomAgent<
       const abortController = new AbortController();
       let unsubscribe: any = undefined;
 
-      let runner!: SessionRunner<State, InputVariables>;
+      let runner!: SessionRunner<State>;
 
       // We construct an asynchronous proxy channel over the inputStream.
       // This enables immediate interception of `detach: true` directives. Without this proxy,
@@ -491,7 +490,7 @@ export function defineCustomAgent<
         }
       })();
 
-      runner = new SessionRunner<State, InputVariables>(
+      runner = new SessionRunner<State>(
         session,
         runnerInputChannel,
         {
@@ -637,7 +636,7 @@ export function defineCustomAgent<
     }
   );
 
-  const composite = Object.assign(primaryAction, {
+      const composite = Object.assign(primaryAction, {
     getSnapshotData: async (
       snapshotId: string,
       options?: SessionStoreOptions
@@ -667,40 +666,35 @@ export function defineCustomAgent<
       return undefined;
     },
     getSnapshotDataAction:
-      getSnapshotDataAction as unknown as GetSnapshotDataAction<
-        State,
-        InputVariables
-      >,
+      getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
     abortAgentAction: abortAgentAction as unknown as Action<
       z.ZodString,
       z.ZodType<string | undefined>
     >,
   });
 
-  return composite as unknown as Agent<State, InputVariables>;
+  return composite as unknown as Agent<State>;
 }
 
 /**
  * Registers an agent from an existing PromptAction.
  */
-export function definePromptAgent<PromptIn = unknown, State = unknown>(
+export function definePromptAgent<State = unknown>(
   registry: Registry,
   config: {
     promptName: string;
-    defaultInput?: PromptIn;
-    store?: SessionStore<State, PromptIn>;
-    snapshotCallback?: SnapshotCallback<State, PromptIn>;
+    store?: SessionStore<State>;
+    snapshotCallback?: SnapshotCallback<State>;
   }
 ) {
   let cachedPromptAction: PromptAction | undefined;
 
-  const fn: AgentFn<unknown, State, PromptIn> = async (
+  const fn: AgentFn<unknown, State> = async (
     sess,
     { sendChunk, abortSignal }
   ) => {
     await sess.run(async (input) => {
-      const promptInput =
-        sess.session.getState().inputVariables || config.defaultInput || {};
+      const promptInput = {};
 
       if (!cachedPromptAction) {
         cachedPromptAction = (await registry.lookupAction(
@@ -777,11 +771,11 @@ export function definePromptAgent<PromptIn = unknown, State = unknown>(
     };
   };
 
-  return defineCustomAgent<unknown, State, PromptIn>(
+  return defineCustomAgent<unknown, State>(
     registry,
     {
       name: config.promptName,
-      store: config.store as SessionStore<State, PromptIn>,
+      store: config.store,
       snapshotCallback: config.snapshotCallback,
     },
     fn
@@ -796,11 +790,10 @@ export function definePromptAgent<PromptIn = unknown, State = unknown>(
  * Configuration for `defineAgent`, which combines prompt definition and agent
  * registration into a single call.
  */
-export interface AgentConfig<PromptIn = unknown, State = unknown>
+export interface AgentConfig<State = unknown>
   extends PromptConfig {
-  defaultInput?: PromptIn;
-  store?: SessionStore<State, PromptIn>;
-  snapshotCallback?: SnapshotCallback<State, PromptIn>;
+  store?: SessionStore<State>;
+  snapshotCallback?: SnapshotCallback<State>;
 }
 
 /**
@@ -813,20 +806,19 @@ export interface AgentConfig<PromptIn = unknown, State = unknown>
  * definePromptAgent(registry, { promptName: promptConfig.name, ... });
  * ```
  */
-export function defineAgent<PromptIn = unknown, State = unknown>(
+export function defineAgent<State = unknown>(
   registry: Registry,
-  config: AgentConfig<PromptIn, State>
-): Agent<State, PromptIn> {
+  config: AgentConfig<State>
+): Agent<State> {
   // Extract prompt-specific fields from the combined config.
-  const { defaultInput, store, snapshotCallback, ...promptConfig } = config;
+  const { store, snapshotCallback, ...promptConfig } = config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
 
   // Wire it into a prompt agent.
-  return definePromptAgent<PromptIn, State>(registry, {
+  return definePromptAgent<State>(registry, {
     promptName: promptConfig.name,
-    defaultInput,
     store,
     snapshotCallback,
   });

@@ -41,12 +41,12 @@ initNodeFeatures();
  * Returns a Promise that resolves once the given snapshotId reaches targetStatus
  * in the store. Rejects after timeoutMs if the status is never reached.
  */
-function waitForSnapshotStatus<S, I>(
-  store: InMemorySessionStore<S, I>,
+function waitForSnapshotStatus<S>(
+  store: InMemorySessionStore<S>,
   snapshotId: string,
-  targetStatus: NonNullable<SessionSnapshot<S, I>['status']>,
+  targetStatus: NonNullable<SessionSnapshot<S>['status']>,
   timeoutMs = 5000
-): Promise<SessionSnapshot<S, I>> {
+): Promise<SessionSnapshot<S>> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () =>
@@ -344,6 +344,97 @@ describe('Agent', () => {
       assert.strictEqual(agent.__action.metadata?.abortable, true);
     });
 
+    it('should ignore init.state for server-managed agents (store is set)', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore<{ foo: string }>();
+
+      const flow = defineCustomAgent<unknown, { foo: string }>(
+        registry,
+        { name: 'ignoreInitStateTest', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      // Pass init.state with messages — it should be ignored because store is set
+      const session = flow.streamBidi({
+        state: {
+          custom: { foo: 'should-be-ignored' },
+          messages: [{ role: 'user', content: [{ text: 'stale history' }] }],
+          artifacts: [],
+        },
+      });
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {}
+      const output = await session.output;
+
+      // Verify state was NOT seeded from init.state
+      const snapshot = await store.getSnapshot(output.snapshotId!);
+      assert.ok(snapshot);
+      // Only the message sent via input should be present, not the stale history
+      assert.strictEqual(snapshot!.state.messages!.length, 1);
+      assert.strictEqual(
+        snapshot!.state.messages![0].content[0].text,
+        'hello'
+      );
+      // Custom state should be empty default, not the init.state value
+      assert.deepStrictEqual(snapshot!.state.custom, {});
+    });
+
+    it('should use init.state for client-managed agents (no store)', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent<unknown, { foo: string }>(
+        registry,
+        { name: 'useInitStateTest' },
+        async (sess) => {
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      // Pass init.state — it should be used because no store is set
+      const session = flow.streamBidi({
+        state: {
+          custom: { foo: 'seeded' },
+          messages: [{ role: 'user', content: [{ text: 'prior msg' }] }],
+          artifacts: [],
+        },
+      });
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {}
+      const output = await session.output;
+
+      // State should include the seeded state plus the new message
+      assert.ok(output.state);
+      assert.strictEqual((output.state!.custom as any).foo, 'seeded');
+      // Messages: 1 from init.state + 1 from input
+      assert.strictEqual(output.state!.messages!.length, 2);
+      assert.strictEqual(
+        output.state!.messages![0].content[0].text,
+        'prior msg'
+      );
+      assert.strictEqual(
+        output.state!.messages![1].content[0].text,
+        'hello'
+      );
+    });
+
     it('should set server stateManagement and abortable=false when store lacks onSnapshotStateChange', () => {
       const registry = new Registry();
       const store: any = {
@@ -494,7 +585,7 @@ describe('Agent', () => {
         resolvePromise = resolve;
       });
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'detachTest',
@@ -535,7 +626,7 @@ describe('Agent', () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let aborted = false;
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'abortTest',
@@ -579,7 +670,7 @@ describe('Agent', () => {
     it('should return "done" when aborting an already-completed flow', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'abortDoneTest',
@@ -616,7 +707,7 @@ describe('Agent', () => {
     it('should return undefined when aborting a non-existent snapshot', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'abortMissingTest',
@@ -636,7 +727,7 @@ describe('Agent', () => {
     });
 
     it('should throw error when detach is requested without session store', async () => {
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'noStoreTest',
@@ -674,7 +765,7 @@ describe('Agent', () => {
         resolvePromise = resolve;
       });
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'detachErrorTest',
@@ -724,7 +815,7 @@ describe('Agent', () => {
         getSnapshot: baseStore.getSnapshot.bind(baseStore),
         saveSnapshot: baseStore.saveSnapshot.bind(baseStore),
       }) as InMemorySessionStore;
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'legacyStoreTest',
@@ -756,7 +847,7 @@ describe('Agent', () => {
 
     it('should fetch snapshot data via companion action', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'companionActionFlow',
@@ -783,7 +874,7 @@ describe('Agent', () => {
 
     it('should chain parentId properly across session snapshots', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'lineageTest',
@@ -826,7 +917,7 @@ describe('Agent', () => {
         releasePromise = resolve;
       });
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'immediateDetachTest',
@@ -864,7 +955,7 @@ describe('Agent', () => {
 
     it('should process messages even when detach is present in the same payload', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'mixedPayloadTest',
@@ -1074,7 +1165,7 @@ describe('Agent', () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let processedCount = 0;
 
-      const flow = defineCustomAgent<{ foo: string }>(
+      const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
           name: 'sequentialBackgroundTest',

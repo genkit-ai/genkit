@@ -102,17 +102,16 @@ export class GenkitBeta extends Genkit {
   defineCustomAgent<
     Stream = unknown,
     State = unknown,
-    InputVariables = unknown,
   >(
     config: {
       name: string;
       description?: string;
-      store?: SessionStore<State, InputVariables>;
-      snapshotCallback?: SnapshotCallback<State, InputVariables>;
+      store?: SessionStore<State>;
+      snapshotCallback?: SnapshotCallback<State>;
     },
-    fn: AgentFn<Stream, State, InputVariables>
+    fn: AgentFn<Stream, State>
   ) {
-    return defineCustomAgent<Stream, State, InputVariables>(
+    return defineCustomAgent<Stream, State>(
       this.registry,
       config,
       fn
@@ -124,13 +123,12 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  definePromptAgent<PromptIn = unknown, State = unknown>(config: {
+  definePromptAgent<State = unknown>(config: {
     promptName: string;
-    defaultInput?: PromptIn;
-    store?: SessionStore<State, PromptIn>;
-    snapshotCallback?: SnapshotCallback<State, PromptIn>;
+    store?: SessionStore<State>;
+    snapshotCallback?: SnapshotCallback<State>;
   }) {
-    return definePromptAgent<PromptIn, State>(this.registry, config);
+    return definePromptAgent<State>(this.registry, config);
   }
 
   /**
@@ -152,10 +150,10 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineAgent<PromptIn = unknown, State = unknown>(
-    config: AgentConfig<PromptIn, State>
+  defineAgent<State = unknown>(
+    config: AgentConfig<State>
   ) {
-    return defineAgent<PromptIn, State>(this.registry, config);
+    return defineAgent<State>(this.registry, config);
   }
 
   /**
