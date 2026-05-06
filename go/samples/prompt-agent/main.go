@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates DefineSessionFlowFromPrompt, which creates a
-// multi-turn conversational session flow backed by a .prompt file. The
-// conversation loop (render prompt, call model, stream chunks, update history)
-// is handled automatically. Compare with custom-agent which wires
-// the same loop manually.
+// This sample demonstrates DefinePromptAgent, which creates a multi-turn
+// conversational agent backed by a .prompt file. The conversation loop
+// (render prompt, call model, stream chunks, update history) is handled
+// automatically. Compare with custom-agent which wires the same loop
+// manually.
 package main
 
 import (
@@ -39,18 +39,18 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	chatFlow := genkit.DefineSessionFlowFromPrompt(
-		g, "chat", ChatPromptInput{Personality: "a sarcastic pirate"},
+	chatAgent := genkit.DefinePromptAgent[any](g, "chat",
+		ChatPromptInput{Personality: "a sarcastic pirate"},
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {
 			return sc.Event == aix.SnapshotEventInvocationEnd || sc.TurnIndex%5 == 0
 		}),
 	)
 
-	fmt.Println("Session Flow Chat (type 'quit' to exit)")
+	fmt.Println("Agent Chat (type 'quit' to exit)")
 	fmt.Println()
 
-	conn, err := chatFlow.StreamBidi(ctx)
+	conn, err := chatAgent.StreamBidi(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

@@ -530,6 +530,11 @@ type BidiConnection[StreamIn, StreamOut, Out any] struct {
 // Send sends an input message to the bidi action.
 // Returns an error if the connection is closed or the context is cancelled.
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Send(input StreamIn) (err error) {
+	// Recover from "send on closed channel" panic. A check-then-send under the
+	// mutex would race with Close, and holding the mutex across the send would
+	// deadlock against Close when the buffer is full. Closing inputCh (rather
+	// than a separate signal channel) is required so receivers can use the
+	// canonical `for ... range inputCh` idiom.
 	defer func() {
 		if r := recover(); r != nil {
 			err = NewError(FAILED_PRECONDITION, "connection is closed")

@@ -1,6 +1,88 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
+    "AgentInit": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentInput": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "toolRestarts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentOutput": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentResult": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStreamChunk": {
+      "type": "object",
+      "properties": {
+        "modelChunk": {
+          "$ref": "#/$defs/ModelResponseChunk"
+        },
+        "status": {},
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        },
+        "turnEnd": {
+          "$ref": "#/$defs/TurnEnd"
+        }
+      },
+      "additionalProperties": false
+    },
     "Artifact": {
       "type": "object",
       "properties": {
@@ -23,88 +105,6 @@
       ],
       "additionalProperties": false
     },
-    "SessionFlowInit": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowInput": {
-      "type": "object",
-      "properties": {
-        "messages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Message"
-          }
-        },
-        "toolRestarts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Part"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowOutput": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        },
-        "message": {
-          "$ref": "#/$defs/Message"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Artifact"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowResult": {
-      "type": "object",
-      "properties": {
-        "message": {
-          "$ref": "#/$defs/Message"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Artifact"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowStreamChunk": {
-      "type": "object",
-      "properties": {
-        "modelChunk": {
-          "$ref": "#/$defs/ModelResponseChunk"
-        },
-        "status": {},
-        "artifact": {
-          "$ref": "#/$defs/Artifact"
-        },
-        "turnEnd": {
-          "$ref": "#/$defs/TurnEnd"
-        }
-      },
-      "additionalProperties": false
-    },
     "SessionState": {
       "type": "object",
       "properties": {
@@ -120,8 +120,7 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
-        },
-        "inputVariables": {}
+        }
       },
       "additionalProperties": false
     },

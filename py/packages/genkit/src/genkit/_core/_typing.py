@@ -34,6 +34,13 @@ warnings.filterwarnings(
 )
 
 
+class SnapshotEvent(StrEnum):
+    """SnapshotEvent data type class."""
+
+    TURNEND = 'turnEnd'
+    INVOCATIONEND = 'invocationEnd'
+
+
 class EvalStatusEnum(StrEnum):
     """EvalStatusEnum data type class."""
 
@@ -77,6 +84,75 @@ class ConfigSchema(GenkitModel):
 Metadata = dict[str, Any]  # type alias for flexible metadata
 
 Custom = dict[str, Any]  # type alias for flexible custom data
+
+
+class AgentInit(GenkitModel):
+    """Model for agentinit data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+
+
+class AgentInput(GenkitModel):
+    """Model for agentinput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    messages: list[MessageData] | None = None
+    tool_restarts: list[Part] | None = None
+
+
+class AgentOutput(GenkitModel):
+    """Model for agentoutput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+    message: MessageData | None = None
+    artifacts: list[Artifact] | None = None
+
+
+class AgentResult(GenkitModel):
+    """Model for agentresult data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    message: MessageData | None = None
+    artifacts: list[Artifact] | None = None
+
+
+class AgentStreamChunk(GenkitModel):
+    """Model for agentstreamchunk data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_chunk: ModelResponseChunk | None = None
+    status: Any | None = Field(default=None)
+    artifact: Artifact | None = None
+    turn_end: TurnEnd | None = None
+
+
+class Artifact(GenkitModel):
+    """Model for artifact data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    name: str | None = None
+    parts: list[Part] = Field(...)
+    metadata: Metadata | None = None
+
+
+class SessionState(GenkitModel):
+    """Model for sessionstate data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    messages: list[MessageData] | None = None
+    custom: Any | None = Field(default=None)
+    artifacts: list[Artifact] | None = None
+
+
+class TurnEnd(GenkitModel):
+    """Model for turnend data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
 
 
 class DocumentData(GenkitModel):

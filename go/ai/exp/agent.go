@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -32,24 +33,23 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
-	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
 )
 
-// --- SessionRunner ---
+// --- AgentSession ---
 
-// SessionRunner extends Session with session-flow-specific functionality:
+// AgentSession extends Session with agent-runtime functionality:
 // turn management, snapshot persistence, and input channel handling.
-type SessionRunner[State any] struct {
+type AgentSession[State any] struct {
 	*Session[State]
 
 	// InputCh is the channel that delivers per-turn inputs from the client.
-	// It is consumed automatically by [SessionRunner.Run], but is exposed
+	// It is consumed automatically by [AgentSession.Run], but is exposed
 	// for advanced use cases that need direct access to the input stream
 	// (e.g., custom turn loops or fan-out patterns).
-	InputCh <-chan *SessionFlowInput
+	InputCh <-chan *AgentInput
 	// TurnIndex is the zero-based index of the current conversation turn.
-	// It is incremented automatically by [SessionRunner.Run], but is exposed
+	// It is incremented automatically by [AgentSession.Run], but is exposed
 	// for advanced use cases that need to track or manipulate turn ordering
 	// directly.
 	TurnIndex int
@@ -65,16 +65,16 @@ type SessionRunner[State any] struct {
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
 // TurnEnd chunk is sent and a snapshot check is triggered.
-func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *SessionFlowInput) error) error {
+func (s *AgentSession[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) error) error {
 	for input := range s.InputCh {
 		spanMeta := &tracing.SpanMetadata{
-			Name:    fmt.Sprintf("sessionFlow/turn/%d", s.TurnIndex),
+			Name:    fmt.Sprintf("agent/turn/%d", s.TurnIndex),
 			Type:    "flowStep",
 			Subtype: "flowStep",
 		}
 
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
-			func(ctx context.Context, input *SessionFlowInput) (any, error) {
+			func(ctx context.Context, input *AgentInput) (any, error) {
 				s.AddMessages(input.Messages...)
 
 				if err := fn(ctx, input); err != nil {
@@ -97,15 +97,15 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 	return nil
 }
 
-// Result returns an [SessionFlowResult] populated from the current session state:
+// Result returns an [AgentResult] populated from the current session state:
 // the last message in the conversation history and all artifacts.
-// It is a convenience for custom session flows that don't need to construct the
+// It is a convenience for custom agents that don't need to construct the
 // result manually.
-func (s *SessionRunner[State]) Result() *SessionFlowResult {
+func (s *AgentSession[State]) Result() *AgentResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := &SessionFlowResult{}
+	result := &AgentResult{}
 	if msgs := s.state.Messages; len(msgs) > 0 {
 		result.Message = msgs[len(msgs)-1]
 	}
@@ -119,7 +119,7 @@ func (s *SessionRunner[State]) Result() *SessionFlowResult {
 
 // maybeSnapshot creates a snapshot if conditions are met (store configured,
 // callback approves, state changed). Returns the snapshot ID or empty string.
-func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
+func (s *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
 	if s.store == nil {
 		return ""
 	}
@@ -163,7 +163,7 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 	}
 
 	if err := s.store.SaveSnapshot(ctx, snapshot); err != nil {
-		logger.FromContext(ctx).Error("session flow: failed to save snapshot", "err", err)
+		logger.FromContext(ctx).Error("agent: failed to save snapshot", "err", err)
 		return ""
 	}
 
@@ -186,80 +186,143 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 
 // --- Responder ---
 
-// Responder is the output channel for an session flow. Artifacts sent through
+// Responder is the output channel for an agent. Artifacts sent through
 // it are automatically added to the session before being forwarded to the
 // client.
-type Responder[Stream any] chan<- *SessionFlowStreamChunk[Stream]
+type Responder[Stream any] chan<- *AgentStreamChunk[Stream]
 
 // SendModelChunk sends a generation chunk (token-level streaming).
 func (r Responder[Stream]) SendModelChunk(chunk *ai.ModelResponseChunk) {
-	r <- &SessionFlowStreamChunk[Stream]{ModelChunk: chunk}
+	r <- &AgentStreamChunk[Stream]{ModelChunk: chunk}
 }
 
 // SendStatus sends a user-defined status update.
 func (r Responder[Stream]) SendStatus(status Stream) {
-	r <- &SessionFlowStreamChunk[Stream]{Status: status}
+	r <- &AgentStreamChunk[Stream]{Status: status}
 }
 
 // SendArtifact sends an artifact to the stream and adds it to the session.
 // If an artifact with the same name already exists in the session, it is replaced.
 func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
-	r <- &SessionFlowStreamChunk[Stream]{Artifact: artifact}
+	r <- &AgentStreamChunk[Stream]{Artifact: artifact}
 }
 
-// --- SessionFlow ---
+// --- Agent ---
 
-// SessionFlowFunc is the function signature for session flows.
+// AgentFunc is the function signature for custom agents.
 // Type parameters:
 //   - Stream: Type for status updates sent via the responder
 //   - State: Type for user-defined state in snapshots
-type SessionFlowFunc[Stream, State any] = func(ctx context.Context, resp Responder[Stream], sess *SessionRunner[State]) (*SessionFlowResult, error)
+type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Stream], sess *AgentSession[State]) (*AgentResult, error)
 
-// SessionFlow is a bidirectional streaming flow with automatic snapshot management.
-type SessionFlow[Stream, State any] struct {
-	flow *core.Flow[*SessionFlowInit[State], *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream], *SessionFlowInput]
+// Agent is a bidirectional streaming agent with automatic snapshot management.
+type Agent[Stream, State any] struct {
+	flow *core.Flow[*AgentInit[State], *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInput]
 }
 
-// DefineSessionFlow creates an SessionFlow with automatic snapshot management and registers it.
-func DefineSessionFlow[Stream, State any](
+// DefineAgent defines an agent that wraps a prompt defined inline from the
+// given options, and registers both under name. Each turn renders the prompt,
+// appends conversation history, calls the model with streaming, and updates
+// session state.
+//
+// opts is a mixed list of [github.com/firebase/genkit/go/ai.PromptOption]
+// values (which configure the prompt) and [AgentOption] values (which
+// configure the agent itself, e.g., [WithSessionStore]).
+//
+// State is phantom in the variadic, so it cannot be inferred. Specify [any]
+// when no typed Custom state is needed; specify [Foo] when a
+// [SessionStore[Foo]] is provided. A mismatch panics at definition time with
+// a clear message.
+//
+// For an agent backed by an existing prompt, use [DefinePromptAgent]. For
+// full control over the per-turn loop, use [DefineCustomAgent].
+func DefineAgent[State any](
 	r api.Registry,
 	name string,
-	fn SessionFlowFunc[Stream, State],
-	opts ...SessionFlowOption[State],
-) *SessionFlow[Stream, State] {
-	afOpts := &sessionFlowOptions[State]{}
+	opts ...AgentDefineOption[State],
+) *Agent[any, State] {
+	var promptOpts []ai.PromptOption
+	var agentOpts []AgentOption[State]
 	for _, opt := range opts {
-		if err := opt.applySessionFlow(afOpts); err != nil {
-			panic(fmt.Errorf("DefineSessionFlow %q: %w", name, err))
+		if ao, ok := opt.(AgentOption[State]); ok {
+			agentOpts = append(agentOpts, ao)
+			continue
+		}
+		if po, ok := opt.(ai.PromptOption); ok {
+			promptOpts = append(promptOpts, po)
+			continue
+		}
+		panic(fmt.Sprintf("DefineAgent %q: option of type %T does not match agent State %T (likely a typed AgentOption with a different State than the one declared on DefineAgent)", name, opt, *new(State)))
+	}
+
+	prompt := ai.DefinePrompt(r, name, promptOpts...)
+	return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), agentOpts...)
+}
+
+// DefinePromptAgent defines an agent backed by a prompt already registered
+// with the registry (via [ai.DefinePrompt] or loaded from a .prompt file).
+// The agent is registered under the same name as the prompt, sharing its
+// namespace.
+//
+// defaultInput is used to render the prompt on every turn. PromptIn is
+// captured for compile-time type checking on defaultInput; it is not
+// propagated through the [Agent] type.
+//
+// For an agent that defines its prompt inline, use [DefineAgent]. For full
+// control over the per-turn loop, use [DefineCustomAgent].
+func DefinePromptAgent[State, PromptIn any](
+	r api.Registry,
+	promptName string,
+	defaultInput PromptIn,
+	opts ...AgentOption[State],
+) *Agent[any, State] {
+	prompt := ai.LookupPrompt(r, promptName)
+	if prompt == nil {
+		panic(fmt.Sprintf("DefinePromptAgent: prompt %q not found", promptName))
+	}
+	return DefineCustomAgent(r, promptName, agentLoop[State](r, prompt, defaultInput), opts...)
+}
+
+// DefineCustomAgent defines an agent with full control over the conversation
+// loop and registers it with the registry.
+func DefineCustomAgent[Stream, State any](
+	r api.Registry,
+	name string,
+	fn AgentFunc[Stream, State],
+	opts ...AgentOption[State],
+) *Agent[Stream, State] {
+	agOpts := &agentOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyAgent(agOpts); err != nil {
+			panic(fmt.Errorf("DefineCustomAgent %q: %w", name, err))
 		}
 	}
 
-	store := afOpts.store
-	snapshotCallback := afOpts.callback
+	store := agOpts.store
+	snapshotCallback := agOpts.callback
 
 	flow := core.DefineBidiFlow(r, name, func(
 		ctx context.Context,
-		in *SessionFlowInit[State],
-		inCh <-chan *SessionFlowInput,
-		outCh chan<- *SessionFlowStreamChunk[Stream],
-	) (*SessionFlowOutput[State], error) {
+		in *AgentInit[State],
+		inCh <-chan *AgentInput,
+		outCh chan<- *AgentStreamChunk[Stream],
+	) (*AgentOutput[State], error) {
 		session, snapshot, err := newSessionFromInit(ctx, in, store)
 		if err != nil {
 			return nil, err
 		}
 		ctx = NewSessionContext(ctx, session)
 
-		agentSess := &SessionRunner[State]{
+		agentSess := &AgentSession[State]{
 			Session:          session,
 			snapshotCallback: snapshotCallback,
 			InputCh:          inCh,
 			lastSnapshot:     snapshot,
 		}
 
-		// Turn output accumulator: collects content chunks per turn for span output.
 		var (
 			turnMu     sync.Mutex
-			turnChunks []*SessionFlowStreamChunk[Stream]
+			turnChunks []*AgentStreamChunk[Stream]
 		)
 
 		agentSess.collectTurnOutput = func() any {
@@ -270,9 +333,7 @@ func DefineSessionFlow[Stream, State any](
 			return result
 		}
 
-		// Intermediary channel: intercepts artifacts, accumulates turn output,
-		// and forwards to outCh.
-		respCh := make(chan *SessionFlowStreamChunk[Stream])
+		respCh := make(chan *AgentStreamChunk[Stream])
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
@@ -281,28 +342,51 @@ func DefineSessionFlow[Stream, State any](
 				if chunk.Artifact != nil {
 					session.AddArtifacts(chunk.Artifact)
 				}
-				// Accumulate content chunks (exclude the TurnEnd control signal).
 				if chunk.TurnEnd == nil {
 					turnMu.Lock()
 					turnChunks = append(turnChunks, chunk)
 					turnMu.Unlock()
 				}
-				outCh <- chunk
+				// Once ctx is cancelled, downstream is gone but fn may
+				// still be mid-flight. Keep draining respCh so fn doesn't
+				// deadlock on its next send; just stop forwarding.
+				if ctx.Err() != nil {
+					continue
+				}
+				select {
+				case outCh <- chunk:
+				case <-ctx.Done():
+				}
 			}
 		}()
 
-		// Wire up onEndTurn: triggers snapshot + sends TurnEnd chunk.
-		// Writes through respCh to preserve ordering with user chunks.
+		// Writes through respCh (not outCh) so the TurnEnd signal stays
+		// ordered after any user chunks emitted during the turn.
 		agentSess.onEndTurn = func(turnCtx context.Context) {
 			snapshotID := agentSess.maybeSnapshot(turnCtx, SnapshotEventTurnEnd)
-			respCh <- &SessionFlowStreamChunk[Stream]{
+			respCh <- &AgentStreamChunk[Stream]{
 				TurnEnd: &TurnEnd{SnapshotID: snapshotID},
 			}
 		}
 
-		result, fnErr := fn(ctx, Responder[Stream](respCh), agentSess)
-		close(respCh)
-		wg.Wait()
+		// Run fn under deferred cleanup so the streaming goroutine is
+		// always released, even if fn panics. The panic is recovered and
+		// surfaced as an error rather than crashing the process.
+		var (
+			result *AgentResult
+			fnErr  error
+		)
+		func() {
+			defer wg.Wait()
+			defer close(respCh)
+			defer func() {
+				if r := recover(); r != nil {
+					logger.FromContext(ctx).Error("agent fn panicked", "panic", r, "stack", string(debug.Stack()))
+					fnErr = core.NewError(core.INTERNAL, "agent fn panicked: %v", r)
+				}
+			}()
+			result, fnErr = fn(ctx, Responder[Stream](respCh), agentSess)
+		}()
 
 		if fnErr != nil {
 			return nil, fnErr
@@ -316,7 +400,7 @@ func DefineSessionFlow[Stream, State any](
 			snapshotID = agentSess.lastSnapshot.SnapshotID
 		}
 
-		out := &SessionFlowOutput[State]{
+		out := &AgentOutput[State]{
 			SnapshotID: snapshotID,
 		}
 		if result != nil {
@@ -332,61 +416,40 @@ func DefineSessionFlow[Stream, State any](
 		return out, nil
 	})
 
-	return &SessionFlow[Stream, State]{flow: flow}
+	return &Agent[Stream, State]{flow: flow}
 }
 
-// promptMessageKey is the metadata key used to tag prompt-rendered messages
-// so they can be excluded from session history after generation.
+// promptMessageKey is the metadata key used to tag base messages from the
+// agent config (system prompt, prompt template output, etc.) so they can be
+// excluded from session history after generation.
 const promptMessageKey = "_genkit_prompt"
 
-// DefineSessionFlowFromPrompt creates a prompt-backed SessionFlow with an
-// automatic conversation loop. Each turn renders the prompt, appends
-// conversation history, calls GenerateWithRequest, streams chunks to the
-// client, and adds the model response to the session.
+// agentLoop returns the per-turn function for a prompt-backed agent. Each
+// turn renders the prompt, appends conversation history, calls the model
+// with streaming, and updates the session.
 //
-// The prompt is looked up by name from the registry using
-// [ai.LookupDataPrompt]. The defaultInput is used for prompt rendering
-// unless overridden per invocation via WithInputVariables.
-func DefineSessionFlowFromPrompt[State, PromptIn any](
-	r api.Registry,
-	promptName string,
-	defaultInput PromptIn,
-	opts ...SessionFlowOption[State],
-) *SessionFlow[any, State] {
-	p := ai.LookupDataPrompt[PromptIn, string](r, promptName)
-	if p == nil {
-		panic(fmt.Sprintf("DefineSessionFlowFromPrompt: prompt %q not found", promptName))
-	}
-
-	fn := func(ctx context.Context, resp Responder[any], sess *SessionRunner[State]) (*SessionFlowResult, error) {
-		if err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
-			// Resolve prompt input: session state override > default.
-			promptInput := defaultInput
-			if stored := sess.InputVariables(); stored != nil {
-				typed, ok := base.ConvertTo[PromptIn](stored)
-				if !ok {
-					return core.NewError(core.INVALID_ARGUMENT, "input variables type mismatch: got %T, want %T", stored, promptInput)
-				}
-				promptInput = typed
-			}
-
-			// Render the prompt template.
-			genOpts, err := p.Render(ctx, promptInput)
+// defaultInput is the prompt input passed to Render on every turn. It is
+// nil for [DefineAgent], where the inline-defined prompt has no per-turn
+// input.
+func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
+	return func(ctx context.Context, resp Responder[any], sess *AgentSession[State]) (*AgentResult, error) {
+		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			actionOpts, err := prompt.Render(ctx, defaultInput)
 			if err != nil {
 				return fmt.Errorf("prompt render: %w", err)
 			}
 
-			// Tag prompt-rendered messages so we can exclude them from
-			// session history after generation.
-			for _, m := range genOpts.Messages {
+			// Tag base messages so they can be filtered out of session
+			// history after generation.
+			for _, m := range actionOpts.Messages {
 				if m.Metadata == nil {
 					m.Metadata = make(map[string]any)
 				}
 				m.Metadata[promptMessageKey] = true
 			}
 
-			// Append conversation history after the prompt-rendered messages.
-			genOpts.Messages = append(genOpts.Messages, sess.Messages()...)
+			// Append conversation history after the base messages.
+			actionOpts.Messages = append(actionOpts.Messages, sess.Messages()...)
 
 			// If tool restarts were provided, set the resume option so
 			// handleResumeOption re-executes the interrupted tools.
@@ -396,11 +459,10 @@ func DefineSessionFlowFromPrompt[State, PromptIn any](
 						return core.NewError(core.INVALID_ARGUMENT, "ToolRestarts: part is not a tool request")
 					}
 				}
-				genOpts.Resume = ai.NewResume(input.ToolRestarts, nil)
+				actionOpts.Resume = ai.NewResume(input.ToolRestarts, nil)
 			}
 
-			// Call the model with streaming.
-			modelResp, err := ai.GenerateWithRequest(ctx, r, genOpts, nil,
+			modelResp, err := ai.GenerateWithRequest(ctx, r, actionOpts, nil,
 				func(ctx context.Context, chunk *ai.ModelResponseChunk) error {
 					resp.SendModelChunk(chunk)
 					return nil
@@ -410,12 +472,13 @@ func DefineSessionFlowFromPrompt[State, PromptIn any](
 				return fmt.Errorf("generate: %w", err)
 			}
 
-			// Replace session messages with the full history minus prompt
+			// Replace session messages with the full history minus base
 			// messages. This captures intermediate tool call/response
 			// messages from the tool loop, not just the final response.
 			if modelResp.Request != nil {
-				var msgs []*ai.Message
-				for _, m := range modelResp.History() {
+				history := modelResp.History()
+				msgs := make([]*ai.Message, 0, len(history))
+				for _, m := range history {
 					if m.Metadata != nil && m.Metadata[promptMessageKey] == true {
 						continue
 					}
@@ -443,39 +506,37 @@ func DefineSessionFlowFromPrompt[State, PromptIn any](
 		}
 		return sess.Result(), nil
 	}
-
-	return DefineSessionFlow(r, promptName, fn, opts...)
 }
 
-// StreamBidi starts a new session flow invocation with bidirectional streaming.
+// StreamBidi starts a new agent invocation with bidirectional streaming.
 // Use this for multi-turn interactions where you need to send multiple inputs
 // and receive streaming chunks. For single-turn usage, see Run and RunText.
-func (af *SessionFlow[Stream, State]) StreamBidi(
+func (a *Agent[Stream, State]) StreamBidi(
 	ctx context.Context,
 	opts ...InvocationOption[State],
-) (*SessionFlowConnection[Stream, State], error) {
-	invOpts, err := af.resolveOptions(opts)
+) (*AgentConnection[Stream, State], error) {
+	invOpts, err := a.resolveOptions(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := af.flow.StreamBidi(ctx, invOpts)
+	conn, err := a.flow.StreamBidi(ctx, invOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	return &SessionFlowConnection[Stream, State]{conn: conn}, nil
+	return &AgentConnection[Stream, State]{conn: conn}, nil
 }
 
-// Run starts a single-turn session flow invocation with the given input.
-// It sends the input, waits for the flow to complete, and returns the output.
+// Run starts a single-turn agent invocation with the given input.
+// It sends the input, waits for the agent to complete, and returns the output.
 // For multi-turn interactions or streaming, use StreamBidi instead.
-func (af *SessionFlow[Stream, State]) Run(
+func (a *Agent[Stream, State]) Run(
 	ctx context.Context,
-	input *SessionFlowInput,
+	input *AgentInput,
 	opts ...InvocationOption[State],
-) (*SessionFlowOutput[State], error) {
-	conn, err := af.StreamBidi(ctx, opts...)
+) (*AgentOutput[State], error) {
+	conn, err := a.StreamBidi(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -497,47 +558,39 @@ func (af *SessionFlow[Stream, State]) Run(
 	return conn.Output()
 }
 
-// RunText is a convenience method that starts a single-turn session flow
-// invocation with a user text message. It is equivalent to calling Run with
-// an SessionFlowInput containing a single user text message.
-func (af *SessionFlow[Stream, State]) RunText(
+// RunText is a convenience method that starts a single-turn agent invocation
+// with a user text message. It is equivalent to calling Run with an
+// AgentInput containing a single user text message.
+func (a *Agent[Stream, State]) RunText(
 	ctx context.Context,
 	text string,
 	opts ...InvocationOption[State],
-) (*SessionFlowOutput[State], error) {
-	return af.Run(ctx, &SessionFlowInput{
+) (*AgentOutput[State], error) {
+	return a.Run(ctx, &AgentInput{
 		Messages: []*ai.Message{ai.NewUserTextMessage(text)},
 	}, opts...)
 }
 
 // resolveOptions applies invocation options and returns the init struct.
-func (af *SessionFlow[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*SessionFlowInit[State], error) {
+func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*AgentInit[State], error) {
 	invOpts := &invocationOptions[State]{}
 	for _, opt := range opts {
 		if err := opt.applyInvocation(invOpts); err != nil {
-			return nil, fmt.Errorf("SessionFlow %q: %w", af.flow.Name(), err)
+			return nil, fmt.Errorf("Agent %q: %w", a.flow.Name(), err)
 		}
 	}
 
-	init := &SessionFlowInit[State]{
+	return &AgentInit[State]{
 		SnapshotID: invOpts.snapshotID,
 		State:      invOpts.state,
-	}
-	if invOpts.promptInput != nil {
-		if init.State == nil {
-			init.State = &SessionState[State]{}
-		}
-		init.State.InputVariables = invOpts.promptInput
-	}
-
-	return init, nil
+	}, nil
 }
 
 // newSessionFromInit creates a Session from initialization data.
 // If resuming from a snapshot, the loaded snapshot is also returned.
 func newSessionFromInit[State any](
 	ctx context.Context,
-	init *SessionFlowInit[State],
+	init *AgentInit[State],
 	store SessionStore[State],
 ) (*Session[State], *SessionSnapshot[State], error) {
 	s := &Session[State]{store: store}
@@ -568,17 +621,17 @@ func newSessionFromInit[State any](
 	return s, snapshot, nil
 }
 
-// --- SessionFlowConnection ---
+// --- AgentConnection ---
 
-// SessionFlowConnection wraps BidiConnection with session flow-specific functionality.
-// It provides a Receive() iterator that supports multi-turn patterns: breaking out
-// of the iterator between turns does not cancel the underlying connection.
-type SessionFlowConnection[Stream, State any] struct {
-	conn *core.BidiConnection[*SessionFlowInput, *SessionFlowStreamChunk[Stream], *SessionFlowOutput[State]]
+// AgentConnection wraps BidiConnection with agent-specific functionality.
+// It provides a Receive() iterator that supports multi-turn patterns: breaking
+// out of the iterator between turns does not cancel the underlying connection.
+type AgentConnection[Stream, State any] struct {
+	conn *core.BidiConnection[*AgentInput, *AgentStreamChunk[Stream], *AgentOutput[State]]
 
 	// chunks buffers stream chunks from the underlying connection so that
 	// breaking from Receive() between turns doesn't cancel the context.
-	chunks   chan *SessionFlowStreamChunk[Stream]
+	chunks   chan *AgentStreamChunk[Stream]
 	chunkErr error
 	initOnce sync.Once
 }
@@ -586,9 +639,9 @@ type SessionFlowConnection[Stream, State any] struct {
 // initReceiver starts a goroutine that drains the underlying BidiConnection's
 // Receive into a channel. This goroutine never breaks from the underlying
 // iterator, preventing context cancellation.
-func (c *SessionFlowConnection[Stream, State]) initReceiver() {
+func (c *AgentConnection[Stream, State]) initReceiver() {
 	c.initOnce.Do(func() {
-		c.chunks = make(chan *SessionFlowStreamChunk[Stream], 1)
+		c.chunks = make(chan *AgentStreamChunk[Stream], 1)
 		go func() {
 			defer close(c.chunks)
 			for chunk, err := range c.conn.Receive() {
@@ -602,31 +655,31 @@ func (c *SessionFlowConnection[Stream, State]) initReceiver() {
 	})
 }
 
-// Send sends an SessionFlowInput to the session flow.
-func (c *SessionFlowConnection[Stream, State]) Send(input *SessionFlowInput) error {
+// Send sends an AgentInput to the agent.
+func (c *AgentConnection[Stream, State]) Send(input *AgentInput) error {
 	return c.conn.Send(input)
 }
 
-// SendMessages sends messages to the session flow.
-func (c *SessionFlowConnection[Stream, State]) SendMessages(messages ...*ai.Message) error {
-	return c.conn.Send(&SessionFlowInput{Messages: messages})
+// SendMessages sends messages to the agent.
+func (c *AgentConnection[Stream, State]) SendMessages(messages ...*ai.Message) error {
+	return c.conn.Send(&AgentInput{Messages: messages})
 }
 
-// SendText sends a single user text message to the session flow.
-func (c *SessionFlowConnection[Stream, State]) SendText(text string) error {
-	return c.conn.Send(&SessionFlowInput{
+// SendText sends a single user text message to the agent.
+func (c *AgentConnection[Stream, State]) SendText(text string) error {
+	return c.conn.Send(&AgentInput{
 		Messages: []*ai.Message{ai.NewUserTextMessage(text)},
 	})
 }
 
 // SendToolRestarts sends tool restart parts to resume interrupted tool calls.
 // Parts should be created via [ai.ToolDef.RestartWith].
-func (c *SessionFlowConnection[Stream, State]) SendToolRestarts(parts ...*ai.Part) error {
-	return c.conn.Send(&SessionFlowInput{ToolRestarts: parts})
+func (c *AgentConnection[Stream, State]) SendToolRestarts(parts ...*ai.Part) error {
+	return c.conn.Send(&AgentInput{ToolRestarts: parts})
 }
 
 // Close signals that no more inputs will be sent.
-func (c *SessionFlowConnection[Stream, State]) Close() error {
+func (c *AgentConnection[Stream, State]) Close() error {
 	return c.conn.Close()
 }
 
@@ -634,9 +687,9 @@ func (c *SessionFlowConnection[Stream, State]) Close() error {
 // Unlike the underlying BidiConnection.Receive, breaking out of this iterator
 // does not cancel the connection. This enables multi-turn patterns where the
 // caller breaks on TurnEnd, sends the next input, then calls Receive again.
-func (c *SessionFlowConnection[Stream, State]) Receive() iter.Seq2[*SessionFlowStreamChunk[Stream], error] {
+func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[Stream], error] {
 	c.initReceiver()
-	return func(yield func(*SessionFlowStreamChunk[Stream], error) bool) {
+	return func(yield func(*AgentStreamChunk[Stream], error) bool) {
 		for {
 			chunk, ok := <-c.chunks
 			if !ok {
@@ -652,12 +705,12 @@ func (c *SessionFlowConnection[Stream, State]) Receive() iter.Seq2[*SessionFlowS
 	}
 }
 
-// Output returns the final response after the session flow completes.
-func (c *SessionFlowConnection[Stream, State]) Output() (*SessionFlowOutput[State], error) {
+// Output returns the final response after the agent completes.
+func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
 	return c.conn.Output()
 }
 
 // Done returns a channel closed when the connection completes.
-func (c *SessionFlowConnection[Stream, State]) Done() <-chan struct{} {
+func (c *AgentConnection[Stream, State]) Done() <-chan struct{} {
 	return c.conn.Done()
 }

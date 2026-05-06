@@ -197,13 +197,6 @@ func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.version++
 }
 
-// InputVariables returns the prompt input stored in the session state.
-func (s *Session[State]) InputVariables() any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state.InputVariables
-}
-
 // Artifacts returns the current artifacts.
 func (s *Session[State]) Artifacts() []*Artifact {
 	s.mu.RLock()
@@ -249,11 +242,11 @@ func (s *Session[State]) UpdateArtifacts(fn func([]*Artifact) []*Artifact) {
 func (s *Session[State]) copyStateLocked() SessionState[State] {
 	bytes, err := json.Marshal(s.state)
 	if err != nil {
-		panic(fmt.Sprintf("session flow: failed to marshal state: %v", err))
+		panic(fmt.Sprintf("agent: failed to marshal state: %v", err))
 	}
 	var copied SessionState[State]
 	if err := json.Unmarshal(bytes, &copied); err != nil {
-		panic(fmt.Sprintf("session flow: failed to unmarshal state: %v", err))
+		panic(fmt.Sprintf("agent: failed to unmarshal state: %v", err))
 	}
 	return copied
 }
