@@ -159,6 +159,31 @@ for await (const chunk of result.stream) {
 console.log(await result.output);
 ```
 
+### Initialization Data
+
+If your flow or action accepts initialization data (defined via `initSchema`), you can pass it using the `init` option in the client:
+
+```ts
+const result = await runFlow({
+  url: 'http://localhost:3780/api/myFlow',
+  input: 'say hello',
+  init: { sessionId: 'abc123', config: { temperature: 0.7 } },
+});
+
+// Also works with streaming
+const streamed = streamFlow({
+  url: 'http://localhost:3780/api/myFlow',
+  input: 'say hello',
+  init: { sessionId: 'abc123' },
+});
+for await (const chunk of streamed.stream) {
+  console.log(chunk);
+}
+console.log(await streamed.output);
+```
+
+The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side.
+
 ## API summary
 
 | Export              | Description                                                                 |

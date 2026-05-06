@@ -47,8 +47,9 @@ export function expressHandler<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   opts?: {
     contextProvider?: ContextProvider<C, I>;
     streamManager?: StreamManager;
@@ -78,6 +79,7 @@ export function expressHandler<
     }
 
     const input = request.body.data as z.infer<I>;
+    const init = request.body.init;
     let context: Record<string, any>;
 
     try {
@@ -129,6 +131,7 @@ export function expressHandler<
         streamManager,
         streamIdToUse,
         input,
+        init,
         context,
         response,
         abortController.signal
@@ -138,6 +141,7 @@ export function expressHandler<
         const result = await action.run(input, {
           context,
           abortSignal: abortController.signal,
+          init,
         });
         response.setHeader('x-genkit-trace-id', result.telemetry.traceId);
         response.setHeader('x-genkit-span-id', result.telemetry.spanId);
@@ -168,6 +172,7 @@ async function runActionWithDurableStreaming<
   streamManager: StreamManager | undefined,
   streamId: string,
   input: z.infer<I>,
+  init: any,
   context: ActionContext,
   response: express.Response,
   abortSignal: AbortSignal
@@ -195,6 +200,7 @@ async function runActionWithDurableStreaming<
       onChunk,
       context,
       abortSignal,
+      init,
     });
     if (streamManager) {
       taskQueue!.enqueue(() => durableStream!.done(result.result));
