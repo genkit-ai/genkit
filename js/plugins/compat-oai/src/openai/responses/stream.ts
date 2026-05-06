@@ -328,8 +328,7 @@ export async function streamResponsesEvents(
           // call_id; arguments come from buffer or fall back to event.item.
           const fcState =
             state && state.type === 'function_call' ? state : undefined;
-          const rawArgs =
-            fcState?.argsBuf || event.item.arguments || '{}';
+          const rawArgs = fcState?.argsBuf || event.item.arguments || '{}';
           let parsed: unknown;
           let malformed = false;
           try {

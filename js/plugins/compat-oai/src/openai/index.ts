@@ -451,9 +451,7 @@ export default openAI;
  * });
  * ```
  */
-export function openAIResponses(
-  options?: OpenAIPluginOptions
-): GenkitPluginV2 {
+export function openAIResponses(options?: OpenAIPluginOptions): GenkitPluginV2 {
   const pluginOptions = { name: 'openai-responses', ...options };
   return openAICompatible({
     name: 'openai-responses',
