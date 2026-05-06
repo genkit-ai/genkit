@@ -38,9 +38,9 @@
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"dish": "tacos", "cuisine": "Mexican", "servingSize": 4}}'
 //
-// Test an agent flow (with all middleware: retry, fallback, filesystem, skills):
+// Test an assistant flow (with all middleware: retry, fallback, filesystem, skills):
 //
-//	curl -N -X POST http://localhost:8080/agentPromptFlow \
+//	curl -N -X POST http://localhost:8080/assistantPromptFlow \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": "what files are in my current directory?"}'
 package main
@@ -94,7 +94,7 @@ type Recipe struct {
 	Difficulty   string        `json:"difficulty" jsonschema:"enum=easy,enum=medium,enum=hard"`
 }
 
-type AgentRequest struct {
+type AssistantRequest struct {
 	Query string `json:"query" jsonschema:"description=The user's query or request"`
 }
 
@@ -114,7 +114,7 @@ func main() {
 	genkit.DefineSchemaFor[Joke](g)
 	genkit.DefineSchemaFor[RecipeRequest](g)
 	genkit.DefineSchemaFor[Recipe](g)
-	genkit.DefineSchemaFor[AgentRequest](g)
+	genkit.DefineSchemaFor[AssistantRequest](g)
 
 	// TODO: Include partials and helpers.
 
@@ -125,8 +125,8 @@ func main() {
 	DefineStructuredJokeWithDotprompt(g)
 	DefineRecipeWithInlinePrompt(g)
 	DefineRecipeWithDotprompt(g)
-	DefineAgentWithInlinePrompt(g)
-	DefineAgentWithDotprompt(g)
+	DefineAssistantWithInlinePrompt(g)
+	DefineAssistantWithDotprompt(g)
 
 	// Optionally, start a web server to make the flows callable via HTTP.
 	mux := http.NewServeMux()
@@ -325,25 +325,16 @@ func newIngredientFilter() func([]*Ingredient) []*Ingredient {
 	}
 }
 
-// DefineAgentWithInlinePrompt demonstrates attaching multiple middlewares
+// DefineAssistantWithInlinePrompt demonstrates attaching multiple middlewares
 // (Retry, Fallback, Filesystem, and Skills) directly to a prompt definition.
 // This creates a highly capable and resilient prompt that is also fully
 // transparent in the Dev UI metadata.
-func DefineAgentWithInlinePrompt(g *genkit.Genkit) {
-	agentPrompt := genkit.DefinePrompt(
-		g, "agent.code",
+func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
+	assistantPrompt := genkit.DefinePrompt(
+		g, "assistant.code",
 		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithPrompt("{{query}}"),
-		ai.WithInputSchema(map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{
-					"type":        "string",
-					"description": "The user's query or request",
-				},
-			},
-			"required": []string{"query"},
-		}),
+		ai.WithInputType(AssistantRequest{}),
 		ai.WithUse(
 			&middleware.Retry{MaxRetries: 2},
 			&middleware.Fallback{
@@ -359,12 +350,12 @@ func DefineAgentWithInlinePrompt(g *genkit.Genkit) {
 		),
 	)
 
-	genkit.DefineStreamingFlow(g, "agentPromptFlow",
+	genkit.DefineStreamingFlow(g, "assistantPromptFlow",
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
-			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(&AgentRequest{Query: query}))
+			stream := assistantPrompt.ExecuteStream(ctx, ai.WithInput(&AssistantRequest{Query: query}))
 			for result, err := range stream {
 				if err != nil {
-					return "", fmt.Errorf("agent error: %w", err)
+					return "", fmt.Errorf("assistant error: %w", err)
 				}
 				if result.Done {
 					return result.Response.Text(), nil
@@ -376,14 +367,14 @@ func DefineAgentWithInlinePrompt(g *genkit.Genkit) {
 	)
 }
 
-// DefineAgentWithDotprompt demonstrates loading a prompt from a .prompt file
+// DefineAssistantWithDotprompt demonstrates loading a prompt from a .prompt file
 // that includes a full suite of middleware configuration in its YAML frontmatter.
-func DefineAgentWithDotprompt(g *genkit.Genkit) {
-	genkit.DefineStreamingFlow(g, "agentDotpromptFlow",
+func DefineAssistantWithDotprompt(g *genkit.Genkit) {
+	genkit.DefineStreamingFlow(g, "assistantDotpromptFlow",
 		func(ctx context.Context, query string, sendChunk core.StreamCallback[string]) (string, error) {
-			// The "agent" prompt file includes all middleware in its frontmatter.
-			agentPrompt := genkit.LookupPrompt(g, "agent")
-			stream := agentPrompt.ExecuteStream(ctx, ai.WithInput(&AgentRequest{Query: query}))
+			// The "assistant" prompt file includes all middleware in its frontmatter.
+			assistantPrompt := genkit.LookupPrompt(g, "assistant")
+			stream := assistantPrompt.ExecuteStream(ctx, ai.WithInput(&AssistantRequest{Query: query}))
 			for result, err := range stream {
 				if err != nil {
 					return "", fmt.Errorf("agent error: %w", err)
