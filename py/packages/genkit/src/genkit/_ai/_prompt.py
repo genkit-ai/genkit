@@ -128,7 +128,6 @@ class PromptGenerateOptions(TypedDict, total=False):
     resources: list[str] | None
     tool_choice: ToolChoice | None
     output: OutputOptions | None
-    resume: Resume | dict[str, Any] | None
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None
     resume_metadata: dict[str, Any] | None
@@ -220,7 +219,6 @@ class PromptConfig(BaseModel):
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None
     resume_metadata: dict[str, Any] | None = None
     resources: list[str] | None = None
-    resume: Resume | None = None
 
 
 class ExecutablePrompt(Generic[InputT, OutputT]):
@@ -585,15 +583,11 @@ async def to_generate_action_options(
     if options.output_constrained is not None:
         output.constrained = options.output_constrained
 
-    resume: Resume | None = None
-    if options.resume is not None:
-        resume = options.resume
-    else:
-        resume = resume_options_to_resume(
-            resume_respond=options.resume_respond,
-            resume_restart=options.resume_restart,
-            resume_metadata=options.resume_metadata,
-        )
+    resume = resume_options_to_resume(
+        resume_respond=options.resume_respond,
+        resume_restart=options.resume_restart,
+        resume_metadata=options.resume_metadata,
+    )
 
     # Convert tool refs (str name or Tool object) to string names for GenerateActionOptions
     tools_refs = tools_to_action_names(options.tools)
@@ -629,30 +623,12 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
 
 
 def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
-    """Normalize ``opts['resume']`` to :class:`Resume` (model instance or loose dict).
-
-    Dict values may use a single ``respond`` / ``restart`` part instead of a list; those are
-    normalized before :meth:`~genkit._core._typing.Resume.model_validate`.
-    """
-    raw = opts.get('resume')
-    if raw is None:
-        return None
-    if isinstance(raw, Resume):
-        resume = raw
-    elif isinstance(raw, dict):
-        if not raw:
-            return None
-        d: dict[str, Any] = {str(k): v for k, v in raw.items()}
-        if 'respond' in d:
-            d['respond'] = _normalize_resume_respond_parts(d['respond'])
-        if 'restart' in d:
-            d['restart'] = _normalize_resume_restart_parts(d['restart'])
-        resume = Resume.model_validate(d)
-    else:
-        return None
-    if resume.respond is None and resume.restart is None and resume.metadata is None:
-        return None
-    return resume
+    """Build a Resume from flat resume_respond / resume_restart / resume_metadata kwargs."""
+    return resume_options_to_resume(
+        resume_respond=opts.get('resume_respond'),
+        resume_restart=opts.get('resume_restart'),
+        resume_metadata=opts.get('resume_metadata'),
+    )
 
 
 async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
