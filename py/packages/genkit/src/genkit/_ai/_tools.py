@@ -384,12 +384,13 @@ def tool(
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
-    """Return a :class:`Tool` that is not registered on your app's :class:`~genkit._core._registry.Registry`.
+    """Dynamically define a tool that can passed into a `generate` call. 
 
-    Pass it in ``generate(..., tools=[...])`` or executable prompts. The action lives on a
-    private registry; use :func:`define_tool` or :meth:`Genkit.tool` when you want it on
-    :attr:`Genkit.registry` instead. :meth:`Genkit.tool` is a decorator; :func:`tool` takes
-    ``func`` as the first argument.
+    Compared to `define_tool`, the `tool` constructor doesn't register the tool. 
+    The Tool instance cannot be referenced by name later.
+    
+    Use when there are dynamic or ephemeral tools that need to be available
+    for a particular `generate` call.
 
     Args:
         func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).

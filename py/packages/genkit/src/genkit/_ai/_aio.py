@@ -860,13 +860,6 @@ class Genkit:
         ``tools`` is typed as ``Sequence`` rather than ``list`` because ``Sequence``
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
-
-        A :class:`~genkit._ai._tools.Tool` that is not already registered on this instance's
-        registry (for example from :func:`~genkit._ai._tools.define_tool` on a different
-        :class:`~genkit._core._registry.Registry`) is registered only for this call on a
-        temporary child registry (see :func:`~genkit._ai._generate.registry_with_inline_tools`);
-        that registry is what :func:`~genkit._ai._generate.generate_action` uses—root is not
-        modified, matching Go's scoped-registration story.
         """
         prompt_config = PromptConfig(
             model=model,
