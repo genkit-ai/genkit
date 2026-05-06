@@ -441,7 +441,7 @@ func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequ
 		return nil, fmt.Errorf("failed to create completion: %w", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(completion)
+	resp, err := convertChatCompletionToModelResponse(completion, req)
 	if err != nil {
 		return nil, err
 	}
