@@ -86,15 +86,6 @@ Metadata = dict[str, Any]  # type alias for flexible metadata
 Custom = dict[str, Any]  # type alias for flexible custom data
 
 
-class Artifact(GenkitModel):
-    """Model for artifact data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    name: str | None = None
-    parts: list[Part] = Field(...)
-    metadata: Metadata | None = None
-
-
 class AgentInit(GenkitModel):
     """Model for agentinit data."""
 
@@ -137,6 +128,15 @@ class AgentStreamChunk(GenkitModel):
     status: Any | None = Field(default=None)
     artifact: Artifact | None = None
     turn_end: TurnEnd | None = None
+
+
+class Artifact(GenkitModel):
+    """Model for artifact data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    name: str | None = None
+    parts: list[Part] = Field(...)
+    metadata: Metadata | None = None
 
 
 class SessionState(GenkitModel):
