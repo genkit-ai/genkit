@@ -332,7 +332,7 @@ func newIngredientFilter() func([]*Ingredient) []*Ingredient {
 func DefineAssistantWithInlinePrompt(g *genkit.Genkit) {
 	assistantPrompt := genkit.DefinePrompt(
 		g, "assistant.code",
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithPrompt("{{query}}"),
 		ai.WithInputType(AssistantRequest{}),
 		ai.WithUse(
