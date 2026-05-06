@@ -128,6 +128,7 @@ class PromptGenerateOptions(TypedDict, total=False):
     resources: list[str] | None
     tool_choice: ToolChoice | None
     output: OutputOptions | None
+    resume: Resume | dict[str, Any] | None
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None
     resume_metadata: dict[str, Any] | None
@@ -348,9 +349,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         context = opts.get('context')
         prompt_config = self._prompt_config_for_call(opts)
         registry = await registry_with_inline_tools(self._registry, prompt_config.tools)
-        gen_options = await executable_prompt_call_to_generate_options(
-            self, registry, prompt_config, input, opts
-        )
+        gen_options = await executable_prompt_call_to_generate_options(self, registry, prompt_config, input, opts)
         result = await generate_action(
             registry,
             gen_options,
@@ -437,12 +436,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
+        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]  # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
         await self._ensure_resolved()
-        prompt_config = self._prompt_config_for_call(opts)
+        prompt_config = self._prompt_config_for_call(call_opts)
         registry = await registry_with_inline_tools(self._registry, prompt_config.tools)
-        return await executable_prompt_call_to_generate_options(
-            self, registry, prompt_config, input, opts
-        )
+        return await executable_prompt_call_to_generate_options(self, registry, prompt_config, input, call_opts)
 
 
 def register_prompt_actions(
@@ -567,9 +565,7 @@ async def to_generate_action_options(
         result = await render_system_prompt(registry, ri, options, cache, None)
         resolved_msgs.append(result)
     if options.messages:
-        resolved_msgs.extend(
-            await render_message_prompt(registry, ri, options, cache, None, history=None)
-        )
+        resolved_msgs.extend(await render_message_prompt(registry, ri, options, cache, None, history=None))
     if options.prompt:
         result = await render_user_prompt(registry, ri, options, cache, None)
         resolved_msgs.append(result)
@@ -633,26 +629,30 @@ def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa
 
 
 def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
-    """Build :class:`Resume` from ``opts['resume']`` when any field is set."""
-    resume_opts = opts.get('resume')
-    if not resume_opts:
+    """Normalize ``opts['resume']`` to :class:`Resume` (model instance or loose dict).
+
+    Dict values may use a single ``respond`` / ``restart`` part instead of a list; those are
+    normalized before :meth:`~genkit._core._typing.Resume.model_validate`.
+    """
+    raw = opts.get('resume')
+    if raw is None:
         return None
-    respond = resume_opts.get('respond')
-    restart = resume_opts.get('restart')
-    metadata = resume_opts.get('metadata')
-
-    respond_list: list[ToolResponsePart] | None = None
-    if respond:
-        respond_list = respond if isinstance(respond, list) else [respond]
-
-    restart_list: list[ToolRequestPart] | None = None
-    if restart:
-        restart_list = restart if isinstance(restart, list) else [restart]
-
-    if respond_list is None and restart_list is None and metadata is None:
+    if isinstance(raw, Resume):
+        resume = raw
+    elif isinstance(raw, dict):
+        if not raw:
+            return None
+        d: dict[str, Any] = {str(k): v for k, v in raw.items()}
+        if 'respond' in d:
+            d['respond'] = _normalize_resume_respond_parts(d['respond'])
+        if 'restart' in d:
+            d['restart'] = _normalize_resume_restart_parts(d['restart'])
+        resume = Resume.model_validate(d)
+    else:
         return None
-
-    return Resume(respond=respond_list, restart=restart_list, metadata=metadata)
+    if resume.respond is None and resume.restart is None and resume.metadata is None:
+        return None
+    return resume
 
 
 async def to_generate_request(registry: Registry, options: GenerateActionOptions) -> ModelRequest:
@@ -870,7 +870,7 @@ async def render_prompt_config_for_executable_call(
     executable_prompt: ExecutablePrompt[Any, Any],
     registry: Registry,
     prompt_config: PromptConfig,
-    template_input: Any,
+    template_input: Any,  # noqa: ANN401
     opts: PromptGenerateOptions,
 ) -> PromptConfig:
     """Expand dotprompt with the call's input into one merged :class:`PromptConfig`.
@@ -903,23 +903,21 @@ async def render_prompt_config_for_executable_call(
         merged_docs = [*merged_docs, *extra_docs] if merged_docs else list(extra_docs)
 
     resume = resume_from_prompt_call_opts(opts)
-    return PromptConfig.model_validate(
-        {
-            **prompt_config.model_dump(),
-            'system': None,
-            'prompt': None,
-            'messages': resolved_msgs,
-            'docs': merged_docs,
-            'resume': resume,
-        }
-    )
+    return PromptConfig.model_validate({
+        **prompt_config.model_dump(),
+        'system': None,
+        'prompt': None,
+        'messages': resolved_msgs,
+        'docs': merged_docs,
+        'resume': resume,
+    })
 
 
 async def executable_prompt_call_to_generate_options(
     executable_prompt: ExecutablePrompt[Any, Any],
     registry: Registry,
     prompt_config: PromptConfig,
-    template_input: Any,
+    template_input: Any,  # noqa: ANN401
     opts: PromptGenerateOptions,
 ) -> GenerateActionOptions:
     """Expand executable prompt templates, then build :class:`GenerateActionOptions`."""
@@ -1187,9 +1185,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
         call_opts: PromptGenerateOptions = {}
         prompt_config = prompt._prompt_config_for_call(call_opts)
         registry = await registry_with_inline_tools(prompt._registry, prompt_config.tools)
-        return await executable_prompt_call_to_generate_options(
-            prompt, registry, prompt_config, input, call_opts
-        )
+        return await executable_prompt_call_to_generate_options(prompt, registry, prompt_config, input, call_opts)
 
     action_name = registry_definition_key(name, variant, ns)
     prompt_action = registry.register_action(
