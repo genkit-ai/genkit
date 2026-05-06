@@ -74,55 +74,69 @@ DEFAULT_MAX_TURNS = 5
 logger = get_logger(__name__)
 
 
-def split_use_entries(
+def normalize_middleware(
+    registry: Registry,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None,
-) -> list[MiddlewareRef] | None:
-    """Pick out just the ``MiddlewareRef`` entries from a veneer ``use=`` list.
+) -> list[MiddlewareRef]:
+    """Normalize a ``use=[...]`` list into registry-backed ``MiddlewareRef``s.
 
-    Inline ``BaseMiddleware`` instances are not serializable, so they cannot flow
-    through ``GenerateActionOptions.use`` (which is the JSON wire form for the
-    reflection API and JSON action dispatch). The veneer resolves the full list
-    locally via :func:`resolve_middleware_from_use` and passes the resolved list as
-    ``resolved_middleware=`` to :func:`generate_action`; this helper produces the
-    parallel ref-only list for ``GenerateActionOptions.use`` so JSON inputs of the
-    action still round-trip.
+    Inline ``BaseMiddleware`` instances are registered into the (child) registry
+    under their class name — or an auto-generated ``__inline_{i}__`` name when
+    the class has no registered name — so that everything in ``use=`` can be
+    resolved uniformly via the registry. 
+
+    The returned list of refs has the same ordering as the input and can be
+    stored on ``GenerateActionOptions.use`` for consistent tracing / Dev UI
+    representation.
+
+    Args:
+        registry: Per-call child registry.  Inline instances are registered
+            here so they are automatically scoped to this generate() call.
+        use: Mixed list of inline instances and/or ``MiddlewareRef`` entries.
+
+    Returns:
+        A list of ``MiddlewareRef`` covering every entry in ``use``.
     """
     if not use:
-        return None
-    refs = [entry for entry in use if isinstance(entry, MiddlewareRef)]
-    return refs or None
+        return []
+    refs: list[MiddlewareRef] = []
+    # Track how many times each name appears so duplicates get unique suffixes.
+    name_counts: dict[str, int] = {}
+    for i, entry in enumerate(use):
+        if isinstance(entry, BaseMiddleware):
+            cls_name = entry.__class__.name  # type: ignore[attr-defined]
+            base_name = str(cls_name) if cls_name else f'__inline_{i}__'
+            count = name_counts.get(base_name, 0)
+            name_counts[base_name] = count + 1
+            reg_name = base_name if count == 0 else f'{base_name}__{count}'
+            # Clone before registering so the caller's instance is never mutated.
+            inst = entry.model_copy()
+            inst._registry = registry
+            # Wrap in a MiddlewareDesc so resolve_middleware_from_use can find it.
+            desc = MiddlewareDesc(
+                name=reg_name,
+                factory=lambda _cfg, _reg, _inst=inst: _inst,
+            )
+            registry.register_value('middleware', reg_name, desc)
+            refs.append(MiddlewareRef(name=reg_name))
+        else:
+            refs.append(entry)
+    return refs
 
 
 def resolve_middleware_from_use(
     registry: Registry,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None,
-) -> list[BaseMiddleware] | None:
-    """Resolve a ``use=[...]`` list to concrete ``BaseMiddleware`` instances.
+    use: Sequence[MiddlewareRef] | None,
+) -> list[BaseMiddleware]:
+    """Resolve a list of ``MiddlewareRef``s to concrete ``BaseMiddleware`` instances.
 
-    Each entry is one of:
-    - ``BaseMiddleware`` instance: used directly (inline fast path; no registry lookup).
-    - ``MiddlewareRef``: looked up by ``name`` and instantiated via the registered
-      ``MiddlewareDesc`` factory, which receives ``config`` directly.
-
-    List order is preserved so inline instances and refs can be interleaved.
+    All entries must already be in the registry (inline instances were registered
+    there by :func:`normalize_middleware`).  Order is preserved.
     """
     if not use:
-        return None
+        return []
     out: list[BaseMiddleware] = []
     for entry in use:
-        if isinstance(entry, BaseMiddleware):
-            # Clone before injecting the registry so we do not mutate the
-            # caller's instance (which they may share across concurrent
-            # generate() calls or across Genkit apps).  ``model_copy()`` is
-            # shallow — sufficient since we only set the ``_registry``
-            # PrivateAttr on the copy.  The registry passed in is the per-call
-            # child registry created by ``generate_action``, so any writes the
-            # middleware does through ``self._registry`` die with the call.
-            inst = entry.model_copy()
-            inst._registry = registry
-            out.append(inst)
-            continue
-        # MiddlewareRef -> look up the registered definition, pass registry.
         defn = registry.lookup_value('middleware', entry.name)
         if isinstance(defn, MiddlewareDesc):
             cfg = entry.config if isinstance(entry.config, dict) else None
@@ -384,25 +398,20 @@ async def generate_action(
     message_index: int = 0,
     current_turn: int = 0,
     context: dict[str, Any] | None = None,
-    resolved_middleware: list[BaseMiddleware] | None = None,
 ) -> ModelResponse:
     """Execute a generation request with tool calling and middleware support, wrapped in a util ``generate`` span.
 
     The registered ``/util/generate`` action calls :func:`_generate_action` directly,
     so reflection runs do not stack another util span on the action span.
 
-    Middleware comes from one of two sources:
-
-    - ``resolved_middleware``: a pre-resolved list from the veneer when the caller
-      passed inline ``BaseMiddleware`` instances in ``use=`` (not serializable on the
-      wire, so the veneer resolves them up-front and ``raw_request.use`` only carries
-      the ``MiddlewareRef`` entries).
-    - ``raw_request.use``: ``MiddlewareRef`` entries resolved here via the registry
-      (used by JSON action dispatch and tests that call ``generate_action`` directly).
-
-    When ``resolved_middleware`` is supplied, it is used as-is (it already reflects
-    the full original ordering and any inline instances). Otherwise the resolver runs
-    against ``raw_request.use`` alone.
+    ``raw_request.use`` may contain a mix of inline ``BaseMiddleware`` instances and
+    ``MiddlewareRef`` entries.  :func:`normalize_middleware` registers every inline
+    instance into the per-call child registry under its class name (or an
+    auto-generated name) and converts the full list to ``MiddlewareRef``s so that
+    :func:`resolve_middleware_from_use` can handle everything uniformly via the
+    registry.  After normalization ``raw_request.use`` contains only refs — a
+    consistent, serializable representation that the Dev UI and JSON action dispatch
+    can also rely on.
     """
     span_name = 'generate'
     with run_in_new_span(
@@ -423,11 +432,12 @@ async def generate_action(
         #      middleware in the same call, since they all share this scope.
         call_registry = registry.new_child()
 
-        middleware = (
-            resolved_middleware
-            if resolved_middleware is not None
-            else resolve_middleware_from_use(call_registry, raw_request.use)
-        )
+        # Normalize: register inline instances into call_registry, convert all
+        # entries to MiddlewareRefs, then resolve uniformly from the registry.
+        normalized_refs = normalize_middleware(call_registry, raw_request.use)
+        if normalized_refs:
+            raw_request = raw_request.model_copy(update={'use': normalized_refs})
+        middleware = resolve_middleware_from_use(call_registry, normalized_refs)
         # Per-call message queue shared across all recursive _generate_action
         # turns.  Middleware (and tool closures) enqueue extra user-role parts
         # here via ``enqueue_parts``; the engine drains and injects them as a

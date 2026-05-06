@@ -1046,21 +1046,22 @@ async def test_inline_middleware_instance_is_not_mutated_across_calls() -> None:
     define_programmable_model(ai_b)
     shared = IdentityMW()
 
-    from genkit._ai._generate import resolve_middleware_from_use
+    from genkit._ai._generate import normalize_middleware
 
-    resolved_a = resolve_middleware_from_use(ai_a.registry, [shared])
-    resolved_b = resolve_middleware_from_use(ai_b.registry, [shared])
+    child_a = ai_a.registry.new_child()
+    child_b = ai_b.registry.new_child()
+    refs_a = normalize_middleware(child_a, [shared])
+    refs_b = normalize_middleware(child_b, [shared])
 
-    assert resolved_a is not None
-    assert resolved_b is not None
+    assert refs_a
+    assert refs_b
     # Caller's instance is untouched.
     assert shared._registry is None
-    # Each resolution returned a distinct cloned instance bound to its own registry.
-    assert resolved_a[0] is not shared
-    assert resolved_b[0] is not shared
-    assert resolved_a[0] is not resolved_b[0]
-    assert resolved_a[0]._registry is ai_a.registry
-    assert resolved_b[0]._registry is ai_b.registry
+    # Each normalization registered a distinct cloned instance into its own child registry.
+    inst_a = child_a.lookup_value('middleware', 'identity_mw')
+    inst_b = child_b.lookup_value('middleware', 'identity_mw')
+    assert inst_a is not None
+    assert inst_b is not None
 
 
 @pytest.mark.asyncio

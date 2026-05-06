@@ -16,24 +16,45 @@
 
 """Middleware for Genkit model calls.
 
-This module provides types and helpers to define middleware and register it on
-the app. Chain ordering: middleware is applied first-in, outermost.
+This module provides types and helpers to define and register custom middleware.
+Chain ordering: middleware is applied first-in, outermost.
 
-Example usage:
-    from genkit import Genkit, MiddlewareRef
-    from genkit.middleware import BaseMiddleware, new_middleware, middleware_plugin
+Define a middleware class and pass it inline directly in ``use=``:
 
-    class MyMiddleware(BaseMiddleware):
-        name = "my_middleware"
-        ...
+    from genkit import Genkit
+    from genkit.middleware import BaseMiddleware
 
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(MyMw)])])
+    class LoggingMiddleware(BaseMiddleware):
+        name = 'logging'
+
+        async def wrap_generate(self, params, next_fn):
+            print('before')
+            result = await next_fn(params)
+            print('after')
+            return result
+
+    ai = Genkit()
 
     response = await ai.generate(
-        model="gemini-pro",
-        prompt="Hello",
-        use=[MiddlewareRef(name="my_mw")],
+        model='your-model-here',
+        prompt='Hello',
+        use=[LoggingMiddleware()],
     )
+
+To reference middleware by name (e.g. from the Dev UI or a config), register it
+first via ``ai.define_middleware``:
+
+    from genkit import MiddlewareRef
+
+    # Option A — imperative, after Genkit() is built.
+    # Once registered, reference by name with MiddlewareRef and pass config there:
+    ai.define_middleware(LoggingMiddleware)
+    await ai.generate(model='your-model-here', prompt='Hello',
+                      use=[MiddlewareRef(name='logging', config={'prefix': '[span]'})])
+
+    # Option B — pass config directly via the inline instance:
+    await ai.generate(model='your-model-here', prompt='Hello',
+                      use=[LoggingMiddleware(prefix='[span]')])
 """
 
 from genkit._core._middleware._base import (

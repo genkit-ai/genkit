@@ -37,9 +37,7 @@ from typing_extensions import Unpack
 from genkit._ai._generate import (
     generate_action,
     registry_with_inline_tools,
-    resolve_middleware_from_use,
     resolve_tool,
-    split_use_entries,
     to_tool_definition,
     tools_to_action_names,
 )
@@ -348,15 +346,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         on_chunk = opts.get('on_chunk')
         context = opts.get('context')
 
-        # Resolve any inline BaseMiddleware instances up-front so the
-        # rendered GenerateActionOptions.use (wire form) keeps only MiddlewareRefs.
         # Opts take precedence over the prompt's declared ``use``.
         raw_use = opts.get('use')
         if raw_use is None:
             raw_use = self._use
-        resolved_mw = resolve_middleware_from_use(self._registry, raw_use)
-        ref_only_use = cast(list[BaseMiddleware | MiddlewareRef] | None, split_use_entries(raw_use))
-        render_opts: PromptGenerateOptions = {**opts, 'use': ref_only_use}
+        render_opts: PromptGenerateOptions = {**opts, 'use': raw_use}
 
         prompt_config = self._prompt_config_for_call(render_opts)
         registry = await registry_with_inline_tools(self._registry, prompt_config.tools)
@@ -367,7 +361,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             registry,
             gen_options,
             on_chunk=on_chunk,
-            resolved_middleware=resolved_mw,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
         return cast(ModelResponse[OutputT], result)

@@ -187,14 +187,14 @@ def create_reflection_asgi_app(
             )
         type_param = raw.strip()
         try:
-            try:
-                await registry.initialize_all_plugins()
-            except Exception as e:
-                logger.warning(
-                    'initialize_all_plugins failed during /api/values; returning registered values only: %s',
-                    e,
-                    exc_info=True,
-                )
+            await registry.initialize_all_plugins()
+        except Exception as e:
+            logger.warning(
+                'initialize_all_plugins failed during /api/values; returning registered values only: %s',
+                e,
+                exc_info=True,
+            )
+        try:
             raw_values = registry.list_values(type_param)
             if type_param == 'middleware':
                 serialized: dict[str, Any] = {}

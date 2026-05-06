@@ -48,8 +48,6 @@ from genkit._ai._generate import (
     define_generate_action,
     generate_action,
     registry_with_inline_tools,
-    resolve_middleware_from_use,
-    split_use_entries,
 )
 from genkit._ai._model import (
     Message,
@@ -936,14 +934,11 @@ class Genkit:
         )
         registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
         gen_options = await to_generate_action_options(registry, prompt_config)
-        resolved_mw = resolve_middleware_from_use(registry, use)
-        ref_only_use = split_use_entries(use)
-        if ref_only_use:
-            gen_options = gen_options.model_copy(update={'use': ref_only_use})
+        if use:
+            gen_options = gen_options.model_copy(update={'use': use})
         return await generate_action(
             registry,
             gen_options,
-            resolved_middleware=resolved_mw,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
 
@@ -1054,15 +1049,12 @@ class Genkit:
             )
             registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
             gen_options = await to_generate_action_options(registry, prompt_config)
-            resolved_mw = resolve_middleware_from_use(registry, use)
-            ref_only_use = split_use_entries(use)
-            if ref_only_use:
-                gen_options = gen_options.model_copy(update={'use': ref_only_use})
+            if use:
+                gen_options = gen_options.model_copy(update={'use': use})
             return await generate_action(
                 registry,
                 gen_options,
                 on_chunk=lambda c: channel.send(c),
-                resolved_middleware=resolved_mw,
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
             )
 
