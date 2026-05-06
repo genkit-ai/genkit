@@ -257,9 +257,14 @@ const REASONING_MODEL_INFO: ModelInfo = {
     multiturn: true,
     tools: true,
     media: true,
-    // o1/o3/gpt-5 reasoning family ignores `system` role; instructions
-    // must go via the `instructions` config field instead.
-    systemRole: false,
+    // The Responses API itself rejects `system` role messages on
+    // reasoning models, but this plugin handles that internally:
+    // `toResponsesRequestBody` lifts text-only system messages into
+    // the top-level `instructions` field. We therefore advertise
+    // `systemRole: true` so Genkit core does NOT transform system
+    // messages (e.g. into a user-prefixed message) before the request
+    // reaches us — that transformation would defeat the lift.
+    systemRole: true,
     output: ['text', 'json'],
   },
 };

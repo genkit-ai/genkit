@@ -24,7 +24,10 @@ import {
 } from '../src/openai/responses/request';
 import { fromResponsesResponse } from '../src/openai/responses/response';
 import { openAIResponsesModelRunner } from '../src/openai/responses/runner';
-import { OpenAIResponsesConfigSchema } from '../src/openai/responses/types';
+import {
+  OpenAIResponsesConfigSchema,
+  SUPPORTED_RESPONSES_MODELS,
+} from '../src/openai/responses/types';
 
 jest.mock('genkit/model', () => {
   const originalModule =
@@ -217,6 +220,33 @@ describe('toResponsesRequestBody', () => {
         type: 'function_call_output',
         call_id: 'call_1',
         output: JSON.stringify({ name: 'Ada' }),
+      },
+    ]);
+  });
+
+  it('case 9b — undefined toolResponse.output falls back to "{}"', () => {
+    const items = chatMessagesToResponsesInput([
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              ref: 'call_1',
+              name: 'noop',
+              output: undefined,
+            },
+          },
+        ],
+      },
+    ]);
+    // The Responses API requires `output` to be a string; we must NOT
+    // emit `output: undefined` (which JSON serialization drops, leaving
+    // the field absent and the body invalid).
+    expect(items).toEqual([
+      {
+        type: 'function_call_output',
+        call_id: 'call_1',
+        output: '{}',
       },
     ]);
   });
@@ -618,19 +648,18 @@ describe('toResponsesRequestBody — invariants & edge cases', () => {
   });
 
   it('file_search ranking_options included when scoreThreshold is set', () => {
-    const withThreshold: GenerateRequest<typeof OpenAIResponsesConfigSchema> =
-      {
-        messages: [{ role: 'user', content: [{ text: 'q' }] }],
-        config: {
-          builtInTools: [
-            {
-              type: 'file_search',
-              vectorStoreIds: ['vs_1'],
-              ranker: { ranker: 'auto', scoreThreshold: 0.5 },
-            },
-          ],
-        },
-      };
+    const withThreshold: GenerateRequest<typeof OpenAIResponsesConfigSchema> = {
+      messages: [{ role: 'user', content: [{ text: 'q' }] }],
+      config: {
+        builtInTools: [
+          {
+            type: 'file_search',
+            vectorStoreIds: ['vs_1'],
+            ranker: { ranker: 'auto', scoreThreshold: 0.5 },
+          },
+        ],
+      },
+    };
     const body = toResponsesRequestBody('gpt-5-mini', withThreshold);
     const tool = body.tools![0] as unknown as Record<string, unknown>;
     expect(tool.ranking_options).toEqual({
@@ -707,5 +736,18 @@ describe('fromResponsesResponse — invariants & edge cases', () => {
     expect(data.finishReason).toBe('other');
     expect(data.finishMessage).toBe('Slow down');
     expect(data.custom).toMatchObject({ errorCode: 'rate_limit_exceeded' });
+  });
+});
+
+describe('SUPPORTED_RESPONSES_MODELS — model info', () => {
+  it('reasoning models advertise systemRole: true so core does not pre-transform system messages', () => {
+    // The plugin handles system-message lifting itself
+    // (toResponsesRequestBody → instructions). If we advertised
+    // systemRole: false, Genkit core would convert system → user
+    // before our resolver runs, defeating the lift.
+    const o3 = SUPPORTED_RESPONSES_MODELS['o3'];
+    expect(o3.info?.supports?.systemRole).toBe(true);
+    const o4mini = SUPPORTED_RESPONSES_MODELS['o4-mini'];
+    expect(o4mini.info?.supports?.systemRole).toBe(true);
   });
 });

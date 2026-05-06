@@ -113,13 +113,18 @@ export function chatMessagesToResponsesInput(
                 `cannot correlate to its function_call`
             );
           }
+          // The Responses API requires `output` to be a string. If the
+          // caller's tool returned undefined, JSON.stringify(undefined)
+          // would itself return undefined and the field would be
+          // dropped from the body, so default to an empty JSON object
+          // string in that case.
           items.push({
             type: 'function_call_output',
             call_id: part.toolResponse.ref,
             output:
               typeof part.toolResponse.output === 'string'
                 ? part.toolResponse.output
-                : JSON.stringify(part.toolResponse.output),
+                : JSON.stringify(part.toolResponse.output ?? {}),
           });
         }
         break;
