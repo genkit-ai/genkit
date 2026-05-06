@@ -1080,6 +1080,40 @@ func TestDefinePrompt_WithoutVariant(t *testing.T) {
 	}
 }
 
+func TestDefinePrompt_WithMiddlewareMetadata(t *testing.T) {
+	reg := registry.New()
+
+	mw := middlewareRefArg{name: "test/mw", config: map[string]any{"foo": "bar"}}
+	DefinePrompt(reg, "test-mw", WithUse(mw))
+
+	prompt := LookupPrompt(reg, "test-mw")
+	if prompt == nil {
+		t.Fatalf("Prompt was not registered")
+	}
+
+	promptMetadata, ok := prompt.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt'] to be a map")
+	}
+
+	use, ok := promptMetadata["use"].([]*MiddlewareRef)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt']['use'] to be []*MiddlewareRef, got %T", promptMetadata["use"])
+	}
+
+	if len(use) != 1 {
+		t.Fatalf("Expected 1 middleware ref, got %d", len(use))
+	}
+
+	if use[0].Name != "test/mw" {
+		t.Errorf("Expected middleware name 'test/mw', got '%s'", use[0].Name)
+	}
+
+	if diff := cmp.Diff(map[string]any{"foo": "bar"}, use[0].Config); diff != "" {
+		t.Errorf("Middleware config mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestLoadPromptFolder(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
@@ -3410,5 +3444,51 @@ hi
 	reg := newTestRegistry(t)
 	if _, err := LoadPromptFromSource(reg, promptSource, "badshape", ""); err == nil {
 		t.Fatal("expected error for non-list `use:`")
+	}
+}
+
+func TestLoadPrompt_WithUseMiddlewareMetadata(t *testing.T) {
+	const promptSource = `---
+model: test/fakeModel
+use:
+  - test/mw1
+  - name: test/mw2
+    config:
+      foo: bar
+---
+hello
+`
+	reg := newTestRegistry(t)
+	defineFakeModel(t, reg, fakeModelConfig{})
+
+	p, err := LoadPromptFromSource(reg, promptSource, "withusemetadata", "")
+	if err != nil {
+		t.Fatalf("LoadPromptFromSource: %v", err)
+	}
+
+	promptMetadata, ok := p.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt'] to be a map")
+	}
+
+	use, ok := promptMetadata["use"].([]*MiddlewareRef)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt']['use'] to be []*MiddlewareRef, got %T", promptMetadata["use"])
+	}
+
+	if len(use) != 2 {
+		t.Fatalf("Expected 2 middleware refs, got %d", len(use))
+	}
+
+	if use[0].Name != "test/mw1" {
+		t.Errorf("Expected middleware[0] name 'test/mw1', got '%s'", use[0].Name)
+	}
+
+	if use[1].Name != "test/mw2" {
+		t.Errorf("Expected middleware[1] name 'test/mw2', got '%s'", use[1].Name)
+	}
+
+	if diff := cmp.Diff(map[string]any{"foo": "bar"}, use[1].Config); diff != "" {
+		t.Errorf("Middleware[1] config mismatch (-want +got):\n%s", diff)
 	}
 }
