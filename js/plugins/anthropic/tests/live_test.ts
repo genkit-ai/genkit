@@ -33,39 +33,13 @@ import {
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 
 describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
-  it('should work with short model name claude-3-5-haiku', async () => {
+  it('should work with short model name claude-haiku-4-5', async () => {
     const ai = genkit({
       plugins: [anthropic({ apiKey: API_KEY })],
     });
 
     const result = await ai.generate({
-      model: 'anthropic/claude-3-5-haiku',
-      prompt: 'Say "hello" and nothing else.',
-    });
-
-    assert.ok(result.text.toLowerCase().includes('hello'));
-  });
-
-  it('should work with short model name claude-3-haiku', async () => {
-    const ai = genkit({
-      plugins: [anthropic({ apiKey: API_KEY })],
-    });
-
-    const result = await ai.generate({
-      model: 'anthropic/claude-3-haiku',
-      prompt: 'Say "hello" and nothing else.',
-    });
-
-    assert.ok(result.text.toLowerCase().includes('hello'));
-  });
-
-  it('should work with full versioned model name', async () => {
-    const ai = genkit({
-      plugins: [anthropic({ apiKey: API_KEY })],
-    });
-
-    const result = await ai.generate({
-      model: 'anthropic/claude-3-5-haiku-20241022',
+      model: 'anthropic/claude-haiku-4-5',
       prompt: 'Say "hello" and nothing else.',
     });
 
@@ -78,7 +52,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
     });
 
     const result = await ai.generate({
-      model: anthropic.model('claude-3-5-haiku'),
+      model: anthropic.model('claude-haiku-4-5'),
       prompt: 'Say "hello" and nothing else.',
     });
 

@@ -27,6 +27,7 @@ import { JSONPath } from 'jsonpath-plus';
 import {
   FunctionCallingMode,
   FunctionDeclaration,
+  FunctionResponse,
   GenerateContentCandidate as GeminiCandidate,
   Content as GeminiContent,
   Part as GeminiPart,
@@ -162,22 +163,27 @@ function toGeminiToolRequest(part: Part): GeminiPart {
 }
 
 function toGeminiToolResponse(part: Part): GeminiPart {
-  if (!part.toolResponse?.output) {
-    throw Error('Invalid ToolResponsePart: output was missing.');
+  if (part.toolResponse?.output === undefined && !part.toolResponse?.content) {
+    throw Error(
+      'Invalid ToolResponsePart: output or content must be provided.'
+    );
   }
-  const functionResponse: GeminiPart['functionResponse'] = {
-    name: part.toolResponse.name,
+  const functionResponse: FunctionResponse = {
+    name: part.toolResponse!.name,
+    ...(part.toolResponse?.ref !== undefined
+      ? { id: part.toolResponse.ref }
+      : {}),
     response: {
-      name: part.toolResponse.name,
-      content: part.toolResponse.output,
+      name: part.toolResponse!.name,
+      ...(part.toolResponse?.output !== undefined
+        ? { content: part.toolResponse.output }
+        : {}),
     },
+    ...(part.toolResponse?.content !== undefined
+      ? { parts: part.toolResponse.content.map(toGeminiPart) }
+      : {}),
   };
-  if (part.toolResponse.content) {
-    functionResponse.parts = part.toolResponse.content.map(toGeminiPart);
-  }
-  if (part.toolResponse.ref) {
-    functionResponse.id = part.toolResponse.ref;
-  }
+
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     functionResponse,
   });
