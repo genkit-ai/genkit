@@ -154,6 +154,7 @@ flask-hello          = { workspace = true }
 gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
 google-genai-media   = { workspace = true }
+genkit-plugin-middleware = { workspace = true }
 middleware           = { workspace = true }
 output-formats       = { workspace = true }
 prompts              = { workspace = true }
@@ -264,6 +265,7 @@ select = [
 "packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
 # Test files don't need docstrings; test method names are self-documenting
 "**/tests/**/*.py" = ["D", "ANN401"]
+"plugins/middleware/tests/*_test.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Validation/provenance/safe-defaults test methods are self-documenting via names;
 # S108 false positives on Path('/tmp/x') used as dummy non-existent paths in tests.

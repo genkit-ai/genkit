@@ -6,8 +6,8 @@
 """Tests for the action module."""
 
 import json
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import BaseModel, Field
@@ -17,8 +17,10 @@ from genkit import (
     Genkit,
     Interrupt,
     Message,
+    MiddlewareRef,
     ModelResponse,
     ModelResponseChunk,
+    middleware_plugin,
     respond_to_interrupt,
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
@@ -52,9 +54,15 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
+from genkit.middleware import BaseMiddleware, ModelHookParams, new_middleware
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
+
+
+def middleware_ref(name: str) -> MiddlewareRef:
+    """Shorthand for tests: ``middleware_ref('inject_ctx')`` instead of MiddlewareRef(name=...)."""
+    return MiddlewareRef(name=name)
 
 
 @pytest.fixture
@@ -1000,30 +1008,29 @@ async def test_generate_json_format_unconstrained(
     assert (await stream_result.response).request == want
 
 
-@pytest.mark.asyncio
-async def test_generate_with_middleware(
-    setup_test: SetupFixture,
-) -> None:
-    """When middleware is provided, applies it."""
-    ai, *_ = setup_test
+class PreMiddleware(BaseMiddleware):
+    name: ClassVar[str] = 'pre_mw'
 
-    async def pre_middle(
-        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
-    ) -> ModelResponse:
-        txt = ''.join(text_from_message(m) for m in req.messages)
-        return await next(
-            ModelRequest(
-                messages=[
-                    Message(role=Role.USER, content=[Part(root=TextPart(text=f'PRE {txt}'))]),
-                ],
-            ),
-            ctx,
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+        txt = ''.join(text_from_message(m) for m in params.request.messages)
+        return await next_fn(
+            ModelHookParams(
+                request=ModelRequest(
+                    messages=[
+                        Message(role=Role.USER, content=[Part(root=TextPart(text=f'PRE {txt}'))]),
+                    ],
+                ),
+                on_chunk=params.on_chunk,
+                context=params.context,
+            )
         )
 
-    async def post_middle(
-        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
-    ) -> ModelResponse:
-        resp: ModelResponse = await next(req, ctx)
+
+class PostMiddleware(BaseMiddleware):
+    name: ClassVar[str] = 'post_mw'
+
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+        resp: ModelResponse = await next_fn(params)
         assert resp.message is not None
         txt = text_from_message(resp.message)
         return ModelResponse(
@@ -1031,42 +1038,78 @@ async def test_generate_with_middleware(
             message=Message(role=Role.USER, content=[Part(root=TextPart(text=f'{txt} POST'))]),
         )
 
+
+@pytest.mark.asyncio
+async def test_generate_with_middleware() -> None:
+    """When middleware is provided, applies it."""
+    ai = Genkit(
+        model='echoModel',
+        plugins=[
+            middleware_plugin([
+                new_middleware(PreMiddleware),
+                new_middleware(PostMiddleware),
+            ])
+        ],
+    )
+    define_programmable_model(ai)
+    define_echo_model(ai)
+
     want = '[ECHO] user: "PRE hi" POST'
 
-    response = await ai.generate(model='echoModel', prompt='hi', use=[pre_middle, post_middle])
+    response = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        use=[middleware_ref('pre_mw'), middleware_ref('post_mw')],
+    )
 
     assert response.text == want
 
-    stream_result = ai.generate_stream(model='echoModel', prompt='hi', use=[pre_middle, post_middle])
+    stream_result = ai.generate_stream(
+        model='echoModel',
+        prompt='hi',
+        use=[middleware_ref('pre_mw'), middleware_ref('post_mw')],
+    )
 
     assert (await stream_result.response).text == want
 
 
-@pytest.mark.asyncio
-async def test_generate_passes_through_current_action_context(
-    setup_test: SetupFixture,
-) -> None:
-    """Test that generate uses current action context by default."""
-    ai, *_ = setup_test
+class InjectContextMiddleware(BaseMiddleware):
+    name: ClassVar[str] = 'inject_ctx'
 
-    async def inject_context(
-        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
-    ) -> ModelResponse:
-        txt = ''.join(text_from_message(m) for m in req.messages)
-        return await next(
-            ModelRequest(
-                messages=[
-                    Message(
-                        role=Role.USER,
-                        content=[Part(root=TextPart(text=f'{txt} {ctx.context}'))],
-                    ),
-                ],
-            ),
-            ctx,
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+        txt = ''.join(text_from_message(m) for m in params.request.messages)
+        return await next_fn(
+            ModelHookParams(
+                request=ModelRequest(
+                    messages=[
+                        Message(
+                            role=Role.USER,
+                            content=[Part(root=TextPart(text=f'{txt} {params.context}'))],
+                        ),
+                    ],
+                ),
+                on_chunk=params.on_chunk,
+                context=params.context,
+            )
         )
 
+
+@pytest.mark.asyncio
+async def test_generate_passes_through_current_action_context() -> None:
+    """Test that generate uses current action context by default."""
+    ai = Genkit(
+        model='echoModel',
+        plugins=[middleware_plugin([new_middleware(InjectContextMiddleware)])],
+    )
+    define_programmable_model(ai)
+    define_echo_model(ai)
+
     async def action_fn() -> ModelResponse:
-        return await ai.generate(model='echoModel', prompt='hi', use=[inject_context])
+        return await ai.generate(
+            model='echoModel',
+            prompt='hi',
+            use=[middleware_ref('inject_ctx')],
+        )
 
     action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
     action_response = await action.run(context={'foo': 'bar'})
@@ -1075,33 +1118,20 @@ async def test_generate_passes_through_current_action_context(
 
 
 @pytest.mark.asyncio
-async def test_generate_uses_explicitly_passed_in_context(
-    setup_test: SetupFixture,
-) -> None:
+async def test_generate_uses_explicitly_passed_in_context() -> None:
     """Generate uses specific context instead of current action context."""
-    ai, *_ = setup_test
-
-    async def inject_context(
-        req: ModelRequest, ctx: ActionRunContext, next: Callable[..., Awaitable[ModelResponse]]
-    ) -> ModelResponse:
-        txt = ''.join(text_from_message(m) for m in req.messages)
-        return await next(
-            ModelRequest(
-                messages=[
-                    Message(
-                        role=Role.USER,
-                        content=[Part(root=TextPart(text=f'{txt} {ctx.context}'))],
-                    ),
-                ],
-            ),
-            ctx,
-        )
+    ai = Genkit(
+        model='echoModel',
+        plugins=[middleware_plugin([new_middleware(InjectContextMiddleware)])],
+    )
+    define_programmable_model(ai)
+    define_echo_model(ai)
 
     async def action_fn() -> ModelResponse:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[inject_context],
+            use=[middleware_ref('inject_ctx')],
             context={'bar': 'baz'},
         )
 

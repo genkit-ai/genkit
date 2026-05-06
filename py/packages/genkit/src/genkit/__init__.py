@@ -33,7 +33,7 @@ from genkit._ai._tools import (
 from genkit._core._action import Action, StreamResponse
 from genkit._core._error import GenkitError, PublicError
 from genkit._core._model import Document
-from genkit._core._plugin import Plugin
+from genkit._core._plugin import Plugin, middleware_plugin
 from genkit._core._plugins import extend_plugin_namespace
 from genkit._core._typing import (
     CustomPart,
@@ -41,6 +41,7 @@ from genkit._core._typing import (
     Media,
     MediaPart,
     Metadata,
+    MiddlewareRef,
     Part,
     ReasoningPart,
     Role,
@@ -131,6 +132,9 @@ __all__ = [
     'DocumentPart',
     # Plugin interface
     'Plugin',
+    'middleware_plugin',
+    # Middleware references (wire form for use= parameter)
+    'MiddlewareRef',
     # AI runtime
     'ActionKind',
     'ActionRunContext',

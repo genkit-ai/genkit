@@ -17,74 +17,108 @@
 """Middleware - inspect or modify requests before they reach the model."""
 
 from collections.abc import Awaitable, Callable
+from typing import ClassVar
 
 import structlog
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Message, ModelRequest, ModelResponse, Part, Role, TextPart
-from genkit._core._action import ActionRunContext
+from genkit import Genkit, Message, MiddlewareRef, Part, Role, TextPart
+from genkit.middleware import BaseMiddleware, ModelHookParams
 from genkit.plugins.google_genai import GoogleAI
 
 logger = structlog.get_logger(__name__)
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.5-flash')
 
 
 class PromptInput(BaseModel):
     """Input shared by middleware flows."""
 
-    prompt: str = Field(default='Explain recursion simply.', description='Prompt to send to the model')
+    prompt: str = Field(
+        default='Explain recursion simply.',
+        description='Prompt to send to the model',
+    )
 
 
-async def logging_middleware(
-    req: ModelRequest,
-    ctx: ActionRunContext,
-    next_handler: Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]],
-) -> ModelResponse:
+class LoggingMiddleware(BaseMiddleware):
     """Log request/response details without changing behavior."""
 
-    await logger.ainfo('middleware saw request', message_count=len(req.messages))
-    response = await next_handler(req, ctx)
-    await logger.ainfo('middleware saw response', finish_reason=response.finish_reason)
-    return response
+    name: ClassVar[str] = 'logging_mw'
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        next_fn: Callable[[ModelHookParams], Awaitable],
+    ):
+        await logger.ainfo('middleware saw request', message_count=len(params.request.messages))
+        response = await next_fn(params)
+        await logger.ainfo(
+            'middleware saw response',
+            finish_reason=response.finish_reason,
+        )
+        return response
 
 
-async def concise_reply_middleware(
-    req: ModelRequest,
-    ctx: ActionRunContext,
-    next_handler: Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]],
-) -> ModelResponse:
-    """Add a short system instruction before the model call."""
+class ConciseReplyMiddleware(BaseMiddleware):
+    """Add a short system instruction before the model call.
 
-    system_message = Message(
-        role=Role.SYSTEM,
-        content=[Part(root=TextPart(text='Answer in one short paragraph.'))],
-    )
-    return await next_handler(req.model_copy(update={'messages': [system_message, *req.messages]}), ctx)
+    ``instruction`` is a pydantic field: override it per call via ``ConciseReplyMiddleware(instruction=...)``
+    or via ``MiddlewareRef(name='concise_reply_mw', config={'instruction': ...})``.
+    """
+
+    name: ClassVar[str] = 'concise_reply_mw'
+    instruction: str = 'Answer in one short paragraph.'
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        next_fn: Callable[[ModelHookParams], Awaitable],
+    ):
+        system_message = Message(
+            role=Role.SYSTEM,
+            content=[Part(root=TextPart(text=self.instruction))],
+        )
+        new_req = params.request.model_copy(update={'messages': [system_message, *params.request.messages]})
+        return await next_fn(
+            ModelHookParams(
+                request=new_req,
+                on_chunk=params.on_chunk,
+                context=params.context,
+            )
+        )
+
+
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash',
+)
+
+# Register ``ConciseReplyMiddleware`` by name so it can be reached via ``MiddlewareRef``
+# (from the Dev UI or cross-process callers); ``LoggingMiddleware`` is used inline below.
+ai.define_middleware(ConciseReplyMiddleware)
 
 
 @ai.flow()
 async def logging_demo(input: PromptInput) -> str:
-    """Run a prompt through a read-only middleware."""
+    """Pass a ``BaseMiddleware`` instance directly: no registration needed in-process."""
 
-    response = await ai.generate(prompt=input.prompt, use=[logging_middleware])
+    response = await ai.generate(prompt=input.prompt, use=[LoggingMiddleware()])
     return response.text
 
 
 @ai.flow()
 async def request_modifier_demo(input: PromptInput) -> str:
-    """Run a prompt through a request-modifying middleware."""
+    """Resolve a registered middleware by name, with a per-call config override."""
 
-    response = await ai.generate(prompt=input.prompt, use=[concise_reply_middleware])
+    response = await ai.generate(
+        prompt=input.prompt,
+        use=[MiddlewareRef(name='concise_reply_mw', config={'instruction': 'Answer in a single haiku.'})],
+    )
     return response.text
 
 
 async def main() -> None:
     """Run both middleware demos once."""
-    try:
-        print(await logging_demo(PromptInput()))  # noqa: T201
-        print(await request_modifier_demo(PromptInput(prompt='Write a haiku about recursion.')))  # noqa: T201
-    except Exception as error:
-        print(f'Set GEMINI_API_KEY to a valid value before running this sample directly.\n{error}')  # noqa: T201
+    print(await logging_demo(PromptInput()))  # noqa: T201
+    print(await request_modifier_demo(PromptInput(prompt='Write a haiku about recursion.')))  # noqa: T201
 
 
 if __name__ == '__main__':

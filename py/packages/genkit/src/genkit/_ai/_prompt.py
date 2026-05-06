@@ -37,12 +37,13 @@ from typing_extensions import Unpack
 from genkit._ai._generate import (
     generate_action,
     registry_with_inline_tools,
+    resolve_middleware_from_use,
     resolve_tool,
+    split_use_entries,
     to_tool_definition,
     tools_to_action_names,
 )
 from genkit._ai._model import (
-    ModelMiddleware,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
@@ -52,11 +53,13 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, Streaming
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
+from genkit._core._middleware._base import BaseMiddleware
 from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     GenerateActionOutputConfig,
+    MiddlewareRef,
     OutputConfig,
     Part,
     Resume,
@@ -134,7 +137,7 @@ class PromptGenerateOptions(TypedDict, total=False):
     return_tool_requests: bool | None
     max_turns: int | None
     on_chunk: ModelStreamingCallback | None
-    use: list[ModelMiddleware] | None
+    use: list[BaseMiddleware | MiddlewareRef] | None
     context: dict[str, Any] | None
     step_name: str | None
     metadata: dict[str, Any] | None
@@ -213,7 +216,7 @@ class PromptConfig(BaseModel):
     metadata: dict[str, Any] | None = None
     tools: Sequence[str | Tool] | None = None
     tool_choice: ToolChoice | None = None
-    use: list[ModelMiddleware] | None = None
+    use: list[BaseMiddleware | MiddlewareRef] | None = None
     docs: list[Document] | None = None
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None
@@ -245,7 +248,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         metadata: dict[str, Any] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         resources: list[str] | None = None,
         name: str | None = None,
@@ -333,9 +336,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Args:
             input: Template variables for rendering.
         """
-        return await self._call_impl(
-            input, opts
-        )  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
 
     async def _call_impl(
         self,
@@ -345,16 +346,28 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         """Execute the prompt with resolved opts. Used by __call__ and stream."""
         await self._ensure_resolved()
         on_chunk = opts.get('on_chunk')
-        middleware = opts.get('use') or self._use
         context = opts.get('context')
-        prompt_config = self._prompt_config_for_call(opts)
+
+        # Resolve any inline BaseMiddleware instances up-front so the
+        # rendered GenerateActionOptions.use (wire form) keeps only MiddlewareRefs.
+        # Opts take precedence over the prompt's declared ``use``.
+        raw_use = opts.get('use')
+        if raw_use is None:
+            raw_use = self._use
+        resolved_mw = resolve_middleware_from_use(self._registry, raw_use)
+        ref_only_use = cast(list[BaseMiddleware | MiddlewareRef] | None, split_use_entries(raw_use))
+        render_opts: PromptGenerateOptions = {**opts, 'use': ref_only_use}
+
+        prompt_config = self._prompt_config_for_call(render_opts)
         registry = await registry_with_inline_tools(self._registry, prompt_config.tools)
-        gen_options = await executable_prompt_call_to_generate_options(self, registry, prompt_config, input, opts)
+        gen_options = await executable_prompt_call_to_generate_options(
+            self, registry, prompt_config, input, render_opts
+        )
         result = await generate_action(
             registry,
             gen_options,
             on_chunk=on_chunk,
-            middleware=middleware,
+            resolved_middleware=resolved_mw,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
         return cast(ModelResponse[OutputT], result)
@@ -545,7 +558,15 @@ async def to_generate_action_options(
     registry: Registry,
     options: PromptConfig,
 ) -> GenerateActionOptions:
-    """Render ``PromptConfig`` into `GenerateActionOptions`."""
+    """Render ``options`` into :class:`GenerateActionOptions`.
+
+    Pass :class:`PromptConfig` from :func:`Genkit.generate` or from
+    :func:`render_prompt_config_for_executable_call` after template expansion (final ``messages``,
+    merged ``docs``, optional ``resume``).
+
+    ``registry`` should come from :func:`~genkit._ai._generate.registry_with_inline_tools` when
+    ``tools`` may include unregistered :class:`~genkit._ai._tools.Tool` instances.
+    """
     model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
