@@ -18,15 +18,20 @@ import { z } from 'genkit';
 import { InMemorySessionStore } from 'genkit/beta';
 import { ai } from './genkit.js';
 
+var count = 0;
+
+ai.defineHelper('roundRobin', (o1, o2) => {
+  console.log(count, o1, o2);
+  return count++ % 2 ? o1 : o2;
+});
+
 export const branchingStore = new InMemorySessionStore();
 
 export const nameAgent = ai.defineAgent({
   name: 'namePrompt',
   model: 'googleai/gemini-flash-lite-latest',
   input: { schema: z.object({}) },
-  system:
-    'You are a friendly assistant. Keep track of the user name and answer their questions about it. ' +
-    'Be very terse in your responses, extremely. If one word will do, use one word. No punctuation unless needed.',
+  system: `You are a {{ roundRobin 'sarcastic' 'business-like' }} assistant.`,
   store: branchingStore,
 });
 
