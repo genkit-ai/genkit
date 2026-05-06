@@ -740,14 +740,29 @@ describe('fromResponsesResponse — invariants & edge cases', () => {
 });
 
 describe('SUPPORTED_RESPONSES_MODELS — model info', () => {
-  it('reasoning models advertise systemRole: true so core does not pre-transform system messages', () => {
-    // The plugin handles system-message lifting itself
-    // (toResponsesRequestBody → instructions). If we advertised
-    // systemRole: false, Genkit core would convert system → user
-    // before our resolver runs, defeating the lift.
+  it('reasoning models advertise systemRole: true (plugin lifts system → instructions internally)', () => {
     const o3 = SUPPORTED_RESPONSES_MODELS['o3'];
     expect(o3.info?.supports?.systemRole).toBe(true);
     const o4mini = SUPPORTED_RESPONSES_MODELS['o4-mini'];
     expect(o4mini.info?.supports?.systemRole).toBe(true);
+  });
+
+  it('end-to-end: system-message lift produces instructions when targeting o3', () => {
+    // Spot-check that the lift actually fires for a reasoning model id —
+    // the OpenAI Responses API itself rejects `system` role for o3, so
+    // the body must arrive with no system message in `input` and the
+    // text moved to top-level `instructions`.
+    const body = toResponsesRequestBody('o3', {
+      messages: [
+        { role: 'system', content: [{ text: 'Be terse.' }] },
+        { role: 'user', content: [{ text: 'Hi' }] },
+      ],
+      config: {},
+    });
+    expect(body.instructions).toBe('Be terse.');
+    const inputRoles = (body.input as Array<{ role?: string }>).map(
+      (i) => i.role
+    );
+    expect(inputRoles).not.toContain('system');
   });
 });

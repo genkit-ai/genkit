@@ -275,10 +275,11 @@ function toResponsesFunctionTools(request: GenerateRequest): FunctionTool[] {
  * Notable behaviours:
  *  - `output.format === 'json'` + `output.schema` ⇒
  *    `text.format = { type: 'json_schema', strict: true, schema }`.
- *  - For models with `supports.systemRole === false` (o1/o3 family),
- *    system messages are extracted into the top-level `instructions`
- *    field and dropped from the input array. Callers can also set
- *    `config.instructions` explicitly to override.
+ *  - When `config.instructions` is unset, leading text-only system
+ *    messages are lifted into the top-level `instructions` field and
+ *    dropped from the input array. System messages carrying media stay
+ *    in the input array so attachments are not silently lost. Setting
+ *    `config.instructions` explicitly disables this lift entirely.
  *  - `config.builtInTools` are appended to `tools[]` after function tools.
  *  - `config.store` defaults to `false` (stateless-by-default — see README).
  */
