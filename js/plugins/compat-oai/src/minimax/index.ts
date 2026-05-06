@@ -122,8 +122,8 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
  *
  * export default configureGenkit({
  *  plugins: [
- *    miniMax()
- *    ... // other plugins
+ *    miniMax(),
+ *    // ... other plugins
  *  ]
  * });
  * ```
