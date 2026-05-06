@@ -33,7 +33,6 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
-	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
 )
 
@@ -257,7 +256,7 @@ func DefineAgent[State any](
 	}
 
 	prompt := ai.DefinePrompt(r, name, promptOpts...)
-	return DefineCustomAgent(r, name, agentLoop[State, any](r, prompt, nil, nil), agentOpts...)
+	return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), agentOpts...)
 }
 
 // DefinePromptAgent defines an agent backed by a prompt already registered
@@ -265,9 +264,9 @@ func DefineAgent[State any](
 // The agent is registered under the same name as the prompt, sharing its
 // namespace.
 //
-// defaultInput is used to render the prompt unless the invocation overrides
-// it via [WithInputVariables]. PromptIn is captured for runtime input-variable
-// type conversion; it is not propagated through the [Agent] type.
+// defaultInput is used to render the prompt on every turn. PromptIn is
+// captured for compile-time type checking on defaultInput; it is not
+// propagated through the [Agent] type.
 //
 // For an agent that defines its prompt inline, use [DefineAgent]. For full
 // control over the per-turn loop, use [DefineCustomAgent].
@@ -281,14 +280,7 @@ func DefinePromptAgent[State, PromptIn any](
 	if prompt == nil {
 		panic(fmt.Sprintf("DefinePromptAgent: prompt %q not found", promptName))
 	}
-	convert := func(v any) (any, error) {
-		typed, ok := base.ConvertTo[PromptIn](v)
-		if !ok {
-			return nil, fmt.Errorf("input variables type mismatch: got %T, want %T", v, defaultInput)
-		}
-		return typed, nil
-	}
-	return DefineCustomAgent(r, promptName, agentLoop[State, PromptIn](r, prompt, defaultInput, convert), opts...)
+	return DefineCustomAgent(r, promptName, agentLoop[State](r, prompt, defaultInput), opts...)
 }
 
 // DefineCustomAgent defines an agent with full control over the conversation
@@ -436,28 +428,13 @@ const promptMessageKey = "_genkit_prompt"
 // turn renders the prompt, appends conversation history, calls the model
 // with streaming, and updates the session.
 //
-// defaultInput is the prompt input when the invocation does not override it
-// via [WithInputVariables]. convertInput converts a session-stored input to
-// the captured PromptIn type. Both are nil for [DefineAgent], where the
-// inline-defined prompt has no per-turn input.
-func agentLoop[State, PromptIn any](r api.Registry, prompt ai.Prompt, defaultInput PromptIn, convertInput func(any) (any, error)) AgentFunc[any, State] {
+// defaultInput is the prompt input passed to Render on every turn. It is
+// nil for [DefineAgent], where the inline-defined prompt has no per-turn
+// input.
+func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
 	return func(ctx context.Context, resp Responder[any], sess *AgentSession[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-			// Session-stored input overrides the default.
-			var promptInput any = defaultInput
-			if stored := sess.InputVariables(); stored != nil {
-				if convertInput != nil {
-					typed, err := convertInput(stored)
-					if err != nil {
-						return core.NewError(core.INVALID_ARGUMENT, "%v", err)
-					}
-					promptInput = typed
-				} else {
-					promptInput = stored
-				}
-			}
-
-			actionOpts, err := prompt.Render(ctx, promptInput)
+			actionOpts, err := prompt.Render(ctx, defaultInput)
 			if err != nil {
 				return fmt.Errorf("prompt render: %w", err)
 			}
@@ -603,18 +580,10 @@ func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*
 		}
 	}
 
-	init := &AgentInit[State]{
+	return &AgentInit[State]{
 		SnapshotID: invOpts.snapshotID,
 		State:      invOpts.state,
-	}
-	if invOpts.promptInput != nil {
-		if init.State == nil {
-			init.State = &SessionState[State]{}
-		}
-		init.State.InputVariables = invOpts.promptInput
-	}
-
-	return init, nil
+	}, nil
 }
 
 // newSessionFromInit creates a Session from initialization data.

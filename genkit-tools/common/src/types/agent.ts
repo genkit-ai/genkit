@@ -47,8 +47,6 @@ export const SessionStateSchema = z.object({
   custom: z.any().optional(),
   /** Named collections of parts produced during the conversation. */
   artifacts: z.array(ArtifactSchema).optional(),
-  /** Input used for agents that require input variables. */
-  inputVariables: z.any().optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 

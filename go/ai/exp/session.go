@@ -197,13 +197,6 @@ func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.version++
 }
 
-// InputVariables returns the prompt input stored in the session state.
-func (s *Session[State]) InputVariables() any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state.InputVariables
-}
-
 // Artifacts returns the current artifacts.
 func (s *Session[State]) Artifacts() []*Artifact {
 	s.mu.RLock()

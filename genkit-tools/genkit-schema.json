@@ -120,8 +120,7 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
-        },
-        "inputVariables": {}
+        }
       },
       "additionalProperties": false
     },

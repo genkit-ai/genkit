@@ -102,9 +102,8 @@ type InvocationOption[State any] interface {
 }
 
 type invocationOptions[State any] struct {
-	state       *SessionState[State]
-	snapshotID  string
-	promptInput any
+	state      *SessionState[State]
+	snapshotID string
 }
 
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
@@ -126,12 +125,6 @@ func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State
 		}
 		opts.snapshotID = o.snapshotID
 	}
-	if o.promptInput != nil {
-		if opts.promptInput != nil {
-			return errors.New("cannot set prompt input more than once (WithInputVariables)")
-		}
-		opts.promptInput = o.promptInput
-	}
 	return nil
 }
 
@@ -145,11 +138,4 @@ func WithState[State any](state *SessionState[State]) InvocationOption[State] {
 // Use this for server-managed state where snapshots are stored.
 func WithSnapshotID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{snapshotID: id}
-}
-
-// WithInputVariables overrides the default input variables for an agent's
-// underlying prompt. Useful when the prompt template has variables that vary
-// per invocation.
-func WithInputVariables[State any](input any) InvocationOption[State] {
-	return &invocationOptions[State]{promptInput: input}
 }

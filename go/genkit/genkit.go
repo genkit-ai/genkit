@@ -482,9 +482,8 @@ func DefineAgent[State any](
 // Experimental: This API is under active development and may change in any
 // minor version release.
 //
-// defaultInput is used to render the prompt unless the invocation overrides
-// it via [aix.WithInputVariables]. PromptIn is captured for runtime
-// input-variable type conversion.
+// defaultInput is used to render the prompt on every turn. PromptIn is
+// captured for compile-time type checking on defaultInput.
 //
 // For an agent that defines its prompt inline, use [DefineAgent]. For full
 // control over the per-turn loop, use [DefineCustomAgent].

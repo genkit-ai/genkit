@@ -103,9 +103,6 @@ type SessionState[State any] struct {
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Custom is the user-defined state associated with this conversation.
 	Custom State `json:"custom,omitempty"`
-	// InputVariables is the input used for agents that require input variables
-	// (e.g. prompt-backed agents).
-	InputVariables any `json:"inputVariables,omitempty"`
 	// Messages is the conversation history (user/model exchanges).
 	// Does NOT include prompt-rendered messages, those are rendered fresh each turn.
 	Messages []*ai.Message `json:"messages,omitempty"`

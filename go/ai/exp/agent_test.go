@@ -971,65 +971,6 @@ func TestPromptAgent_Basic(t *testing.T) {
 	}
 }
 
-func TestPromptAgent_PromptInputOverride(t *testing.T) {
-	ctx := context.Background()
-	reg := setupPromptTestRegistry(t)
-
-	type greetInput struct {
-		Name string `json:"name"`
-	}
-
-	ai.DefineDataPrompt[greetInput, string](reg, "greetPrompt",
-		ai.WithModelName("test/echo"),
-		ai.WithPrompt("Hello {{name}}!"),
-	)
-
-	af := DefinePromptAgent[testState](reg, "greetPrompt", greetInput{Name: "default"})
-
-	// Use WithPromptInput to override.
-	conn, err := af.StreamBidi(ctx,
-		WithInputVariables[testState](greetInput{Name: "override"}),
-	)
-	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
-	}
-
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText failed: %v", err)
-	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
-	conn.Close()
-
-	response, err := conn.Output()
-	if err != nil {
-		t.Fatalf("Output failed: %v", err)
-	}
-
-	// Verify the override was stored in session state.
-	if response.State.InputVariables == nil {
-		t.Fatal("expected PromptInput in state")
-	}
-
-	// The model echoes the last user message, which is "hi".
-	// But the prompt was rendered with "override" so "Hello override!" should appear
-	// in the messages sent to the model (verified via the echo).
-	// We primarily verify the state was set correctly.
-	inputMap, ok := response.State.InputVariables.(map[string]any)
-	if !ok {
-		t.Fatalf("expected PromptInput to be map[string]any, got %T", response.State.InputVariables)
-	}
-	if name, _ := inputMap["name"].(string); name != "override" {
-		t.Errorf("expected PromptInput name='override', got %q", name)
-	}
-}
-
 func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
@@ -1124,7 +1065,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 	}
 }
 
-func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
+func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
@@ -1138,10 +1079,7 @@ func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	// Start with prompt input.
-	conn, err := af.StreamBidi(ctx,
-		WithInputVariables[testState](map[string]any{"key": "value"}),
-	)
+	conn, err := af.StreamBidi(ctx)
 	if err != nil {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
@@ -1161,21 +1099,10 @@ func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Output failed: %v", err)
 	}
-
 	if resp.SnapshotID == "" {
 		t.Fatal("expected snapshot ID")
 	}
 
-	// Verify the snapshot contains PromptInput.
-	snap, err := store.GetSnapshot(ctx, resp.SnapshotID)
-	if err != nil {
-		t.Fatalf("GetSnapshot failed: %v", err)
-	}
-	if snap.State.InputVariables == nil {
-		t.Error("expected InputVariables in snapshot state")
-	}
-
-	// Resume from snapshot — the PromptInput should be preserved.
 	conn2, err := af.StreamBidi(ctx, WithSnapshotID[testState](resp.SnapshotID))
 	if err != nil {
 		t.Fatalf("StreamBidi with snapshot failed: %v", err)
@@ -1197,16 +1124,12 @@ func TestPromptAgent_SnapshotPersistsPromptInput(t *testing.T) {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	// Verify state via snapshot (server-managed state).
 	snap2, err := store.GetSnapshot(ctx, resp2.SnapshotID)
 	if err != nil {
 		t.Fatalf("GetSnapshot failed: %v", err)
 	}
 	if got := len(snap2.State.Messages); got != 4 {
 		t.Errorf("expected 4 messages after resume, got %d", got)
-	}
-	if snap2.State.InputVariables == nil {
-		t.Error("expected PromptInput preserved after resume")
 	}
 }
 
