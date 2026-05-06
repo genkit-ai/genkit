@@ -29,19 +29,7 @@ import {
   VertexAIEvaluationMetricType,
   vertexAIEvaluation,
 } from '@genkit-ai/vertexai/evaluation';
-import {
-  claude35Sonnet,
-  claude35SonnetV2,
-  claude3Haiku,
-  claude3Opus,
-  claude3Sonnet,
-  codestral,
-  llama31,
-  llama32,
-  mistralLarge,
-  mistralNemo,
-  vertexAIModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit } from 'genkit';
 import { logger } from 'genkit/logging';
 import { chroma } from 'genkitx-chromadb';
@@ -112,28 +100,19 @@ export const ai = genkit({
     vertexAI({
       location: 'us-central1',
     }),
-    vertexAIModelGarden({
-      location: 'us-central1', // gemini, llama
-      // location: 'us-east5', // anthropic
-      models: [
-        claude35Sonnet,
-        claude35SonnetV2,
-        claude3Haiku,
-        claude3Opus,
-        claude3Sonnet,
-        codestral,
-        llama31,
-        llama32,
-        mistralLarge,
-        mistralNemo,
-      ],
+    vertexModelGarden({
+      location: 'us-central1',
     }),
     vertexAIEvaluation({
       location: 'us-central1',
       metrics: [
         VertexAIEvaluationMetricType.BLEU,
+        VertexAIEvaluationMetricType.FLUENCY,
         VertexAIEvaluationMetricType.GROUNDEDNESS,
         VertexAIEvaluationMetricType.SAFETY,
+        VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS,
+        VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY,
+        VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY,
         {
           type: VertexAIEvaluationMetricType.ROUGE,
           metricSpec: {
@@ -174,9 +153,13 @@ export const ai = genkit({
       judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
       embedder: googleAI.embedder('gemini-embedding-001'),
       metrics: [
+        GenkitMetric.ANSWER_ACCURACY,
         GenkitMetric.ANSWER_RELEVANCY,
+        GenkitMetric.DEEP_EQUAL,
         GenkitMetric.FAITHFULNESS,
+        GenkitMetric.JSONATA,
         GenkitMetric.MALICIOUSNESS,
+        GenkitMetric.REGEX,
       ],
     }),
 

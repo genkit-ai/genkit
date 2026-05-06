@@ -15,11 +15,7 @@
  */
 
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
-import {
-  claude35Sonnet,
-  claude35SonnetV2,
-  vertexAIModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit, z, type Flow, type GenerateOptions } from 'genkit';
 import { logger } from 'genkit/logging';
 
@@ -31,9 +27,8 @@ const ai = genkit({
     vertexAI({
       location: 'us-east5',
     }),
-    vertexAIModelGarden({
+    vertexModelGarden({
       location: 'us-east5',
-      models: [claude35Sonnet, claude35SonnetV2],
     }),
   ],
 });

@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "module": "NodeNext",
+    "rootDir": "src",
     "noImplicitReturns": true,
     "noUnusedLocals": false,
     "outDir": "lib",
