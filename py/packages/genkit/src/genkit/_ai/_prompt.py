@@ -543,15 +543,7 @@ async def to_generate_action_options(
     registry: Registry,
     options: PromptConfig,
 ) -> GenerateActionOptions:
-    """Render ``options`` into :class:`GenerateActionOptions`.
-
-    Pass :class:`PromptConfig` from :func:`Genkit.generate` or from
-    :func:`render_prompt_config_for_executable_call` after template expansion (final ``messages``,
-    merged ``docs``, optional ``resume``).
-
-    ``registry`` should come from :func:`~genkit._ai._generate.registry_with_inline_tools` when
-    ``tools`` may include unregistered :class:`~genkit._ai._tools.Tool` instances.
-    """
+    """Render ``PromptConfig`` into `GenerateActionOptions`."""
     model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
