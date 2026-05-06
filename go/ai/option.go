@@ -25,6 +25,25 @@ import (
 	"github.com/firebase/genkit/go/core"
 )
 
+// setOnce assigns src to *dst when srcSet is true. If dstSet is also true,
+// returns errors.New(dupErr) without assigning. Used by apply methods to
+// collapse the "is-set / already-set / assign" pattern into one line per field.
+//
+// The src/dst predicates are passed in by the caller because Go's type system
+// can't express "nillable" for the union of pointers, interfaces, slices, maps,
+// and funcs. Comparable-with-zero would exclude slices/maps/funcs, and a
+// reflect-based check would add cost and gotchas.
+func setOnce[T any](dst *T, src T, srcSet, dstSet bool, dupErr string) error {
+	if !srcSet {
+		return nil
+	}
+	if dstSet {
+		return errors.New(dupErr)
+	}
+	*dst = src
+	return nil
+}
+
 // PromptFn is a function that generates a prompt.
 type PromptFn = func(context.Context, any) (string, error)
 
@@ -36,27 +55,20 @@ type configOptions struct {
 	Config any // Primitive (model, embedder, retriever, etc) configuration.
 }
 
-// ConfigOption is an option for model configuration.
+// ConfigOption is an option for primitive configuration. It applies wherever
+// a Config is meaningful: generation, prompt definition, prompt execution,
+// embedding, retrieval, and evaluation.
 type ConfigOption interface {
-	applyConfig(*configOptions) error
-	applyCommonGen(*commonGenOptions) error
-	applyPrompt(*promptOptions) error
-	applyGenerate(*generateOptions) error
-	applyPromptExecute(*promptExecutionOptions) error
-	applyEmbedder(*embedderOptions) error
-	applyRetriever(*retrieverOptions) error
-	applyEvaluator(*evaluatorOptions) error
+	CommonGenOption
+	EmbedderOption
+	RetrieverOption
+	EvaluatorOption
 }
 
 // applyConfig applies the option to the config options.
 func (o *configOptions) applyConfig(opts *configOptions) error {
-	if o.Config != nil {
-		if opts.Config != nil {
-			return errors.New("cannot set config more than once (WithConfig)")
-		}
-		opts.Config = o.Config
-	}
-	return nil
+	return setOnce(&opts.Config, o.Config, o.Config != nil, opts.Config != nil,
+		"cannot set config more than once (WithConfig)")
 }
 
 // applyCommonGen applies the option to the common options.
@@ -113,11 +125,12 @@ type commonGenOptions struct {
 	Use                []Middleware      // Middleware to apply to generation (Generate, Model, and Tool hooks).
 }
 
+// CommonGenOption is an option common to model generation, prompt definition,
+// and prompt execution.
 type CommonGenOption interface {
-	applyCommonGen(*commonGenOptions) error
-	applyPrompt(*promptOptions) error
-	applyGenerate(*generateOptions) error
-	applyPromptExecute(*promptExecutionOptions) error
+	GenerateOption
+	PromptOption
+	PromptExecuteOption
 }
 
 // applyCommonGen applies the option to the common options.
@@ -125,70 +138,42 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 	if err := o.configOptions.applyConfig(&opts.configOptions); err != nil {
 		return err
 	}
-
-	if o.MessagesFn != nil {
-		if opts.MessagesFn != nil {
-			return errors.New("cannot set messages more than once (either WithMessages or WithMessagesFn)")
-		}
-		opts.MessagesFn = o.MessagesFn
+	if err := setOnce(&opts.MessagesFn, o.MessagesFn, o.MessagesFn != nil, opts.MessagesFn != nil,
+		"cannot set messages more than once (either WithMessages or WithMessagesFn)"); err != nil {
+		return err
 	}
-
-	if o.Model != nil {
-		if opts.Model != nil {
-			return errors.New("cannot set model more than once (either WithModel or WithModelName)")
-		}
-		opts.Model = o.Model
+	if err := setOnce(&opts.Model, o.Model, o.Model != nil, opts.Model != nil,
+		"cannot set model more than once (either WithModel or WithModelName)"); err != nil {
+		return err
 	}
-
-	if o.Tools != nil {
-		if opts.Tools != nil {
-			return errors.New("cannot set tools more than once (WithTools)")
-		}
-		opts.Tools = o.Tools
+	if err := setOnce(&opts.Tools, o.Tools, o.Tools != nil, opts.Tools != nil,
+		"cannot set tools more than once (WithTools)"); err != nil {
+		return err
 	}
-
-	if o.Resources != nil {
-		if opts.Resources != nil {
-			return errors.New("cannot set resources more than once (WithResources)")
-		}
-		opts.Resources = o.Resources
+	if err := setOnce(&opts.Resources, o.Resources, o.Resources != nil, opts.Resources != nil,
+		"cannot set resources more than once (WithResources)"); err != nil {
+		return err
 	}
-
-	if o.ToolChoice != "" {
-		if opts.ToolChoice != "" {
-			return errors.New("cannot set tool choice more than once (WithToolChoice)")
-		}
-		opts.ToolChoice = o.ToolChoice
+	if err := setOnce(&opts.ToolChoice, o.ToolChoice, o.ToolChoice != "", opts.ToolChoice != "",
+		"cannot set tool choice more than once (WithToolChoice)"); err != nil {
+		return err
 	}
-
-	if o.MaxTurns > 0 {
-		if opts.MaxTurns > 0 {
-			return errors.New("cannot set max turns more than once (WithMaxTurns)")
-		}
-		opts.MaxTurns = o.MaxTurns
+	if err := setOnce(&opts.MaxTurns, o.MaxTurns, o.MaxTurns > 0, opts.MaxTurns > 0,
+		"cannot set max turns more than once (WithMaxTurns)"); err != nil {
+		return err
 	}
-
-	if o.ReturnToolRequests != nil {
-		if opts.ReturnToolRequests != nil {
-			return errors.New("cannot configure returning tool requests more than once (WithReturnToolRequests)")
-		}
-		opts.ReturnToolRequests = o.ReturnToolRequests
+	if err := setOnce(&opts.ReturnToolRequests, o.ReturnToolRequests, o.ReturnToolRequests != nil, opts.ReturnToolRequests != nil,
+		"cannot configure returning tool requests more than once (WithReturnToolRequests)"); err != nil {
+		return err
 	}
-
-	if o.Middleware != nil {
-		if opts.Middleware != nil {
-			return errors.New("cannot set middleware more than once (WithMiddleware)")
-		}
-		opts.Middleware = o.Middleware
+	if err := setOnce(&opts.Middleware, o.Middleware, o.Middleware != nil, opts.Middleware != nil,
+		"cannot set middleware more than once (WithMiddleware)"); err != nil {
+		return err
 	}
-
-	if o.Use != nil {
-		if opts.Use != nil {
-			return errors.New("cannot set middleware more than once (WithUse)")
-		}
-		opts.Use = o.Use
+	if err := setOnce(&opts.Use, o.Use, o.Use != nil, opts.Use != nil,
+		"cannot set middleware more than once (WithUse)"); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -287,30 +272,23 @@ type inputOptions struct {
 	DefaultInput map[string]any // Default input that will be used if no input is provided.
 }
 
-// InputOption is an option for the input of a prompt.
-// It applies only to DefinePrompt().
+// InputOption is an option for the input of a prompt or tool.
+// It applies to DefinePrompt() and DefineTool().
 type InputOption interface {
-	applyInput(*inputOptions) error
-	applyPrompt(*promptOptions) error
-	applyTool(*toolOptions) error
+	PromptOption
+	ToolOption
 }
 
 // applyInput applies the option to the input options.
 func (o *inputOptions) applyInput(opts *inputOptions) error {
-	if o.InputSchema != nil {
-		if opts.InputSchema != nil {
-			return errors.New("cannot set input schema more than once (WithInputType, WithInputSchema, or WithInputSchemaName)")
-		}
-		opts.InputSchema = o.InputSchema
+	if err := setOnce(&opts.InputSchema, o.InputSchema, o.InputSchema != nil, opts.InputSchema != nil,
+		"cannot set input schema more than once (WithInputType, WithInputSchema, or WithInputSchemaName)"); err != nil {
+		return err
 	}
-
-	if o.DefaultInput != nil {
-		if opts.DefaultInput != nil {
-			return errors.New("cannot set default input more than once (WithInputType)")
-		}
-		opts.DefaultInput = o.DefaultInput
+	if err := setOnce(&opts.DefaultInput, o.DefaultInput, o.DefaultInput != nil, opts.DefaultInput != nil,
+		"cannot set default input more than once (WithInputType)"); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -383,33 +361,23 @@ func (o *promptOptions) applyPrompt(opts *promptOptions) error {
 	if err := o.commonGenOptions.applyPrompt(opts); err != nil {
 		return err
 	}
-
 	if err := o.promptingOptions.applyPrompt(opts); err != nil {
 		return err
 	}
-
 	if err := o.inputOptions.applyPrompt(opts); err != nil {
 		return err
 	}
-
 	if err := o.outputOptions.applyPrompt(opts); err != nil {
 		return err
 	}
-
-	if o.Description != "" {
-		if opts.Description != "" {
-			return errors.New("cannot set description more than once (WithDescription)")
-		}
-		opts.Description = o.Description
+	if err := setOnce(&opts.Description, o.Description, o.Description != "", opts.Description != "",
+		"cannot set description more than once (WithDescription)"); err != nil {
+		return err
 	}
-
-	if o.Metadata != nil {
-		if opts.Metadata != nil {
-			return errors.New("cannot set metadata more than once (WithMetadata)")
-		}
-		opts.Metadata = o.Metadata
+	if err := setOnce(&opts.Metadata, o.Metadata, o.Metadata != nil, opts.Metadata != nil,
+		"cannot set metadata more than once (WithMetadata)"); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -432,27 +400,20 @@ type promptingOptions struct {
 // PromptingOption is an option for the system and user prompts of a prompt or generate request.
 // It applies only to DefinePrompt() and Generate().
 type PromptingOption interface {
-	applyPrompting(*promptingOptions) error
-	applyPrompt(*promptOptions) error
-	applyGenerate(*generateOptions) error
+	GenerateOption
+	PromptOption
 }
 
 // applyPrompting applies the option to the prompting options.
 func (o *promptingOptions) applyPrompting(opts *promptingOptions) error {
-	if o.SystemFn != nil {
-		if opts.SystemFn != nil {
-			return errors.New("cannot set system text more than once (either WithSystem or WithSystemFn)")
-		}
-		opts.SystemFn = o.SystemFn
+	if err := setOnce(&opts.SystemFn, o.SystemFn, o.SystemFn != nil, opts.SystemFn != nil,
+		"cannot set system text more than once (either WithSystem or WithSystemFn)"); err != nil {
+		return err
 	}
-
-	if o.PromptFn != nil {
-		if opts.PromptFn != nil {
-			return errors.New("cannot set prompt text more than once (either WithPrompt or WithPromptFn)")
-		}
-		opts.PromptFn = o.PromptFn
+	if err := setOnce(&opts.PromptFn, o.PromptFn, o.PromptFn != nil, opts.PromptFn != nil,
+		"cannot set prompt text more than once (either WithPrompt or WithPromptFn)"); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -513,35 +474,28 @@ type outputOptions struct {
 // OutputOption is an option for the output of a prompt or generate request.
 // It applies only to DefinePrompt() and Generate().
 type OutputOption interface {
-	applyOutput(*outputOptions) error
-	applyPrompt(*promptOptions) error
-	applyGenerate(*generateOptions) error
+	GenerateOption
+	PromptOption
 }
 
 // applyOutput applies the option to the output options.
 func (o *outputOptions) applyOutput(opts *outputOptions) error {
-	if o.OutputSchema != nil {
-		if opts.OutputSchema != nil {
-			return errors.New("cannot set output schema more than once (WithOutputType, WithOutputSchema, or WithOutputSchemaName)")
-		}
-		opts.OutputSchema = o.OutputSchema
+	if err := setOnce(&opts.OutputSchema, o.OutputSchema, o.OutputSchema != nil, opts.OutputSchema != nil,
+		"cannot set output schema more than once (WithOutputType, WithOutputSchema, or WithOutputSchemaName)"); err != nil {
+		return err
 	}
-
-	if o.OutputInstructions != nil {
-		if opts.OutputInstructions != nil {
-			return errors.New("cannot set output instructions more than once (WithOutputFormat)")
-		}
-		opts.OutputInstructions = o.OutputInstructions
+	if err := setOnce(&opts.OutputInstructions, o.OutputInstructions, o.OutputInstructions != nil, opts.OutputInstructions != nil,
+		"cannot set output instructions more than once (WithOutputFormat)"); err != nil {
+		return err
 	}
-
+	// OutputFormat and CustomConstrained are override (no duplicate check):
+	// WithOutputType sets format alongside the schema, and we want both to land.
 	if o.OutputFormat != "" {
 		opts.OutputFormat = o.OutputFormat
 	}
-
 	if o.CustomConstrained {
 		opts.CustomConstrained = o.CustomConstrained
 	}
-
 	return nil
 }
 
@@ -630,21 +584,14 @@ type executionOptions struct {
 
 // ExecutionOption is an option for the execution of a prompt or generate request. It applies only to Generate() and prompt.Execute().
 type ExecutionOption interface {
-	applyExecution(*executionOptions) error
-	applyGenerate(*generateOptions) error
-	applyPromptExecute(*promptExecutionOptions) error
+	GenerateOption
+	PromptExecuteOption
 }
 
 // applyExecution applies the option to the runtime options.
 func (o *executionOptions) applyExecution(execOpts *executionOptions) error {
-	if o.Stream != nil {
-		if execOpts.Stream != nil {
-			return errors.New("cannot set stream callback more than once (WithStream)")
-		}
-		execOpts.Stream = o.Stream
-	}
-
-	return nil
+	return setOnce(&execOpts.Stream, o.Stream, o.Stream != nil, execOpts.Stream != nil,
+		"cannot set stream callback more than once (WithStream)")
 }
 
 // applyGenerate applies the option to the generate options.
@@ -669,25 +616,18 @@ type documentOptions struct {
 }
 
 // DocumentOption is an option for providing context or input documents.
-// It applies only to [Generate] and [prompt.Execute].
+// It applies to [Generate], [prompt.Execute], [Embed], and [Retrieve].
 type DocumentOption interface {
-	applyDocument(*documentOptions) error
-	applyGenerate(*generateOptions) error
-	applyPromptExecute(*promptExecutionOptions) error
-	applyEmbedder(*embedderOptions) error
-	applyRetriever(*retrieverOptions) error
+	GenerateOption
+	PromptExecuteOption
+	EmbedderOption
+	RetrieverOption
 }
 
 // applyDocument applies the option to the context options.
 func (o *documentOptions) applyDocument(docOpts *documentOptions) error {
-	if o.Documents != nil {
-		if docOpts.Documents != nil {
-			return errors.New("cannot set documents more than once (WithDocs)")
-		}
-		docOpts.Documents = o.Documents
-	}
-
-	return nil
+	return setOnce(&docOpts.Documents, o.Documents, o.Documents != nil, docOpts.Documents != nil,
+		"cannot set documents more than once (WithDocs)")
 }
 
 // applyGenerate applies the option to the generate options.
@@ -743,28 +683,18 @@ func (o *evaluatorOptions) applyEvaluator(evalOpts *evaluatorOptions) error {
 	if err := o.applyConfig(&evalOpts.configOptions); err != nil {
 		return err
 	}
-
-	if o.Dataset != nil {
-		if evalOpts.Dataset != nil {
-			return errors.New("cannot set dataset more than once (WithDataset)")
-		}
-		evalOpts.Dataset = o.Dataset
+	if err := setOnce(&evalOpts.Dataset, o.Dataset, o.Dataset != nil, evalOpts.Dataset != nil,
+		"cannot set dataset more than once (WithDataset)"); err != nil {
+		return err
 	}
-
-	if o.ID != "" {
-		if evalOpts.ID != "" {
-			return errors.New("cannot set ID more than once (WithID)")
-		}
-		evalOpts.ID = o.ID
+	if err := setOnce(&evalOpts.ID, o.ID, o.ID != "", evalOpts.ID != "",
+		"cannot set ID more than once (WithID)"); err != nil {
+		return err
 	}
-
-	if o.Evaluator != nil {
-		if evalOpts.Evaluator != nil {
-			return errors.New("cannot set evaluator more than once (WithEvaluator or WithEvaluatorName)")
-		}
-		evalOpts.Evaluator = o.Evaluator
+	if err := setOnce(&evalOpts.Evaluator, o.Evaluator, o.Evaluator != nil, evalOpts.Evaluator != nil,
+		"cannot set evaluator more than once (WithEvaluator or WithEvaluatorName)"); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -808,19 +738,11 @@ func (o *embedderOptions) applyEmbedder(embedOpts *embedderOptions) error {
 	if err := o.applyConfig(&embedOpts.configOptions); err != nil {
 		return err
 	}
-
 	if err := o.applyDocument(&embedOpts.documentOptions); err != nil {
 		return err
 	}
-
-	if o.Embedder != nil {
-		if embedOpts.Embedder != nil {
-			return errors.New("cannot set embedder more than once (WithEmbedder or WithEmbedderName)")
-		}
-		embedOpts.Embedder = o.Embedder
-	}
-
-	return nil
+	return setOnce(&embedOpts.Embedder, o.Embedder, o.Embedder != nil, embedOpts.Embedder != nil,
+		"cannot set embedder more than once (WithEmbedder or WithEmbedderName)")
 }
 
 // WithEmbedder sets either a [Embedder] or a [EmbedderRef] that may contain a config.
@@ -853,19 +775,11 @@ func (o *retrieverOptions) applyRetriever(retOpts *retrieverOptions) error {
 	if err := o.applyConfig(&retOpts.configOptions); err != nil {
 		return err
 	}
-
 	if err := o.applyDocument(&retOpts.documentOptions); err != nil {
 		return err
 	}
-
-	if o.Retriever != nil {
-		if retOpts.Retriever != nil {
-			return errors.New("cannot set retriever more than once (WithRetriever or WithRetrieverName)")
-		}
-		retOpts.Retriever = o.Retriever
-	}
-
-	return nil
+	return setOnce(&retOpts.Retriever, o.Retriever, o.Retriever != nil, retOpts.Retriever != nil,
+		"cannot set retriever more than once (WithRetriever or WithRetrieverName)")
 }
 
 // WithRetriever sets either a [Retriever] or a [RetrieverRef] that may contain a config.
@@ -901,37 +815,26 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) error {
 	if err := o.commonGenOptions.applyGenerate(genOpts); err != nil {
 		return err
 	}
-
 	if err := o.promptingOptions.applyGenerate(genOpts); err != nil {
 		return err
 	}
-
 	if err := o.outputOptions.applyGenerate(genOpts); err != nil {
 		return err
 	}
-
 	if err := o.executionOptions.applyGenerate(genOpts); err != nil {
 		return err
 	}
-
 	if err := o.documentOptions.applyGenerate(genOpts); err != nil {
 		return err
 	}
-
-	if o.RespondParts != nil {
-		if genOpts.RespondParts != nil {
-			return errors.New("cannot set respond parts more than once (WithToolResponses)")
-		}
-		genOpts.RespondParts = o.RespondParts
+	if err := setOnce(&genOpts.RespondParts, o.RespondParts, o.RespondParts != nil, genOpts.RespondParts != nil,
+		"cannot set respond parts more than once (WithToolResponses)"); err != nil {
+		return err
 	}
-
-	if o.RestartParts != nil {
-		if genOpts.RestartParts != nil {
-			return errors.New("cannot set restart parts more than once (WithToolRestarts)")
-		}
-		genOpts.RestartParts = o.RestartParts
+	if err := setOnce(&genOpts.RestartParts, o.RestartParts, o.RestartParts != nil, genOpts.RestartParts != nil,
+		"cannot set restart parts more than once (WithToolRestarts)"); err != nil {
+		return err
 	}
-
 	return nil
 }
 
@@ -981,23 +884,14 @@ func (o *promptExecutionOptions) applyPromptExecute(pgOpts *promptExecutionOptio
 	if err := o.commonGenOptions.applyPromptExecute(pgOpts); err != nil {
 		return err
 	}
-
 	if err := o.executionOptions.applyPromptExecute(pgOpts); err != nil {
 		return err
 	}
-
 	if err := o.documentOptions.applyPromptExecute(pgOpts); err != nil {
 		return err
 	}
-
-	if o.Input != nil {
-		if pgOpts.Input != nil {
-			return errors.New("cannot set input more than once (WithInput)")
-		}
-		pgOpts.Input = o.Input
-	}
-
-	return nil
+	return setOnce(&pgOpts.Input, o.Input, o.Input != nil, pgOpts.Input != nil,
+		"cannot set input more than once (WithInput)")
 }
 
 // WithInput sets the input for the prompt request. Input must conform to the
