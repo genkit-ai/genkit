@@ -29,6 +29,7 @@ require (
 	github.com/jba/slog v0.2.0
 	github.com/lib/pq v1.10.9
 	github.com/mark3labs/mcp-go v0.29.0
+	github.com/openai/openai-go/v3 v3.16.0
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/weaviate/weaviate v1.30.0
 	github.com/weaviate/weaviate-go-client/v5 v5.1.0
