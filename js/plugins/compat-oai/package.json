@@ -9,7 +9,8 @@
     "openai",
     "ai",
     "genai",
-    "generative-ai"
+    "generative-ai",
+    "minimax"
   ],
   "version": "1.33.0",
   "type": "commonjs",
@@ -60,6 +61,12 @@
       "import": "./lib/xai/index.mjs",
       "types": "./lib/xai/index.d.ts",
       "default": "./lib/xai/index.js"
+    },
+    "./minimax": {
+      "require": "./lib/minimax/index.js",
+      "import": "./lib/minimax/index.mjs",
+      "types": "./lib/minimax/index.d.ts",
+      "default": "./lib/minimax/index.js"
     }
   },
   "typesVersions": {
@@ -72,6 +79,9 @@
       ],
       "xai": [
         "lib/xai"
+      ],
+      "minimax": [
+        "lib/minimax"
       ]
     }
   },
