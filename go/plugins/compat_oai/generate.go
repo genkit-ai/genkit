@@ -230,7 +230,7 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 	}
 
 	if handleChunk != nil {
-		return g.generateStream(ctx, handleChunk)
+		return g.generateStream(ctx, req, handleChunk)
 	}
 	return g.generateComplete(ctx, req)
 }
@@ -276,7 +276,7 @@ func (g *ModelGenerator) concatenateContent(parts []*ai.Part) string {
 }
 
 // generateStream generates a streaming model response
-func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelRequest, handleChunk func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
 	defer stream.Close()
 
@@ -324,11 +324,11 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 	}
 
 	// Convert accumulated ChatCompletion to ai.ModelResponse
-	return convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	return convertChatCompletionToModelResponse(&acc.ChatCompletion, req)
 }
 
 // convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
-func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*ai.ModelResponse, error) {
+func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, req *ai.ModelRequest) (*ai.ModelResponse, error) {
 	if len(completion.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in completion")
 	}
@@ -375,7 +375,8 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 	}
 
 	resp := &ai.ModelResponse{
-		Request: &ai.ModelRequest{},
+		// Request: &ai.ModelRequest{},
+		Request: req,
 		Usage:   usage,
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
@@ -440,7 +441,7 @@ func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequ
 		return nil, fmt.Errorf("failed to create completion: %w", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(completion)
+	resp, err := convertChatCompletionToModelResponse(completion, req)
 	if err != nil {
 		return nil, err
 	}
