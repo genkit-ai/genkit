@@ -44,7 +44,7 @@ from genkit._ai._evaluator import (
 )
 from genkit._ai._formats import built_in_formats
 from genkit._ai._formats._types import FormatDef
-from genkit._ai._generate import define_generate_action, generate_action
+from genkit._ai._generate import define_generate_action, generate_action, registry_with_inline_tools
 from genkit._ai._model import (
     Message,
     ModelConfig,
@@ -861,31 +861,31 @@ class Genkit:
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
         """
+        prompt_config = PromptConfig(
+            model=model,
+            prompt=prompt,
+            system=system,
+            messages=messages,
+            tools=tools,
+            return_tool_requests=return_tool_requests,
+            tool_choice=tool_choice,
+            resume_respond=resume_respond,
+            resume_restart=resume_restart,
+            resume_metadata=resume_metadata,
+            config=config,
+            max_turns=max_turns,
+            output_format=output_format,
+            output_content_type=output_content_type,
+            output_instructions=output_instructions,
+            output_schema=output_schema,
+            output_constrained=output_constrained,
+            docs=docs,
+        )
+        registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
+        gen_options = await to_generate_action_options(registry, prompt_config)
         return await generate_action(
-            self.registry,
-            await to_generate_action_options(
-                self.registry,
-                PromptConfig(
-                    model=model,
-                    prompt=prompt,
-                    system=system,
-                    messages=messages,
-                    tools=tools,
-                    return_tool_requests=return_tool_requests,
-                    tool_choice=tool_choice,
-                    resume_respond=resume_respond,
-                    resume_restart=resume_restart,
-                    resume_metadata=resume_metadata,
-                    config=config,
-                    max_turns=max_turns,
-                    output_format=output_format,
-                    output_content_type=output_content_type,
-                    output_instructions=output_instructions,
-                    output_schema=output_schema,
-                    output_constrained=output_constrained,
-                    docs=docs,
-                ),
-            ),
+            registry,
+            gen_options,
             middleware=use,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
@@ -975,31 +975,31 @@ class Genkit:
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
 
         async def _run_generate() -> ModelResponse[Any]:
+            prompt_config = PromptConfig(
+                model=model,
+                prompt=prompt,
+                system=system,
+                messages=messages,
+                tools=tools,
+                return_tool_requests=return_tool_requests,
+                tool_choice=tool_choice,
+                resume_respond=resume_respond,
+                resume_restart=resume_restart,
+                resume_metadata=resume_metadata,
+                config=config,
+                max_turns=max_turns,
+                output_format=output_format,
+                output_content_type=output_content_type,
+                output_instructions=output_instructions,
+                output_schema=output_schema,
+                output_constrained=output_constrained,
+                docs=docs,
+            )
+            registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
+            gen_options = await to_generate_action_options(registry, prompt_config)
             return await generate_action(
-                self.registry,
-                await to_generate_action_options(
-                    self.registry,
-                    PromptConfig(
-                        model=model,
-                        prompt=prompt,
-                        system=system,
-                        messages=messages,
-                        tools=tools,
-                        return_tool_requests=return_tool_requests,
-                        tool_choice=tool_choice,
-                        resume_respond=resume_respond,
-                        resume_restart=resume_restart,
-                        resume_metadata=resume_metadata,
-                        config=config,
-                        max_turns=max_turns,
-                        output_format=output_format,
-                        output_content_type=output_content_type,
-                        output_instructions=output_instructions,
-                        output_schema=output_schema,
-                        output_constrained=output_constrained,
-                        docs=docs,
-                    ),
-                ),
+                registry,
+                gen_options,
                 on_chunk=lambda c: channel.send(c),
                 middleware=use,
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]

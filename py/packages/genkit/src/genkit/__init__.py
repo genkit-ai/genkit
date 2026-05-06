@@ -28,6 +28,7 @@ from genkit._ai._tools import (
     ToolRunContext,
     respond_to_interrupt,
     restart_tool,
+    tool,
 )
 from genkit._core._action import Action, StreamResponse
 from genkit._core._error import GenkitError, PublicError
@@ -102,6 +103,7 @@ __all__ = [
     'Tool',
     'respond_to_interrupt',
     'restart_tool',
+    'tool',
     # Content types
     'Constrained',
     'CustomPart',

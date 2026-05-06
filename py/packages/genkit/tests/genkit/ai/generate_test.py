@@ -22,9 +22,10 @@ from genkit._ai._testing import (
     define_echo_model,
     define_programmable_model,
 )
-from genkit._ai._tools import Interrupt
+from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._action import ActionRunContext
 from genkit._core._model import GenerateActionOptions, ModelRequest
+from genkit._core._registry import Registry
 from genkit._core._typing import (
     DocumentPart,
     FinishReason,
@@ -437,6 +438,53 @@ async def test_parallel_tool_requests_all_complete() -> None:
 
     assert response.finish_reason == FinishReason.STOP
     assert response.text == 'after_tools'
+
+
+@pytest.mark.asyncio
+async def test_generate_inline_tool_without_root_registration() -> None:
+    """Passing a Tool from another registry into ``ai.generate`` resolves for that call only."""
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    other = Registry()
+
+    async def inline_yell() -> str:
+        return 'HEY'
+
+    inline_tool = define_tool(other, inline_yell, name='inline_yell')
+
+    assert await ai.registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='inline_yell', ref='ref-y', input={}),
+                        )
+                    ),
+                ],
+            ),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='after_inline'))]),
+        )
+    )
+
+    response = await ai.generate(
+        model='programmableModel',
+        prompt='call it',
+        tools=[inline_tool],
+    )
+
+    assert response.text == 'after_inline'
+    assert await ai.registry.resolve_action(ActionKind.TOOL, 'inline_yell') is None
 
 
 @pytest.mark.asyncio

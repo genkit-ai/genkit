@@ -130,6 +130,29 @@ def tools_to_action_names(
     return names
 
 
+async def registry_with_inline_tools(registry: Registry, tools: Sequence[str | Tool] | None) -> Registry:
+    """
+    Creates a child registry and ensures that all tools are registered.
+    Supports dynamically defined tools that are only passed in at call time
+    and never actually registered.
+    """
+    if not tools:
+        return registry
+
+    child: Registry | None = None
+    for t in tools:
+        if not isinstance(t, Tool):
+            continue
+        resolved = await registry.resolve_action(ActionKind.TOOL, t.name)
+        if resolved is t.action():
+            continue
+        if child is None:
+            child = registry.new_child()
+        child.register_action_from_instance(t.action())
+
+    return child if child is not None else registry
+
+
 # Matches data URIs: everything up to the first comma is the media-type +
 # parameters (e.g. "data:audio/L16;codec=pcm;rate=24000;base64,").
 _DATA_URI_RE = re.compile(r'data:[^,]{0,200},(?=.{100})', re.ASCII)

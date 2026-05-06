@@ -32,7 +32,7 @@ from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, T
 class Tool:
     """A registered tool: a callable handle backed by an :class:`~genkit._core._action.Action`.
 
-    Obtain instances via :func:`define_tool`, :func:`define_interrupt`, or the
+    Obtain instances via :func:`define_tool`, :func:`define_interrupt`, :func:`tool`, or the
     ``@ai.tool`` decorator rather than constructing directly.
     """
 
@@ -357,6 +357,8 @@ def define_tool(
     func: Callable[..., Any],
     name: str | None = None,
     description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
     """Register a function as a tool.
 
@@ -367,11 +369,39 @@ def define_tool(
         func: The async function to register as a tool. Must be a coroutine function.
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
+        input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
         TypeError: If func is not an async function.
     """
-    return _define_tool(registry, func, name, description)
+    return _define_tool(registry, func, name, description, input_schema=input_schema)
+
+
+def tool(
+    func: Callable[..., Any],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> Tool:
+    """Dynamically define a tool that can passed into a `generate` call.
+
+    Compared to `define_tool`, the `tool` constructor doesn't register the tool.
+    The Tool instance cannot be referenced by name later.
+
+    Use when there are dynamic or ephemeral tools that need to be available
+    for a particular `generate` call.
+
+    Args:
+        func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
+        name: Tool name for the model. Defaults to ``func.__name__``.
+        description: Sent to the model. Defaults to the function docstring.
+        input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
+
+    Raises:
+        TypeError: If ``func`` is not a coroutine function.
+    """
+    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
 
 def define_interrupt(
