@@ -152,8 +152,12 @@ Each language must provide a test harness that:
 
 ### Required Agents
 
-The harness must register the following named agents. All agents use a
-**programmable model** whose responses can be controlled per-test.
+The harness must register the following named agents.
+
+#### Prompt-backed agents
+
+These use a **programmable model** whose responses can be controlled per-test
+via the `modelResponses` / `streamChunks` fields in `send` invocations.
 
 | Agent Name | Description |
 |------------|-------------|
@@ -161,6 +165,19 @@ The harness must register the following named agents. All agents use a
 | `promptAgentWithStore` | Same as `promptAgent` but with a **server-managed** in-memory session store. |
 | `promptAgentWithTools` | A prompt agent with `testTool` registered. Client-managed state. |
 | `promptAgentWithInterrupt` | A prompt agent with `interruptTool` registered and a server-managed store (for snapshot-based resume). |
+
+#### Custom agents (hardcoded behavior)
+
+These agents use `defineCustomAgent` with fixed, deterministic logic.
+They do **not** use the programmable model — the `modelResponses` field
+is not needed for tests targeting these agents.
+
+| Agent Name | Description |
+|------------|-------------|
+| `customAgentBlocking` | Server-managed. Blocks indefinitely until its abort signal fires. Used for abort-while-pending tests. |
+| `customAgentFailing` | Server-managed. Throws `Error('intentional failure')` during processing. Used for detach + background failure tests. |
+| `customAgentWithArtifacts` | Client-managed. Adds artifact `doc1` (v1), updates it to `doc1` (v2), then adds `doc2`. Returns all artifacts. |
+| `customAgentWithCustomState` | Client-managed. Reads `custom.counter`, increments it (default 0→1), and persists it. Returns `{ text: 'done' }`. |
 
 ### Required Tools
 
@@ -199,13 +216,29 @@ _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
 ---
 
-## 5. Future Extensions
+## 5. Test Coverage
+
+The spec currently covers the following categories (16 tests total):
+
+| Category | Tests |
+|----------|-------|
+| Basic single-turn | Client-managed, server-managed |
+| Streaming | Model chunk forwarding |
+| Multi-turn | Multiple turns in one invocation |
+| Tool calling | Automatic tool execution |
+| Interrupt & resume | Snapshot-based tool interrupt resume |
+| Snapshot chaining | Parent chain across invocations |
+| Client-managed state | State seeding across invocations |
+| Detach | Background completion, background failure |
+| Abort | Pending agent, completed agent, non-existent snapshot |
+| Artifacts | Streamed chunks, deduplication by name |
+| Custom state | Update during execution, persistence across invocations |
+
+## 6. Future Extensions
 
 The spec is designed to grow. Planned additions:
 
-- **Detach & background execution** (`detach` input flag, `waitUntilCompleted`)
-- **Abort** (`abort` invocation type)
-- **Artifacts** (`agentArtifacts`, `artifactsContain` assertions)
-- **Custom state** (`stateContains.custom` assertions)
 - **Client state transform** (verifying redaction)
 - **Error cases** (detach without store, missing snapshot, etc.)
+- **Multi-agent orchestration** (agent-to-agent delegation)
+- **Concurrent turns** (parallel input processing)

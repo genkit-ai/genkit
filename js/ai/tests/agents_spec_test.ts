@@ -31,7 +31,7 @@ import { readFileSync } from 'fs';
 import { beforeEach, describe, it } from 'node:test';
 import { parse } from 'yaml';
 
-import { defineAgent, type Agent, type AgentStreamChunk } from '../src/session-flow.js';
+import { defineAgent, defineCustomAgent, type Agent, type AgentStreamChunk } from '../src/session-flow.js';
 import { InMemorySessionStore } from '../src/session.js';
 import { defineTool, interrupt } from '../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from './helpers.js';
@@ -316,11 +316,106 @@ function setupHarness(
     store: new InMemorySessionStore(),
   });
 
+  // --- Phase 2: Custom agents for detach, abort, artifacts, state ---
+
+  // customAgentBlocking: server-managed, blocks until abort signal fires.
+  // Used for abort-while-pending tests.
+  const customAgentBlocking = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentBlocking',
+      store: new InMemorySessionStore(),
+    },
+    async (sess, { abortSignal }) => {
+      await sess.run(async () => {
+        await new Promise<void>((resolve) => {
+          if (abortSignal?.aborted) {
+            resolve();
+            return;
+          }
+          abortSignal?.addEventListener('abort', () => resolve(), {
+            once: true,
+          });
+        });
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'unblocked' }] },
+      };
+    }
+  );
+
+  // customAgentFailing: server-managed, throws during processing.
+  // Used for detach + background failure tests.
+  const customAgentFailing = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentFailing',
+      store: new InMemorySessionStore(),
+    },
+    async (sess) => {
+      await sess.run(async () => {
+        throw new Error('intentional failure');
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'unreachable' }] },
+      };
+    }
+  );
+
+  // customAgentWithArtifacts: client-managed, adds and updates artifacts.
+  const customAgentWithArtifacts = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentWithArtifacts',
+    },
+    async (sess) => {
+      await sess.run(async () => {
+        sess.session.addArtifacts([
+          { name: 'doc1', parts: [{ text: 'v1' }] },
+        ]);
+        sess.session.addArtifacts([
+          { name: 'doc1', parts: [{ text: 'v2' }] },
+        ]);
+        sess.session.addArtifacts([
+          { name: 'doc2', parts: [{ text: 'other' }] },
+        ]);
+      });
+      return {
+        artifacts: sess.session.getArtifacts(),
+        message: { role: 'model', content: [{ text: 'done' }] },
+      };
+    }
+  );
+
+  // customAgentWithCustomState: client-managed, increments a counter on
+  // each turn. Useful for verifying custom state persistence across
+  // invocations.
+  const customAgentWithCustomState = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentWithCustomState',
+    },
+    async (sess) => {
+      await sess.run(async () => {
+        const prev = (sess.session.getCustom() as any) || {};
+        const counter = (prev.counter || 0) + 1;
+        sess.session.updateCustom(() => ({ counter }));
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+      };
+    }
+  );
+
   return {
     promptAgent,
     promptAgentWithStore,
     promptAgentWithTools,
     promptAgentWithInterrupt,
+    customAgentBlocking,
+    customAgentFailing,
+    customAgentWithArtifacts,
+    customAgentWithCustomState,
   };
 }
 
