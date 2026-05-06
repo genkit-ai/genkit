@@ -723,6 +723,14 @@ describe('Google AI Gemini', () => {
       assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
     });
 
+    it('returns a ModelReference for gemini-3.1-flash-tts-preview', () => {
+      const name = 'gemini-3.1-flash-tts-preview';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `googleai/${name}`);
+      assert.strictEqual(modelRef.info?.supports?.multiturn, false);
+      assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
+    });
+
     it('returns a ModelReference for an image type model string', () => {
       const name = 'gemini-2.5-flash-image';
       const modelRef = model(name);

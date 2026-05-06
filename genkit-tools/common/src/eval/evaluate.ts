@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { getDatasetStore, getEvalStore } from '.';
@@ -89,7 +90,7 @@ export async function runNewEvaluation(
 
   if (datasetId) {
     const datasetStore = await getDatasetStore();
-    logger.info(`Fetching dataset ${datasetId}...`);
+    logger.debug(`Fetching dataset ${datasetId}...`);
     const dataset = await datasetStore.getDataset(datasetId);
     if (dataset.length === 0) {
       throw new Error(`Dataset ${datasetId} is empty`);
@@ -110,7 +111,7 @@ export async function runNewEvaluation(
     inferenceDataset = rawData as Dataset;
   }
 
-  logger.info('Running inference...');
+  logger.debug('Running inference...');
   const evalDataset = await runInference({
     manager,
     actionRef,
@@ -176,7 +177,7 @@ export async function runEvaluation(params: {
   }
   const evalRunId = randomUUID();
   const scores: Record<string, any> = {};
-  logger.info('Running evaluation...');
+  logger.debug('Running evaluation...');
 
   const runtime = manager.getMostRecentRuntime();
   const isNodeRuntime = runtime?.genkitVersion?.startsWith('nodejs') ?? false;
@@ -192,9 +193,8 @@ export async function runEvaluation(params: {
       },
     });
     scores[name] = response.result;
-    logger.info(
-      `Finished evaluator '${action.name}'. Trace ID: ${response.telemetry?.traceId}`
-    );
+    logger.debug(`Finished evaluator '${action.name}'`);
+    logger.info(`${clc.cyan('Trace ID:')} ${response.telemetry?.traceId}`);
   }
 
   const scoredResults = enrichResultsWithScoring(scores, evalDataset);
@@ -212,7 +212,7 @@ export async function runEvaluation(params: {
     results: scoredResults,
   };
 
-  logger.info('Finished evaluation, writing key...');
+  logger.debug('Finished evaluation, writing key...');
   const evalStore = await getEvalStore();
   await evalStore.save(evalRun);
   return evalRun;
@@ -272,7 +272,7 @@ async function bulkRunAction(params: {
   const states: InferenceRunState[] = [];
   const evalInputs: EvalInput[] = [];
   for (const sample of fullInferenceDataset) {
-    logger.info(`Running inference '${actionRef}' ...`);
+    logger.debug(`Running inference '${actionRef}' ...`);
     if (actionType === 'model') {
       states.push(
         await runModelAction({
@@ -305,7 +305,7 @@ async function bulkRunAction(params: {
     }
   }
 
-  logger.info(`Gathering evalInputs...`);
+  logger.debug(`Gathering evalInputs...`);
   for (const state of states) {
     evalInputs.push(await gatherEvalInput({ manager, actionRef, state }));
   }

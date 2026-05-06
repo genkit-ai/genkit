@@ -952,14 +952,21 @@ func TestToolContextIsResumed(t *testing.T) {
 }
 
 func TestResumedValue(t *testing.T) {
-	t.Run("returns value when key exists and type matches", func(t *testing.T) {
-		tc := &ToolContext{
-			Context: context.Background(),
-			Resumed: map[string]any{
-				"step":  "confirmation",
-				"count": 42,
-			},
+	// ctxWithResumed builds a ToolContext whose embedded context carries the
+	// resumed metadata, mirroring how wrapToolFunc constructs one at runtime.
+	ctxWithResumed := func(m map[string]any) *ToolContext {
+		ctx := context.Background()
+		if m != nil {
+			ctx = resumedCtxKey.NewContext(ctx, m)
 		}
+		return &ToolContext{Context: ctx, Resumed: m}
+	}
+
+	t.Run("returns value when key exists and type matches", func(t *testing.T) {
+		tc := ctxWithResumed(map[string]any{
+			"step":  "confirmation",
+			"count": 42,
+		})
 
 		step, ok := ResumedValue[string](tc, "step")
 		if !ok {
@@ -979,10 +986,7 @@ func TestResumedValue(t *testing.T) {
 	})
 
 	t.Run("returns false when key does not exist", func(t *testing.T) {
-		tc := &ToolContext{
-			Context: context.Background(),
-			Resumed: map[string]any{"other": "value"},
-		}
+		tc := ctxWithResumed(map[string]any{"other": "value"})
 
 		val, ok := ResumedValue[string](tc, "missing")
 		if ok {
@@ -994,10 +998,7 @@ func TestResumedValue(t *testing.T) {
 	})
 
 	t.Run("returns false when type does not match", func(t *testing.T) {
-		tc := &ToolContext{
-			Context: context.Background(),
-			Resumed: map[string]any{"count": "not a number"},
-		}
+		tc := ctxWithResumed(map[string]any{"count": "not a number"})
 
 		val, ok := ResumedValue[int](tc, "count")
 		if ok {
@@ -1009,10 +1010,7 @@ func TestResumedValue(t *testing.T) {
 	})
 
 	t.Run("returns false when Resumed is nil", func(t *testing.T) {
-		tc := &ToolContext{
-			Context: context.Background(),
-			Resumed: nil,
-		}
+		tc := ctxWithResumed(nil)
 
 		val, ok := ResumedValue[string](tc, "anything")
 		if ok {
@@ -1024,13 +1022,10 @@ func TestResumedValue(t *testing.T) {
 	})
 
 	t.Run("works with complex types", func(t *testing.T) {
-		tc := &ToolContext{
-			Context: context.Background(),
-			Resumed: map[string]any{
-				"options": []string{"a", "b", "c"},
-				"nested":  map[string]any{"key": "value"},
-			},
-		}
+		tc := ctxWithResumed(map[string]any{
+			"options": []string{"a", "b", "c"},
+			"nested":  map[string]any{"key": "value"},
+		})
 
 		options, ok := ResumedValue[[]string](tc, "options")
 		if !ok {
@@ -1046,6 +1041,17 @@ func TestResumedValue(t *testing.T) {
 		}
 		if nested["key"] != "value" {
 			t.Errorf("nested[key] = %v, want %q", nested["key"], "value")
+		}
+	})
+
+	t.Run("works with a plain context.Context (middleware use)", func(t *testing.T) {
+		ctx := resumedCtxKey.NewContext(context.Background(), map[string]any{
+			"toolApproved": true,
+		})
+
+		approved, ok := ResumedValue[bool](ctx, "toolApproved")
+		if !ok || !approved {
+			t.Errorf("ResumedValue[bool] = (%v, %v), want (true, true)", approved, ok)
 		}
 	})
 }

@@ -53,7 +53,7 @@ func main() {
     g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
     answer, err := genkit.GenerateText(ctx, g,
-        ai.WithModelName("googleai/gemini-2.5-flash"),
+        ai.WithModelName("googleai/gemini-flash-latest"),
         ai.WithPrompt("Why is Go a great language for AI applications?"),
     )
     if err != nil {
@@ -80,7 +80,7 @@ Call any model with a simple, unified API:
 
 ```go
 text, _ := genkit.GenerateText(ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Explain quantum computing in simple terms."),
 )
 fmt.Println(text)
@@ -98,7 +98,7 @@ type Recipe struct {
 }
 
 recipe, _ := genkit.GenerateData[Recipe](ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Create a recipe for chocolate chip cookies."),
 )
 fmt.Printf("Recipe: %s\n", recipe.Title)
@@ -112,7 +112,7 @@ Stream text as it's generated for responsive user experiences:
 
 ```go
 stream := genkit.GenerateStream(ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Write a short story about a robot learning to paint."),
 )
 
@@ -145,7 +145,7 @@ type Recipe struct {
 }
 
 stream := genkit.GenerateDataStream[*Recipe](ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Create a recipe for spaghetti carbonara."),
 )
 
@@ -184,7 +184,7 @@ weatherTool := genkit.DefineTool(g, "getWeather",
 )
 
 response, _ := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("What's the weather like in San Francisco?"),
     ai.WithTools(weatherTool),
 )
@@ -226,7 +226,7 @@ transferTool := genkit.DefineTool(g, "transfer",
 
 // Handle interrupts in your flow
 resp, _ := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Transfer $5000 to account ABC123"),
     ai.WithTools(transferTool),
 )
@@ -248,6 +248,68 @@ if resp.FinishReason == ai.FinishReasonInterrupted {
 
 [See full example](samples/intermediate-interrupts)
 
+### Middleware
+
+Middleware wraps generation, model calls, and tool execution to add cross-cutting behavior without touching your flows. Register the `middleware` plugin during `Init` to expose the built-ins in the Dev UI, then attach them per call with `ai.WithUse`:
+
+```go
+import "github.com/firebase/genkit/go/plugins/middleware"
+
+g := genkit.Init(ctx, genkit.WithPlugins(
+    &googlegenai.GoogleAI{},
+    &middleware.Middleware{},
+))
+
+// Retry transient failures, then fall back to a secondary model if the primary
+// stays down. Middleware composes outer-to-inner: Retry { Fallback { model } }.
+response, _ := genkit.Generate(ctx, g,
+    ai.WithModelName("googleai/gemini-flash-latest"),
+    ai.WithPrompt("Explain quantum computing."),
+    ai.WithUse(
+        &middleware.Retry{MaxRetries: 3},
+        &middleware.Fallback{Models: []ai.ModelRef{
+            googlegenai.ModelRef("googleai/gemini-3.1-flash", nil),
+        }},
+    ),
+)
+```
+
+The `middleware` plugin also ships with:
+
+- [`ToolApproval`](plugins/middleware/tool_approval.go) — interrupts any tool not on an allow list and resumes once the call is explicitly approved on restart.
+- [`Filesystem`](samples/basic-middleware/filesystem) — gives the model `list_files` and `read_file` tools (plus `write_file` and `edit_file` when `AllowWriteAccess` is set), all confined to a single `RootDir` via `os.Root` (Go 1.25+) so paths cannot escape via `..`, absolute paths, or symlinks.
+- [`Skills`](samples/basic-middleware/skills) — exposes a library of `SKILL.md` files through a `use_skill` tool so the model can pull in specialised instructions on demand.
+
+[See the retry + fallback sample](samples/basic-middleware/retry-fallback) for a full composition.
+
+### Custom Middleware
+
+Implement the `ai.Middleware` interface — `Name()` plus `New(ctx)` — to build your own. `New` returns a `Hooks` bundle whose four fields (`Tools`, `WrapGenerate`, `WrapModel`, `WrapTool`) are all optional; nil hooks pass through:
+
+```go
+type Logger struct {
+    Prefix string `json:"prefix,omitempty"`
+}
+
+func (l *Logger) Name() string { return "mine/logger" }
+
+func (l *Logger) New(ctx context.Context) (*ai.Hooks, error) {
+    return &ai.Hooks{
+        WrapModel: func(ctx context.Context, params *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
+            start := time.Now()
+            resp, err := next(ctx, params)
+            log.Printf("%s model call took %s", l.Prefix, time.Since(start))
+            return resp, err
+        },
+    }, nil
+}
+
+// Use it like any built-in middleware.
+ai.WithUse(&Logger{Prefix: "[trace]"})
+```
+
+`Name()` must be unique and stable since it's the key used to register the middleware and reference it from the Dev UI and across runtimes. `New()` is called once per `Generate` invocation, so per-call state (counters, caches, message queues) can be allocated inside it and closed over by the hooks — just guard anything mutable, since `WrapTool` may run concurrently when tools execute in parallel. For ad-hoc, inline middleware that doesn't need to surface in the Dev UI, wrap a factory closure with `ai.MiddlewareFunc`.
+
 ### Define Flows
 
 Wrap your AI logic in flows for better observability, testing, and deployment:
@@ -256,7 +318,7 @@ Wrap your AI logic in flows for better observability, testing, and deployment:
 jokeFlow := genkit.DefineFlow(g, "tellJoke",
     func(ctx context.Context, topic string) (string, error) {
         return genkit.GenerateText(ctx, g,
-            ai.WithModelName("googleai/gemini-2.5-flash"),
+            ai.WithModelName("googleai/gemini-flash-latest"),
             ai.WithPrompt("Tell me a joke about %s", topic),
         )
     },
@@ -276,7 +338,7 @@ Stream data from your flows using Server-Sent Events (SSE):
 genkit.DefineStreamingFlow(g, "streamStory",
     func(ctx context.Context, topic string, send core.StreamCallback[string]) (string, error) {
         stream := genkit.GenerateStream(ctx, g,
-            ai.WithModelName("googleai/gemini-2.5-flash"),
+            ai.WithModelName("googleai/gemini-flash-latest"),
             ai.WithPrompt("Write a story about %s", topic),
         )
 
@@ -306,14 +368,14 @@ genkit.DefineFlow(g, "processDocument",
         // Each Run call creates a traced step visible in the Dev UI
         summary, _ := genkit.Run(ctx, "summarize", func() (string, error) {
             return genkit.GenerateText(ctx, g,
-                ai.WithModelName("googleai/gemini-2.5-flash"),
+                ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithPrompt("Summarize: %s", doc),
             )
         })
 
         keywords, _ := genkit.Run(ctx, "extractKeywords", func() ([]string, error) {
             return genkit.GenerateData[[]string](ctx, g,
-                ai.WithModelName("googleai/gemini-2.5-flash"),
+                ai.WithModelName("googleai/gemini-flash-latest"),
                 ai.WithPrompt("Extract keywords from: %s", summary),
             )
         })
@@ -331,7 +393,7 @@ Create reusable prompts with Handlebars templating:
 
 ```go
 greetingPrompt := genkit.DefinePrompt(g, "greeting",
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Write a {{style}} greeting for {{name}}."),
 )
 
@@ -359,7 +421,7 @@ type Joke struct {
 }
 
 jokePrompt := genkit.DefineDataPrompt[JokeRequest, *Joke](g, "joke",
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Tell a joke about {{topic}}."),
 )
 
@@ -387,7 +449,7 @@ Keep prompts separate from code using `.prompt` files with YAML frontmatter:
 ```yaml
 # prompts/recipe.prompt
 ---
-model: googleai/gemini-2.5-flash
+model: googleai/gemini-flash-latest
 input:
   schema: RecipeRequest
 output:
@@ -553,13 +615,13 @@ import "google.golang.org/genai"
 
 // Simple: just the model name
 response, _ := genkit.Generate(ctx, g,
-    ai.WithModelName("googleai/gemini-2.5-flash"),
+    ai.WithModelName("googleai/gemini-flash-latest"),
     ai.WithPrompt("Hello!"),
 )
 
 // Advanced: model name + provider-specific configuration
 response, _ := genkit.Generate(ctx, g,
-    ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+    ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
         Temperature:     genai.Ptr(float32(0.7)),
         MaxOutputTokens: genai.Ptr(int32(1000)),
         TopP:            genai.Ptr(float32(0.9)),
@@ -657,6 +719,9 @@ Explore working examples to see Genkit in action:
 | [basic-structured](samples/basic-structured) | Typed JSON output with `GenerateData` and `GenerateDataStream` |
 | [basic-prompts](samples/basic-prompts) | Prompt templates with Handlebars and `.prompt` files |
 | [intermediate-interrupts](samples/intermediate-interrupts) | Human-in-the-loop with tool interrupts |
+| [basic-middleware/retry-fallback](samples/basic-middleware/retry-fallback) | Composing `Retry` and `Fallback` middleware |
+| [basic-middleware/filesystem](samples/basic-middleware/filesystem) | Scoped filesystem tools for the model |
+| [basic-middleware/skills](samples/basic-middleware/skills) | On-demand loadable `SKILL.md` personas |
 | [prompts-embed](samples/prompts-embed) | Embed prompts in your binary |
 | [durable-streaming](samples/durable-streaming) | Reconnectable streams with replay |
 | [session](samples/session) | Stateful flows with typed session data |
@@ -664,5 +729,5 @@ Explore working examples to see Genkit in action:
 ---
 
 <p align="center">
-  Built by Google with contributions from the <a href="https://github.com/firebase/genkit/graphs/contributors">Open Source Community</a>
+  Built by Google with contributions from the <a href="https://github.com/genkit-ai/genkit/graphs/contributors">Open Source Community</a>
 </p>

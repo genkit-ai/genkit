@@ -35,7 +35,7 @@
 
 ::: genkit.PublicError
 
-::: genkit.ToolInterruptError
+::: genkit.Interrupt
 
 ::: genkit.Message
 

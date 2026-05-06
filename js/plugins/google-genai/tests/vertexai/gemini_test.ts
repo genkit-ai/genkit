@@ -255,6 +255,14 @@ describe('Vertex AI Gemini', () => {
         assert.strictEqual(body.labels, undefined);
 
         assert.deepStrictEqual(options.headers, getExpectedHeaders());
+        assert.strictEqual(
+          options.headers['X-Vertex-AI-LLM-Shared-Request-Type'],
+          undefined
+        );
+        assert.strictEqual(
+          options.headers['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
 
         assert.ok(result.result.candidates);
         assert.strictEqual(result.result.candidates.length, 1);
@@ -679,6 +687,90 @@ describe('Vertex AI Gemini', () => {
 
         assert.strictEqual(url, expectedUrl);
         assert.ok(url.includes(overrideLocation));
+      });
+
+      it('handles config.payGo priority spillover mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'priority' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'priority'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+      });
+
+      it('handles config.payGo priority-only mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'priority-only' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'priority'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          'shared'
+        );
+      });
+
+      it('handles config.payGo flex spillover mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'flex' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'flex'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+      });
+
+      it('handles config.payGo flex-only mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'flex-only' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'flex'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          'shared'
+        );
       });
     });
   }

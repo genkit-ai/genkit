@@ -771,6 +771,9 @@ ai.defineModel(
 );
 
 const blockingMiddleware: ModelMiddleware = async (req, next) => {
+  logger.warn(
+    'blockingMiddleware invoked: request blocked due to policy violation.'
+  );
   return {
     finishReason: 'blocked',
     finishMessage: `Model input violated policies: further processing blocked.`,

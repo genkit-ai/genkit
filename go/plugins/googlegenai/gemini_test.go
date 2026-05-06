@@ -223,8 +223,19 @@ func TestConvertRequest(t *testing.T) {
 				},
 				err: errors.New("system instruction should be set using Genkit features"),
 			},
-			// Note: FunctionDeclarations in config.Tools are now allowed and merged
-			// with ai.WithTools() declarations instead of being rejected.
+			{
+				name: "use custom function tools outside genkit",
+				cfg: genai.GenerateContentConfig{
+					Tools: []*genai.Tool{
+						{
+							FunctionDeclarations: []*genai.FunctionDeclaration{
+								{Name: "myCustomTool", Description: "x"},
+							},
+						},
+					},
+				},
+				err: errors.New("custom function tools should be set using Genkit features"),
+			},
 			{
 				name: "use cache outside genkit",
 				cfg: genai.GenerateContentConfig{
@@ -585,23 +596,48 @@ func TestToolMerging(t *testing.T) {
 		}
 	})
 
-	t.Run("merges FunctionDeclarations from config with Genkit tools", func(t *testing.T) {
-		// This tests the case where FunctionDeclarations exist in both
-		// config.Tools AND input.Tools - they should all be merged.
-		configFuncDecl := &genai.FunctionDeclaration{
-			Name:        "config_function",
-			Description: "A function from config",
-		}
-
+	t.Run("rejects FunctionDeclarations in config tools", func(t *testing.T) {
+		// Custom function tools must go through ai.WithTools() so they are
+		// registered with the Genkit tool registry. Passing them via config
+		// would skip registration and the model would call something with no
+		// handler attached.
 		req := &ai.ModelRequest{
 			Config: genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](0.5),
 				Tools: []*genai.Tool{
 					{
-						FunctionDeclarations: []*genai.FunctionDeclaration{configFuncDecl},
-						GoogleSearch:         &genai.GoogleSearch{}, // hybrid tool
+						FunctionDeclarations: []*genai.FunctionDeclaration{
+							{Name: "config_function", Description: "A function from config"},
+						},
+						GoogleSearch: &genai.GoogleSearch{},
 					},
 				},
+			},
+			Tools: []*ai.ToolDefinition{genkitTool},
+			Messages: []*ai.Message{
+				{Role: ai.RoleUser, Content: []*ai.Part{{Text: "test"}}},
+			},
+		}
+
+		if _, err := toGeminiRequest(req, nil); err == nil {
+			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
+		}
+	})
+
+	t.Run("preserves user ToolConfig when no ToolChoice is set", func(t *testing.T) {
+		// Regression: passing ai.WithTools() without ai.WithToolChoice() used
+		// to clobber gcc.ToolConfig to nil, dropping any RetrievalConfig or
+		// IncludeServerSideToolInvocations the user supplied.
+		userToolConfig := &genai.ToolConfig{
+			RetrievalConfig: &genai.RetrievalConfig{
+				LanguageCode: "en-US",
+			},
+			IncludeServerSideToolInvocations: genai.Ptr(true),
+		}
+		req := &ai.ModelRequest{
+			Config: genai.GenerateContentConfig{
+				Temperature: genai.Ptr[float32](0.5),
+				ToolConfig:  userToolConfig,
 			},
 			Tools: []*ai.ToolDefinition{genkitTool},
 			Messages: []*ai.Message{
@@ -613,29 +649,14 @@ func TestToolMerging(t *testing.T) {
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
-
-		// Should have: 1 tool with all FunctionDeclarations, 1 tool with GoogleSearch
-		hasGoogleSearch := false
-		funcDeclCount := 0
-		var funcNames []string
-
-		for _, tool := range gcc.Tools {
-			if tool.GoogleSearch != nil {
-				hasGoogleSearch = true
-			}
-			if tool.FunctionDeclarations != nil {
-				for _, fd := range tool.FunctionDeclarations {
-					funcDeclCount++
-					funcNames = append(funcNames, fd.Name)
-				}
-			}
+		if gcc.ToolConfig == nil {
+			t.Fatal("ToolConfig was dropped; expected user-supplied fields to be preserved")
 		}
-
-		if !hasGoogleSearch {
-			t.Error("GoogleSearch was dropped during merge")
+		if gcc.ToolConfig.RetrievalConfig == nil || gcc.ToolConfig.RetrievalConfig.LanguageCode != "en-US" {
+			t.Errorf("RetrievalConfig not preserved: %#v", gcc.ToolConfig.RetrievalConfig)
 		}
-		if funcDeclCount != 2 {
-			t.Errorf("expected 2 function declarations (1 from config + 1 from input.Tools), got %d: %v", funcDeclCount, funcNames)
+		if gcc.ToolConfig.IncludeServerSideToolInvocations == nil || !*gcc.ToolConfig.IncludeServerSideToolInvocations {
+			t.Errorf("IncludeServerSideToolInvocations not preserved: %#v", gcc.ToolConfig.IncludeServerSideToolInvocations)
 		}
 	})
 }
@@ -1068,6 +1089,82 @@ func TestTranslateCandidateThoughtSignature(t *testing.T) {
 		}
 		if string(sig) != string(testSignature) {
 			t.Errorf("signature mismatch: got %q, want %q", sig, testSignature)
+		}
+	})
+}
+
+// TestTranslateCandidateMultiFieldPart verifies that a single genai.Part with
+// multiple populated fields (e.g. text alongside InlineData, as returned by
+// image-generation models like Nano Banana 2) is split into separate ai.Parts
+// instead of panicking. Regression test for issue #5195.
+func TestTranslateCandidateMultiFieldPart(t *testing.T) {
+	t.Run("text and inline data in the same part", func(t *testing.T) {
+		imageBytes := []byte{0x89, 0x50, 0x4e, 0x47}
+		candidate := &genai.Candidate{
+			FinishReason: genai.FinishReasonStop,
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{
+						Text: "Here is the restored photo.",
+						InlineData: &genai.Blob{
+							MIMEType: "image/png",
+							Data:     imageBytes,
+						},
+					},
+				},
+			},
+		}
+
+		resp, err := translateCandidate(candidate)
+		if err != nil {
+			t.Fatalf("translateCandidate failed: %v", err)
+		}
+
+		if got, want := len(resp.Message.Content), 2; got != want {
+			t.Fatalf("expected %d parts, got %d", want, got)
+		}
+		if !resp.Message.Content[0].IsText() || resp.Message.Content[0].Text != "Here is the restored photo." {
+			t.Errorf("expected first part to be the text, got %#v", resp.Message.Content[0])
+		}
+		if !resp.Message.Content[1].IsMedia() {
+			t.Errorf("expected second part to be media, got %#v", resp.Message.Content[1])
+		}
+	})
+
+	t.Run("signature attaches to the first emitted part only", func(t *testing.T) {
+		testSignature := []byte("multi-part-signature")
+		candidate := &genai.Candidate{
+			FinishReason: genai.FinishReasonStop,
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{
+					{
+						Text: "caption",
+						InlineData: &genai.Blob{
+							MIMEType: "image/png",
+							Data:     []byte{0x00},
+						},
+						ThoughtSignature: testSignature,
+					},
+				},
+			},
+		}
+
+		resp, err := translateCandidate(candidate)
+		if err != nil {
+			t.Fatalf("translateCandidate failed: %v", err)
+		}
+
+		if got, want := len(resp.Message.Content), 2; got != want {
+			t.Fatalf("expected %d parts, got %d", want, got)
+		}
+		sig, ok := resp.Message.Content[0].Metadata["signature"].([]byte)
+		if !ok || string(sig) != string(testSignature) {
+			t.Errorf("expected signature on first part, got metadata %#v", resp.Message.Content[0].Metadata)
+		}
+		if _, ok := resp.Message.Content[1].Metadata["signature"]; ok {
+			t.Errorf("did not expect signature on second part, got metadata %#v", resp.Message.Content[1].Metadata)
 		}
 	})
 }

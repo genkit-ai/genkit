@@ -634,4 +634,25 @@ describe('registry class', () => {
       );
     });
   });
+
+  describe('resolveActionNames', () => {
+    it('resolves dynamic actions from parent registry', async () => {
+      const tool1 = action(
+        { name: 'fs/tool1', actionType: 'tool' },
+        async () => {}
+      );
+      defineDynamicActionProvider(registry, 'my-dap', async () => ({
+        tool: [tool1],
+      }));
+
+      const childRegistry = new Registry(registry);
+
+      const resolved = await childRegistry.resolveActionNames(
+        '/dynamic-action-provider/my-dap:tool/fs/tool1'
+      );
+      assert.deepStrictEqual(resolved, [
+        '/dynamic-action-provider/my-dap:tool/fs/tool1',
+      ]);
+    });
+  });
 });

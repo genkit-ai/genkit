@@ -49,7 +49,7 @@ async function main() {
 
   const currentDir = process.cwd();
   const fsRoot = path.join(currentDir, 'workspace');
-  const skillsRoot = path.join(currentDir, 'skills');
+  const skillsRoot = path.join(currentDir, 'examples', 'skills');
 
   // Ensure workspace exists
   if (!fs.existsSync(fsRoot)) {
@@ -95,7 +95,7 @@ async function main() {
               approved: ['read_file', 'list_files', 'use_skill'],
             }),
             skills({ skillPaths: [skillsRoot] }),
-            filesystem({ rootDirectory: fsRoot }),
+            filesystem({ rootDirectory: fsRoot, allowWriteAccess: true }),
           ],
           maxTurns: 20,
         });

@@ -29,6 +29,7 @@ import {
   runInference,
   type EvalExporter,
 } from '@genkit-ai/tools-common/eval';
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import {
   confirmLlmUse,
   findProjectRoot,
@@ -91,9 +92,32 @@ export const evalFlow = new Command('eval:flow')
   .option('-f, --force', 'Automatically accept all interactive prompts')
   .action(
     async (flowName: string, data: string, options: EvalFlowRunCliOptions) => {
-      await runWithManager(await findProjectRoot(), async (manager) => {
+      const dashDashIndex = process.argv.indexOf('--');
+      let runtimeCommand: string[] | undefined;
+      let actualData: string | undefined = data;
+
+      // Commander removes the '--' separator from evalFlow.args.
+      // We find '--' in process.argv to determine which arguments belong to the runtime command
+      // and which belong to the command itself (like the optional [data] argument).
+      if (dashDashIndex !== -1) {
+        const numArgsAfterDashDash = process.argv.length - dashDashIndex - 1;
+        runtimeCommand = evalFlow.args.slice(-numArgsAfterDashDash);
+        const commandArgs = evalFlow.args.slice(
+          0,
+          evalFlow.args.length - numArgsAfterDashDash
+        );
+        if (commandArgs.length > 1) {
+          actualData = commandArgs[1];
+        } else {
+          actualData = undefined;
+        }
+      }
+
+      const projectRoot = await findProjectRoot();
+
+      const runAction = async (manager: BaseRuntimeManager) => {
         const actionRef = `/flow/${flowName}`;
-        if (!data && !options.input) {
+        if (!actualData && !options.input) {
           throw new Error(
             'No input data passed. Specify input data using [data] argument or --input <filename> option'
           );
@@ -134,7 +158,7 @@ export const evalFlow = new Command('eval:flow')
           }
         }
 
-        const sourceType = getSourceType(data, options.input);
+        const sourceType = getSourceType(actualData, options.input);
         let targetDatasetMetadata;
         if (sourceType === SourceType.DATASET) {
           const datasetStore = await getDatasetStore();
@@ -146,7 +170,7 @@ export const evalFlow = new Command('eval:flow')
 
         const inferenceDataset = await readInputs(
           sourceType,
-          data,
+          actualData,
           options.input
         );
         const evalDataset = await runInference({
@@ -184,11 +208,11 @@ export const evalFlow = new Command('eval:flow')
             )
           );
         } else {
-          logger.info(
-            `Succesfully ran evaluation, with evalId: ${evalRun.key.evalRunId}`
-          );
+          logger.info(`${clc.cyan('Evaluation ID:')} ${evalRun.key.evalRunId}`);
         }
-      });
+      };
+
+      await runWithManager(projectRoot, runAction, { runtimeCommand });
     }
   );
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import signal
 import socket
 import threading
@@ -31,8 +32,6 @@ from typing import Any, TypeVar, cast, overload
 
 import anyio
 import uvicorn
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import TracerProvider
 from pydantic import BaseModel
 
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
@@ -71,7 +70,7 @@ from genkit._ai._resource import (
     ResourceOptions,
     define_resource,
 )
-from genkit._ai._tools import Tool, define_tool
+from genkit._ai._tools import Tool, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._background import (
     BackgroundAction,
@@ -94,6 +93,7 @@ from genkit._core._logger import get_logger
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
+from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
 from genkit._core._tracing import run_in_new_span
 from genkit._core._typing import (
@@ -107,6 +107,8 @@ from genkit._core._typing import (
     Part,
     SpanMetadata,
     ToolChoice,
+    ToolRequestPart,
+    ToolResponsePart,
 )
 
 from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
@@ -267,6 +269,37 @@ class Genkit:
             return define_tool(self.registry, func, name, description)
 
         return wrapper
+
+    def define_interrupt(
+        self,
+        name: str,
+        *,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+        description: str | None = None,
+    ) -> Tool:
+        """Register an interrupt tool that always pauses for user input.
+
+        Args:
+            name: Tool name
+            input_schema: Optional input schema (Pydantic model or JSON schema dict)
+            description: Tool description
+
+        Returns:
+            The registered interrupt tool
+
+        Example:
+            ask_user = ai.define_interrupt(
+                name='ask_user',
+                input_schema=Question,
+                description='Ask the user a question',
+            )
+        """
+        return define_interrupt(
+            self.registry,
+            name,
+            description=description,
+            input_schema=input_schema,
+        )
 
     def define_evaluator(
         self,
@@ -628,9 +661,22 @@ class Genkit:
     # -------------------------------------------------------------------------
 
     def _start_reflection_background(self) -> None:
-        """Start the Dev UI reflection server in a background daemon thread."""
+        """Start the Dev UI reflection server in a background daemon thread.
+
+        If GENKIT_REFLECTION_V2_SERVER is set (the CLI launches the runtime in
+        v2 mode and provides a WebSocket URL), run the v2 JSON-RPC client.
+        Otherwise start the v1 HTTP server.
+        """
 
         async def _run_server() -> None:
+            v2_url = os.environ.get('GENKIT_REFLECTION_V2_SERVER')
+            if v2_url:
+                await logger.ainfo(f'Genkit Dev UI reflection v2 client connecting to {v2_url}')
+                server_v2 = ReflectionServerV2(self.registry, v2_url)
+                self._reflection_ready.set()
+                await server_v2.run_forever()
+                return
+
             sockets: list[socket.socket] | None = None
             spec = self._reflection_server_spec
             if spec is None:
@@ -666,9 +712,8 @@ class Genkit:
 
     def _initialize_registry(self, model: str | None, plugins: list[Plugin] | None) -> None:
         """Initialize the registry with default model and plugins."""
-        self.registry.default_model = model
         if model:
-            self.registry.register_value('defaultModel', model, model)
+            self.registry.register_value('defaultModel', 'defaultModel', model)
         for fmt in built_in_formats:
             self.define_format(fmt)
 
@@ -744,7 +789,9 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        tool_responses: list[Part] | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
         config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
@@ -769,7 +816,9 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        tool_responses: list[Part] | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
         config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
@@ -792,7 +841,9 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        tool_responses: list[Part] | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
         config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
@@ -822,7 +873,9 @@ class Genkit:
                     tools=tools,
                     return_tool_requests=return_tool_requests,
                     tool_choice=tool_choice,
-                    tool_responses=tool_responses,
+                    resume_respond=resume_respond,
+                    resume_restart=resume_restart,
+                    resume_metadata=resume_metadata,
                     config=config,
                     max_turns=max_turns,
                     output_format=output_format,
@@ -849,6 +902,9 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
         config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
@@ -874,6 +930,9 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
         config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
@@ -897,6 +956,9 @@ class Genkit:
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
+        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
         config: dict[str, object] | ModelConfig | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
@@ -925,6 +987,9 @@ class Genkit:
                         tools=tools,
                         return_tool_requests=return_tool_requests,
                         tool_choice=tool_choice,
+                        resume_respond=resume_respond,
+                        resume_restart=resume_restart,
+                        resume_metadata=resume_metadata,
                         config=config,
                         max_turns=max_turns,
                         output_format=output_format,
@@ -1058,12 +1123,6 @@ class Genkit:
         """Get the current execution context, or None if not in an action."""
         return ActionRunContext._current_context()  # pyright: ignore[reportPrivateUsage]
 
-    async def flush_tracing(self) -> None:
-        """Flush all pending trace spans to exporters."""
-        provider = trace_api.get_tracer_provider()
-        if isinstance(provider, TracerProvider):
-            await asyncio.to_thread(provider.force_flush)
-
     async def run(
         self,
         *,
@@ -1131,7 +1190,7 @@ class Genkit:
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""
         # Resolve the model and check for long_running support
-        resolved_model = model or self.registry.default_model
+        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
         if not resolved_model:
             raise GenkitError(
                 status='INVALID_ARGUMENT',

@@ -16,6 +16,8 @@
 
 """Registry for managing Genkit resources and actions."""
 
+from __future__ import annotations
+
 import asyncio
 import threading
 from collections.abc import Awaitable, Callable
@@ -26,14 +28,17 @@ from pydantic import BaseModel
 from typing_extensions import Never, TypeVar
 
 from genkit._core._action import (
+    GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
-    ActionMetadata,
     ActionName,
     ActionRunContext,
     SpanAttributeValue,
+    create_action_key,
     parse_action_key,
+    parse_dap_qualified_name,
 )
+from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     ModelRequest,
@@ -42,6 +47,7 @@ from genkit._core._model import (
 )
 from genkit._core._plugin import Plugin
 from genkit._core._typing import (
+    ActionMetadata,
     EmbedRequest,
     EmbedResponse,
     EvalRequest,
@@ -76,6 +82,19 @@ ActionFn = (
 )
 
 
+def _action_metadata_for_registered_action(action: Action) -> ActionMetadata:
+    """Build an ``ActionMetadata`` row for a directly-registered :class:`Action`."""
+    return ActionMetadata(
+        key=create_action_key(action.kind, action.name),
+        action_type=action.kind,
+        name=action.name,
+        description=action.description,
+        input_schema=action.input_schema,
+        output_schema=action.output_schema,
+        metadata=dict(action.metadata) if action.metadata else None,
+    )
+
+
 class Registry:
     """Central repository for Genkit resources.
 
@@ -84,6 +103,11 @@ class Registry:
     plugins, and schemas. It provides methods for registering new resources and
     looking them up at runtime.
 
+    Supports a **child registry** pattern (see ``new_child``): a child registry
+    delegates lookups to its parent when a name is not found locally.  This is
+    used to create cheap, ephemeral registries scoped to a single generate call
+    (for DAP-resolved tools) without polluting the root registry.
+
     This class is thread-safe and can be safely shared between multiple threads.
 
     Attributes:
@@ -91,10 +115,16 @@ class Registry:
             action names and their corresponding Action instances.
     """
 
-    default_model: str | None = None
+    def __init__(self, parent: Registry | None = None) -> None:
+        """Initialize a Registry instance.
 
-    def __init__(self) -> None:
-        """Initialize an empty Registry instance."""
+        Args:
+            parent: Optional parent registry.  When provided this is a *child*
+                registry that falls back to the parent for any lookup that
+                returns ``None`` locally.  Use ``new_child()`` as the
+                preferred factory rather than passing ``parent`` directly.
+        """
+        self._parent: Registry | None = parent
         self._entries: ActionStore = {}
         self._value_by_kind_and_name: dict[str, dict[str, object]] = {}
         self._schemas_by_name: dict[str, dict[str, object]] = {}
@@ -103,15 +133,21 @@ class Registry:
 
         # Re-entrancy guard for _trigger_lazy_loading.  Prevents infinite
         # recursion when a lazy factory resolves its own action key (see
-        # https://github.com/firebase/genkit/issues/4491).
+        # https://github.com/genkit-ai/genkit/issues/4491).
         self._loading_actions: set[str] = set()
 
-        # Initialize Dotprompt with schema_resolver to match JS SDK pattern
-        # Use async function to avoid thread pool deadlock in resolve_json_schema
-        async def async_schema_resolver(name: str) -> dict[str, object] | str:
-            return self.lookup_schema(name) or name
+        # Dotprompt resolves ``output.schema`` names via the registry's stored schemas.
+        # Async resolver avoids thread-pool deadlock in ``resolve_json_schema``.
+        async def async_schema_resolver(name: str) -> dict[str, object]:
+            schema = self.lookup_schema(name)
+            if schema is None:
+                raise GenkitError(status='NOT_FOUND', message=f"Schema '{name}' not found")
+            return schema
 
-        self.dotprompt: Dotprompt = Dotprompt(schema_resolver=async_schema_resolver)
+        # Children share the parent's Dotprompt instance (prompts are global).
+        self._dotprompt: Dotprompt = (
+            parent.dotprompt if parent is not None else Dotprompt(schema_resolver=async_schema_resolver)
+        )
         # TODO(#4352): Figure out how to set this.
         self.api_stability: str = 'stable'
 
@@ -127,6 +163,45 @@ class Registry:
         #   reflection server schedules coroutines onto that loop.)
         self._plugins: dict[str, Plugin] = {}
         self._plugin_init_tasks: dict[str, asyncio.Task[None]] = {}
+        self._all_plugins_initialized: bool = False
+
+    # -------------------------------------------------------------------------
+    # Child registry support
+    # -------------------------------------------------------------------------
+
+    def new_child(self) -> Registry:
+        """Create a cheap child registry that inherits from this registry.
+
+        Child registries are used to create short-lived, ephemeral scopes (e.g.
+        per-generate-call tool registrations from a DAP) without polluting the
+        root registry.  Any lookup that fails locally falls back to this parent.
+        Writes on the child never propagate back to the parent.
+
+        Returns:
+            A new ``Registry`` whose parent is ``self``.
+        """
+        return Registry(parent=self)
+
+    @property
+    def parent(self) -> Registry | None:
+        """The parent registry, or ``None`` if this is a root registry."""
+        return self._parent
+
+    @property
+    def is_child(self) -> bool:
+        """``True`` if this registry has a parent."""
+        return self._parent is not None
+
+    @property
+    def dotprompt(self) -> Dotprompt:
+        """The shared :class:`Dotprompt` instance for this registry tree.
+
+        Mutations (partials, helpers) propagate to all sibling and descendant
+        registries because the instance is shared. Use :func:`define_partial`
+        and :func:`define_helper` rather than mutating the returned instance
+        directly, so the public surface stays stable.
+        """
+        return self._dotprompt
 
     def register_action(
         self,
@@ -204,6 +279,66 @@ class Registry:
             await self._trigger_lazy_loading(action)
         return actions
 
+    async def list_actions(self) -> dict[str, ActionMetadata]:
+        """Return reflection metadata for plugins, registered actions, and DAP-expanded tools.
+
+        Initializes plugins, advertises plugin rows from each plugin's ``list_actions()``,
+        then fills registered :class:`Action` rows and expands DAP-provided actions. Merges
+        with the parent registry's catalog; entries from this registry win on duplicate keys.
+
+        Returns:
+            Map of action key string to typed :class:`ActionMetadata`.
+        """
+        await self.initialize_all_plugins()
+
+        catalog: dict[str, ActionMetadata] = {}
+
+        # 1. Plugin-advertised rows: actions the plugin claims it can resolve on demand.
+        with self._lock:
+            plugins = list(self._plugins.items())
+        for plugin_name, plugin in plugins:
+            try:
+                advertised = await plugin.list_actions()
+            except Exception:
+                logger.exception('Error listing actions for plugin %s', plugin_name)
+                continue
+            for meta in advertised or []:
+                if not meta.name:
+                    raise ValueError(f'Invalid ActionMetadata from {plugin_name}: name required')
+                if not meta.action_type:
+                    raise ValueError(f'Invalid ActionMetadata from {plugin_name}: action_type required')
+                key = f'/{meta.action_type}/{meta.name}'
+                catalog[key] = meta.model_copy(update={'key': key})
+
+        # 2. Concrete registered actions, plus DAP-expanded actions if the action is a provider.
+        for kind in ActionKind.__members__.values():
+            for name, action in (await self.resolve_actions_by_kind(kind)).items():
+                key = create_action_key(kind, name)
+                catalog[key] = _action_metadata_for_registered_action(action)
+
+                dap = getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+                if dap is None:
+                    continue
+                try:
+                    # DAP action keys are prefixed with the provider action's ``name``;
+                    # see :meth:`DynamicActionProvider.list_action_metadata_by_key`.
+                    dap_actions = await dap.list_action_metadata_by_key(action.name)
+                except Exception:
+                    logger.exception(
+                        'Error listing actions for Dynamic Action Provider %s',
+                        action.name,
+                    )
+                    continue
+                # ``list_action_metadata_by_key`` already populates each entry's ``meta.key``
+                # to match its DAP action key, so we can merge straight into the catalog.
+                catalog.update(dap_actions)
+
+        # 3. Merge in parent registry's catalog; entries from this registry win on duplicate keys.
+        if self._parent is None:
+            return catalog
+        parent_catalog = await self._parent.list_actions()
+        return {**parent_catalog, **catalog}
+
     def register_value(self, kind: str, name: str, value: object) -> None:
         """Registers a value with a given kind and name.
 
@@ -238,22 +373,30 @@ class Registry:
             name: The name of the value (e.g., "json", "text").
 
         Returns:
-            The value or None if not found.
+            The value or None if not found.  Falls back to parent registry.
         """
         with self._lock:
-            return self._value_by_kind_and_name.get(kind, {}).get(name)
+            local = self._value_by_kind_and_name.get(kind, {}).get(name)
+        if local is not None:
+            return local
+        return self._parent.lookup_value(kind, name) if self._parent is not None else None
 
-    def list_values(self, kind: str) -> list[str]:
-        """List all values registered for a specific kind.
+    def list_values(self, kind: str) -> dict[str, object]:
+        """List all values registered for a specific kind, merged with the parent registry.
+
+        Entries from this registry win on duplicate names.
 
         Args:
-            kind: The kind of values to list (e.g., "defaultModel").
+            kind: The kind of values to list (e.g., ``"defaultModel"``, ``"format"``).
 
         Returns:
-            A list of registered value names.
+            Map of value name to value object.
         """
         with self._lock:
-            return list(self._value_by_kind_and_name.get(kind, {}).keys())
+            local = dict(self._value_by_kind_and_name.get(kind, {}))
+        if self._parent is None:
+            return local
+        return {**self._parent.list_values(kind), **local}
 
     def register_plugin(self, plugin: Plugin) -> None:
         """Register a plugin with the registry.
@@ -270,6 +413,20 @@ class Registry:
             if plugin.name in self._plugins:
                 raise ValueError(f'Plugin {plugin.name} already registered')
             self._plugins[plugin.name] = plugin
+            self._all_plugins_initialized = False
+
+    async def initialize_all_plugins(self) -> None:
+        """Run ``init()`` for every plugin on this registry exactly once (until a new plugin is registered).
+
+        Used before enumerating registered actions so plugin-registered entries exist in ``_entries``.
+        """
+        if self._all_plugins_initialized:
+            return
+        with self._lock:
+            plugin_names = list(self._plugins.keys())
+        for name in plugin_names:
+            await self._ensure_plugin_initialized(name)
+        self._all_plugins_initialized = True
 
     async def _ensure_plugin_initialized(self, plugin_name: str) -> None:
         """Ensure a plugin is initialized exactly once.
@@ -341,7 +498,7 @@ class Registry:
 
         A re-entrancy guard (``_loading_actions``) prevents infinite recursion
         when a factory resolves its own action key during initialization.
-        See https://github.com/firebase/genkit/issues/4491.
+        See https://github.com/genkit-ai/genkit/issues/4491.
         """
         if action is None:
             return None
@@ -359,29 +516,76 @@ class Registry:
                 self._loading_actions.discard(action_id)
         return action
 
-    async def resolve_action(self, kind: ActionKind, name: str) -> Action | None:
-        """Resolve an action by kind and name, supporting both prefixed and unprefixed names.
+    async def _resolve_dap_qualified_action(self, kind: ActionKind, name: str) -> Action | None:
+        """Resolve through the one registered DAP for ``provider:innerKind/innerName`` names.
 
-        This method supports:
-        1. Cache hit: Returns immediately if action is already registered
-        2. Namespaced request (e.g., "plugin/model"): Resolves via specific plugin
-        3. Unprefixed request (e.g., "model"): Tries all plugins, errors on ambiguity
-        4. Dynamic action providers: Last-resort fallback for dynamic action creation
+        Caller must ensure :func:`parse_dap_qualified_name` accepts ``name``. Does not consult
+        plugins. Returns ``None`` if the provider is not registered here (caller may delegate
+        to a parent registry).
+        """
+        qualified = parse_dap_qualified_name(name)
+        if qualified is None:
+            return None
+        dap_host = qualified.provider
+        with self._lock:
+            provider = self._entries.get(ActionKind.DYNAMIC_ACTION_PROVIDER, {}).get(dap_host)
+        if provider is None:
+            return None
+        dap_action = await self._trigger_lazy_loading(provider)
+        if dap_action is None:
+            raise RuntimeError(
+                f'Dynamic action provider {dap_host!r} is not registered. '
+                'DAPs must be registered using define_dynamic_action_provider '
+                'before referencing qualified action names.'
+            )
+        dap = getattr(dap_action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+        if dap is not None:
+            try:
+                resolved = await dap.get_action(qualified.inner_kind, qualified.inner_name)
+            except Exception as e:
+                raise ValueError(f'Dynamic action provider {dap_host!r} get_action failed for {kind} {name!r}') from e
+            if resolved is not None and resolved.kind == kind:
+                return resolved
+            if resolved is None:
+                raise ValueError(
+                    f'Dynamic action provider {dap_host!r} has no action '
+                    f'{qualified.inner_kind!r}/{qualified.inner_name!r} for {name!r}'
+                )
+            raise ValueError(
+                f'Dynamic action provider {dap_host!r} returned {resolved.kind!r} for {name!r}, expected {kind!r}'
+            )
+        raise RuntimeError(
+            f'Dynamic action provider {dap_host!r} is missing the Genkit DAP helper. '
+            'Register it using define_dynamic_action_provider before referencing qualified action names.'
+        )
+
+    async def resolve_action(self, kind: ActionKind, name: str) -> Action | None:
+        """Resolve an action by kind and name.
+
+        Tries an exact (kind, name) cache hit first. DAP-qualified names
+        (provider:innerKind/innerName) go through that provider only. If the name contains a
+        slash, the first segment is treated as a plugin id: that plugin is initialized and
+        plugin.resolve is used. Falls back to parent registry if nothing found.
 
         Args:
             kind: The type of action to resolve.
-            name: The name of the action (may be prefixed with "plugin/" or unprefixed).
+            name: Action name, optionally plugin/... for a specific plugin.
 
         Returns:
             The Action instance if found, None otherwise.
-
-        Raises:
-            ValueError: If an unprefixed name matches multiple plugins (ambiguous).
         """
-        # Cache hit
         with self._lock:
             if kind in self._entries and name in self._entries[kind]:
                 return await self._trigger_lazy_loading(self._entries[kind][name])
+
+        # DAP-qualified names: resolve via that provider only (not plugin slash splitting).
+        if kind != ActionKind.DYNAMIC_ACTION_PROVIDER and parse_dap_qualified_name(name) is not None:
+            action = await self._resolve_dap_qualified_action(kind, name)
+            if action is not None:
+                return action
+            if self._parent is not None:
+                return await self._parent.resolve_action(kind, name)
+            return None
 
         action: Action | None = None
 
@@ -406,115 +610,60 @@ class Registry:
                     self.register_action_instance(action, namespace=plugin_name)
                     with self._lock:
                         return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(target))
-        else:
-            # Unprefixed request: try all plugins
-            successes: list[tuple[str, Action]] = []
-            with self._lock:
-                plugins = list(self._plugins.items())
-            for plugin_name, plugin in plugins:
-                await self._ensure_plugin_initialized(plugin_name)
-                target = f'{plugin_name}/{name}'
 
-                # Check cache first - init() might have registered this action
-                with self._lock:
-                    cached_action = self._entries.get(kind, {}).get(target)
-                if cached_action is not None:
-                    successes.append((plugin_name, cached_action))
-                    continue
-
-                action = await plugin.resolve(kind, target)
-                if action is not None:
-                    successes.append((plugin_name, action))
-
-            if len(successes) > 1:
-                plugin_names = [p for p, _ in successes]
-                raise ValueError(
-                    f"Ambiguous {kind} action name '{name}'. "
-                    + f"Matches plugins: {plugin_names}. Use 'plugin/{name}'."
-                )
-
-            if len(successes) == 1:
-                plugin_name, action = successes[0]
-                self.register_action_instance(action, namespace=plugin_name)
-                with self._lock:
-                    return await self._trigger_lazy_loading(self._entries.get(kind, {}).get(f'{plugin_name}/{name}'))
-
-        # Fallback: try dynamic action providers (for MCP, dynamic resources, etc.)
-        # Skip if we're looking up a dynamic action provider itself to avoid recursion
-        if kind != ActionKind.DYNAMIC_ACTION_PROVIDER:
-            with self._lock:
-                if ActionKind.DYNAMIC_ACTION_PROVIDER in self._entries:
-                    providers_dict = self._entries[ActionKind.DYNAMIC_ACTION_PROVIDER]
-                else:
-                    providers_dict = {}
-                providers = list(providers_dict.values())
-            for provider in providers:
-                try:
-                    response = await provider.run({'kind': kind, 'name': name})
-                    if response.response:
-                        self.register_action_instance(response.response)
-                        return await self._trigger_lazy_loading(response.response)
-                except Exception as e:
-                    logger.debug(
-                        f'Dynamic action provider {provider.name} failed for {kind}/{name}',
-                        exc_info=e,
-                    )
-                    continue
+        # Final fallback: delegate to parent registry.
+        if self._parent is not None:
+            return await self._parent.resolve_action(kind, name)
 
         return None
 
     async def resolve_action_by_key(self, key: str) -> Action | None:
         """Resolve an action using its combined key string.
 
-        The key format is `<kind>/<name>`, where kind must be a valid
-        `ActionKind` and name may be prefixed with plugin namespace or unprefixed.
+        The key format is ``/<kind>/<name>``, where kind must be a valid
+        ``ActionKind`` and name may be prefixed with plugin namespace or
+        unprefixed.
+
+        For nested actions exposed by a dynamic action provider, use
+        ``/dynamic-action-provider/<provider>:<innerKind>/<innerName>`` (for
+        example ``/dynamic-action-provider/my-mcp:tool/echo``).
 
         Args:
-            key: The action key in the format `<kind>/<name>`.
+            key: The action key in the format ``/<kind>/<name>``.
 
         Returns:
-            The `Action` instance if found, None otherwise.
+            The ``Action`` instance if found, None otherwise.
 
         Raises:
             ValueError: If the key format is invalid, the kind is not a valid
-                `ActionKind`, or an unprefixed name is ambiguous.
+                ``ActionKind``, or an unprefixed name is ambiguous.
         """
         kind, name = parse_action_key(key)
+        if kind == ActionKind.DYNAMIC_ACTION_PROVIDER:
+            dap_parts = parse_dap_qualified_name(name)
+            if dap_parts is not None:
+                provider_action = await self.resolve_action(
+                    ActionKind.DYNAMIC_ACTION_PROVIDER,
+                    dap_parts.provider,
+                )
+                if provider_action is None:
+                    return None
+                dap = getattr(provider_action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)
+                if dap is None:
+                    return None
+                try:
+                    resolved = await dap.get_action(dap_parts.inner_kind, dap_parts.inner_name)
+                except Exception as e:
+                    logger.debug(
+                        f'Dynamic action provider {dap_parts.provider} failed for '
+                        f'qualified key {dap_parts.inner_kind}/{dap_parts.inner_name}',
+                        exc_info=e,
+                    )
+                    return None
+                if resolved is None:
+                    return None
+                return resolved
         return await self.resolve_action(kind, name)
-
-    async def list_actions(self, allowed_kinds: list[ActionKind] | None = None) -> list[ActionMetadata]:
-        """List all actions advertised by plugins.
-
-        This method returns the advertised set of actions from all registered
-        plugins. It does NOT trigger plugin initialization and does NOT consult
-        the registry's internal action store.
-
-        Args:
-            allowed_kinds: Optional list of action kinds to filter by.
-
-        Returns:
-            A list of ActionMetadata objects describing available actions.
-
-        Raises:
-            ValueError: If a plugin returns invalid ActionMetadata.
-        """
-        metas: list[ActionMetadata] = []
-        with self._lock:
-            plugins = list(self._plugins.items())
-        for plugin_name, plugin in plugins:
-            plugin_metas = await plugin.list_actions()
-            for meta in plugin_metas or []:
-                if not meta.name:
-                    raise ValueError(f'Invalid ActionMetadata from {plugin_name}: name required')
-
-                # Normalize metadata name
-                if '/' not in meta.name:
-                    meta = meta.model_copy(update={'name': f'{plugin_name}/{meta.name}'})
-
-                if allowed_kinds and meta.kind not in allowed_kinds:
-                    continue
-                metas.append(meta)
-        return metas
 
     def register_schema(self, name: str, schema: dict[str, object], schema_type: type[BaseModel] | None = None) -> None:
         """Registers a schema by name.
@@ -545,10 +694,13 @@ class Registry:
             name: The name of the schema to look up.
 
         Returns:
-            The schema data if found, None otherwise.
+            The schema data if found, None otherwise.  Falls back to parent.
         """
         with self._lock:
-            return self._schemas_by_name.get(name)
+            local = self._schemas_by_name.get(name)
+        if local is not None:
+            return local
+        return self._parent.lookup_schema(name) if self._parent is not None else None
 
     def lookup_schema_type(self, name: str) -> type[BaseModel] | None:
         """Looks up a schema's Pydantic type by name.
@@ -557,10 +709,13 @@ class Registry:
             name: The name of the schema to look up.
 
         Returns:
-            The Pydantic model class if found, None otherwise.
+            The Pydantic model class if found, None otherwise.  Falls back to parent.
         """
         with self._lock:
-            return self._schema_types_by_name.get(name)
+            local = self._schema_types_by_name.get(name)
+        if local is not None:
+            return local
+        return self._parent.lookup_schema_type(name) if self._parent is not None else None
 
     # ===== Typed Action Lookups =====
     #

@@ -222,12 +222,12 @@ Choose the interface based on your project's scale, infrastructure, and feature 
 
 ## Feedback
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests against that repo.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
 ## Links
 
 -  **Documentation:** [https://genkit.dev/docs/plugins/google-genai/](https://genkit.dev/docs/plugins/google-genai)
--   **Source Code:** [https://github.com/firebase/genkit/tree/main/js/plugins/google-genai](https://github.com/firebase/genkit/tree/main/js/plugins/google-genai)
+-   **Source Code:** [https://github.com/genkit-ai/genkit/tree/main/js/plugins/google-genai](https://github.com/genkit-ai/genkit/tree/main/js/plugins/google-genai)
 -   **Google AI Studio:** [https://aistudio.google.com/](https://aistudio.google.com/)
 -   **Vertex AI:** [https://cloud.google.com/vertex-ai](https://cloud.google.com/vertex-ai)
 -   **Vertex AI Express Mode:** [https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview](https://cloud.google.com/vertex-ai/generative-ai/docs/start/express-mode/overview)

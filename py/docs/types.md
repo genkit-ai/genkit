@@ -32,7 +32,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, an
 
 ::: genkit.PublicError
 
-::: genkit.ToolInterruptError
+::: genkit.Interrupt
 
 ::: genkit.Message
 

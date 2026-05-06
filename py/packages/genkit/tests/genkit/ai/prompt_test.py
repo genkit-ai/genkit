@@ -85,12 +85,12 @@ async def test_simple_prompt_with_override_config() -> None:
 
     my_prompt = ai.define_prompt(prompt='hi', config={'banana': True})
 
-    # New API: pass config via kwargs — this MERGES with prompt config
+    # Pass config via kwargs — this MERGES with prompt config
     response = await my_prompt(config={'temperature': 12})
 
     assert response.text == want_txt
 
-    # New API: stream also uses kwargs
+    # stream() also accepts the same kwargs
     result = my_prompt.stream(config={'temperature': 12})
 
     assert (await result.response).text == want_txt
@@ -243,7 +243,7 @@ async def test_prompt_rendering_dotprompt(
 
     my_prompt = ai.define_prompt(**prompt)
 
-    # New API: use kwargs to pass config and context
+    # New API: use kwargs parameter to pass config and context
     response = await my_prompt(input, config=input_option, context=context)
 
     assert response.text == want_rendered
@@ -792,7 +792,7 @@ async def test_variant_prompt_loading_does_not_recurse() -> None:
     on its own action key before setting _cached_prompt.  This triggered
     _trigger_lazy_loading() which re-invoked create_prompt_from_file(),
     recursing until RecursionError.
-    See https://github.com/firebase/genkit/issues/4491.
+    See https://github.com/genkit-ai/genkit/issues/4491.
     """
     ai, *_ = setup_test()
 

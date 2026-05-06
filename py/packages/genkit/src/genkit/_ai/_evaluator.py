@@ -25,12 +25,13 @@ from typing import Any, ClassVar, TypeVar, cast
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
-from genkit._core._action import Action, ActionKind, ActionMetadata
+from genkit._core._action import Action, ActionKind
 from genkit._core._logger import get_logger
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._tracing import run_in_new_span
 from genkit._core._typing import (
+    ActionMetadata,
     BaseDataPoint,
     EvalFnResponse,
     EvalRequest,
@@ -76,7 +77,7 @@ def evaluator_action_metadata(
 ) -> ActionMetadata:
     """Create ActionMetadata for an evaluator action."""
     return ActionMetadata(
-        kind=ActionKind.EVALUATOR,
+        action_type=ActionKind.EVALUATOR,
         name=name,
         input_json_schema=to_json_schema(EvalRequest),
         output_json_schema=to_json_schema(list[EvalFnResponse]),

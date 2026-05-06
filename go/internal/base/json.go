@@ -75,55 +75,82 @@ func ReadJSONFile(filename string, pvalue any) error {
 	return json.NewDecoder(f).Decode(pvalue)
 }
 
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+
 // InferJSONSchema infers a JSON schema from a Go value.
-func InferJSONSchema(x any) (s *jsonschema.Schema) {
-	seen := make(map[reflect.Type]bool)
+//
+// Recursion is detected by stack: while a struct type T is being reflected, T
+// is marked in-progress. Any nested encounter of T (a self-reference) returns
+// an "any" schema; T is unmarked when its reflection completes. Each top-level
+// occurrence of T (siblings, repeats) gets its own full reflection — so a
+// struct used in multiple fields produces the correct schema each time.
+//
+// We can't observe reflection completion through the library's Mapper hook
+// alone, so each struct type is reflected via a sub-Reflector. The Mapper's
+// defer fires when the sub-Reflector returns, which is the exit point.
+func InferJSONSchema(x any) *jsonschema.Schema {
+	inProgress := make(map[reflect.Type]bool)
+	var mapper func(reflect.Type) *jsonschema.Schema
+	mapper = func(t reflect.Type) *jsonschema.Schema {
+		// []any reflects to `{ type: "array", items: true }` which is not valid JSON schema.
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Interface {
+			return &jsonschema.Schema{
+				Type:  "array",
+				Items: &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema},
+			}
+		}
+		baseType := t
+		if t.Kind() == reflect.Ptr {
+			baseType = t.Elem()
+		}
+		if baseType.Kind() != reflect.Struct {
+			return nil
+		}
+		if inProgress[baseType] {
+			return anyStructSchema(baseType)
+		}
 
-	r := jsonschema.Reflector{
-		DoNotReference: true,
-		Mapper: func(t reflect.Type) *jsonschema.Schema {
-			// []any generates `{ type: "array", items: true }` which is not valid JSON schema.
-			if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Interface {
-				return &jsonschema.Schema{
-					Type: "array",
-					Items: &jsonschema.Schema{
-						// This field is not necessary but it's the most benign way for the object to not be empty.
-						AdditionalProperties: jsonschema.TrueSchema,
-					},
+		inProgress[baseType] = true
+		defer delete(inProgress, baseType)
+
+		// The sub-Reflector's first Mapper call is for baseType itself: return
+		// nil so the library reflects it. All nested calls (fields, including
+		// recursive self-references) delegate back to the outer mapper, where
+		// inProgress[baseType] is set and recursion is broken.
+		firstCall := true
+		sub := jsonschema.Reflector{
+			DoNotReference: true,
+			Anonymous:      true, // suppress $id on this nested schema
+			Mapper: func(st reflect.Type) *jsonschema.Schema {
+				if firstCall && st == baseType {
+					firstCall = false
+					return nil
 				}
-			}
-
-			// Handle recursive types: track struct types we've seen.
-			// The first encounter is reflected normally; subsequent encounters
-			// (including self-references) return an "any" schema to break recursion.
-			baseType := t
-			if t.Kind() == reflect.Ptr {
-				baseType = t.Elem()
-			}
-			if baseType.Kind() == reflect.Struct {
-				if seen[baseType] {
-					// check if the type implements json.Marshaler since it might serialize to a non-object
-					marshalerType := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
-					if baseType.Implements(marshalerType) || reflect.PointerTo(baseType).Implements(marshalerType) {
-						return &jsonschema.Schema{
-							AdditionalProperties: jsonschema.TrueSchema,
-						}
-					}
-					return &jsonschema.Schema{
-						Type:                 "object",
-						AdditionalProperties: jsonschema.TrueSchema,
-					}
-				}
-				seen[baseType] = true
-			}
-
-			return nil // Return nil to use default schema generation for other types
-		},
+				return mapper(st)
+			},
+		}
+		s := sub.ReflectFromType(baseType)
+		s.Version = "" // suppress $schema on this nested schema
+		return s
 	}
-	s = r.Reflect(x)
+
+	r := jsonschema.Reflector{DoNotReference: true, Anonymous: true, Mapper: mapper}
+	s := r.Reflect(x)
 	s.Version = ""
-	s.ID = ""
 	return s
+}
+
+// anyStructSchema returns the "any" schema used to break recursion. Types
+// that implement json.Marshaler may serialize to a non-object, so we omit
+// `type: object` for them.
+func anyStructSchema(t reflect.Type) *jsonschema.Schema {
+	if t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
+		return &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema}
+	}
+	return &jsonschema.Schema{
+		Type:                 "object",
+		AdditionalProperties: jsonschema.TrueSchema,
+	}
 }
 
 // MapToStruct converts a map[string]any to a struct of type T via JSON round-trip.

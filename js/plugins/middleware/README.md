@@ -14,7 +14,7 @@ pnpm add @genkit-ai/middleware
 
 ### 1. FileSystem Middleware (`filesystem`)
 
-Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `search_and_replace`). All operations are safely restricted to a specified root directory.
+Grants the model access to the local filesystem by injecting standard file manipulation tools (`list_files`, `read_file`, `write_file`, `search_and_replace`). All operations are safely restricted to a specified root directory. Note that write operations require setting `allowWriteAccess: true` in the middleware configuration.
 
 ```typescript
 import { genkit } from 'genkit';
@@ -26,7 +26,7 @@ const response = await ai.generate({
   model: 'gemini-2.5-flash',
   prompt: 'Create a hello world node app in the workspace',
   use: [
-    filesystem({ rootDirectory: './workspace' })
+    filesystem({ rootDirectory: './workspace', allowWriteAccess: true })
   ]
 });
 ```

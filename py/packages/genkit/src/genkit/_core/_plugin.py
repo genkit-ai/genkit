@@ -18,7 +18,8 @@
 
 import abc
 
-from genkit._core._action import Action, ActionKind, ActionMetadata
+from genkit._core._action import Action, ActionKind
+from genkit._core._typing import ActionMetadata
 
 
 class Plugin(abc.ABC):
@@ -38,7 +39,12 @@ class Plugin(abc.ABC):
 
     @abc.abstractmethod
     async def list_actions(self) -> list[ActionMetadata]:
-        """Return advertised actions for dev UI/reflection listing."""
+        """Return advertised actions for dev UI/reflection listing.
+
+        ``ActionMetadata.action_type`` must be set (typically ``ActionKind.*``) and
+        ``ActionMetadata.name`` must match resolution keys (typically
+        ``{plugin.name}/localName`` for plugin-backed actions).
+        """
         ...
 
     async def model(self, name: str) -> Action | None:

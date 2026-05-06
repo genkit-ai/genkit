@@ -104,6 +104,11 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 
 	baseName, variant, _ := strings.Cut(name, ".")
 
+	use, err := configsToRefs(pOpts.commonGenOptions.Use)
+	if err != nil {
+		panic(fmt.Errorf("ai.DefinePrompt: error processing middleware: %w", err))
+	}
+
 	promptMetadata := map[string]any{
 		"name":         baseName,
 		"description":  p.Description,
@@ -113,7 +118,11 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		"output":       map[string]any{"schema": p.OutputSchema},
 		"defaultInput": p.DefaultInput,
 		"tools":        tools,
+		"toolChoice":   pOpts.ToolChoice,
 		"maxTurns":     p.MaxTurns,
+	}
+	if len(use) > 0 {
+		promptMetadata["use"] = use
 	}
 	if variant != "" {
 		promptMetadata["variant"] = variant
@@ -247,6 +256,14 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 		for _, t := range newTools {
 			t.Register(r)
 		}
+	}
+
+	refs, err := configsToRefs(execOpts.Use)
+	if err != nil {
+		return nil, fmt.Errorf("Prompt.Execute: %w", err)
+	}
+	if len(refs) > 0 {
+		actionOpts.Use = refs
 	}
 
 	return GenerateWithRequest(ctx, r, actionOpts, execOpts.Middleware, execOpts.Stream)
@@ -439,6 +456,11 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		return nil, core.NewError(core.INVALID_ARGUMENT, "invalid output schema for prompt %q: %v", p.Name(), err)
 	}
 
+	useRefs, err := configsToRefs(p.Use)
+	if err != nil {
+		return nil, fmt.Errorf("prompt %q: %w", p.Name(), err)
+	}
+
 	return &GenerateActionOptions{
 		Model:              modelName,
 		Config:             config,
@@ -447,6 +469,7 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		ReturnToolRequests: p.ReturnToolRequests != nil && *p.ReturnToolRequests,
 		Messages:           messages,
 		Tools:              tools,
+		Use:                useRefs,
 		Output: &GenerateActionOutputConfig{
 			Format:       p.OutputFormat,
 			JsonSchema:   outputSchema,
@@ -773,6 +796,12 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 		opts.ReturnToolRequests = &returnToolRequests
 	}
 
+	if uses, err := parseDotpromptUse(metadata.Raw["use"]); err != nil {
+		return nil, fmt.Errorf("prompt %q: %w", name, err)
+	} else if len(uses) > 0 {
+		opts.Use = uses
+	}
+
 	if inputSchema, ok := metadata.Input.Schema.(*jsonschema.Schema); ok {
 		if inputSchema.Ref != "" {
 			opts.InputSchema = core.SchemaRef(inputSchema.Ref)
@@ -820,6 +849,40 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 	prompt := DefinePrompt(r, key, opts, WithPrompt(parsedPrompt.Template))
 
 	return prompt, nil
+}
+
+// parseDotpromptUse converts the value of the dotprompt `use:` frontmatter
+// field into a slice of lazy [Middleware] references. Each entry may be a
+// bare string (interpreted as a registered middleware name) or a map with
+// `name` and optional `config`, mirroring the TypeScript MiddlewareRef shape.
+// Returns nil if the input is nil or an empty slice.
+func parseDotpromptUse(raw any) ([]Middleware, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	entries, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("`use` must be a list, got %T", raw)
+	}
+	uses := make([]Middleware, 0, len(entries))
+	for i, entry := range entries {
+		switch v := entry.(type) {
+		case string:
+			if v == "" {
+				return nil, fmt.Errorf("`use[%d]` is an empty string", i)
+			}
+			uses = append(uses, middlewareRefArg{name: v})
+		case map[string]any:
+			name, _ := v["name"].(string)
+			if name == "" {
+				return nil, fmt.Errorf("`use[%d]` is missing required `name` field", i)
+			}
+			uses = append(uses, middlewareRefArg{name: name, config: v["config"]})
+		default:
+			return nil, fmt.Errorf("`use[%d]` must be a string or map, got %T", i, entry)
+		}
+	}
+	return uses, nil
 }
 
 // LoadPromptDir loads prompts and partials from a directory on the local filesystem.

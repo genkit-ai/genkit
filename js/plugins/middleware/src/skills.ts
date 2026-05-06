@@ -137,9 +137,10 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
 
       return {
         tools: [useSkillTool],
-        generate: async (req, ctx, next) => {
+        generate: async (envelope, ctx, next) => {
+          const { request } = envelope;
           await ensureSkillsScanned();
-          if (skillCache.size === 0) return next(req, ctx);
+          if (skillCache.size === 0) return next(envelope, ctx);
 
           const skillsList = Array.from(skillCache.entries())
             .map(([name, info]) => {
@@ -159,7 +160,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
             `${skillsList}\n` +
             `</skills>`;
 
-          const messages = [...req.messages];
+          const messages = [...request.messages];
           let injectedPart: any | undefined;
           let injectedMsgIndex = -1;
           let injectedPartIndex = -1;
@@ -218,7 +219,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
             }
           }
 
-          return next({ ...req, messages }, ctx);
+          return next({ ...envelope, request: { ...request, messages } }, ctx);
         },
       };
     }

@@ -53,7 +53,7 @@ export interface ActionMetadata<
 > {
   /** The type of action (e.g. 'prompt', 'flow'). */
   actionType?: ActionType;
-  /** The key of the action. */
+  /** Registry key (unique identifier). */
   key?: string;
   /** The name of the action. */
   name: string;
@@ -692,7 +692,7 @@ export function defineAction<
   if (isInRuntimeContext()) {
     throw new Error(
       'Cannot define new actions at runtime.\n' +
-        'See: https://github.com/firebase/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
+        'See: https://github.com/genkit-ai/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
     );
   }
   const act = action(config, async (i: I, options): Promise<z.infer<O>> => {

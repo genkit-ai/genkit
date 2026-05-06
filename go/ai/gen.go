@@ -28,9 +28,9 @@ type ActionMetadata struct {
 	Metadata        map[string]any `json:"metadata,omitempty"`
 	Name            string         `json:"name,omitempty"`
 	// A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.
-	OutputJsonSchema *ActionMetadata `json:"outputJsonSchema,omitempty"`
-	OutputSchema     any             `json:"outputSchema,omitempty"`
-	StreamSchema     any             `json:"streamSchema,omitempty"`
+	OutputJsonSchema any `json:"outputJsonSchema,omitempty"`
+	OutputSchema     any `json:"outputSchema,omitempty"`
+	StreamSchema     any `json:"streamSchema,omitempty"`
 }
 
 type customPart struct {
@@ -111,8 +111,9 @@ type GenerateActionOptions struct {
 	// the model to choose a tool, and none forces the model not to use any tools. Defaults to auto.
 	ToolChoice ToolChoice `json:"toolChoice,omitempty"`
 	// Tools is a list of registered tool names for this generation if supported.
-	Tools []string         `json:"tools,omitempty"`
-	Use   []*MiddlewareRef `json:"use,omitempty"`
+	Tools []string `json:"tools,omitempty"`
+	// Use is middleware to apply to this generation, referenced by name with optional config.
+	Use []*MiddlewareRef `json:"use,omitempty"`
 }
 
 // GenerateActionResume holds options for resuming an interrupted generation.
@@ -120,9 +121,9 @@ type GenerateActionResume struct {
 	// Metadata contains additional context for resuming the generation.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Respond contains tool response parts to send to the model when resuming.
-	Respond []*toolResponsePart `json:"respond,omitempty"`
+	Respond []*Part `json:"respond,omitempty"`
 	// Restart contains tool request parts to restart when resuming.
-	Restart []*toolRequestPart `json:"restart,omitempty"`
+	Restart []*Part `json:"restart,omitempty"`
 }
 
 // ToolChoice controls how the model uses tools.
@@ -151,7 +152,7 @@ type GenerateActionOutputConfig struct {
 // GenerationCommonConfig holds configuration parameters for model generation requests.
 type GenerationCommonConfig struct {
 	// API Key to use for the model call, overrides API key provided in plugin config.
-	ApiKey string `json:"apiKey,omitempty"`
+	APIKey string `json:"apiKey,omitempty"`
 	// MaxOutputTokens limits the maximum number of tokens generated in the response.
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 	// StopSequences specifies sequences that will cause generation to stop when encountered.
@@ -225,16 +226,25 @@ type Message struct {
 	Role Role `json:"role,omitempty"`
 }
 
+// MiddlewareDesc is the registered descriptor for a middleware.
 type MiddlewareDesc struct {
-	ConfigSchema any    `json:"configSchema,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Metadata     any    `json:"metadata,omitempty"`
-	Name         string `json:"name,omitempty"`
+	// ConfigSchema is a JSON Schema describing the middleware's configuration.
+	ConfigSchema map[string]any `json:"configSchema,omitempty"`
+	// Description explains what the middleware does.
+	Description string `json:"description,omitempty"`
+	// Metadata contains additional context for the middleware.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Name is the middleware's unique identifier.
+	Name          string `json:"name,omitempty"`
+	buildFromJSON middlewareFactoryFunc
 }
 
+// MiddlewareRef is a serializable reference to a registered middleware with config.
 type MiddlewareRef struct {
-	Config any    `json:"config,omitempty"`
-	Name   string `json:"name,omitempty"`
+	// Config contains the middleware configuration.
+	Config any `json:"config,omitempty"`
+	// Name is the name of the registered middleware.
+	Name string `json:"name,omitempty"`
 }
 
 // ModelInfo contains metadata about a model's capabilities and characteristics.
@@ -435,77 +445,6 @@ type reasoningPart struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Reasoning contains the reasoning text of the message.
 	Reasoning string `json:"reasoning,omitempty"`
-}
-
-type ReflectionCancelActionParams struct {
-	TraceID string `json:"traceId,omitempty"`
-}
-
-type ReflectionCancelActionResponse struct {
-	Message string `json:"message,omitempty"`
-}
-
-type ReflectionConfigureParams struct {
-	TelemetryServerUrl string `json:"telemetryServerUrl,omitempty"`
-}
-
-type ReflectionEndInputStreamParams struct {
-	RequestID string `json:"requestId,omitempty"`
-}
-
-type ReflectionListActionsResponse struct {
-	Actions map[string]*ActionMetadata `json:"actions,omitempty"`
-}
-
-type ReflectionListValuesParams struct {
-	Type string `json:"type,omitempty"`
-}
-
-type ReflectionListValuesResponse struct {
-	Values map[string]any `json:"values,omitempty"`
-}
-
-type ReflectionRegisterParams struct {
-	Envs                     []string `json:"envs,omitempty"`
-	GenkitVersion            string   `json:"genkitVersion,omitempty"`
-	Id                       string   `json:"id,omitempty"`
-	Name                     string   `json:"name,omitempty"`
-	Pid                      float64  `json:"pid,omitempty"`
-	ReflectionApiSpecVersion float64  `json:"reflectionApiSpecVersion,omitempty"`
-}
-
-type ReflectionRunActionParams struct {
-	// Additional runtime context data (ex. auth context data).
-	Context any `json:"context,omitempty"`
-	// An input with the type that this action expects.
-	Input any `json:"input,omitempty"`
-	// Action key that consists of the action type and ID.
-	Key string `json:"key,omitempty"`
-	// ID of the Genkit runtime to run the action on. Typically $pid-$port.
-	RuntimeID   string `json:"runtimeId,omitempty"`
-	Stream      bool   `json:"stream,omitempty"`
-	StreamInput bool   `json:"streamInput,omitempty"`
-	// Labels to be applied to telemetry data.
-	TelemetryLabels map[string]string `json:"telemetryLabels,omitempty"`
-}
-
-type ReflectionRunActionStateParams struct {
-	RequestID string                               `json:"requestId,omitempty"`
-	State     *ReflectionRunActionStateParamsState `json:"state,omitempty"`
-}
-
-type ReflectionRunActionStateParamsState struct {
-	TraceID string `json:"traceId,omitempty"`
-}
-
-type ReflectionSendInputStreamChunkParams struct {
-	Chunk     any    `json:"chunk,omitempty"`
-	RequestID string `json:"requestId,omitempty"`
-}
-
-type ReflectionStreamChunkParams struct {
-	Chunk     any    `json:"chunk,omitempty"`
-	RequestID string `json:"requestId,omitempty"`
 }
 
 // RerankerRequest represents a request to rerank documents based on relevance.

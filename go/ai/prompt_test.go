@@ -1080,6 +1080,40 @@ func TestDefinePrompt_WithoutVariant(t *testing.T) {
 	}
 }
 
+func TestDefinePrompt_WithMiddlewareMetadata(t *testing.T) {
+	reg := registry.New()
+
+	mw := middlewareRefArg{name: "test/mw", config: map[string]any{"foo": "bar"}}
+	DefinePrompt(reg, "test-mw", WithUse(mw))
+
+	prompt := LookupPrompt(reg, "test-mw")
+	if prompt == nil {
+		t.Fatalf("Prompt was not registered")
+	}
+
+	promptMetadata, ok := prompt.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt'] to be a map")
+	}
+
+	use, ok := promptMetadata["use"].([]*MiddlewareRef)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt']['use'] to be []*MiddlewareRef, got %T", promptMetadata["use"])
+	}
+
+	if len(use) != 1 {
+		t.Fatalf("Expected 1 middleware ref, got %d", len(use))
+	}
+
+	if use[0].Name != "test/mw" {
+		t.Errorf("Expected middleware name 'test/mw', got '%s'", use[0].Name)
+	}
+
+	if diff := cmp.Diff(map[string]any{"foo": "bar"}, use[0].Config); diff != "" {
+		t.Errorf("Middleware config mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestLoadPromptFolder(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir := t.TempDir()
@@ -3123,7 +3157,7 @@ func TestDefineDataPromptPanics(t *testing.T) {
 
 // TestLoadPromptTemplateVariableSubstitution tests that template variables are
 // properly substituted with actual input values at execution time.
-// This is a regression test for https://github.com/firebase/genkit/issues/3924
+// This is a regression test for https://github.com/genkit-ai/genkit/issues/3924
 func TestLoadPromptTemplateVariableSubstitution(t *testing.T) {
 	t.Run("single role", func(t *testing.T) {
 		tempDir := t.TempDir()
@@ -3291,4 +3325,170 @@ Hello {{name}}, please help me with {{task}}.
 			t.Errorf("BUG: Second render user message contains 'coding' from first input! Got: %s", userText2)
 		}
 	})
+}
+
+func TestParseDotpromptUse(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     any
+		want    []Middleware
+		wantErr bool
+	}{
+		{name: "nil", raw: nil, want: nil},
+		{name: "empty list", raw: []any{}, want: []Middleware{}},
+		{
+			name: "bare names",
+			raw:  []any{"a", "b"},
+			want: []Middleware{middlewareRefArg{name: "a"}, middlewareRefArg{name: "b"}},
+		},
+		{
+			name: "mixed names and refs with config",
+			raw: []any{
+				"a",
+				map[string]any{"name": "b", "config": map[string]any{"k": 1}},
+			},
+			want: []Middleware{
+				middlewareRefArg{name: "a"},
+				middlewareRefArg{name: "b", config: map[string]any{"k": 1}},
+			},
+		},
+		{
+			name: "ref without config",
+			raw:  []any{map[string]any{"name": "x"}},
+			want: []Middleware{middlewareRefArg{name: "x"}},
+		},
+		{name: "not a list", raw: "single", wantErr: true},
+		{name: "empty string entry", raw: []any{""}, wantErr: true},
+		{name: "map missing name", raw: []any{map[string]any{"config": "x"}}, wantErr: true},
+		{name: "unsupported entry type", raw: []any{42}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseDotpromptUse(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(middlewareRefArg{})); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestLoadPrompt_WithUseMiddleware(t *testing.T) {
+	const promptSource = `---
+model: test/fakeModel
+use:
+  - test/counter
+  - name: test/counter
+    config:
+      label: from-yaml
+---
+hello
+`
+	reg := newTestRegistry(t)
+	defineFakeModel(t, reg, fakeModelConfig{})
+
+	var modelCalls int32
+	NewMiddleware("counter", counterConfig{sharedModelCalls: &modelCalls}).Register(reg)
+
+	p, err := LoadPromptFromSource(reg, promptSource, "withuse", "")
+	if err != nil {
+		t.Fatalf("LoadPromptFromSource: %v", err)
+	}
+
+	if _, err := p.Execute(context.Background()); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Both `use:` entries fire on the single model call: 2 hooks layered.
+	if got := modelCalls; got != 2 {
+		t.Errorf("model hook calls = %d, want 2 (one per use entry)", got)
+	}
+}
+
+func TestLoadPrompt_WithUseMiddleware_NotRegistered(t *testing.T) {
+	const promptSource = `---
+model: test/fakeModel
+use:
+  - test/missing
+---
+hi
+`
+	reg := newTestRegistry(t)
+	defineFakeModel(t, reg, fakeModelConfig{})
+
+	p, err := LoadPromptFromSource(reg, promptSource, "missingmw", "")
+	if err != nil {
+		t.Fatalf("LoadPromptFromSource: %v", err)
+	}
+
+	if _, err := p.Execute(context.Background()); err == nil {
+		t.Fatal("expected NOT_FOUND error for unregistered middleware referenced from `use:`")
+	}
+}
+
+func TestLoadPrompt_WithUseMiddleware_InvalidShape(t *testing.T) {
+	const promptSource = `---
+model: test/fakeModel
+use: "not-a-list"
+---
+hi
+`
+	reg := newTestRegistry(t)
+	if _, err := LoadPromptFromSource(reg, promptSource, "badshape", ""); err == nil {
+		t.Fatal("expected error for non-list `use:`")
+	}
+}
+
+func TestLoadPrompt_WithUseMiddlewareMetadata(t *testing.T) {
+	const promptSource = `---
+model: test/fakeModel
+use:
+  - test/mw1
+  - name: test/mw2
+    config:
+      foo: bar
+---
+hello
+`
+	reg := newTestRegistry(t)
+	defineFakeModel(t, reg, fakeModelConfig{})
+
+	p, err := LoadPromptFromSource(reg, promptSource, "withusemetadata", "")
+	if err != nil {
+		t.Fatalf("LoadPromptFromSource: %v", err)
+	}
+
+	promptMetadata, ok := p.(api.Action).Desc().Metadata["prompt"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt'] to be a map")
+	}
+
+	use, ok := promptMetadata["use"].([]*MiddlewareRef)
+	if !ok {
+		t.Fatalf("Expected Metadata['prompt']['use'] to be []*MiddlewareRef, got %T", promptMetadata["use"])
+	}
+
+	if len(use) != 2 {
+		t.Fatalf("Expected 2 middleware refs, got %d", len(use))
+	}
+
+	if use[0].Name != "test/mw1" {
+		t.Errorf("Expected middleware[0] name 'test/mw1', got '%s'", use[0].Name)
+	}
+
+	if use[1].Name != "test/mw2" {
+		t.Errorf("Expected middleware[1] name 'test/mw2', got '%s'", use[1].Name)
+	}
+
+	if diff := cmp.Diff(map[string]any{"foo": "bar"}, use[1].Config); diff != "" {
+		t.Errorf("Middleware[1] config mismatch (-want +got):\n%s", diff)
+	}
 }
