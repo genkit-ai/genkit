@@ -731,22 +731,40 @@ export function definePromptAgent<State = unknown>(
         }
       }
 
+      const historyTag = '_genkit_history';
+      const promptTag = 'agentPreamble';
+
+      // Tag every history message so we can identify them after render.
+      const history = (sess.session.getMessages() || []).map((m) => ({
+        ...m,
+        metadata: { ...m.metadata, [historyTag]: true },
+      }));
+
+      // Let the prompt control where history is placed (e.g. dotprompt
+      // {{history}}).  When the prompt has no explicit `messages` config
+      // the render helper simply appends history after system/user.
       const genOpts = await cachedPromptAction.__executablePrompt.render(
-        promptInput as unknown as z.ZodTypeAny
+        promptInput as unknown as z.ZodTypeAny,
+        { messages: history }
       );
 
-      const promptMessageKey = '_genkit_prompt';
+      // After render: tag everything that is NOT history as a prompt
+      // message so we can strip it after generation.  Also strip the
+      // internal history tag — it is an implementation detail that
+      // should not leak to the model.
       if (genOpts.messages) {
-        genOpts.messages = genOpts.messages.map((m) => ({
-          ...m,
-          metadata: { ...m.metadata, [promptMessageKey]: true },
-        }));
+        genOpts.messages = genOpts.messages.map((m) => {
+          if (m.metadata?.[historyTag]) {
+            // Strip the history tag before sending to the model.
+            const { [historyTag]: _, ...restMeta } = m.metadata!;
+            return {
+              ...m,
+              metadata: Object.keys(restMeta).length ? restMeta : undefined,
+            };
+          }
+          return { ...m, metadata: { ...m.metadata, [promptTag]: true } };
+        });
       }
-
-      genOpts.messages = [
-        ...(genOpts.messages || []),
-        ...(sess.session.getMessages() || []),
-      ];
 
       if (input.toolRestarts && input.toolRestarts.length > 0) {
         genOpts.resume = {
@@ -762,9 +780,13 @@ export function definePromptAgent<State = unknown>(
 
       const res = await result.response;
 
+      // Keep everything that is NOT a prompt-template message:
+      //   • history messages (clean — history tag was stripped before generate)
+      //   • new messages from tool loops (untagged)
+      //   • model response
       if (res.request?.messages) {
         const msgs = res.request.messages.filter(
-          (m) => !m.metadata?.[promptMessageKey]
+          (m) => !m.metadata?.[promptTag]
         );
         if (res.message) {
           msgs.push(res.message);

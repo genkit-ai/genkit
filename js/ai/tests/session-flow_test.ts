@@ -34,7 +34,11 @@ import {
   type SessionSnapshot,
 } from '../src/session.js';
 import { interrupt } from '../src/tool.js';
-import { defineEchoModel, defineProgrammableModel } from './helpers.js';
+import {
+  defineEchoModel,
+  defineProgrammableModel,
+  type ProgrammableModel,
+} from './helpers.js';
 
 initNodeFeatures();
 
@@ -1537,6 +1541,458 @@ describe('Agent', () => {
       // Messages should be present
       assert.ok(output.state!.messages);
       assert.ok(output.state!.messages!.length > 0);
+    });
+  });
+
+  // =========================================================================
+  // Prompt rendering across turns
+  // =========================================================================
+
+  describe('prompt rendering across turns', () => {
+    /** Run a single invocation, collecting all model requests made during it. */
+    async function runAgent(
+      agent: ReturnType<typeof defineAgent>,
+      pm: ProgrammableModel,
+      opts: {
+        init?: any;
+        inputs: any[];
+        modelResponses: any[];
+      }
+    ) {
+      const modelRequests: any[] = [];
+      let reqCounter = 0;
+
+      pm.handleResponse = async (req) => {
+        modelRequests.push(JSON.parse(JSON.stringify(req)));
+        return opts.modelResponses[reqCounter++]!;
+      };
+
+      const session = agent.streamBidi(opts.init || {});
+      for (const input of opts.inputs) {
+        session.send(input);
+      }
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const output = await session.output;
+      return { output, chunks, modelRequests };
+    }
+
+    it('system-only: system appears in model request each turn, not in stored history', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+
+      const agent = defineAgent(registry, {
+        name: 'systemOnlyAgent',
+        model: 'programmableModel',
+        system: 'You are a helpful assistant.',
+      });
+
+      const { output, modelRequests } = await runAgent(agent, pm, {
+        inputs: [
+          { messages: [{ role: 'user', content: [{ text: 'turn1' }] }] },
+          { messages: [{ role: 'user', content: [{ text: 'turn2' }] }] },
+        ],
+        modelResponses: [
+          {
+            message: { role: 'model', content: [{ text: 'reply1' }] },
+            finishReason: 'stop',
+          },
+          {
+            message: { role: 'model', content: [{ text: 'reply2' }] },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      // --- Model request assertions ---
+
+      // Turn 1: model sees [system("You are a helpful assistant."), user("turn1")]
+      const t1 = modelRequests[0].messages;
+      assert.strictEqual(
+        t1.length,
+        2,
+        'Turn 1: model should receive 2 messages'
+      );
+      assert.strictEqual(t1[0].role, 'system');
+      assert.strictEqual(t1[0].content[0].text, 'You are a helpful assistant.');
+      assert.strictEqual(t1[1].role, 'user');
+      assert.strictEqual(t1[1].content[0].text, 'turn1');
+
+      // Turn 2: model sees [system, user("turn1"), model("reply1"), user("turn2")]
+      const t2 = modelRequests[1].messages;
+      assert.strictEqual(
+        t2.length,
+        4,
+        'Turn 2: model should receive 4 messages'
+      );
+      assert.strictEqual(t2[0].role, 'system');
+      assert.strictEqual(t2[0].content[0].text, 'You are a helpful assistant.');
+      assert.strictEqual(t2[1].role, 'user');
+      assert.strictEqual(t2[1].content[0].text, 'turn1');
+      assert.strictEqual(t2[2].role, 'model');
+      assert.strictEqual(t2[2].content[0].text, 'reply1');
+      assert.strictEqual(t2[3].role, 'user');
+      assert.strictEqual(t2[3].content[0].text, 'turn2');
+
+      // No duplicate system messages
+      assert.strictEqual(t2.filter((m: any) => m.role === 'system').length, 1);
+
+      // --- Stored messages assertions ---
+      const storedMessages = output.state?.messages || [];
+      assert.strictEqual(
+        storedMessages.filter((m: any) => m.role === 'system').length,
+        0,
+        'Stored history should not contain system messages'
+      );
+      assert.strictEqual(storedMessages.length, 4);
+    });
+
+    it('system + user prompt: template user prompt appears each turn but does not accumulate', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+
+      const agent = defineAgent(registry, {
+        name: 'systemAndPromptAgent',
+        model: 'programmableModel',
+        system: 'You are a helpful assistant.',
+        prompt: 'Always respond concisely.',
+      });
+
+      const { output, modelRequests } = await runAgent(agent, pm, {
+        inputs: [
+          { messages: [{ role: 'user', content: [{ text: 'turn1' }] }] },
+          { messages: [{ role: 'user', content: [{ text: 'turn2' }] }] },
+        ],
+        modelResponses: [
+          {
+            message: { role: 'model', content: [{ text: 'reply1' }] },
+            finishReason: 'stop',
+          },
+          {
+            message: { role: 'model', content: [{ text: 'reply2' }] },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      // Turn 2: template user prompt should appear exactly once
+      const templateMsgs = modelRequests[1].messages.filter(
+        (m: any) =>
+          m.role === 'user' &&
+          m.content?.[0]?.text?.includes('Always respond concisely')
+      );
+      assert.strictEqual(templateMsgs.length, 1);
+
+      // Stored history should NOT contain system or template user prompt
+      const storedMessages = output.state?.messages || [];
+      assert.strictEqual(
+        storedMessages.filter((m: any) => m.role === 'system').length,
+        0
+      );
+      assert.strictEqual(
+        storedMessages.filter(
+          (m: any) =>
+            m.role === 'user' &&
+            m.content?.[0]?.text?.includes('Always respond concisely')
+        ).length,
+        0
+      );
+      assert.strictEqual(storedMessages.length, 4);
+    });
+
+    it('cross-invocation: system + prompt do not duplicate when state is carried over', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+
+      const agent = defineAgent(registry, {
+        name: 'crossInvAgent',
+        model: 'programmableModel',
+        system: 'You are a helpful assistant.',
+        prompt: 'Always respond concisely.',
+      });
+
+      // Invocation 1
+      const result1 = await runAgent(agent, pm, {
+        inputs: [
+          { messages: [{ role: 'user', content: [{ text: 'first' }] }] },
+        ],
+        modelResponses: [
+          {
+            message: { role: 'model', content: [{ text: 'reply1' }] },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      // Invocation 2: seed with state from invocation 1
+      const result2 = await runAgent(agent, pm, {
+        init: { state: result1.output.state },
+        inputs: [
+          { messages: [{ role: 'user', content: [{ text: 'second' }] }] },
+        ],
+        modelResponses: [
+          {
+            message: { role: 'model', content: [{ text: 'reply2' }] },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      const req2msgs = result2.modelRequests[0].messages;
+      assert.strictEqual(
+        req2msgs.filter((m: any) => m.role === 'system').length,
+        1
+      );
+      assert.strictEqual(
+        req2msgs.filter(
+          (m: any) =>
+            m.role === 'user' &&
+            m.content?.[0]?.text?.includes('Always respond concisely')
+        ).length,
+        1
+      );
+
+      // Stored messages should be clean
+      const storedMessages = result2.output.state?.messages || [];
+      assert.strictEqual(storedMessages.length, 4);
+      assert.strictEqual(
+        storedMessages.filter((m: any) => m.role === 'system').length,
+        0
+      );
+    });
+
+    it('message ordering: [system, ...history, user_prompt_from_template]', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+
+      const agent = defineAgent(registry, {
+        name: 'orderingAgent',
+        model: 'programmableModel',
+        system: 'Be helpful.',
+        prompt: 'Be concise.',
+      });
+
+      const { modelRequests } = await runAgent(agent, pm, {
+        inputs: [
+          { messages: [{ role: 'user', content: [{ text: 'q1' }] }] },
+          { messages: [{ role: 'user', content: [{ text: 'q2' }] }] },
+        ],
+        modelResponses: [
+          {
+            message: { role: 'model', content: [{ text: 'a1' }] },
+            finishReason: 'stop',
+          },
+          {
+            message: { role: 'model', content: [{ text: 'a2' }] },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      // Turn 2: render places history between system and user prompt
+      const req2msgs = modelRequests[1].messages;
+      const roles = req2msgs.map((m: any) => m.role);
+      // Expected: [system, user(q1), model(a1), user(q2), user(Be concise.)]
+      assert.deepStrictEqual(roles, [
+        'system',
+        'user',
+        'model',
+        'user',
+        'user',
+      ]);
+      // Preamble messages are tagged agentPreamble; history messages are
+      // clean (the internal _genkit_history tag is stripped before the model
+      // sees them).
+      assert.ok(
+        req2msgs[0].metadata?.agentPreamble,
+        'system is preamble-tagged'
+      );
+      assert.strictEqual(
+        req2msgs[1].metadata?.agentPreamble,
+        undefined,
+        'q1 has no preamble tag'
+      );
+      assert.strictEqual(
+        req2msgs[1].metadata?._genkit_history,
+        undefined,
+        'q1 has no history tag (stripped)'
+      );
+      assert.strictEqual(
+        req2msgs[2].metadata?._genkit_history,
+        undefined,
+        'a1 has no history tag (stripped)'
+      );
+      assert.strictEqual(
+        req2msgs[3].metadata?._genkit_history,
+        undefined,
+        'q2 has no history tag (stripped)'
+      );
+      assert.ok(
+        req2msgs[4].metadata?.agentPreamble,
+        'Be concise is preamble-tagged'
+      );
+    });
+
+    it('dotprompt {{history}}: history is inserted where the template specifies', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+
+      // Define a prompt with a dotprompt messages template that uses {{history}}
+      definePrompt(registry, {
+        name: 'historyTemplatePrompt',
+        model: 'programmableModel',
+        system: 'You are a helpful assistant.',
+        messages: `{{role "user"}}Here is the conversation so far:
+{{history}}
+Now respond to the latest message.`,
+      });
+
+      const agent = definePromptAgent(registry, {
+        promptName: 'historyTemplatePrompt',
+      });
+
+      const { output, modelRequests } = await runAgent(agent, pm, {
+        inputs: [
+          { messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+          { messages: [{ role: 'user', content: [{ text: 'how are you' }] }] },
+        ],
+        modelResponses: [
+          {
+            message: { role: 'model', content: [{ text: 'hi there' }] },
+            finishReason: 'stop',
+          },
+          {
+            message: { role: 'model', content: [{ text: 'doing well' }] },
+            finishReason: 'stop',
+          },
+        ],
+      });
+
+      // --- Turn 1 model request assertions ---
+      // Model sees: [system, user(template-before), user(hello), model(template-after)]
+      const t1 = modelRequests[0].messages;
+      assert.strictEqual(t1.length, 4, 'Turn 1: 4 messages');
+
+      assert.strictEqual(t1[0].role, 'system');
+      assert.strictEqual(t1[0].content[0].text, 'You are a helpful assistant.');
+      assert.ok(t1[0].metadata?.agentPreamble, 'T1: system is preamble');
+
+      assert.strictEqual(t1[1].role, 'user');
+      assert.ok(
+        t1[1].content[0].text.includes('Here is the conversation so far'),
+        'T1: template text before {{history}}'
+      );
+      assert.ok(
+        t1[1].metadata?.agentPreamble,
+        'T1: template-before is preamble'
+      );
+
+      assert.strictEqual(t1[2].role, 'user');
+      assert.strictEqual(t1[2].content[0].text, 'hello');
+      assert.strictEqual(
+        t1[2].metadata?.agentPreamble,
+        undefined,
+        'T1: hello is not preamble'
+      );
+      assert.strictEqual(
+        t1[2].metadata?._genkit_history,
+        undefined,
+        'T1: hello has no internal tag'
+      );
+
+      assert.strictEqual(t1[3].role, 'model');
+      assert.ok(
+        t1[3].content[0].text.includes('Now respond to the latest message'),
+        'T1: template text after {{history}}'
+      );
+      assert.ok(
+        t1[3].metadata?.agentPreamble,
+        'T1: template-after is preamble'
+      );
+
+      // --- Turn 2 model request assertions ---
+      // Model sees: [system, user(template-before), user(hello), model(hi there),
+      //              user(how are you), model(template-after)]
+      const t2 = modelRequests[1].messages;
+      assert.strictEqual(t2.length, 6, 'Turn 2: 6 messages');
+
+      assert.strictEqual(t2[0].role, 'system');
+      assert.ok(t2[0].metadata?.agentPreamble, 'T2: system is preamble');
+
+      assert.strictEqual(t2[1].role, 'user');
+      assert.ok(
+        t2[1].metadata?.agentPreamble,
+        'T2: template-before is preamble'
+      );
+
+      // History messages are embedded between template parts, clean of internal tags
+      assert.strictEqual(t2[2].role, 'user');
+      assert.strictEqual(t2[2].content[0].text, 'hello');
+      assert.strictEqual(
+        t2[2].metadata?.agentPreamble,
+        undefined,
+        'T2: hello not preamble'
+      );
+      assert.strictEqual(
+        t2[2].metadata?._genkit_history,
+        undefined,
+        'T2: hello no internal tag'
+      );
+
+      assert.strictEqual(t2[3].role, 'model');
+      assert.strictEqual(t2[3].content[0].text, 'hi there');
+      assert.strictEqual(
+        t2[3].metadata?.agentPreamble,
+        undefined,
+        'T2: hi there not preamble'
+      );
+      assert.strictEqual(
+        t2[3].metadata?._genkit_history,
+        undefined,
+        'T2: hi there no internal tag'
+      );
+
+      assert.strictEqual(t2[4].role, 'user');
+      assert.strictEqual(t2[4].content[0].text, 'how are you');
+      assert.strictEqual(
+        t2[4].metadata?.agentPreamble,
+        undefined,
+        'T2: how are you not preamble'
+      );
+
+      assert.strictEqual(t2[5].role, 'model');
+      assert.ok(
+        t2[5].content[0].text.includes('Now respond to the latest message'),
+        'T2: template-after text'
+      );
+      assert.ok(
+        t2[5].metadata?.agentPreamble,
+        'T2: template-after is preamble'
+      );
+
+      // --- Stored messages should be clean (no system, no template wrapper) ---
+      const storedMessages = output.state?.messages || [];
+      assert.strictEqual(
+        storedMessages.filter((m: any) => m.role === 'system').length,
+        0,
+        'No system in stored history'
+      );
+      // Should have the 4 conversation messages
+      assert.strictEqual(storedMessages.length, 4);
+      assert.strictEqual(storedMessages[0].content[0].text, 'hello');
+      assert.strictEqual(storedMessages[1].content[0].text, 'hi there');
+      assert.strictEqual(storedMessages[2].content[0].text, 'how are you');
+      assert.strictEqual(storedMessages[3].content[0].text, 'doing well');
     });
   });
 });
