@@ -384,11 +384,11 @@ def tool(
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
-    """Dynamically define a tool that can passed into a `generate` call. 
+    """Dynamically define a tool that can passed into a `generate` call.
 
-    Compared to `define_tool`, the `tool` constructor doesn't register the tool. 
+    Compared to `define_tool`, the `tool` constructor doesn't register the tool.
     The Tool instance cannot be referenced by name later.
-    
+
     Use when there are dynamic or ephemeral tools that need to be available
     for a particular `generate` call.
 

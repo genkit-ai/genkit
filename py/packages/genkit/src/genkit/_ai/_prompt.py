@@ -333,7 +333,9 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Args:
             input: Template variables for rendering.
         """
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        return await self._call_impl(
+            input, opts
+        )  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
 
     async def _call_impl(
         self,
