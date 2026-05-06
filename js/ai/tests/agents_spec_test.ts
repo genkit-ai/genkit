@@ -62,6 +62,7 @@ const SnapshotAssertionsSchema = z.object({
   parentId: z.string().optional(),
   status: z.string().optional(),
   stateContains: z.any().optional(),
+  errorContains: z.any().optional(),
 });
 
 const SendInvocationSchema = z.object({
@@ -618,6 +619,11 @@ async function executeGetSnapshotDataInvocation(
     if (expect.stateContains) {
       assertContains(snapshot.state, expect.stateContains, 'snapshot.state');
     }
+
+    if (expect.errorContains) {
+      assert.ok(snapshot.error, 'Expected snapshot to have error');
+      assertContains(snapshot.error, expect.errorContains, 'snapshot.error');
+    }
   }
 }
 
@@ -684,6 +690,11 @@ async function executeWaitUntilCompletedInvocation(
 
     if (expect.stateContains) {
       assertContains(snapshot.state, expect.stateContains, 'snapshot.state');
+    }
+
+    if (expect.errorContains) {
+      assert.ok(snapshot.error, 'Expected snapshot to have error');
+      assertContains(snapshot.error, expect.errorContains, 'snapshot.error');
     }
   }
 }

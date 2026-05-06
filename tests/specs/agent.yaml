@@ -401,6 +401,86 @@ tests:
         expectSnapshot:
           status: aborted
 
+  - name: server-managed agent ignores init state
+    description: >
+      When a server-managed agent receives init.state, it should be
+      ignored. Only the message sent via the input stream should appear
+      in the resulting snapshot state — no stale history from init.
+    agent: promptAgentWithStore
+    invocations:
+      - type: send
+        init:
+          state:
+            messages:
+              - { role: user, content: [{ text: stale history }] }
+            custom: { shouldBeIgnored: true }
+            artifacts: []
+        inputs:
+          - messages: [{ role: user, content: [{ text: fresh message }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: reply }] }
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: fresh message }] }
+              - { role: model, content: [{ text: reply }] }
+
+  - name: pure detach without payload
+    description: >
+      A detach-only message (no messages or toolRestarts) sent as a
+      separate input should detach immediately without processing an
+      extra turn. The agent should return a pending snapshot.
+    agent: customAgentBlocking
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: work }] }]
+          - detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: pending
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+  - name: failed snapshot includes error details
+    description: >
+      When a detached agent fails in the background, the snapshot
+      should include error details with the failure message.
+    agent: customAgentFailing
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: fail }] }]
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          errorContains:
+            message: intentional failure
+
   - name: abort non-existent snapshot
     description: >
       Aborting a snapshot that does not exist should not throw and

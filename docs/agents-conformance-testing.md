@@ -105,6 +105,7 @@ invocations.
 | `parentId` | `string` | Expected `parentId`. Supports `{{name}}` references. |
 | `status` | `string` | Expected `status` (e.g. `"done"`, `"pending"`, `"failed"`, `"aborted"`). |
 | `stateContains` | `SessionState` (partial) | Subset match on `snapshot.state`. |
+| `errorContains` | `object` (partial) | If present, asserts that `snapshot.error` contains (at minimum) these fields. Uses "contains" / subset matching. |
 
 ---
 
@@ -220,7 +221,7 @@ _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
 ## 5. Test Coverage
 
-The spec currently covers the following categories (16 tests total):
+The spec currently covers the following categories (19 tests total):
 
 | Category | Tests |
 |----------|-------|
@@ -231,8 +232,10 @@ The spec currently covers the following categories (16 tests total):
 | Interrupt & resume | Snapshot-based tool interrupt resume |
 | Snapshot chaining | Parent chain across invocations |
 | Client-managed state | State seeding across invocations |
-| Detach | Background completion, background failure |
+| Server-managed state | Init state ignored for server-managed agents |
+| Detach | Background completion, background failure, pure detach without payload |
 | Abort | Pending agent, completed agent, non-existent snapshot |
+| Error details | Failed snapshot includes error message |
 | Artifacts | Streamed chunks, deduplication by name |
 | Custom state | Update during execution, persistence across invocations |
 
