@@ -1,0 +1,289 @@
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# This file describes the behavioral specification for the Agent API.
+# It is designed to be consumed by conformance test harnesses in any
+# language (JS, Go, Dart, Python, etc.) to ensure cross-language
+# compatibility of the Agent abstraction.
+#
+# See docs/agents-conformance-testing.md for harness requirements and
+# full spec format reference.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # Basic single-turn
+  # ---------------------------------------------------------------------------
+  - name: simple single turn - client managed
+    description: >
+      A single user message is sent to a client-managed agent.
+      The agent generates one model response and returns it along with
+      the accumulated session state.
+    agent: promptAgent
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello back }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: hello back }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hi }] }
+              - { role: model, content: [{ text: hello back }] }
+
+  - name: simple single turn - server managed
+    description: >
+      A single user message is sent to a server-managed agent.
+      The output should contain a snapshotId and no inline state.
+    agent: promptAgentWithStore
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello back }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: hello back }] }
+          hasSnapshotId: true
+
+  # ---------------------------------------------------------------------------
+  # Streaming
+  # ---------------------------------------------------------------------------
+  - name: streaming model chunks
+    description: >
+      Model emits streaming chunks during generation. They should be
+      forwarded as modelChunk stream events, followed by a turnEnd.
+    agent: promptAgent
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        streamChunks:
+          - [
+              { index: 0, role: model, content: [{ text: 'hel' }] },
+              { index: 0, role: model, content: [{ text: 'lo' }] },
+            ]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        expectChunks:
+          - modelChunk: { index: 0, role: model, content: [{ text: 'hel' }] }
+          - modelChunk: { index: 0, role: model, content: [{ text: 'lo' }] }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: hello }] }
+
+  # ---------------------------------------------------------------------------
+  # Multi-turn in one invocation
+  # ---------------------------------------------------------------------------
+  - name: multi-turn in one invocation
+    description: >
+      Two user messages are sent sequentially in one invocation.
+      Both should be processed as separate turns. History must
+      accumulate so the second model call sees the first exchange.
+    agent: promptAgent
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: turn1 }] }]
+          - messages: [{ role: user, content: [{ text: turn2 }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: {}
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: reply2 }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: turn1 }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: turn2 }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Tool calling
+  # ---------------------------------------------------------------------------
+  - name: agent calls tools
+    description: >
+      Model issues a tool request, tool executes automatically, and
+      the tool response is fed back to the model which then produces
+      a final text response.
+    agent: promptAgentWithTools
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: do it }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: ref1 }
+          - message: { role: model, content: [{ text: done }] }
+            finishReason: stop
+        expectChunks:
+          - modelChunk:
+              role: tool
+              content:
+                - toolResponse:
+                    { name: testTool, ref: ref1, output: 'tool called' }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do it }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: ref1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref1 }
+              - { role: model, content: [{ text: done }] }
+
+  # ---------------------------------------------------------------------------
+  # Interrupt and resume (multi-invocation)
+  # ---------------------------------------------------------------------------
+  - name: interrupt and resume
+    description: >
+      Model returns an interrupt tool request. The agent saves state
+      and returns the tool request as the output message. The client
+      then resumes with a new invocation providing the tool response
+      via snapshotId. The model receives the full history including
+      the tool response and produces a final answer.
+    agent: promptAgentWithInterrupt
+    invocations:
+      # Phase 1: model interrupts
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hello }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    {
+                      name: interruptTool,
+                      input: { query: 'yes?' },
+                      ref: '123',
+                    }
+            finishReason: stop
+        expectOutput:
+          message:
+            content:
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'yes?' }, ref: '123' }
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      # Phase 2: client resumes with tool response
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages:
+              - role: tool
+                content:
+                  - toolResponse:
+                      {
+                        name: interruptTool,
+                        ref: '123',
+                        output: { answer: 'yes indeed' },
+                      }
+        modelResponses:
+          - message: { role: model, content: [{ text: completed }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: completed }] }
+
+  # ---------------------------------------------------------------------------
+  # Snapshot chaining
+  # ---------------------------------------------------------------------------
+  - name: snapshot chaining across invocations
+    description: >
+      Two sequential invocations against a server-managed agent.
+      The second invocation resumes from the first snapshot. After
+      both complete, getSnapshotData verifies the parent chain and
+      accumulated history.
+    agent: promptAgentWithStore
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Client-managed state across invocations
+  # ---------------------------------------------------------------------------
+  - name: client-managed state across invocations
+    description: >
+      Two sequential invocations against a client-managed agent.
+      The second invocation seeds session state from the first
+      invocation's output state. History should accumulate.
+    agent: promptAgent
+    invocations:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureState: state1
+
+      - type: send
+        init: { state: '{{state1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: reply2 }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
