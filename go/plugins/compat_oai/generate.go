@@ -18,11 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/shared"
 )
 
@@ -65,14 +68,18 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 	}
 
 	oaiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+
+	filterAll := func(p *ai.Part) bool { return true }
+	filterReasoning := func(p *ai.Part) bool { return p.IsReasoning() }
+	filterExceptReasoning := func(p *ai.Part) bool { return !p.IsReasoning() }
+
 	for _, msg := range messages {
-		content := g.concatenateContent(msg.Content)
 		switch msg.Role {
 		case ai.RoleSystem:
+			content := g.concatenateContent(msg.Content, filterAll)
 			oaiMessages = append(oaiMessages, openai.SystemMessage(content))
 		case ai.RoleModel:
 			am := openai.ChatCompletionAssistantMessageParam{}
-			am.Content.OfString = param.NewOpt(content)
 			toolCalls, err := convertToolCalls(msg.Content)
 			if err != nil {
 				g.err = err
@@ -81,6 +88,21 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 			if len(toolCalls) > 0 {
 				am.ToolCalls = (toolCalls)
 			}
+
+			// Store reasoning in extra fields if present
+			reasoningKey, ok := g.firstReasoningMetadataKey(msg.Content)
+			reasoning := g.concatenateContent(msg.Content, filterReasoning)
+			var content string
+			if ok && reasoning != "" {
+				am.SetExtraFields(map[string]any{
+					reasoningKey: reasoning,
+				})
+				content = g.concatenateContent(msg.Content, filterExceptReasoning)
+			} else {
+				content = g.concatenateContent(msg.Content, filterAll)
+			}
+
+			am.Content.OfString = param.NewOpt(content)
 			oaiMessages = append(oaiMessages, openai.ChatCompletionMessageParamUnion{
 				OfAssistant: &am,
 			})
@@ -266,13 +288,29 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	return format
 }
 
-// concatenateContent concatenates text content into a single string
-func (g *ModelGenerator) concatenateContent(parts []*ai.Part) string {
-	content := ""
+// concatenateContent concatenates text content into a single string.
+// Only parts matching the filter are included.
+func (g *ModelGenerator) concatenateContent(parts []*ai.Part, filter func(*ai.Part) bool) string {
+	var sb strings.Builder
 	for _, part := range parts {
-		content += part.Text
+		if filter(part) {
+			sb.WriteString(part.Text)
+		}
 	}
-	return content
+	return sb.String()
+}
+
+// firstReasoningMetadataKey returns the key which is used for the reasoning values
+func (g *ModelGenerator) firstReasoningMetadataKey(parts []*ai.Part) (string, bool) {
+	for _, part := range parts {
+		if !part.IsReasoning() || part.Metadata == nil {
+			continue
+		}
+		if key, ok := part.Metadata["reasoningKey"].(string); ok && key != "" {
+			return key, true
+		}
+	}
+	return "", false
 }
 
 // generateStream generates a streaming model response
@@ -280,35 +318,13 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
 	defer stream.Close()
 
-	// Use openai-go's accumulator to collect the complete response
-	acc := &openai.ChatCompletionAccumulator{}
+	collector := streamResponseCollector{}
 
 	for stream.Next() {
 		chunk := stream.Current()
-		acc.AddChunk(chunk)
-
-		if len(chunk.Choices) == 0 {
+		modelChunk, ok := collector.AddChunk(chunk)
+		if !ok {
 			continue
-		}
-
-		// Create chunk for callback
-		modelChunk := &ai.ModelResponseChunk{}
-
-		// Handle content delta
-		if chunk.Choices[0].Delta.Content != "" {
-			modelChunk.Content = append(modelChunk.Content, ai.NewTextPart(chunk.Choices[0].Delta.Content))
-		}
-
-		// Handle tool call deltas
-		for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
-			// Send the incremental tool call part in the chunk
-			if toolCall.Function.Name != "" || toolCall.Function.Arguments != "" {
-				modelChunk.Content = append(modelChunk.Content, ai.NewToolRequestPart(&ai.ToolRequest{
-					Name:  toolCall.Function.Name,
-					Input: toolCall.Function.Arguments,
-					Ref:   toolCall.ID,
-				}))
-			}
 		}
 
 		// Call the chunk handler with incremental data
@@ -323,8 +339,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 		return nil, fmt.Errorf("stream error: %w", err)
 	}
 
-	// Convert accumulated ChatCompletion to ai.ModelResponse
-	return convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	return collector.ToModelResponse()
 }
 
 // convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
@@ -421,6 +436,13 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*a
 		}))
 	}
 
+	// Add reasoning content if present (for Kimi/Moonshot compatibility)
+	// Check ExtraFields for reasoning fields when tool calls are present
+	reasoning, ok := firstReasoningField(choice.Message.JSON.ExtraFields)
+	if ok {
+		resp.Message.Content = append([]*ai.Part{reasoning.ToPart()}, resp.Message.Content...)
+	}
+
 	// Store additional metadata in custom field if needed
 	if completion.SystemFingerprint != "" {
 		resp.Custom = map[string]any{
@@ -504,4 +526,129 @@ func anyToJSONString(data any) (string, error) {
 		return "", fmt.Errorf("failed to marshal any to JSON string: data, %#v %w", data, err)
 	}
 	return string(jsonBytes), nil
+}
+
+var reasoningFieldNames = []string{
+	"reasoning_content",
+	"reasoning",
+	"reasoning_text",
+}
+
+type reasoningField struct {
+	key   string
+	value string
+}
+
+// firstReasoningField returns the first non-empty reasoning field from an
+// OpenAI-compatible response using the compatibility order in reasoningFieldNames.
+func firstReasoningField(fields map[string]respjson.Field) (reasoningField, bool) {
+	for _, name := range reasoningFieldNames {
+		raw := fields[name].Raw()
+		if raw == "" || raw == "null" {
+			continue
+		}
+
+		var val string
+		if err := json.Unmarshal([]byte(raw), &val); err != nil {
+			slog.Debug("could not unmarshal reasoning field", "err", err)
+			return reasoningField{}, false
+		}
+		if val != "" {
+			return reasoningField{key: name, value: val}, true
+		}
+	}
+	return reasoningField{}, false
+}
+
+// ToPart converts the reasoning field to an ai.Part with appropriate metadata.
+func (rf reasoningField) ToPart() *ai.Part {
+	part := ai.NewReasoningPart(rf.value, nil)
+	if rf.key == "" {
+		return part
+	}
+	if part.Metadata == nil {
+		part.Metadata = make(map[string]any)
+	}
+	part.Metadata["reasoningKey"] = rf.key
+	return part
+}
+
+type streamResponseCollector struct {
+	accumulator openai.ChatCompletionAccumulator
+	reasoning   reasoningAccumulator
+}
+
+func (c *streamResponseCollector) AddChunk(chunk openai.ChatCompletionChunk) (*ai.ModelResponseChunk, bool) {
+	c.accumulator.AddChunk(chunk)
+
+	if len(chunk.Choices) == 0 {
+		return nil, false
+	}
+
+	// Create chunk for callback
+	modelChunk := &ai.ModelResponseChunk{}
+
+	if chunk.Choices[0].Delta.Content != "" {
+		modelChunk.Content = append(modelChunk.Content, ai.NewTextPart(chunk.Choices[0].Delta.Content))
+	}
+
+	for _, toolCall := range chunk.Choices[0].Delta.ToolCalls {
+		// Send the incremental tool call part in the chunk
+		if toolCall.Function.Name != "" || toolCall.Function.Arguments != "" {
+			modelChunk.Content = append(modelChunk.Content, ai.NewToolRequestPart(&ai.ToolRequest{
+				Name:  toolCall.Function.Name,
+				Input: toolCall.Function.Arguments,
+				Ref:   toolCall.ID,
+			}))
+		}
+	}
+
+	reasoningPart, ok := c.reasoning.Add(chunk.Choices[0].Delta.JSON.ExtraFields)
+	if ok {
+		modelChunk.Content = append(modelChunk.Content, reasoningPart)
+	}
+
+	return modelChunk, true
+}
+
+func (c *streamResponseCollector) ToModelResponse() (*ai.ModelResponse, error) {
+	c.reasoning.MergeInto(&c.accumulator.ChatCompletion)
+	return convertChatCompletionToModelResponse(&c.accumulator.ChatCompletion)
+}
+
+type reasoningAccumulator struct {
+	// key should be present if content not empty
+	key     string
+	content strings.Builder
+}
+
+// Add accumulates reasoning content if present and returns added part
+func (ra *reasoningAccumulator) Add(fields map[string]respjson.Field) (*ai.Part, bool) {
+	reasoning, ok := firstReasoningField(fields)
+	if !ok {
+		return nil, false
+	}
+	ra.content.WriteString(reasoning.value)
+	ra.key = reasoning.key
+	return reasoning.ToPart(), true
+}
+
+// MergeInto adds accumulated reasoning to the givem completion
+func (ra *reasoningAccumulator) MergeInto(completion *openai.ChatCompletion) {
+	if completion == nil || len(completion.Choices) == 0 || ra.content.Len() == 0 {
+		return
+	}
+
+	fields := completion.Choices[0].Message.JSON.ExtraFields
+	if fields == nil {
+		fields = make(map[string]respjson.Field)
+		completion.Choices[0].Message.JSON.ExtraFields = fields
+	}
+
+	raw, err := json.Marshal(ra.content.String())
+	if err != nil {
+		slog.Debug("could not marshal reasoning", "err", err)
+		return
+	}
+	fields[ra.key] = respjson.NewField(string(raw))
 }
