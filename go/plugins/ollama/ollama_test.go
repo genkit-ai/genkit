@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -494,4 +495,78 @@ func TestTranslateChatResponse(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetModelCapabilities(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/show" {
+			var req map[string]string
+			json.NewDecoder(r.Body).Decode(&req)
+			caps := map[string][]string{
+				"gemma4:e2b":  {"completion", "vision", "audio", "tools", "thinking"},
+				"llama3.2":    {"completion", "tools"},
+				"nomic-embed": {"embedding"},
+			}
+			json.NewEncoder(w).Encode(map[string]any{"capabilities": caps[req["model"]]})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	o := &Ollama{ServerAddress: server.URL, client: &http.Client{}, initted: true}
+
+	t.Run("gemma4 reports tools capability", func(t *testing.T) {
+		caps := o.getModelCapabilities(context.Background(), "gemma4:e2b")
+		if !slices.Contains(caps, "tools") {
+			t.Errorf("expected 'tools' in capabilities, got %v", caps)
+		}
+	})
+
+	t.Run("embed model has no tools", func(t *testing.T) {
+		caps := o.getModelCapabilities(context.Background(), "nomic-embed")
+		if slices.Contains(caps, "tools") {
+			t.Error("embed model should not have tools capability")
+		}
+	})
+
+	t.Run("unknown model returns empty", func(t *testing.T) {
+		caps := o.getModelCapabilities(context.Background(), "unknown-model")
+		if len(caps) > 0 {
+			t.Errorf("expected empty capabilities for unknown model, got %v", caps)
+		}
+	})
+}
+
+func TestModelSupportsFromCapabilities(t *testing.T) {
+	t.Run("dynamic capabilities with tools and vision", func(t *testing.T) {
+		s := modelSupportsFromCapabilities([]string{"completion", "vision", "tools"}, "gemma4")
+		if !s.Tools {
+			t.Error("expected Tools=true")
+		}
+		if !s.Media {
+			t.Error("expected Media=true (vision)")
+		}
+	})
+
+	t.Run("no tools in capabilities", func(t *testing.T) {
+		s := modelSupportsFromCapabilities([]string{"completion"}, "some-model")
+		if s.Tools {
+			t.Error("expected Tools=false")
+		}
+	})
+
+	t.Run("fallback to static list for qwen2.5", func(t *testing.T) {
+		s := modelSupportsFromCapabilities(nil, "qwen2.5")
+		if !s.Tools {
+			t.Error("expected Tools=true from static fallback")
+		}
+	})
+
+	t.Run("fallback for unknown model", func(t *testing.T) {
+		s := modelSupportsFromCapabilities(nil, "brand-new-model")
+		if s.Tools {
+			t.Error("expected Tools=false for unknown model")
+		}
+	})
 }
