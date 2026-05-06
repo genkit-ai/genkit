@@ -316,6 +316,15 @@ export class SessionRunner<State = unknown> {
 }
 
 /**
+ * Optional transform applied to session state before it is exposed to the
+ * client (e.g. in `AgentOutput.state` or via `getSnapshotData`).  This lets
+ * agents redact sensitive fields or reshape the state for the client.
+ */
+export type ClientStateTransform<S = unknown> = (
+  state: SessionState<S>
+) => SessionState;
+
+/**
  * Function handler definition for custom agent actions.
  */
 export type AgentFn<Stream, State> = (
@@ -366,9 +375,21 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     description?: string;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
+    clientStateTransform?: ClientStateTransform<State>;
   },
   fn: AgentFn<Stream, State>
 ): Agent<State> {
+  // Helper that applies the optional transform before exposing state to the
+  // client.  When no transform is configured it returns the raw state.
+  const toClientState = (
+    state: SessionState<State>
+  ): SessionState | undefined => {
+    if (config.clientStateTransform) {
+      return config.clientStateTransform(state);
+    }
+    return state as SessionState;
+  };
+
   const primaryAction = defineBidiAction(
     registry,
     {
@@ -556,7 +577,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         return {
           artifacts: [],
           snapshotId: detachedSnapshotId!,
-          state: config.store ? undefined : session.getState(),
+          state: config.store ? undefined : toClientState(session.getState()),
         };
       }
 
@@ -566,10 +587,24 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         artifacts: result.artifacts || [],
         message: result.message,
         snapshotId: finalSnapshotId,
-        state: config.store ? undefined : session.getState(),
+        state: config.store ? undefined : toClientState(session.getState()),
       };
     }
   );
+
+  // Helper that applies the clientStateTransform to a snapshot's state,
+  // returning a new snapshot object with the transformed state.
+  const toClientSnapshot = (
+    snapshot: SessionSnapshot<State>
+  ): SessionSnapshot => {
+    if (!config.clientStateTransform) {
+      return snapshot as SessionSnapshot;
+    }
+    return {
+      ...snapshot,
+      state: config.clientStateTransform(snapshot.state),
+    };
+  };
 
   const getSnapshotDataAction = defineAction(
     registry,
@@ -587,9 +622,10 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      return await config.store.getSnapshot(snapshotId, {
+      const snapshot = await config.store.getSnapshot(snapshotId, {
         context: getContext(),
       });
+      return snapshot ? toClientSnapshot(snapshot) : undefined;
     }
   );
 
@@ -633,7 +669,8 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      return await config.store.getSnapshot(snapshotId, options);
+      const snapshot = await config.store.getSnapshot(snapshotId, options);
+      return snapshot ? toClientSnapshot(snapshot) : undefined;
     },
     abort: async (snapshotId: string, options?: SessionStoreOptions) => {
       if (!config.store) {
@@ -671,6 +708,7 @@ export function definePromptAgent<State = unknown>(
     promptName: string;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
+    clientStateTransform?: ClientStateTransform<State>;
   }
 ) {
   let cachedPromptAction: PromptAction | undefined;
@@ -763,6 +801,7 @@ export function definePromptAgent<State = unknown>(
       name: config.promptName,
       store: config.store,
       snapshotCallback: config.snapshotCallback,
+      clientStateTransform: config.clientStateTransform,
     },
     fn
   );
@@ -779,6 +818,7 @@ export function definePromptAgent<State = unknown>(
 export interface AgentConfig<State = unknown> extends PromptConfig {
   store?: SessionStore<State>;
   snapshotCallback?: SnapshotCallback<State>;
+  clientStateTransform?: ClientStateTransform<State>;
 }
 
 /**
@@ -796,7 +836,8 @@ export function defineAgent<State = unknown>(
   config: AgentConfig<State>
 ): Agent<State> {
   // Extract prompt-specific fields from the combined config.
-  const { store, snapshotCallback, ...promptConfig } = config;
+  const { store, snapshotCallback, clientStateTransform, ...promptConfig } =
+    config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
@@ -806,5 +847,6 @@ export function defineAgent<State = unknown>(
     promptName: promptConfig.name,
     store,
     snapshotCallback,
+    clientStateTransform,
   });
 }

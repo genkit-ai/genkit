@@ -24,6 +24,7 @@ import { definePrompt } from '../src/prompt.js';
 import {
   AgentStreamChunk,
   SessionRunner,
+  defineAgent,
   defineCustomAgent,
   definePromptAgent,
 } from '../src/session-flow.js';
@@ -1200,6 +1201,342 @@ describe('Agent', () => {
       assert.strictEqual(processedCount, 2);
 
       session.close();
+    });
+  });
+
+  describe('clientStateTransform', () => {
+    it('should transform state in AgentOutput for client-managed agents', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent<
+        unknown,
+        { publicField: string; secretField: string }
+      >(
+        registry,
+        {
+          name: 'clientTransformTest',
+          clientStateTransform: (state) => ({
+            custom: { publicField: (state.custom as any)?.publicField },
+            // Strip messages and artifacts
+          }),
+        },
+        async (sess) => {
+          sess.session.updateCustom(() => ({
+            publicField: 'visible',
+            secretField: 'top-secret',
+          }));
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.ok(output.state);
+      assert.strictEqual((output.state!.custom as any).publicField, 'visible');
+      assert.strictEqual((output.state!.custom as any).secretField, undefined);
+      // Messages were stripped by the transform
+      assert.strictEqual(output.state!.messages, undefined);
+    });
+
+    it('should return full state when no clientStateTransform is provided', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent<
+        unknown,
+        { publicField: string; secretField: string }
+      >(registry, { name: 'noTransformTest' }, async (sess) => {
+        sess.session.updateCustom(() => ({
+          publicField: 'visible',
+          secretField: 'top-secret',
+        }));
+        await sess.run(async () => {});
+        return {
+          artifacts: [],
+          message: { role: 'model', content: [{ text: 'done' }] },
+        };
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.ok(output.state);
+      assert.strictEqual((output.state!.custom as any).publicField, 'visible');
+      assert.strictEqual(
+        (output.state!.custom as any).secretField,
+        'top-secret'
+      );
+      // Messages should be present
+      assert.ok(output.state!.messages);
+      assert.strictEqual(output.state!.messages!.length, 1);
+    });
+
+    it('should transform snapshot state in getSnapshotData for server-managed agents', async () => {
+      const store = new InMemorySessionStore<{
+        publicField: string;
+        secretField: string;
+      }>();
+
+      const flow = defineCustomAgent<
+        unknown,
+        { publicField: string; secretField: string }
+      >(
+        new Registry(),
+        {
+          name: 'snapshotTransformTest',
+          store,
+          clientStateTransform: (state) => ({
+            custom: { publicField: (state.custom as any)?.publicField },
+          }),
+        },
+        async (sess) => {
+          sess.session.updateCustom(() => ({
+            publicField: 'visible',
+            secretField: 'top-secret',
+          }));
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+      assert.ok(output.snapshotId);
+
+      // getSnapshotData should return transformed state
+      const snapshot = await flow.getSnapshotData(output.snapshotId!);
+      assert.ok(snapshot);
+      assert.strictEqual(
+        (snapshot!.state.custom as any).publicField,
+        'visible'
+      );
+      assert.strictEqual(
+        (snapshot!.state.custom as any).secretField,
+        undefined
+      );
+      // Messages were stripped
+      assert.strictEqual(snapshot!.state.messages, undefined);
+
+      // But the raw store should still have the full state
+      const rawSnapshot = await store.getSnapshot(output.snapshotId!);
+      assert.ok(rawSnapshot);
+      assert.strictEqual(rawSnapshot!.state.custom?.secretField, 'top-secret');
+      assert.ok(rawSnapshot!.state.messages);
+    });
+
+    it('should transform snapshot state in getSnapshotDataAction for server-managed agents', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore<{
+        publicField: string;
+        secretField: string;
+      }>();
+
+      const flow = defineCustomAgent<
+        unknown,
+        { publicField: string; secretField: string }
+      >(
+        registry,
+        {
+          name: 'snapshotActionTransformTest',
+          store,
+          clientStateTransform: (state) => ({
+            custom: { publicField: (state.custom as any)?.publicField },
+          }),
+        },
+        async (sess) => {
+          sess.session.updateCustom(() => ({
+            publicField: 'visible',
+            secretField: 'top-secret',
+          }));
+          await sess.run(async () => {});
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+      assert.ok(output.snapshotId);
+
+      // Invoke the companion action directly
+      const actionResult = await flow.getSnapshotDataAction(output.snapshotId!);
+      assert.ok(actionResult);
+      assert.strictEqual(
+        (actionResult as any).state.custom.publicField,
+        'visible'
+      );
+      assert.strictEqual(
+        (actionResult as any).state.custom.secretField,
+        undefined
+      );
+    });
+
+    it('should transform state in detached output for client-managed agents', async () => {
+      const store = new InMemorySessionStore<{
+        publicField: string;
+        secretField: string;
+      }>();
+      let resolvePromise: () => void = () => {};
+      const releasePromise = new Promise<void>((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      // Client-managed (no store in config), but we need a store for detach;
+      // use a server-managed config to test detach transform path
+      const flow = defineCustomAgent<
+        unknown,
+        { publicField: string; secretField: string }
+      >(
+        new Registry(),
+        {
+          name: 'detachTransformTest',
+          store,
+          clientStateTransform: (state) => ({
+            custom: { publicField: (state.custom as any)?.publicField },
+          }),
+        },
+        async (sess) => {
+          sess.session.updateCustom(() => ({
+            publicField: 'visible',
+            secretField: 'top-secret',
+          }));
+          await sess.run(async () => {
+            await releasePromise;
+          });
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        detach: true,
+      });
+
+      const output = await session.output;
+      assert.ok(output.snapshotId);
+      // Server-managed agents don't return state in output (state is undefined)
+      // but the snapshot should have the transformed state
+      const snapshot = await flow.getSnapshotData(output.snapshotId!);
+      assert.ok(snapshot);
+      assert.strictEqual(
+        (snapshot!.state.custom as any).publicField,
+        'visible'
+      );
+      assert.strictEqual(
+        (snapshot!.state.custom as any).secretField,
+        undefined
+      );
+
+      resolvePromise();
+      session.close();
+    });
+
+    it('should pass clientStateTransform through definePromptAgent', async () => {
+      const registry = new Registry();
+      defineEchoModel(registry);
+      definePrompt(registry, {
+        name: 'transformPromptAgent',
+        model: 'echoModel',
+        config: { temperature: 1 },
+      });
+
+      const flow = definePromptAgent<{ secret: string }>(registry, {
+        promptName: 'transformPromptAgent',
+        clientStateTransform: (state) => ({
+          // strip custom state entirely, keep messages
+          messages: state.messages,
+        }),
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.ok(output.state);
+      // Custom state should be stripped
+      assert.strictEqual(output.state!.custom, undefined);
+      // Messages should be present
+      assert.ok(output.state!.messages);
+      assert.ok(output.state!.messages!.length > 0);
+    });
+
+    it('should pass clientStateTransform through defineAgent', async () => {
+      const registry = new Registry();
+      defineEchoModel(registry);
+
+      const flow = defineAgent<{ secret: string }>(registry, {
+        name: 'transformDefineAgent',
+        model: 'echoModel',
+        config: { temperature: 1 },
+        clientStateTransform: (state) => ({
+          // strip custom state entirely, keep messages
+          messages: state.messages,
+        }),
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.ok(output.state);
+      // Custom state should be stripped
+      assert.strictEqual(output.state!.custom, undefined);
+      // Messages should be present
+      assert.ok(output.state!.messages);
+      assert.ok(output.state!.messages!.length > 0);
     });
   });
 });
