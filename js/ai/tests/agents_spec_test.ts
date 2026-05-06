@@ -85,7 +85,9 @@ const GetSnapshotDataInvocationSchema = z.object({
 const AbortInvocationSchema = z.object({
   type: z.literal('abort'),
   snapshotId: z.string(),
-  expectPreviousStatus: z.string().optional(),
+  // YAML `~` (null) means "expect undefined/absent". A string value means
+  // "expect exactly this status".
+  expectPreviousStatus: z.string().nullable().optional(),
 });
 
 const WaitUntilCompletedInvocationSchema = z.object({
@@ -238,11 +240,13 @@ function assertContainsSubsequence(
 // ---------------------------------------------------------------------------
 
 /**
- * Recursively strips undefined and null values from an object/array for clean
- * comparison.
+ * Recursively strips undefined values from an object/array for clean
+ * comparison. Note: `null` is preserved — stripping it could mask real
+ * differences (e.g. a field explicitly set to `null` vs absent).
  */
 function deepStrip(value: any): any {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined) return undefined;
+  if (value === null) return null;
   if (Array.isArray(value)) {
     return value.map(deepStrip);
   }
@@ -278,6 +282,10 @@ function setupHarness(
     async () => 'tool called'
   );
 
+  // interruptTool is registered via the `interrupt()` helper rather than
+  // `defineTool()` because it uses the interrupt mechanism (pausing execution
+  // and returning the tool request to the client for external resolution).
+  // The helper returns an action definition that must be manually registered.
   const interruptToolDef = interrupt({
     name: 'interruptTool',
     description: 'An interrupt tool',
@@ -625,11 +633,15 @@ async function executeAbortInvocation(
 
   const previousStatus = await agent.abort(snapshotId);
 
-  if (resolved.expectPreviousStatus !== undefined) {
+  // The `expectPreviousStatus` key being present (even as null/~) means we
+  // should assert.  YAML `~` maps to JS `null`; agent.abort() returns
+  // `undefined` for non-existent snapshots — treat both as "absent".
+  if ('expectPreviousStatus' in resolved) {
+    const expected = resolved.expectPreviousStatus ?? undefined;
     assert.strictEqual(
       previousStatus,
-      resolved.expectPreviousStatus,
-      `Expected previous status '${resolved.expectPreviousStatus}', got '${previousStatus}'`
+      expected,
+      `Expected previous status '${expected}', got '${previousStatus}'`
     );
   }
 }

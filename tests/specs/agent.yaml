@@ -82,6 +82,10 @@ tests:
           - turnEnd: {}
         expectOutput:
           message: { role: model, content: [{ text: hello }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hi }] }
+              - { role: model, content: [{ text: hello }] }
 
   # ---------------------------------------------------------------------------
   # Multi-turn in one invocation
@@ -134,6 +138,7 @@ tests:
               role: model
               content:
                 - toolRequest: { name: testTool, input: {}, ref: ref1 }
+            finishReason: stop
           - message: { role: model, content: [{ text: done }] }
             finishReason: stop
         expectChunks:
@@ -398,11 +403,13 @@ tests:
 
   - name: abort non-existent snapshot
     description: >
-      Aborting a snapshot that does not exist should not throw.
+      Aborting a snapshot that does not exist should not throw and
+      should return no previous status.
     agent: promptAgentWithStore
     invocations:
       - type: abort
         snapshotId: non-existent-id
+        expectPreviousStatus: ~
 
   # ---------------------------------------------------------------------------
   # Artifacts

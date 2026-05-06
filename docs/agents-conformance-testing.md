@@ -133,8 +133,8 @@ Only simple `{{name}}` syntax is supported — no dot-paths or expressions.
 
 | Assertion Type | Semantics |
 |----------------|-----------|
-| `expectChunks` | **Strict**: ordered deep-equality comparison of the full chunk list. |
-| `stateContains` | **Partial**: each specified field must be present and match. Additional fields in the actual state are ignored. For `messages`, the listed messages must appear in order as a contiguous subsequence. |
+| `expectChunks` | **Semi-strict**: the actual and expected chunk lists must have the same length and order. Individual chunks are matched with type-aware logic: `turnEnd` chunks only assert the key is present (the `snapshotId` is dynamic); `modelChunk` and `artifact` chunks use partial/contains matching on their payload. |
+| `stateContains` | **Partial**: each specified field must be present and match. Additional fields in the actual state are ignored. For `messages`, the listed messages must appear in the same relative order but need not be contiguous (ordered subsequence matching). |
 | `artifactsContain` | **Partial**: each specified artifact must be present (matched by name). |
 | `message` | **Strict**: deep-equality on the message object. |
 | `hasSnapshotId` | **Boolean**: asserts presence of a non-empty string. |
@@ -203,14 +203,16 @@ them but the harness controls responses).
 
 ## 4. Running Tests
 
-### JavaScript
+### JavaScript ✅
+
+The JS harness is the current reference implementation.
 
 ```bash
 cd js/ai
 npx tsx --test tests/agents_spec_test.ts
 ```
 
-### Go
+### Go ⏳
 
 _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
