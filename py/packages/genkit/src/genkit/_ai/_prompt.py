@@ -42,7 +42,6 @@ from genkit._ai._generate import (
     tools_to_action_names,
 )
 from genkit._ai._model import (
-    Message,
     ModelMiddleware,
     ModelRequest,
     ModelResponse,
@@ -53,7 +52,7 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, Streaming
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._model import Document, GenerateActionOptions, ModelConfig
+from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
@@ -88,12 +87,34 @@ class OutputOptions(TypedDict, total=False):
     constrained: bool | None
 
 
-class ResumeOptions(TypedDict, total=False):
-    """Options for resuming generation after a tool interrupt."""
+def _normalize_resume_respond_parts(
+    value: ToolResponsePart | list[ToolResponsePart] | None,
+) -> list[ToolResponsePart] | None:
+    if value is None:
+        return None
+    return list(value) if isinstance(value, list) else [value]
 
-    respond: ToolResponsePart | list[ToolResponsePart] | None
-    restart: ToolRequestPart | list[ToolRequestPart] | None
-    metadata: dict[str, Any] | None
+
+def _normalize_resume_restart_parts(
+    value: ToolRequestPart | list[ToolRequestPart] | None,
+) -> list[ToolRequestPart] | None:
+    if value is None:
+        return None
+    return list(value) if isinstance(value, list) else [value]
+
+
+def resume_options_to_resume(
+    *,
+    resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
+    resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+    resume_metadata: dict[str, Any] | None = None,
+) -> Resume | None:
+    """Build wire Resume from flat keyword options (``generate`` / prompts)."""
+    respond = _normalize_resume_respond_parts(resume_respond)
+    restart = _normalize_resume_restart_parts(resume_restart)
+    if respond is None and restart is None and resume_metadata is None:
+        return None
+    return Resume(respond=respond, restart=restart, metadata=resume_metadata)
 
 
 class PromptGenerateOptions(TypedDict, total=False):
@@ -107,7 +128,9 @@ class PromptGenerateOptions(TypedDict, total=False):
     resources: list[str] | None
     tool_choice: ToolChoice | None
     output: OutputOptions | None
-    resume: ResumeOptions | None
+    resume_respond: ToolResponsePart | list[ToolResponsePart] | None
+    resume_restart: ToolRequestPart | list[ToolRequestPart] | None
+    resume_metadata: dict[str, Any] | None
     return_tool_requests: bool | None
     max_turns: int | None
     on_chunk: ModelStreamingCallback | None
@@ -192,7 +215,9 @@ class PromptConfig(BaseModel):
     tool_choice: ToolChoice | None = None
     use: list[ModelMiddleware] | None = None
     docs: list[Document] | None = None
-    tool_responses: list[Part] | None = None
+    resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None
+    resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None
+    resume_metadata: dict[str, Any] | None = None
     resources: list[str] | None = None
     resume: Resume | None = None
 
@@ -379,6 +404,9 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             metadata=merged_metadata,
             docs=self._docs,
             resources=opts.get('resources') or self._resources,
+            resume_respond=opts.get('resume_respond'),
+            resume_restart=opts.get('resume_restart'),
+            resume_metadata=opts.get('resume_metadata'),
         )
 
     def stream(
@@ -415,37 +443,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         return await executable_prompt_call_to_generate_options(
             self, registry, prompt_config, input, opts
         )
-
-    async def as_tool(self) -> Action:
-        """Expose this prompt as a tool.
-
-        Returns the PROMPT action, which can be used as a tool.
-        """
-        await self._ensure_resolved()
-        # If we have a direct reference to the action, use it
-        if self._prompt_action is not None:
-            return self._prompt_action
-
-        # Otherwise, try to look it up using name/variant/ns
-        if self._name is None:
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message=(
-                    'Prompt name not available. This prompt was not created via define_prompt_async() or load_prompt().'
-                ),
-            )
-
-        lookup_key = registry_lookup_key(self._name, self._variant, self._ns)
-
-        action = await self._registry.resolve_action_by_key(lookup_key)
-
-        if action is None or action.kind != ActionKind.PROMPT:
-            raise GenkitError(
-                status='NOT_FOUND',
-                message=f'PROMPT action not found for prompt "{self._name}"',
-            )
-
-        return action
 
 
 def register_prompt_actions(
@@ -595,11 +592,14 @@ async def to_generate_action_options(
     resume: Resume | None = None
     if options.resume is not None:
         resume = options.resume
-    elif options.tool_responses:
-        tool_response_parts = [r.root for r in options.tool_responses if isinstance(r.root, ToolResponsePart)]
-        if tool_response_parts:
-            resume = Resume(respond=tool_response_parts)
+    else:
+        resume = resume_options_to_resume(
+            resume_respond=options.resume_respond,
+            resume_restart=options.resume_restart,
+            resume_metadata=options.resume_metadata,
+        )
 
+    # Convert tool refs (str name or Tool object) to string names for GenerateActionOptions
     tools_refs = tools_to_action_names(options.tools)
 
     merged_docs = await render_docs({}, options, None)

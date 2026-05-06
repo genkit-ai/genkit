@@ -19,6 +19,8 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -42,6 +44,31 @@ type Part struct {
 	Resource     *ResourcePart  `json:"resource,omitempty"`     // valid for kind==partResource
 	Custom       map[string]any `json:"custom,omitempty"`       // valid for plugin-specific custom parts
 	Metadata     map[string]any `json:"metadata,omitempty"`     // valid for all kinds
+}
+
+// Clone returns a shallow copy of the Part with its own Metadata and Custom
+// maps. Callers can add or remove map keys without mutating the original.
+func (p *Part) Clone() *Part {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.Custom = maps.Clone(p.Custom)
+	cp.Metadata = maps.Clone(p.Metadata)
+	return &cp
+}
+
+// Clone returns a shallow copy of the Message with its own Content slice
+// and Metadata map. Callers can replace parts or add metadata keys without
+// mutating the original.
+func (m *Message) Clone() *Message {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	cp.Content = slices.Clone(m.Content)
+	cp.Metadata = maps.Clone(m.Metadata)
+	return &cp
 }
 
 type PartKind int8

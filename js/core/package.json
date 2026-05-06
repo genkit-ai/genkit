@@ -7,7 +7,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.31.0",
+  "version": "1.33.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -20,17 +20,19 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/core"
   },
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api-logs": "^0.52.0",
     "@opentelemetry/context-async-hooks": "~1.25.0",
     "@opentelemetry/core": "~1.25.0",
     "@opentelemetry/sdk-metrics": "~1.25.0",
     "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/sdk-logs": "^0.52.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
     "@types/json-schema": "^7.0.15",
     "ajv": "^8.12.0",

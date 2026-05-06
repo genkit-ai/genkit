@@ -175,6 +175,24 @@ class GenkitError(GenkitModel):
     data: Data | None = None
 
 
+class MiddlewareDesc(GenkitModel):
+    """Model for middlewaredesc data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    name: str = Field(...)
+    description: str | None = None
+    config_schema: Any | ConfigSchema | None = Field(default=None)
+    metadata: Metadata | None = None
+
+
+class MiddlewareRef(GenkitModel):
+    """Model for middlewareref data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    name: str = Field(...)
+    config: Any | None = Field(default=None)
+
+
 class CandidateError(GenkitModel):
     """Model for candidateerror data."""
 
@@ -325,24 +343,6 @@ class MessageData(GenkitModel):
     metadata: Metadata | None = None
 
 
-class MiddlewareDesc(GenkitModel):
-    """Model for middlewaredesc data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    name: str = Field(...)
-    description: str | None = None
-    config_schema: Any | ConfigSchema | None = Field(default=None)
-    metadata: Any | Metadata | None = Field(default=None)
-
-
-class MiddlewareRef(GenkitModel):
-    """Model for middlewareref data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    name: str = Field(...)
-    config: Any | None = Field(default=None)
-
-
 class ModelInfo(GenkitModel):
     """Model for modelinfo data."""
 
@@ -359,9 +359,6 @@ class ModelReference(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
-    config_schema: Any | None = Field(default=None)
-    info: Any | None = Field(default=None)
-    version: str | None = None
     config: Any | None = Field(default=None)
 
 
@@ -854,10 +851,7 @@ class Values(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
 
 
-class TelemetryLabels(GenkitModel):
-    """Model for telemetrylabels data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+TelemetryLabels = dict[str, str]  # type alias for telemetrylabels (typed string map)
 
 
 class State(GenkitModel):

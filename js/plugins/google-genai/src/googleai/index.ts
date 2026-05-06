@@ -17,9 +17,9 @@
 import { ActionMetadata, EmbedderReference, ModelReference, z } from 'genkit';
 import { logger } from 'genkit/logging';
 import {
-  GenkitPluginV2,
-  ResolvableAction,
   genkitPluginV2,
+  type GenkitPluginV2,
+  type ResolvableAction,
 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import { extractErrMsg } from '../common/utils.js';

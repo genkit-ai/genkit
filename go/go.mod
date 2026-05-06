@@ -1,6 +1,6 @@
 module github.com/firebase/genkit/go
 
-go 1.24.1
+go 1.25.0
 
 retract (
 	v0.1.4 // Retraction only.
@@ -19,6 +19,7 @@ require (
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace v1.27.0
 	github.com/anthropics/anthropic-sdk-go v1.23.0
 	github.com/blues/jsonata-go v1.5.4
+	github.com/coder/websocket v1.8.14
 	github.com/goccy/go-yaml v1.17.1
 	github.com/google/dotprompt/go v0.0.0-20251014011017-8d056e027254
 	github.com/google/go-cmp v0.7.0

@@ -35,6 +35,6 @@ Dev UI: http://localhost:4000. Most samples need `GEMINI_API_KEY`. See [plugins/
 | `middleware` | Observe or modify model requests |
 | `output-formats` | Text, enum, JSON, array, and JSONL outputs |
 | `prompts` | `.prompt` files, variants, helpers, and streaming |
-| `tool-interrupts` | Pause a tool for human approval |
+| `tool-interrupts` | Trivia (`respond_example.py`) and bank approval (`approval_example.py`) — interrupt + resume |
 | `tracing` | Watch spans appear in real time |
 | `vertexai-imagen` | Generate an image with Vertex AI Imagen |

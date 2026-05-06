@@ -270,6 +270,49 @@
       ],
       "additionalProperties": false
     },
+    "MiddlewareDesc": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "configSchema": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "MiddlewareRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "config": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
     "CandidateError": {
       "type": "object",
       "properties": {
@@ -756,56 +799,6 @@
       ],
       "additionalProperties": false
     },
-    "MiddlewareDesc": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "configSchema": {
-          "anyOf": [
-            {
-              "type": "object",
-              "additionalProperties": {}
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "metadata": {
-          "anyOf": [
-            {
-              "type": "object",
-              "additionalProperties": {}
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "additionalProperties": false
-    },
-    "MiddlewareRef": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "config": {}
-      },
-      "required": [
-        "name"
-      ],
-      "additionalProperties": false
-    },
     "ModelInfo": {
       "type": "object",
       "properties": {
@@ -886,11 +879,6 @@
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
-        },
-        "configSchema": {},
-        "info": {},
-        "version": {
           "type": "string"
         },
         "config": {}

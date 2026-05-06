@@ -30,6 +30,7 @@ import {
   type ModelReference,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import type {
   ClientOptions,
@@ -133,7 +134,8 @@ export function model(
   config: ImagenConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
 

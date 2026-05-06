@@ -483,6 +483,8 @@ export declare interface UsageMetadata {
   cachedContentTokenCount?: number;
   /** Optional. Number of tokens present in thoughts output. */
   thoughtsTokenCount?: number;
+  /** Optional. The traffic type for the request (e.g. ON_DEMAND_FLEX or ON_DEMAND_PRIORITY). */
+  trafficType?: string;
 }
 
 export const TaskTypeSchema = z.enum([
@@ -1242,6 +1244,8 @@ export declare interface GenerateContentRequest {
   tools?: Tool[];
   /** Optional. This config is shared for all tools provided in the request. */
   toolConfig?: ToolConfig;
+  /** Optional. Service tier (e.g. 'standard', 'flex', or 'priority'). */
+  serviceTier?: string;
 }
 
 /**

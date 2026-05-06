@@ -242,7 +242,7 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
-  # TODO(https://github.com/firebase/genkit/issues/4398): Enable PLC0415 after
+  # TODO(https://github.com/genkit-ai/genkit/issues/4398): Enable PLC0415 after
   # completing cleanup of remaining in-function imports in core framework.
   # "PLC0415",
 ]
@@ -269,9 +269,9 @@ select = [
 # S108 false positives on Path('/tmp/x') used as dummy non-existent paths in tests.
 # Samples have install_rich_traceback() call after imports, before other code
 # Samples are demo code and can use blocking I/O for simplicity
-"samples/*/*.py"     = ["ANN", "D", "E402", "ASYNC"]
-"samples/*/**/*.py"  = ["ANN", "D", "E402", "ASYNC"]
-"samples/*/src/*.py" = ["ANN", "D", "E402", "ASYNC"]
+"samples/*/*.py"     = ["ANN", "D", "E402", "ASYNC", "T201"]
+"samples/*/**/*.py"  = ["ANN", "D", "E402", "ASYNC", "T201"]
+"samples/*/src/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
 
 
 [tool.ruff.lint.isort]

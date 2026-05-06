@@ -14,6 +14,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    DapQualifiedName,
     create_action_key,
     parse_action_key,
     parse_dap_qualified_name,
@@ -75,7 +76,7 @@ def test_parse_action_key_invalid_format() -> None:
 
 def test_parse_dap_qualified_name() -> None:
     """Parse provider:innerKind/innerName segments."""
-    assert parse_dap_qualified_name('my-dap:tool/echo') == ('my-dap', 'tool', 'echo')
+    assert parse_dap_qualified_name('my-dap:tool/echo') == DapQualifiedName('my-dap', 'tool', 'echo')
     assert parse_dap_qualified_name('plugin/foo:model/bar') is None
     assert parse_dap_qualified_name('plain-name') is None
     assert parse_dap_qualified_name('no-slash:toolonly') is None

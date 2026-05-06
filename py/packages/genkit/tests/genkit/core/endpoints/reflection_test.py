@@ -145,11 +145,11 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
         input: object = None,
         on_chunk: object | None = None,
         context: object | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> MagicMock:
         if on_trace_start:
-            on_trace_start('test_trace_id', 'test_span_id')
+            await on_trace_start('test_trace_id', 'test_span_id')
         return mock_output
 
     mock_action.run.side_effect = side_effect
@@ -224,11 +224,11 @@ async def test_run_action_streaming(
         input: object = None,
         on_chunk: object | None = None,
         context: object | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> MagicMock:
         if on_trace_start:
-            on_trace_start('stream_trace_id', 'stream_span_id')
+            await on_trace_start('stream_trace_id', 'stream_span_id')
         if on_chunk:
             on_chunk_fn = cast(Callable[[object], Awaitable[None]], on_chunk)
             await on_chunk_fn({'chunk': 1})
@@ -277,11 +277,11 @@ async def test_run_action_streaming_primitive_types(
         input: object = None,
         on_chunk: object | None = None,
         context: object | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> MagicMock:
         if on_trace_start:
-            on_trace_start('stream_trace_id', 'stream_span_id')
+            await on_trace_start('stream_trace_id', 'stream_span_id')
         if on_chunk:
             on_chunk_fn = cast(Callable[[object], None], on_chunk)
             for chunk in chunks:

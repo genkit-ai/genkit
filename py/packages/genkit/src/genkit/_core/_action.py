@@ -24,7 +24,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, ClassVar, Generic, cast, get_type_hints
+from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import Span
@@ -36,6 +36,7 @@ from typing_extensions import Never, TypeVar
 from genkit._core._channel import Channel
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
+from genkit._core._schema import to_json_schema
 from genkit._core._trace._path import build_path
 from genkit._core._trace._suppress import suppress_telemetry
 from genkit._core._tracing import tracer
@@ -237,7 +238,15 @@ def extract_action_args_and_types(
 GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR = '_genkit_dynamic_action_provider'
 
 
-def parse_dap_qualified_name(name: str) -> tuple[str, str, str] | None:
+class DapQualifiedName(NamedTuple):
+    """Segments of a DAP-qualified name ``provider:innerKind/innerName``."""
+
+    provider: str
+    inner_kind: str
+    inner_name: str
+
+
+def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     """Parse DAP-qualified segment ``provider:innerKind/innerName``.
 
     Used when the action key kind is ``dynamic-action-provider`` and the name
@@ -247,9 +256,8 @@ def parse_dap_qualified_name(name: str) -> tuple[str, str, str] | None:
     provider segment (``plugin/foo`` is not a valid provider host).
 
     Returns:
-        ``(provider_name, inner_kind, inner_name)`` if the string matches the
-        pattern; otherwise ``None`` so callers can treat the name as a plain
-        dynamic-action-provider id.
+        A :class:`DapQualifiedName` if the string matches; otherwise ``None`` so
+        callers can treat the name as a plain dynamic-action-provider id.
     """
     # Pattern: [provider]:[inner_kind]/[inner_name]; no '/' or ':' in provider.
     match = re.match(r'^([^/:]+):([^/:]+)/(.+)$', name)
@@ -258,7 +266,7 @@ def parse_dap_qualified_name(name: str) -> tuple[str, str, str] | None:
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
         return None
-    return (provider, inner_kind, inner_name)
+    return DapQualifiedName(provider, inner_kind, inner_name)
 
 
 def parse_action_key(key: str) -> tuple[ActionKind, str]:
@@ -349,8 +357,6 @@ class ActionRunContext:
 class Action(Generic[InputT, OutputT, ChunkT]):
     """A named, traced, remotely callable function."""
 
-    _input_type: TypeAdapter[InputT] | None
-
     def __init__(
         self,
         kind: ActionKind,
@@ -420,18 +426,17 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         self._output_schema = value
         self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
 
-    def override_input_schema(self, schema: type[BaseModel] | dict[str, object]) -> None:
+    def _override_input_schema(
+        self,
+        input_schema: type[BaseModel] | dict[str, object],
+    ) -> None:
         """Replace inferred input JSON Schema and validation type (e.g. tool schema overrides)."""
-        if isinstance(schema, type) and issubclass(schema, BaseModel):
-            type_adapter: TypeAdapter[Any] = TypeAdapter(schema)
-            self._input_schema = type_adapter.json_schema()
-            self._input_type = cast(TypeAdapter[InputT], type_adapter)
-        elif isinstance(schema, dict):
-            self._input_schema = schema
+        in_js = to_json_schema(input_schema)
+        self.input_schema = in_js
+        if isinstance(input_schema, dict):
             self._input_type = None
         else:
-            raise TypeError(f'input_schema must be a Pydantic model type or dict, got {type(schema)}')
-        self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
+            self._input_type = cast(TypeAdapter[InputT], TypeAdapter(input_schema))
 
     async def __call__(self, input: InputT | None = None) -> OutputT:
         """Call the action directly, returning just the response value."""
@@ -442,7 +447,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         input: InputT | None = None,
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, object] | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> ActionResponse[OutputT]:
         """Execute the action with optional input validation.
@@ -562,7 +567,7 @@ def _make_tracing_wrapper(
         object | None,
         ActionRunContext,
         StreamingCallback | None,
-        Callable[[str, str], None] | None,
+        Callable[[str, str], Any] | None,
         dict[str, object] | None,
     ],
     Awaitable[ActionResponse[Any]],
@@ -584,7 +589,7 @@ def _make_tracing_wrapper(
         input: object | None,
         ctx: ActionRunContext,
         on_chunk: StreamingCallback | None,
-        on_trace_start: Callable[[str, str], None] | None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None,
         telemetry_labels: dict[str, object] | None,
     ) -> ActionResponse[Any]:
         start_time = time.perf_counter()
@@ -598,7 +603,7 @@ def _make_tracing_wrapper(
                     trace_id = format(span.get_span_context().trace_id, '032x')
                     span_id = format(span.get_span_context().span_id, '016x')
                     if on_trace_start:
-                        on_trace_start(trace_id, span_id)
+                        await on_trace_start(trace_id, span_id)
 
                     # Set telemetry labels as direct span attributes (matches JS/Go behavior)
                     if telemetry_labels:

@@ -23,7 +23,8 @@ import json
 import os
 import signal
 import threading
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -72,7 +73,7 @@ class ActionRunner:
     trace_id: str | None = None
     span_id: str | None = None
 
-    def on_trace_start(self, tid: str, sid: str) -> None:
+    async def on_trace_start(self, tid: str, sid: str) -> None:
         self.trace_id, self.span_id = tid, sid
         if task := asyncio.current_task():
             self.active_actions[tid] = task
@@ -209,13 +210,15 @@ def create_reflection_asgi_app(
         )
         return await runner.stream_response(version)
 
-    async def reflection_startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
         # Eagerly initialize plugins so init()-registered actions exist before handling traffic.
         await registry.initialize_all_plugins()
-
-    startup_hooks: list[LifecycleHook] = [reflection_startup]
-    if on_startup is not None:
-        startup_hooks.append(on_startup)
+        if on_startup is not None:
+            await on_startup()
+        yield
+        if on_shutdown is not None:
+            await on_shutdown()
 
     app = Starlette(
         routes=[
@@ -237,8 +240,7 @@ def create_reflection_asgi_app(
                 expose_headers=['X-Genkit-Trace-Id', 'X-Genkit-Span-Id', 'x-genkit-version'],
             )
         ],
-        on_startup=startup_hooks,
-        on_shutdown=[on_shutdown] if on_shutdown else [],
+        lifespan=lifespan,
     )
     app.active_actions = active_actions  # type: ignore[attr-defined]
     return app
