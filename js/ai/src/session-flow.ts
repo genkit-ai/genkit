@@ -609,7 +609,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
   const getSnapshotDataAction = defineAction(
     registry,
     {
-      name: `${config.name}__getSnapshotData`,
+      name: config.name,
       description: `Gets snapshot data for ${config.name} by snapshotId`,
       actionType: 'agent-snapshot',
       inputSchema: z.string(),
@@ -632,7 +632,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
   const abortAgentAction = defineAction(
     registry,
     {
-      name: `${config.name}__abort`,
+      name: config.name,
       description: `Aborts ${config.name} agent by snapshotId. Returns the previous status of the snapshot before it was set to 'aborted', or undefined if the snapshot was not found.`,
       actionType: 'agent-abort',
       inputSchema: z.string(),
