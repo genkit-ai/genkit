@@ -1,28 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
-    "Artifact": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "parts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Part"
-          }
-        },
-        "metadata": {
-          "type": "object",
-          "additionalProperties": {}
-        }
-      },
-      "required": [
-        "parts"
-      ],
-      "additionalProperties": false
-    },
     "AgentInit": {
       "type": "object",
       "properties": {
@@ -103,6 +81,28 @@
           "$ref": "#/$defs/TurnEnd"
         }
       },
+      "additionalProperties": false
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "parts"
+      ],
       "additionalProperties": false
     },
     "SessionState": {
