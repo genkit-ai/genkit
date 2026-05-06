@@ -64,7 +64,7 @@ export type OutputAssertions = z.infer<typeof OutputAssertionsSchema>;
 
 /**
  * Schema for snapshot assertions on `getSnapshotData` and
- * `waitUntilCompleted` invocations.
+ * `waitUntilCompleted` steps.
  */
 export const SnapshotAssertionsSchema = z.object({
   /** Expected parentId. Supports {{name}} template references. */
@@ -150,13 +150,13 @@ export type WaitUntilCompletedInvocation = z.infer<
 /**
  * Union schema for all invocation types.
  */
-export const SpecInvocationSchema = z.discriminatedUnion('type', [
+export const SpecStepSchema = z.discriminatedUnion('type', [
   SendInvocationSchema,
   GetSnapshotDataInvocationSchema,
   AbortInvocationSchema,
   WaitUntilCompletedInvocationSchema,
 ]);
-export type SpecInvocation = z.infer<typeof SpecInvocationSchema>;
+export type SpecStep = z.infer<typeof SpecStepSchema>;
 
 // ---------------------------------------------------------------------------
 // Conformance spec — top-level
@@ -172,8 +172,8 @@ export const SpecTestSchema = z.object({
   description: z.string().optional(),
   /** Name of the harness-provided agent to use. */
   agent: z.string(),
-  /** Ordered sequence of invocations to execute. */
-  invocations: z.array(SpecInvocationSchema),
+  /** Ordered sequence of steps to execute. */
+  steps: z.array(SpecStepSchema),
 });
 export type SpecTest = z.infer<typeof SpecTestSchema>;
 

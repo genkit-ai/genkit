@@ -19,7 +19,7 @@ tests:
       The agent generates one model response and returns it along with
       the accumulated session state.
     agent: promptAgent
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -41,7 +41,7 @@ tests:
       A single user message is sent to a server-managed agent.
       The output should contain a snapshotId and no inline state.
     agent: promptAgentWithStore
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -63,7 +63,7 @@ tests:
       Model emits streaming chunks during generation. They should be
       forwarded as modelChunk stream events, followed by a turnEnd.
     agent: promptAgent
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -96,7 +96,7 @@ tests:
       Both should be processed as separate turns. History must
       accumulate so the second model call sees the first exchange.
     agent: promptAgent
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -128,7 +128,7 @@ tests:
       the tool response is fed back to the model which then produces
       a final text response.
     agent: promptAgentWithTools
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -173,7 +173,7 @@ tests:
       via snapshotId. The model receives the full history including
       the tool response and produces a final answer.
     agent: promptAgentWithInterrupt
-    invocations:
+    steps:
       # Phase 1: model interrupts
       - type: send
         init: {}
@@ -227,7 +227,7 @@ tests:
       both complete, getSnapshotData verifies the parent chain and
       accumulated history.
     agent: promptAgentWithStore
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -267,7 +267,7 @@ tests:
       The second invocation seeds session state from the first
       invocation's output state. History should accumulate.
     agent: promptAgent
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -307,7 +307,7 @@ tests:
       eventually the snapshot reaches "done" status with accumulated
       state.
     agent: promptAgentWithStore
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -334,7 +334,7 @@ tests:
       When a detached agent fails in the background, the snapshot
       status should be set to "failed".
     agent: customAgentFailing
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -358,7 +358,7 @@ tests:
       should return "pending" as the previous status and the snapshot
       should be set to "aborted".
     agent: customAgentBlocking
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -382,7 +382,7 @@ tests:
       Abort an agent that has already finished. The abort returns
       "done" as previous status and sets the snapshot to "aborted".
     agent: promptAgentWithStore
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -407,7 +407,7 @@ tests:
       ignored. Only the message sent via the input stream should appear
       in the resulting snapshot state — no stale history from init.
     agent: promptAgentWithStore
-    invocations:
+    steps:
       - type: send
         init:
           state:
@@ -440,7 +440,7 @@ tests:
       separate input should detach immediately without processing an
       extra turn. The agent should return a pending snapshot.
     agent: customAgentBlocking
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -464,7 +464,7 @@ tests:
       When a detached agent fails in the background, the snapshot
       should include error details with the failure message.
     agent: customAgentFailing
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -486,7 +486,7 @@ tests:
       Aborting a snapshot that does not exist should not throw and
       should return no previous status.
     agent: promptAgentWithStore
-    invocations:
+    steps:
       - type: abort
         snapshotId: non-existent-id
         expectPreviousStatus: ~
@@ -500,7 +500,7 @@ tests:
       are streamed in order. Same-named artifacts are deduplicated
       (updated) so the final output contains only the latest version.
     agent: customAgentWithArtifacts
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -526,7 +526,7 @@ tests:
       Custom agent updates custom state during processing. The output
       state should contain the updated custom data.
     agent: customAgentWithCustomState
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:
@@ -542,7 +542,7 @@ tests:
       invocation's output. The counter should increment across
       invocations.
     agent: customAgentWithCustomState
-    invocations:
+    steps:
       - type: send
         init: {}
         inputs:

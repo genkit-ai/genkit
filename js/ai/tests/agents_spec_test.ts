@@ -98,7 +98,7 @@ const WaitUntilCompletedInvocationSchema = z.object({
   expectSnapshot: SnapshotAssertionsSchema.optional(),
 });
 
-const SpecInvocationSchema = z.discriminatedUnion('type', [
+const SpecStepSchema = z.discriminatedUnion('type', [
   SendInvocationSchema,
   GetSnapshotDataInvocationSchema,
   AbortInvocationSchema,
@@ -109,7 +109,7 @@ const SpecTestSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   agent: z.string(),
-  invocations: z.array(SpecInvocationSchema),
+  steps: z.array(SpecStepSchema),
 });
 
 const SpecSuiteSchema = z.object({
@@ -117,7 +117,7 @@ const SpecSuiteSchema = z.object({
 });
 
 type SendInvocation = z.infer<typeof SendInvocationSchema>;
-type SpecInvocation = z.infer<typeof SpecInvocationSchema>;
+type SpecStep = z.infer<typeof SpecStepSchema>;
 
 // ---------------------------------------------------------------------------
 // Template resolution
@@ -586,7 +586,7 @@ async function executeSendInvocation(
 
 async function executeGetSnapshotDataInvocation(
   agent: Agent,
-  invocation: SpecInvocation,
+  invocation: SpecStep,
   captures: Map<string, any>
 ): Promise<void> {
   const resolved = resolveTemplates(invocation, captures);
@@ -629,7 +629,7 @@ async function executeGetSnapshotDataInvocation(
 
 async function executeAbortInvocation(
   agent: Agent,
-  invocation: SpecInvocation,
+  invocation: SpecStep,
   captures: Map<string, any>
 ): Promise<void> {
   const resolved = resolveTemplates(invocation, captures);
@@ -654,7 +654,7 @@ async function executeAbortInvocation(
 
 async function executeWaitUntilCompletedInvocation(
   agent: Agent,
-  invocation: SpecInvocation,
+  invocation: SpecStep,
   captures: Map<string, any>
 ): Promise<void> {
   const resolved = resolveTemplates(invocation, captures);
@@ -725,37 +725,29 @@ describe('Agent conformance spec', () => {
 
       const captures = new Map<string, any>();
 
-      for (let i = 0; i < test.invocations.length; i++) {
-        const invocation = test.invocations[i];
-        const label = `invocation[${i}] (${invocation.type})`;
+      for (let i = 0; i < test.steps.length; i++) {
+        const step = test.steps[i];
+        const label = `step[${i}] (${step.type})`;
 
         try {
-          switch (invocation.type) {
+          switch (step.type) {
             case 'send':
-              await executeSendInvocation(agent, pm, invocation, captures);
+              await executeSendInvocation(agent, pm, step, captures);
               break;
             case 'getSnapshotData':
-              await executeGetSnapshotDataInvocation(
-                agent,
-                invocation,
-                captures
-              );
+              await executeGetSnapshotDataInvocation(agent, step, captures);
               break;
             case 'abort':
-              await executeAbortInvocation(agent, invocation, captures);
+              await executeAbortInvocation(agent, step, captures);
               break;
             case 'waitUntilCompleted':
-              await executeWaitUntilCompletedInvocation(
-                agent,
-                invocation,
-                captures
-              );
+              await executeWaitUntilCompletedInvocation(agent, step, captures);
               break;
             default:
-              assert.fail(`Unknown invocation type: ${invocation.type}`);
+              assert.fail(`Unknown step type: ${(step as any).type}`);
           }
         } catch (e: any) {
-          // Wrap error with invocation context for better diagnostics
+          // Wrap error with step context for better diagnostics
           const wrapped = new Error(
             `${label} in test '${test.name}' failed: ${e.message}`
           );

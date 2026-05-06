@@ -26,12 +26,12 @@ tests:
   - name: <string>              # Human-readable test name
     description: <string>       # Optional description
     agent: <string>             # Name of the harness-provided agent
-    invocations:                # Ordered sequence of operations
+    steps:                      # Ordered sequence of operations
       - type: send | getSnapshotData | abort | waitUntilCompleted
-        ...                     # Fields depend on invocation type
+        ...                     # Fields depend on step type
 ```
 
-### Invocation Types
+### Step Types
 
 #### `send`
 
@@ -47,8 +47,8 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 | `streamChunks` | `GenerateResponseChunkData[][]` | Optional. Pre-programmed streaming chunks, indexed by model call. Each inner array is emitted as a stream before the corresponding `modelResponses` entry. |
 | `expectChunks` | `AgentStreamChunk[]` | **Strict ordered** list of expected stream chunks. |
 | `expectOutput` | Object | Expected fields on the `AgentOutput`. See [Output Assertions](#output-assertions). |
-| `captureSnapshotId` | `string` | Optional. Stores `output.snapshotId` under this name for use in later invocations via `{{name}}`. |
-| `captureState` | `string` | Optional. Stores `output.state` under this name for use in later invocations via `{{name}}`. |
+| `captureSnapshotId` | `string` | Optional. Stores `output.snapshotId` under this name for use in later steps via `{{name}}`. |
+| `captureState` | `string` | Optional. Stores `output.state` under this name for use in later steps via `{{name}}`. |
 
 #### `getSnapshotData`
 
@@ -86,7 +86,7 @@ Polls a snapshot until it reaches a terminal status (`done`, `failed`, or
 
 ### Output Assertions
 
-Used in `expectOutput` for `send` invocations.
+Used in `expectOutput` for `send` steps.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -98,7 +98,7 @@ Used in `expectOutput` for `send` invocations.
 ### Snapshot Assertions
 
 Used in `expectSnapshot` for `getSnapshotData` and `waitUntilCompleted`
-invocations.
+steps.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -118,7 +118,7 @@ values:
 - `captureState: state1` → captures `output.state` as `state1`
 
 These can be used anywhere a `snapshotId` or `state` is expected in subsequent
-invocations:
+steps:
 
 ```yaml
 init: { snapshotId: '{{snap1}}' }
@@ -148,7 +148,7 @@ Each language must provide a test harness that:
 
 1. **Parses** `tests/specs/agent.yaml`.
 2. **Registers** the required harness-provided agents (see below).
-3. **Runs** each test by executing its invocation sequence.
+3. **Runs** each test by executing its step sequence.
 4. **Asserts** results according to the spec.
 
 ### Required Agents
@@ -158,7 +158,7 @@ The harness must register the following named agents.
 #### Prompt-backed agents
 
 These use a **programmable model** whose responses can be controlled per-test
-via the `modelResponses` / `streamChunks` fields in `send` invocations.
+via the `modelResponses` / `streamChunks` fields in `send` steps.
 
 | Agent Name | Description |
 |------------|-------------|
@@ -191,7 +191,7 @@ is not needed for tests targeting these agents.
 
 The harness must provide a model (named `programmableModel`) whose response
 behavior can be programmed per model call within a test. For each `send`
-invocation:
+step:
 
 - `modelResponses[i]` is returned for the i-th `generate` call.
 - `streamChunks[i]` (if present) is emitted as streaming chunks before the
@@ -227,17 +227,17 @@ The spec currently covers the following categories (19 tests total):
 |----------|-------|
 | Basic single-turn | Client-managed, server-managed |
 | Streaming | Model chunk forwarding |
-| Multi-turn | Multiple turns in one invocation |
+| Multi-turn | Multiple turns in one step |
 | Tool calling | Automatic tool execution |
 | Interrupt & resume | Snapshot-based tool interrupt resume |
-| Snapshot chaining | Parent chain across invocations |
-| Client-managed state | State seeding across invocations |
+| Snapshot chaining | Parent chain across steps |
+| Client-managed state | State seeding across steps |
 | Server-managed state | Init state ignored for server-managed agents |
 | Detach | Background completion, background failure, pure detach without payload |
 | Abort | Pending agent, completed agent, non-existent snapshot |
 | Error details | Failed snapshot includes error message |
 | Artifacts | Streamed chunks, deduplication by name |
-| Custom state | Update during execution, persistence across invocations |
+| Custom state | Update during execution, persistence across steps |
 
 ## 6. Future Extensions
 
