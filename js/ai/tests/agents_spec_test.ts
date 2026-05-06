@@ -31,7 +31,12 @@ import { readFileSync } from 'fs';
 import { beforeEach, describe, it } from 'node:test';
 import { parse } from 'yaml';
 
-import { defineAgent, defineCustomAgent, type Agent, type AgentStreamChunk } from '../src/session-flow.js';
+import {
+  defineAgent,
+  defineCustomAgent,
+  type Agent,
+  type AgentStreamChunk,
+} from '../src/session-flow.js';
 import { InMemorySessionStore } from '../src/session.js';
 import { defineTool, interrupt } from '../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from './helpers.js';
@@ -108,9 +113,8 @@ const SpecSuiteSchema = z.object({
   tests: z.array(SpecTestSchema),
 });
 
+type SendInvocation = z.infer<typeof SendInvocationSchema>;
 type SpecInvocation = z.infer<typeof SpecInvocationSchema>;
-type SpecTest = z.infer<typeof SpecTestSchema>;
-type SpecSuite = z.infer<typeof SpecSuiteSchema>;
 
 // ---------------------------------------------------------------------------
 // Template resolution
@@ -370,12 +374,8 @@ function setupHarness(
     },
     async (sess) => {
       await sess.run(async () => {
-        sess.session.addArtifacts([
-          { name: 'doc1', parts: [{ text: 'v1' }] },
-        ]);
-        sess.session.addArtifacts([
-          { name: 'doc1', parts: [{ text: 'v2' }] },
-        ]);
+        sess.session.addArtifacts([{ name: 'doc1', parts: [{ text: 'v1' }] }]);
+        sess.session.addArtifacts([{ name: 'doc1', parts: [{ text: 'v2' }] }]);
         sess.session.addArtifacts([
           { name: 'doc2', parts: [{ text: 'other' }] },
         ]);
@@ -426,7 +426,7 @@ function setupHarness(
 async function executeSendInvocation(
   agent: Agent,
   pm: ProgrammableModel,
-  invocation: SpecInvocation,
+  invocation: SendInvocation,
   captures: Map<string, any>
 ): Promise<void> {
   const resolvedInvocation = resolveTemplates(invocation, captures);

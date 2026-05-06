@@ -33,10 +33,10 @@ import {
   ArtifactSchema,
   SessionStateSchema,
 } from './agent';
-import { MessageSchema } from './model';
 import {
   GenerateResponseChunkSchema,
   GenerateResponseSchema,
+  MessageSchema,
 } from './model';
 
 // ---------------------------------------------------------------------------
