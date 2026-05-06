@@ -16,12 +16,9 @@
 
 import { startFlowServer } from '@genkit-ai/express';
 import { vertexAI } from '@genkit-ai/google-genai';
-import {
-  VertexAIEvaluationMetricType,
-  vertexAIEvaluation,
-} from '@genkit-ai/vertexai/evaluation';
-import { llama31, vertexAIModelGarden } from '@genkit-ai/vertexai/modelgarden';
-import { PartSchema, genkit, type ModelReference } from 'genkit';
+import { vertexAIEvaluation, VertexAIEvaluationMetricType } from '@genkit-ai/vertexai/evaluation';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
+import { genkit, PartSchema, type ModelReference } from 'genkit';
 import { GenerateResponseChunkSchema } from 'genkit/model';
 import { z } from 'zod';
 import { inMemoryStore } from './memory.js';
@@ -38,9 +35,8 @@ const ai = genkit({
     vertexAI({
       location: 'us-central1',
     }),
-    vertexAIModelGarden({
+    vertexModelGarden({
       location: 'us-central1',
-      models: [llama31],
     }),
     vertexAIEvaluation({
       location: 'us-central1',
@@ -54,7 +50,7 @@ const ai = genkit({
 
 const llms: ModelReference<any>[] = [
   vertexAI.model('gemini-2.5-flash'),
-  llama31,
+  vertexModelGarden.model('meta/llama-3.1-405b-instruct-maas'),
 ];
 
 const historyStore = inMemoryStore();

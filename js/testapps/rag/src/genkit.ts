@@ -17,11 +17,7 @@
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { googleAI } from '@genkit-ai/google-genai';
-import {
-  claude3Sonnet,
-  llama31,
-  vertexAIModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit } from 'genkit';
 import { chroma } from 'genkitx-chromadb';
 import { pinecone } from 'genkitx-pinecone';
@@ -41,9 +37,8 @@ async function getCloudRunAuthClient(aud: string) {
 export const ai = genkit({
   plugins: [
     googleAI(),
-    vertexAIModelGarden({
+    vertexModelGarden({
       location: 'us-central1',
-      models: [claude3Sonnet, llama31],
     }),
     pinecone([
       {
