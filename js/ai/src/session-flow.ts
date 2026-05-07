@@ -530,7 +530,9 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
         onEndTurn: (snapshotId) => {
           if (!runner.isDetached) {
-            arg.sendChunk({ turnEnd: { snapshotId } });
+            arg.sendChunk({
+              turnEnd: { ...(config.store && { snapshotId }) },
+            });
           }
         },
       });
@@ -577,19 +579,18 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
       if (outcome === 'detached') {
         return {
-          artifacts: [],
           snapshotId: detachedSnapshotId!,
-          state: config.store ? undefined : toClientState(session.getState()),
+          ...(!config.store && { state: toClientState(session.getState()) }),
         };
       }
 
       const { result, finalSnapshotId } = outcome;
 
       return {
-        artifacts: result.artifacts || [],
-        message: result.message,
-        snapshotId: finalSnapshotId,
-        state: config.store ? undefined : toClientState(session.getState()),
+        ...(result.artifacts?.length && { artifacts: result.artifacts }),
+        ...(result.message && { message: result.message }),
+        ...(config.store && { snapshotId: finalSnapshotId }),
+        ...(!config.store && { state: toClientState(session.getState()) }),
       };
     }
   );
