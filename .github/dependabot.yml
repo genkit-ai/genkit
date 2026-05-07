@@ -1,0 +1,61 @@
+version: 2
+updates:
+  # Maintain dependencies for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for the root JS (pnpm)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      root-dependencies:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for the core JS workspace
+  - package-ecosystem: "npm"
+    directory: "/js"
+    schedule:
+      interval: "weekly"
+    groups:
+      js-dependencies:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for genkit-tools
+  - package-ecosystem: "npm"
+    directory: "/genkit-tools"
+    schedule:
+      interval: "weekly"
+    groups:
+      tools-dependencies:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for Go
+  - package-ecosystem: "gomod"
+    directory: "/go"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+
+  # Maintain dependencies for Python (uv workspace)
+  - package-ecosystem: "uv"
+    directory: "/py"
+    schedule:
+      interval: "weekly"
+    groups:
+      py-dependencies:
+        patterns:
+          - "*"
