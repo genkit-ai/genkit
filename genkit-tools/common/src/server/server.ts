@@ -90,7 +90,6 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   let server: Server;
   const app = express();
 
-  // Only allow localhost origins (matching telemetry server pattern)
   app.use(
     cors({
       origin: /^http:\/\/localhost:\d+$/,
