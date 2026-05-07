@@ -40,11 +40,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
-if TYPE_CHECKING:
-    from genkit._core._registry import Registry
-
+from genkit._core._action import Action
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from genkit._core._model import (
@@ -54,10 +52,8 @@ from genkit._core._model import (
     MultipartToolResponse,
     ToolHookParams,
 )
+from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
-
-if TYPE_CHECKING:
-    from genkit._core._action import Action
 
 # Disallowed in middleware definition names and in ``middleware_plugin(..., namespace=...)``.
 # Model/action keys use ``provider/name``; middleware stays one path-free token for the registry.
@@ -146,7 +142,7 @@ class BaseMiddleware(BaseModel):
     # passed in ``use=`` are ``model_copy()``-cloned first so the caller's
     # value is never mutated (safe to reuse one instance across concurrent
     # ``generate()`` calls).
-    _registry: Registry | None = PrivateAttr(default=None)
+    _registry: RegistryLike | None = PrivateAttr(default=None)
 
     def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Action]:
         """Return additional tools to expose to the model for this generate call.
@@ -221,12 +217,12 @@ class MiddlewareDesc(MiddlewareDescData):
     # Factory takes ``(config, registry)`` and mints a fresh BaseMiddleware
     # instance per generate() call.  ``registry`` is ``None`` only when the
     # factory is called outside a generate context (e.g. tests or tooling).
-    _factory: Callable[[dict[str, Any] | None, Registry | None], BaseMiddleware] = PrivateAttr()
+    _factory: Callable[[dict[str, Any] | None, RegistryLike | None], BaseMiddleware] = PrivateAttr()
 
     def __init__(
         self,
         *,
-        factory: Callable[[dict[str, Any] | None, Registry | None], BaseMiddleware],
+        factory: Callable[[dict[str, Any] | None, RegistryLike | None], BaseMiddleware],
         name: str,
         description: str | None = None,
         config_schema: object | None = None,
@@ -244,13 +240,9 @@ class MiddlewareDesc(MiddlewareDescData):
     def __call__(
         self,
         config: dict[str, Any] | None = None,
-        registry: Registry | None = None,
+        registry: RegistryLike | None = None,
     ) -> BaseMiddleware:
-        """Return a fresh BaseMiddleware instance for this generate() call.
-
-        Mirrors JS ``def.instantiate({ config, ai })``: the registry is injected
-        at resolution time so the instance can look up models and actions.
-        """
+        """Return a fresh BaseMiddleware instance for this generate() call."""
         return self._factory(config, registry)
 
     def with_name(self, name: str) -> MiddlewareDesc:
@@ -287,7 +279,7 @@ def new_middleware(middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
         raise ValueError(f'{middleware_cls.__qualname__}.name must be set for new_middleware(MyClass).')
     _validate_middleware_key_segment(str(reg_name), label=f'{middleware_cls.__qualname__}.name')
 
-    def _factory(config: dict[str, Any] | None, registry: Registry | None = None) -> BaseMiddleware:
+    def _factory(config: dict[str, Any] | None, registry: RegistryLike | None = None) -> BaseMiddleware:
         # Instantiate with the incoming config so registered use is equivalent to
         # ``use=[middleware_cls(**config)]``; empty/None config uses class defaults.
         inst = middleware_cls(**(config or {}))

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Abstract base class for Genkit plugins."""
+"""Abstract base class for Genkit plugins and middleware_plugin helper."""
 
 from __future__ import annotations
 
