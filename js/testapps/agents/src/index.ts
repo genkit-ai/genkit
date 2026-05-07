@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { expressHandler, startFlowServer } from '@genkit-ai/express';
+import { expressHandler } from '@genkit-ai/express';
 import express from 'express';
 
 import { demonstrateBranching, nameAgent } from './branching-agent.js';

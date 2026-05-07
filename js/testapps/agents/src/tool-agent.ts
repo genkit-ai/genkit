@@ -17,8 +17,6 @@
 import { z } from 'genkit';
 import { FileSessionStore } from 'genkit/beta';
 import { ai } from './genkit.js';
-import { FileSessionStore } from 'genkit/beta';
-import { ai } from './genkit.js';
 
 export const getWeather = ai.defineTool(
   {
