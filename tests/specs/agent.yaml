@@ -1,0 +1,564 @@
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# This file describes the behavioral specification for the Agent API.
+# It is designed to be consumed by conformance test harnesses in any
+# language (JS, Go, Dart, Python, etc.) to ensure cross-language
+# compatibility of the Agent abstraction.
+#
+# See docs/agents-conformance-testing.md for harness requirements and
+# full spec format reference.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # Basic single-turn
+  # ---------------------------------------------------------------------------
+  - name: simple single turn - client managed
+    description: >
+      A single user message is sent to a client-managed agent.
+      The agent generates one model response and returns it along with
+      the accumulated session state.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello back }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: hello back }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hi }] }
+              - { role: model, content: [{ text: hello back }] }
+
+  - name: simple single turn - server managed
+    description: >
+      A single user message is sent to a server-managed agent.
+      The output should contain a snapshotId and no inline state.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello back }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: hello back }] }
+          hasSnapshotId: true
+
+  # ---------------------------------------------------------------------------
+  # Streaming
+  # ---------------------------------------------------------------------------
+  - name: streaming model chunks
+    description: >
+      Model emits streaming chunks during generation. They should be
+      forwarded as modelChunk stream events, followed by a turnEnd.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        streamChunks:
+          - [
+              { index: 0, role: model, content: [{ text: 'hel' }] },
+              { index: 0, role: model, content: [{ text: 'lo' }] },
+            ]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        expectChunks:
+          - modelChunk: { index: 0, role: model, content: [{ text: 'hel' }] }
+          - modelChunk: { index: 0, role: model, content: [{ text: 'lo' }] }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: hello }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: hi }] }
+              - { role: model, content: [{ text: hello }] }
+
+  # ---------------------------------------------------------------------------
+  # Multi-turn in one invocation
+  # ---------------------------------------------------------------------------
+  - name: multi-turn in one invocation
+    description: >
+      Two user messages are sent sequentially in one invocation.
+      Both should be processed as separate turns. History must
+      accumulate so the second model call sees the first exchange.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: turn1 }] }]
+          - messages: [{ role: user, content: [{ text: turn2 }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectChunks:
+          - turnEnd: {}
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: reply2 }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: turn1 }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: turn2 }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Tool calling
+  # ---------------------------------------------------------------------------
+  - name: agent calls tools
+    description: >
+      Model issues a tool request, tool executes automatically, and
+      the tool response is fed back to the model which then produces
+      a final text response.
+    agent: promptAgentWithTools
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: do it }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: ref1 }
+            finishReason: stop
+          - message: { role: model, content: [{ text: done }] }
+            finishReason: stop
+        expectChunks:
+          - modelChunk:
+              role: tool
+              content:
+                - toolResponse:
+                    { name: testTool, ref: ref1, output: 'tool called' }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do it }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: ref1 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref1 }
+              - { role: model, content: [{ text: done }] }
+
+  # ---------------------------------------------------------------------------
+  # Interrupt and resume (multi-invocation)
+  # ---------------------------------------------------------------------------
+  - name: interrupt and resume
+    description: >
+      Model returns an interrupt tool request. The agent saves state
+      and returns the tool request as the output message. The client
+      then resumes with a new invocation providing the tool response
+      via snapshotId. The model receives the full history including
+      the tool response and produces a final answer.
+    agent: promptAgentWithInterrupt
+    steps:
+      # Phase 1: model interrupts
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hello }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    {
+                      name: interruptTool,
+                      input: { query: 'yes?' },
+                      ref: '123',
+                    }
+            finishReason: stop
+        expectOutput:
+          message:
+            content:
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'yes?' }, ref: '123' }
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      # Phase 2: client resumes with tool response
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages:
+              - role: tool
+                content:
+                  - toolResponse:
+                      {
+                        name: interruptTool,
+                        ref: '123',
+                        output: { answer: 'yes indeed' },
+                      }
+        modelResponses:
+          - message: { role: model, content: [{ text: completed }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: completed }] }
+
+  # ---------------------------------------------------------------------------
+  # Snapshot chaining
+  # ---------------------------------------------------------------------------
+  - name: snapshot chaining across invocations
+    description: >
+      Two sequential invocations against a server-managed agent.
+      The second invocation resumes from the first snapshot. After
+      both complete, getSnapshotData verifies the parent chain and
+      accumulated history.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Client-managed state across invocations
+  # ---------------------------------------------------------------------------
+  - name: client-managed state across invocations
+    description: >
+      Two sequential invocations against a client-managed agent.
+      The second invocation seeds session state from the first
+      invocation's output state. History should accumulate.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureState: state1
+
+      - type: send
+        init: { state: '{{state1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: reply2 }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ===========================================================================
+  # Phase 2: Detach, Abort, Artifacts, Custom State
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Detach & background execution
+  # ---------------------------------------------------------------------------
+  - name: detach and background completion
+    description: >
+      A detach flag causes the agent to return immediately with a
+      pending snapshot. The background continues processing and
+      eventually the snapshot reaches "done" status with accumulated
+      state.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: process this }] }]
+            detach: true
+        modelResponses:
+          - message: { role: model, content: [{ text: done in background }] }
+            finishReason: stop
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: process this }] }
+              - { role: model, content: [{ text: done in background }] }
+
+  - name: detach with background failure
+    description: >
+      When a detached agent fails in the background, the snapshot
+      status should be set to "failed".
+    agent: customAgentFailing
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: fail }] }]
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+
+  # ---------------------------------------------------------------------------
+  # Abort
+  # ---------------------------------------------------------------------------
+  - name: abort pending agent
+    description: >
+      Abort a detached agent that is still processing. The abort
+      should return "pending" as the previous status and the snapshot
+      should be set to "aborted".
+    agent: customAgentBlocking
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: do work }] }]
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+
+  - name: abort completed agent
+    description: >
+      Abort an agent that has already finished. The abort returns
+      "done" as previous status and sets the snapshot to "aborted".
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: done
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
+
+  - name: server-managed agent ignores init state
+    description: >
+      When a server-managed agent receives init.state, it should be
+      ignored. Only the message sent via the input stream should appear
+      in the resulting snapshot state — no stale history from init.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init:
+          state:
+            messages:
+              - { role: user, content: [{ text: stale history }] }
+            custom: { shouldBeIgnored: true }
+            artifacts: []
+        inputs:
+          - messages: [{ role: user, content: [{ text: fresh message }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: reply }] }
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: fresh message }] }
+              - { role: model, content: [{ text: reply }] }
+
+  - name: pure detach without payload
+    description: >
+      A detach-only message (no messages or toolRestarts) sent as a
+      separate input should detach immediately without processing an
+      extra turn. The agent should return a pending snapshot.
+    agent: customAgentBlocking
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: work }] }]
+          - detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: pending
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+  - name: failed snapshot includes error details
+    description: >
+      When a detached agent fails in the background, the snapshot
+      should include error details with the failure message.
+    agent: customAgentFailing
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: fail }] }]
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+          errorContains:
+            message: intentional failure
+
+  - name: abort non-existent snapshot
+    description: >
+      Aborting a snapshot that does not exist should not throw and
+      should return no previous status.
+    agent: promptAgentWithStore
+    steps:
+      - type: abort
+        snapshotId: non-existent-id
+        expectPreviousStatus: ~
+
+  # ---------------------------------------------------------------------------
+  # Artifacts
+  # ---------------------------------------------------------------------------
+  - name: artifacts streamed and deduplicated
+    description: >
+      Custom agent adds artifacts during execution. Artifact chunks
+      are streamed in order. Same-named artifacts are deduplicated
+      (updated) so the final output contains only the latest version.
+    agent: customAgentWithArtifacts
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: go }] }]
+        expectChunks:
+          - artifact: { name: doc1, parts: [{ text: v1 }] }
+          - artifact: { name: doc1, parts: [{ text: v2 }] }
+          - artifact: { name: doc2, parts: [{ text: other }] }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          artifactsContain:
+            - name: doc1
+              parts: [{ text: v2 }]
+            - name: doc2
+              parts: [{ text: other }]
+
+  # ---------------------------------------------------------------------------
+  # Custom state
+  # ---------------------------------------------------------------------------
+  - name: custom state updated during execution
+    description: >
+      Custom agent updates custom state during processing. The output
+      state should contain the updated custom data.
+    agent: customAgentWithCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: go }] }]
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            custom: { counter: 1 }
+
+  - name: custom state persisted across invocations
+    description: >
+      Custom state is preserved when seeded from a previous
+      invocation's output. The counter should increment across
+      invocations.
+    agent: customAgentWithCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        expectOutput:
+          stateContains:
+            custom: { counter: 1 }
+        captureState: state1
+
+      - type: send
+        init: { state: '{{state1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        expectOutput:
+          stateContains:
+            custom: { counter: 2 }
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: user, content: [{ text: second }] }
