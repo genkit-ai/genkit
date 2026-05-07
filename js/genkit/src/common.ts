@@ -121,7 +121,6 @@ export {
   type ToolResponse,
   type ToolResponsePart,
 } from '@genkit-ai/ai';
-export { Chat } from '@genkit-ai/ai/chat';
 export {
   Session,
   type SessionData,
