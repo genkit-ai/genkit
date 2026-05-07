@@ -56,6 +56,9 @@ const ACTION_TYPES = [
   'tool.v2',
   'util',
   'resource',
+  'agent',
+  'agent-snapshot',
+  'agent-abort',
 ] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 

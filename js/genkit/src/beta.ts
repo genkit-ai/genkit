@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+export type { AgentInit, AgentInput, AgentOutput } from '@genkit-ai/ai';
 export {
   InMemoryStreamManager,
   StreamNotFoundError,
@@ -23,4 +24,19 @@ export {
 } from '@genkit-ai/core';
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
-export { GenkitBeta, genkit, type GenkitBetaOptions } from './genkit-beta.js';
+export {
+  FileSessionStore,
+  GenkitBeta,
+  InMemorySessionStore,
+  SessionRunner,
+  genkit,
+  type AgentFn,
+  type AgentStreamChunk,
+  type GenkitBetaOptions,
+  type SessionSnapshot,
+  type SessionState,
+  type SessionStore,
+  type SessionStoreOptions,
+  type SnapshotCallback,
+  type SnapshotContext,
+} from './genkit-beta.js';

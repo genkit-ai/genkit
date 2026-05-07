@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,173 +14,418 @@
  * limitations under the License.
  */
 
-import { getAsyncContext, type z } from '@genkit-ai/core';
+import { getAsyncContext, z, type ActionContext } from '@genkit-ai/core';
+import { EventEmitter } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
-import { v4 as uuidv4 } from 'uuid';
-import { type GenerateOptions, type MessageData } from './index.js';
+import * as fs from 'fs';
+import * as fsp from 'fs/promises';
+import * as path from 'path';
+import { MessageData, MessageSchema } from './model-types.js';
 
-export type BaseGenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
-> = Omit<GenerateOptions<O, CustomOptions>, 'prompt'>;
+import { PartSchema } from './model-types.js';
 
-export interface SessionOptions<S = any> {
-  /** Session store implementation for persisting the session state. */
-  store?: SessionStore<S>;
-  /** Initial state of the session.  */
-  initialState?: S;
-  /** Custom session Id. */
-  sessionId?: string;
+/**
+ * Schema for tracking persistent artifacts generated during a session turn.
+ */
+export const ArtifactSchema = z.object({
+  name: z.string().optional(),
+  parts: z.array(PartSchema),
+  metadata: z.record(z.any()).optional(),
+});
+
+/**
+ * Artifact generated during a session turn.
+ */
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
+/**
+ * Events signifying a session snapshot persistence point.
+ */
+export const SnapshotEventSchema = z.enum(['turnEnd', 'invocationEnd']);
+
+/**
+ * Event signifying a session snapshot persistence point.
+ */
+export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
+
+/**
+ * Schema for session execution state.
+ */
+export const SessionStateSchema = z.object({
+  messages: z.array(MessageSchema).optional(),
+  custom: z.any().optional(),
+  artifacts: z.array(ArtifactSchema).optional(),
+});
+
+/**
+ * State persisted for a session across turns.
+ */
+export interface SessionState<S = unknown> {
+  messages?: MessageData[];
+  custom?: S;
+  artifacts?: Artifact[];
 }
 
 /**
- * Session encapsulates a statful execution environment for chat.
- * Chat session executed within a session in this environment will have acesss to
- * session session convesation history.
- *
- * ```ts
- * const ai = genkit({...});
- * const chat = ai.chat(); // create a Session
- * let response = await chat.send('hi'); // session/history aware conversation
- * response = await chat.send('tell me a story');
- * ```
+ * The execution context provided to a snapshot callback.
  */
-export class Session<S = any> {
-  readonly id: string;
-  private sessionData?: SessionData<S>;
-  private store: SessionStore<S>;
+export interface SnapshotContext<S = unknown> {
+  state: SessionState<S>;
+  prevState?: SessionState<S>;
+  turnIndex: number;
+  event: 'turnEnd' | 'invocationEnd';
+}
 
-  constructor(
-    readonly registry: Registry,
-    options?: {
-      id?: string;
-      stateSchema?: S;
-      sessionData?: SessionData<S>;
-      store?: SessionStore<S>;
-    }
-  ) {
-    this.id = options?.id ?? uuidv4();
-    this.sessionData = options?.sessionData ?? {
-      id: this.id,
-    };
-    if (!this.sessionData) {
-      this.sessionData = { id: this.id };
-    }
-    if (!this.sessionData.threads) {
-      this.sessionData!.threads = {};
-    }
-    this.store = options?.store ?? new InMemorySessionStore<S>();
-  }
+/**
+ * Callback triggered before a snapshot is saved. Return false to reject persistence.
+ */
+export type SnapshotCallback<S = unknown> = (
+  ctx: SnapshotContext<S>
+) => boolean;
 
-  get state(): S | undefined {
-    return this.sessionData!.state;
+/**
+ * Saved snapshot of a session's state at a given event point.
+ */
+export interface SessionSnapshot<S = unknown> {
+  snapshotId: string;
+  parentId?: string;
+  createdAt: string;
+  event: 'turnEnd' | 'invocationEnd';
+  state: SessionState<S>;
+  status?: 'pending' | 'done' | 'failed' | 'aborted';
+
+  error?: {
+    status: string;
+    message: string;
+    details?: any;
+  };
+}
+
+/**
+ * Options provided to the session store methods.
+ */
+export interface SessionStoreOptions {
+  context?: ActionContext;
+}
+
+/**
+ * Interface for persistent session snapshot storage.
+ */
+export interface SessionStore<S = unknown> {
+  getSnapshot(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<SessionSnapshot<S> | undefined>;
+  saveSnapshot(
+    snapshot: SessionSnapshot<S>,
+    options?: SessionStoreOptions
+  ): Promise<void>;
+  onSnapshotStateChange?(
+    snapshotId: string,
+    callback: (snapshot: SessionSnapshot<S>) => void,
+    options?: SessionStoreOptions
+  ): void | (() => void);
+}
+
+/**
+ * State manager for a session turn, tracking messages, custom state, and artifacts.
+ */
+export class Session<S = unknown> extends EventEmitter {
+  private state: SessionState<S>;
+  private version: number = 0;
+
+  constructor(initialState: SessionState<S>) {
+    super();
+    this.state = initialState;
   }
 
   /**
-   * Update session state data.
+   * Returns a deep copy of the current session state.
    */
-  async updateState(data: S): Promise<void> {
-    let sessionData = this.sessionData;
-    if (!sessionData) {
-      sessionData = {} as SessionData<S>;
-    }
-    sessionData.state = data;
-    this.sessionData = sessionData;
-
-    await this.store.save(this.id, sessionData);
+  getState(): SessionState<S> {
+    return structuredClone(this.state);
   }
 
   /**
-   * Update messages for a given thread.
+   * Retrieves all messages associated with the session.
    */
-  async updateMessages(thread: string, messages: MessageData[]): Promise<void> {
-    let sessionData = this.sessionData;
-    if (!sessionData) {
-      sessionData = {} as SessionData<S>;
-    }
-    if (!sessionData.threads) {
-      sessionData.threads = {};
-    }
-    sessionData.threads[thread] = messages.map((m: any) =>
-      m.toJSON ? m.toJSON() : m
-    );
-    this.sessionData = sessionData;
-
-    await this.store.save(this.id, sessionData);
+  getMessages(): MessageData[] {
+    return this.state.messages || [];
   }
 
   /**
-   * Create a chat session with the provided options.
-   *
-   * ```ts
-
-
+   * Appends a list of messages to the session.
+   */
+  addMessages(messages: MessageData[]) {
+    this.state.messages = [...(this.state.messages || []), ...messages];
+    this.version++;
+  }
 
   /**
-   * Executes provided function within this session context allowing calling
-   * `ai.currentSession().state`
+   * Overwrites the session messages.
+   */
+  setMessages(messages: MessageData[]) {
+    this.state.messages = messages;
+    this.version++;
+  }
+
+  /**
+   * Retrieves the custom state of the session.
+   */
+  getCustom(): S | undefined {
+    return this.state.custom;
+  }
+
+  /**
+   * Updates the custom state of the session using a mutator function.
+   */
+  updateCustom(fn: (custom?: S) => S) {
+    this.state.custom = fn(this.state.custom);
+    this.version++;
+  }
+
+  /**
+   * Retrieves the list of artifacts generated during the session.
+   */
+  getArtifacts(): Artifact[] {
+    return this.state.artifacts || [];
+  }
+
+  /**
+   * Adds artifacts to the session, deduplicating items by name.
+   * Emits 'artifactAdded' for new artifacts and 'artifactUpdated' for replacements.
+   */
+  addArtifacts(artifacts: Artifact[]) {
+    const existing = this.state.artifacts || [];
+    const added: Artifact[] = [];
+    const updated: Artifact[] = [];
+
+    for (const a of artifacts) {
+      if (a.name) {
+        const idx = existing.findIndex((e) => e.name === a.name);
+        if (idx >= 0) {
+          existing[idx] = a;
+          updated.push(a);
+          continue;
+        }
+      }
+      existing.push(a);
+      added.push(a);
+    }
+
+    this.state.artifacts = existing;
+    if (added.length + updated.length > 0) {
+      this.version++;
+    }
+    for (const a of added) {
+      this.emit('artifactAdded', a);
+    }
+    for (const a of updated) {
+      this.emit('artifactUpdated', a);
+    }
+  }
+
+  /**
+   * Runs the provided function inside the session's context.
    */
   run<O>(fn: () => O) {
-    return runWithSession(this.registry, this, fn);
+    return getAsyncContext().run('ai.session', this, fn);
   }
 
-  toJSON() {
-    return this.sessionData;
+  /**
+   * Gets the current mutation version of the session state.
+   */
+  getVersion(): number {
+    return this.version;
   }
 }
-
-export interface SessionData<S = any> {
-  id: string;
-  state?: S;
-  threads?: Record<string, MessageData[]>;
-}
-
-const sessionAlsKey = 'ai.session';
 
 /**
- * Executes provided function within the provided session state.
+ * In-memory implementation of persistent Session Store.
+ */
+export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
+  private snapshots = new Map<string, SessionSnapshot<S>>();
+  private listeners = new Map<
+    string,
+    Array<(snapshot: SessionSnapshot<S>) => void>
+  >();
+
+  async getSnapshot(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<SessionSnapshot<S> | undefined> {
+    const snap = this.snapshots.get(snapshotId);
+    if (!snap) return undefined;
+    return structuredClone(snap);
+  }
+
+  async saveSnapshot(
+    snapshot: SessionSnapshot<S>,
+    options?: SessionStoreOptions
+  ): Promise<void> {
+    this.snapshots.set(snapshot.snapshotId, structuredClone(snapshot));
+    const snapshotListeners = this.listeners.get(snapshot.snapshotId);
+    if (snapshotListeners) {
+      for (const listener of snapshotListeners) {
+        listener(structuredClone(snapshot));
+      }
+    }
+  }
+
+  onSnapshotStateChange(
+    snapshotId: string,
+    callback: (snapshot: SessionSnapshot<S>) => void,
+    options?: SessionStoreOptions
+  ): void | (() => void) {
+    if (!this.listeners.has(snapshotId)) {
+      this.listeners.set(snapshotId, []);
+    }
+    this.listeners.get(snapshotId)!.push(callback);
+    return () => {
+      const list = this.listeners.get(snapshotId);
+      if (list) {
+        const index = list.indexOf(callback);
+        if (index >= 0) list.splice(index, 1);
+      }
+    };
+  }
+}
+
+/**
+ * Utility to execute a function bound to a Session instance context.
  */
 export function runWithSession<S = any, O = any>(
   registry: Registry,
   session: Session<S>,
   fn: () => O
 ): O {
-  return getAsyncContext().run(sessionAlsKey, session, fn);
+  return getAsyncContext().run('ai.session', session, fn);
 }
 
-/** Returns the current session. */
+/**
+ * Returns the Session instance active in the current context.
+ */
 export function getCurrentSession<S = any>(
   registry: Registry
 ): Session<S> | undefined {
-  return getAsyncContext().getStore(sessionAlsKey);
+  return getAsyncContext().getStore('ai.session');
 }
 
-/** Throw when session state errors occur, ex. missing state, etc. */
+/**
+ * Error thrown during session execution.
+ */
 export class SessionError extends Error {
   constructor(msg: string) {
     super(msg);
   }
 }
 
-/** Session store persists session data such as state and chat messages. */
-export interface SessionStore<S = any> {
-  get(sessionId: string): Promise<SessionData<S> | undefined>;
+// Only UUID-shaped IDs are accepted to prevent path traversal.
+const SAFE_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  save(sessionId: string, data: Omit<SessionData<S>, 'id'>): Promise<void>;
-}
+/**
+ * A Node.js file-system backed session snapshot store.
+ *
+ * Each snapshot is persisted as a JSON file under `dirPath/<prefix>/<snapshotId>.json`.
+ * Only UUID-formatted snapshot IDs are accepted to prevent path traversal.
+ */
+export class FileSessionStore<S = unknown> implements SessionStore<S> {
+  private dirPath: string;
+  private maxPersistedChainLength?: number;
+  private snapshotPathPrefix?: (
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ) => string;
 
-export function inMemorySessionStore() {
-  return new InMemorySessionStore();
-}
-
-class InMemorySessionStore<S = any> implements SessionStore<S> {
-  private data: Record<string, SessionData<S>> = {};
-
-  async get(sessionId: string): Promise<SessionData<S> | undefined> {
-    return this.data[sessionId];
+  /**
+   * @param dirPath Directory where snapshot JSON files are stored.
+   * @param options.maxPersistedChainLength When set, snapshots older than this
+   *   many entries in a chain are automatically deleted on each save.
+   * @param options.snapshotPathPrefix Returns a sub-directory prefix per
+   *   snapshot, useful for multi-tenant isolation. Defaults to `"global"`.
+   */
+  constructor(
+    dirPath: string,
+    options?: {
+      maxPersistedChainLength?: number;
+      snapshotPathPrefix?: (
+        snapshotId: string,
+        options?: SessionStoreOptions
+      ) => string;
+    }
+  ) {
+    this.dirPath = path.resolve(dirPath);
+    fs.mkdirSync(this.dirPath, { recursive: true });
+    this.maxPersistedChainLength = options?.maxPersistedChainLength;
+    this.snapshotPathPrefix = options?.snapshotPathPrefix;
   }
 
-  async save(sessionId: string, sessionData: SessionData<S>): Promise<void> {
-    this.data[sessionId] = sessionData;
+  private validateId(snapshotId: string): void {
+    if (!SAFE_ID_PATTERN.test(snapshotId)) {
+      throw new Error(`Invalid snapshotId: "${snapshotId}"`);
+    }
+  }
+
+  private async ensureDir(dir: string): Promise<void> {
+    await fsp.mkdir(dir, { recursive: true });
+  }
+
+  private async getFilePath(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<string> {
+    this.validateId(snapshotId);
+    const prefix = this.snapshotPathPrefix
+      ? this.snapshotPathPrefix(snapshotId, options)
+      : 'global';
+    const dir = path.join(this.dirPath, prefix);
+    await this.ensureDir(dir);
+    return path.join(dir, `${snapshotId}.json`);
+  }
+
+  async getSnapshot(
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<SessionSnapshot<S> | undefined> {
+    const filePath = await this.getFilePath(snapshotId, options);
+    try {
+      const fileContents = await fsp.readFile(filePath, 'utf-8');
+      return JSON.parse(fileContents) as SessionSnapshot<S>;
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw e;
+    }
+  }
+
+  async saveSnapshot(
+    snapshot: SessionSnapshot<S>,
+    options?: SessionStoreOptions
+  ): Promise<void> {
+    const filePath = await this.getFilePath(snapshot.snapshotId, options);
+    await fsp.writeFile(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+
+    if (this.maxPersistedChainLength && this.maxPersistedChainLength > 0) {
+      let current: SessionSnapshot<S> | undefined = snapshot;
+      const chain: string[] = [];
+
+      while (current) {
+        chain.push(current.snapshotId);
+        if (current.parentId) {
+          current = await this.getSnapshot(current.parentId, options);
+        } else {
+          break;
+        }
+      }
+
+      if (chain.length > this.maxPersistedChainLength) {
+        for (let i = this.maxPersistedChainLength; i < chain.length; i++) {
+          const pathToDelete = await this.getFilePath(chain[i], options);
+          await fsp.unlink(pathToDelete).catch((e: unknown) => {
+            if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          });
+        }
+      }
+    }
   }
 }
