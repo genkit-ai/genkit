@@ -14,7 +14,7 @@ pnpm add @genkit-ai/middleware
 
 ### 1. Agents Middleware (`agents`)
 
-Enables sub-agent delegation by injecting a `call_agent` tool that allows the model to delegate tasks to registered sub-agents. When the model calls the tool, the middleware intercepts the call, runs the specified sub-agent via `ai.generate()`, and returns its response as the tool result.
+Enables sub-agent delegation by injecting a call_agent tool that allows the model to delegate tasks to registered sub-agents. When the model calls the tool, the middleware intercepts the call and runs the specified sub-agent via its run() method. If the sub-agent execution fails, the error is reported back to the model via a history message, allowing it to attempt a correction.
 
 **Key behaviors:**
 - Injects a system prompt describing available sub-agents
