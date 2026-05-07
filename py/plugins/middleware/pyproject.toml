@@ -17,9 +17,6 @@
 [project]
 authors = [
   { name = "Google" },
-  { name = "Yesudeep Mangalapilly", email = "yesudeep@google.com" },
-  { name = "Elisa Shen", email = "mengqin@google.com" },
-  { name = "Niraj Nepal", email = "nnepal@google.com" },
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
