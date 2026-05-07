@@ -612,6 +612,9 @@ class ReflectionRunActionParams(GenkitModel):
     runtime_id: str | None = None
     key: str = Field(..., description='Action key that consists of the action type and ID.')
     input: Any | None = Field(default=None, description='An input with the type that this action expects.')
+    init: Any | None = Field(
+        default=None, description='Initialization parameters to establish long running session states.'
+    )
     context: Any | None = Field(default=None, description='Additional runtime context data (ex. auth context data).')
     telemetry_labels: TelemetryLabels | None = None
     stream: bool | None = None
