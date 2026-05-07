@@ -36,9 +36,10 @@ const __flowStreamDelimiter = '\n\n';
  * console.log(await response.output);
  * ```
  */
-export function streamFlow<O = any, S = any>({
+export function streamFlow<O = any, S = any, Init = any>({
   url,
   input,
+  init,
   streamId,
   headers,
   abortSignal,
@@ -47,6 +48,8 @@ export function streamFlow<O = any, S = any>({
   url: string;
   /** Flow input. */
   input?: any;
+  /** Initialization data for the action. */
+  init?: Init;
   /** Stream ID to connect to. */
   streamId?: string;
   /** A map of HTTP headers to be added to the HTTP call. */
@@ -64,6 +67,7 @@ export function streamFlow<O = any, S = any>({
   const operationPromise = __flowRunEnvelope({
     url,
     input,
+    init,
     sendChunk: (c) => channel.send(c),
     headers: streamId
       ? { ...headers, 'x-genkit-stream-id': streamId }
@@ -88,6 +92,7 @@ export function streamFlow<O = any, S = any>({
 async function __flowRunEnvelope({
   url,
   input,
+  init,
   sendChunk,
   headers,
   abortSignal,
@@ -95,6 +100,7 @@ async function __flowRunEnvelope({
 }: {
   url: string;
   input: any;
+  init?: any;
   sendChunk: (chunk: any) => void;
   headers?: Record<string, string>;
   abortSignal?: AbortSignal;
@@ -104,6 +110,7 @@ async function __flowRunEnvelope({
     method: 'POST',
     body: JSON.stringify({
       data: input,
+      ...(init !== undefined && { init }),
     }),
     headers: {
       Accept: 'text/event-stream',
@@ -177,9 +184,10 @@ async function __flowRunEnvelope({
  * console.log(await response);
  * ```
  */
-export async function runFlow<O = any>({
+export async function runFlow<O = any, Init = any>({
   url,
   input,
+  init,
   headers,
   abortSignal,
 }: {
@@ -187,6 +195,8 @@ export async function runFlow<O = any>({
   url: string;
   /** Flow input. */
   input?: any;
+  /** Initialization data for the action. */
+  init?: Init;
   /** A map of HTTP headers to be added to the HTTP call. */
   headers?: Record<string, string>;
   /** Abort signal to abort the request. */
@@ -196,6 +206,7 @@ export async function runFlow<O = any>({
     method: 'POST',
     body: JSON.stringify({
       data: input,
+      ...(init !== undefined && { init }),
     }),
     headers: {
       'Content-Type': 'application/json',
