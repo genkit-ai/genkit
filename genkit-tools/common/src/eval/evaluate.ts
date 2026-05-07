@@ -194,13 +194,15 @@ export async function runEvaluation(params: {
   const runtime = manager.getMostRecentRuntime();
   const isNodeRuntime = runtime?.genkitVersion?.startsWith('nodejs') ?? false;
 
+  const successfulResults = evalDataset.filter((row) => !row.error);
+
   await Promise.all(
     evaluatorActions.map(async (action) => {
       const name = evaluatorName(action);
       const response = await manager.runAction({
         key: name,
         input: {
-          dataset: evalDataset.filter((row) => !row.error),
+          dataset: successfulResults,
           evalRunId,
           batchSize: isNodeRuntime ? batchSize : undefined,
         },
@@ -264,7 +266,7 @@ export async function getMatchingEvaluatorActions(
   return filteredEvaluatorActions;
 }
 
-async function bulkRunAction(params: {
+export async function bulkRunAction(params: {
   manager: BaseRuntimeManager;
   actionRef: string;
   inferenceDataset: Dataset;
