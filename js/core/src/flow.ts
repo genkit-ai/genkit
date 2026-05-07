@@ -15,7 +15,7 @@
  */
 
 import type { z } from 'zod';
-import { ActionFnArg, action, type Action } from './action.js';
+import { ActionFnArg, ActionParams, action, type Action } from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
 
@@ -35,17 +35,8 @@ export interface FlowConfig<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
-> {
-  /** Name of the flow. */
+> extends Omit<ActionParams<I, O, S>, 'actionType'> {
   name: string;
-  /** Schema of the input to the flow. */
-  inputSchema?: I;
-  /** Schema of the output from the flow. */
-  outputSchema?: O;
-  /** Schema of the streaming chunks from the flow. */
-  streamSchema?: S;
-  /** Metadata of the flow used by tooling. */
-  metadata?: Record<string, any>;
 }
 
 /**
@@ -115,11 +106,7 @@ function flowAction<
   return action(
     {
       actionType: 'flow',
-      name: config.name,
-      inputSchema: config.inputSchema,
-      outputSchema: config.outputSchema,
-      streamSchema: config.streamSchema,
-      metadata: config.metadata,
+      ...config,
     },
     async (
       input,
