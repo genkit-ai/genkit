@@ -1,0 +1,52 @@
+{
+  "name": "@genkit-ai/a2a",
+  "keywords": [
+    "genkit",
+    "genkit-plugin",
+    "a2a",
+    "agent-to-agent",
+    "ai",
+    "genai",
+    "generative-ai"
+  ],
+  "version": "1.33.0",
+  "description": "A Genkit plugin that provides interoperability between Genkit Agent Flow and the A2A (Agent-to-Agent) protocol.",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./lib/index.js",
+      "import": "./lib/index.mjs",
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "type": "commonjs",
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "tsx --test ./tests/*_test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/a2a"
+  },
+  "author": "genkit",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "genkit": "workspace:^",
+    "@a2a-js/sdk": "^0.3.13"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

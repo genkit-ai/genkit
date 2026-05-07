@@ -1,0 +1,21 @@
+{
+  "name": "a2a-testapp",
+  "version": "1.0.0",
+  "description": "Testapp for A2A agent interoperability",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "npx tsx src/index.ts",
+    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
+  },
+  "dependencies": {
+    "@genkit-ai/a2a": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/middleware": "workspace:*",
+    "@a2a-js/sdk": "^0.3.13",
+    "genkit": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
