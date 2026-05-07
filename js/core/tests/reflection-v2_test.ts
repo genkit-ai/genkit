@@ -884,7 +884,7 @@ describe('ReflectionServerV2', () => {
     await actionRun;
   });
 
-  it('should handle bidi action with init data passed as input', async () => {
+  it('should handle bidi action with init data', async () => {
     const initBidiAction = bidiAction(
       {
         name: 'initBidi',
@@ -927,14 +927,15 @@ describe('ReflectionServerV2', () => {
                   id: msg.id,
                 })
               );
-              // Input carries init data for bidi actions
+              // Init data is passed via the init param
               ws.send(
                 JSON.stringify({
                   jsonrpc: '2.0',
                   method: 'runAction',
                   params: {
                     key: '/custom/initBidi',
-                    input: { prefix: 'test' },
+                    input: null,
+                    init: { prefix: 'test' },
                     stream: true,
                     streamInput: true,
                   },
@@ -1082,6 +1083,118 @@ describe('ReflectionServerV2', () => {
               assert.deepStrictEqual(msg.result.result, {
                 items: ['x', 'y'],
               });
+              clearTimeout(timeout);
+              resolve();
+            }
+          } catch (e) {
+            clearTimeout(timeout);
+            reject(e);
+          }
+        });
+      });
+    });
+
+    server = new ReflectionServerV2(registry, {
+      url: `ws://localhost:${port}`,
+    });
+    await server.start();
+    await actionRun;
+  });
+
+  it('should use explicit init param over input for bidi action', async () => {
+    // When both init and input are provided for a bidi action,
+    // the explicit init should take precedence over input.
+    const bidiWithInit = bidiAction(
+      {
+        name: 'bidiWithInit',
+        inputSchema: z.string(),
+        outputSchema: z.object({
+          initValue: z.string(),
+          messages: z.array(z.string()),
+        }),
+        streamSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+        actionType: 'custom',
+      },
+      async function* ({ inputStream, init }) {
+        const messages: string[] = [];
+        for await (const msg of inputStream) {
+          messages.push(`${init.sessionId}:${msg}`);
+          yield `${init.sessionId}:${msg}`;
+        }
+        return { initValue: init.sessionId, messages };
+      }
+    );
+    registry.registerAction('custom', bidiWithInit);
+
+    const outputChunks: any[] = [];
+    const actionRun = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error('bidi with init timeout')),
+        3000
+      );
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          try {
+            const msg = JSON.parse(data.toString());
+            if (msg.method === 'register') {
+              ws.send(
+                JSON.stringify({
+                  jsonrpc: '2.0',
+                  result: {},
+                  id: msg.id,
+                })
+              );
+              // Send both input and init; init should win
+              ws.send(
+                JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'runAction',
+                  params: {
+                    key: '/custom/bidiWithInit',
+                    input: { sessionId: 'wrong-from-input' },
+                    init: { sessionId: 'correct-from-init' },
+                    stream: true,
+                    streamInput: true,
+                  },
+                  id: 'bidi-init-1',
+                })
+              );
+              setTimeout(() => {
+                ws.send(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'sendInputStreamChunk',
+                    params: { requestId: 'bidi-init-1', chunk: 'hello' },
+                  })
+                );
+                ws.send(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'endInputStream',
+                    params: { requestId: 'bidi-init-1' },
+                  })
+                );
+              }, 50);
+            } else if (msg.method === 'streamChunk') {
+              if (msg.params.requestId === 'bidi-init-1') {
+                outputChunks.push(msg.params.chunk);
+              }
+            } else if (msg.id === 'bidi-init-1') {
+              if (msg.error) {
+                reject(
+                  new Error(
+                    `bidi with init error: ${JSON.stringify(msg.error)}`
+                  )
+                );
+                return;
+              }
+              // init should be { sessionId: 'correct-from-init' }, not input
+              assert.deepStrictEqual(msg.result.result, {
+                initValue: 'correct-from-init',
+                messages: ['correct-from-init:hello'],
+              });
+              assert.deepStrictEqual(outputChunks, ['correct-from-init:hello']);
               clearTimeout(timeout);
               resolve();
             }
