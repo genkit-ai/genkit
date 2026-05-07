@@ -90,10 +90,10 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   let server: Server;
   const app = express();
 
-  // Allow all origins and expose trace ID header
+  // Only allow localhost origins (matching telemetry server pattern)
   app.use(
     cors({
-      origin: '*',
+      origin: /^http:\/\/localhost:\d+$/,
       allowedHeaders: ['Content-Type'],
       exposedHeaders: ['X-Genkit-Trace-Id'],
     })
