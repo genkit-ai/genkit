@@ -1086,31 +1086,6 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  testapps/agents.local.copy:
-    dependencies:
-      '@genkit-ai/express':
-        specifier: workspace:*
-        version: link:../../plugins/express
-      '@genkit-ai/google-genai':
-        specifier: workspace:*
-        version: link:../../plugins/google-genai
-      '@genkit-ai/middleware':
-        specifier: workspace:*
-        version: link:../../plugins/middleware
-      express:
-        specifier: ^4.20.0
-        version: 4.22.1
-      genkit:
-        specifier: workspace:*
-        version: link:../../genkit
-    devDependencies:
-      '@types/express':
-        specifier: ^4.17.21
-        version: 4.17.25
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
   testapps/agents/web:
     dependencies:
       genkit:
