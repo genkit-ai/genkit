@@ -206,9 +206,8 @@ export async function runEvaluation(params: {
         },
       });
       scores[name] = response.result;
-      logger.info(
-        `Finished evaluator '${action.name}'. Trace ID: ${response.telemetry?.traceId}`
-      );
+      logger.debug(`Finished evaluator '${action.name}'`);
+      logger.info(`${clc.cyan('Trace ID:')} ${response.telemetry?.traceId}`);
     })
   );
 
@@ -304,7 +303,7 @@ async function bulkRunAction(params: {
   const evalInputs: EvalInput[] = [];
   const runSample = async (sample: FullInferenceSample, index: number) => {
     try {
-      logger.info(`Running inference '${actionRef}' ...`);
+      logger.debug(`Running inference '${actionRef}' ...`);
       if (actionType === 'model') {
         states[index] = await runModelAction({
           manager,
@@ -352,7 +351,7 @@ async function bulkRunAction(params: {
       batch.map((sample, offset) => runSample(sample, i + offset))
     );
   }
-  logger.info(`Gathering evalInputs...`);
+  logger.debug(`Gathering evalInputs...`);
   for (const state of states) {
     evalInputs.push(await gatherEvalInput({ manager, actionRef, state }));
   }
