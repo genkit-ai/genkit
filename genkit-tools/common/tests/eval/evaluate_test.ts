@@ -143,6 +143,46 @@ describe('bulkRunAction', () => {
     expect(results.some((r) => r.error)).toBe(true);
     expect(manager.runAction).toHaveBeenCalledTimes(3);
   }, 10000);
+
+  it('maintains constant concurrency with worker pool', async () => {
+    const manager = createMockManager();
+    let activeCount = 0;
+    let maxActiveCount = 0;
+    const delays = [100, 10, 10, 100];
+    let callIndex = 0;
+    manager.runAction.mockImplementation(async () => {
+      activeCount++;
+      maxActiveCount = Math.max(maxActiveCount, activeCount);
+      const delay = delays[callIndex++] ?? 10;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      activeCount--;
+      return {
+        result: 'ok',
+        telemetry: { traceId: 'trace' },
+      };
+    });
+    manager.getTrace.mockResolvedValue({
+      spans: {},
+      mockInput: 'input',
+      mockOutput: 'output',
+    });
+
+    const dataset = Array.from({ length: 4 }, (_, i) => ({
+      testCaseId: `case-${i}`,
+      input: { value: i },
+    }));
+
+    const results = await bulkRunAction({
+      manager: manager as any,
+      actionRef: '/flow/test',
+      inferenceDataset: dataset as any,
+      batchSize: 2,
+    });
+
+    expect(results).toHaveLength(4);
+    expect(maxActiveCount).toBeLessThanOrEqual(2);
+    expect(manager.runAction).toHaveBeenCalledTimes(4);
+  }, 15000);
 });
 
 describe('runEvaluation', () => {

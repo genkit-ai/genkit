@@ -347,12 +347,15 @@ export async function bulkRunAction(params: {
     }
   };
 
-  for (let i = 0; i < total; i += resolvedConcurrency) {
-    const batch = fullInferenceDataset.slice(i, i + resolvedConcurrency);
-    await Promise.all(
-      batch.map((sample, offset) => runSample(sample, i + offset))
-    );
-  }
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: resolvedConcurrency }, async () => {
+      while (nextIndex < total) {
+        const index = nextIndex++;
+        await runSample(fullInferenceDataset[index], index);
+      }
+    })
+  );
   logger.debug(`Gathering evalInputs...`);
   for (const state of states) {
     evalInputs.push(await gatherEvalInput({ manager, actionRef, state }));
