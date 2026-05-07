@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import cast
 
@@ -163,12 +164,12 @@ class Registry:
         #   we key both the in-flight task cache and the "all done" flag by the
         #   running loop.
         self._plugins: dict[str, Plugin] = {}
-        self._plugin_init_tasks: dict[
+        self._plugin_init_tasks: weakref.WeakKeyDictionary[
             asyncio.AbstractEventLoop, dict[str, asyncio.Task[None]]
-        ] = {}
-        self._all_plugins_initialized: dict[
+        ] = weakref.WeakKeyDictionary()
+        self._all_plugins_initialized: weakref.WeakKeyDictionary[
             asyncio.AbstractEventLoop, bool
-        ] = {}
+        ] = weakref.WeakKeyDictionary()
 
     # -------------------------------------------------------------------------
     # Child registry support
@@ -432,7 +433,9 @@ class Registry:
             plugin_names = list(self._plugins.keys())
         for name in plugin_names:
             await self._ensure_plugin_initialized(name)
-        self._all_plugins_initialized[loop] = True
+        with self._lock:
+            if len(self._plugins) == len(plugin_names):
+                self._all_plugins_initialized[loop] = True
 
     async def _ensure_plugin_initialized(self, plugin_name: str) -> None:
         """Ensure a plugin is initialized exactly once.
