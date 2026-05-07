@@ -317,35 +317,40 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 			return nil, fmt.Errorf("tool name must match regex: %s", ToolNameRegex)
 		}
 
-		var schema anthropic.ToolInputSchemaParam
 		inputSchema := t.InputSchema
 		if len(inputSchema) == 0 {
 			inputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 
-		// Strict tools require additionalProperties: false recursively
-		var strictInputSchema map[string]any
-		if b, err := json.Marshal(inputSchema); err != nil {
-			return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
-		} else if err := json.Unmarshal(b, &strictInputSchema); err != nil {
-			return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
-		}
-		enforceStrictSchema(strictInputSchema)
-		inputSchema = strictInputSchema
+		// Strict is the provider default (true) unless the tool explicitly opts out.
+		strict := provider != "vertexai" && (t.Strict == nil || *t.Strict)
 
-		var err error
-		schema, err = base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
+		// Strict mode requires additionalProperties: false recursively throughout the schema.
+		if strict {
+			var strictInputSchema map[string]any
+			if b, err := json.Marshal(inputSchema); err != nil {
+				return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
+			} else if err := json.Unmarshal(b, &strictInputSchema); err != nil {
+				return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
+			}
+			enforceStrictSchema(strictInputSchema)
+			inputSchema = strictInputSchema
+		}
+
+		schema, err := base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse tool input schema: %w", err)
 		}
 
 		// ToolInputSchemaParam struct doesn't have AdditionalProperties field,
 		// so we must add it to ExtraFields manually for the top-level schema.
-		if schema.ExtraFields == nil {
-			schema.ExtraFields = make(map[string]any)
-		}
-		if t, ok := inputSchema["type"].(string); ok && t == "object" {
-			schema.ExtraFields["additionalProperties"] = false
+		if strict {
+			if schema.ExtraFields == nil {
+				schema.ExtraFields = make(map[string]any)
+			}
+			if typ, ok := inputSchema["type"].(string); ok && typ == "object" {
+				schema.ExtraFields["additionalProperties"] = false
+			}
 		}
 
 		tool := &anthropic.ToolParam{
@@ -353,8 +358,10 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 			Description: anthropic.String(t.Description),
 			InputSchema: schema,
 		}
-		// Vertex AI's Anthropic endpoint does not support the strict field.
-		if provider != "vertexai" {
+		// Only set strict when true. Sending strict: false still triggers
+		// Anthropic's supported-keywords validator (which rejects e.g.
+		// maxItems/minItems); omitting the field skips validation entirely.
+		if strict {
 			tool.Strict = anthropic.Bool(true)
 		}
 		resp = append(resp, anthropic.ToolUnionParam{OfTool: tool})

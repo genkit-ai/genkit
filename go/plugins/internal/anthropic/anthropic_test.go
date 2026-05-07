@@ -204,6 +204,37 @@ func TestToAnthropicTools(t *testing.T) {
 			},
 		},
 		{
+			name: "tool with strict opt-out omits the strict field",
+			tools: []*ai.ToolDefinition{
+				{
+					Name:        "loose-tool",
+					Description: "tool that opts out of strict",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"items": map[string]any{
+								"type":     "array",
+								"maxItems": 5,
+							},
+						},
+					},
+					Strict: func() *bool { b := false; return &b }(),
+				},
+			},
+			check: func(t *testing.T, got []anthropic.ToolUnionParam) {
+				if len(got) != 1 {
+					t.Fatalf("expected 1 tool, got %d", len(got))
+				}
+				tool := got[0].OfTool
+				if tool.Strict.Valid() {
+					t.Errorf("expected Strict to be omitted, got value=%v", tool.Strict.Value)
+				}
+				if _, ok := tool.InputSchema.ExtraFields["additionalProperties"]; ok {
+					t.Errorf("expected additionalProperties to be absent, got %v", tool.InputSchema.ExtraFields["additionalProperties"])
+				}
+			},
+		},
+		{
 			name: "empty tool name",
 			tools: []*ai.ToolDefinition{
 				{

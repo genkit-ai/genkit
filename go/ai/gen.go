@@ -529,6 +529,9 @@ type ToolDefinition struct {
 	Name string `json:"name,omitempty"`
 	// OutputSchema is a valid JSON Schema describing the output of the tool.
 	OutputSchema map[string]any `json:"outputSchema,omitempty"`
+	// Strict controls whether strict schema validation is enforced for this tool.
+	// When nil, the provider's default is used.
+	Strict *bool `json:"strict,omitempty"`
 }
 
 // A ToolRequest is a message from the model to the client that it should run a
