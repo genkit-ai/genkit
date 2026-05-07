@@ -14,23 +14,23 @@
  * limitations under the License.
  */
 
-import { ClientFactory } from '@a2a-js/sdk/client';
 import type {
   Message as A2AMessage,
   Task as A2ATask,
   MessageSendParams,
 } from '@a2a-js/sdk';
+import { ClientFactory } from '@a2a-js/sdk/client';
 import type {
-  GenkitBeta,
   AgentFn,
+  GenkitBeta,
   SessionStore,
   SnapshotCallback,
 } from 'genkit/beta';
 
 import {
-  mapGenkitPartToA2A,
-  mapA2APartToGenkit,
   mapA2AArtifactToGenkit,
+  mapA2APartToGenkit,
+  mapGenkitPartToA2A,
 } from './mapping.js';
 
 /**
@@ -112,8 +112,8 @@ export function defineA2AAgent<State = unknown>(
     // Get or create a stable A2A contextId for this session.
     // This ensures multi-turn conversations within the same invocation
     // are correctly associated on the remote side.
-    let a2aContextId: string | undefined =
-      (sess.session.getCustom() as any)?.a2aContextId;
+    let a2aContextId: string | undefined = (sess.session.getCustom() as any)
+      ?.a2aContextId;
     if (!a2aContextId) {
       a2aContextId = crypto.randomUUID();
       sess.session.updateCustom((custom) => ({
@@ -123,8 +123,8 @@ export function defineA2AAgent<State = unknown>(
     }
 
     // Track the last A2A taskId for multi-turn continuity
-    let a2aTaskId: string | undefined =
-      (sess.session.getCustom() as any)?.a2aTaskId;
+    let a2aTaskId: string | undefined = (sess.session.getCustom() as any)
+      ?.a2aTaskId;
 
     await sess.run(async (input) => {
       // Get the latest user message parts
@@ -182,9 +182,7 @@ export function defineA2AAgent<State = unknown>(
 
         if (finalAgentMessage) {
           const genkitParts = finalAgentMessage.parts.map(mapA2APartToGenkit);
-          sess.session.addMessages([
-            { role: 'model', content: genkitParts },
-          ]);
+          sess.session.addMessages([{ role: 'model', content: genkitParts }]);
         }
 
         // Stream status if available
@@ -223,9 +221,7 @@ export function defineA2AAgent<State = unknown>(
  * This represents the "final answer" from the remote agent, ignoring
  * intermediate tool-call and tool-response messages.
  */
-function findFinalTextMessage(
-  messages: A2AMessage[]
-): A2AMessage | undefined {
+function findFinalTextMessage(messages: A2AMessage[]): A2AMessage | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.parts.some((p) => p.kind === 'text')) {

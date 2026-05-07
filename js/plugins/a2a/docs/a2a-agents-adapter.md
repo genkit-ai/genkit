@@ -31,8 +31,8 @@ The agent flow architecture (`js/ai/src/session-flow.ts`) provides:
   status, artifact, turnEnd) plus a final `AgentOutput`.
 - **`defineCustomAgent`** — register an agent with a custom handler (`AgentFn`).
 - **`defineAgent` / `definePromptAgent`** — prompt-backed convenience wrappers.
-- **State management**: either *client-managed* (state returned in
-  `AgentOutput.state`, passed back in `AgentInit.state`) or *server-managed*
+- **State management**: either _client-managed_ (state returned in
+  `AgentOutput.state`, passed back in `AgentInit.state`) or _server-managed_
   (via a `SessionStore` + `snapshotId`).
 - Features: detach (background execution), abort, multi-turn, interrupts,
   artifacts, streaming.
@@ -84,6 +84,7 @@ The initial implementation targets simple blocking `message/send`. A typical
 exchange looks like this:
 
 **Request** (JSON-RPC `message/send`):
+
 ```json
 {
   "transport": "JSONRPC",
@@ -91,15 +92,14 @@ exchange looks like this:
   "message": {
     "kind": "message",
     "messageId": "msg-123",
-    "parts": [
-      { "kind": "text", "text": "what's the weather in london?" }
-    ],
+    "parts": [{ "kind": "text", "text": "what's the weather in london?" }],
     "role": "user"
   }
 }
 ```
 
 **Response** (A2A Task with completed status):
+
 ```json
 {
   "id": "task-456",
@@ -113,7 +113,10 @@ exchange looks like this:
     {
       "artifactId": "art-001",
       "parts": [
-        { "kind": "text", "text": "The weather in london is sunny and 72 degrees." }
+        {
+          "kind": "text",
+          "text": "The weather in london is sunny and 72 degrees."
+        }
       ]
     }
   ],
@@ -130,33 +133,51 @@ exchange looks like this:
       "kind": "message",
       "messageId": "msg-tool-call",
       "role": "agent",
-      "parts": [{
-        "kind": "data",
-        "data": { "id": "call-1", "name": "get_weather", "args": { "location": "london" } },
-        "metadata": { "genkit_type": "function_call" }
-      }]
+      "parts": [
+        {
+          "kind": "data",
+          "data": {
+            "id": "call-1",
+            "name": "get_weather",
+            "args": { "location": "london" }
+          },
+          "metadata": { "genkit_type": "function_call" }
+        }
+      ]
     },
     {
       "kind": "message",
       "messageId": "msg-tool-resp",
       "role": "agent",
-      "parts": [{
-        "kind": "data",
-        "data": { "id": "call-1", "name": "get_weather", "response": { "result": "sunny and 72 degrees" } },
-        "metadata": { "genkit_type": "function_response" }
-      }]
+      "parts": [
+        {
+          "kind": "data",
+          "data": {
+            "id": "call-1",
+            "name": "get_weather",
+            "response": { "result": "sunny and 72 degrees" }
+          },
+          "metadata": { "genkit_type": "function_response" }
+        }
+      ]
     },
     {
       "kind": "message",
       "messageId": "msg-final",
       "role": "agent",
-      "parts": [{ "kind": "text", "text": "The weather in london is sunny and 72 degrees." }]
+      "parts": [
+        {
+          "kind": "text",
+          "text": "The weather in london is sunny and 72 degrees."
+        }
+      ]
     }
   ]
 }
 ```
 
 Key observations:
+
 - The response is a **Task** object containing the full conversation history,
   artifacts, and a terminal status.
 - Tool calls and responses appear in the history as data parts with type
@@ -185,7 +206,7 @@ const remoteAgent = ai.defineA2AAgent({
   agentUrl: 'https://remote-agent.example.com',
   // optional overrides:
   description: 'A remote research agent',
-  store: mySessionStore,  // enable server-managed state
+  store: mySessionStore, // enable server-managed state
 });
 
 // Use exactly like any other agent:
@@ -338,6 +359,7 @@ interface directly, translating A2A protocol calls to agent flow's
 `streamBidi()`.
 
 **Rationale:**
+
 - **Single source of truth**: Genkit's `SessionStore` IS the persistence layer.
   No dual writes.
 - **Natural mapping**: A2A `taskId` ↔ Genkit `snapshotId`, A2A `contextId` ↔
@@ -361,7 +383,7 @@ runs the Genkit agent to completion and returns a Task with full history.
 class GenkitA2ARequestHandler implements A2ARequestHandler {
   constructor(
     private agent: Agent,
-    private agentCard: AgentCard,
+    private agentCard: AgentCard
   ) {}
 
   async getAgentCard(): Promise<AgentCard> {
@@ -379,7 +401,7 @@ class GenkitA2ARequestHandler implements A2ARequestHandler {
 
     // 1. Map A2A message parts → Genkit parts
     const genkitParts = incomingMessage.parts.map(mapA2APartToGenkit);
-    const isToolResponse = genkitParts.some(p => 'toolResponse' in p);
+    const isToolResponse = genkitParts.some((p) => 'toolResponse' in p);
 
     // 2. Determine init — resume from existing snapshot or fresh
     const init: AgentInit = {};
@@ -390,20 +412,26 @@ class GenkitA2ARequestHandler implements A2ARequestHandler {
 
     // 3. Run agent to completion (blocking)
     const result = await this.agent.run(
-      { messages: [{ role: isToolResponse ? 'tool' : 'user', content: genkitParts }] },
+      {
+        messages: [
+          { role: isToolResponse ? 'tool' : 'user', content: genkitParts },
+        ],
+      },
       { init }
     );
     const output: AgentOutput = result.result;
 
     // 4. Build A2A Task response
-    const history: A2AMessage[] = (output.state?.messages || []).map((m, i) => ({
-      kind: 'message',
-      messageId: `msg-${taskId}-${i}`,
-      role: m.role === 'user' || m.role === 'system' ? 'user' : 'agent',
-      parts: m.content.map(mapGenkitPartToA2A),
-      contextId,
-      taskId,
-    }));
+    const history: A2AMessage[] = (output.state?.messages || []).map(
+      (m, i) => ({
+        kind: 'message',
+        messageId: `msg-${taskId}-${i}`,
+        role: m.role === 'user' || m.role === 'system' ? 'user' : 'agent',
+        parts: m.content.map(mapGenkitPartToA2A),
+        contextId,
+        taskId,
+      })
+    );
 
     const artifacts = (output.artifacts || []).map(mapGenkitArtifactToA2A);
 
@@ -439,37 +467,60 @@ class GenkitA2ARequestHandler implements A2ARequestHandler {
   }
 
   // Push notifications — not supported initially
-  async setTaskPushNotificationConfig() { throw A2AError.pushNotificationNotSupported(); }
-  async getTaskPushNotificationConfig() { throw A2AError.pushNotificationNotSupported(); }
-  async listTaskPushNotificationConfigs() { throw A2AError.pushNotificationNotSupported(); }
-  async deleteTaskPushNotificationConfig() { throw A2AError.pushNotificationNotSupported(); }
-  async *resubscribe() { throw A2AError.unsupportedOperation('resubscribe'); }
+  async setTaskPushNotificationConfig() {
+    throw A2AError.pushNotificationNotSupported();
+  }
+  async getTaskPushNotificationConfig() {
+    throw A2AError.pushNotificationNotSupported();
+  }
+  async listTaskPushNotificationConfigs() {
+    throw A2AError.pushNotificationNotSupported();
+  }
+  async deleteTaskPushNotificationConfig() {
+    throw A2AError.pushNotificationNotSupported();
+  }
+  async *resubscribe() {
+    throw A2AError.unsupportedOperation('resubscribe');
+  }
 }
 ```
 
 ### Wiring to Express
 
 ```ts
-import { jsonRpcHandler, restHandler, agentCardHandler } from '@a2a-js/sdk/server/express';
+import {
+  jsonRpcHandler,
+  restHandler,
+  agentCardHandler,
+} from '@a2a-js/sdk/server/express';
 
 const handler = new GenkitA2ARequestHandler(myAgent, agentCard);
 
 // JSON-RPC transport (the primary A2A protocol)
-app.use('/a2a', jsonRpcHandler({
-  requestHandler: handler,
-  userBuilder: UserBuilder.noAuthentication,
-}));
+app.use(
+  '/a2a',
+  jsonRpcHandler({
+    requestHandler: handler,
+    userBuilder: UserBuilder.noAuthentication,
+  })
+);
 
 // REST transport (optional)
-app.use('/a2a/rest', restHandler({
-  requestHandler: handler,
-  userBuilder: UserBuilder.noAuthentication,
-}));
+app.use(
+  '/a2a/rest',
+  restHandler({
+    requestHandler: handler,
+    userBuilder: UserBuilder.noAuthentication,
+  })
+);
 
 // Agent card discovery
-app.use('/.well-known/agent-card.json', agentCardHandler({
-  agentCardProvider: handler,
-}));
+app.use(
+  '/.well-known/agent-card.json',
+  agentCardHandler({
+    agentCardProvider: handler,
+  })
+);
 ```
 
 ### gRPC Support
@@ -487,17 +538,17 @@ transport concerns.
 
 ### Key Mapping Details
 
-| A2A Concept          | Genkit Agent Flow Concept   |
-|----------------------|-----------------------------|
-| `taskId`             | `snapshotId`                |
-| `contextId`          | Session lineage (parentId chain) |
-| `Message.parts`      | `MessageData.content` (Part mapping) |
-| `Task.status.state`  | Snapshot status (pending/done/failed/aborted) |
-| `Task.history`       | `SessionState.messages`     |
-| `Task.artifacts`     | `SessionState.artifacts`    |
-| `input-required`     | Interrupt (toolRequest in final message) |
-| Non-blocking mode    | `detach: true` (future)     |
-| `cancelTask`         | `agent.abort(snapshotId)`   |
+| A2A Concept         | Genkit Agent Flow Concept                     |
+| ------------------- | --------------------------------------------- |
+| `taskId`            | `snapshotId`                                  |
+| `contextId`         | Session lineage (parentId chain)              |
+| `Message.parts`     | `MessageData.content` (Part mapping)          |
+| `Task.status.state` | Snapshot status (pending/done/failed/aborted) |
+| `Task.history`      | `SessionState.messages`                       |
+| `Task.artifacts`    | `SessionState.artifacts`                      |
+| `input-required`    | Interrupt (toolRequest in final message)      |
+| Non-blocking mode   | `detach: true` (future)                       |
+| `cancelTask`        | `agent.abort(snapshotId)`                     |
 
 ### Open Questions
 

@@ -22,9 +22,9 @@ export {
 } from './define-a2a-agent.js';
 
 export {
-  mapGenkitPartToA2A,
+  mapA2AArtifactToGenkit,
   mapA2APartToGenkit,
   mapGenkitArtifactToA2A,
-  mapA2AArtifactToGenkit,
+  mapGenkitPartToA2A,
   type GenkitArtifact,
 } from './mapping.js';

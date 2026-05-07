@@ -18,10 +18,10 @@ import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
 import {
-  mapGenkitPartToA2A,
+  mapA2AArtifactToGenkit,
   mapA2APartToGenkit,
   mapGenkitArtifactToA2A,
-  mapA2AArtifactToGenkit,
+  mapGenkitPartToA2A,
   type GenkitArtifact,
 } from '../src/mapping.js';
 
@@ -323,7 +323,10 @@ describe('mapGenkitArtifactToA2A', () => {
     const artifact: GenkitArtifact = {
       parts: [{ text: 'content' }],
     };
-    assert.throws(() => mapGenkitArtifactToA2A(artifact), /Artifact\.name is required/);
+    assert.throws(
+      () => mapGenkitArtifactToA2A(artifact),
+      /Artifact\.name is required/
+    );
   });
 });
 

@@ -36,14 +36,12 @@ import { ai } from './genkit.js';
 // Remote A2A Weather Agent — wrapped as a Genkit Agent
 // ---------------------------------------------------------------------------
 
-const A2A_WEATHER_URL =
-  process.env.A2A_WEATHER_URL || 'http://localhost:8001';
+const A2A_WEATHER_URL = process.env.A2A_WEATHER_URL || 'http://localhost:8001';
 
 export const weatherA2AAgent = defineA2AAgent(ai, {
   name: 'weatherA2A',
   agentUrl: A2A_WEATHER_URL,
-  description:
-    'A remote A2A weather agent. Ask it about weather in any city.',
+  description: 'A remote A2A weather agent. Ask it about weather in any city.',
 });
 
 // ---------------------------------------------------------------------------
@@ -53,9 +51,7 @@ export const weatherA2AAgent = defineA2AAgent(ai, {
 export const testDirectA2AWeather = ai.defineFlow(
   {
     name: 'testDirectA2AWeather',
-    inputSchema: z
-      .string()
-      .default("What's the weather like in Tokyo?"),
+    inputSchema: z.string().default("What's the weather like in Tokyo?"),
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
@@ -87,9 +83,7 @@ For non-weather questions, answer directly.`,
 export const testSubAgentA2AWeather = ai.defineFlow(
   {
     name: 'testSubAgentA2AWeather',
-    inputSchema: z
-      .string()
-      .default("What's the weather in Paris right now?"),
+    inputSchema: z.string().default("What's the weather in Paris right now?"),
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {

@@ -15,18 +15,15 @@
  */
 
 import {
-  weatherA2AAgent,
   orchestratorWithA2A,
   testDirectA2AWeather,
   testSubAgentA2AWeather,
+  weatherA2AAgent,
 } from './a2a-weather.js';
 
 console.log('Loaded A2A weather agent:', weatherA2AAgent.__action.name);
 console.log('Loaded orchestrator agent:', orchestratorWithA2A.__action.name);
 console.log('Loaded direct A2A flow:', testDirectA2AWeather.__action.name);
-console.log(
-  'Loaded sub-agent A2A flow:',
-  testSubAgentA2AWeather.__action.name
-);
+console.log('Loaded sub-agent A2A flow:', testSubAgentA2AWeather.__action.name);
 
 export * from './a2a-weather.js';

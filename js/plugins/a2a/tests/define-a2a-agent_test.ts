@@ -14,13 +14,9 @@
  * limitations under the License.
  */
 
-import {
-  genkit,
-  type AgentStreamChunk,
-  type GenkitBeta,
-} from 'genkit/beta';
 import * as assert from 'assert';
-import { describe, it, beforeEach } from 'node:test';
+import { genkit, type AgentStreamChunk, type GenkitBeta } from 'genkit/beta';
+import { beforeEach, describe, it } from 'node:test';
 
 import {
   defineA2AAgent,
@@ -207,7 +203,9 @@ describe('defineA2AAgent', () => {
     assert.ok(result.result.artifacts!.length > 0);
     const artifact = result.result.artifacts![0];
     assert.strictEqual(artifact.name, 'report-1');
-    assert.ok(artifact.parts.some((p: any) => p.text === 'Report content here...'));
+    assert.ok(
+      artifact.parts.some((p: any) => p.text === 'Report content here...')
+    );
   });
 
   it('passes contextId across turns for multi-turn continuity', async () => {
@@ -225,7 +223,9 @@ describe('defineA2AAgent', () => {
             kind: 'message',
             messageId: 'resp',
             role: 'agent',
-            parts: [{ kind: 'text', text: 'Response ' + receivedContextIds.length }],
+            parts: [
+              { kind: 'text', text: 'Response ' + receivedContextIds.length },
+            ],
           },
         ],
         artifacts: [],
@@ -315,7 +315,11 @@ describe('defineA2AAgent', () => {
       },
     ]);
 
-    assert.strictEqual(receivedRole, 'agent', 'Tool response should map to agent role');
+    assert.strictEqual(
+      receivedRole,
+      'agent',
+      'Tool response should map to agent role'
+    );
   });
 
   it('handles task response with no history gracefully', async () => {
@@ -365,7 +369,11 @@ describe('defineA2AAgent', () => {
             parts: [
               {
                 kind: 'data',
-                data: { id: 'c1', name: 'get_weather', args: { city: 'London' } },
+                data: {
+                  id: 'c1',
+                  name: 'get_weather',
+                  args: { city: 'London' },
+                },
                 metadata: { genkit_type: 'function_call' },
               },
             ],
