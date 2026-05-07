@@ -29,6 +29,7 @@ from genkit._core._typing import (
     DocumentPart,
     FinishReason,
     Part,
+    Resume,
     Role,
     TextPart,
     ToolRequest,
@@ -874,6 +875,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
         if isinstance(p.root, ToolRequestPart) and p.root.metadata and 'interrupt' in p.root.metadata
     ]
     assert len(interrupt_parts) == 1
+    assert interrupt_parts[0].root.metadata is not None
     assert interrupt_parts[0].root.metadata['interrupt'] == {'blocked': True}
 
 
@@ -1189,14 +1191,14 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
             ],
             tools=['approveMe'],
             use=[MiddlewareRef(name='recording_mw')],
-            resume={
-                'restart': [
-                    {
-                        'toolRequest': {'name': 'approveMe', 'input': {}, 'ref': 'r1'},
-                        'metadata': {'resumed': {'toolApproved': True}},
-                    }
+            resume=Resume(
+                restart=[
+                    ToolRequestPart(
+                        tool_request=ToolRequest(name='approveMe', input={}, ref='r1'),
+                        metadata={'resumed': {'toolApproved': True}},
+                    )
                 ],
-            },
+            ),
         ),
     )
     assert response.text == 'final'
