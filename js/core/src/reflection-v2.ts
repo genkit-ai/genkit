@@ -432,7 +432,7 @@ export class ReflectionServerV2 {
           telemetryLabels,
           onTraceStart: onTraceStartCallback,
           abortSignal: abortController.signal,
-          ...(inputChannel ? { inputStream: inputChannel, init: input } : {}),
+          ...(inputChannel ? { inputStream: inputChannel } : {}),
         });
 
         await flushTracing();
@@ -451,7 +451,7 @@ export class ReflectionServerV2 {
           telemetryLabels,
           onTraceStart: onTraceStartCallback,
           abortSignal: abortController.signal,
-          ...(inputChannel ? { inputStream: inputChannel, init: input } : {}),
+          ...(inputChannel ? { inputStream: inputChannel } : {}),
         });
         await flushTracing();
 
