@@ -161,6 +161,26 @@ describe('expressHandler', async () => {
       '/echoModelWithAuth',
       expressHandler(echoModel, { contextProvider })
     );
+    // A flow that echoes back the init data to verify it was received.
+    const flowWithInit = ai.defineFlow(
+      {
+        name: 'flowWithInit',
+        inputSchema: z.string(),
+      },
+      async (input) => {
+        return `input: ${input}`;
+      }
+    );
+    // Monkey-patch the run method to capture and return init data.
+    const originalRun = flowWithInit.run.bind(flowWithInit);
+    flowWithInit.run = async (input: any, options: any) => {
+      const result = await originalRun(input, options);
+      // Embed init in the result so we can verify it was passed through.
+      result.result = `input: ${input}, init: ${JSON.stringify(options?.init)}`;
+      return result;
+    };
+
+    app.post('/flowWithInit', expressHandler(flowWithInit));
     app.post('/abortableFlow', expressHandler(abortableFlow));
 
     server = app.listen(port, () => {
@@ -287,6 +307,26 @@ describe('expressHandler', async () => {
       await assert.rejects(result, (err) => {
         return (err as Error).message.includes('not authorized');
       });
+    });
+
+    it('should pass init data to the action', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInit`,
+        input: 'hello',
+        init: { sessionId: 'abc123', temperature: 0.7 },
+      });
+      assert.strictEqual(
+        result,
+        'input: hello, init: {"sessionId":"abc123","temperature":0.7}'
+      );
+    });
+
+    it('should pass undefined init when not provided', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInit`,
+        input: 'hello',
+      });
+      assert.strictEqual(result, 'input: hello, init: undefined');
     });
 
     // TODO: This test is flaky, skipping until fixed.

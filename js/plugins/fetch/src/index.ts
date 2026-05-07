@@ -213,6 +213,7 @@ async function runActionWithDurableStreaming<
   streamManager: StreamManager | undefined,
   streamId: string,
   input: z.infer<I>,
+  init: any,
   context: ActionContext,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   abortSignal: AbortSignal
@@ -247,6 +248,7 @@ async function runActionWithDurableStreaming<
       onChunk,
       context,
       abortSignal,
+      init,
     });
 
     if (streamManager && durableStream) {
@@ -344,6 +346,7 @@ async function handleActionRequest<
   }
 
   const input = body.data as z.infer<I>;
+  const init = body.init;
 
   let context: C;
   try {
@@ -381,6 +384,7 @@ async function handleActionRequest<
       options?.streamManager,
       streamIdToUse,
       input,
+      init,
       context,
       writer,
       request.signal
@@ -409,6 +413,7 @@ async function handleActionRequest<
     const result = await action.run(input, {
       context,
       abortSignal: request.signal,
+      init,
     });
 
     const headers: Record<string, string> = {
