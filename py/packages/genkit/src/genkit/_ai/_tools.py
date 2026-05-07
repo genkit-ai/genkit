@@ -17,14 +17,16 @@
 """Tool-specific types and utilities for the Genkit framework."""
 
 import inspect
+import json
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any, cast
 
+from opentelemetry import trace as trace_api
 from pydantic import BaseModel
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, GenkitInterrupt
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
 
@@ -153,7 +155,7 @@ class ToolRunContext(ActionRunContext):
         return self.resumed_metadata is not None
 
 
-class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Error for style
+class Interrupt(GenkitInterrupt):  # noqa: N818 - public Genkit name; not renamed *Error for style
     """Exception for interrupting tool execution with user-facing API.
 
     Raise ``Interrupt(metadata)`` from a tool or from tool middleware (e.g. ``wrap_tool``).
@@ -173,6 +175,10 @@ class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Err
         """
         super().__init__()
         self.metadata: dict[str, Any] = {} if metadata is None else metadata
+        if self.metadata:
+            span = trace_api.get_current_span()
+            if span.is_recording():
+                span.set_attribute('genkit:metadata:interrupt', json.dumps(self.metadata))
 
 
 def _tool_response_part(
@@ -318,6 +324,13 @@ def _define_tool(
     input_spec = inspect.getfullargspec(func)
 
     async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - arity dispatch; args/return follow registered tool
+        # Record resumed metadata on the current span for observability.
+        resumed_meta = _tool_resumed_metadata.get()
+        if resumed_meta:
+            span = trace_api.get_current_span()
+            if span.is_recording():
+                span.set_attribute('genkit:metadata:resumed', json.dumps(resumed_meta))
+
         # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
         match len(input_spec.args):
             case 0:
@@ -325,8 +338,6 @@ def _define_tool(
             case 1:
                 return await func(args[0])
             case 2:
-                # Read from context variables for resumed metadata
-                resumed_meta = _tool_resumed_metadata.get()
                 original_input = _tool_original_input.get()
                 return await func(
                     args[0],
