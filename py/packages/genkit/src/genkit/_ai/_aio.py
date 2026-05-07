@@ -44,12 +44,15 @@ from genkit._ai._evaluator import (
 )
 from genkit._ai._formats import built_in_formats
 from genkit._ai._formats._types import FormatDef
-from genkit._ai._generate import define_generate_action, generate_action, registry_with_inline_tools
+from genkit._ai._generate import (
+    define_generate_action,
+    generate_action,
+    registry_with_inline_tools,
+)
 from genkit._ai._model import (
     Message,
     ModelConfig,
     ModelFn,
-    ModelMiddleware,
     ModelResponse,
     ModelResponseChunk,
     define_model,
@@ -90,6 +93,7 @@ from genkit._core._dap import (
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
+from genkit._core._middleware._base import BaseMiddleware, MiddlewareDesc, new_middleware
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -102,6 +106,7 @@ from genkit._core._typing import (
     EmbedRequest,
     EvalRequest,
     EvalResponse,
+    MiddlewareRef,
     ModelInfo,
     Operation,
     Part,
@@ -158,6 +163,7 @@ class Genkit:
         self._initialize_registry(model, plugins)
         # Ensure the default generate action is registered for async usage.
         define_generate_action(self.registry)
+        self._register_plugin_middleware(plugins)
         # In dev mode, start the reflection server immediately in a background
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
@@ -426,7 +432,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
@@ -454,7 +460,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
@@ -482,7 +488,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
@@ -510,7 +516,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: dict[str, object] | str | None = None,
@@ -536,7 +542,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -726,6 +732,44 @@ class Genkit:
                 else:
                     raise ValueError(f'Invalid {plugin=} provided to Genkit: must be of type `genkit.ai.Plugin`')
 
+    def _register_plugin_middleware(self, plugins: list[Plugin] | None) -> None:
+        """Register middleware descriptors returned by ``Plugin.list_middleware``."""
+        if not plugins:
+            return
+        for plugin in plugins:
+            for desc in plugin.list_middleware():
+                self.registry.register_value('middleware', desc.name, desc)
+
+    def new_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
+        """Build a ``MiddlewareDesc`` from a class (same as ``genkit.middleware.new_middleware``).
+
+        Does not register on the registry. Pass the result to ``middleware_plugin([...])``
+        or return it from a custom ``Plugin.list_middleware`` so it is registered when the
+        app is constructed.
+
+        Returns:
+            The ``MiddlewareDesc`` instance.
+        """
+        return new_middleware(middleware_cls)
+
+    def define_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
+        """Register a middleware class on this app and return the resulting descriptor.
+
+        Equivalent to building the descriptor with ``new_middleware(cls)`` and wiring
+        it through ``middleware_plugin([...])`` at construction time, but usable after
+        ``Genkit`` has already been built. The factory instantiates
+        ``middleware_cls(**config)`` each time a request resolves the name via
+        ``MiddlewareRef``, so the same pydantic fields drive both the inline
+        (``use=[cls(...)]``) and registered paths.
+
+        Returns:
+            The registered ``MiddlewareDesc``; also available via
+            ``registry.lookup_value('middleware', cls.name)``.
+        """
+        desc = new_middleware(middleware_cls)
+        self.registry.register_value('middleware', desc.name, desc)
+        return desc
+
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
         """Run the user's main coroutine, blocking in dev mode for the reflection server."""
         if not is_dev_environment():
@@ -800,7 +844,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[OutputT]: ...
 
@@ -827,7 +871,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]: ...
 
@@ -852,7 +896,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]:
         """Generate text or structured data using a language model.
@@ -860,6 +904,13 @@ class Genkit:
         ``tools`` is typed as ``Sequence`` rather than ``list`` because ``Sequence``
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
+
+        A :class:`~genkit._ai._tools.Tool` that is not already registered on this instance's
+        registry (for example from :func:`~genkit._ai._tools.define_tool` on a different
+        :class:`~genkit._core._registry.Registry`) is registered only for this call on a
+        temporary child registry (see :func:`~genkit._ai._generate.registry_with_inline_tools`);
+        that registry is what :func:`~genkit._ai._generate.generate_action` uses—root is not
+        modified, so inline tools cannot leak into other concurrent calls.
         """
         prompt_config = PromptConfig(
             model=model,
@@ -883,10 +934,11 @@ class Genkit:
         )
         registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
         gen_options = await to_generate_action_options(registry, prompt_config)
+        if use:
+            gen_options = gen_options.model_copy(update={'use': use})
         return await generate_action(
             registry,
             gen_options,
-            middleware=use,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
 
@@ -913,7 +965,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         timeout: float | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
@@ -941,7 +993,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         timeout: float | None = None,
     ) -> ModelStreamResponse[Any]: ...
@@ -967,7 +1019,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         timeout: float | None = None,
     ) -> ModelStreamResponse[Any]:
@@ -997,11 +1049,12 @@ class Genkit:
             )
             registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
             gen_options = await to_generate_action_options(registry, prompt_config)
+            if use:
+                gen_options = gen_options.model_copy(update={'use': use})
             return await generate_action(
                 registry,
                 gen_options,
                 on_chunk=lambda c: channel.send(c),
-                middleware=use,
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
             )
 
@@ -1185,7 +1238,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: str | None = None,
         output_constrained: bool | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: list[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
     ) -> Operation:
         """Generate content using a long-running model, returning an Operation to poll."""

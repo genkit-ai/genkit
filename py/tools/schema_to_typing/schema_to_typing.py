@@ -38,6 +38,7 @@ PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
+    'MiddlewareDesc': {'output_name': 'MiddlewareDescData'},
 }
 
 

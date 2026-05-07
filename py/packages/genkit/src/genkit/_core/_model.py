@@ -22,7 +22,7 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
+from genkit._core._action import Action
 from genkit._core._base import GenkitModel
 from genkit._core._extract_json import extract_json
 from genkit._core._typing import (
@@ -478,6 +479,73 @@ class ModelResponseChunk(GenerateResponseChunk, Generic[OutputT]):
         return cast(OutputT, extract_json(self.accumulated_text))
 
 
+class MultipartToolResponse(BaseModel):
+    """Return value of ``wrap_tool``: structured output and optional extra rich parts.
+
+    The engine packs both fields into a single ``ToolResponsePart`` on the
+    wire so the 1-to-1 request/response contract the LLM requires is
+    preserved — middleware can therefore attach extra context to a tool
+    response without forging a second response part.
+
+    Fields:
+        output:  The structured result returned to the model (maps to
+                 ``ToolResponse.output``).  May be ``None`` when the tool only
+                 produces rich content parts.
+        content: Additional ``Part`` objects bundled alongside ``output`` inside
+                 the same ``ToolResponsePart`` (maps to ``ToolResponse.content``).
+                 Use this for rich artefacts such as file contents, images, or
+                 structured metadata that the model can reason about.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    output: Any = None
+    content: list[Part] = Field(default_factory=list)
+
+
+class GenerateHookParams(BaseModel):
+    """Params for the wrap_generate hook."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    options: GenerateActionOptions
+    request: ModelRequest
+    iteration: int
+    # Streaming / message-sequence fields: ``message_index`` is the engine's
+    # current position in the streamed message sequence; ``on_chunk`` is the
+    # live streaming callback so middleware can emit chunks directly.
+    message_index: int = 0
+    on_chunk: Callable[[ModelResponseChunk], None] | None = None
+    # Queue callback: call enqueue_parts([Part(...)]) to inject an extra user
+    # message into the conversation at the start of the next wrap_generate turn.
+    # The engine creates this closure per generate() call and drains the queue
+    # automatically before each new iteration.
+    enqueue_parts: Callable[[list[Part]], None] | None = None
+
+
+class ModelHookParams(BaseModel):
+    """Params for the wrap_model hook."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    request: ModelRequest
+    on_chunk: Callable[[ModelResponseChunk], None] | None = None
+    context: dict[str, object] = Field(default_factory=dict)
+
+
+class ToolHookParams(BaseModel):
+    """Params for the wrap_tool hook."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    tool_request_part: ToolRequestPart
+    tool: Action
+    # Same queue callback as GenerateHookParams.enqueue_parts — middleware can
+    # call this from wrap_tool to queue extra conversational messages alongside
+    # the tool response (e.g. error details for the next model turn).
+    enqueue_parts: Callable[[list[Part]], None] | None = None
+
+
 def text_from_message(msg: Message) -> str:
     """Concatenate text from all parts of a message."""
     return text_from_content(msg.content)
@@ -557,10 +625,3 @@ GenerateActionOptions.model_rebuild(
         'Role': Role,
     }
 )
-
-# Type aliases for model middleware (Any is intentional - middleware is type-agnostic)
-# Middleware can have two signatures:
-#   Simple (3 params): (req, ctx, next) -> response
-#   Streaming (4 params): (req, ctx, on_chunk, next) -> response
-# The framework detects which signature is used based on parameter count.
-ModelMiddleware = Callable[..., Awaitable[ModelResponse[Any]]]
