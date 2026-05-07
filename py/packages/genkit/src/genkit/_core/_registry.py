@@ -422,7 +422,7 @@ class Registry:
             self._all_plugins_initialized.clear()
 
     async def initialize_all_plugins(self) -> None:
-        """Run ``init()`` for every plugin on this registry exactly once per event loop.
+        """Run ``init()`` for every plugin on this registry exactly once per event loop (until a new plugin is registered).
 
         Used before enumerating registered actions so plugin-registered entries exist in ``_entries``.
         """
