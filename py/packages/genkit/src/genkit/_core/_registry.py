@@ -164,12 +164,12 @@ class Registry:
         #   we key both the in-flight task cache and the "all done" flag by the
         #   running loop.
         self._plugins: dict[str, Plugin] = {}
-        self._plugin_init_tasks: weakref.WeakKeyDictionary[
-            asyncio.AbstractEventLoop, dict[str, asyncio.Task[None]]
-        ] = weakref.WeakKeyDictionary()
-        self._all_plugins_initialized: weakref.WeakKeyDictionary[
-            asyncio.AbstractEventLoop, bool
-        ] = weakref.WeakKeyDictionary()
+        self._plugin_init_tasks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Task[None]]] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._all_plugins_initialized: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, bool] = (
+            weakref.WeakKeyDictionary()
+        )
 
     # -------------------------------------------------------------------------
     # Child registry support
