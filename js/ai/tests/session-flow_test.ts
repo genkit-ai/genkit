@@ -333,8 +333,11 @@ describe('Agent', () => {
         { name: 'noStoreMetadataTest' },
         async () => ({ artifacts: [] })
       );
-      assert.strictEqual(agent.__action.metadata?.stateManagement, 'client');
-      assert.strictEqual(agent.__action.metadata?.abortable, false);
+      assert.strictEqual(
+        agent.__action.metadata?.agent?.stateManagement,
+        'client'
+      );
+      assert.strictEqual(agent.__action.metadata?.agent?.abortable, false);
     });
 
     it('should set server stateManagement and abortable=true when store with onSnapshotStateChange is provided', () => {
@@ -345,8 +348,11 @@ describe('Agent', () => {
         { name: 'fullStoreMetadataTest', store },
         async () => ({ artifacts: [] })
       );
-      assert.strictEqual(agent.__action.metadata?.stateManagement, 'server');
-      assert.strictEqual(agent.__action.metadata?.abortable, true);
+      assert.strictEqual(
+        agent.__action.metadata?.agent?.stateManagement,
+        'server'
+      );
+      assert.strictEqual(agent.__action.metadata?.agent?.abortable, true);
     });
 
     it('should ignore init.state for server-managed agents (store is set)', async () => {
@@ -448,8 +454,11 @@ describe('Agent', () => {
         { name: 'noAbortStoreMetadataTest', store },
         async () => ({ artifacts: [] })
       );
-      assert.strictEqual(agent.__action.metadata?.stateManagement, 'server');
-      assert.strictEqual(agent.__action.metadata?.abortable, false);
+      assert.strictEqual(
+        agent.__action.metadata?.agent?.stateManagement,
+        'server'
+      );
+      assert.strictEqual(agent.__action.metadata?.agent?.abortable, false);
     });
 
     it('should register and execute agent', async () => {
