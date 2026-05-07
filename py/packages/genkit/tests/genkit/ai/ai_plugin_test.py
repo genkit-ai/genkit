@@ -20,7 +20,7 @@
 
 """Tests for AI plugin functionality."""
 
-from typing import ClassVar
+
 
 import pytest
 
@@ -29,7 +29,7 @@ from genkit._core._action import Action, ActionRunContext
 from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
 from genkit._core._typing import ActionMetadata, FinishReason
-from genkit.middleware import BaseMiddleware, MiddlewareDesc
+from genkit.middleware import BaseMiddleware, MiddlewareDesc, middleware
 from genkit.plugin_api import new_middleware
 
 
@@ -111,8 +111,9 @@ class AsyncInitPlugin(Plugin):
         ]
 
 
+@middleware(name='ai_plugin_test_mw')
 class _RegistryMw(BaseMiddleware):
-    name: ClassVar[str] = 'ai_plugin_test_mw'
+    pass
 
 
 class MiddlewareListingPlugin(Plugin):

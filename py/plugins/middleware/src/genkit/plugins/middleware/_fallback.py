@@ -24,14 +24,14 @@ features by seamlessly switching to backup models.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import ClassVar, cast
+from typing import cast
 
 from pydantic import Field
 
 from genkit import GenkitError
 from genkit._core._action import ActionKind
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, ModelHookParams
+from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -44,6 +44,7 @@ _DEFAULT_FALLBACK_STATUSES: list[str] = [
 ]
 
 
+@middleware(name='fallback', description='Falls back to alternative models on failure')
 class Fallback(BaseMiddleware):
     """Fallback middleware to try alternative models on failure.
 
@@ -61,9 +62,6 @@ class Fallback(BaseMiddleware):
     ``self._registry`` is injected at resolve time so model lookup works whether
     Fallback is passed inline or registered via ``middleware_plugin``.
     """
-
-    name: ClassVar[str] = 'fallback'
-    description: ClassVar[str | None] = 'Falls back to alternative models on failure'
 
     models: list[str] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_FALLBACK_STATUSES))

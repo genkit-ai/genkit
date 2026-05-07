@@ -40,7 +40,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
+
+_M = TypeVar('_M', bound='type[BaseMiddleware]')
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -93,8 +95,8 @@ class BaseMiddleware(BaseModel):
     ``Plugin.list_middleware``) and reference by name with ``MiddlewareRef``.
 
     Example:
+        @middleware(name='logger')
         class Logger(BaseMiddleware):
-            name: ClassVar[str] = 'logger'
             prefix: str = '[trace]'
 
             async def wrap_model(self, params, next_fn):
@@ -241,6 +243,45 @@ class MiddlewareDesc(MiddlewareDescData):
             config_schema=self.config_schema,
             metadata=self.metadata,
         )
+
+
+def middleware(
+    name: str,
+    *,
+    description: str | None = None,
+    config_schema: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+) -> Callable[[_M], _M]:
+    """Class decorator that sets registry metadata on a ``BaseMiddleware`` subclass.
+
+    Required when registering middleware via ``new_middleware``, ``define_middleware``,
+    or ``middleware_plugin``. Optional for inline-only use (``use=[MyClass()]``).
+
+    Example::
+
+        @middleware(name='latency_logger', description='Logs model call latency')
+        class LatencyLogger(BaseMiddleware):
+            prefix: str = '[trace]'
+
+            async def wrap_model(self, params, next_fn):
+                ...
+
+    Args:
+        name: Registry key — must be a single path-free token (no ``/``, whitespace, ``:``).
+        description: Human-readable description shown in the Dev UI.
+        config_schema: JSON Schema for the config. Inferred from Pydantic fields if omitted.
+        metadata: Arbitrary metadata passed through to the Dev UI wire format.
+    """
+    _validate_middleware_key_segment(name, label='middleware name')
+
+    def decorator(cls: _M) -> _M:
+        cls.name = name  # type: ignore[attr-defined]
+        cls.description = description  # type: ignore[attr-defined]
+        cls.middleware_config_schema = config_schema  # type: ignore[attr-defined]
+        cls.middleware_metadata = metadata  # type: ignore[attr-defined]
+        return cls
+
+    return decorator
 
 
 def new_middleware(middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:

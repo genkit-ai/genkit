@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import copy
 import re
+import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
@@ -107,7 +108,7 @@ def normalize_middleware(
     for i, entry in enumerate(use):
         if isinstance(entry, BaseMiddleware):
             cls_name = entry.__class__.name  # type: ignore[attr-defined]
-            base_name = str(cls_name) if cls_name else f'__inline_{i}__'
+            base_name = str(cls_name) if cls_name else f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
             count = name_counts.get(base_name, 0)
             name_counts[base_name] = count + 1
             reg_name = base_name if count == 0 else f'{base_name}__{count}'

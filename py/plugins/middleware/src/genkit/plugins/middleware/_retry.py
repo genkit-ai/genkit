@@ -27,13 +27,11 @@ import asyncio
 import math
 import random
 from collections.abc import Awaitable, Callable
-from typing import ClassVar
-
 from pydantic import Field
 
 from genkit import GenkitError
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, ModelHookParams
+from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
 
 _DEFAULT_RETRY_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -44,6 +42,7 @@ _DEFAULT_RETRY_STATUSES: list[str] = [
 ]
 
 
+@middleware(name='retry', description='Retries model calls on transient failures with exponential backoff')
 class Retry(BaseMiddleware):
     """Retry middleware with exponential backoff for transient failures.
 
@@ -55,9 +54,6 @@ class Retry(BaseMiddleware):
     of the base delay, with the total capped at ``max_delay_ms``. Prevents thundering-herd
     retries while guaranteeing sleep never exceeds the configured maximum.
     """
-
-    name: ClassVar[str] = 'retry'
-    description: ClassVar[str | None] = 'Retries model calls on transient failures with exponential backoff'
 
     max_retries: int = Field(default=3, ge=0)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_RETRY_STATUSES))

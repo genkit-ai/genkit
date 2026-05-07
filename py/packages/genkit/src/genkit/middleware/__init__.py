@@ -60,6 +60,7 @@ first via ``ai.define_middleware``:
 from genkit._core._middleware._base import (
     BaseMiddleware,
     MiddlewareDesc,
+    middleware,
 )
 from genkit._core._model import GenerateHookParams, ModelHookParams, MultipartToolResponse, ToolHookParams
 from genkit._core._plugin import middleware_plugin
@@ -71,5 +72,6 @@ __all__ = [
     'ModelHookParams',
     'MultipartToolResponse',
     'ToolHookParams',
+    'middleware',
     'middleware_plugin',
 ]

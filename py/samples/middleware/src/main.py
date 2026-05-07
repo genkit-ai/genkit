@@ -17,13 +17,12 @@
 """Middleware - inspect or modify requests before they reach the model."""
 
 from collections.abc import Awaitable, Callable
-from typing import ClassVar
 
 import structlog
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, MiddlewareRef, Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, ModelHookParams
+from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
 from genkit.plugins.google_genai import GoogleAI
 
 logger = structlog.get_logger(__name__)
@@ -38,10 +37,9 @@ class PromptInput(BaseModel):
     )
 
 
+@middleware(name='logging_mw')
 class LoggingMiddleware(BaseMiddleware):
     """Log request/response details without changing behavior."""
-
-    name: ClassVar[str] = 'logging_mw'
 
     async def wrap_model(
         self,
@@ -57,14 +55,13 @@ class LoggingMiddleware(BaseMiddleware):
         return response
 
 
+@middleware(name='concise_reply_mw')
 class ConciseReplyMiddleware(BaseMiddleware):
     """Add a short system instruction before the model call.
 
     ``instruction`` is a pydantic field: override it per call via ``ConciseReplyMiddleware(instruction=...)``
     or via ``MiddlewareRef(name='concise_reply_mw', config={'instruction': ...})``.
     """
-
-    name: ClassVar[str] = 'concise_reply_mw'
     instruction: str = 'Answer in one short paragraph.'
 
     async def wrap_model(

@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import yaml
 from pydantic import Field
@@ -36,7 +36,7 @@ from genkit._ai._tools import define_tool
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, GenerateHookParams
+from genkit.middleware import BaseMiddleware, GenerateHookParams, middleware
 
 # Marker placed in TextPart.metadata so later iterations can find and replace
 # the skills block without duplicating it.
@@ -45,6 +45,7 @@ _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
 
 
+@middleware(name='skills', description='Provides access to skill library for specialized instructions')
 class Skills(BaseMiddleware):
     """Skills middleware that exposes SKILL.md files as loadable instructions.
 
@@ -56,9 +57,6 @@ class Skills(BaseMiddleware):
     Skills are scanned once per generate() call (inside ``tools()``) so filesystem
     changes between calls are always picked up.
     """
-
-    name: ClassVar[str] = 'skills'
-    description: ClassVar[str | None] = 'Provides access to skill library for specialized instructions'
 
     skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
 

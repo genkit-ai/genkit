@@ -24,16 +24,16 @@ Useful for sensitive operations or user confirmation flows.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import ClassVar
 
 from pydantic import Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._tracing import run_in_new_span
 from genkit._core._typing import SpanMetadata, ToolRequestPart
-from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams
+from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams, middleware
 
 
+@middleware(name='tool_approval', description='Requires approval before executing tools')
 class ToolApproval(BaseMiddleware):
     """Tool approval middleware that interrupts execution for non-allowed tools.
 
@@ -44,9 +44,6 @@ class ToolApproval(BaseMiddleware):
     Allowed-list entries must match the plain tool name as passed to ``define_tool``
     (e.g. ``'search'``), not the full registry key (e.g. ``'/tool/search'``).
     """
-
-    name: ClassVar[str] = 'tool_approval'
-    description: ClassVar[str | None] = 'Requires approval before executing tools'
 
     allowed_tools: list[str] = Field(default_factory=list)
 

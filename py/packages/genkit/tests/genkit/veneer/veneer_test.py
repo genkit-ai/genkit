@@ -7,7 +7,7 @@
 
 import json
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field
@@ -54,7 +54,7 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
-from genkit.middleware import BaseMiddleware, ModelHookParams
+from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
 from genkit.plugin_api import new_middleware
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -1009,8 +1009,8 @@ async def test_generate_json_format_unconstrained(
     assert (await stream_result.response).request == want
 
 
+@middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'pre_mw'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -1027,8 +1027,8 @@ class PreMiddleware(BaseMiddleware):
         )
 
 
+@middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'post_mw'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
@@ -1074,8 +1074,8 @@ async def test_generate_with_middleware() -> None:
     assert (await stream_result.response).text == want
 
 
+@middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'inject_ctx'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)

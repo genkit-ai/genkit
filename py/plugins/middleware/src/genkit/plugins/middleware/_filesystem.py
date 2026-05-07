@@ -33,7 +33,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 from pydantic import BaseModel as PydanticBaseModel, PrivateAttr, model_validator
 
@@ -52,6 +52,7 @@ from genkit.middleware import (
     GenerateHookParams,
     MultipartToolResponse,
     ToolHookParams,
+    middleware,
 )
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,7 @@ class _FileState:
     limit: int  # 0 when the read covered the whole file
 
 
+@middleware(name='filesystem', description='Sandboxed filesystem operations')
 class Filesystem(BaseMiddleware):
     """Filesystem middleware with sandboxed file operations.
 
@@ -132,9 +134,6 @@ class Filesystem(BaseMiddleware):
     on the same ``Filesystem`` instance are fully isolated — write guards from one call
     cannot block another.
     """
-
-    name: ClassVar[str] = 'filesystem'
-    description: ClassVar[str | None] = 'Sandboxed filesystem operations'
 
     root_dir: str
     allow_write_access: bool = False

@@ -8,7 +8,7 @@
 import json
 import pathlib
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -42,6 +42,7 @@ from genkit.middleware import (
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
+    middleware,
     middleware_plugin,
 )
 from genkit.plugin_api import new_middleware
@@ -310,8 +311,8 @@ def test_augment_with_context_with_purpose_part() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'pre_mw'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -328,8 +329,8 @@ class PreMiddleware(BaseMiddleware):
         )
 
 
+@middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'post_mw'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
@@ -386,10 +387,9 @@ async def test_generate_interleaves_inline_instances_and_middleware_refs() -> No
     assert response.text == '[ECHO] user: "PRE hi" POST'
 
 
+@middleware(name='configured_prefix_mw')
 class ConfiguredPrefixMiddleware(BaseMiddleware):
     """Inline middleware driven purely by a pydantic config field."""
-
-    name: ClassVar[str] = 'configured_prefix_mw'
     prefix: str = 'DEFAULT'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
@@ -506,8 +506,8 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
     assert response.text == '[ECHO] user: "hi" POST'
 
 
+@middleware(name='add_ctx')
 class AddContextMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'add_ctx'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         return await next_fn(
@@ -519,8 +519,8 @@ class AddContextMiddleware(BaseMiddleware):
         )
 
 
+@middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
-    name: ClassVar[str] = 'inject_ctx'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -575,8 +575,8 @@ async def test_generate_middleware_can_modify_context() -> None:
 async def test_generate_middleware_can_modify_stream() -> None:
     """Test that middleware can intercept and modify streaming chunks."""
 
+    @middleware(name='mod_stream_mw')
     class ModifyStreamMiddleware(BaseMiddleware):
-        name: ClassVar[str] = 'mod_stream_mw'
 
         async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
             if params.on_chunk:
@@ -825,8 +825,8 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
     """
     from genkit._ai._tools import Interrupt
 
+    @middleware(name='interrupt_all')
     class InterruptingMiddleware(BaseMiddleware):
-        name: ClassVar[str] = 'interrupt_all'
 
         async def wrap_tool(
             self,
@@ -890,10 +890,9 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     appear in the root registry afterward — mirroring Go's Hooks.Tools + NewChild.
     """
 
+    @middleware(name='tool_provider_mw')
     class ToolProviderMiddleware(BaseMiddleware):
         """Middleware that contributes a tool dynamically per generate() call."""
-
-        name: ClassVar[str] = 'tool_provider_mw'
 
         def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list:
             # Build a tool action on a throw-away registry; the generate engine
@@ -957,8 +956,8 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
     """
     seen_by_b: list[str] = []
 
+    @middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
-        name: ClassVar[str] = 'provider_mw'
 
         def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list:
             scratch = Registry()
@@ -969,8 +968,8 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
 
             return [define_tool(scratch, shared_tool, name='shared_tool').action()]
 
+    @middleware(name='looker_mw')
     class LookerMW(BaseMiddleware):
-        name: ClassVar[str] = 'looker_mw'
 
         async def wrap_generate(
             self,
@@ -1035,8 +1034,9 @@ async def test_inline_middleware_instance_is_not_mutated_across_calls() -> None:
     ``_registry`` mutated in place — the engine clones with ``model_copy()``.
     """
 
+    @middleware(name='identity_mw')
     class IdentityMW(BaseMiddleware):
-        name: ClassVar[str] = 'identity_mw'
+        pass
 
     ai_a = Genkit()
     ai_b = Genkit()
@@ -1073,10 +1073,9 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
     The fix emits queued chunks directly and increments once per message.
     """
 
+    @middleware(name='enqueuing_mw')
     class EnqueuingMW(BaseMiddleware):
         """After each tool call, enqueue an extra USER part for the next turn."""
-
-        name: ClassVar[str] = 'enqueuing_mw'
 
         async def wrap_tool(
             self,
@@ -1145,8 +1144,8 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     """
     invocations: list[str] = []
 
+    @middleware(name='recording_mw')
     class RecordingMW(BaseMiddleware):
-        name: ClassVar[str] = 'recording_mw'
 
         async def wrap_tool(
             self,
