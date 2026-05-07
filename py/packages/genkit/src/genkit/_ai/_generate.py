@@ -131,8 +131,8 @@ def tools_to_action_names(
 
 
 async def registry_with_inline_tools(registry: Registry, tools: Sequence[str | Tool] | None) -> Registry:
-    """
-    Creates a child registry and ensures that all tools are registered.
+    """Creates a child registry and ensures that all tools are registered.
+
     Supports dynamically defined tools that are only passed in at call time
     and never actually registered.
     """
