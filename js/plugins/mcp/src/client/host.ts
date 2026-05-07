@@ -376,7 +376,7 @@ export class GenkitMcpHost<Multipart extends boolean = false> {
       if (client.isEnabled() && !this.hasError(serverName)) {
         try {
           const tools = await client.getActiveTools(ai);
-          allTools.push(...(tools as any));
+          allTools.push(...tools);
         } catch (e) {
           logger.error(
             `Error fetching active tools from client ${serverName}.`,
