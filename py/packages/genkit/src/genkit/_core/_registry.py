@@ -422,7 +422,8 @@ class Registry:
             self._all_plugins_initialized.clear()
 
     async def initialize_all_plugins(self) -> None:
-        """Run ``init()`` for every plugin on this registry exactly once per event loop.
+        """
+        Run ``init()`` for every plugin on this registry exactly once per event loop.
         Skip setting _all_plugins_initialized if a new plugin was registered
         during initialization.
 
