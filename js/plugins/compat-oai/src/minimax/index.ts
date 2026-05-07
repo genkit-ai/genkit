@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
-import { GenkitError, ModelReference, z } from 'genkit';
+import {
+  ActionMetadata,
+  GenkitError,
+  modelActionMetadata,
+  ModelReference,
+  z,
+} from 'genkit';
 import { logger } from 'genkit/logging';
 import { type GenkitPluginV2 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
@@ -50,6 +56,25 @@ function createResolver(pluginOptions: PluginOptions) {
   };
 }
 
+const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
+  return await client.models.list().then((response) =>
+    response.data
+      .filter((model) => model.object === 'model')
+      .map((model: OpenAI.Model) => {
+        const modelRef =
+          SUPPORTED_MINIMAX_MODELS[model.id] ??
+          miniMaxModelRef({
+            name: model.id,
+          });
+        return modelActionMetadata({
+          name: modelRef.name,
+          info: modelRef.info,
+          configSchema: modelRef.configSchema,
+        });
+      })
+  );
+};
+
 export function miniMaxPlugin(
   options?: MiniMaxPluginOptions
 ): GenkitPluginV2 {
@@ -79,6 +104,7 @@ export function miniMaxPlugin(
       );
     },
     resolver: createResolver(pluginOptions),
+    listActions,
   });
 }
 
