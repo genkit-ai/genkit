@@ -231,6 +231,38 @@ ai.defineFlow('test-error-tool', async (q) => {
   return text;
 });
 
+ai.defineFlow('test-meta-tool', async (q) => {
+  const { text } = await ai.generate({
+    prompt: `call the echo_meta_tool.`,
+    tools: ['test-mcp-manager:tool/inmemory/echo_meta_tool'],
+    context: {
+      mcp: {
+        _meta: { progressToken: 'look-at-me-i-am-a-meta-token' },
+      },
+    },
+  });
+
+  return text;
+});
+
+ai.defineFlow('test-structured-tool', async (q) => {
+  const { text } = await ai.generate({
+    prompt: `call the get_structured_weather tool and tell me the weather.`,
+    tools: ['test-mcp-manager:tool/inmemory/get_structured_weather'],
+  });
+
+  return text;
+});
+
+ai.defineFlow('test-resource-link-tool', async (q) => {
+  const { text } = await ai.generate({
+    prompt: `call the get_resource_link tool and tell me what you got.`,
+    tools: ['test-mcp-manager:tool/inmemory/get_resource_link'],
+  });
+
+  return text;
+});
+
 // MCP Controls
 export const controlMcp = ai.defineFlow(
   {

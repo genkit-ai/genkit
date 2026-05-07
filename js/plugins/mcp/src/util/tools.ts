@@ -35,6 +35,9 @@ const toText = (c: CallToolResult['content']) =>
 
 function processResult(result: CallToolResult) {
   if (result.isError) return { error: toText(result.content) };
+  if (result.structuredContent !== undefined) {
+    return result.structuredContent;
+  }
   if (result.content.every((c) => c.type === 'text' && !!c.text)) {
     const text = toText(result.content);
     if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
@@ -59,12 +62,14 @@ function processMultipartResult(result: CallToolResult) {
   }
 
   const content: Part[] = [];
+  let textOutput = '';
+
   for (const c of result.content) {
     if (c.type === 'text') {
       if (c.text) {
-        content.push({ text: c.text });
+        textOutput += c.text;
       }
-    } else if (c.type === 'image') {
+    } else if (c.type === 'image' || c.type === 'audio') {
       if (c.data) {
         content.push({
           media: {
@@ -73,12 +78,20 @@ function processMultipartResult(result: CallToolResult) {
           },
         });
       }
+    } else if (c.type === 'resource_link') {
+      if (c.uri) {
+        content.push({
+          resource: {
+            uri: c.uri,
+          },
+        });
+      }
     } else if (c.type === 'resource') {
       if (c.resource) {
         if ('text' in c.resource && c.resource.text) {
-          content.push({
-            text: `Resource (${c.resource.uri}):\n${c.resource.text}`,
-          });
+          textOutput +=
+            (textOutput ? '\n\n' : '') +
+            `Resource (${c.resource.uri}):\n${c.resource.text}`;
         } else if ('blob' in c.resource && c.resource.blob) {
           content.push({
             media: {
@@ -91,8 +104,26 @@ function processMultipartResult(result: CallToolResult) {
     }
   }
 
+  let output: unknown = result.structuredContent;
+
+  if (output === undefined && textOutput) {
+    if (
+      textOutput.trim().startsWith('{') ||
+      textOutput.trim().startsWith('[')
+    ) {
+      try {
+        output = JSON.parse(textOutput);
+      } catch (e) {
+        output = textOutput;
+      }
+    } else {
+      output = textOutput;
+    }
+  }
+
   return {
-    content,
+    ...(output !== undefined ? { output } : {}),
+    ...(content.length > 0 ? { content } : {}),
     metadata: result._meta,
   };
 }
@@ -120,7 +151,7 @@ function registerTool(
   }
 ) {
   logger.debug(
-    `[MCP] Registering tool '${params.name}/${tool.name}'' from server '${params.serverName}'`
+    `[MCP] Registering tool '${params.name}/${tool.name}' from server '${params.serverName}'`
   );
   if (params.multipart && params.rawToolResponses) {
     logger.warn(
@@ -137,7 +168,7 @@ function registerTool(
         metadata: { mcp: { _meta: tool._meta || {} } },
         multipart: true as const,
       },
-      async (args) => {
+      async (args, { context }) => {
         logger.debug(
           `[MCP] Calling MCP tool '${params.serverName}/${tool.name}' with arguments`,
           JSON.stringify(args)
@@ -145,6 +176,7 @@ function registerTool(
         const result = await client.callTool({
           name: tool.name,
           arguments: args,
+          _meta: context?.mcp?._meta,
         });
         if (params.rawToolResponses) return { output: result };
         return processMultipartResult(result as CallToolResult);
@@ -159,7 +191,7 @@ function registerTool(
         outputSchema: z.any(),
         metadata: { mcp: { _meta: tool._meta || {} } },
       },
-      async (args) => {
+      async (args, { context }) => {
         logger.debug(
           `[MCP] Calling MCP tool '${params.serverName}/${tool.name}' with arguments`,
           JSON.stringify(args)
@@ -167,6 +199,7 @@ function registerTool(
         const result = await client.callTool({
           name: tool.name,
           arguments: args,
+          _meta: context?.mcp?._meta,
         });
         if (params.rawToolResponses) return result;
         return processResult(result as CallToolResult);

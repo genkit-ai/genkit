@@ -480,6 +480,57 @@ describe('toGeminiMessage', () => {
         ],
       },
     },
+    {
+      should: 'should transform resource part',
+      inputMessage: {
+        role: 'user',
+        content: [
+          {
+            resource: {
+              uri: 'file:///some/file.txt',
+            },
+            metadata: {
+              mimeType: 'text/plain',
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            fileData: {
+              fileUri: 'file:///some/file.txt',
+              mimeType: 'text/plain',
+            },
+          },
+        ],
+      },
+    },
+    {
+      should: 'should transform resource part with default mimeType',
+      inputMessage: {
+        role: 'user',
+        content: [
+          {
+            resource: {
+              uri: 'file:///some/file.txt',
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            fileData: {
+              fileUri: 'file:///some/file.txt',
+              mimeType: 'application/octet-stream',
+            },
+          },
+        ],
+      },
+    },
   ];
   for (const test of testCases) {
     it(test.should, () => {

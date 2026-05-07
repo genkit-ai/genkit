@@ -310,22 +310,21 @@ describe('createMcpHost', () => {
       );
 
       assert.deepStrictEqual(response, {
+        output:
+          'yep {"foo":"bar"}\n\nResource (file:///foo.txt):\nhello resource{"soMeta":true}',
         content: [
-          { text: 'yep {"foo":"bar"}' },
           {
             media: {
               url: 'data:image/png;base64,base64data',
               contentType: 'image/png',
             },
           },
-          { text: 'Resource (file:///foo.txt):\nhello resource' },
           {
             media: {
               url: 'data:application/octet-stream;base64,base64blob',
               contentType: 'application/octet-stream',
             },
           },
-          { text: '{"soMeta":true}' },
         ],
         metadata: {
           someData: true,

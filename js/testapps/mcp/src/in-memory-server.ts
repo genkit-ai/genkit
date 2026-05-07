@@ -59,6 +59,75 @@ customMcpServer.registerTool(
   }
 );
 
+customMcpServer.registerTool(
+  'echo_meta_tool',
+  { description: 'A tool that echoes the meta progress token back' },
+  async (extra) => {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Meta received: ${JSON.stringify(extra?._meta ?? null)}`,
+        },
+      ],
+    };
+  }
+);
+
+customMcpServer.registerTool(
+  'get_test_audio',
+  { description: 'Returns an audio clip' },
+  async () => {
+    return {
+      content: [
+        {
+          type: 'audio',
+          data: 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=',
+          mimeType: 'audio/wav',
+        },
+      ],
+    };
+  }
+);
+
+customMcpServer.registerTool(
+  'get_structured_weather',
+  { description: 'Returns structured weather data' },
+  async () => {
+    return {
+      structuredContent: {
+        temperature: 22.5,
+        conditions: 'Partly cloudy',
+        humidity: 65,
+      },
+      content: [
+        {
+          type: 'text',
+          text: '{"temperature": 22.5, "conditions": "Partly cloudy", "humidity": 65}',
+        },
+      ],
+    };
+  }
+);
+
+customMcpServer.registerTool(
+  'get_resource_link',
+  { description: 'Returns a test resource link' },
+  async () => {
+    return {
+      content: [
+        {
+          type: 'resource_link',
+          uri: 'file:///project/src/main.rs',
+          name: 'main.rs',
+          description: 'Primary application entry point',
+          mimeType: 'text/x-rust',
+        },
+      ],
+    };
+  }
+);
+
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 customMcpServer.connect(serverTransport);
 

@@ -189,6 +189,22 @@ function toGeminiToolResponse(part: Part): GeminiPart {
   });
 }
 
+function toGeminiResource(part: Part): GeminiPart {
+  if (!part.resource?.uri) {
+    throw Error('Invalid ResourcePart: uri was missing.');
+  }
+
+  const media: GeminiPart = {
+    fileData: {
+      mimeType:
+        (part.metadata?.mimeType as string) || 'application/octet-stream',
+      fileUri: part.resource.uri,
+    },
+  };
+
+  return maybeAddGeminiThoughtSignatureAndMetadata(part, media);
+}
+
 function toGeminiReasoning(part: Part): GeminiPart {
   const out: GeminiPart = { thought: true };
   if (part.reasoning?.length) {
@@ -272,6 +288,9 @@ function toGeminiPart(part: Part): GeminiPart {
   }
   if (part.toolResponse) {
     return toGeminiToolResponse(part);
+  }
+  if (part.resource) {
+    return toGeminiResource(part);
   }
   if (typeof part.reasoning === 'string') {
     return toGeminiReasoning(part);
