@@ -89,7 +89,7 @@ export const DeepResearchConfigSchema = z
       .describe('The modalities to be used in response.')
       .optional(),
     visualization: z
-      .enum(['AUTO', 'OFF', 'auto', 'off'])
+      .enum(['AUTO', 'OFF'])
       .describe('Whether to enable agent-generated charts and images.')
       .optional(),
     collaborativePlanning: z
@@ -127,7 +127,7 @@ export const DeepResearchConfigSchema = z
         z
           .object({
             name: z.string().optional(),
-            url: z.string(),
+            url: z.string().optional(),
             headers: z.record(z.string()).optional(),
             allowedTools: z.array(z.string()).optional(),
           })
@@ -320,10 +320,11 @@ export function defineModel(
         } as InteractionTool);
       }
       if (fileSearch) {
+        const { fileSearchStoreNames, ...restFileSearch } = fileSearch;
         tools.push({
           type: 'file_search',
-          file_search_store_names: fileSearch.fileSearchStoreNames,
-          ...fileSearch,
+          file_search_store_names: fileSearchStoreNames,
+          ...restFileSearch,
         } as InteractionTool);
       }
       if (mcpServers) {

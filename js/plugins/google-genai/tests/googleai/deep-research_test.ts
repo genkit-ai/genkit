@@ -433,7 +433,6 @@ describe('Deep Research', () => {
         {
           type: 'file_search',
           file_search_store_names: ['stores/123'],
-          fileSearchStoreNames: ['stores/123'],
         },
         {
           type: 'mcp_server',
