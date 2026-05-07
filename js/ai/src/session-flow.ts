@@ -401,8 +401,10 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       streamSchema: AgentStreamChunkSchema,
       initSchema: AgentInitSchema,
       metadata: {
-        stateManagement: config.store ? 'server' : 'client',
-        abortable: !!config.store?.onSnapshotStateChange,
+        agent: {
+          stateManagement: config.store ? 'server' : 'client',
+          abortable: !!config.store?.onSnapshotStateChange,
+        },
       },
     },
     async function* (
