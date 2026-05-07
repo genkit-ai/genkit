@@ -428,7 +428,7 @@ class Registry:
 
         Used before enumerating registered actions so plugin-registered entries exist in ``_entries``.
         """
-        
+
         loop = asyncio.get_running_loop()
         if self._all_plugins_initialized.get(loop):
             return
