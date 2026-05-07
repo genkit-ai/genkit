@@ -178,7 +178,10 @@ class Interrupt(GenkitInterrupt):  # noqa: N818 - public Genkit name; not rename
         if self.metadata:
             span = trace_api.get_current_span()
             if span.is_recording():
-                span.set_attribute('genkit:metadata:interrupt', json.dumps(self.metadata))
+                try:
+                    span.set_attribute('genkit:metadata:interrupt', json.dumps(self.metadata))
+                except Exception:
+                    span.set_attribute('genkit:metadata:interrupt', str(self.metadata))
 
 
 def _tool_response_part(
@@ -329,7 +332,10 @@ def _define_tool(
         if resumed_meta:
             span = trace_api.get_current_span()
             if span.is_recording():
-                span.set_attribute('genkit:metadata:resumed', json.dumps(resumed_meta))
+                try:
+                    span.set_attribute('genkit:metadata:resumed', json.dumps(resumed_meta))
+                except Exception:
+                    span.set_attribute('genkit:metadata:resumed', str(resumed_meta))
 
         # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
         match len(input_spec.args):
