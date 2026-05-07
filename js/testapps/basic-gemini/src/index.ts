@@ -126,7 +126,7 @@ ai.defineFlow('combine tools and builtins', async () => {
 
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-flash-lite-latest'),
+    model: googleAI.model('gemini-3.1-flash-lite'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
