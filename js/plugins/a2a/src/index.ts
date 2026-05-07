@@ -22,6 +22,12 @@ export {
 } from './define-a2a-agent.js';
 
 export {
+  GenkitA2ARequestHandler,
+  type GenkitA2AHandlerConfig,
+  type GenkitAgentLike,
+} from './genkit-a2a-request-handler.js';
+
+export {
   mapA2AArtifactToGenkit,
   mapA2APartToGenkit,
   mapGenkitArtifactToA2A,
