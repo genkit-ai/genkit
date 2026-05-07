@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { genkit, z } from 'genkit';
+import { genkit, z } from 'genkit/beta';
 
 const ai = genkit({});
 

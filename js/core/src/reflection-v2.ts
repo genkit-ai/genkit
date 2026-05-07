@@ -16,17 +16,20 @@
 
 import WebSocket from 'ws';
 import { StatusCodes, type Status } from './action.js';
+import { Channel } from './async.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
 import {
   ReflectionCancelActionParamsSchema,
   ReflectionConfigureParamsSchema,
+  ReflectionEndInputStreamParamsSchema,
   ReflectionListActionsResponse,
   ReflectionListValuesParamsSchema,
   ReflectionListValuesResponseSchema,
   ReflectionRegisterParams,
   ReflectionRunActionParamsSchema,
   ReflectionRunActionStateParamsSchema,
+  ReflectionSendInputStreamChunkParamsSchema,
   ReflectionStreamChunkParamsSchema,
 } from './reflection-types.js';
 import type { Registry } from './registry.js';
@@ -87,6 +90,7 @@ export class ReflectionServerV2 {
     }
   >();
   private requestIdCounter = 0;
+  private inputStreams = new Map<string, Channel<any>>();
 
   constructor(registry: Registry, options: ReflectionServerV2Options) {
     this.registry = registry;
@@ -374,7 +378,7 @@ export class ReflectionServerV2 {
   private async handleRunAction(request: JsonRpcRequest) {
     if (!request.id) return;
 
-    const { key, input, context, telemetryLabels, stream } =
+    const { key, input, init, context, telemetryLabels, stream, streamInput } =
       ReflectionRunActionParamsSchema.parse(request.params);
     const action = await this.registry.lookupAction(key);
 
@@ -385,6 +389,13 @@ export class ReflectionServerV2 {
 
     const abortController = new AbortController();
     let traceId: string | undefined;
+
+    // For bidi streaming, create a Channel to receive input chunks
+    let inputChannel: Channel<any> | undefined;
+    if (streamInput) {
+      inputChannel = new Channel<any>();
+      this.inputStreams.set(request.id, inputChannel);
+    }
 
     try {
       const onTraceStartCallback = ({ traceId: tid }: { traceId: string }) => {
@@ -416,10 +427,12 @@ export class ReflectionServerV2 {
 
         const result = await action.run(input, {
           context,
+          init,
           onChunk: callback,
           telemetryLabels,
           onTraceStart: onTraceStartCallback,
           abortSignal: abortController.signal,
+          ...(inputChannel ? { inputStream: inputChannel, init: input } : {}),
         });
 
         await flushTracing();
@@ -434,9 +447,11 @@ export class ReflectionServerV2 {
       } else {
         const result = await action.run(input, {
           context,
+          init,
           telemetryLabels,
           onTraceStart: onTraceStartCallback,
           abortSignal: abortController.signal,
+          ...(inputChannel ? { inputStream: inputChannel, init: input } : {}),
         });
         await flushTracing();
 
@@ -469,6 +484,9 @@ export class ReflectionServerV2 {
     } finally {
       if (traceId) {
         this.activeActions.delete(traceId);
+      }
+      if (request.id) {
+        this.inputStreams.delete(request.id);
       }
     }
   }
@@ -503,12 +521,29 @@ export class ReflectionServerV2 {
   }
 
   private handleSendInputStreamChunk(request: JsonRpcRequest) {
-    // ReflectionSendInputStreamChunkParamsSchema.parse(request.params);
-    throw new Error('Not implemented');
+    const { requestId, chunk } =
+      ReflectionSendInputStreamChunkParamsSchema.parse(request.params);
+    const channel = this.inputStreams.get(requestId);
+    if (channel) {
+      channel.send(chunk);
+    } else {
+      logger.warn(
+        `Received input stream chunk for unknown request ID: ${requestId}`
+      );
+    }
   }
 
   private handleEndInputStream(request: JsonRpcRequest) {
-    // ReflectionEndInputStreamParamsSchema.parse(request.params);
-    throw new Error('Not implemented');
+    const { requestId } = ReflectionEndInputStreamParamsSchema.parse(
+      request.params
+    );
+    const channel = this.inputStreams.get(requestId);
+    if (channel) {
+      channel.close();
+    } else {
+      logger.warn(
+        `Received end input stream for unknown request ID: ${requestId}`
+      );
+    }
   }
 }
