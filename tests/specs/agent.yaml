@@ -401,11 +401,11 @@ tests:
         expectSnapshot:
           status: aborted
 
-  - name: server-managed agent ignores init state
+  - name: server-managed agent rejects init state
     description: >
-      When a server-managed agent receives init.state, it should be
-      ignored. Only the message sent via the input stream should appear
-      in the resulting snapshot state — no stale history from init.
+      When a server-managed agent receives init.state, it should throw a
+      FAILED_PRECONDITION error. Server-managed agents expect a snapshotId,
+      not the full state blob.
     agent: promptAgentWithStore
     steps:
       - type: send
@@ -420,19 +420,7 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: reply }] }
             finishReason: stop
-        expectOutput:
-          message: { role: model, content: [{ text: reply }] }
-          hasSnapshotId: true
-        captureSnapshotId: snap1
-
-      - type: getSnapshotData
-        snapshotId: '{{snap1}}'
-        expectSnapshot:
-          status: done
-          stateContains:
-            messages:
-              - { role: user, content: [{ text: fresh message }] }
-              - { role: model, content: [{ text: reply }] }
+        expectError: "Cannot send 'state' to agent"
 
   - name: pure detach without payload
     description: >

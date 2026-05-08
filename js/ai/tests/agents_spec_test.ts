@@ -73,6 +73,7 @@ const SendInvocationSchema = z.object({
   streamChunks: z.array(z.array(z.any())).optional(),
   expectChunks: z.array(z.any()).optional(),
   expectOutput: OutputAssertionsSchema.optional(),
+  expectError: z.string().optional(),
   captureSnapshotId: z.string().optional(),
   captureState: z.string().optional(),
 });
@@ -463,6 +464,25 @@ async function executeSendInvocation(
     session.send(input);
   }
   session.close();
+
+  // If the spec expects an error, catch it and verify the message.
+  if (resolvedInvocation.expectError) {
+    try {
+      // Drain the stream so the error surfaces on output.
+      for await (const _ of session.stream) {
+      }
+      await session.output;
+      assert.fail(
+        `Expected error containing "${resolvedInvocation.expectError}" but invocation succeeded`
+      );
+    } catch (e: any) {
+      assert.ok(
+        e.message?.includes(resolvedInvocation.expectError),
+        `Expected error containing "${resolvedInvocation.expectError}", got: ${e.message}`
+      );
+    }
+    return;
+  }
 
   // Collect stream chunks
   const chunks: AgentStreamChunk[] = [];
