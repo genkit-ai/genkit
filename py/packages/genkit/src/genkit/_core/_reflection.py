@@ -41,7 +41,7 @@ from genkit._core._action import Action
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
-from genkit._core._middleware._base import MiddlewareDesc
+from genkit._core._middleware import MiddlewareDesc
 from genkit._core._registry import Registry
 
 logger = get_logger(__name__)
@@ -186,14 +186,6 @@ def create_reflection_asgi_app(
                 headers={'x-genkit-version': version},
             )
         type_param = raw.strip()
-        try:
-            await registry.initialize_all_plugins()
-        except Exception as e:
-            logger.warning(
-                'initialize_all_plugins failed during /api/values; returning registered values only: %s',
-                e,
-                exc_info=True,
-            )
         try:
             raw_values = registry.list_values(type_param)
             if type_param == 'middleware':

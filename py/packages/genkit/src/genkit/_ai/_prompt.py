@@ -51,7 +51,7 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, Streaming
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._middleware._base import BaseMiddleware
+from genkit._core._middleware import BaseMiddleware
 from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -604,7 +604,7 @@ async def to_generate_action_options(
         max_turns=options.max_turns,
         docs=merged_docs,  # type: ignore[arg-type]
         resume=resume,
-        use=options.use,  # type: ignore[arg-type]
+        use=options.use,  # type: ignore[arg-type]  # PromptGenerateOptions.use accepts BaseMiddleware|MiddlewareRef; _generate_action registers inline instances into a scoped child registry and normalises to list[MiddlewareRef]
     )
 
 

@@ -16,17 +16,16 @@
 
 """Middleware for Genkit model calls.
 
-This module provides types and helpers to define and register custom middleware.
+This module provides types and helpers to define custom middleware.
 Chain ordering: middleware is applied first-in, outermost.
 
-Define a middleware class and pass it inline directly in ``use=``:
+Define a middleware class with ``@middleware`` and pass instances inline via ``use=``:
 
     from genkit import Genkit
-    from genkit.middleware import BaseMiddleware
+    from genkit.middleware import BaseMiddleware, middleware
 
+    @middleware(name='logging')
     class LoggingMiddleware(BaseMiddleware):
-        name = 'logging'
-
         async def wrap_generate(self, params, next_fn):
             print('before')
             result = await next_fn(params)
@@ -41,28 +40,18 @@ Define a middleware class and pass it inline directly in ``use=``:
         use=[LoggingMiddleware()],
     )
 
-To reference middleware by name (e.g. from the Dev UI or a config), register it
-first via ``ai.define_middleware``:
+To make middleware available to the **Dev UI** and referenceable by name, register it
+on the app via ``ai.define_middleware`` or declare it in a plugin:
 
-    from genkit import MiddlewareRef
-
-    # Option A — imperative, after Genkit() is built.
-    # Once registered, reference by name with MiddlewareRef and pass config there:
     ai.define_middleware(LoggingMiddleware)
-    await ai.generate(model='your-model-here', prompt='Hello',
-                      use=[MiddlewareRef(name='logging', config={'prefix': '[span]'})])
-
-    # Option B — pass config directly via the inline instance:
-    await ai.generate(model='your-model-here', prompt='Hello',
-                      use=[LoggingMiddleware(prefix='[span]')])
 """
 
-from genkit._core._middleware._base import (
+from genkit._core._middleware import (
     BaseMiddleware,
     MiddlewareDesc,
     middleware,
 )
-from genkit._core._model import GenerateHookParams, ModelHookParams, MultipartToolResponse, ToolHookParams
+from genkit._core._middleware import GenerateHookParams, ModelHookParams, MultipartToolResponse, ToolHookParams
 from genkit._core._plugin import middleware_plugin
 
 __all__ = [

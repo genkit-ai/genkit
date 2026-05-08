@@ -20,9 +20,9 @@ from genkit import (
     MiddlewareRef,
     ModelResponse,
     ModelResponseChunk,
-    middleware_plugin,
     respond_to_interrupt,
 )
+from genkit.plugin_api import middleware_plugin
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
 from genkit._ai._testing import (
@@ -60,10 +60,6 @@ from genkit.plugin_api import new_middleware
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 
-
-def middleware_ref(name: str) -> MiddlewareRef:
-    """Shorthand for tests: ``middleware_ref('inject_ctx')`` instead of MiddlewareRef(name=...)."""
-    return MiddlewareRef(name=name)
 
 
 @pytest.fixture
@@ -1058,7 +1054,7 @@ async def test_generate_with_middleware() -> None:
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        use=[middleware_ref('pre_mw'), middleware_ref('post_mw')],
+        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
     )
 
     assert response.text == want
@@ -1066,7 +1062,7 @@ async def test_generate_with_middleware() -> None:
     stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        use=[middleware_ref('pre_mw'), middleware_ref('post_mw')],
+        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
     )
 
     assert (await stream_result.response).text == want
@@ -1106,7 +1102,7 @@ async def test_generate_passes_through_current_action_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[middleware_ref('inject_ctx')],
+            use=[MiddlewareRef(name='inject_ctx')],
         )
 
     action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
@@ -1129,7 +1125,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[middleware_ref('inject_ctx')],
+            use=[MiddlewareRef(name='inject_ctx')],
             context={'bar': 'baz'},
         )
 

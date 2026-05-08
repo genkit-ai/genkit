@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter
 
 from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelResponse, ModelResponseChunk
 from genkit._ai._generate import _augment_with_context, generate_action
@@ -232,8 +232,13 @@ def test_augment_with_context_does_not_mutate_input() -> None:
     assert len(transformed_req.messages[0].content) == original_content_len + 1
 
 
-def test_augment_with_context_should_not_modify_non_pending_part() -> None:
-    """An existing non-pending context part means the request is returned unchanged."""
+def test_augment_with_context_skips_when_context_already_rendered() -> None:
+    """Already-rendered context (purpose=context, no pending flag) is left untouched.
+
+    If a message already contains a context part that was previously rendered
+    (non-pending), _augment_with_context should return the original request
+    unchanged rather than injecting the docs again.
+    """
     req = ModelRequest(
         messages=[
             Message(
@@ -260,7 +265,12 @@ def test_augment_with_context_should_not_modify_non_pending_part() -> None:
 
 
 def test_augment_with_context_with_purpose_part() -> None:
-    """A pending purpose=context part is replaced with the rendered docs context."""
+    """A pending context placeholder is replaced in-place with the rendered docs.
+
+    Prompts can include a Part with metadata={'purpose': 'context', 'pending': True}
+    as a placeholder.  _augment_with_context locates it and swaps it out for the
+    actual rendered document context, preserving the surrounding parts.
+    """
     req = ModelRequest(
         messages=[
             Message(
@@ -339,20 +349,6 @@ class PostMiddleware(BaseMiddleware):
             message=Message(role=Role.USER, content=[Part(TextPart(text=f'{txt} POST'))]),
         )
 
-
-def test_generate_action_options_use_is_middleware_ref_only() -> None:
-    """``GenerateActionOptions.use`` is the wire form; only ``MiddlewareRef`` entries allowed.
-
-    Inline ``BaseMiddleware`` instances are normalized by the veneer before
-    ``generate_action`` is called — they never appear in the serialized options.
-    """
-    expected: tuple[type[BaseException], ...] = (ValidationError, TypeError)
-    with pytest.raises(expected):
-        GenerateActionOptions(
-            model='echoModel',
-            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
-            use=cast(list[MiddlewareRef], [PreMiddleware()]),
-        )
 
 
 @pytest.mark.asyncio
@@ -1037,12 +1033,12 @@ async def test_inline_middleware_instance_is_not_mutated_across_calls() -> None:
     define_programmable_model(ai_b)
     shared = IdentityMW()
 
-    from genkit._ai._generate import normalize_middleware
+    from genkit._ai._generate import registry_with_inline_middleware
 
     child_a = ai_a.registry.new_child()
     child_b = ai_b.registry.new_child()
-    refs_a = normalize_middleware(child_a, [shared])
-    refs_b = normalize_middleware(child_b, [shared])
+    refs_a = registry_with_inline_middleware(child_a, [shared])
+    refs_b = registry_with_inline_middleware(child_b, [shared])
 
     assert refs_a
     assert refs_b

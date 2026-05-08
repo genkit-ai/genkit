@@ -14,26 +14,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Middleware hook params, default implementation, and registration types.
+"""Core middleware abstractions for the Genkit generate pipeline.
 
-Two roles (they are not superclass/subclass):
+Defines :class:`BaseMiddleware` (the class authors subclass to add config fields
+and hook overrides), :class:`MiddlewareDesc` (the registry descriptor used for
+Dev UI name-based dispatch), plus the :func:`middleware` decorator and
+:func:`new_middleware` factory for registration.
 
-- **Runtime hook class:** ``BaseMiddleware`` is a ``pydantic.BaseModel`` that subclasses
-  extend with config fields and hook overrides. Pass instances directly in ``use=[...]``
-  for the in-process fast path (no registration needed).
-- **Registry descriptor:** ``MiddlewareDesc`` — a named bundle in the registry (wire
-  metadata plus a factory callable). It does not extend ``BaseMiddleware``; calling it
-  with options returns the ``BaseMiddleware`` instance for that request. Register via
-  ``middleware_plugin``, ``Plugin.list_middleware``, or ``Genkit.define_middleware``;
-  reference by name in ``use=`` as ``MiddlewareRef``. ``MiddlewareDesc`` extends the
-  auto-generated wire schema ``MiddlewareDescData`` and adds a ``PrivateAttr`` factory,
-  so ``model_dump`` produces the wire shape automatically (the factory is private
-  and never serialized).
-
-Instance contract (matches Django / Starlette middleware conventions):
-- Instances may be reused across concurrent ``generate()`` calls.
-- Per-call scratch state belongs in method locals, not on ``self``.
-- Shared state on ``self`` (buckets, counters) is the author's concurrency responsibility.
+Also contains the hook parameter types (:class:`GenerateHookParams`,
+:class:`ModelHookParams`, :class:`ToolHookParams`, :class:`MultipartToolResponse`)
+that are passed into each hook by the engine. These live here rather than in
+``_model.py`` because middleware is a concept built on top of the model layer.
 """
 
 from __future__ import annotations
@@ -42,15 +33,14 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, TypeVar
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from genkit._core._action import Action
 from genkit._core._model import (
-    GenerateHookParams,
-    ModelHookParams,
+    GenerateActionOptions,
+    ModelRequest,
     ModelResponse,
-    MultipartToolResponse,
-    ToolHookParams,
+    ModelResponseChunk,
 )
 from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
@@ -83,6 +73,72 @@ def _validate_middleware_key_segment(name: str, *, label: str) -> None:
             f'{label} must be one path-free token: no whitespace, "/", ":", '
             r'backslashes, or control characters (for example "myorg_logging_mw").'
         )
+
+
+class MultipartToolResponse(BaseModel):
+    """A tool result with optional rich content attachments.
+
+    Return from ``wrap_tool`` to send structured output alongside extra parts —
+    images, file contents, error details — that the model can reason about.
+
+    The engine serializes both fields into a single ``ToolResponsePart`` on the wire:
+    ``output`` becomes ``ToolResponse.output`` and ``content`` becomes
+    ``ToolResponse.content``. Packing them together preserves the LLM's
+    one-response-per-call contract while still letting middleware attach rich context.
+
+    Fields:
+        output: Structured result returned to the model. May be ``None`` when the
+            tool only produces rich content parts.
+        content: Extra ``Part`` objects (images, files, metadata) bundled alongside
+            ``output`` in the same ``ToolResponsePart``.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    output: Any = None
+    content: list[Part] = Field(default_factory=list)
+
+
+class GenerateHookParams(BaseModel):
+    """Params passed to the ``wrap_generate`` hook.
+
+    Covers one full iteration of the tool loop: a model call plus optional tool
+    resolution. ``message_index`` and ``on_chunk`` support streaming; ``enqueue_parts``
+    lets middleware inject an extra user message before the next iteration.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    options: GenerateActionOptions
+    request: ModelRequest
+    iteration: int
+    message_index: int = 0
+    on_chunk: Callable[[ModelResponseChunk], None] | None = None
+    enqueue_parts: Callable[[list[Part]], None] | None = None
+
+
+class ModelHookParams(BaseModel):
+    """Params passed to the ``wrap_model`` hook (each raw model API call)."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    request: ModelRequest
+    on_chunk: Callable[[ModelResponseChunk], None] | None = None
+    context: dict[str, object] = Field(default_factory=dict)
+
+
+class ToolHookParams(BaseModel):
+    """Params passed to the ``wrap_tool`` hook (each individual tool execution).
+
+    ``enqueue_parts`` lets middleware queue extra conversational messages alongside
+    the tool response (e.g. error details for the next model turn).
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
+    tool_request_part: ToolRequestPart
+    tool: Action
+    enqueue_parts: Callable[[list[Part]], None] | None = None
 
 
 class BaseMiddleware(BaseModel):

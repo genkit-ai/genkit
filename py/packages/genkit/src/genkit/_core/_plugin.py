@@ -22,7 +22,7 @@ import abc
 from collections.abc import Sequence
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._middleware._base import MiddlewareDesc, _validate_middleware_key_segment
+from genkit._core._middleware import MiddlewareDesc, _validate_middleware_key_segment
 from genkit._core._typing import ActionMetadata
 
 

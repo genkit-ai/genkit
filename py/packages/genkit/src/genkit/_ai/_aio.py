@@ -47,7 +47,7 @@ from genkit._ai._formats._types import FormatDef
 from genkit._ai._generate import (
     define_generate_action,
     generate_action,
-    normalize_middleware,
+    registry_with_inline_middleware,
     registry_with_inline_tools,
 )
 from genkit._ai._model import (
@@ -94,7 +94,7 @@ from genkit._core._dap import (
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._middleware._base import BaseMiddleware, MiddlewareDesc, new_middleware
+from genkit._core._middleware import BaseMiddleware, MiddlewareDesc, new_middleware
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -756,12 +756,15 @@ class Genkit:
     def define_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
         """Register a middleware class on this app and return the resulting descriptor.
 
+        Registering a class makes it visible to the **Dev UI** (via the reflection
+        API) and allows it to be referenced by name using ``MiddlewareRef``.
         Equivalent to building the descriptor with ``new_middleware(cls)`` and wiring
         it through ``middleware_plugin([...])`` at construction time, but usable after
         ``Genkit`` has already been built. The factory instantiates
         ``middleware_cls(**config)`` each time a request resolves the name via
         ``MiddlewareRef``, so the same pydantic fields drive both the inline
-        (``use=[cls(...)]``) and registered paths.
+        (``use=[cls(...)]``) and registered (``use=[MiddlewareRef(name=cls.name)]``)
+        paths.
 
         Returns:
             The registered ``MiddlewareDesc``; also available via
@@ -907,8 +910,8 @@ class Genkit:
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
         """
         registry = await registry_with_inline_tools(self.registry, tools)
-        call_registry = registry.new_child()
-        normalized_refs = normalize_middleware(call_registry, use) or None
+        child_registry = registry if registry.is_child else registry.new_child()
+        refs = registry_with_inline_middleware(child_registry, use) or None
         prompt_config = PromptConfig(
             model=model,
             prompt=prompt,
@@ -928,11 +931,11 @@ class Genkit:
             output_schema=output_schema,
             output_constrained=output_constrained,
             docs=docs,
-            use=normalized_refs,
+            use=refs,
         )
         gen_options = await to_generate_action_options(registry, prompt_config)
         return await generate_action(
-            call_registry,
+            child_registry,
             gen_options,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
@@ -1023,8 +1026,8 @@ class Genkit:
 
         async def _run_generate() -> ModelResponse[Any]:
             registry = await registry_with_inline_tools(self.registry, tools)
-            call_registry = registry.new_child()
-            normalized_refs = normalize_middleware(call_registry, use) or None
+            child_registry = registry if registry.is_child else registry.new_child()
+            refs = registry_with_inline_middleware(child_registry, use) or None
             prompt_config = PromptConfig(
                 model=model,
                 prompt=prompt,
@@ -1044,11 +1047,11 @@ class Genkit:
                 output_schema=output_schema,
                 output_constrained=output_constrained,
                 docs=docs,
-                use=normalized_refs,
+                use=refs,
             )
             gen_options = await to_generate_action_options(registry, prompt_config)
             return await generate_action(
-                call_registry,
+                child_registry,
                 gen_options,
                 on_chunk=lambda c: channel.send(c),
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]

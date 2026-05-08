@@ -46,14 +46,17 @@ from genkit._core._action import (
 )
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._middleware._base import BaseMiddleware, MiddlewareDesc
-from genkit._core._model import (
-    Document,
-    GenerateActionOptions,
+from genkit._core._middleware import (
+    BaseMiddleware,
     GenerateHookParams,
+    MiddlewareDesc,
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
+)
+from genkit._core._model import (
+    Document,
+    GenerateActionOptions,
 )
 from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
@@ -77,7 +80,7 @@ DEFAULT_MAX_TURNS = 5
 logger = get_logger(__name__)
 
 
-def normalize_middleware(
+def registry_with_inline_middleware(
     registry: Registry,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None,
 ) -> list[MiddlewareRef]:
@@ -144,7 +147,7 @@ def resolve_middleware_from_use(
     """Resolve a list of ``MiddlewareRef``s to concrete ``BaseMiddleware`` instances.
 
     All entries must already be in the registry (inline instances were registered
-    there by :func:`normalize_middleware`).  Order is preserved.
+    there by :func:`registry_with_inline_middleware`).  Order is preserved.
     """
     if not use:
         return []
@@ -428,10 +431,10 @@ async def generate_action(
             span.set_attribute('genkit:input', raw_request.model_dump_json(by_alias=True, exclude_none=True))
 
         call_registry = registry if registry.is_child else registry.new_child()
-        normalized_refs = normalize_middleware(call_registry, raw_request.use)
-        if normalized_refs:
-            raw_request = raw_request.model_copy(update={'use': normalized_refs})
-        middleware = resolve_middleware_from_use(call_registry, normalized_refs)
+        refs = registry_with_inline_middleware(call_registry, raw_request.use)
+        if refs:
+            raw_request = raw_request.model_copy(update={'use': refs})
+        middleware = resolve_middleware_from_use(call_registry, refs)
         _queue: list[Message] = []
 
         def _enqueue_parts(parts: list[Part]) -> None:
@@ -454,13 +457,13 @@ async def generate_action(
                 existing = list(raw_request.tools) if raw_request.tools else []
                 raw_request = raw_request.model_copy(update={'tools': existing + mw_tool_names})
         result = await _generate_action(
-            call_registry,
-            raw_request,
-            on_chunk,
-            message_index,
-            current_turn,
-            middleware,
-            context,
+            registry=call_registry,
+            raw_request=raw_request,
+            on_chunk=on_chunk,
+            message_index=message_index,
+            current_turn=current_turn,
+            middleware=middleware,
+            context=context,
             _enqueue_parts=_enqueue_parts,
             _queue=_queue,
         )
@@ -599,7 +602,7 @@ async def _generate_action(
                 await model.run(
                     input=params.request,
                     context=params.context,
-                    on_chunk=cast(Callable[[object], None], params.on_chunk) if params.on_chunk else None,
+                    on_chunk=params.on_chunk,
                 )
             ).response
 
@@ -780,7 +783,7 @@ async def _generate_action(
 
         # then recursively call for another loop.
         return await _generate_action(
-            registry,
+            registry=registry,
             raw_request=next_request,
             middleware=middleware,
             current_turn=current_turn + 1,

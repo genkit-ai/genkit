@@ -137,61 +137,58 @@ class PartConverter:
                 thought_signature=cls._extract_thought_signature(part.root.metadata),
             )
         if isinstance(part.root, ToolResponsePart):
-            tool_output = part.root.tool_response.output
-            parts_to_return = []
+            tool_response = part.root.tool_response
+            tool_output = tool_response.output
 
-            # Check for multimodal content structure {content: [{media: ...}]}
-            if isinstance(tool_output, dict) and 'content' in tool_output:
+            # FunctionResponse.response must be a dict, not a raw value.
+            output = tool_output if isinstance(tool_output, dict) else {'result': tool_output}
+
+            # --- Primary path: ToolResponse.content (set by MultipartToolResponse.content) ---
+            # Mirrors JS: functionResponse.parts = content.map(toGeminiPart)
+            # Mirrors Go: genai.NewPartFromFunctionResponseWithParts(name, output, parts)
+            extra_parts: list[genai.types.Part] = []
+            if tool_response.content:
+                for item in tool_response.content:
+                    try:
+                        genkit_part = Part.model_validate(item)
+                        converted = await cls.to_gemini(genkit_part)
+                        if isinstance(converted, list):
+                            extra_parts.extend(converted)
+                        else:
+                            extra_parts.append(converted)
+                    except Exception:
+                        pass  # skip unrecognised parts rather than crashing the call
+
+            # --- Legacy fallback: tools that embed media inside output['content'] ---
+            # Kept for backward compat; new middleware should use MultipartToolResponse.content.
+            if not extra_parts and isinstance(tool_output, dict) and 'content' in tool_output:
                 content_list = tool_output['content']
                 if isinstance(content_list, list):
-                    # Create a copy to avoid mutating original if that matters,
-                    # but here we just want to separate content from other fields.
-                    clean_output = tool_output.copy()
-                    clean_output.pop('content')
-
-                    # Heuristic: if media found, extract it to separate parts.
-                    has_media = False
+                    clean_output = {k: v for k, v in tool_output.items() if k != 'content'}
                     for item in content_list:
                         if isinstance(item, dict) and 'media' in item:
-                            has_media = True
                             media_info = item['media']
-                            url = media_info.get('url')
+                            url = media_info.get('url') or ''
                             content_type = media_info.get('contentType') or media_info.get('content_type')
-
-                            if url and url.startswith(cls.DATA):
+                            if url.startswith(cls.DATA):
                                 _, data_str = url.split(',', 1)
                                 data = base64.b64decode(data_str)
-                                parts_to_return.append(
+                                extra_parts.append(
                                     genai.types.Part(inline_data=genai.types.Blob(mime_type=content_type, data=data))
                                 )
+                    if extra_parts:
+                        output = clean_output
 
-                    if has_media:
-                        # Append the function response part FIRST (contextually correct)
-                        parts_to_return.insert(
-                            0,
-                            genai.types.Part(
-                                function_response=genai.types.FunctionResponse(
-                                    id=part.root.tool_response.ref,
-                                    name=part.root.tool_response.name.replace('/', '__'),
-                                    response=clean_output,
-                                )
-                            ),
-                        )
-                        return parts_to_return
-
-            # Default behavior for standard tool responses
-            # FunctionResponse.response must be a dict, not a raw value
-            output = tool_output
-            if not isinstance(output, dict):
-                output = {'result': output}
-
-            return genai.types.Part(
+            fn_part = genai.types.Part(
                 function_response=genai.types.FunctionResponse(
-                    id=part.root.tool_response.ref,
-                    name=part.root.tool_response.name.replace('/', '__'),
+                    id=tool_response.ref,
+                    name=tool_response.name.replace('/', '__'),
                     response=output,
                 )
             )
+            if extra_parts:
+                return [fn_part, *extra_parts]
+            return fn_part
         if isinstance(part.root, MediaPart):
             url = part.root.media.url
             if url.startswith(cls.DATA):
