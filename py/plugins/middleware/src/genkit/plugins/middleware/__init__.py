@@ -26,13 +26,12 @@ Provides concrete middleware implementations:
 
 Quick start — register all five at once:
 
-    from genkit.plugins.middleware import middleware_bundle
+    from genkit.plugins.middleware import Middleware
 
-    ai = Genkit(plugins=[middleware_bundle()])
+    ai = Genkit(plugins=[Middleware()])
 """
 
-from genkit import middleware_plugin
-from genkit.plugin_api import new_middleware
+from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, new_middleware
 from genkit.plugins.middleware._fallback import Fallback
 from genkit.plugins.middleware._filesystem import Filesystem
 from genkit.plugins.middleware._retry import Retry
@@ -40,37 +39,49 @@ from genkit.plugins.middleware._skills import Skills
 from genkit.plugins.middleware._tool_approval import ToolApproval
 
 
-def middleware_bundle() -> object:
-    """Return a plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
+class Middleware(Plugin):
+    """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
-    Registers all five middleware descriptors under bare names (``retry``,
-    ``fallback``, ``tool_approval``, ``skills``, ``filesystem``) so they can be
-    referenced by name in ``generate(use=[MiddlewareRef(...)])`` calls.
+    Registers all five middleware descriptors so they can be referenced by name
+    in ``generate(use=[MiddlewareRef(...)])`` calls and from the Dev UI.
 
-    ``Filesystem`` has no default root: you must supply ``root_dir`` in the ref
-    config (or pass a ``Filesystem(root_dir=...)`` instance inline).  Resolving
+    ``Filesystem`` has no default root: supply ``root_dir`` in the ref config
+    (or pass a ``Filesystem(root_dir=...)`` instance inline). Resolving
     ``Filesystem`` with empty config raises a validation error.
 
     Usage::
 
-        ai = Genkit(plugins=[middleware_bundle()])
+        ai = Genkit(plugins=[GoogleAI(), Middleware()])
         # Then reference by name in generate():
         await ai.generate(use=[MiddlewareRef(name='retry', config={'max_retries': 5})])
     """
-    return middleware_plugin([
-        new_middleware(Retry),
-        new_middleware(Fallback),
-        new_middleware(ToolApproval),
-        new_middleware(Skills),
-        new_middleware(Filesystem),
-    ])
+
+    name = 'genkit-middleware'
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+    def list_middleware(self):
+        return [
+            new_middleware(Retry),
+            new_middleware(Fallback),
+            new_middleware(ToolApproval),
+            new_middleware(Skills),
+            new_middleware(Filesystem),
+        ]
 
 
 __all__ = [
     'Fallback',
     'Filesystem',
+    'Middleware',
     'Retry',
     'Skills',
     'ToolApproval',
-    'middleware_bundle',
 ]
