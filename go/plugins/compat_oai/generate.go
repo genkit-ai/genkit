@@ -475,10 +475,24 @@ func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequ
 
 func convertToolCalls(content []*ai.Part) ([]openai.ChatCompletionMessageToolCallParam, error) {
 	var toolCalls []openai.ChatCompletionMessageToolCallParam
+	seen := make(map[string]struct{})
 	for _, p := range content {
 		if !p.IsToolRequest() {
 			continue
 		}
+
+		// Skip partial tool request fragments that lack both an ID and a name.
+		// These are emitted by streaming deltas that only carry argument slices.
+		if p.ToolRequest.Ref == "" && p.ToolRequest.Name == "" {
+			continue
+		}
+
+		// Deduplicate by Ref to prevent duplicate tool call IDs in the request.
+		if _, ok := seen[p.ToolRequest.Ref]; ok {
+			continue
+		}
+		seen[p.ToolRequest.Ref] = struct{}{}
+
 		toolCall, err := convertToolCall(p)
 		if err != nil {
 			return nil, err
