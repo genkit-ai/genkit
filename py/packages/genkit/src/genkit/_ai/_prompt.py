@@ -604,7 +604,7 @@ async def to_generate_action_options(
         max_turns=options.max_turns,
         docs=merged_docs,  # type: ignore[arg-type]
         resume=resume,
-        use=options.use,  # type: ignore[arg-type]  # PromptGenerateOptions.use accepts BaseMiddleware|MiddlewareRef; _generate_action registers inline instances into a scoped child registry and normalises to list[MiddlewareRef]
+        use=options.use,  # type: ignore[arg-type]
     )
 
 
