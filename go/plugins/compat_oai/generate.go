@@ -318,7 +318,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, handleChunk func(co
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
 	defer stream.Close()
 
-	collector := streamResponseCollector{}
+	var collector streamResponseCollector
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -626,12 +626,12 @@ func (c *streamResponseCollector) AddChunk(chunk openai.ChatCompletionChunk) (*a
 }
 
 func (c *streamResponseCollector) ToModelResponse() (*ai.ModelResponse, error) {
-	c.reasoning.MergeInto(&c.accumulator.ChatCompletion)
+	c.reasoning.WriteTo(&c.accumulator.ChatCompletion)
 	return convertChatCompletionToModelResponse(&c.accumulator.ChatCompletion)
 }
 
 type reasoningAccumulator struct {
-	// key should be present if content not empty
+	// key is not empty if content is not empty
 	key     string
 	content strings.Builder
 }
@@ -643,12 +643,15 @@ func (ra *reasoningAccumulator) Add(fields map[string]respjson.Field) (*ai.Part,
 		return nil, false
 	}
 	ra.content.WriteString(reasoning.value)
+	if ra.key != "" && ra.key != reasoning.key {
+		slog.Error("got different reasoning keys during accumulation", "present", ra.key, "new", reasoning.key)
+	}
 	ra.key = reasoning.key
 	return reasoning.ToPart(), true
 }
 
-// MergeInto adds accumulated reasoning to the givem completion
-func (ra *reasoningAccumulator) MergeInto(completion *openai.ChatCompletion) {
+// WriteTo adds accumulated reasoning to the given completion.
+func (ra *reasoningAccumulator) WriteTo(completion *openai.ChatCompletion) {
 	if completion == nil || len(completion.Choices) == 0 || ra.content.Len() == 0 {
 		return
 	}
