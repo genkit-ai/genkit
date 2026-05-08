@@ -20,8 +20,6 @@
 
 """Tests for AI plugin functionality."""
 
-
-
 import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part, Plugin, Role, TextPart

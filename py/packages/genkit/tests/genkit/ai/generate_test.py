@@ -313,7 +313,6 @@ def test_augment_with_context_with_purpose_part() -> None:
 
 @middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -331,7 +330,6 @@ class PreMiddleware(BaseMiddleware):
 
 @middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
         assert resp.message is not None
@@ -390,6 +388,7 @@ async def test_generate_interleaves_inline_instances_and_middleware_refs() -> No
 @middleware(name='configured_prefix_mw')
 class ConfiguredPrefixMiddleware(BaseMiddleware):
     """Inline middleware driven purely by a pydantic config field."""
+
     prefix: str = 'DEFAULT'
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
@@ -508,7 +507,6 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
 
 @middleware(name='add_ctx')
 class AddContextMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         return await next_fn(
             ModelHookParams(
@@ -521,7 +519,6 @@ class AddContextMiddleware(BaseMiddleware):
 
 @middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -577,7 +574,6 @@ async def test_generate_middleware_can_modify_stream() -> None:
 
     @middleware(name='mod_stream_mw')
     class ModifyStreamMiddleware(BaseMiddleware):
-
         async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
             if params.on_chunk:
                 params.on_chunk(
@@ -827,7 +823,6 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
 
     @middleware(name='interrupt_all')
     class InterruptingMiddleware(BaseMiddleware):
-
         async def wrap_tool(
             self,
             params: ToolHookParams,
@@ -958,7 +953,6 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
 
     @middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
-
         def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list:
             scratch = Registry()
 
@@ -970,7 +964,6 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
 
     @middleware(name='looker_mw')
     class LookerMW(BaseMiddleware):
-
         async def wrap_generate(
             self,
             params: GenerateHookParams,
@@ -1146,7 +1139,6 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
 
     @middleware(name='recording_mw')
     class RecordingMW(BaseMiddleware):
-
         async def wrap_tool(
             self,
             params: ToolHookParams,

@@ -263,8 +263,7 @@ def middleware(
         class LatencyLogger(BaseMiddleware):
             prefix: str = '[trace]'
 
-            async def wrap_model(self, params, next_fn):
-                ...
+            async def wrap_model(self, params, next_fn): ...
 
     Args:
         name: Registry key — must be a single path-free token (no ``/``, whitespace, ``:``).

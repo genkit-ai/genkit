@@ -1011,7 +1011,6 @@ async def test_generate_json_format_unconstrained(
 
 @middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -1029,7 +1028,6 @@ class PreMiddleware(BaseMiddleware):
 
 @middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
         assert resp.message is not None
@@ -1076,7 +1074,6 @@ async def test_generate_with_middleware() -> None:
 
 @middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
-
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
