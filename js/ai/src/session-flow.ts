@@ -26,9 +26,9 @@ import {
   type ActionFnArg,
   type BidiAction,
 } from '@genkit-ai/core';
-import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { Channel } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
+import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { generateStream } from './generate.js';
 import {
   MessageData,
