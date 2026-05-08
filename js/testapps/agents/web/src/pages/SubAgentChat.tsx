@@ -116,6 +116,11 @@ export default function SubAgentChat() {
       <ChatUI
         title="Sub-Agent Orchestrator"
         description="An orchestrator that delegates research tasks to a researcher agent and coding tasks to a coder agent."
+        suggestions={[
+          'Research the history of the Internet.',
+          'Write a Python function to calculate Fibonacci numbers.',
+          'Explain quantum computing in simple terms.',
+        ]}
         messages={messages}
         streamingText={streamingText}
         loading={loading}

@@ -33,6 +33,8 @@ interface Props {
   headerAction?: React.ReactNode;
   /** Render model messages as markdown instead of plain text. */
   renderMarkdown?: boolean;
+  /** Suggested prompts shown in the empty state for easy copy-paste or click-to-send. */
+  suggestions?: string[];
 }
 
 export function ChatUI({
@@ -46,6 +48,7 @@ export function ChatUI({
   children,
   headerAction,
   renderMarkdown,
+  suggestions,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -90,7 +93,26 @@ export function ChatUI({
       <div className="chat-messages" ref={scrollRef}>
         {messages.length === 0 && !streamingText && !loading && (
           <div className="empty-state">
-            Send a message to start a conversation with <strong>{title}</strong>
+            <p>
+              Send a message to start a conversation with{' '}
+              <strong>{title}</strong>
+            </p>
+            {suggestions && suggestions.length > 0 && (
+              <div className="suggestions">
+                <span className="suggestions-label">Try one of these:</span>
+                <div className="suggestions-list">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      className="suggestion-chip"
+                      onClick={() => onSend(s)}
+                      disabled={disabled}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {messages.map((m, i) => {

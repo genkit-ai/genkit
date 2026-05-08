@@ -106,7 +106,12 @@ export default function WorkspaceBuilder() {
     <div className="workspace-layout">
       <ChatUI
         title="Workspace Builder"
-        description="Generates code artifacts via an emitArtifact tool. Try: 'Write poem.txt with a poem about AI'"
+        description="Generates code artifacts via an emitArtifact tool."
+        suggestions={[
+          'Write poem.txt with a poem about AI.',
+          'Create hello.py with a Python hello world script.',
+          'Generate a README.md for a todo app project.',
+        ]}
         messages={messages}
         streamingText={streamingText}
         loading={loading}

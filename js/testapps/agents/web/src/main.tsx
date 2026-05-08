@@ -12,6 +12,7 @@ import ClientState from './pages/ClientState';
 import ResearchAgent from './pages/ResearchAgent';
 import SubAgentChat from './pages/SubAgentChat';
 import TaskTracker from './pages/TaskTracker';
+import TripPlanner from './pages/TripPlanner';
 import WeatherChat from './pages/WeatherChat';
 import WorkspaceBuilder from './pages/WorkspaceBuilder';
 
@@ -32,6 +33,8 @@ createRoot(document.getElementById('root')!).render(
           <Route path="tasks" element={<TaskTracker />} />
           <Route path="research" element={<ResearchAgent />} />
           <Route path="subagents" element={<SubAgentChat />} />
+          <Route path="trip-planner" element={<TripPlanner />} />
+          <Route path="trip-planner/:snapshotId" element={<TripPlanner />} />
         </Route>
       </Routes>
     </BrowserRouter>

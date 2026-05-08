@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { to: '/tasks', icon: '✅', label: 'Task Tracker (Custom State)' },
   { to: '/research', icon: '🔬', label: 'Research (Custom Agent)' },
   { to: '/subagents', icon: '🤝', label: 'Sub-Agent Delegation' },
+  { to: '/trip-planner', icon: '✈️', label: 'Trip Planner (Prompt File)' },
 ];
 
 export default function App() {

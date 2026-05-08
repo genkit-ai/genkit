@@ -154,7 +154,12 @@ export default function TaskTracker() {
     <div className="task-tracker-layout">
       <ChatUI
         title="Task Tracker"
-        description='Chat-based task management powered by custom state. Try: "Add buy groceries", "Mark task 1 done", "What tasks do I have?"'
+        description="Chat-based task management powered by custom state."
+        suggestions={[
+          'Add buy groceries',
+          'Add finish the report by Friday',
+          'What tasks do I have?',
+        ]}
         messages={messages}
         streamingText={streamingText}
         loading={loading}

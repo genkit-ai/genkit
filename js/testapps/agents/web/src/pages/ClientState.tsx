@@ -131,6 +131,10 @@ export default function ClientState() {
       <ChatUI
         title="Client-Managed Weather Chat"
         description="Same weather agent, but NO server store. The client round-trips the full session state."
+        suggestions={[
+          'What is the weather like in London?',
+          'Is it sunny in Tokyo right now?',
+        ]}
         messages={messages}
         streamingText={streamingText}
         loading={loading}

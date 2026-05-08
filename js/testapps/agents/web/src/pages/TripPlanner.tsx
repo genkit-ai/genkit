@@ -10,20 +10,23 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
-// Weather Chat — multi-turn streaming chat with tool-calling + session restore
+// Trip Planner — demonstrates definePromptAgent with a .prompt file
+//
+// This page is structurally similar to WeatherChat but targets the
+// tripPlannerAgent, whose prompt is defined in `prompts/tripPlanner.prompt`
+// and wired via `ai.definePromptAgent({ promptName: 'tripPlanner' })`.
 //
 // Demonstrates:
-//   • streamFlow() for streaming responses
-//   • Multi-turn session via `init: { state }` round-tripping
-//   • Rendering streamed tool calls and tool responses in real time
-//   • Restoring a session from a snapshotId (URL-based session persistence)
-//   • Using the `/state` endpoint to fetch snapshot data on page load
+//   • Agent whose prompt lives in a .prompt file (dotprompt)
+//   • definePromptAgent — prompt file + agent wiring separated
+//   • Streaming multi-turn chat with tool calls
+//   • Session restore via snapshotId in URL
 // ---------------------------------------------------------------------------
 
-const ENDPOINT = '/api/weatherAgent';
-const STATE_ENDPOINT = '/api/weatherAgent/state';
+const ENDPOINT = '/api/tripPlannerAgent';
+const STATE_ENDPOINT = '/api/tripPlannerAgent/state';
 
-export default function WeatherChat() {
+export default function TripPlanner() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
@@ -44,9 +47,6 @@ export default function WeatherChat() {
 
     async function restore() {
       try {
-        // Call the /state endpoint to fetch the snapshot data.
-        // The getSnapshotDataAction takes a snapshotId string as input
-        // and returns a SessionSnapshot with the full session state.
         const snapshot = (await runFlow({
           url: STATE_ENDPOINT,
           input: urlSnapshotId,
@@ -55,7 +55,6 @@ export default function WeatherChat() {
         if (cancelled) return;
 
         if (snapshot?.state?.messages) {
-          // Reconstruct chat messages from the session history.
           const restored: Message[] = [];
           for (const msg of snapshot.state.messages) {
             const role = msg.role as Message['role'];
@@ -67,7 +66,6 @@ export default function WeatherChat() {
               restored.push({ role, text: textParts.join('') });
             }
 
-            // Also show tool calls/responses from history
             for (const p of msg.content || []) {
               if (p.toolRequest) {
                 restored.push({
@@ -84,11 +82,7 @@ export default function WeatherChat() {
             }
           }
           setMessages(restored);
-
-          // Use the snapshot's state for continuing the conversation.
-          // Since the weatherAgent uses a server store, we can use snapshotId.
           snapshotIdRef.current = snapshot.snapshotId;
-          // Also keep the state for the `state` init path.
           stateRef.current = snapshot.state;
         }
       } catch (err: any) {
@@ -119,12 +113,10 @@ export default function WeatherChat() {
       setLoading(true);
       setStreamingText('');
 
-      // ── Build the request ──────────────────────────────────────────────
       const input: AgentInput = {
         messages: [{ role: 'user', content: [{ text }] }],
       };
 
-      // Prefer state over snapshotId for multi-turn.
       const init: AgentInit = stateRef.current
         ? { state: stateRef.current }
         : snapshotIdRef.current
@@ -132,7 +124,6 @@ export default function WeatherChat() {
           : {};
 
       try {
-        // ── Stream the response ────────────────────────────────────────
         const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
           url: ENDPOINT,
           input,
@@ -171,18 +162,14 @@ export default function WeatherChat() {
           }
         }
 
-        // ── Read the final result ──────────────────────────────────────
         const result = await response.output;
         setStreamingText('');
 
-        // Save session state for the next turn.
         if (result?.state) stateRef.current = result.state;
 
-        // Update the snapshotId and push it into the URL.
         if (result?.snapshotId) {
           snapshotIdRef.current = result.snapshotId;
-          // Update URL so the user can bookmark or hard-reload this session.
-          navigate(`/weather/${result.snapshotId}`, { replace: true });
+          navigate(`/trip-planner/${result.snapshotId}`, { replace: true });
         }
 
         const replyText = extractText(result);
@@ -208,7 +195,7 @@ export default function WeatherChat() {
       <div className="page-with-sidebar">
         <div className="chat-panel">
           <div className="chat-header">
-            <h2>Weather Agent</h2>
+            <h2>Trip Planner</h2>
             <span className="chat-desc">Restoring session…</span>
           </div>
           <div className="chat-messages">
@@ -228,12 +215,12 @@ export default function WeatherChat() {
   return (
     <div className="page-with-sidebar">
       <ChatUI
-        title="Weather Agent"
-        description="Multi-turn chat with tool-calling. Ask about the weather in any city. Session persists in the URL."
+        title="Trip Planner"
+        description="Multi-turn travel assistant powered by a .prompt file and definePromptAgent."
         suggestions={[
-          'What is the weather like in London?',
-          'Is it sunny in Tokyo right now?',
-          'Compare the weather in Paris and New York.',
+          'I want to plan a trip to Paris. What should I see there?',
+          'Find me flights from New York to Tokyo.',
+          'What are the top attractions in London?',
         ]}
         messages={messages}
         streamingText={streamingText}
@@ -241,7 +228,10 @@ export default function WeatherChat() {
         onSend={handleSend}
         headerAction={
           snapshotIdRef.current ? (
-            <Link to="/weather" className="btn btn-new-session" reloadDocument>
+            <Link
+              to="/trip-planner"
+              className="btn btn-new-session"
+              reloadDocument>
               ✨ New Session
             </Link>
           ) : null
@@ -250,62 +240,68 @@ export default function WeatherChat() {
 
       <aside className="info-sidebar">
         <h3>📋 How It Works</h3>
-        <ol>
+        <p>
+          This agent demonstrates <code>definePromptAgent</code> — the prompt
+          template lives in a <strong>.prompt file</strong> (
+          <code>prompts/tripPlanner.prompt</code>) rather than being defined
+          inline in code.
+        </p>
+
+        <h4>Prompt File</h4>
+        <pre>{`---
+model: googleai/gemini-flash-latest
+tools:
+  - getAttractions
+  - getFlightInfo
+---
+
+{{role "system"}}
+You are a friendly trip planning
+assistant...
+
+{{history}}`}</pre>
+
+        <h4>Agent Wiring</h4>
+        <pre>{`// Tools are defined in code
+const getAttractions = ai.defineTool(...);
+const getFlightInfo = ai.defineTool(...);
+
+// Agent is wired from the .prompt file
+const tripPlannerAgent =
+  ai.definePromptAgent({
+    promptName: 'tripPlanner',
+    store: new FileSessionStore(...),
+  });`}</pre>
+
+        <h4>Why use definePromptAgent?</h4>
+        <ul>
           <li>
-            Client sends user message via <code>streamFlow()</code> — responses
-            arrive as they're generated.
+            <strong>Separation of concerns</strong> — prompt authors can edit{' '}
+            <code>.prompt</code> files without touching code
           </li>
           <li>
-            The model can invoke <strong>tools</strong> (e.g.{' '}
-            <code>getWeather</code>). Tool calls and responses render inline in
-            the chat.
+            <strong>Reuse</strong> — the same prompt can power multiple agents
+            with different stores or configurations
           </li>
           <li>
-            Each response returns a <code>state</code> object and a{' '}
-            <code>snapshotId</code>. The state is sent back on the next turn via{' '}
-            <code>{'init: { state }'}</code> for multi-turn context.
+            <strong>Dotprompt features</strong> — use Handlebars templates,{' '}
+            <code>{'{{history}}'}</code>, roles, helpers, and partials
           </li>
-          <li>
-            The <code>snapshotId</code> is pushed into the URL, so you can
-            bookmark or share the session link.
-          </li>
-          <li>
-            On page load with a <code>:snapshotId</code> in the URL, the client
-            calls the <code>/state</code> endpoint to restore the full
-            conversation history.
-          </li>
-        </ol>
+        </ul>
 
         <h4>Key APIs</h4>
-        <pre>{`// Streaming multi-turn
+        <pre>{`// Client-side streaming
 const response = streamFlow({
-  url: '/api/weatherAgent',
+  url: '/api/tripPlannerAgent',
   input: { messages: [...] },
-  init: { state },
+  init: { snapshotId },
 });
 
 for await (const chunk of response.stream) {
   // chunk.modelChunk.content[]
-  // → .text, .toolRequest, .toolResponse
 }
 
-const result = await response.output;
-// result.state → send back next turn
-// result.snapshotId → push to URL
-
-// Restore session
-runFlow({
-  url: '/api/weatherAgent/state',
-  input: snapshotId,
-});`}</pre>
-
-        <h4>Session Persistence</h4>
-        <p>
-          This demo uses a <strong>server-side session store</strong>. The{' '}
-          <code>snapshotId</code> is a key into the store — the full message
-          history lives on the server. The client also receives{' '}
-          <code>state</code> for stateless round-tripping as a fallback.
-        </p>
+const result = await response.output;`}</pre>
       </aside>
     </div>
   );

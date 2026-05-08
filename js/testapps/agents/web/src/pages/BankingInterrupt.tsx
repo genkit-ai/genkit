@@ -193,7 +193,12 @@ export default function BankingInterrupt() {
     <div className="page-with-sidebar">
       <ChatUI
         title="Banking Agent (Interrupt)"
-        description="Banking assistant that requests user approval before transfers. Try: 'Transfer $500 to savings'"
+        description="Banking assistant that requests user approval before transfers."
+        suggestions={[
+          'Transfer $500 to my savings account.',
+          'Send $200 to account ACME-1234.',
+          'What is my account balance?',
+        ]}
         messages={messages}
         streamingText={streamingText}
         loading={loading}

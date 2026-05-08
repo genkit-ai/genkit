@@ -40,6 +40,7 @@ import {
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 import { taskAgent, testTaskAgent } from './custom-state-agent.js';
 import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
+import { testPromptFileAgent, tripPlannerAgent } from './prompt-file-agent.js';
 import {
   orchestratorAgent,
   testSubAgentDemo,
@@ -74,6 +75,8 @@ console.log('Loaded task flow:', testTaskAgent.__action.name);
 console.log('Loaded orchestrator agent:', orchestratorAgent.__action.name);
 console.log('Loaded sub-agent demo flow:', testSubAgentDemo.__action.name);
 console.log('Loaded sub-agent simple flow:', testSubAgentSimple.__action.name);
+console.log('Loaded prompt-file agent:', tripPlannerAgent.__action.name);
+console.log('Loaded prompt-file flow:', testPromptFileAgent.__action.name);
 
 export * from './background-agent.js';
 export * from './interrupt-agent.js';
@@ -127,6 +130,11 @@ app.post(
 );
 app.post('/api/taskAgent', expressHandler(taskAgent));
 app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent));
+app.post('/api/tripPlannerAgent', expressHandler(tripPlannerAgent));
+app.post(
+  '/api/tripPlannerAgent/state',
+  expressHandler(tripPlannerAgent.getSnapshotDataAction)
+);
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
@@ -136,6 +144,7 @@ app.post('/api/testBankingAgent', expressHandler(testBankingAgent));
 app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
 app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
 app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
+app.post('/api/testPromptFileAgent', expressHandler(testPromptFileAgent));
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 app.listen(PORT, () => {

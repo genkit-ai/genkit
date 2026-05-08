@@ -140,7 +140,12 @@ export default function ResearchAgent() {
     <div className="research-layout">
       <ChatUI
         title="Research Agent"
-        description='Multi-step research via defineCustomAgent. Try: "What are the impacts of AI on education?" or "Compare solar and wind energy"'
+        description="Multi-step research via defineCustomAgent."
+        suggestions={[
+          'What are the impacts of AI on education?',
+          'Compare solar and wind energy.',
+          'Explain the pros and cons of remote work.',
+        ]}
         messages={messages}
         streamingText={streamingText}
         loading={loading}
