@@ -327,8 +327,6 @@ func defineGablorkenTool(g *genkit.Genkit) *ai.ToolDef[gablorkenToolIn, float64]
 	)
 }
 
-
-
 func fetchImgAsBase64() (string, error) {
 	// CC0 license image
 	imgURL := "https://pd.w.org/2025/07/896686fbbcd9990c9.84605288-2048x1365.jpg"
