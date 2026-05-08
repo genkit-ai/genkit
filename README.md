@@ -144,6 +144,8 @@ Key features:
 
 - [**Follow us on X/Twitter**](https://x.com/GenkitFramework) – Get the latest
 news, updates, releases, tips and samples from the Genkit team.
+- [**Join us on Reddit**](https://reddit.com/r/GenkitFramework) – Post questions,
+ learn advanced features, connect with the team and read the latest developments.
 - [**Join us on Discord**](https://discord.gg/qXt5zzQKpc) – Get help, share
 ideas, and chat with other developers.
 - [**Contribute on GitHub**](https://github.com/genkit-ai/genkit/issues) – Report
