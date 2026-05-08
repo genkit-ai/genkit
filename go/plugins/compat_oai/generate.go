@@ -481,17 +481,19 @@ func convertToolCalls(content []*ai.Part) ([]openai.ChatCompletionMessageToolCal
 			continue
 		}
 
+		id := getToolCallID(p.ToolRequest)
+
 		// Skip partial tool request fragments that lack both an ID and a name.
 		// These are emitted by streaming deltas that only carry argument slices.
-		if p.ToolRequest.Ref == "" && p.ToolRequest.Name == "" {
+		if id == "" {
 			continue
 		}
 
 		// Deduplicate by Ref to prevent duplicate tool call IDs in the request.
-		if _, ok := seen[p.ToolRequest.Ref]; ok {
+		if _, ok := seen[id]; ok {
 			continue
 		}
-		seen[p.ToolRequest.Ref] = struct{}{}
+		seen[id] = struct{}{}
 
 		toolCall, err := convertToolCall(p)
 		if err != nil {
@@ -503,10 +505,7 @@ func convertToolCalls(content []*ai.Part) ([]openai.ChatCompletionMessageToolCal
 }
 
 func convertToolCall(part *ai.Part) (*openai.ChatCompletionMessageToolCallParam, error) {
-	toolCallID := part.ToolRequest.Ref
-	if toolCallID == "" {
-		toolCallID = part.ToolRequest.Name
-	}
+	toolCallID := getToolCallID(part.ToolRequest)
 
 	param := &openai.ChatCompletionMessageToolCallParam{
 		ID: (toolCallID),
@@ -524,6 +523,14 @@ func convertToolCall(part *ai.Part) (*openai.ChatCompletionMessageToolCallParam,
 	}
 
 	return param, nil
+}
+
+func getToolCallID(tr *ai.ToolRequest) string {
+	id := tr.Ref
+	if id == "" {
+		id = tr.Name
+	}
+	return id
 }
 
 func jsonStringToMap(jsonString string) (map[string]any, error) {
