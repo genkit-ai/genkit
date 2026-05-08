@@ -565,7 +565,7 @@ func firstReasoningField(fields map[string]respjson.Field) (reasoningField, bool
 		var val string
 		if err := json.Unmarshal([]byte(raw), &val); err != nil {
 			slog.Debug("could not unmarshal reasoning field", "err", err)
-			return reasoningField{}, false
+			continue
 		}
 		if val != "" {
 			return reasoningField{key: name, value: val}, true
