@@ -42,8 +42,6 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, TypeVar
 
-_M = TypeVar('_M', bound='type[BaseMiddleware]')
-
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from genkit._core._action import Action
@@ -56,6 +54,8 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
+
+_M = TypeVar('_M', bound='type[BaseMiddleware]')
 
 # Disallowed in middleware definition names and in ``middleware_plugin(..., namespace=...)``.
 # Model/action keys use ``provider/name``; middleware stays one path-free token for the registry.
