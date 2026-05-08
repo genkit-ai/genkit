@@ -22,7 +22,6 @@ from genkit import (
     ModelResponseChunk,
     respond_to_interrupt,
 )
-from genkit.plugin_api import middleware_plugin
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
 from genkit._ai._testing import (
@@ -55,11 +54,10 @@ from genkit._core._typing import (
     ToolResponsePart,
 )
 from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
-from genkit.plugin_api import new_middleware
+from genkit.plugin_api import middleware_plugin, new_middleware
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
-
 
 
 @pytest.fixture

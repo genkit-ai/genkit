@@ -350,7 +350,6 @@ class PostMiddleware(BaseMiddleware):
         )
 
 
-
 @pytest.mark.asyncio
 async def test_generate_accepts_inline_base_middleware_instance() -> None:
     """Inline ``BaseMiddleware`` instances in ``use=`` run without registration."""

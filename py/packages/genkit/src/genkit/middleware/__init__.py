@@ -48,10 +48,13 @@ on the app via ``ai.define_middleware`` or declare it in a plugin:
 
 from genkit._core._middleware import (
     BaseMiddleware,
+    GenerateHookParams,
     MiddlewareDesc,
+    ModelHookParams,
+    MultipartToolResponse,
+    ToolHookParams,
     middleware,
 )
-from genkit._core._middleware import GenerateHookParams, ModelHookParams, MultipartToolResponse, ToolHookParams
 from genkit._core._plugin import middleware_plugin
 
 __all__ = [

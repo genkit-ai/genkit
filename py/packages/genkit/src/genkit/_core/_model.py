@@ -31,7 +31,6 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
-from genkit._core._action import Action
 from genkit._core._base import GenkitModel
 from genkit._core._extract_json import extract_json
 from genkit._core._typing import (
@@ -477,7 +476,6 @@ class ModelResponseChunk(GenerateResponseChunk, Generic[OutputT]):
         if self.chunk_parser:
             return cast(OutputT, self.chunk_parser(self))
         return cast(OutputT, extract_json(self.accumulated_text))
-
 
 
 def text_from_message(msg: Message) -> str:

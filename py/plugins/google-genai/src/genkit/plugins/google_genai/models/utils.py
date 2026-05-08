@@ -47,6 +47,7 @@ kept in mind when modifying media handling or tool conversion logic:
 """
 
 import base64
+import logging
 from typing import cast
 from urllib.parse import urlparse
 
@@ -67,6 +68,8 @@ from genkit import (
     ToolResponsePart,
 )
 from genkit.plugin_api import get_cached_client
+
+logger = logging.getLogger(__name__)
 
 
 class PartConverter:
@@ -156,8 +159,8 @@ class PartConverter:
                             extra_parts.extend(converted)
                         else:
                             extra_parts.append(converted)
-                    except Exception:
-                        pass  # skip unrecognised parts rather than crashing the call
+                    except Exception as exc:
+                        logger.debug('Skipping unrecognised tool-response content part: %s', exc)
 
             # --- Legacy fallback: tools that embed media inside output['content'] ---
             # Kept for backward compat; new middleware should use MultipartToolResponse.content.
