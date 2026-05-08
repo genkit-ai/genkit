@@ -103,6 +103,7 @@ export class GenkitBeta extends Genkit {
     config: {
       name: string;
       description?: string;
+      stateSchema?: z.ZodType<State>;
       store?: SessionStore<State>;
       snapshotCallback?: SnapshotCallback<State>;
     },
@@ -118,6 +119,7 @@ export class GenkitBeta extends Genkit {
    */
   definePromptAgent<State = unknown>(config: {
     promptName: string;
+    stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
   }) {

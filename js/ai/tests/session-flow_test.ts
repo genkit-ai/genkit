@@ -355,13 +355,13 @@ describe('Agent', () => {
       assert.strictEqual(agent.__action.metadata?.agent?.abortable, true);
     });
 
-    it('should ignore init.state for server-managed agents (store is set)', async () => {
+    it('should reject init.state for server-managed agents (store is set)', async () => {
       const registry = new Registry();
       const store = new InMemorySessionStore<{ foo: string }>();
 
       const flow = defineCustomAgent<unknown, { foo: string }>(
         registry,
-        { name: 'ignoreInitStateTest', store },
+        { name: 'rejectInitStateTest', store },
         async (sess) => {
           await sess.run(async () => {});
           return {
@@ -371,10 +371,10 @@ describe('Agent', () => {
         }
       );
 
-      // Pass init.state with messages — it should be ignored because store is set
+      // Pass init.state — should throw FAILED_PRECONDITION for server-managed agents
       const session = flow.streamBidi({
         state: {
-          custom: { foo: 'should-be-ignored' },
+          custom: { foo: 'should-be-rejected' },
           messages: [{ role: 'user', content: [{ text: 'stale history' }] }],
           artifacts: [],
         },
@@ -384,18 +384,18 @@ describe('Agent', () => {
       });
       session.close();
 
-      for await (const _ of session.stream) {
+      try {
+        for await (const _ of session.stream) {
+        }
+        await session.output;
+        assert.fail('Expected FAILED_PRECONDITION error');
+      } catch (e: any) {
+        assert.ok(
+          e.message.includes("Cannot send 'state' to agent"),
+          `Expected FAILED_PRECONDITION error, got: ${e.message}`
+        );
+        assert.strictEqual(e.status, 'FAILED_PRECONDITION');
       }
-      const output = await session.output;
-
-      // Verify state was NOT seeded from init.state
-      const snapshot = await store.getSnapshot(output.snapshotId!);
-      assert.ok(snapshot);
-      // Only the message sent via input should be present, not the stale history
-      assert.strictEqual(snapshot!.state.messages!.length, 1);
-      assert.strictEqual(snapshot!.state.messages![0].content[0].text, 'hello');
-      // Custom state should be empty default, not the init.state value
-      assert.deepStrictEqual(snapshot!.state.custom, {});
     });
 
     it('should use init.state for client-managed agents (no store)', async () => {

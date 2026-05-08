@@ -26,6 +26,7 @@ import {
   type ActionFnArg,
   type BidiAction,
 } from '@genkit-ai/core';
+import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { Channel } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
 import { generateStream } from './generate.js';
@@ -189,6 +190,50 @@ export class SessionRunner<State = unknown> {
     this.onEndTurn = options?.onEndTurn;
     this.onDetach = options?.onDetach;
     this.newSnapshotId = options?.newSnapshotId;
+  }
+
+  // ── Session delegate methods ────────────────────────────────────────
+  // These forward to `this.session` so callers can write `sess.addMessages()`
+  // instead of the verbose `sess.session.addMessages()`.
+
+  /** Returns a deep copy of the current session state. */
+  getState(): SessionState<State> {
+    return this.session.getState();
+  }
+
+  /** Retrieves all messages associated with the session. */
+  getMessages(): MessageData[] {
+    return this.session.getMessages();
+  }
+
+  /** Appends messages to the session. */
+  addMessages(messages: MessageData[]): void {
+    this.session.addMessages(messages);
+  }
+
+  /** Overwrites the session messages. */
+  setMessages(messages: MessageData[]): void {
+    this.session.setMessages(messages);
+  }
+
+  /** Retrieves the custom state of the session. */
+  getCustom(): State | undefined {
+    return this.session.getCustom();
+  }
+
+  /** Updates the custom state using a mutator function. */
+  updateCustom(fn: (custom?: State) => State): void {
+    this.session.updateCustom(fn);
+  }
+
+  /** Retrieves the list of artifacts generated during the session. */
+  getArtifacts(): Artifact[] {
+    return this.session.getArtifacts();
+  }
+
+  /** Adds artifacts to the session, deduplicating by name. */
+  addArtifacts(artifacts: Artifact[]): void {
+    this.session.addArtifacts(artifacts);
   }
 
   /**
@@ -367,12 +412,18 @@ export interface Agent<State = unknown>
 
 /**
  * Registers a multi-turn custom agent action capable of maintaining persistent state.
+ *
+ * When `stateSchema` is provided the custom state is validated at load time
+ * (from a snapshot store or from the client-supplied `init.state`) and the
+ * JSON Schema representation is included in the action metadata so that
+ * tooling (e.g. the Dev UI) can inspect / validate the state shape.
  */
 export function defineCustomAgent<Stream = unknown, State = unknown>(
   registry: Registry,
   config: {
     name: string;
     description?: string;
+    stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
     clientStateTransform?: ClientStateTransform<State>;
@@ -390,6 +441,22 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     return state as SessionState;
   };
 
+  // If a state schema was provided, pre-compute the JSON schema once so it
+  // can be embedded in metadata and reused for validation.
+  const stateJsonSchema = config.stateSchema
+    ? toJsonSchema({ schema: config.stateSchema })
+    : undefined;
+
+  /**
+   * Validates the `custom` field of a session state against the configured
+   * `stateSchema`.  No-ops when no schema was provided.
+   */
+  const validateCustomState = (custom: unknown, label: string): void => {
+    if (config.stateSchema && custom !== undefined) {
+      parseSchema(custom, { schema: config.stateSchema });
+    }
+  };
+
   const primaryAction = defineBidiAction(
     registry,
     {
@@ -404,6 +471,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         agent: {
           stateManagement: config.store ? 'server' : 'client',
           abortable: !!config.store?.onSnapshotStateChange,
+          ...(stateJsonSchema && { stateSchema: stateJsonSchema }),
         },
       },
     },
@@ -412,6 +480,26 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     ) {
       const init = arg.init;
       const store = config.store || new InMemorySessionStore<State>();
+
+      // Validate that the init strategy matches the agent's state management
+      // mode.  Server-managed agents (with a store) expect a snapshotId;
+      // client-managed agents (no store) expect the full state blob.
+      if (init?.snapshotId && !config.store) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message:
+            `Cannot use 'snapshotId' with agent '${config.name}': this agent ` +
+            `has no store configured (client-managed state). Send 'state' instead.`,
+        });
+      }
+      if (init?.state && config.store) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message:
+            `Cannot send 'state' to agent '${config.name}': this agent uses ` +
+            `a server-managed store. Send 'snapshotId' instead.`,
+        });
+      }
 
       let session: Session<State>;
 
@@ -424,8 +512,13 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         if (!snapshot) {
           throw new Error(`Snapshot ${init.snapshotId} not found`);
         }
+        validateCustomState(
+          snapshot.state?.custom,
+          `snapshot ${init.snapshotId}`
+        );
         session = new Session<State>(snapshot.state as SessionState<State>);
       } else if (init?.state && !config.store) {
+        validateCustomState(init.state.custom, 'client-supplied init.state');
         session = new Session<State>(init.state as SessionState<State>);
       } else {
         session = new Session<State>({
@@ -709,6 +802,7 @@ export function definePromptAgent<State = unknown>(
   registry: Registry,
   config: {
     promptName: string;
+    stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
     clientStateTransform?: ClientStateTransform<State>;
@@ -738,7 +832,7 @@ export function definePromptAgent<State = unknown>(
       const promptTag = 'agentPreamble';
 
       // Tag every history message so we can identify them after render.
-      const history = (sess.session.getMessages() || []).map((m) => ({
+      const history = (sess.getMessages() || []).map((m) => ({
         ...m,
         metadata: { ...m.metadata, [historyTag]: true },
       }));
@@ -794,9 +888,9 @@ export function definePromptAgent<State = unknown>(
         if (res.message) {
           msgs.push(res.message);
         }
-        sess.session.setMessages(msgs);
+        sess.setMessages(msgs);
       } else if (res.message) {
-        sess.session.addMessages([res.message]);
+        sess.addMessages([res.message]);
       }
 
       if (res.finishReason === 'interrupted') {
@@ -813,9 +907,9 @@ export function definePromptAgent<State = unknown>(
       }
     });
 
-    const msgs = sess.session.getMessages();
+    const msgs = sess.getMessages();
     return {
-      artifacts: sess.session.getArtifacts(),
+      artifacts: sess.getArtifacts(),
       message: msgs.length > 0 ? msgs[msgs.length - 1] : undefined,
     };
   };
@@ -824,6 +918,7 @@ export function definePromptAgent<State = unknown>(
     registry,
     {
       name: config.promptName,
+      stateSchema: config.stateSchema,
       store: config.store,
       snapshotCallback: config.snapshotCallback,
       clientStateTransform: config.clientStateTransform,
@@ -841,6 +936,17 @@ export function definePromptAgent<State = unknown>(
  * registration into a single call.
  */
 export interface AgentConfig<State = unknown> extends PromptConfig {
+  /**
+   * Optional Zod schema describing the shape of the custom session state.
+   *
+   * When provided:
+   * - The `State` type is inferred from the schema (no explicit generic needed).
+   * - The JSON Schema is included in action metadata (`metadata.agent.stateSchema`)
+   *   so the Dev UI and other tooling can inspect / validate the state.
+   * - Custom state is validated at load time (from a snapshot store or from the
+   *   client-supplied `init.state`).
+   */
+  stateSchema?: z.ZodType<State>;
   store?: SessionStore<State>;
   snapshotCallback?: SnapshotCallback<State>;
   clientStateTransform?: ClientStateTransform<State>;
@@ -860,9 +966,15 @@ export function defineAgent<State = unknown>(
   registry: Registry,
   config: AgentConfig<State>
 ): Agent<State> {
-  // Extract prompt-specific fields from the combined config.
-  const { store, snapshotCallback, clientStateTransform, ...promptConfig } =
-    config;
+  // Extract agent-specific fields from the combined config; the rest is
+  // forwarded to definePrompt.
+  const {
+    stateSchema,
+    store,
+    snapshotCallback,
+    clientStateTransform,
+    ...promptConfig
+  } = config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
@@ -870,6 +982,7 @@ export function defineAgent<State = unknown>(
   // Wire it into a prompt agent.
   return definePromptAgent<State>(registry, {
     promptName: promptConfig.name,
+    stateSchema,
     store,
     snapshotCallback,
     clientStateTransform,
