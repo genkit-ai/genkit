@@ -15,14 +15,14 @@
  */
 
 import type {
-  AgentCard,
   Artifact as A2AArtifact,
+  Message as A2AMessage,
+  Task as A2ATask,
+  AgentCard,
   DeleteTaskPushNotificationConfigParams,
   GetTaskPushNotificationConfigParams,
   ListTaskPushNotificationConfigParams,
-  Message as A2AMessage,
   MessageSendParams,
-  Task as A2ATask,
   TaskArtifactUpdateEvent,
   TaskIdParams,
   TaskPushNotificationConfig,
@@ -304,7 +304,9 @@ export class GenkitA2ARequestHandler implements A2ARequestHandler {
   ): Promise<A2AMessage | A2ATask> {
     const incoming = params.message;
     const contextId =
-      (incoming as any).contextId || (incoming as any).taskId || crypto.randomUUID();
+      (incoming as any).contextId ||
+      (incoming as any).taskId ||
+      crypto.randomUUID();
     const taskId = (incoming as any).taskId || crypto.randomUUID();
 
     // Map A2A parts → Genkit parts

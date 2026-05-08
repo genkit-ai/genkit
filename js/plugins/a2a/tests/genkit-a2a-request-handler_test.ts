@@ -43,7 +43,9 @@ function createTestCard(overrides?: Partial<AgentCard>): AgentCard {
   } as AgentCard;
 }
 
-function createMockAgent(overrides?: Partial<GenkitAgentLike>): GenkitAgentLike {
+function createMockAgent(
+  overrides?: Partial<GenkitAgentLike>
+): GenkitAgentLike {
   return {
     __action: { name: 'testAgent', description: 'A test agent' },
     run: async () => ({
@@ -481,9 +483,7 @@ describe('GenkitA2ARequestHandler', () => {
 
       assert.strictEqual(result.history!.length, 2);
       // Should be the last 2 messages
-      assert.ok(
-        result.history![0].parts.some((p: any) => p.text === 'Q2')
-      );
+      assert.ok(result.history![0].parts.some((p: any) => p.text === 'Q2'));
     });
 
     it('maps snapshot status correctly', async () => {
