@@ -1,14 +1,22 @@
 package compat_oai
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
 )
 
-func TestStreamResponseCollectorPreservesReasoning(t *testing.T) {
+func TestStreamResponseCollector(t *testing.T) {
 	collector := &streamResponseCollector{}
 
 	chunks := []openai.ChatCompletionChunk{
@@ -62,26 +70,25 @@ func TestStreamResponseCollectorPreservesReasoning(t *testing.T) {
 
 	var reasoningChunks []string
 	for _, chunk := range chunks {
-		modelChunk, err := collector.AddChunk(chunk)
-		if err != nil {
-			t.Fatalf("AddChunk() error: %v", err)
-		}
-		if modelChunk != nil && modelChunk.Reasoning() != "" {
+		modelChunk, ok := collector.AddChunk(chunk)
+		if ok && modelChunk != nil && modelChunk.Reasoning() != "" {
 			reasoningChunks = append(reasoningChunks, modelChunk.Reasoning())
 		}
 	}
 
-	resp, err := collector.Response()
+	resp, err := collector.ToModelResponse()
 	if err != nil {
-		t.Fatalf("Response() error: %v", err)
+		t.Fatalf("ToModelResponse() error: %v", err)
 	}
 
 	if got, want := strings.Join(reasoningChunks, ""), "Need location lookup. Calling the tool."; got != want {
-		t.Fatalf("stream reasoning mismatch: got %q want %q", got, want)
+		t.Errorf("stream reasoning mismatch: got %q want %q", got, want)
 	}
-	if got, want := resp.Reasoning(), "Need location lookup. Calling the tool."; got != want {
-		t.Fatalf("final reasoning mismatch: got %q want %q", got, want)
+
+	if strings.Contains(resp.Text(), resp.Reasoning()) {
+		t.Errorf("response text contains reasoning")
 	}
+
 	var reasoningParts int
 	for _, part := range resp.Message.Content {
 		if part.IsReasoning() {
@@ -89,199 +96,125 @@ func TestStreamResponseCollectorPreservesReasoning(t *testing.T) {
 		}
 	}
 	if reasoningParts != 1 {
-		t.Fatalf("expected 1 reasoning part, got %d", reasoningParts)
+		t.Errorf("expected 1 reasoning part, got %d", reasoningParts)
 	}
-	toolRequests := resp.ToolRequests()
-	if len(toolRequests) != 1 {
-		t.Fatalf("expected 1 tool request, got %d", len(toolRequests))
+	if got := len(resp.ToolRequests()); got != 1 {
+		t.Errorf("expected 1 tool request, got %d", got)
 	}
-	if got, want := toolRequests[0].Name, "get_weather"; got != want {
-		t.Fatalf("tool name mismatch: got %q want %q", got, want)
-	}
-}
-
-func TestStreamResponseCollectorResponsePrefersAccumulatedCompletionReasoning(t *testing.T) {
-	collector := &streamResponseCollector{}
-	collector.accumulator.ChatCompletion = openai.ChatCompletion{
-		Choices: []openai.ChatCompletionChoice{
-			{
-				Message: openai.ChatCompletionMessage{},
-			},
-		},
-	}
-	collector.accumulator.ChatCompletion.Choices[0].Message.JSON.ExtraFields = map[string]respjson.Field{
-		"reasoning_content": respjson.NewField(`"from completion"`),
-	}
-	collector.reasoning.content.WriteString("from chunks")
-	collector.reasoning.key = "reasoning_content"
-
-	resp, err := collector.Response()
-	if err != nil {
-		t.Fatalf("Response() error: %v", err)
-	}
-
-	if got, want := resp.Reasoning(), "from completion"; got != want {
-		t.Fatalf("final reasoning mismatch: got %q want %q", got, want)
+	if got, want := resp.ToolRequests()[0].Name, "get_weather"; got != want {
+		t.Errorf("tool name mismatch: got %q want %q", got, want)
 	}
 }
 
-func TestStreamResponseCollectorReturnsReasoningParseErrors(t *testing.T) {
-	collector := &streamResponseCollector{}
+// TestDuplicateToolCallIDsInHistory verifies that model messages containing
+// partial tool requests (with empty ref/name) do not create duplicate or
+// empty tool call IDs when converted back to OpenAI format.
+// This reproduces the bug where accumulated streaming chunks create
+// partial tool requests that result in "tool call id duplicated" errors.
+func TestDuplicateToolCallIDsInHistory(t *testing.T) {
+	var requests [][]byte
+	var mu sync.Mutex
 
-	chunk := openai.ChatCompletionChunk{
-		ID: "chatcmpl-test",
-		Choices: []openai.ChatCompletionChunkChoice{
-			{
-				Index: 0,
-				Delta: openai.ChatCompletionChunkChoiceDelta{},
-			},
-		},
-	}
-	chunk.Choices[0].Delta.JSON.ExtraFields = map[string]respjson.Field{
-		"reasoning_content": respjson.NewField(`{"bad":"json"}`),
-	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, body)
+		mu.Unlock()
 
-	_, err := collector.AddChunk(chunk)
-	if err == nil {
-		t.Fatal("AddChunk() error = nil, want parse failure")
-	}
-	if !strings.Contains(err.Error(), "could not parse reasoning field") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-// TestFragmentedToolCalls verifies that fragmented tool calls in streaming mode
-// do not create multiple partial/empty tool request parts.
-//
-// This is a regression test for a bug where each chunk of a tool call would
-// create a separate tool request part, resulting in many tool requests with
-// empty names and refs.
-func TestFragmentedToolCalls(t *testing.T) {
-	collector := &streamResponseCollector{}
-
-	// Simulate a tool call arriving in fragments across multiple chunks
-	// This mimics how OpenAI-compatible APIs actually stream tool calls
-	chunks := []openai.ChatCompletionChunk{
-		// First chunk: ID and name arrive, no arguments yet
-		{
-			Choices: []openai.ChatCompletionChunkChoice{
-				{
-					Delta: openai.ChatCompletionChunkChoiceDelta{
-						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
-							{
-								Index: 0,
-								ID:    "call_abc123",
-								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
-									Name:      "get_weather",
-									Arguments: "",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		// Second chunk: partial arguments (empty name/id as they were already sent)
-		{
-			Choices: []openai.ChatCompletionChunkChoice{
-				{
-					Delta: openai.ChatCompletionChunkChoiceDelta{
-						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
-							{
-								Index: 0,
-								ID:    "", // Empty in subsequent chunks
-								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
-									Name:      "", // Empty in subsequent chunks
-									Arguments: `{"city": "`,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		// Third chunk: rest of arguments
-		{
-			Choices: []openai.ChatCompletionChunkChoice{
-				{
-					Delta: openai.ChatCompletionChunkChoiceDelta{
-						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
-							{
-								Index: 0,
-								ID:    "",
-								Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
-									Name:      "",
-									Arguments: `Paris"}`,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	var totalToolRequestParts int
-	var emptyNameToolRequests int
-	var emptyRefToolRequests int
-
-	for i, chunk := range chunks {
-		modelChunk, err := collector.AddChunk(chunk)
-		if err != nil {
-			t.Fatalf("AddChunk %d failed: %v", i, err)
+		isStream := strings.Contains(string(body), `"stream":true`)
+		if isStream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			chunks := []string{
+				`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"kimi-k2.5","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n",
+				`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"kimi-k2.5","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}` + "\n\n",
+				`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"kimi-k2.5","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"65","type":"function","function":{"name":"get_weather"}}]},"finish_reason":null}]}` + "\n\n",
+				`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,"model":"kimi-k2.5","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Paris\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n",
+				"data: [DONE]\n\n",
+			}
+			for _, chunk := range chunks {
+				w.Write([]byte(chunk))
+				w.(http.Flusher).Flush()
+			}
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"id":"chatcmpl-123","object":"chat.completion","created":1694268190,"model":"kimi-k2.5","choices":[{"index":0,"message":{"role":"assistant","content":"The weather in Paris is sunny."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}`))
 		}
-		if modelChunk != nil {
-			for _, part := range modelChunk.Content {
-				if part.IsToolRequest() {
-					totalToolRequestParts++
-					t.Logf("Chunk %d: ToolRequest(name=%q, ref=%q, input=%q)",
-						i, part.ToolRequest.Name, part.ToolRequest.Ref, part.ToolRequest.Input)
-					if part.ToolRequest.Name == "" {
-						emptyNameToolRequests++
-					}
-					if part.ToolRequest.Ref == "" {
-						emptyRefToolRequests++
-					}
-				}
+	}))
+	defer ts.Close()
+
+	client := openai.NewClient(option.WithBaseURL(ts.URL), option.WithAPIKey("test"))
+	g := NewModelGenerator(&client, "kimi-k2.5")
+
+	// Simulate a history message that contains partial tool request fragments
+	// (as would happen if a consumer appended streaming chunks to history)
+	historyMsg := &ai.Message{
+		Role: ai.RoleModel,
+		Content: []*ai.Part{
+			ai.NewTextPart("Hello"),
+			// Complete tool request
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "get_weather", Ref: "65", Input: map[string]any{"city": "Paris"}}),
+			// Partial fragments that were emitted by raw streaming deltas
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "", Ref: "", Input: `{"city": `}),
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "", Ref: "", Input: `"Paris"}`}),
+			// Another duplicate of the complete one
+			ai.NewToolRequestPart(&ai.ToolRequest{Name: "get_weather", Ref: "65", Input: map[string]any{"city": "Paris"}}),
+		},
+	}
+
+	_, err := g.WithMessages([]*ai.Message{
+		ai.NewUserTextMessage("What's the weather?"),
+		historyMsg,
+	}).WithTools([]*ai.ToolDefinition{{
+		Name:        "get_weather",
+		Description: "Get weather",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			},
+			"required": []string{"city"},
+		},
+	}}).Generate(context.Background(), ai.NewModelRequest(nil), nil)
+
+	if err != nil {
+		t.Fatalf("generation failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(requests))
+	}
+
+	var reqBody map[string]any
+	if err := json.Unmarshal(requests[0], &reqBody); err != nil {
+		t.Fatalf("failed to parse request: %v", err)
+	}
+
+	messages, _ := reqBody["messages"].([]any)
+	for _, msg := range messages {
+		m, _ := msg.(map[string]any)
+		if m["role"] != "assistant" {
+			continue
+		}
+		toolCalls, _ := m["tool_calls"].([]any)
+		ids := make(map[string]int)
+		for _, tc := range toolCalls {
+			tcMap, _ := tc.(map[string]any)
+			id, _ := tcMap["id"].(string)
+			ids[id]++
+			if ids[id] > 1 {
+				t.Errorf("duplicate tool call id found: %q", id)
+			}
+			if id == "" {
+				t.Errorf("empty tool call id found")
 			}
 		}
-	}
-
-	t.Logf("Total tool request parts emitted: %d", totalToolRequestParts)
-	t.Logf("Empty name tool requests: %d", emptyNameToolRequests)
-	t.Logf("Empty ref tool requests: %d", emptyRefToolRequests)
-
-	// BEFORE THE FIX: This creates 2 tool request parts with empty names/refs
-	// (chunks 2 and 3 have empty name/ref because they are fragments)
-	// AFTER THE FIX: Should create 0-1 tool request parts with no empty names/refs
-	if emptyNameToolRequests > 0 {
-		t.Errorf("Got %d tool requests with empty names - fragmented tool calls not properly handled", emptyNameToolRequests)
-	}
-	if emptyRefToolRequests > 0 {
-		t.Errorf("Got %d tool requests with empty refs - fragmented tool calls not properly handled", emptyRefToolRequests)
-	}
-
-	// Check the final response
-	resp, err := collector.Response()
-	if err != nil {
-		t.Fatalf("Response() failed: %v", err)
-	}
-
-	toolReqs := resp.ToolRequests()
-	t.Logf("Final response has %d tool requests", len(toolReqs))
-
-	// We should have exactly 1 tool request
-	if len(toolReqs) != 1 {
-		t.Errorf("Expected 1 tool request in final response, got %d", len(toolReqs))
-	}
-
-	if len(toolReqs) > 0 {
-		toolReq := toolReqs[0]
-		if toolReq.Name != "get_weather" {
-			t.Errorf("Expected tool name 'get_weather', got %q", toolReq.Name)
-		}
-		if toolReq.Ref != "call_abc123" {
-			t.Errorf("Expected tool ref 'call_abc123', got %q", toolReq.Ref)
+		if len(toolCalls) != 1 {
+			t.Errorf("expected 1 tool call, got %d", len(toolCalls))
 		}
 	}
 }
