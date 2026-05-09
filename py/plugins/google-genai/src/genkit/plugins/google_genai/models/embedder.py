@@ -17,17 +17,19 @@
 """Google-Genai embedder model."""
 
 import sys
-from typing import Any  # noqa
+from typing import cast
 
-if sys.version_info < (3, 11):  # noqa
-    from strenum import StrEnum  # noqa
-else:  # noqa
-    from enum import StrEnum  # noqa
+if sys.version_info < (3, 11):
+    from strenum import StrEnum
+else:
+    from enum import StrEnum
 
 from google import genai
+from google.genai import types as genai_types
 
+from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
+from genkit._core._typing import DocumentData
 from genkit.plugins.google_genai.models.utils import PartConverter
-from genkit.types import Embedding, EmbedRequest, EmbedResponse
 
 
 class VertexEmbeddingModels(StrEnum):
@@ -38,6 +40,8 @@ class VertexEmbeddingModels(StrEnum):
     TEXT_EMBEDDING_005_ENG = 'text-embedding-005'
     GECKO_MULTILINGUAL = 'textembedding-gecko-multilingual@001'
     TEXT_EMBEDDING_002_MULTILINGUAL = 'text-multilingual-embedding-002'
+    MULTIMODAL_EMBEDDING_001 = 'multimodalembedding@001'
+    GEMINI_EMBEDDING_001 = 'gemini-embedding-001'
 
 
 class GeminiEmbeddingModels(StrEnum):
@@ -45,7 +49,7 @@ class GeminiEmbeddingModels(StrEnum):
 
     GEMINI_EMBEDDING_EXP_03_07 = 'gemini-embedding-exp-03-07'
     TEXT_EMBEDDING_004 = 'text-embedding-004'
-    EMBEDDING_001 = 'embedding-001'
+    GEMINI_EMBEDDING_001 = 'gemini-embedding-001'
 
 
 class EmbeddingTaskType(StrEnum):
@@ -60,9 +64,16 @@ class EmbeddingTaskType(StrEnum):
     FACT_VERIFICATION = 'FACT_VERIFICATION'
 
 
-def default_embedder_info(name: str) -> dict[str, Any]:
-    """Returns default info for embedders given a name."""
-    return {'dimensions': 768, 'label': f'Google AI - {name}', 'supports': {'input': ['text']}}
+# Static dimensions for known embedders.
+EMBEDDER_DIMENSIONS: dict[str, int] = {
+    # Google AI
+    'gemini-embedding-2-preview': 3072,
+    'gemini-embedding-001': 3072,
+    # Vertex AI
+    'text-embedding-005': 768,
+    'text-multilingual-embedding-002': 768,
+    'multimodalembedding@001': 768,
+}
 
 
 class Embedder:
@@ -72,7 +83,7 @@ class Embedder:
         self,
         version: VertexEmbeddingModels | GeminiEmbeddingModels | str,
         client: genai.Client,
-    ):
+    ) -> None:
         """Initialize the embedder.
 
         Args:
@@ -91,14 +102,24 @@ class Embedder:
         Returns:
             EmbedResponse
         """
-        contents = self._build_contents(request)
+        request = EmbedRequest.model_validate(request)
+        if not request.input:
+            raise ValueError(
+                'Embed request input is empty: provide at least one document with content '
+                '(for example input: [{"content": [{"text": "your text here"}]}]).'
+            )
+        contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(request)
-        response = await self._client.aio.models.embed_content(model=self._version, contents=contents, config=config)
+        response = await self._client.aio.models.embed_content(
+            model=self._version,
+            contents=cast(genai_types.ContentListUnion, contents),
+            config=config,
+        )
 
-        embeddings = [Embedding(embedding=em.values) for em in response.embeddings]
+        embeddings = [Embedding(embedding=em.values or []) for em in (response.embeddings or [])]
         return EmbedResponse(embeddings=embeddings)
 
-    def _build_contents(self, request: EmbedRequest) -> list[genai.types.Content]:
+    async def _build_contents(self, request: EmbedRequest) -> list[genai.types.Content]:
         """Build google-genai request contents from Genkit request.
 
         Args:
@@ -109,9 +130,16 @@ class Embedder:
         """
         request_contents: list[genai.types.Content] = []
         for doc in request.input:
+            if not isinstance(doc, DocumentData):
+                doc = DocumentData.model_validate(doc)
             content_parts: list[genai.types.Part] = []
             for p in doc.content:
-                content_parts.append(PartConverter.to_gemini(p))
+                part = p if isinstance(p, DocumentPart) else DocumentPart.model_validate(p)
+                converted = await PartConverter.to_gemini(part)
+                if isinstance(converted, list):
+                    content_parts.extend(converted)
+                else:
+                    content_parts.append(converted)
             request_contents.append(genai.types.Content(parts=content_parts))
 
         return request_contents

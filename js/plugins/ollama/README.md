@@ -1,5 +1,7 @@
 # Ollama plugin for Genkit
 
+See [official documentation](https://genkit.dev/docs/integrations/ollama/) for more.
+
 ## Installing the plugin
 
 ```bash
@@ -32,7 +34,7 @@ async function main() {
 main();
 ```
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests against that repo.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
 Usage information and reference details can be found in [Genkit documentation](https://genkit.dev/docs/plugins/ollama/).
 

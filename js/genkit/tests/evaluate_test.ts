@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { genkit, type Genkit } from '../src/genkit';
+import { genkit, type Genkit } from '../src/index.js';
 import { bonknessEvaluator } from './helpers';
 
 describe('evaluate', () => {

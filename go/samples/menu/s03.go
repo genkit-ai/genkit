@@ -58,7 +58,7 @@ func (ch *chatHistoryStore) Retrieve(sessionID string) chatHistory {
 }
 
 func setup03(g *genkit.Genkit, m ai.Model) error {
-	chatPreamblePrompt, err := genkit.DefinePrompt(g, "s03_chatPreamble",
+	chatPreamblePrompt := genkit.DefinePrompt(g, "s03_chatPreamble",
 		ai.WithMessages(
 			ai.NewUserTextMessage("Hi. What's on the menu today?"),
 			ai.NewModelTextMessage(`
@@ -79,9 +79,6 @@ Do you have any questions about the menu?`),
 			Temperature: genai.Ptr[float32](0.3),
 		}),
 	)
-	if err != nil {
-		return err
-	}
 
 	menuData, err := menu(&ai.ToolContext{Context: context.Background()}, nil)
 	if err != nil {

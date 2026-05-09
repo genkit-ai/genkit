@@ -38,10 +38,7 @@ func main() {
 	ctx := context.Background()
 
 	// Initialize Genkit
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal("Failed to initialize Genkit:", err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	// Create Files API client
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -66,7 +63,7 @@ func main() {
 	// Use Files API URI directly with Genkit (now supported!)
 	fmt.Println("Analyzing image with Genkit using Files API URI...")
 	resp, err := genkit.Generate(ctx, g,
-		ai.WithModelName("googleai/gemini-2.0-flash"),
+		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithMessages(
 			ai.NewUserMessage(
 				ai.NewTextPart("What do you see in this image?"),

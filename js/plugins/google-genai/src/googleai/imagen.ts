@@ -20,7 +20,6 @@ import {
   MessageData,
   modelActionMetadata,
   z,
-  type Genkit,
 } from 'genkit';
 import {
   getBasicUsageStats,
@@ -30,6 +29,8 @@ import {
   type ModelInfo,
   type ModelReference,
 } from 'genkit/model';
+import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import type {
   ClientOptions,
@@ -116,13 +117,9 @@ const GENERIC_MODEL = commonRef('imagen', {
 });
 
 const KNOWN_MODELS = {
-  'imagen-3.0-generate-002': commonRef('imagen-3.0-generate-002'),
-  'imagen-4.0-generate-preview-06-06': commonRef(
-    'imagen-4.0-generate-preview-06-06'
-  ),
-  'imagen-4.0-ultra-generate-preview-06-06': commonRef(
-    'imagen-4.0-ultra-generate-preview-06-06'
-  ),
+  'imagen-4.0-fast-generate-001': commonRef('imagen-4.0-fast-generate-001'),
+  'imagen-4.0-generate-001': commonRef('imagen-4.0-generate-001'),
+  'imagen-4.0-ultra-generate-001': commonRef('imagen-4.0-ultra-generate-001'),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
 
@@ -137,7 +134,8 @@ export function model(
   config: ImagenConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
 
@@ -169,14 +167,13 @@ export function listActions(models: Model[]): ActionMetadata[] {
     });
 }
 
-export function defineKnownModels(ai: Genkit, options?: GoogleAIPluginOptions) {
-  for (const name of Object.keys(KNOWN_MODELS)) {
-    defineModel(ai, name, options);
-  }
+export function listKnownModels(options?: GoogleAIPluginOptions) {
+  return Object.keys(KNOWN_MODELS).map((name: string) =>
+    defineModel(name, options)
+  );
 }
 
 export function defineModel(
-  ai: Genkit,
   name: string,
   pluginOptions?: GoogleAIPluginOptions
 ): ModelAction {
@@ -185,11 +182,11 @@ export function defineModel(
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
+    customHeaders: pluginOptions?.customHeaders,
   };
 
-  return ai.defineModel(
+  return pluginModel(
     {
-      apiVersion: 'v2',
       name: ref.name,
       ...ref.info,
       configSchema: ref.configSchema,
@@ -253,20 +250,22 @@ function fromImagenPrediction(p: ImagenPrediction): MediaPart {
 function toImagenParameters(
   request: GenerateRequest<typeof ImagenConfigSchema>
 ): ImagenParameters {
-  const out = {
+  const params = {
     sampleCount: request.config?.numberOfImages ?? 1,
     ...request?.config,
   };
 
-  for (const k in out) {
-    if (!out[k]) delete out[k];
+  for (const k in params) {
+    if (params[k] === undefined || params[k] === null) {
+      delete params[k];
+    }
   }
 
   // This is not part of the request parameters sent to the endpoint
   // It's pulled out and used separately
-  delete out.apiKey;
+  delete params.apiKey;
 
-  return out;
+  return params;
 }
 
 export const TEST_ONLY = {

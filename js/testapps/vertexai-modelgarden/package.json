@@ -1,11 +1,10 @@
 {
   "main": "lib/index.js",
   "scripts": {
-    "start:anthropic": "node lib/anthropic.js",
-    "start:mistral": "node lib/mistral.js",
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
   },
   "name": "anthropic-models",
   "version": "1.0.0",
@@ -16,12 +15,13 @@
   "dependencies": {
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "@mistralai/mistralai-gcp": "^1.3.4",
     "express": "^4.21.0",
     "genkit": "workspace:*",
     "zod": "3.22.4"
   },
   "devDependencies": {
-    "typescript": "^5.5.3"
+    "typescript": "^5.9.3"
   }
 }

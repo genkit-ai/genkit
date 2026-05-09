@@ -18,6 +18,7 @@ import {
   GenkitError,
   defineActionAsync,
   getContext,
+  isAction,
   stripUndefinedProps,
   type Action,
   type ActionAsyncParams,
@@ -32,6 +33,7 @@ import { toJsonSchema } from '@genkit-ai/core/schema';
 import { SPAN_TYPE_ATTR, runInNewSpan } from '@genkit-ai/core/tracing';
 import { Message as DpMessage, PromptFunction } from 'dotprompt';
 import { existsSync, readFileSync, readdirSync } from 'fs';
+import type Handlebars from 'handlebars';
 import { basename, join, resolve } from 'path';
 import type { DocumentData } from './document.js';
 import {
@@ -48,6 +50,7 @@ import {
 import { Message } from './message.js';
 import {
   GenerateActionOptionsSchema,
+  MiddlewareRef,
   type GenerateActionOptions,
   type GenerateRequest,
   type GenerateRequestSchema,
@@ -127,7 +130,7 @@ export interface PromptConfig<
   metadata?: Record<string, any>;
   tools?: ToolArgument[];
   toolChoice?: ToolChoice;
-  use?: ModelMiddleware[];
+  use?: (ModelMiddleware | MiddlewareRef)[];
   context?: ActionContext;
 }
 
@@ -259,7 +262,6 @@ function definePromptAsync<
     renderOptions: PromptGenerateOptions<O, CustomOptions> | undefined
   ): Promise<GenerateOptions> => {
     return await runInNewSpan(
-      registry,
       {
         metadata: {
           name: 'render',
@@ -308,7 +310,7 @@ function definePromptAsync<
         if (typeof resolvedOptions.docs === 'function') {
           docs = await resolvedOptions.docs(input, {
             state: session?.state,
-            context: renderOptions?.context || getContext(registry) || {},
+            context: renderOptions?.context || getContext() || {},
           });
         } else {
           docs = resolvedOptions.docs;
@@ -330,7 +332,18 @@ function definePromptAsync<
             ...resolvedOptions?.config,
             ...renderOptions?.config,
           },
+          metadata: resolvedOptions.metadata?.metadata
+            ? {
+                prompt: resolvedOptions.metadata?.metadata,
+              }
+            : undefined,
         });
+
+        // Fix for issue #3348: Preserve AbortSignal object
+        // AbortSignal needs its prototype chain and shouldn't be processed by stripUndefinedProps
+        if (renderOptions?.abortSignal) {
+          opts.abortSignal = renderOptions.abortSignal;
+        }
         // if config is empty and it was not explicitly passed in, we delete it, don't want {}
         if (Object.keys(opts.config).length === 0 && !renderOptions?.config) {
           delete opts.config;
@@ -428,6 +441,12 @@ function promptMetadata(options: PromptConfig<any, any, any>) {
         ? options.name.split('.')[0]
         : options.name,
       model: modelName(options.model),
+      tools: (options.tools ?? []).map(toolName).filter(Boolean) as string[],
+      toolChoice: options.toolChoice,
+      use: (options.use ?? []).map(toMiddlewareMetadata).filter(Boolean) as {
+        name: string;
+        config?: any;
+      }[],
     },
     type: 'prompt',
   };
@@ -524,7 +543,7 @@ async function renderSystemPrompt<
       content: normalizeParts(
         await options.system(input, {
           state: session?.state,
-          context: renderOptions?.context || getContext(registry) || {},
+          context: renderOptions?.context || getContext() || {},
         })
       ),
     });
@@ -570,7 +589,7 @@ async function renderMessages<
       messages.push(
         ...(await options.messages(input, {
           state: session?.state,
-          context: renderOptions?.context || getContext(registry) || {},
+          context: renderOptions?.context || getContext() || {},
           history: renderOptions?.messages,
         }))
       );
@@ -584,7 +603,7 @@ async function renderMessages<
       const rendered = await promptCache.messages({
         input,
         context: {
-          ...(renderOptions?.context || getContext(registry)),
+          ...(renderOptions?.context || getContext()),
           state: session?.state,
         },
         messages: renderOptions?.messages?.map((m) =>
@@ -625,7 +644,7 @@ async function renderUserPrompt<
       content: normalizeParts(
         await options.prompt(input, {
           state: session?.state,
-          context: renderOptions?.context || getContext(registry) || {},
+          context: renderOptions?.context || getContext() || {},
         })
       ),
     });
@@ -668,6 +687,35 @@ function modelName(
   return (modelArg as ModelAction).__action.name;
 }
 
+function toolName(tool: ToolArgument): string | undefined {
+  if (typeof tool === 'string') {
+    return tool;
+  }
+  if (isAction(tool)) {
+    return tool.__action.name;
+  }
+  if (isExecutablePrompt(tool)) {
+    return tool.ref.name;
+  }
+  return undefined;
+}
+
+function toMiddlewareMetadata(
+  middleware: any
+): { name: string; config?: any } | undefined {
+  if (typeof middleware === 'string') {
+    return { name: middleware };
+  }
+  if (
+    typeof middleware === 'object' &&
+    middleware !== null &&
+    middleware.name
+  ) {
+    return { name: middleware.name, config: middleware.config };
+  }
+  return undefined;
+}
+
 function normalizeParts(parts: string | Part | Part[]): Part[] {
   if (Array.isArray(parts)) return parts;
   if (typeof parts === 'string') {
@@ -695,7 +743,7 @@ async function renderDotpromptToParts<
   const renderred = await promptFn({
     input,
     context: {
-      ...(renderOptions?.context || getContext(registry)),
+      ...(renderOptions?.context || getContext()),
       state: session?.state,
     },
   });
@@ -822,6 +870,25 @@ function loadPrompt(
         delete promptMetadata.input.schema.description;
       }
 
+      const metadata = {
+        ...promptMetadata.metadata,
+        type: 'prompt',
+        prompt: {
+          ...promptMetadata,
+          use: (Array.isArray(promptMetadata.raw?.['use'])
+            ? promptMetadata.raw?.['use']
+            : []
+          )
+            .map(toMiddlewareMetadata)
+            .filter(Boolean),
+          toolChoice: promptMetadata.raw?.['toolChoice'],
+          template: parsedPrompt.template,
+        },
+      };
+      if (promptMetadata.raw?.['metadata']) {
+        metadata['metadata'] = { ...promptMetadata.raw?.['metadata'] };
+      }
+
       return {
         name: registryDefinitionKey(name, variant ?? undefined, ns),
         model: promptMetadata.model,
@@ -835,17 +902,11 @@ function loadPrompt(
         input: {
           jsonSchema: promptMetadata.input?.schema,
         },
-        metadata: {
-          ...promptMetadata.metadata,
-          type: 'prompt',
-          prompt: {
-            ...promptMetadata,
-            template: parsedPrompt.template,
-          },
-        },
+        metadata,
         maxTurns: promptMetadata.raw?.['maxTurns'],
         toolChoice: promptMetadata.raw?.['toolChoice'],
         returnToolRequests: promptMetadata.raw?.['returnToolRequests'],
+        use: promptMetadata.raw?.['use'],
         messages: parsedPrompt.template,
       };
     })
@@ -859,7 +920,7 @@ export async function prompt<
 >(
   registry: Registry,
   name: string,
-  options?: { variant?: string; dir?: string }
+  options?: { variant?: string; dir?: string | null }
 ): Promise<ExecutablePrompt<I, O, CustomOptions>> {
   return await lookupPrompt<I, O, CustomOptions>(
     registry,

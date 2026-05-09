@@ -1,0 +1,12 @@
+---
+model: googleai/gemini-3-flash-preview
+input:
+  schema:
+    subject: string
+    personality?: string
+output:
+  format: text
+---
+{{>style personality=personality}}
+
+Tell me a story about {{subject}}.

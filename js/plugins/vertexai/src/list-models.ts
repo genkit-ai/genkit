@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { GENKIT_CLIENT_HEADER } from 'genkit';
 import type { GoogleAuth } from 'google-auth-library';
+import { getGenkitClientHeader } from './common/index.js';
 
 // Gemini  model definition
 export interface Model {
@@ -46,7 +46,7 @@ export async function listModels(
         Authorization: `Bearer ${accessToken}`,
         'x-goog-user-project': projectId,
         'Content-Type': 'application/json',
-        'X-Goog-Api-Client': GENKIT_CLIENT_HEADER,
+        'X-Goog-Api-Client': getGenkitClientHeader(),
       },
     }
   );

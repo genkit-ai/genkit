@@ -1,0 +1,8 @@
+TODO
+====
+- [x] Stand up /weather/{city} endpoint.
+- [x] Wire upstream OpenWeather adapter.
+- [ ] Add in-memory response cache (see config.upstream.cacheTTLSeconds).
+- [ ] Emit structured logs (config.logging.format = json).
+- [ ] Write a smoke test for /health.
+- [ ] Document authentication story in docs/api.md.

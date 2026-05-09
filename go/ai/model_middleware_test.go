@@ -28,13 +28,13 @@ import (
 func TestValidateSupport(t *testing.T) {
 	tests := []struct {
 		name    string
-		info    *ModelInfo
+		opts    *ModelOptions
 		input   *ModelRequest
 		wantErr bool
 	}{
 		{
 			name: "valid request with no special features",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					Media:      false,
 					Tools:      false,
@@ -52,7 +52,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "media not supported but requested",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					Media: false,
 				},
@@ -66,7 +66,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "tools not supported but requested",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					Tools: false,
 				},
@@ -83,7 +83,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "multiturn not supported but requested",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					Multiturn: false,
 				},
@@ -98,7 +98,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "tool choice not supported but requested",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					ToolChoice: false,
 				},
@@ -110,7 +110,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "system role not supported but requested",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					SystemRole: false,
 				},
@@ -124,7 +124,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "all features supported and used",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					Media:      true,
 					Tools:      true,
@@ -151,7 +151,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "nil supports defaults to no features",
-			info: nil,
+			opts: nil,
 			input: &ModelRequest{
 				Messages: []*Message{
 					{Content: []*Part{NewMediaPart("image/png", "data:image/png;base64,...")}},
@@ -161,7 +161,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "mixed content types in message",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{
 					Media: false,
 				},
@@ -178,7 +178,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "supported version",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{},
 				Versions: []string{"v1", "v2"},
 			},
@@ -192,7 +192,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "unsupported version",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{},
 				Versions: []string{"v1", "v2"},
 			},
@@ -206,7 +206,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "non-string version",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{},
 				Versions: []string{"v1", "v2"},
 			},
@@ -220,7 +220,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "struct with supported version",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{},
 				Versions: []string{"v1", "v2"},
 			},
@@ -234,7 +234,7 @@ func TestValidateSupport(t *testing.T) {
 		},
 		{
 			name: "struct with unsupported version",
-			info: &ModelInfo{
+			opts: &ModelOptions{
 				Supports: &ModelSupports{},
 				Versions: []string{"v1", "v2"},
 			},
@@ -254,7 +254,7 @@ func TestValidateSupport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := validateSupport("test-model", tt.info)(mockModelFunc)
+			handler := validateSupport("test-model", tt.opts)(mockModelFunc)
 			_, err := handler(context.Background(), tt.input, nil)
 
 			if (err != nil) != tt.wantErr {
@@ -270,7 +270,7 @@ func TestValidateSupport(t *testing.T) {
 func TestSimulateSystemPrompt(t *testing.T) {
 	testCases := []struct {
 		name        string
-		info        *ModelInfo
+		opts        *ModelOptions
 		options     map[string]string
 		input       *ModelRequest
 		expected    *ModelRequest
@@ -278,7 +278,7 @@ func TestSimulateSystemPrompt(t *testing.T) {
 	}{
 		{
 			name: "system role not supported, system message present",
-			info: &ModelInfo{Supports: &ModelSupports{SystemRole: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{SystemRole: false}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					{Role: "system", Content: []*Part{NewTextPart("Be helpful.")}},
@@ -296,7 +296,7 @@ func TestSimulateSystemPrompt(t *testing.T) {
 		},
 		{
 			name: "system role supported, no system message",
-			info: &ModelInfo{Supports: &ModelSupports{SystemRole: true}},
+			opts: &ModelOptions{Supports: &ModelSupports{SystemRole: true}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					{Role: "user", Content: []*Part{NewTextPart("Hello.")}},
@@ -311,7 +311,7 @@ func TestSimulateSystemPrompt(t *testing.T) {
 		},
 		{
 			name: "system role supported, with system message",
-			info: &ModelInfo{Supports: &ModelSupports{SystemRole: true}},
+			opts: &ModelOptions{Supports: &ModelSupports{SystemRole: true}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					{Role: "system", Content: []*Part{NewTextPart("Be helpful.")}},
@@ -328,7 +328,7 @@ func TestSimulateSystemPrompt(t *testing.T) {
 		},
 		{
 			name: "custom preface and acknowledgement",
-			info: &ModelInfo{Supports: &ModelSupports{SystemRole: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{SystemRole: false}},
 			options: map[string]string{
 				"preface":         "CUSTOM PREFACE:\n",
 				"acknowledgement": "OKAY!",
@@ -358,7 +358,7 @@ func TestSimulateSystemPrompt(t *testing.T) {
 				}
 				return &ModelResponse{}, nil
 			}
-			middleware := simulateSystemPrompt(tc.info, tc.options)
+			middleware := simulateSystemPrompt(tc.opts, tc.options)
 			_, _ = middleware(next)(context.Background(), tc.input, nil)
 		})
 	}
@@ -523,7 +523,7 @@ func TestDownloadRequestMedia(t *testing.T) {
 func TestAugmentWithContext(t *testing.T) {
 	testCases := []struct {
 		name         string
-		info         *ModelInfo
+		opts         *ModelOptions
 		options      *AugmentWithContextOptions
 		input        *ModelRequest
 		expected     *ModelRequest
@@ -531,7 +531,7 @@ func TestAugmentWithContext(t *testing.T) {
 	}{
 		{
 			name: "model supports context, should bypass middleware",
-			info: &ModelInfo{Supports: &ModelSupports{Context: true}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: true}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					NewSystemTextMessage("You are a narrator."),
@@ -547,7 +547,7 @@ func TestAugmentWithContext(t *testing.T) {
 		},
 		{
 			name: "no docs, should bypass middleware",
-			info: &ModelInfo{Supports: &ModelSupports{Context: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: false}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					NewSystemTextMessage("You are a narrator."),
@@ -563,7 +563,7 @@ func TestAugmentWithContext(t *testing.T) {
 		},
 		{
 			name: "no user messages, should bypass middleware",
-			info: &ModelInfo{Supports: &ModelSupports{Context: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: false}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					NewSystemTextMessage("You are a narrator."),
@@ -577,7 +577,7 @@ func TestAugmentWithContext(t *testing.T) {
 		},
 		{
 			name: "context already present , should bypass middleware",
-			info: &ModelInfo{Supports: &ModelSupports{Context: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: false}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					NewSystemTextMessage("You are a narrator."),
@@ -595,7 +595,7 @@ func TestAugmentWithContext(t *testing.T) {
 		},
 		{
 			name: "context not present multiple docs present , should get augment",
-			info: &ModelInfo{Supports: &ModelSupports{Context: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: false}},
 			input: &ModelRequest{
 				Messages: []*Message{
 					NewSystemTextMessage("You are a narrator."),
@@ -624,7 +624,7 @@ func TestAugmentWithContext(t *testing.T) {
 		},
 		{
 			name: "custom preface for middleware",
-			info: &ModelInfo{Supports: &ModelSupports{Context: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: false}},
 			options: &AugmentWithContextOptions{
 				Preface: func() *string {
 					s := "\n\nCustom Preface : Use the following information to complete your task:\n\n"
@@ -656,7 +656,7 @@ func TestAugmentWithContext(t *testing.T) {
 		},
 		{
 			name: "custom item template for middleware",
-			info: &ModelInfo{Supports: &ModelSupports{Context: false}},
+			opts: &ModelOptions{Supports: &ModelSupports{Context: false}},
 			options: &AugmentWithContextOptions{
 				ItemTemplate: func(d Document, index int, options *AugmentWithContextOptions) string {
 					out := "- The new context is doc3"
@@ -696,7 +696,7 @@ func TestAugmentWithContext(t *testing.T) {
 				}
 				return &ModelResponse{}, nil
 			}
-			middleware := augmentWithContext(tc.info, tc.options)
+			middleware := augmentWithContext(tc.opts, tc.options)
 			_, _ = middleware(next)(context.Background(), tc.input, nil)
 		})
 	}

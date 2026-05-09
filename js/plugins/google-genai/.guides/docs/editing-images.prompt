@@ -1,0 +1,106 @@
+---
+title: Edit images with `gemini-2.5-flash-image-preview` (aka "Nano Banana")
+description: read this if you need to perform sophisticated image edits such as background removal, post matching, character replacement, relighting, on an existing image
+---
+
+The `gemini-2.5-flash-image-preview` model (also known as "Nano Banana") can perform sophisticated image edits.
+
+- You must ALWAYS add `{config: {responseModalities: ['TEXT', 'IMAGE']}}` to your `ai.generate` calls when using this model.
+
+<example>
+```ts
+// generate an image from a prompt
+
+import { ai } from "@/ai/genkit"; // or wherever genkit is initialized
+import { googleAI } from "@genkit-ai/google-genai";
+
+const {media} = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-image-preview'),
+  config: {responseModalities: ['TEXT', 'IMAGE']}},
+  prompt: "generate a picture of a unicorn wearing a space suit on the moon",
+});
+
+return media.url; // --> "data:image/png;base64,..."
+```
+</example>
+
+<example>
+```ts
+// edit an image with a text prompt
+
+import { ai } from "@/ai/genkit"; // or wherever genkit is initialized
+import { googleAI } from "@genkit-ai/google-genai";
+
+const {media} = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-image-preview'),
+  config: {responseModalities: ['TEXT', 'IMAGE']}},
+  prompt: [
+    {text: "change the person's outfit to a banana costume"},
+    {media: {url: "https://..." /* or 'data:...' */}},
+  ],
+});
+
+return media.url; // --> "data:image/png;base64,..."
+```
+</example>
+
+<example>
+```ts
+// combine multiple images together
+
+import { ai } from "@/ai/genkit"; // or wherever genkit is initialized
+import { googleAI } from "@genkit-ai/google-genai";
+
+const {personImageUri, animalImageUri, sceneryImageUri} = await loadImages(...);
+
+const {media} = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-image-preview'),
+  config: {responseModalities: ['TEXT', 'IMAGE']}},
+  prompt: [
+    // the model tends to match aspect ratio of the *last* image provided
+    {text: "[PERSON]:\n"},
+    {media: {url: personImageUri}},
+    {text: "\n[ANIMAL]:\n"},
+    {media: {url: animalImageUri}},
+    {text; "\n[SCENERY]:\n"},
+    // IMPORTANT: the model tends to match aspect ratio of the *last* image provided
+    {media: {url: sceneryImageUri}},
+    {text: "make an image of [PERSON] riding a giant version of [ANIMAL] with a background of [SCENERY]"},
+  ],
+});
+
+return media.url; // --> "data:image/png;base64,..."
+```
+</example>
+
+<example>
+```ts
+// use an annotated image to guide generation
+
+import { ai } from "@/ai/genkit"; // or wherever genkit is initialized
+import { googleAI } from "@genkit-ai/google-genai";
+
+const originalImageUri = "data:..."; // the original image
+const annotatedImageUri = "data:..."; // the image with annotations on top of it
+
+const {media} = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-image-preview'),
+  config: {responseModalities: ['TEXT', 'IMAGE']}},
+  prompt: [
+    
+    {text: "follow the instructions in the following annotated image:"},
+    {media: {url: annotatedImageUri}},
+    {text: "\n\napply the annotated instructions to the original image, making sure to follow the instructions of the annotations.\n\noriginal image:\n"},
+    {media: {url: originalImageUri}},
+  ],
+});
+
+return media.url; // --> "data:image/png;base64,..."
+```
+</example>
+
+## Prompting tips for image editing
+
+- For complex edits prefer a chain of small edits to a single complex edit. Feed the output of one generation as input to the next.
+- Be specific and detailed about the edits you want to make.
+- Be clear whether added images are meant as style or subject references.

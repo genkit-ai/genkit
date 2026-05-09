@@ -20,6 +20,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
@@ -506,6 +507,10 @@ func TestPromptOptionsComplete(t *testing.T) {
 			SystemFn: opts.SystemFn,
 			PromptFn: opts.PromptFn,
 		},
+		inputOptions: inputOptions{
+			InputSchema:  opts.InputSchema,
+			DefaultInput: map[string]any{"test": "value"},
+		},
 		outputOptions: outputOptions{
 			OutputFormat: OutputFormatJSON,
 			OutputSchema: opts.OutputSchema,
@@ -515,20 +520,18 @@ func TestPromptOptionsComplete(t *testing.T) {
 			}(),
 			CustomConstrained: true,
 		},
-		Description:  "test description",
-		Metadata:     map[string]any{"key": "value"},
-		InputSchema:  opts.InputSchema,
-		DefaultInput: map[string]any{"test": "value"},
+		Description: "test description",
+		Metadata:    map[string]any{"key": "value"},
 	}
 
 	if diff := cmp.Diff(expected, opts,
 		cmpopts.IgnoreFields(commonGenOptions{}, "MessagesFn", "Middleware"),
 		cmpopts.IgnoreFields(promptingOptions{}, "SystemFn", "PromptFn"),
 		cmpopts.IgnoreFields(outputOptions{}, "OutputSchema"),
-		cmpopts.IgnoreFields(promptOptions{}, "InputSchema"),
+		cmpopts.IgnoreFields(inputOptions{}, "InputSchema"),
 		cmpopts.IgnoreUnexported(mockModel{}, mockTool{}),
 		cmp.AllowUnexported(promptOptions{}, commonGenOptions{}, promptingOptions{},
-			outputOptions{})); diff != "" {
+			inputOptions{}, outputOptions{})); diff != "" {
 		t.Errorf("Options not applied correctly, diff (-want +got):\n%s", diff)
 	}
 
@@ -650,4 +653,122 @@ func (t *mockTool) Definition() *ToolDefinition {
 
 func (t *mockTool) RunRaw(ctx context.Context, input any) (any, error) {
 	return nil, nil
+}
+
+func (t *mockTool) RunRawMultipart(ctx context.Context, input any) (*MultipartToolResponse, error) {
+	return nil, nil
+}
+
+func (t *mockTool) Register(r api.Registry) {
+}
+
+func TestWithInputSchemaName(t *testing.T) {
+	t.Run("creates input option with schema reference", func(t *testing.T) {
+		opt := WithInputSchemaName("MyInputType")
+		opts := &promptOptions{}
+
+		if err := opt.applyPrompt(opts); err != nil {
+			t.Fatalf("applyPrompt() error: %v", err)
+		}
+
+		if opts.InputSchema == nil {
+			t.Fatal("InputSchema is nil")
+		}
+
+		ref, ok := opts.InputSchema["$ref"].(string)
+		if !ok {
+			t.Fatal("InputSchema.$ref is not a string")
+		}
+		if ref != "genkit:MyInputType" {
+			t.Errorf("InputSchema.$ref = %q, want %q", ref, "genkit:MyInputType")
+		}
+	})
+}
+
+func TestWithOutputSchema(t *testing.T) {
+	t.Run("creates output option with direct schema", func(t *testing.T) {
+		schema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string"},
+			},
+		}
+		opt := WithOutputSchema(schema)
+		opts := &generateOptions{}
+
+		if err := opt.applyGenerate(opts); err != nil {
+			t.Fatalf("applyGenerate() error: %v", err)
+		}
+
+		if opts.OutputSchema == nil {
+			t.Fatal("OutputSchema is nil")
+		}
+		if opts.OutputFormat != OutputFormatJSON {
+			t.Errorf("OutputFormat = %q, want %q", opts.OutputFormat, OutputFormatJSON)
+		}
+	})
+}
+
+func TestWithOutputEnums(t *testing.T) {
+	t.Run("creates enum output with string values", func(t *testing.T) {
+		opt := WithOutputEnums("red", "green", "blue")
+		opts := &generateOptions{}
+
+		if err := opt.applyGenerate(opts); err != nil {
+			t.Fatalf("applyGenerate() error: %v", err)
+		}
+
+		if opts.OutputSchema == nil {
+			t.Fatal("OutputSchema is nil")
+		}
+		if opts.OutputFormat != OutputFormatEnum {
+			t.Errorf("OutputFormat = %q, want %q", opts.OutputFormat, OutputFormatEnum)
+		}
+
+		enumType, ok := opts.OutputSchema["type"].(string)
+		if !ok || enumType != "string" {
+			t.Errorf("OutputSchema.type = %v, want %q", opts.OutputSchema["type"], "string")
+		}
+
+		enumVals, ok := opts.OutputSchema["enum"].([]string)
+		if !ok {
+			t.Fatalf("OutputSchema.enum is not []string: %T", opts.OutputSchema["enum"])
+		}
+		if len(enumVals) != 3 {
+			t.Errorf("len(enum) = %d, want 3", len(enumVals))
+		}
+	})
+
+	t.Run("works with custom string type", func(t *testing.T) {
+		type Color string
+		opt := WithOutputEnums(Color("red"), Color("green"))
+		opts := &generateOptions{}
+
+		if err := opt.applyGenerate(opts); err != nil {
+			t.Fatalf("applyGenerate() error: %v", err)
+		}
+
+		enumVals := opts.OutputSchema["enum"].([]string)
+		if enumVals[0] != "red" || enumVals[1] != "green" {
+			t.Errorf("enum values = %v, want [red, green]", enumVals)
+		}
+	})
+}
+
+func TestWithEvaluatorName(t *testing.T) {
+	t.Run("creates evaluator option with reference", func(t *testing.T) {
+		opt := WithEvaluatorName("test/myEvaluator")
+		opts := &evaluatorOptions{}
+
+		if err := opt.applyEvaluator(opts); err != nil {
+			t.Fatalf("applyEvaluator() error: %v", err)
+		}
+
+		if opts.Evaluator == nil {
+			t.Fatal("Evaluator is nil")
+		}
+		if opts.Evaluator.Name() != "test/myEvaluator" {
+			t.Errorf("Evaluator.Name() = %q, want %q", opts.Evaluator.Name(), "test/myEvaluator")
+		}
+	})
 }

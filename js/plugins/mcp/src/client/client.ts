@@ -24,9 +24,11 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import {
   GenkitError,
+  type DynamicActionProviderAction,
   type DynamicResourceAction,
   type ExecutablePrompt,
   type Genkit,
+  type MultipartToolAction,
   type PromptGenerateOptions,
   type ToolAction,
 } from 'genkit';
@@ -90,7 +92,7 @@ export type McpServerConfig = (
  * Configuration options for an individual `GenkitMcpClient` instance.
  * This defines how the client connects to a single MCP server and how it behaves.
  */
-export type McpClientOptions = {
+export type McpClientOptions<M extends boolean = false> = {
   /** Client name to advertise to the server. */
   name: string;
   /** Name for the server, defaults to the server's advertised name. */
@@ -107,11 +109,18 @@ export type McpClientOptions = {
    * simplified for better compatibility with Genkit's typical data structures.
    */
   rawToolResponses?: boolean;
+  /** If true, tools will be registered as multipart tool.v2 actions. */
+  multipart?: M;
   /** The server configuration to connect. */
   mcpServer: McpServerConfig;
   /** Manually supply a session id for HTTP streaming clients if desired. */
   sessionId?: string;
 };
+
+export type McpClientOptionsWithCache<M extends boolean = false> =
+  McpClientOptions<M> & {
+    cacheTtlMillis?: number;
+  };
 
 /**
  * Represents a client connection to a single MCP (Model Context Protocol) server.
@@ -121,8 +130,9 @@ export type McpClientOptions = {
  * An instance of `GenkitMcpClient` is typically managed by a `GenkitMcpHost`
  * when dealing with multiple MCP server connections.
  */
-export class GenkitMcpClient {
+export class GenkitMcpClient<Multipart extends boolean = false> {
   _server?: McpServerRef;
+  private _dynamicActionProvider: DynamicActionProviderAction | undefined;
 
   sessionId?: string;
   readonly name: string;
@@ -130,6 +140,7 @@ export class GenkitMcpClient {
   private version: string;
   private serverConfig: McpServerConfig;
   private rawToolResponses?: boolean;
+  private multipart?: boolean;
   private disabled: boolean;
   private roots?: Root[];
 
@@ -139,17 +150,28 @@ export class GenkitMcpClient {
   }[] = [];
   private _ready = false;
 
-  constructor(options: McpClientOptions) {
+  constructor(options: McpClientOptions<Multipart>) {
     this.name = options.name;
     this.suppliedServerName = options.serverName;
     this.version = options.version || '1.0.0';
     this.serverConfig = options.mcpServer;
     this.rawToolResponses = !!options.rawToolResponses;
+    this.multipart = !!options.multipart;
     this.disabled = !!options.mcpServer.disabled;
     this.roots = options.mcpServer.roots;
     this.sessionId = options.sessionId;
 
     this._initializeConnection();
+  }
+
+  set dynamicActionProvider(dap: DynamicActionProviderAction) {
+    this._dynamicActionProvider = dap;
+  }
+
+  _invalidateDapCache(): void {
+    if (this._dynamicActionProvider) {
+      this._dynamicActionProvider.invalidateCache();
+    }
   }
 
   get serverName(): string {
@@ -163,6 +185,7 @@ export class GenkitMcpClient {
   async updateRoots(roots: Root[]) {
     this.roots = roots;
     await this._server?.client.sendRootsListChanged();
+    this._invalidateDapCache();
   }
 
   /**
@@ -188,6 +211,7 @@ export class GenkitMcpClient {
     if (this.roots) {
       await this.updateRoots(this.roots);
     }
+    this._invalidateDapCache();
   }
 
   /**
@@ -208,6 +232,7 @@ export class GenkitMcpClient {
    */
   private async _connect() {
     if (this._server) await this._server.transport.close();
+    this._invalidateDapCache();
     logger.debug(
       `[MCP Client] Connecting MCP server '${this.serverName}' in client '${this.name}'.`
     );
@@ -249,6 +274,7 @@ export class GenkitMcpClient {
       transport,
       error,
     } as McpServerRef;
+    this._invalidateDapCache();
   }
 
   /**
@@ -262,6 +288,7 @@ export class GenkitMcpClient {
       );
       await this._server.client.close();
       this._server = undefined;
+      this._invalidateDapCache();
     }
   }
 
@@ -277,6 +304,7 @@ export class GenkitMcpClient {
       );
       await this._disconnect();
       this.disabled = true;
+      this._invalidateDapCache();
     }
   }
 
@@ -296,6 +324,7 @@ export class GenkitMcpClient {
     logger.debug(`[MCP Client] Reenabling MCP server in client '${this.name}'`);
     await this._initializeConnection();
     this.disabled = !!this._server!.error;
+    this._invalidateDapCache();
   }
 
   /**
@@ -310,6 +339,7 @@ export class GenkitMcpClient {
       );
       await this._disconnect();
       await this._initializeConnection();
+      this._invalidateDapCache();
     }
   }
 
@@ -317,23 +347,41 @@ export class GenkitMcpClient {
    * Fetches all tools available through this client, if the server
    * configuration is not disabled.
    */
-  async getActiveTools(ai: Genkit): Promise<ToolAction[]> {
+  async getActiveTools(
+    ai: Genkit
+  ): Promise<(Multipart extends true ? MultipartToolAction : ToolAction)[]> {
     await this.ready();
-    let tools: ToolAction[] = [];
 
     if (this._server) {
       const capabilities = this._server.client.getServerCapabilities();
-      if (capabilities?.tools)
-        tools.push(
-          ...(await fetchDynamicTools(ai, this._server.client, {
+      if (capabilities?.tools) {
+        if (this.multipart) {
+          const tools = await fetchDynamicTools(ai, this._server.client, {
             rawToolResponses: this.rawToolResponses,
+            multipart: true,
             serverName: this.serverName,
             name: this.name,
-          }))
-        );
+          });
+          return tools as unknown as (Multipart extends true
+            ? MultipartToolAction
+            : ToolAction)[];
+        } else {
+          const tools = await fetchDynamicTools(ai, this._server.client, {
+            rawToolResponses: this.rawToolResponses,
+            multipart: false,
+            serverName: this.serverName,
+            name: this.name,
+          });
+          return tools as unknown as (Multipart extends true
+            ? MultipartToolAction
+            : ToolAction)[];
+        }
+      }
     }
 
-    return tools;
+    return [] as unknown as (Multipart extends true
+      ? MultipartToolAction
+      : ToolAction)[];
   }
 
   /**

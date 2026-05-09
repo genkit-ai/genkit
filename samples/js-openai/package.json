@@ -1,0 +1,28 @@
+{
+  "name": "openai",
+  "version": "1.0.0",
+  "description": "",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "npm run genkit:dev",
+    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts",
+    "build": "tsc",
+    "build:watch": "tsc --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@genkit-ai/compat-oai": "^1.16.0",
+    "genkit": "^1.16.0",
+    "node-fetch": "3.3.2",
+    "wav": "^1.0.2"
+  },
+  "devDependencies": {
+    "@types/wav": "^1.0.4",
+    "genkit-cli": "^1.16.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.5.4"
+  }
+}

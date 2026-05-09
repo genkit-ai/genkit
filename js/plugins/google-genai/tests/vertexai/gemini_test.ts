@@ -15,18 +15,20 @@
  */
 
 import * as assert from 'assert';
-import { Genkit, GENKIT_CLIENT_HEADER, z } from 'genkit';
+import { z } from 'genkit';
 import { GenerateRequest, ModelReference } from 'genkit/model';
 import { GoogleAuth } from 'google-auth-library';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
-import { FinishReason } from '../../src/common/types';
+import { FinishReason } from '../../src/common/types.js';
+import { getGenkitClientHeader } from '../../src/common/utils.js';
+import { getVertexAIUrl } from '../../src/vertexai/client.js';
 import {
-  defineModel,
   GeminiConfigSchema,
+  GeminiImageConfigSchema,
+  defineModel,
   model,
-} from '../../src/vertexai/gemini';
+} from '../../src/vertexai/gemini.js';
 import {
   ClientOptions,
   GenerateContentRequest,
@@ -34,23 +36,13 @@ import {
   HarmBlockThreshold,
   HarmCategory,
   isFunctionDeclarationsTool,
+  isGoogleMapsTool,
   isGoogleSearchRetrievalTool,
   isRetrievalTool,
-} from '../../src/vertexai/types';
+} from '../../src/vertexai/types.js';
 
 describe('Vertex AI Gemini', () => {
-  let mockGenkit: sinon.SinonStubbedInstance<Genkit>;
-  let modelActionCallback: (
-    request: GenerateRequest<typeof GeminiConfigSchema>,
-    options: {
-      streamingRequested?: boolean;
-      sendChunk?: (chunk: any) => void;
-      abortSignal?: AbortSignal;
-    }
-  ) => Promise<any>;
-
   let fetchStub: sinon.SinonStub;
-  let mockAsyncStore: sinon.SinonStubbedInstance<AsyncLocalStorage<any>>;
   let authMock: sinon.SinonStubbedInstance<GoogleAuth>;
 
   const defaultRegionalClientOptions: ClientOptions = {
@@ -74,30 +66,13 @@ describe('Vertex AI Gemini', () => {
   };
 
   beforeEach(() => {
-    mockGenkit = sinon.createStubInstance(Genkit);
-    mockAsyncStore = sinon.createStubInstance(AsyncLocalStorage);
     authMock = sinon.createStubInstance(GoogleAuth);
 
     authMock.getAccessToken.resolves('test-token');
     defaultRegionalClientOptions.authClient = authMock as unknown as GoogleAuth;
     defaultGlobalClientOptions.authClient = authMock as unknown as GoogleAuth;
 
-    mockAsyncStore.getStore.returns(undefined);
-    mockAsyncStore.run.callsFake((_, callback) => callback());
-
-    (mockGenkit as any).registry = {
-      lookupAction: () => undefined,
-      lookupFlow: () => undefined,
-      generateTraceId: () => 'test-trace-id',
-      asyncStore: mockAsyncStore,
-    };
-
     fetchStub = sinon.stub(global, 'fetch');
-
-    mockGenkit.defineModel.callsFake((config: any, func: any) => {
-      modelActionCallback = func;
-      return { name: config.name } as any;
-    });
   });
 
   afterEach(() => {
@@ -148,9 +123,9 @@ describe('Vertex AI Gemini', () => {
     candidates: [mockCandidate],
   };
 
-  describe('gemini() function', () => {
+  describe('model() function', () => {
     it('returns a ModelReference for a known model string', () => {
-      const name = 'gemini-2.0-flash';
+      const name = 'gemini-2.5-flash';
       const modelRef: ModelReference<typeof GeminiConfigSchema> = model(name);
       assert.strictEqual(modelRef.name, `vertexai/${name}`);
       assert.ok(modelRef.info?.supports?.multiturn);
@@ -165,29 +140,47 @@ describe('Vertex AI Gemini', () => {
       assert.strictEqual(modelRef.configSchema, GeminiConfigSchema);
     });
 
+    it('returns a ModelReference for a known image model string', () => {
+      const name = 'gemini-3-pro-image-preview';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `vertexai/${name}`);
+      assert.ok(modelRef.info?.supports?.multiturn);
+      assert.strictEqual(modelRef.configSchema, GeminiImageConfigSchema);
+    });
+
+    it('returns a ModelReference for an unknown image model string', () => {
+      const name = 'gemini-new-image-model';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `vertexai/${name}`);
+      assert.ok(modelRef.info?.supports?.multiturn);
+      assert.strictEqual(modelRef.configSchema, GeminiImageConfigSchema);
+    });
+
     it('applies options to the ModelReference', () => {
       const options = { temperature: 0.9, topK: 20 };
       const modelRef: ModelReference<typeof GeminiConfigSchema> = model(
-        'gemini-2.0-flash',
+        'gemini-2.5-flash',
         options
       );
+      assert.deepStrictEqual(modelRef.config, options);
+    });
+
+    it('applies image config options to the ModelReference', () => {
+      const options = { imageConfig: { imageSize: '4K' } };
+      const modelRef = model('gemini-3-pro-image-preview', options);
       assert.deepStrictEqual(modelRef.config, options);
     });
   });
 
   function runCommonTests(clientOptions: ClientOptions) {
     describe(`Model Action Callback ${clientOptions.kind}`, () => {
-      beforeEach(() => {
-        defineModel(mockGenkit, 'gemini-2.5-flash', clientOptions);
-      });
-
       function getExpectedHeaders(
         configApiKey?: string
       ): Record<string, string | undefined> {
         const headers: Record<string, string | undefined> = {
           'Content-Type': 'application/json',
-          'X-Goog-Api-Client': GENKIT_CLIENT_HEADER,
-          'User-Agent': GENKIT_CLIENT_HEADER,
+          'X-Goog-Api-Client': getGenkitClientHeader(),
+          'User-Agent': getGenkitClientHeader(),
         };
         if (clientOptions.kind !== 'express') {
           headers['Authorization'] = 'Bearer test-token';
@@ -232,15 +225,17 @@ describe('Vertex AI Gemini', () => {
       }
 
       it('throws if no messages are provided', async () => {
+        const model = defineModel('gemini-2.5-flash', clientOptions);
         await assert.rejects(
-          modelActionCallback({ messages: [], config: {} }, {}),
+          model.run({ messages: [], config: {} }),
           /No messages provided/
         );
       });
 
       it('calls fetch for non-streaming requests', async () => {
         mockFetchResponse(defaultApiResponse);
-        const result = await modelActionCallback(minimalRequest, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        const result = await model.run(minimalRequest);
 
         sinon.assert.calledOnce(fetchStub);
         const fetchArgs = fetchStub.lastCall.args;
@@ -260,10 +255,19 @@ describe('Vertex AI Gemini', () => {
         assert.strictEqual(body.labels, undefined);
 
         assert.deepStrictEqual(options.headers, getExpectedHeaders());
-
-        assert.strictEqual(result.candidates.length, 1);
         assert.strictEqual(
-          result.candidates[0].message.content[0].text,
+          options.headers['X-Vertex-AI-LLM-Shared-Request-Type'],
+          undefined
+        );
+        assert.strictEqual(
+          options.headers['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+
+        assert.ok(result.result.candidates);
+        assert.strictEqual(result.result.candidates.length, 1);
+        assert.strictEqual(
+          result.result.candidates[0].message.content[0].text,
           'Hi there'
         );
       });
@@ -272,10 +276,8 @@ describe('Vertex AI Gemini', () => {
         mockFetchStreamResponse([defaultApiResponse]);
 
         const sendChunkSpy = sinon.spy();
-        await modelActionCallback(minimalRequest, {
-          streamingRequested: true,
-          sendChunk: sendChunkSpy,
-        });
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(minimalRequest, { onChunk: sendChunkSpy });
 
         sinon.assert.calledOnce(fetchStub);
         const fetchArgs = fetchStub.lastCall.args;
@@ -301,8 +303,8 @@ describe('Vertex AI Gemini', () => {
         mockFetchResponse(defaultApiResponse);
         const controller = new AbortController();
         const abortSignal = controller.signal;
-        await modelActionCallback(minimalRequest, {
-          streamingRequested: false,
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(minimalRequest, {
           abortSignal,
         });
         sinon.assert.calledOnce(fetchStub);
@@ -330,7 +332,8 @@ describe('Vertex AI Gemini', () => {
           ],
           config: {},
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
@@ -350,7 +353,8 @@ describe('Vertex AI Gemini', () => {
           ...minimalRequest,
           config: { temperature: 0.1, topP: 0.8, maxOutputTokens: 100 },
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
@@ -360,6 +364,55 @@ describe('Vertex AI Gemini', () => {
         assert.strictEqual(apiRequest.generationConfig?.maxOutputTokens, 100);
       });
 
+      it('passes thinkingLevel to the API', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            thinkingConfig: {
+              thinkingLevel: 'HIGH',
+            },
+          },
+        };
+        const model = defineModel('gemini-3.1-pro-preview', clientOptions);
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generationConfig, {
+          thinkingConfig: {
+            thinkingLevel: 'HIGH',
+          },
+        });
+      });
+
+      it('handles imageConfig', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<any> = {
+          ...minimalRequest,
+          config: {
+            imageConfig: {
+              aspectRatio: '16:9',
+              imageSize: '2K',
+            },
+          },
+        };
+        const model = defineModel('gemini-3-pro-image-preview', clientOptions);
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          (apiRequest.generationConfig as any)?.imageConfig,
+          {
+            aspectRatio: '16:9',
+            imageSize: '2K',
+          }
+        );
+      });
+
       it('sends labels when provided in config', async () => {
         mockFetchResponse(defaultApiResponse);
         const myLabels = { env: 'test', version: '1' };
@@ -367,12 +420,41 @@ describe('Vertex AI Gemini', () => {
           ...minimalRequest,
           config: { labels: myLabels },
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
         assert.deepStrictEqual(apiRequest.labels, myLabels);
+      });
+
+      it('handles retrievalConfig', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            retrievalConfig: {
+              latLng: {
+                latitude: 37.7749,
+                longitude: -122.4194,
+              },
+              languageCode: 'en-US',
+            },
+          },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.toolConfig?.retrievalConfig, {
+          latLng: {
+            latitude: 37.7749,
+            longitude: -122.4194,
+          },
+          languageCode: 'en-US',
+        });
       });
 
       it('constructs tools array with functionDeclarations', async () => {
@@ -389,7 +471,8 @@ describe('Vertex AI Gemini', () => {
           ],
           config: {},
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
@@ -416,7 +499,8 @@ describe('Vertex AI Gemini', () => {
             googleSearchRetrieval: {},
           },
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
@@ -425,6 +509,29 @@ describe('Vertex AI Gemini', () => {
         if (searchTool) {
           assert.ok(searchTool.googleSearch, 'Expected googleSearch property');
           assert.deepStrictEqual(searchTool, { googleSearch: {} });
+        }
+      });
+
+      it('handles googleMaps tool', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            tools: [{ googleMaps: { enableWidget: true } } as any],
+          },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        const mapsTool = apiRequest.tools?.find(isGoogleMapsTool);
+        assert.ok(mapsTool, 'Expected GoogleMapsTool');
+        if (mapsTool) {
+          assert.ok(mapsTool.googleMaps, 'Expected googleMaps property');
+          assert.deepStrictEqual(mapsTool, {
+            googleMaps: { enableWidget: true },
+          });
         }
       });
 
@@ -440,7 +547,8 @@ describe('Vertex AI Gemini', () => {
               },
             },
           };
-          await modelActionCallback(request, {});
+          const model = defineModel('gemini-2.5-flash', clientOptions);
+          await model.run(request);
           const apiRequest: GenerateContentRequest = JSON.parse(
             fetchStub.lastCall.args[1].body
           );
@@ -474,7 +582,8 @@ describe('Vertex AI Gemini', () => {
             ],
           },
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
@@ -493,7 +602,8 @@ describe('Vertex AI Gemini', () => {
           output: { format: 'json' },
           config: {},
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
         const apiRequest: GenerateContentRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
@@ -505,16 +615,18 @@ describe('Vertex AI Gemini', () => {
 
       it('throws if no candidates are returned', async () => {
         mockFetchResponse({ candidates: [] });
+        const model = defineModel('gemini-2.5-flash', clientOptions);
         await assert.rejects(
-          modelActionCallback(minimalRequest, {}),
+          model.run(minimalRequest),
           /No valid candidates returned/
         );
       });
 
       it('handles API call error', async () => {
         mockFetchResponse({ error: { message: 'API Error' } }, 400);
+        const model = defineModel('gemini-2.5-flash', clientOptions);
         await assert.rejects(
-          modelActionCallback(minimalRequest, {}),
+          model.run(minimalRequest),
           /Error fetching from .*?: \[400 Error\] API Error/
         );
       });
@@ -526,7 +638,8 @@ describe('Vertex AI Gemini', () => {
           ...minimalRequest,
           config: { apiKey: overrideKey },
         };
-        await modelActionCallback(request, {});
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
         sinon.assert.calledOnce(fetchStub);
         const fetchArgs = fetchStub.lastCall.args;
         const url = fetchArgs[0];
@@ -542,21 +655,131 @@ describe('Vertex AI Gemini', () => {
           getExpectedHeaders(overrideKey)
         );
       });
+
+      it('handles config.location override', async () => {
+        if (clientOptions.kind === 'express') {
+          return; // location override not applicable to express
+        }
+        mockFetchResponse(defaultApiResponse);
+        const overrideLocation = 'europe-west1';
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { location: overrideLocation },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const url = fetchArgs[0];
+
+        const newClientOptions = {
+          ...clientOptions,
+          location: overrideLocation,
+          kind: 'regional' as const,
+        };
+
+        const expectedUrl = getVertexAIUrl({
+          includeProjectAndLocation: true,
+          resourcePath: 'publishers/google/models/gemini-2.5-flash',
+          resourceMethod: 'generateContent',
+          clientOptions: newClientOptions,
+        });
+
+        assert.strictEqual(url, expectedUrl);
+        assert.ok(url.includes(overrideLocation));
+      });
+
+      it('handles config.payGo priority spillover mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'priority' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'priority'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+      });
+
+      it('handles config.payGo priority-only mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'priority-only' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'priority'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          'shared'
+        );
+      });
+
+      it('handles config.payGo flex spillover mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'flex' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'flex'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+      });
+
+      it('handles config.payGo flex-only mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'flex-only' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'flex'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          'shared'
+        );
+      });
     });
   }
 
   describe('defineModel - Regional Client', () => {
-    it('defines a model with the correct name', () => {
-      defineModel(mockGenkit, 'gemini-2.0-flash', defaultRegionalClientOptions);
-      sinon.assert.calledOnce(mockGenkit.defineModel);
-      const args = mockGenkit.defineModel.lastCall.args[0];
-      assert.strictEqual(args.name, 'vertexai/gemini-2.0-flash');
-    });
-
     runCommonTests(defaultRegionalClientOptions);
 
     it('handles googleSearchRetrieval tool for gemini-1.5', async () => {
-      defineModel(mockGenkit, 'gemini-1.5-pro', defaultRegionalClientOptions);
+      const model = defineModel('gemini-1.5-pro', defaultRegionalClientOptions);
       mockFetchResponse(defaultApiResponse);
       const request: GenerateRequest<typeof GeminiConfigSchema> = {
         ...minimalRequest,
@@ -564,7 +787,7 @@ describe('Vertex AI Gemini', () => {
           googleSearchRetrieval: {},
         },
       };
-      await modelActionCallback(request, {});
+      await model.run(request);
       const apiRequest: GenerateContentRequest = JSON.parse(
         fetchStub.lastCall.args[1].body
       );
@@ -581,24 +804,10 @@ describe('Vertex AI Gemini', () => {
   });
 
   describe('defineModel - Global Client', () => {
-    it('defines a model with the correct name', () => {
-      defineModel(mockGenkit, 'gemini-2.0-flash', defaultGlobalClientOptions);
-      sinon.assert.calledOnce(mockGenkit.defineModel);
-      const args = mockGenkit.defineModel.lastCall.args[0];
-      assert.strictEqual(args.name, 'vertexai/gemini-2.0-flash');
-    });
-
     runCommonTests(defaultGlobalClientOptions);
   });
 
   describe('defineModel - Express Client', () => {
-    it('defines a model with the correct name', () => {
-      defineModel(mockGenkit, 'gemini-2.0-flash', defaultExpressClientOptions);
-      sinon.assert.calledOnce(mockGenkit.defineModel);
-      const args = mockGenkit.defineModel.lastCall.args[0];
-      assert.strictEqual(args.name, 'vertexai/gemini-2.0-flash');
-    });
-
     runCommonTests(defaultExpressClientOptions);
   });
 });

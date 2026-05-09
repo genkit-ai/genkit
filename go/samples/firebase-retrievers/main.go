@@ -53,10 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error initializing Firestore client: %v", err)
 	}
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{App: firebaseApp}, &googlegenai.GoogleAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{App: firebaseApp}, &googlegenai.GoogleAI{}))
 
 	// Google text-embedder
 	embedder := googlegenai.GoogleAIEmbedder(g, "text-embedding-004")

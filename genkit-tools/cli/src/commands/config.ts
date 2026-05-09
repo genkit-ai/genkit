@@ -25,11 +25,23 @@ import {
 import * as clc from 'colorette';
 import { Command } from 'commander';
 
+export const UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG =
+  'updateNotificationsOptOut';
+
 const CONFIG_TAGS: Record<
   string,
   (value: string) => string | boolean | number
 > = {
   [ANALYTICS_OPT_OUT_CONFIG_TAG]: (value) => {
+    let o: boolean | undefined;
+    try {
+      o = JSON.parse(value);
+    } finally {
+      if (typeof o !== 'boolean') throw new Error('Expected boolean');
+      return o;
+    }
+  },
+  [UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG]: (value) => {
     let o: boolean | undefined;
     try {
       o = JSON.parse(value);

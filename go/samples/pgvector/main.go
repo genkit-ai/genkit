@@ -37,6 +37,7 @@ import (
 	"log"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	_ "github.com/lib/pq"
@@ -52,12 +53,7 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: *apiKey}),
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: *apiKey}))
 	if err := run(g); err != nil {
 		log.Fatal(err)
 	}
@@ -84,7 +80,7 @@ func run(g *genkit.Genkit) error {
 	defer db.Close()
 
 	if *index {
-		if err := indexExistingRows(ctx, db, embedder); err != nil {
+		if err := indexExistingRows(ctx, g, db, embedder); err != nil {
 			return err
 		}
 	}
@@ -92,11 +88,9 @@ func run(g *genkit.Genkit) error {
 	// [START use-retr]
 	retOpts := &ai.RetrieverOptions{
 		ConfigSchema: nil,
-		Info: &ai.RetrieverInfo{
-			Label: "pgVector",
-			Supports: &ai.RetrieverSupports{
-				Media: false,
-			},
+		Label:        "pgVector",
+		Supports: &ai.RetrieverSupports{
+			Media: false,
 		},
 	}
 	retriever := defineRetriever(g, db, embedder, retOpts)
@@ -107,7 +101,8 @@ func run(g *genkit.Genkit) error {
 	}
 
 	genkit.DefineFlow(g, "askQuestion", func(ctx context.Context, in input) (string, error) {
-		res, err := ai.Retrieve(ctx, retriever,
+		res, err := genkit.Retrieve(ctx, g,
+			ai.WithRetriever(retriever),
 			ai.WithConfig(in.Show),
 			ai.WithTextDocs(in.Question))
 		if err != nil {
@@ -130,7 +125,9 @@ const provider = "pgvector"
 // [START retr]
 func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.Embedder, retOpts *ai.RetrieverOptions) ai.Retriever {
 	f := func(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
-		eres, err := ai.Embed(ctx, embedder, ai.WithDocs(req.Query))
+		eres, err := genkit.Embed(ctx, g,
+			ai.WithEmbedder(embedder),
+			ai.WithDocs(req.Query))
 		if err != nil {
 			return nil, err
 		}
@@ -168,13 +165,13 @@ func defineRetriever(g *genkit.Genkit, db *sql.DB, embedder ai.Embedder, retOpts
 		}
 		return res, nil
 	}
-	return genkit.DefineRetriever(g, provider, "shows", retOpts, f)
+	return genkit.DefineRetriever(g, api.NewName(provider, "shows"), retOpts, f)
 }
 
 // [END retr]
 
 // Helper function to get started with indexing
-func Index(ctx context.Context, db *sql.DB, embedder ai.Embedder, docs []*ai.Document) error {
+func Index(ctx context.Context, g *genkit.Genkit, db *sql.DB, embedder ai.Embedder, docs []*ai.Document) error {
 	// The indexer assumes that each Document has a single part, to be embedded, and metadata fields
 	// for the table primary key: show_id, season_number, episode_id.
 	const query = `
@@ -182,7 +179,9 @@ func Index(ctx context.Context, db *sql.DB, embedder ai.Embedder, docs []*ai.Doc
 			SET embedding = $4
 			WHERE show_id = $1 AND season_number = $2 AND episode_id = $3
 		`
-	res, err := ai.Embed(ctx, embedder, ai.WithDocs(docs...))
+	res, err := genkit.Embed(ctx, g,
+		ai.WithEmbedder(embedder),
+		ai.WithDocs(docs...))
 	if err != nil {
 		return err
 	}
@@ -207,7 +206,7 @@ func Index(ctx context.Context, db *sql.DB, embedder ai.Embedder, docs []*ai.Doc
 
 }
 
-func indexExistingRows(ctx context.Context, db *sql.DB, embedder ai.Embedder) error {
+func indexExistingRows(ctx context.Context, g *genkit.Genkit, db *sql.DB, embedder ai.Embedder) error {
 	rows, err := db.QueryContext(ctx, `SELECT show_id, season_number, episode_id, chunk FROM embeddings`)
 	if err != nil {
 		return err
@@ -233,5 +232,5 @@ func indexExistingRows(ctx context.Context, db *sql.DB, embedder ai.Embedder) er
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return Index(ctx, db, embedder, docs)
+	return Index(ctx, g, db, embedder, docs)
 }

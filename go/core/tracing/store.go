@@ -36,7 +36,7 @@ type SpanData struct {
 	ParentSpanID         string               `json:"parentSpanId,omitempty"`
 	StartTime            Milliseconds         `json:"startTime"`
 	EndTime              Milliseconds         `json:"endTime"`
-	Attributes           map[string]any       `json:"attributes,omitempty"`
+	Attributes           map[string]any       `json:"attributes"`
 	DisplayName          string               `json:"displayName"`
 	Links                []*Link              `json:"links,omitempty"`
 	InstrumentationScope InstrumentationScope `json:"instrumentationLibrary"` // TODO: update json tag when JS runtime gets updated
@@ -52,7 +52,7 @@ type TimeEvents struct {
 }
 
 type BoolValue struct {
-	Value bool `json:"value,omitempty"`
+	Value bool `json:"value"`
 }
 
 type TimeEvent struct {
@@ -75,7 +75,7 @@ type SpanContext struct {
 
 // A Link describes the relationship between two Spans.
 type Link struct {
-	SpanContext            SpanContext    `json:"spanContext"`
+	SpanContext            SpanContext    `json:"context"`
 	Attributes             map[string]any `json:"attributes,omitempty"`
 	DroppedAttributesCount int            `json:"droppedAttributesCount"`
 }
@@ -92,5 +92,5 @@ type InstrumentationScope struct {
 // with added struct tags to match the javascript JSON field names.
 type Status struct {
 	Code        uint32 `json:"code"` // avoid the MarshalJSON method on codes.Code
-	Description string `json:"description,omitempty"`
+	Description string `json:"message,omitempty"`
 }

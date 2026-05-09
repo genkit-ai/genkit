@@ -36,4 +36,14 @@ var (
 		Media:       true,
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
+
+	//  MultimodalNoConstrained describes model capabilities for multimodal models without native constrained generation.
+	MultimodalNoConstrained = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       true,
+		ToolChoice:  true,
+		SystemRole:  true,
+		Media:       true,
+		Constrained: ai.ConstrainedSupportNone,
+	}
 )

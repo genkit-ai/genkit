@@ -118,7 +118,7 @@ func (i IVFFlatOptions) Options() string {
 	return fmt.Sprintf("(lists = %d)", i.Lists)
 }
 
-// indexOptions returns the specific options for the index based on the index type.
+// indexOptions returns the specific options for the index based on the index api.
 func (index *BaseIndex) indexOptions() string {
 	return index.options.Options()
 }

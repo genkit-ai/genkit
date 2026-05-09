@@ -21,5 +21,5 @@ export {
   type GeminiTtsConfig,
   type GoogleAIPluginOptions,
   type ImagenConfig,
-} from './googleai';
-export { vertexAI } from './vertexai';
+} from './googleai/index.js';
+export { vertexAI } from './vertexai/index.js';

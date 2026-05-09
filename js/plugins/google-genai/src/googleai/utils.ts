@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import { GenerateRequest, GenkitError } from 'genkit';
+import { GenerateRequest, GenkitError, z } from 'genkit';
 import process from 'process';
-import { VeoImage } from './types.js';
+import { extractMedia } from '../common/utils.js';
+import { ClientOptions, ImagenInstance, VeoImage, VeoVideo } from './types.js';
 
 export {
   checkModelName,
   cleanSchema,
-  extractImagenImage,
   extractText,
   extractVersion,
   modelName,
@@ -102,7 +102,7 @@ export function checkApiKey(
 export function calculateApiKey(
   pluginApiKey: string | false | undefined,
   requestApiKey: string | undefined
-): string {
+): string | undefined {
   let apiKey: string | undefined;
 
   // Don't get the key from the environment if pluginApiKey is false
@@ -113,7 +113,7 @@ export function calculateApiKey(
   apiKey = requestApiKey || apiKey;
 
   if (pluginApiKey === false && !requestApiKey) {
-    throw API_KEY_FALSE_ERROR;
+    return undefined;
   }
 
   if (!apiKey) {
@@ -126,20 +126,102 @@ export function extractVeoImage(
   request: GenerateRequest
 ): VeoImage | undefined {
   const media = request.messages.at(-1)?.content.find((p) => !!p.media)?.media;
-  if (media) {
-    const img = media.url.split(',')[1];
-    if (img && media.contentType) {
-      return {
-        bytesBase64Encoded: img,
-        mimeType: media.contentType!,
-      };
-    } else if (img) {
-      // Content Type is not optional
-      throw new GenkitError({
-        status: 'INVALID_ARGUMENT',
-        message: 'content type is required for images',
-      });
-    }
+  if (!media?.contentType?.startsWith('image/')) {
+    return undefined;
+  }
+  const bytes = media?.url.split(',')[1];
+  if (bytes) {
+    return {
+      bytesBase64Encoded: bytes,
+      mimeType: media.contentType,
+    };
   }
   return undefined;
+}
+
+export function extractVeoVideo(
+  request: GenerateRequest
+): VeoVideo | undefined {
+  const media = request.messages.at(-1)?.content.find((p) => !!p.media)?.media;
+  if (!media?.contentType?.startsWith('video/')) {
+    return undefined;
+  }
+  return {
+    uri: media.url,
+  };
+}
+
+export function extractImagenImage(
+  request: GenerateRequest
+): ImagenInstance['image'] | undefined {
+  const image = extractMedia(request, {
+    metadataType: 'base',
+    isDefault: true,
+  })?.url.split(',')[1];
+
+  if (image) {
+    return { bytesBase64Encoded: image };
+  }
+  return undefined;
+}
+
+/**
+ * For each field in ClientOptions, if the request config object has
+ * a matching non-empty/non-null field, it overrides the original.
+ */
+export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+  clientOptions: ClientOptions,
+  reqConfig?: z.infer<T>
+): ClientOptions {
+  if (!reqConfig) {
+    return clientOptions;
+  }
+
+  let newOptions = { ...clientOptions };
+
+  if (typeof reqConfig.timeout == 'number') {
+    newOptions.timeout = reqConfig.timeout;
+  }
+
+  if (typeof reqConfig.apiKey == 'string') {
+    newOptions.apiKey = reqConfig.apiKey;
+  }
+
+  if (typeof reqConfig.apiVersion == 'string') {
+    newOptions.apiVersion = reqConfig.apiVersion;
+  }
+
+  if (typeof reqConfig.apiClient == 'string') {
+    newOptions.apiClient = reqConfig.apiClient;
+  }
+
+  if (typeof reqConfig.baseUrl == 'string') {
+    newOptions.baseUrl = reqConfig.baseUrl;
+  }
+
+  if (reqConfig.customHeaders && typeof reqConfig.customHeaders === 'object') {
+    newOptions.customHeaders = reqConfig.customHeaders;
+  }
+
+  return newOptions;
+}
+
+/**
+ * The config can have client option overrides, but they should not
+ * be sent with the request like normal config.
+ * @param requestConfig
+ */
+export function removeClientOptionOverrides<
+  T extends z.ZodObject<any, any, any>,
+>(requestConfig?: z.infer<T>): z.infer<T> {
+  let newConfig = { ...requestConfig };
+
+  delete newConfig?.timeout;
+  delete newConfig?.apiKey;
+  delete newConfig?.apiVersion;
+  delete newConfig?.apiClient;
+  delete newConfig?.baseUrl;
+  delete newConfig?.customHeaders;
+
+  return newConfig;
 }

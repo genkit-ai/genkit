@@ -32,10 +32,7 @@ func main() {
 	oai := &oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g, err := genkit.Init(ctx, genkit.WithPlugins(oai))
-	if err != nil {
-		log.Fatalf("failed to create Genkit: %v", err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(oai))
 
 	genkit.DefineFlow(g, "basic", func(ctx context.Context, subject string) (string, error) {
 		gpt4o := oai.Model(g, "gpt-4o")
@@ -51,9 +48,6 @@ func main() {
 
 	genkit.DefineFlow(g, "defined-model", func(ctx context.Context, subject string) (string, error) {
 		gpt4oMini := oai.Model(g, "gpt-4o-mini")
-		if err != nil {
-			return "", err
-		}
 		prompt := fmt.Sprintf("tell me a joke about %s", subject)
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
 		resp, err := genkit.Generate(ctx, g, ai.WithModel(gpt4oMini), ai.WithPrompt(prompt), ai.WithConfig(config))
@@ -65,9 +59,6 @@ func main() {
 
 	genkit.DefineFlow(g, "media", func(ctx context.Context, subject string) (string, error) {
 		gpt4oMini := oai.Model(g, "gpt-4o-mini")
-		if err != nil {
-			return "", err
-		}
 		config := &openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(gpt4oMini),

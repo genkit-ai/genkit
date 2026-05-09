@@ -14,6 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
+"""Ollama constants."""
+
 import sys
 
 if sys.version_info < (3, 11):

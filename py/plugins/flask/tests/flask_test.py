@@ -14,13 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from flask import Flask
 
-from genkit.ai import Genkit
+"""Tests for the Flask plugin."""
+
+from typing import Any
+
+from flask import Flask, Request
+
+from genkit import ActionRunContext, Genkit
+from genkit.plugin_api import RequestData
 from genkit.plugins.flask import genkit_flask_handler
 
 
-def create_app():
+def create_app() -> Flask:
+    """Create a Flask application for testing."""
     ai = Genkit()
 
     app = Flask(__name__)
@@ -28,14 +35,14 @@ def create_app():
         'TESTING': True,
     })
 
-    async def my_context_provider(request):
+    async def my_context_provider(request_data: RequestData[Request]) -> dict[str, Any]:
         """Provide a context for the flow."""
-        return {'username': request.headers.get('authorization')}
+        return {'username': request_data.request.headers.get('authorization')}
 
     @app.post('/chat')
     @genkit_flask_handler(ai, context_provider=my_context_provider)
     @ai.flow()
-    async def say_hi(name: str, ctx):
+    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
         ctx.send_chunk(1)
         ctx.send_chunk({'username': ctx.context.get('username')})
         ctx.send_chunk({'foo': 'bar'})
@@ -44,7 +51,8 @@ def create_app():
     return app
 
 
-def test_simple_post():
+def test_simple_post() -> None:
+    """Test a simple POST request to the chat endpoint."""
     client = create_app().test_client()
     response = client.post(
         '/chat', json={'data': 'banana'}, headers={'Authorization': 'Pavel', 'content-Type': 'application/json'}
@@ -57,7 +65,8 @@ def test_simple_post():
     }
 
 
-def test_streaming():
+def test_streaming() -> None:
+    """Test a streaming POST request to the chat endpoint."""
     client = create_app().test_client()
     response = client.post(
         '/chat',
@@ -65,15 +74,15 @@ def test_streaming():
         headers={'Authorization': 'Pavel', 'content-Type': 'application/json', 'accept': 'text/event-stream'},
     )
 
-    assert response.is_streamed == True
+    assert response.is_streamed
 
     chunks = []
     for chunk in response.response:
         chunks.append(chunk)
 
     assert chunks == [
-        b'data: {"message": 1}\n\n',
-        b'data: {"message": {"username": "Pavel"}}\n\n',
-        b'data: {"message": {"foo": "bar"}}\n\n',
-        b'data: {"result": {"bar": "baz"}}\n\n',
+        b'data: {"message":1}\n\n',
+        b'data: {"message":{"username":"Pavel"}}\n\n',
+        b'data: {"message":{"foo":"bar"}}\n\n',
+        b'data: {"result":{"bar":"baz"}}\n\n',
     ]

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
-import { createMcpHost } from '@genkit-ai/mcp';
+import { googleAI } from '@genkit-ai/google-genai';
+import { defineMcpHost } from '@genkit-ai/mcp';
 import { genkit, z } from 'genkit';
 import { logger } from 'genkit/logging';
 import path from 'path';
@@ -45,12 +45,12 @@ export const PERMISSIVE_SAFETY_SETTINGS: any = {
 
 export const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 logger.setLogLevel('debug'); // Set the logging level to debug for detailed output
 
-export const mcpHost = createMcpHost({
+export const mcpHost = defineMcpHost(ai, {
   name: 'test-mcp-manager',
   mcpServers: {
     'git-client': {
@@ -81,6 +81,15 @@ ai.defineFlow('git-commits', async (q) => {
   return text;
 });
 
+ai.defineFlow('dynamic-git-commits', async (q) => {
+  const { text } = await ai.generate({
+    prompt: `summarize last 5 commits in '${path.resolve(process.cwd(), '../../..')}'`,
+    tools: ['test-mcp-manager:tool/*'], // All the tools
+  });
+
+  return text;
+});
+
 ai.defineFlow('get-file', async (q) => {
   const { text } = await ai.generate({
     prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
@@ -90,6 +99,70 @@ ai.defineFlow('get-file', async (q) => {
   return text;
 });
 
+ai.defineFlow('dynamic-get-file', async (q) => {
+  const { text } = await ai.generate({
+    prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
+    tools: ['test-mcp-manager:tool/fs/read_file'], // Just this one tool
+  });
+
+  return text;
+});
+
+ai.defineFlow('dynamic-prefix-tool', async (q) => {
+  // When specifying tools you can use a prefix - so
+  // test-mcp-manager:tool/fs/read_* or
+  // test-mcp-manager:tool/fs/* will use only the tools whose
+  // names match the prefix.
+  const { text } = await ai.generate({
+    prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
+    tools: ['test-mcp-manager:tool/fs/read_*'], // Just read tools from the fs/
+  });
+
+  return text;
+});
+
+ai.defineFlow('dynamic-disable-enable', async (q) => {
+  // This shows that the dap cache is invalidated any time
+  // we change something with the mcpHost config.
+  const { text: text1 } = await ai.generate({
+    prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
+    tools: ['test-mcp-manager:tool/fs/read_file'], // Just this one tool
+  });
+
+  // Now disable fs to show that we invalidate the dap cache
+  await mcpHost.disable('fs');
+  let text2: string;
+  try {
+    // This should fail because the fs/read_file tool is not available
+    // after disabling the mcp client providing it.
+    const { text } = await ai.generate({
+      prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
+      tools: ['test-mcp-manager:tool/fs/read_file'], // Just this one tool
+    });
+    text2 =
+      'ERROR! This should have failed to find the tool but succeeded instead: ' +
+      text;
+  } catch (e: any) {
+    text2 = e.message;
+  }
+
+  // If we re-enable the fs it will succeed.
+  await mcpHost.enable('fs');
+  await mcpHost.reconnect('fs');
+  const { text: text3 } = await ai.generate({
+    prompt: `summarize contexts of hello-world.txt (in '${process.cwd()}/test-workspace')`,
+    tools: ['test-mcp-manager:tool/fs/read_file'], // Just this one tool
+  });
+  return (
+    'Original: <br/>' +
+    text1 +
+    '<br/>After Disable: <br/>' +
+    text2 +
+    '<br/>After Enable: <br/>' +
+    text3
+  );
+});
+
 ai.defineFlow('test-resource', async (q) => {
   const { text } = await ai.generate({
     prompt: [
@@ -97,6 +170,30 @@ ai.defineFlow('test-resource', async (q) => {
       { resource: { uri: 'test://static/resource/1' } },
     ],
     resources: await mcpHost.getActiveResources(ai),
+  });
+
+  return text;
+});
+
+ai.defineFlow('dynamic-test-resources', async (q) => {
+  const { text } = await ai.generate({
+    prompt: [
+      { text: 'analyze this: ' },
+      { resource: { uri: 'test://static/resource/1' } },
+    ],
+    resources: ['test-mcp-manager:resource/*'],
+  });
+
+  return text;
+});
+
+ai.defineFlow('dynamic-test-one-resource', async (q) => {
+  const { text } = await ai.generate({
+    prompt: [
+      { text: 'analyze this: ' },
+      { resource: { uri: 'test://static/resource/1' } },
+    ],
+    resources: ['test-mcp-manager:resource/everything/Resource 1'],
   });
 
   return text;

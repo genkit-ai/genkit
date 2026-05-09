@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini20Flash } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { Allow, parse } from 'partial-json';
 import { ai } from './genkit.js';
@@ -43,7 +43,7 @@ export const streamCharacters = ai.defineFlow(
   },
   async (count, { sendChunk }) => {
     const { response, stream } = await ai.generateStream({
-      model: gemini20Flash,
+      model: googleAI.model('gemini-flash-latest'),
       output: {
         format: 'json',
         schema: GameCharactersSchema,

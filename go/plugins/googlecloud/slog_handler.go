@@ -20,26 +20,37 @@ package googlecloud
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"cloud.google.com/go/logging"
 	"github.com/jba/slog/withsupport"
+	"go.opentelemetry.io/otel/trace"
+	mrpb "google.golang.org/genproto/googleapis/api/monitoredres"
 )
 
-func newHandler(level slog.Leveler, f func(logging.Entry)) *handler {
-	if level == nil {
-		level = slog.LevelInfo
-	}
-	return &handler{
-		level:       level,
-		handleEntry: f,
-	}
-}
+// MetadataKey is the slog attribute key used for structured metadata
+const MetadataKey = "metadata"
 
+// Enhanced handler with error handling
 type handler struct {
 	level       slog.Leveler
 	handleEntry func(logging.Entry)
 	goa         *withsupport.GroupOrAttrs
+	projectID   string
+}
+
+func newHandler(level slog.Leveler, f func(logging.Entry), projectID string) *handler {
+	if level == nil {
+		level = slog.LevelInfo
+	}
+
+	return &handler{
+		level:       level,
+		handleEntry: f,
+		projectID:   projectID,
+	}
 }
 
 func (h *handler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -47,35 +58,94 @@ func (h *handler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *handler) WithAttrs(as []slog.Attr) slog.Handler {
-	h2 := *h
-	h2.goa = h2.goa.WithAttrs(as)
-	return &h2
+	return &handler{
+		level:       h.level,
+		handleEntry: h.handleEntry,
+		goa:         h.goa.WithAttrs(as),
+		projectID:   h.projectID,
+	}
 }
 
 func (h *handler) WithGroup(name string) slog.Handler {
-	h2 := *h
-	h2.goa = h2.goa.WithGroup(name)
-	return &h2
+	return &handler{
+		level:       h.level,
+		handleEntry: h.handleEntry,
+		goa:         h.goa.WithGroup(name),
+		projectID:   h.projectID,
+	}
 }
 
 func (h *handler) Handle(ctx context.Context, r slog.Record) error {
-	h.handleEntry(h.recordToEntry(ctx, r))
+	// Filter out logs from internal Google Cloud operations to prevent log recursion
+	// Apply same filtering logic as spans - only exclude internal Google Cloud SDK operations
+	message := r.Message
+	isInternalGoogleCloudLog := strings.Contains(message, "google.monitoring.v3.MetricService") ||
+		strings.Contains(message, "google.devtools.cloudtrace.v2.TraceService") ||
+		strings.Contains(message, "google.logging.v2.LoggingServiceV2")
+
+	if isInternalGoogleCloudLog {
+		// Skip these logs - they're noise
+		return nil
+	}
+
+	entry := h.recordToEntry(ctx, r)
+
+	h.handleEntry(entry)
 	return nil
 }
 
 func (h *handler) recordToEntry(ctx context.Context, r slog.Record) logging.Entry {
-	return logging.Entry{
+	span := trace.SpanFromContext(ctx)
+
+	message := r.Message
+	var metadata map[string]interface{}
+
+	// Process record attributes to separate message from metadata
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == MetadataKey {
+			if dataMap, ok := a.Value.Any().(map[string]interface{}); ok {
+				metadata = dataMap
+				// Remove unnecessary GCP logging fields from metadata
+				delete(metadata, "logging.googleapis.com/trace")
+				delete(metadata, "logging.googleapis.com/spanId")
+				delete(metadata, "logging.googleapis.com/trace_sampled")
+			}
+		}
+		return true
+	})
+
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+
+	// Create AIM-compatible payload structure
+	payload := map[string]interface{}{
+		"message":  message,
+		"metadata": metadata,
+	}
+
+	globalResource := &mrpb.MonitoredResource{
+		Type: "global",
+		Labels: map[string]string{
+			"project_id": h.projectID,
+		},
+	}
+
+	entry := logging.Entry{
 		Timestamp: r.Time,
 		Severity:  levelToSeverity(r.Level),
-		Payload:   recordToMap(r, h.goa.Collect()),
+		Payload:   payload,
 		Labels:    map[string]string{"module": "genkit"},
-		// TODO: add a monitored resource
-		// Resource:       &monitoredres.MonitoredResource{},
-		// TODO: add trace information from the context.
-		// Trace:        "",
-		// SpanID:       "",
-		// TraceSampled: false,
+		Resource:  globalResource,
 	}
+
+	// Add trace context at top level
+	if span.SpanContext().IsValid() {
+		entry.Trace = fmt.Sprintf("projects/%s/traces/%s", h.projectID, span.SpanContext().TraceID().String())
+		entry.SpanID = span.SpanContext().SpanID().String()
+	}
+
+	return entry
 }
 
 func levelToSeverity(l slog.Level) logging.Severity {
@@ -96,56 +166,5 @@ func levelToSeverity(l slog.Level) logging.Severity {
 		return logging.Alert
 	default:
 		return logging.Emergency
-	}
-}
-func recordToMap(r slog.Record, goras []*withsupport.GroupOrAttrs) map[string]any {
-	root := map[string]any{}
-	root[slog.MessageKey] = r.Message
-
-	m := root
-	for i, gora := range goras {
-		if gora.Group != "" {
-			if i == len(goras)-1 && r.NumAttrs() == 0 {
-				continue
-			}
-			m2 := map[string]any{}
-			m[gora.Group] = m2
-			m = m2
-		} else {
-			for _, a := range gora.Attrs {
-				handleAttr(a, m)
-			}
-		}
-	}
-	r.Attrs(func(a slog.Attr) bool {
-		handleAttr(a, m)
-		return true
-	})
-	return root
-}
-
-func handleAttr(a slog.Attr, m map[string]any) {
-	if a.Equal(slog.Attr{}) {
-		return
-	}
-	v := a.Value.Resolve()
-	if v.Kind() == slog.KindGroup {
-		gas := v.Group()
-		if len(gas) == 0 {
-			return
-		}
-		if a.Key == "" {
-			for _, ga := range gas {
-				handleAttr(ga, m)
-			}
-		} else {
-			gm := map[string]any{}
-			for _, ga := range gas {
-				handleAttr(ga, gm)
-			}
-			m[a.Key] = gm
-		}
-	} else {
-		m[a.Key] = v.Any()
 	}
 }

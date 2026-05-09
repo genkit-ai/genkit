@@ -16,7 +16,7 @@
 
 import type { JSONSchema7 } from 'json-schema';
 import * as z from 'zod';
-import { Action, ActionMetadata, defineAction, Middleware } from './action.js';
+import { Action, ActionMetadata, Middleware, action } from './action.js';
 import { ActionContext } from './context.js';
 import { GenkitError } from './error.js';
 import { ActionType, Registry } from './registry.js';
@@ -56,6 +56,13 @@ export interface BackgroundAction<
   RunOptions extends BackgroundActionRunOptions = BackgroundActionRunOptions,
 > {
   __action: ActionMetadata<I, O>;
+
+  readonly startAction: Action<I, typeof OperationSchema>;
+  readonly checkAction: Action<typeof OperationSchema, typeof OperationSchema>;
+  readonly cancelAction?: Action<
+    typeof OperationSchema,
+    typeof OperationSchema
+  >;
   readonly supportsCancel: boolean;
 
   start(
@@ -230,8 +237,46 @@ export function defineBackgroundAction<
   registry: Registry,
   config: BackgroundActionParams<I, O, S>
 ): BackgroundAction<I, O> {
-  const startAction = defineAction(
-    registry,
+  const act = backgroundAction(config);
+
+  registerBackgroundAction(registry, act);
+
+  return act;
+}
+
+export function registerBackgroundAction(
+  registry: Registry,
+  act: BackgroundAction<any, any>,
+  opts?: { namespace?: string }
+) {
+  registry.registerAction(
+    act.startAction.__action.actionType!,
+    act.startAction,
+    opts
+  );
+  registry.registerAction(
+    act.checkAction.__action.actionType!,
+    act.checkAction,
+    opts
+  );
+  if (act.cancelAction) {
+    registry.registerAction(
+      act.cancelAction.__action.actionType!,
+      act.cancelAction,
+      opts
+    );
+  }
+}
+
+/**
+ * Creates a background action with the given config.
+ */
+export function backgroundAction<
+  I extends z.ZodTypeAny,
+  O extends z.ZodTypeAny,
+  S extends z.ZodTypeAny = z.ZodTypeAny,
+>(config: BackgroundActionParams<I, O, S>): BackgroundAction<I, O> {
+  const startAction = action(
     {
       actionType: config.actionType,
       name: config.name,
@@ -254,8 +299,7 @@ export function defineBackgroundAction<
       return operation;
     }
   );
-  const checkAction = defineAction(
-    registry,
+  const checkAction = action(
     {
       actionType: 'check-operation',
       name: `${config.name}/check`,
@@ -281,8 +325,7 @@ export function defineBackgroundAction<
     | Action<typeof OperationSchema, typeof OperationSchema>
     | undefined = undefined;
   if (config.cancel) {
-    cancelAction = defineAction(
-      registry,
+    cancelAction = action(
       {
         actionType: 'cancel-operation',
         name: `${config.name}/cancel`,
@@ -313,4 +356,8 @@ export function defineBackgroundAction<
   }
 
   return new BackgroundActionImpl(startAction, checkAction, cancelAction);
+}
+
+export function isBackgroundAction(a: unknown): a is BackgroundAction {
+  return a instanceof BackgroundActionImpl;
 }

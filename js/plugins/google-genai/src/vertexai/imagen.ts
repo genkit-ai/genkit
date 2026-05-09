@@ -14,34 +14,25 @@
  * limitations under the License.
  */
 
-import { ActionMetadata, Genkit, modelActionMetadata, z } from 'genkit';
+import { ActionMetadata, modelActionMetadata, z } from 'genkit';
 import {
-  CandidateData,
-  GenerateRequest,
   GenerationCommonConfigSchema,
   ModelAction,
   ModelInfo,
   ModelReference,
-  getBasicUsageStats,
   modelRef,
 } from 'genkit/model';
-import { imagenPredict } from './client';
+import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
+import { imagenPredict } from './client.js';
+import { fromImagenResponse, toImagenPredictRequest } from './converters.js';
+import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
-  ClientOptions,
-  ImagenParameters,
-  ImagenPredictRequest,
-  ImagenPrediction,
-  Model,
-  VertexPluginOptions,
-} from './types.js';
-import {
+  calculateRequestOptions,
   checkModelName,
-  extractImagenImage,
-  extractImagenMask,
-  extractText,
   extractVersion,
   modelName,
-} from './utils';
+} from './utils.js';
 
 /**
  * See https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api.
@@ -140,6 +131,7 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
             'needing to provide one. Consequently, when you provide ' +
             'this parameter you can omit a mask object.'
         )
+        .passthrough()
         .optional(),
       maskDilation: z
         .number()
@@ -173,13 +165,56 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
         .describe('The factor to upscale the image.'),
     })
     .describe('Configuration for upscaling.')
+    .passthrough()
     .optional(),
 }).passthrough();
 export type ImagenConfigSchemaType = typeof ImagenConfigSchema;
 export type ImagenConfig = z.infer<ImagenConfigSchemaType>;
 
-// for commonRef
-type ConfigSchemaType = ImagenConfigSchemaType;
+export const ImagenTryOnConfigSchema = z
+  .object({
+    sampleCount: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('Number of images to generate.'),
+    seed: z
+      .number()
+      .int()
+      .optional()
+      .describe('Random seed for the image generation.'),
+    baseSteps: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe('Number of denoising steps.'),
+    personGeneration: z
+      .enum(['dont_allow', 'allow_adult', 'allow_all'])
+      .optional(),
+    safetySetting: z
+      .enum(['block_most', 'block_some', 'block_few', 'block_fewest'])
+      .optional(),
+    storageUri: z
+      .string()
+      .optional()
+      .describe('Cloud Storage URI to store the generated images.'),
+    outputOptions: z
+      .object({
+        mimeType: z.string().optional(),
+        compressionQuality: z.number().int().optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+export type ImagenTryOnConfigSchemaType = typeof ImagenTryOnConfigSchema;
+export type ImagenTryOnConfig = z.infer<ImagenTryOnConfigSchemaType>;
+
+export type ConfigSchemaType =
+  | ImagenConfigSchemaType
+  | ImagenTryOnConfigSchemaType;
 
 function commonRef(
   name: string,
@@ -202,41 +237,61 @@ function commonRef(
   });
 }
 
-// Allow all the capabilities for unknown future models
+// There are no more future imagen models, set these to the commonRef values.
 const GENERIC_MODEL = commonRef('imagen', {
   supports: {
     media: true,
-    multiturn: true,
-    tools: true,
-    systemRole: true,
+    multiturn: false,
+    tools: false,
+    toolChoice: false,
+    systemRole: false,
     output: ['media'],
   },
 });
 
+// The 'regular' imagen models are deprecated, but not shutdown yet.
+// Shutdown is June 30, 2026 - until then, we need to keep the same
+// logic as before in the definitions so we are backwards compatible.
 export const KNOWN_MODELS = {
-  'imagen-3.0-generate-002': commonRef('imagen-3.0-generate-002'),
-  'imagen-3.0-fast-generate-001': commonRef('imagen-3.0-fast-generate-001'),
-  'imagen-4.0-generate-preview-06-06': commonRef(
-    'imagen-4.0-generate-preview-06-06'
-  ),
-  'imagen-4.0-ultra-generate-preview-06-06': commonRef(
-    'imagen-4.0-ultra-generate-preview-06-06'
+  'virtual-try-on-001': commonRef(
+    'virtual-try-on-001',
+    {
+      supports: {
+        media: true,
+        multiturn: false,
+        tools: false,
+        systemRole: true,
+        output: ['media'],
+      },
+    },
+    ImagenTryOnConfigSchema
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS;
-export type ImagenModelName = `imagen=${string}`;
+
+export type ImagenModelName =
+  | KnownModels
+  | `imagen-${string}`
+  | `virtual-try-on-${string}`;
 export function isImagenModelName(value?: string): value is ImagenModelName {
-  return !!value?.startsWith('imagen-');
+  return (
+    !!value &&
+    (value.startsWith('imagen-') ||
+      value.startsWith('virtual-try-on-') ||
+      value in KNOWN_MODELS)
+  );
 }
 
 export function model(
   version: string,
   config: ImagenConfig = {}
-): ModelReference<typeof ImagenConfigSchema> {
+): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
+
   return modelRef({
     name: `vertexai/${name}`,
     config,
@@ -260,43 +315,35 @@ export function listActions(models: Model[]): ActionMetadata[] {
     });
 }
 
-export function defineKnownModels(
-  ai: Genkit,
+export function listKnownModels(
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
 ) {
-  for (const name of Object.keys(KNOWN_MODELS)) {
-    defineModel(ai, name, clientOptions, pluginOptions);
-  }
+  return Object.keys(KNOWN_MODELS).map((name: string) =>
+    defineModel(name, clientOptions, pluginOptions)
+  );
 }
 
 export function defineModel(
-  ai: Genkit,
   name: string,
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
 ): ModelAction {
   const ref = model(name);
 
-  return ai.defineModel(
+  return pluginModel(
     {
-      apiVersion: 'v2',
       name: ref.name,
       ...ref.info,
       configSchema: ref.configSchema,
     },
     async (request, { abortSignal }) => {
-      const clientOpt = { ...clientOptions, signal: abortSignal };
-      const imagenPredictRequest: ImagenPredictRequest = {
-        instances: [
-          {
-            prompt: extractText(request),
-            image: extractImagenImage(request),
-            mask: extractImagenMask(request),
-          },
-        ],
-        parameters: toImagenParameters(request),
-      };
+      const clientOpt = calculateRequestOptions(
+        { ...clientOptions, signal: abortSignal },
+        request.config
+      );
+
+      const imagenPredictRequest = toImagenPredictRequest(request);
 
       const response = await imagenPredict(
         extractVersion(ref),
@@ -310,58 +357,12 @@ export function defineModel(
         );
       }
 
-      const candidates = response.predictions.map(fromImagenPrediction);
-
-      return {
-        candidates,
-        usage: {
-          ...getBasicUsageStats(request.messages, candidates),
-          custom: { generations: candidates.length },
-        },
-        custom: response,
-      };
+      return fromImagenResponse(response, request);
     }
   );
 }
 
-function toImagenParameters(
-  request: GenerateRequest<typeof ImagenConfigSchema>
-): ImagenParameters {
-  const params = {
-    sampleCount: request.candidates ?? 1,
-    ...request?.config,
-  };
-
-  for (const k in params) {
-    if (!params[k]) delete params[k];
-  }
-
-  return params;
-}
-
-function fromImagenPrediction(p: ImagenPrediction, i: number): CandidateData {
-  const b64data = p.bytesBase64Encoded;
-  const mimeType = p.mimeType;
-  return {
-    index: i,
-    finishReason: 'stop',
-    message: {
-      role: 'model',
-      content: [
-        {
-          media: {
-            url: `data:${mimeType};base64,${b64data}`,
-            contentType: mimeType,
-          },
-        },
-      ],
-    },
-  };
-}
-
 export const TEST_ONLY = {
-  toImagenParameters,
-  fromImagenPrediction,
   GENERIC_MODEL,
   KNOWN_MODELS,
 };

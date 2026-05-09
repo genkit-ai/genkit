@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import { defineAction, z, type Action } from '@genkit-ai/core';
+import { action, z, type Action } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
-import { PartSchema, type Part } from './document.js';
+import { PartSchema, type Part } from './parts.js';
 import {
   Document,
   DocumentDataSchema,
@@ -104,7 +104,7 @@ function rerankerWithMetadata<
 }
 
 /**
- *  Creates a reranker action for the provided {@link RerankerFn} implementation.
+ *  Creates a reranker action for the provided {@link RerankerFn} implementation and registers it in the registry.
  */
 export function defineReranker<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
   registry: Registry,
@@ -114,9 +114,26 @@ export function defineReranker<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
     info?: RerankerInfo;
   },
   runner: RerankerFn<OptionsType>
-) {
-  const reranker = defineAction(
-    registry,
+): RerankerAction<OptionsType> {
+  const act = reranker(options, runner);
+
+  registry.registerAction('reranker', act);
+
+  return act;
+}
+
+/**
+ *  Creates a reranker action for the provided {@link RerankerFn} implementation.
+ */
+export function reranker<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
+  options: {
+    name: string;
+    configSchema?: OptionsType;
+    info?: RerankerInfo;
+  },
+  runner: RerankerFn<OptionsType>
+): RerankerAction<OptionsType> {
+  const reranker = action(
     {
       actionType: 'reranker',
       name: options.name,

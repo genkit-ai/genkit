@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -30,7 +31,7 @@ const provider = "postgres"
 type Postgres struct {
 	mu      sync.Mutex
 	initted bool
-	engine  *PostgresEngine
+	Engine  *PostgresEngine
 }
 
 func (p *Postgres) Name() string {
@@ -38,24 +39,23 @@ func (p *Postgres) Name() string {
 }
 
 // Init initialize the PostgreSQL
-func (p *Postgres) Init(ctx context.Context, g *genkit.Genkit) error {
+func (p *Postgres) Init(ctx context.Context) []api.Action {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.initted {
-		return fmt.Errorf("postgres.Init already initted")
+		panic("postgres.Init already initted")
 	}
 
-	if p.engine == nil {
-		return fmt.Errorf("postgres.Init engine is nil")
+	if p.Engine == nil {
+		panic("postgres.Init engine is nil")
 	}
 
-	if p.engine.Pool == nil {
-		return fmt.Errorf("postgres.Init engine has no pool")
+	if p.Engine.Pool == nil {
+		panic("postgres.Init engine has no pool")
 	}
 
 	p.initted = true
-	return nil
-
+	return []api.Action{}
 }
 
 // Config provides configuration options for [DefineRetriever].
@@ -89,12 +89,12 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, p *Postgres, cfg *Co
 		return nil, nil, err
 	}
 
-	return ds, genkit.DefineRetriever(g, provider, ds.config.TableName, nil, ds.Retrieve), nil
+	return ds, genkit.DefineRetriever(g, api.NewName(provider, ds.config.TableName), &ai.RetrieverOptions{}, ds.Retrieve), nil
 }
 
-// Retriever returns the retriever with the given index name.
-func Retriever(g *genkit.Genkit, name string) ai.Retriever {
-	return genkit.LookupRetriever(g, provider, name)
+// Retriever returns the retriever with the given index id.
+func Retriever(g *genkit.Genkit, id string) ai.Retriever {
+	return genkit.LookupRetriever(g, api.NewName(provider, id))
 }
 
 /* +++++++++++++++++++++++
@@ -134,7 +134,7 @@ func (p *Postgres) ApplyVectorIndex(ctx context.Context, config *Config, index B
 	stmt := fmt.Sprintf(`CREATE INDEX %s %s ON "%s"."%s" USING %s (%s %s) %s %s`,
 		concurrentlyStr, name, config.SchemaName, config.TableName, index.indexType, config.EmbeddingColumn, function, params, filter)
 
-	_, err := p.engine.Pool.Exec(ctx, stmt)
+	_, err := p.Engine.Pool.Exec(ctx, stmt)
 	if err != nil {
 		return fmt.Errorf("failed to execute creation of index: %w", err)
 	}
@@ -157,7 +157,7 @@ func (p *Postgres) ReIndexWithName(ctx context.Context, indexName string) error 
 		panic("postgres.ApplyVectorIndex not initted")
 	}
 	query := fmt.Sprintf("REINDEX INDEX %s;", indexName)
-	_, err := p.engine.Pool.Exec(ctx, query)
+	_, err := p.Engine.Pool.Exec(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to reindex: %w", err)
 	}
@@ -174,7 +174,7 @@ func (p *Postgres) DropVectorIndex(ctx context.Context, config *Config, indexNam
 		indexName = config.TableName + defaultIndexNameSuffix
 	}
 	query := fmt.Sprintf("DROP INDEX IF EXISTS %s;", indexName)
-	_, err := p.engine.Pool.Exec(ctx, query)
+	_, err := p.Engine.Pool.Exec(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to drop vector index: %w", err)
 	}
@@ -193,7 +193,7 @@ func (p *Postgres) IsValidIndex(ctx context.Context, config *Config, indexName s
 	query := fmt.Sprintf("SELECT tablename, indexname  FROM pg_indexes WHERE tablename = '%s' AND schemaname = '%s' AND indexname = '%s';",
 		config.TableName, config.SchemaName, indexName)
 	var tableName, indexNameFromDB string
-	if err := p.engine.Pool.QueryRow(ctx, query).Scan(&tableName, &indexNameFromDB); err != nil {
+	if err := p.Engine.Pool.QueryRow(ctx, query).Scan(&tableName, &indexNameFromDB); err != nil {
 		return false, fmt.Errorf("failed to check if index exists: %w", err)
 	}
 

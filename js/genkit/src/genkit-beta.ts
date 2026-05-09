@@ -86,7 +86,7 @@ export class GenkitBeta extends Genkit {
   chat<I>(options?: ChatOptions<I>): Chat;
 
   /**
-   * Create a chat session with the provided preabmle.
+   * Create a chat session with the provided preamble.
    *
    * ```ts
    * const triageAgent = ai.definePrompt({
@@ -272,7 +272,7 @@ export class GenkitBeta extends Genkit {
   }
 
   /**
-   * Defines a resource. Resources can then be accessed from a genreate call.
+   * Defines a resource. Resources can then be accessed from a generate call.
    *
    * ```ts
    * ai.defineResource({

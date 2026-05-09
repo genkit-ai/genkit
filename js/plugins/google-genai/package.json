@@ -13,7 +13,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "0.0.2-rc.1",
+  "version": "1.33.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -25,18 +25,20 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/google-genai"
   },
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
-    "google-auth-library": "^9.14.2"
+    "google-auth-library": "^9.14.2",
+    "jsonpath-plus": "^10.3.0"
   },
   "peerDependencies": {
     "genkit": "workspace:^"
   },
   "devDependencies": {
+    "@types/jsonpath-plus": "^5.0.5",
     "@types/node": "^20.11.16",
     "@types/sinon": "^17.0.4",
     "npm-run-all": "^4.1.5",
@@ -44,7 +46,7 @@
     "sinon": "^21.0.0",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^4.9.0"
+    "typescript": "^5.9.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {

@@ -15,6 +15,7 @@
  */
 
 import { z } from '@genkit-ai/core';
+import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import assert from 'node:assert';
 import { beforeEach, describe, it } from 'node:test';
@@ -27,6 +28,8 @@ import type {
   MessageData,
 } from '../../src/model.js';
 import { defineProgrammableModel, runAsync } from '../helpers.js';
+
+initNodeFeatures();
 
 describe('jsonFormat', () => {
   let registry: Registry;

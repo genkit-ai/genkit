@@ -370,8 +370,8 @@ describe('session', () => {
 
     const session = ai.createSession();
     const chat = session.chat(agent);
-    const respose = await chat.send('hi');
-    assert.deepStrictEqual(respose.messages, [
+    const response = await chat.send('hi');
+    assert.deepStrictEqual(response.messages, [
       {
         role: 'system',
         content: [{ text: 'hello from template' }],
@@ -405,8 +405,8 @@ describe('session', () => {
         name: 'Genkit',
       },
     });
-    const respose = await chat.send('hi');
-    assert.deepStrictEqual(respose.messages, [
+    const response = await chat.send('hi');
+    assert.deepStrictEqual(response.messages, [
       {
         role: 'system',
         content: [{ text: 'hello Genkit from template' }],
@@ -481,8 +481,8 @@ describe('session', () => {
       },
     });
     const chat = session.chat(agent);
-    const respose = await chat.send('hi');
-    assert.deepStrictEqual(respose.messages, [
+    const response = await chat.send('hi');
+    assert.deepStrictEqual(response.messages, [
       {
         role: 'system',
         content: [{ text: 'foo=bar' }],

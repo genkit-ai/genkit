@@ -49,7 +49,7 @@ async function testFlowServer() {
     },
     {
       maxRetries: 30,
-      delayMs: 1000,
+      delayMs: 2000,
     }
   );
 

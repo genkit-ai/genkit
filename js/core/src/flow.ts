@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type { z } from 'zod';
-import { ActionFnArg, defineAction, type Action } from './action.js';
+import { ActionFnArg, action, type Action } from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
 
@@ -73,6 +72,20 @@ export type FlowFn<
 ) => Promise<z.infer<O>> | z.infer<O>;
 
 /**
+ * Defines a  flow. This operates on the currently active registry.
+ */
+export function flow<
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodTypeAny = z.ZodTypeAny,
+  S extends z.ZodTypeAny = z.ZodTypeAny,
+>(config: FlowConfig<I, O, S> | string, fn: FlowFn<I, O, S>): Flow<I, O, S> {
+  const resolvedConfig: FlowConfig<I, O, S> =
+    typeof config === 'string' ? { name: config } : config;
+
+  return flowAction(resolvedConfig, fn);
+}
+
+/**
  * Defines a non-streaming flow. This operates on the currently active registry.
  */
 export function defineFlow<
@@ -84,26 +97,22 @@ export function defineFlow<
   config: FlowConfig<I, O, S> | string,
   fn: FlowFn<I, O, S>
 ): Flow<I, O, S> {
-  const resolvedConfig: FlowConfig<I, O, S> =
-    typeof config === 'string' ? { name: config } : config;
+  const f = flow(config, fn);
 
-  return defineFlowAction(registry, resolvedConfig, fn);
+  registry.registerAction('flow', f);
+
+  return f;
 }
 
 /**
  * Registers a flow as an action in the registry.
  */
-function defineFlowAction<
+function flowAction<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
->(
-  registry: Registry,
-  config: FlowConfig<I, O, S>,
-  fn: FlowFn<I, O, S>
-): Flow<I, O, S> {
-  return defineAction(
-    registry,
+>(config: FlowConfig<I, O, S>, fn: FlowFn<I, O, S>): Flow<I, O, S> {
+  return action(
     {
       actionType: 'flow',
       name: config.name,
@@ -116,27 +125,24 @@ function defineFlowAction<
       input,
       { sendChunk, context, trace, abortSignal, streamingRequested }
     ) => {
-      return await legacyRegistryAls.run(registry, () => {
-        const ctx = sendChunk;
-        (ctx as FlowSideChannel<z.infer<S>>).sendChunk = sendChunk;
-        (ctx as FlowSideChannel<z.infer<S>>).context = context;
-        (ctx as FlowSideChannel<z.infer<S>>).trace = trace;
-        (ctx as FlowSideChannel<z.infer<S>>).abortSignal = abortSignal;
-        (ctx as FlowSideChannel<z.infer<S>>).streamingRequested =
-          streamingRequested;
-        return fn(input, ctx as FlowSideChannel<z.infer<S>>);
-      });
+      const ctx = sendChunk;
+      (ctx as FlowSideChannel<z.infer<S>>).sendChunk = sendChunk;
+      (ctx as FlowSideChannel<z.infer<S>>).context = context;
+      (ctx as FlowSideChannel<z.infer<S>>).trace = trace;
+      (ctx as FlowSideChannel<z.infer<S>>).abortSignal = abortSignal;
+      (ctx as FlowSideChannel<z.infer<S>>).streamingRequested =
+        streamingRequested;
+      return fn(input, ctx as FlowSideChannel<z.infer<S>>);
     }
   );
 }
 
-const legacyRegistryAls = new AsyncLocalStorage<Registry>();
-
 export function run<T>(
   name: string,
   func: () => Promise<T>,
-  registry?: Registry
+  _?: Registry
 ): Promise<T>;
+
 export function run<T>(
   name: string,
   input: any,
@@ -151,46 +157,25 @@ export function run<T>(
   name: string,
   funcOrInput: () => Promise<T>,
   fnOrRegistry?: Registry | HasRegistry | ((input?: any) => Promise<T>),
-  maybeRegistry?: Registry | HasRegistry
+  _?: Registry | HasRegistry
 ): Promise<T> {
   let func;
   let input;
-  let registry: Registry | undefined;
+  let hasInput = false;
   if (typeof funcOrInput === 'function') {
     func = funcOrInput;
   } else {
     input = funcOrInput;
+    hasInput = true;
   }
   if (typeof fnOrRegistry === 'function') {
     func = fnOrRegistry;
-  } else if (
-    fnOrRegistry instanceof Registry ||
-    (fnOrRegistry as HasRegistry)?.registry
-  ) {
-    registry = (fnOrRegistry as HasRegistry)?.registry
-      ? (fnOrRegistry as HasRegistry)?.registry
-      : (fnOrRegistry as Registry);
-  }
-  if (maybeRegistry) {
-    registry = (maybeRegistry as HasRegistry).registry
-      ? (maybeRegistry as HasRegistry).registry
-      : (maybeRegistry as Registry);
-  }
-
-  if (!registry) {
-    registry = legacyRegistryAls.getStore();
-  }
-  if (!registry) {
-    throw new Error(
-      'Unable to resolve registry. Consider explicitly passing Genkit instance.'
-    );
   }
 
   if (!func) {
     throw new Error('unable to resolve run function');
   }
   return runInNewSpan(
-    registry,
     {
       metadata: { name },
       labels: {
@@ -199,7 +184,7 @@ export function run<T>(
     },
     async (meta) => {
       meta.input = input;
-      const output = arguments.length === 3 ? await func(input) : await func();
+      const output = hasInput ? await func(input) : await func();
       meta.output = JSON.stringify(output);
       return output;
     }

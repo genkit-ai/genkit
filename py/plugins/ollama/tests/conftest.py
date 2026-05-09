@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import ollama as ollama_api
 import pytest
 
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.models import ModelDefinition
 from genkit.plugins.ollama.plugin_api import Ollama
@@ -50,12 +50,14 @@ def chat_model_plugin(ollama_model: str) -> Ollama:
 
 @pytest.fixture
 def genkit_veneer_chat_model(
+    mock_ollama_api_async_client: MagicMock,
     ollama_model: str,
     chat_model_plugin: Ollama,
 ) -> Genkit:
     """Genkit veneer chat model.
 
     Args:
+        mock_ollama_api_async_client: Mock for ollama async client (ensures it's set up first).
         ollama_model: Ollama model to use for testing.
         chat_model_plugin: Chat model plugin parameters.
 
@@ -90,12 +92,14 @@ def generate_model_plugin(ollama_model: str) -> Ollama:
 
 @pytest.fixture
 def genkit_veneer_generate_model(
+    mock_ollama_api_async_client: MagicMock,
     ollama_model: str,
     generate_model_plugin: Ollama,
 ) -> Genkit:
     """Genkit veneer generate model.
 
     Args:
+        mock_ollama_api_async_client: Mock for ollama async client (ensures it's set up first).
         ollama_model: Ollama model to use for testing.
         generate_model_plugin: Generate model plugin parameters.
 
@@ -119,11 +123,17 @@ def mock_ollama_api_client() -> Generator[MagicMock | AsyncMock, None, None]:
 def mock_ollama_api_async_client() -> Generator[MagicMock | AsyncMock, None, None]:
     """Mock the ollama API async client."""
     with mock.patch.object(ollama_api, 'AsyncClient') as mock_ollama_async_client:
+        # Create an AsyncMock instance with async methods
+        client_instance = AsyncMock()
+        client_instance.chat = AsyncMock()
+        client_instance.generate = AsyncMock()
+        client_instance.embed = AsyncMock()
+        mock_ollama_async_client.return_value = client_instance
         yield mock_ollama_async_client
 
 
 @pytest.fixture
 @patch('ollama.AsyncClient')
-def ollama_plugin_instance(ollama_async_client):
+def ollama_plugin_instance(ollama_async_client: MagicMock) -> Ollama:
     """Common instance of ollama plugin."""
     return Ollama()

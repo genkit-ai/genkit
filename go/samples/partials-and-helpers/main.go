@@ -34,24 +34,17 @@ func main() {
 		"name":     "John Doe",
 	})
 
-	g, err := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+	g := genkit.Init(ctx,
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	if err = genkit.DefinePartial(g, "header", "Welcome {{@name}}!"); err != nil {
-		log.Fatal(err)
-	}
-	if err = genkit.DefineHelper(g, "uppercase", func(s string) string {
+	genkit.DefinePartial(g, "header", "Welcome {{@name}}!")
+	genkit.DefineHelper(g, "uppercase", func(s string) string {
 		return strings.ToUpper(s)
-	}); err != nil {
-		log.Fatal(err)
-	}
+	})
 
-	p, err := genkit.DefinePrompt(g, "test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
+	p := genkit.DefinePrompt(g, "test", ai.WithPrompt(`{{> header}} {{uppercase @greeting}}`))
 
 	result, err := p.Execute(ctx)
 	if err != nil {

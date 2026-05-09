@@ -35,13 +35,7 @@ import {
   type VertexAI,
 } from '@google-cloud/vertexai';
 import { ApiClient } from '@google-cloud/vertexai/build/src/resources/index.js';
-import {
-  GENKIT_CLIENT_HEADER,
-  GenkitError,
-  z,
-  type Genkit,
-  type JSONSchema,
-} from 'genkit';
+import { GenkitError, z, type Genkit, type JSONSchema } from 'genkit';
 import {
   GenerationCommonConfigDescriptions,
   GenerationCommonConfigSchema,
@@ -64,6 +58,7 @@ import {
 } from 'genkit/model/middleware';
 import { runInNewSpan } from 'genkit/tracing';
 import { GoogleAuth } from 'google-auth-library';
+import { getGenkitClientHeader } from './common/index.js';
 import type { PluginOptions } from './common/types.js';
 import { handleCacheIfNeeded } from './context-caching/index.js';
 import { extractCacheConfig } from './context-caching/utils.js';
@@ -75,6 +70,9 @@ type ExtendedUsageMetadata = UsageMetadata & {
   thoughtsTokenCount?: number;
 };
 
+/**
+ * @deprecated
+ */
 export const SafetySettingsSchema = z.object({
   category: z.enum([
     /** The harm category is unspecified. */
@@ -136,6 +134,7 @@ const GoogleSearchRetrievalSchema = z.object({
 /**
  * Zod schema of Gemini model options.
  * Please refer to: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#generationconfig, for further information.
+ * @deprecated
  */
 export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   temperature: z
@@ -261,10 +260,34 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
         'With NONE, the model is prohibited from making function calls.'
     )
     .optional(),
+  thinkingConfig: z
+    .object({
+      includeThoughts: z
+        .boolean()
+        .describe(
+          'Indicates whether to include thoughts in the response.' +
+            'If true, thoughts are returned only when available.'
+        )
+        .optional(),
+      thinkingBudget: z
+        .number()
+        .min(0)
+        .max(24576)
+        .describe(
+          'The thinking budget parameter gives the model guidance on the ' +
+            'number of thinking tokens it can use when generating a response. ' +
+            'A greater number of tokens is typically associated with more detailed ' +
+            'thinking, which is needed for solving more complex tasks. ' +
+            'Setting the thinking budget to 0 disables thinking.'
+        )
+        .optional(),
+    })
+    .optional(),
 }).passthrough();
 
 /**
  * Known model names, to allow code completion for convenience. Allows other model names.
+ * @deprecated
  */
 export type GeminiVersionString =
   | keyof typeof SUPPORTED_GEMINI_MODELS
@@ -279,6 +302,7 @@ export type GeminiVersionString =
  *   model: gemini('gemini-1.5-flash')
  * });
  * ```
+ * @deprecated
  */
 export function gemini(
   version: GeminiVersionString,
@@ -357,9 +381,13 @@ function longestMatchingPrefix(version: string, potentialMatches: string[]) {
  *     }
  *   }
  * ```
+ * @deprecated
  */
 export type GeminiConfig = z.infer<typeof GeminiConfigSchema>;
 
+/**
+ * @deprecated
+ */
 export const gemini10Pro = modelRef({
   name: 'vertexai/gemini-1.0-pro',
   info: {
@@ -377,6 +405,9 @@ export const gemini10Pro = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini15Pro = modelRef({
   name: 'vertexai/gemini-1.5-pro',
   info: {
@@ -394,6 +425,9 @@ export const gemini15Pro = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini15Flash = modelRef({
   name: 'vertexai/gemini-1.5-flash',
   info: {
@@ -411,6 +445,9 @@ export const gemini15Flash = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini20Flash001 = modelRef({
   name: 'vertexai/gemini-2.0-flash-001',
   info: {
@@ -428,6 +465,9 @@ export const gemini20Flash001 = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini20Flash = modelRef({
   name: 'vertexai/gemini-2.0-flash',
   info: {
@@ -445,6 +485,9 @@ export const gemini20Flash = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini20FlashLite = modelRef({
   name: 'vertexai/gemini-2.0-flash-lite',
   info: {
@@ -462,6 +505,9 @@ export const gemini20FlashLite = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini20FlashLitePreview0205 = modelRef({
   name: 'vertexai/gemini-2.0-flash-lite-preview-02-05',
   info: {
@@ -479,6 +525,9 @@ export const gemini20FlashLitePreview0205 = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini20ProExp0205 = modelRef({
   name: 'vertexai/gemini-2.0-pro-exp-02-05',
   info: {
@@ -496,6 +545,9 @@ export const gemini20ProExp0205 = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini25FlashPreview0417 = modelRef({
   name: 'vertexai/gemini-2.5-flash-preview-04-17',
   info: {
@@ -513,6 +565,9 @@ export const gemini25FlashPreview0417 = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini25ProExp0325 = modelRef({
   name: 'vertexai/gemini-2.5-pro-exp-03-25',
   info: {
@@ -530,6 +585,9 @@ export const gemini25ProExp0325 = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated
+ */
 export const gemini25ProPreview0325 = modelRef({
   name: 'vertexai/gemini-2.5-pro-preview-03-25',
   info: {
@@ -547,6 +605,9 @@ export const gemini25ProPreview0325 = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated After importing from the new plugin, use vertexAI.model('gemini-2.5-pro')
+ */
 export const gemini25Pro = modelRef({
   name: 'vertexai/gemini-2.5-pro',
   info: {
@@ -563,6 +624,9 @@ export const gemini25Pro = modelRef({
   },
   configSchema: GeminiConfigSchema,
 });
+/**
+ * @deprecated After importing from the new plugin, use vertexAI.model('gemini-2.5-flash')
+ */
 export const gemini25Flash = modelRef({
   name: 'vertexai/gemini-2.5-flash',
   info: {
@@ -580,6 +644,9 @@ export const gemini25Flash = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/**
+ * @deprecated After importing from the new plugin, use vertexAI.model('gemini-2.5-flash-lite')
+ */
 export const gemini25FlashLite = modelRef({
   name: 'vertexai/gemini-2.5-flash-lite',
   info: {
@@ -597,6 +664,7 @@ export const gemini25FlashLite = modelRef({
   configSchema: GeminiConfigSchema,
 });
 
+/** @deprecated */
 export const GENERIC_GEMINI_MODEL = modelRef({
   name: 'vertexai/gemini',
   configSchema: GeminiConfigSchema,
@@ -616,6 +684,7 @@ const SUPPORTED_V1_MODELS = {
   'gemini-1.0-pro': gemini10Pro,
 };
 
+/** @deprecated */
 export const SUPPORTED_V15_MODELS = {
   'gemini-1.5-pro': gemini15Pro,
   'gemini-1.5-flash': gemini15Flash,
@@ -632,6 +701,7 @@ export const SUPPORTED_V15_MODELS = {
   'gemini-2.5-flash-lite': gemini25FlashLite,
 };
 
+/** @deprecated */
 export const SUPPORTED_GEMINI_MODELS = {
   ...SUPPORTED_V15_MODELS,
 } as const;
@@ -662,7 +732,10 @@ function toGeminiRole(
   }
 }
 
-/** @hidden */
+/**
+ * @hidden
+ * @deprecated
+ */
 export const toGeminiTool = (
   tool: z.infer<typeof ToolDefinitionSchema>
 ): FunctionDeclaration => {
@@ -732,6 +805,7 @@ const toGeminiToolResponsePart = (part: Part): GeminiPart => {
   };
 };
 
+/** @deprecated */
 export function toGeminiSystemInstruction(message: MessageData): Content {
   return {
     role: 'user',
@@ -739,6 +813,7 @@ export function toGeminiSystemInstruction(message: MessageData): Content {
   };
 }
 
+/** @deprecated */
 export function toGeminiMessage(
   message: MessageData,
   modelInfo?: ModelInfo
@@ -881,6 +956,8 @@ function fromGeminiPart(
     'Part type is unsupported/corrupted. Either data is missing or type cannot be inferred from type.'
   );
 }
+
+/** @deprecated */
 export function fromGeminiCandidate(
   candidate: GenerateContentCandidate,
   jsonMode: boolean
@@ -979,6 +1056,7 @@ function convertSchemaProperty(property) {
   }
 }
 
+/** @deprecated */
 export function cleanSchema(schema: JSONSchema): JSONSchema {
   const out = structuredClone(schema);
   for (const key in out) {
@@ -1001,6 +1079,7 @@ export function cleanSchema(schema: JSONSchema): JSONSchema {
 
 /**
  * Define a Vertex AI Gemini model.
+ * @deprecated
  */
 export function defineGeminiKnownModel(
   ai: Genkit,
@@ -1029,6 +1108,7 @@ export function defineGeminiKnownModel(
 
 /**
  * Define a Vertex AI Gemini model.
+ * @deprecated
  */
 export function defineGeminiModel({
   ai,
@@ -1228,7 +1308,7 @@ export function defineGeminiModel({
             model: modelVersion,
           },
           {
-            apiClient: GENKIT_CLIENT_HEADER,
+            apiClient: getGenkitClientHeader(),
           }
         );
       } else {
@@ -1237,7 +1317,7 @@ export function defineGeminiModel({
             model: modelVersion,
           },
           {
-            apiClient: GENKIT_CLIENT_HEADER,
+            apiClient: getGenkitClientHeader(),
           }
         );
       }

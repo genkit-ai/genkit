@@ -16,24 +16,10 @@
 
 """Smoke tests for package structure."""
 
-from genkit.core import package_name as core_package_name
-from genkit.plugins.firebase import package_name as firebase_package_name
 from genkit.plugins.google_cloud import package_name as google_cloud_package_name
 from genkit.plugins.google_genai import package_name as google_genai_package_name
 from genkit.plugins.ollama import package_name as ollama_package_name
 from genkit.plugins.vertex_ai import package_name as vertex_ai_package_name
-
-
-def square(n: int | float) -> int | float:
-    """Calculates the square of a number.
-
-    Args:
-        n: The number to square.
-
-    Returns:
-        The square of n.
-    """
-    return n * n
 
 
 def test_package_names() -> None:
@@ -42,16 +28,7 @@ def test_package_names() -> None:
     This test verifies that the package imports work correctly from the
     end-user perspective.
     """
-    assert core_package_name() == 'genkit.core'
-    assert firebase_package_name() == 'genkit.plugins.firebase'
     assert google_cloud_package_name() == 'genkit.plugins.google_cloud'
     assert google_genai_package_name() == 'genkit.plugins.google_genai'
     assert ollama_package_name() == 'genkit.plugins.ollama'
     assert vertex_ai_package_name() == 'genkit.plugins.vertex_ai'
-
-
-def test_square() -> None:
-    """Tests whether the square function works correctly."""
-    assert square(2) == 4
-    assert square(3) == 9
-    assert square(4) == 16

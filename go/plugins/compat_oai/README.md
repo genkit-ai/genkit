@@ -1,6 +1,6 @@
 # OpenAI-Compatible Plugin Package
 
-This directory contains a package for building plugins that are compatible with the OpenAI API specification, along with plugins built on top of this package. 
+This directory contains a package for building plugins that are compatible with the OpenAI API specification, along with plugins built on top of this package.
 
 ## Package Overview
 

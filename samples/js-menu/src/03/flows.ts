@@ -15,7 +15,7 @@
  */
 
 import type { MessageData } from '@genkit-ai/ai/model';
-import { gemini15Flash } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { ai } from '../genkit.js';
 import type { MenuItem } from '../types';
 import {
@@ -77,7 +77,7 @@ export const s03_multiTurnChatFlow = ai.defineFlow(
 
     // Generate the response
     const llmResponse = await ai.generate({
-      model: gemini15Flash,
+      model: googleAI.model('gemini-flash-latest'),
       messages: history,
       prompt: {
         text: input.question,

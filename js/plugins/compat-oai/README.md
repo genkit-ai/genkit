@@ -1,9 +1,15 @@
 # OpenAI Compatible API plugin for Genkit
 
-**`@genkit-ai/compat-oai`** is a community plugin for using OpenAI APIs with
-[Firebase Genkit](https://github.com/firebase/genkit).
+**`@genkit-ai/compat-oai`** is a plugin for using OpenAI Compatible APIs with [Genkit](https://genkit.dev).
 
 This Genkit plugin allows to use OpenAI models through their official APIs.
+
+Official OpenAI-compatible provider documentation:
+
+- [OpenAI](https://genkit.dev/docs/integrations/openai/)
+- [xAI (Grok)](https://genkit.dev/docs/integrations/xai/)
+- [DeepSeek](https://genkit.dev/docs/integrations/deepseek/)
+- [Other compatible APIs](https://genkit.dev/docs/integrations/openai-compatible/)
 
 ## Supported models
 
@@ -186,15 +192,15 @@ export const customModelFlow = ai.defineFlow(
 
 ## Contributing
 
-Want to contribute to the project? That's awesome! Head over to our [Contribution Guidelines](https://github.com/firebase/genkit/blob/main/CONTRIBUTING.md).
+Want to contribute to the project? That's awesome! Head over to our [Contribution Guidelines](https://github.com/genkit-ai/genkit/blob/main/CONTRIBUTING.md).
 
-## Need support?
+## Need help?
 
-Reach out by opening a discussion on [Github Discussions](https://github.com/firebase/genkit/discussions).
-
+ - [Genkit Discord](https://genkit.dev/discord)
+ - [Github Issues](https://github.com/genkit-ai/genkit/issues)
 
 ## License
 
-This project is licensed under the [Apache 2.0 License](https://github.com/firebase/genkit/blob/main/LICENSE).
+This project is licensed under the [Apache 2.0 License](https://github.com/genkit-ai/genkit/blob/main/LICENSE).
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202%2E0-lightgrey.svg)](https://github.com/firebase/genkit/blob/main/LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202%2E0-lightgrey.svg)](https://github.com/genkit-ai/genkit/blob/main/LICENSE)

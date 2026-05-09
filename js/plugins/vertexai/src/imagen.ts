@@ -31,6 +31,7 @@ import { predictModel, type PredictClient } from './predict.js';
 
 /**
  * See https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api.
+ * @deprecated
  */
 export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
   // TODO: Remove common config schema extension since Imagen models don't support
@@ -162,6 +163,7 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
 }).passthrough();
 
+/** @deprecated */
 export const imagen2 = modelRef({
   name: 'vertexai/imagen2',
   info: {
@@ -179,6 +181,7 @@ export const imagen2 = modelRef({
   configSchema: ImagenConfigSchema,
 });
 
+/** @deprecated */
 export const imagen3 = modelRef({
   name: 'vertexai/imagen3',
   info: {
@@ -196,6 +199,7 @@ export const imagen3 = modelRef({
   configSchema: ImagenConfigSchema,
 });
 
+/** @deprecated */
 export const imagen3Fast = modelRef({
   name: 'vertexai/imagen3-fast',
   info: {
@@ -213,6 +217,7 @@ export const imagen3Fast = modelRef({
   configSchema: ImagenConfigSchema,
 });
 
+/** @deprecated */
 export const ACTUAL_IMAGEN_MODELS = {
   'imagen-3.0-generate-001': modelRef({
     name: 'vertexai/imagen-3.0-generate-001',
@@ -244,6 +249,7 @@ export const ACTUAL_IMAGEN_MODELS = {
   }),
 } as const;
 
+/** @deprecated */
 export const SUPPORTED_IMAGEN_MODELS = {
   ...ACTUAL_IMAGEN_MODELS,
   // These are old, inconsistent model naming. Only here for backwards compatibility.
@@ -313,6 +319,7 @@ interface ImagenInstance {
   mask?: { image?: { bytesBase64Encoded: string } };
 }
 
+/** @deprecated */
 export const GENERIC_IMAGEN_INFO = {
   label: `Vertex AI - Generic`,
   supports: {
@@ -324,6 +331,7 @@ export const GENERIC_IMAGEN_INFO = {
   },
 } as ModelInfo;
 
+/** @deprecated */
 export function defineImagenModel(
   ai: Genkit,
   name: string,

@@ -14,20 +14,14 @@
  * limitations under the License.
  */
 
-import { GenkitError, defineAction, z, type Action } from '@genkit-ai/core';
+import { GenkitError, action, z, type Action } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import { Document, DocumentDataSchema, type DocumentData } from './document.js';
 import type { EmbedderInfo } from './embedder.js';
 
-export {
-  Document,
-  DocumentDataSchema,
-  type DocumentData,
-  type MediaPart,
-  type Part,
-  type TextPart,
-} from './document.js';
+export { Document, DocumentDataSchema, type DocumentData } from './document.js';
+export { type MediaPart, type Part, type TextPart } from './parts.js';
 
 /**
  * Retriever implementation function signature.
@@ -130,9 +124,24 @@ export function defineRetriever<
     info?: RetrieverInfo;
   },
   runner: RetrieverFn<OptionsType>
-) {
-  const retriever = defineAction(
-    registry,
+): RetrieverAction<OptionsType> {
+  const r = retriever(options, runner);
+  registry.registerAction('retriever', r);
+  return r;
+}
+
+/**
+ *  Creates a retriever action for the provided {@link RetrieverFn} implementation.
+ */
+export function retriever<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
+  options: {
+    name: string;
+    configSchema?: OptionsType;
+    info?: RetrieverInfo;
+  },
+  runner: RetrieverFn<OptionsType>
+): RetrieverAction<OptionsType> {
+  const retriever = action(
     {
       actionType: 'retriever',
       name: options.name,
@@ -175,9 +184,24 @@ export function defineIndexer<IndexerOptions extends z.ZodTypeAny>(
     configSchema?: IndexerOptions;
   },
   runner: IndexerFn<IndexerOptions>
-) {
-  const indexer = defineAction(
-    registry,
+): IndexerAction<IndexerOptions> {
+  const r = indexer(options, runner);
+  registry.registerAction('indexer', r);
+  return r;
+}
+
+/**
+ *  Creates an indexer action for the provided {@link IndexerFn} implementation.
+ */
+export function indexer<IndexerOptions extends z.ZodTypeAny>(
+  options: {
+    name: string;
+    embedderInfo?: EmbedderInfo;
+    configSchema?: IndexerOptions;
+  },
+  runner: IndexerFn<IndexerOptions>
+): IndexerAction<IndexerOptions> {
+  const indexer = action(
     {
       actionType: 'indexer',
       name: options.name,

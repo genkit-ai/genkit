@@ -17,16 +17,18 @@
 import type {
   GenerateRequest,
   GenerateResponseData,
-  Genkit,
   ModelReference,
 } from 'genkit';
 import { Message, modelRef, z } from 'genkit';
 import { ModelAction, ModelInfo } from 'genkit/model';
+import { model } from 'genkit/plugin';
 import OpenAI from 'openai';
 import type {
   ImageGenerateParams,
   ImagesResponse,
 } from 'openai/resources/images.mjs';
+import { PluginOptions } from './index.js';
+import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 export type ImageRequestBuilder = (
   req: GenerateRequest,
@@ -49,7 +51,7 @@ export const ImageGenerationCommonConfigSchema = z.object({
   user: z.string().optional(),
   n: z.number().int().min(1).max(10).default(1),
   quality: z.enum(['standard', 'hd']).optional(),
-  response_format: z.enum(['b64_json', 'url']).optional(),
+  response_format: z.enum(['b64_json', 'url']).default('b64_json').optional(),
 });
 
 function toImageGenerateParams(
@@ -120,25 +122,38 @@ function toGenerateResponse(result: ImagesResponse): GenerateResponseData {
 export function defineCompatOpenAIImageModel<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 >(params: {
-  ai: Genkit;
   name: string;
   client: OpenAI;
+  pluginOptions?: PluginOptions;
   modelRef?: ModelReference<CustomOptions>;
   requestBuilder?: ImageRequestBuilder;
 }): ModelAction<CustomOptions> {
-  const { ai, name, client, modelRef, requestBuilder } = params;
-  const model = name.split('/').pop();
+  const {
+    name,
+    client: defaultClient,
+    pluginOptions,
+    modelRef,
+    requestBuilder,
+  } = params;
 
-  return ai.defineModel(
+  const modelName = toModelName(name, pluginOptions?.name);
+  const actionName =
+    modelRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
+
+  return model(
     {
-      name,
+      name: actionName,
       ...modelRef?.info,
-      apiVersion: 'v2',
       configSchema: modelRef?.configSchema,
     },
     async (request, { abortSignal }) => {
+      const client = maybeCreateRequestScopedOpenAIClient(
+        pluginOptions,
+        request,
+        defaultClient
+      );
       const result = await client.images.generate(
-        toImageGenerateParams(model!, request, requestBuilder),
+        toImageGenerateParams(modelName, request, requestBuilder),
         { signal: abortSignal }
       );
       return toGenerateResponse(result);
@@ -155,17 +170,21 @@ export function compatOaiImageModelRef<
   info?: ModelInfo;
   configSchema?: CustomOptions;
   config?: any;
+  namespace?: string;
 }) {
   const {
     name,
     info = IMAGE_GENERATION_MODEL_INFO,
     configSchema,
     config = undefined,
+    namespace,
   } = params;
   return modelRef({
     name,
-    configSchema: configSchema || (ImageGenerationCommonConfigSchema as any),
+    configSchema:
+      configSchema || (ImageGenerationCommonConfigSchema as z.AnyZodObject),
     info,
     config,
+    namespace,
   });
 }

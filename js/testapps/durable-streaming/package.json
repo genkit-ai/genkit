@@ -1,0 +1,29 @@
+{
+  "name": "durable-streaming",
+  "version": "1.0.0",
+  "description": "",
+  "main": "lib/index.js",
+  "scripts": {
+    "start": "node lib/index.js",
+    "compile": "tsc",
+    "build": "pnpm build:clean && pnpm compile",
+    "build:clean": "rimraf ./lib",
+    "build:watch": "tsc --watch",
+    "build-and-run": "pnpm build && node lib/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "genkit": "workspace:^",
+    "@genkit-ai/express": "workspace:^",
+    "@genkit-ai/firebase": "workspace:^",
+    "firebase-admin": "^13.5.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.3",
+    "@types/express": "^4"
+  }
+}

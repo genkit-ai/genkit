@@ -1,0 +1,13 @@
+---
+model: googleai/gemini-2.5-flash
+config:
+  thinkingConfig:
+    thinkingBudget: 0
+input:
+  schema:
+    topic?: string
+  default:
+    topic: airplane food
+---
+Share a long joke about {{topic}}.
+

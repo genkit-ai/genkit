@@ -19,7 +19,7 @@
 //
 // Example usage:
 //
-//	$ go run internal/cmd/weave go-types.md > README.md
+//	$ go run internal/cmd/weave go-api.md > README.md
 //
 // The weave command copies lines of the input file to standard output, with two
 // exceptions:

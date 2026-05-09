@@ -4,7 +4,7 @@
   "input": "",
   "result": "x",
   "trace": {
-    "displayName": "dev-run-action-wrapper",
+    "displayName": "run",
     "spans": {
       "83947eebc7a9527c": {
         "spanId": "83947eebc7a9527c",
@@ -13,7 +13,7 @@
         "attributes": {
           "genkit:type": "flowStep",
           "genkit:name": "r",
-          "genkit:path": "/dev-run-action-wrapper/run/run/r",
+          "genkit:path": "/run/run/r",
           "genkit:metadata:flow:stepType": "run",
           "genkit:metadata:flow:stepName": "r",
           "genkit:metadata:flow:resolvedStepName": "r",
@@ -38,7 +38,7 @@
           "genkit:type": "flow",
           "genkit:name": "run",
           "genkit:isRoot": true,
-          "genkit:path": "/dev-run-action-wrapper/run/run",
+          "genkit:path": "/run/run",
           "genkit:metadata:flow:execution": "0",
           "genkit:metadata:flow:name": "run",
           "genkit:metadata:flow:id": "$ANYTHING",
@@ -62,12 +62,11 @@
       },
       "8dcc43cef5bc2c4a": {
         "spanId": "8dcc43cef5bc2c4a",
-        "parentSpanId": "07a8639db8012dff",
         "startTime": 1712165004979,
         "attributes": {
           "genkit:type": "action",
           "genkit:name": "run",
-          "genkit:path": "/dev-run-action-wrapper/run",
+          "genkit:path": "/run",
           "genkit:input": "\"\"",
           "genkit:metadata:flow:wrapperAction": "true",
           "genkit:output": "$ANYTHING",
@@ -85,29 +84,6 @@
         },
         "status": {
           "code": 0
-        }
-      },
-      "07a8639db8012dff": {
-        "spanId": "07a8639db8012dff",
-        "startTime": 1712165004916,
-        "attributes": {
-          "genkit:name": "dev-run-action-wrapper",
-          "genkit:isRoot": true,
-          "genkit:path": "/dev-run-action-wrapper",
-          "genkit:metadata:genkit-dev-internal": "true",
-          "genkit:state": "success"
-        },
-        "displayName": "dev-run-action-wrapper",
-        "spanKind": "INTERNAL",
-        "sameProcessAsParentSpan": {
-          "value": true
-        },
-        "status": {
-          "code": 0
-        },
-        "instrumentationLibrary": {
-          "name": "genkit-tracer",
-          "version": "v1"
         }
       }
     }

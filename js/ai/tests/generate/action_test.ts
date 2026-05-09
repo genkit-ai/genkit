@@ -15,6 +15,7 @@
  */
 
 import { stripUndefinedProps, z } from '@genkit-ai/core';
+import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { readFileSync } from 'fs';
@@ -24,14 +25,17 @@ import {
   defineGenerateAction,
   type GenerateAction,
 } from '../../src/generate/action.js';
+import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   GenerateActionOptionsSchema,
   GenerateResponseChunkSchema,
   GenerateResponseSchema,
   type GenerateResponseChunkData,
 } from '../../src/model.js';
-import { defineTool } from '../../src/tool.js';
+import { defineTool, tool } from '../../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from '../helpers.js';
+
+initNodeFeatures();
 
 const SpecSuiteSchema = z
   .object({
@@ -108,5 +112,54 @@ describe('spec', () => {
         );
       }
     });
+  });
+});
+
+describe('generateAction middleware injection', () => {
+  let registry: Registry;
+  let pm: ProgrammableModel;
+
+  beforeEach(() => {
+    registry = new Registry();
+    defineGenerateAction(registry);
+    pm = defineProgrammableModel(registry);
+  });
+
+  it('supports injecting tools through middleware definitions directly via action route', async () => {
+    const injectedTool = tool(
+      {
+        name: 'injectedTool',
+        description: 'desc',
+        inputSchema: z.object({ arg: z.string() }),
+      },
+      async (input) => `Result: ${input.arg}`
+    );
+
+    let toolsSeen = false;
+    pm.handleResponse = async (req) => {
+      if (req.tools?.find((t) => t.name === 'injectedTool')) {
+        toolsSeen = true;
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        finishReason: 'stop',
+      } as any;
+    };
+
+    const dummyMw = generateMiddleware({ name: 'dummyMw' }, () => ({
+      tools: [injectedTool],
+    }));
+
+    const action = await registry.lookupAction('/util/generate');
+    await action({
+      model: 'programmableModel',
+      messages: [{ role: 'user', content: [{ text: 'test' }] }],
+      use: [dummyMw()],
+    } as any);
+
+    assert.ok(
+      toolsSeen,
+      'Tool was not successfully passed to the model from action generated route.'
+    );
   });
 });

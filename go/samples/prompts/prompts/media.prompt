@@ -1,5 +1,5 @@
 ---
-model: vertexai/gemini-2.5-flash-preview-04-17
+model: googleai/gemini-2.5-flash
 config:
   temperature: 0.1
 input:

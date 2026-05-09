@@ -42,11 +42,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	g, err := genkit.Init(ctx)
-	if err != nil {
-		logger.FromContext(ctx).Error("Failed to initialize Genkit", "error", err)
-		os.Exit(1)
-	}
+	g := genkit.Init(ctx)
 
 	// Tool 1: Encode/decode text
 	genkit.DefineTool(g, "text_encode", "Encode or decode text using various methods",
@@ -152,7 +148,7 @@ func main() {
 	logger.FromContext(ctx).Info("Starting MCP server", "name", "text-utilities", "tools", server.ListRegisteredTools())
 	logger.FromContext(ctx).Info("Ready! Run: go run client.go")
 
-	if err := server.ServeStdio(ctx); err != nil && err != context.Canceled {
+	if err := server.ServeStdio(); err != nil && err != context.Canceled {
 		logger.FromContext(ctx).Error("MCP server error", "error", err)
 		os.Exit(1)
 	}

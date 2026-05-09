@@ -26,10 +26,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
-	if err != nil {
-		log.Fatal(err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
 
 	genkit.DefineFlow(g, "image-generation", func(ctx context.Context, input string) ([]string, error) {
 		r, err := genkit.Generate(ctx, g,

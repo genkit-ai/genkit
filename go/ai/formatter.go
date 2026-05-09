@@ -15,25 +15,34 @@
 package ai
 
 import (
-	"fmt"
-
-	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 )
 
 const (
-	OutputFormatText  string = "text"
-	OutputFormatJSON  string = "json"
+	// OutputFormatText is the default format.
+	OutputFormatText string = "text"
+	// OutputFormatJSON is the legacy format for JSON content.
+	// For streaming, each chunk represents the full object received up to that point.
+	OutputFormatJSON string = "json"
+	// OutputFormatJSONL is the format for JSONL content.
+	// For streaming, each chunk represents new items since the last chunk.
 	OutputFormatJSONL string = "jsonl"
+	// OutputFormatMedia is the format for media content.
 	OutputFormatMedia string = "media"
+	// OutputFormatArray is the format for array content.
+	// For streaming, each chunk represents new items since the last chunk.
 	OutputFormatArray string = "array"
-	OutputFormatEnum  string = "enum"
+	// OutputFormatEnum is the format for enum content.
+	// The value must be a string.
+	OutputFormatEnum string = "enum"
 )
 
 // Default formats get automatically registered on registry init
 var DEFAULT_FORMATS = []Formatter{
+	textFormatter{},
 	jsonFormatter{},
 	jsonlFormatter{},
-	textFormatter{},
 	arrayFormatter{},
 	enumFormatter{},
 }
@@ -46,9 +55,12 @@ type Formatter interface {
 	Handler(schema map[string]any) (FormatHandler, error)
 }
 
-// FormatHandler represents the handler part of the Formatter interface.
+// FormatHandler is a handler for formatting messages.
+// A new instance is created via [Formatter.Handler] for each request.
 type FormatHandler interface {
 	// ParseMessage parses the message and returns a new formatted message.
+	//
+	// Legacy: New format handlers should implement this as a no-op passthrough and implement [StreamingFormatHandler] instead.
 	ParseMessage(message *Message) (*Message, error)
 	// Instructions returns the formatter instructions to embed in the prompt.
 	Instructions() string
@@ -56,42 +68,44 @@ type FormatHandler interface {
 	Config() ModelOutputConfig
 }
 
+// StreamingFormatHandler is a handler for formatting messages that supports streaming.
+// This interface must be implemented to be able to use [ModelResponse.Output] and [ModelResponseChunk.Output].
+type StreamingFormatHandler interface {
+	// ParseOutput parses the final output and returns parsed output.
+	ParseOutput(message *Message) (any, error)
+	// ParseChunk processes a streaming chunk and returns parsed output.
+	// The handler maintains its own internal state. When the chunk's index changes, the state is reset for the new turn.
+	// Returns parsed output, or nil if nothing can be parsed yet.
+	ParseChunk(chunk *ModelResponseChunk) (any, error)
+}
+
 // ConfigureFormats registers default formats in the registry
-func ConfigureFormats(reg *registry.Registry) {
+func ConfigureFormats(reg api.Registry) {
 	for _, format := range DEFAULT_FORMATS {
 		DefineFormat(reg, "/format/"+format.Name(), format)
 	}
 }
 
 // DefineFormat defines and registers a new [Formatter].
-func DefineFormat(r *registry.Registry, name string, formatter Formatter) {
+func DefineFormat(r api.Registry, name string, formatter Formatter) {
 	r.RegisterValue(name, formatter)
 }
 
 // resolveFormat returns a [Formatter], either a default one or one from the registry.
-func resolveFormat(reg *registry.Registry, schema map[string]any, format string) (Formatter, error) {
+func resolveFormat(reg api.Registry, schema map[string]any, format string) (Formatter, error) {
 	var formatter any
-
-	// If schema is set but no explicit format is set we default to json.
-	if schema != nil && format == "" {
-		formatter = reg.LookupValue("/format/" + OutputFormatJSON)
-	}
-
-	// If format is not set we default to text
 	if format == "" {
-		formatter = reg.LookupValue("/format/" + OutputFormatText)
+		if schema != nil {
+			format = OutputFormatJSON
+		} else {
+			format = OutputFormatText
+		}
 	}
-
-	// Lookup format in registry
-	if format != "" {
-		formatter = reg.LookupValue("/format/" + format)
-	}
-
+	formatter = reg.LookupValue("/format/" + format)
 	if f, ok := formatter.(Formatter); ok {
 		return f, nil
 	}
-
-	return nil, fmt.Errorf("output format %q is invalid", format)
+	return nil, core.NewError(core.INVALID_ARGUMENT, "output format %q is invalid", format)
 }
 
 // injectInstructions looks through the messages and injects formatting directives

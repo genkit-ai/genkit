@@ -34,7 +34,7 @@ func setup05(g *genkit.Genkit, model ai.Model) error {
 	text := `Extract _all_ of the text, in order, from the following image of a restaurant menu.
 
 {{media url=imageUrl}}`
-	readMenuPrompt, err := genkit.DefinePrompt(
+	readMenuPrompt := genkit.DefinePrompt(
 		g, "s05_readMenu",
 		ai.WithPrompt(text),
 		ai.WithModel(model),
@@ -44,11 +44,8 @@ func setup05(g *genkit.Genkit, model ai.Model) error {
 			Temperature: genai.Ptr[float32](0.1),
 		}),
 	)
-	if err != nil {
-		return err
-	}
 
-	textMenuPrompt, err := genkit.DefinePrompt(
+	textMenuPrompt := genkit.DefinePrompt(
 		g, "s05_textMenu",
 		ai.WithPrompt(`
 You are acting as Walt, a helpful AI assistant here at the restaurant.
@@ -68,9 +65,6 @@ Answer this customer's question:
 			Temperature: genai.Ptr[float32](0.3),
 		}),
 	)
-	if err != nil {
-		return err
-	}
 
 	// Define a flow that takes an image, passes it to Gemini Vision Pro,
 	// and extracts all of the text from the photo of the menu.

@@ -24,8 +24,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/fakeembedder"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -46,46 +44,6 @@ var testRegion = flag.String("test-postgres-region", "", "postgres region for te
 var testInstance = flag.String("test-postgres-instance", "", "postgres instance for tests")
 var testIAMEmail = flag.String("test-postgres-iam-email", "", "postgres instance for tests")
 
-func TestInit_NoConnectionPool(t *testing.T) {
-	ctx := context.Background()
-	cfg := engineConfig{}
-	engine := &PostgresEngine{Pool: cfg.connPool}
-	gcsp := &Postgres{engine: engine}
-	if err := gcsp.Init(ctx, &genkit.Genkit{}); err == nil {
-		t.Fatal("must fail if connection pool is nil")
-	}
-}
-
-func TestInit_AlreadyCalled(t *testing.T) {
-	if !areValidFlags() {
-		t.Skip("no valid postgres flags")
-	}
-
-	ctx := context.Background()
-
-	pEngine, err := NewPostgresEngine(ctx,
-		WithUser(*testUsername),
-		WithPassword(*testPassword),
-		WithCloudSQLInstance(*testProjectID, *testRegion, *testInstance),
-		WithDatabase(*testDatabase),
-		WithIAMAccountEmail(*testIAMEmail))
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	g := &genkit.Genkit{}
-
-	gcsp := &Postgres{engine: pEngine}
-	g, err = genkit.Init(ctx, genkit.WithPlugins(gcsp))
-
-	err = gcsp.Init(ctx, g)
-	if err == nil {
-		t.Fatal("must fail if init is called twice")
-	}
-
-}
-
 func TestPostgres(t *testing.T) {
 	if !areValidFlags() {
 		t.Skip("no valid postgres flags")
@@ -105,13 +63,10 @@ func TestPostgres(t *testing.T) {
 	}
 
 	postgres := &Postgres{
-		engine: pEngine,
+		Engine: pEngine,
 	}
 
-	g, err := genkit.Init(ctx, genkit.WithPlugins(postgres))
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(postgres))
 
 	// Create test schema and table
 	_, err = pEngine.Pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", SchemaName))
@@ -170,7 +125,7 @@ func TestPostgres(t *testing.T) {
 		IDColumn:              CustomIdColumn,
 		MetadataJSONColumn:    CustomMetadataColumn,
 		IgnoreMetadataColumns: []string{"created_at", "updated_at"},
-		Embedder:              genkit.DefineEmbedder(g, "fake", "embedder3", nil, embedder.Embed),
+		Embedder:              genkit.DefineEmbedder(g, "fake/embedder3", nil, embedder.Embed),
 		EmbedderOptions:       nil,
 	}
 
@@ -201,9 +156,15 @@ func TestPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	require.Len(t, resp.Documents, 3)
-	require.Len(t, resp.Documents[0].Content, 1)
-	assert.Equal(t, "hello1", resp.Documents[0].Content[0].Text)
+	if len(resp.Documents) != 3 {
+		t.Fatalf("expected 3 documents, got %d", len(resp.Documents))
+	}
+	if len(resp.Documents[0].Content) != 1 {
+		t.Fatalf("expected 1 content part, got %d", len(resp.Documents[0].Content))
+	}
+	if got, want := resp.Documents[0].Content[0].Text, "hello1"; got != want {
+		t.Errorf("got content %q, want %q", got, want)
+	}
 
 	resp, err = retriever.Retrieve(ctx, &ai.RetrieverRequest{
 		Query: d1,
@@ -215,9 +176,15 @@ func TestPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	require.Len(t, resp.Documents, 1)
-	require.Len(t, resp.Documents[0].Content, 1)
-	assert.Equal(t, "hello2", resp.Documents[0].Content[0].Text)
+	if len(resp.Documents) != 1 {
+		t.Fatalf("expected 1 document, got %d", len(resp.Documents))
+	}
+	if len(resp.Documents[0].Content) != 1 {
+		t.Fatalf("expected 1 content part, got %d", len(resp.Documents[0].Content))
+	}
+	if got, want := resp.Documents[0].Content[0].Text, "hello2"; got != want {
+		t.Errorf("got content %q, want %q", got, want)
+	}
 
 }
 

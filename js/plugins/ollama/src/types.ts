@@ -152,8 +152,10 @@ export interface OllamaToolCall {
 export interface Message {
   role: string;
   content: string;
+  thinking?: string;
   images?: string[];
   tool_calls?: any[];
+  tool_name?: string;
 }
 
 // Ollama local model definition

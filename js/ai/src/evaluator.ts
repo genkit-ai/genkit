@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { defineAction, z, type Action } from '@genkit-ai/core';
+import { action, z, type Action } from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
-import { SPAN_TYPE_ATTR, runInNewSpan } from '@genkit-ai/core/tracing';
+import { SpanMetadata, runInNewSpan } from '@genkit-ai/core/tracing';
 import { randomUUID } from 'crypto';
 
 export const ATTR_PREFIX = 'genkit';
@@ -136,6 +136,18 @@ export interface EvaluatorParams<
   options?: z.infer<CustomOptions>;
 }
 
+export interface EvaluatorOptions<
+  DataPoint extends typeof BaseDataPointSchema,
+  EvaluatorOpts extends z.ZodTypeAny,
+> {
+  name: string;
+  displayName: string;
+  definition: string;
+  dataPointType?: DataPoint;
+  configSchema?: EvaluatorOpts;
+  isBilled?: boolean;
+}
+
 /**
  * Creates evaluator action for the provided {@link EvaluatorFn} implementation.
  */
@@ -143,19 +155,31 @@ export function defineEvaluator<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
   EvalDataPoint extends
     typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
-  EvaluatorOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  options: {
-    name: string;
-    displayName: string;
-    definition: string;
-    dataPointType?: DataPoint;
-    configSchema?: EvaluatorOptions;
-    isBilled?: boolean;
-  },
-  runner: EvaluatorFn<EvalDataPoint, EvaluatorOptions>
-) {
+  options: EvaluatorOptions<DataPoint, EvaluatorOpts>,
+  runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>
+): EvaluatorAction {
+  const e = evaluator(options, runner);
+
+  registry.registerAction('evaluator', e);
+
+  return e;
+}
+
+/**
+ * Creates evaluator action for the provided {@link EvaluatorFn} implementation.
+ */
+export function evaluator<
+  DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
+  EvalDataPoint extends
+    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+  EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  options: EvaluatorOptions<DataPoint, EvaluatorOpts>,
+  runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>
+): EvaluatorAction {
   const evalMetadata = {};
   evalMetadata[EVALUATOR_METADATA_KEY_IS_BILLED] =
     options.isBilled == undefined ? true : options.isBilled;
@@ -166,8 +190,7 @@ export function defineEvaluator<
       schema: options.configSchema,
     });
   }
-  const evaluator = defineAction(
-    registry,
+  const evaluator = action(
     {
       actionType: 'evaluator',
       name: options.name,
@@ -193,61 +216,38 @@ export function defineEvaluator<
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
         try {
-          await runInNewSpan(
-            registry,
-            {
-              metadata: {
-                name: i.batchSize
-                  ? `Batch ${batchIndex}`
-                  : `Test Case ${batch[0].testCaseId}`,
-                metadata: { 'evaluator:evalRunId': i.evalRunId },
+          if (batch.length === 1) {
+            const results = await runBatch(
+              runner,
+              batch,
+              i.batchSize,
+              batchIndex,
+              i.evalRunId,
+              i.options
+            );
+            evalResponses.push(...results);
+          } else {
+            await runInNewSpan(
+              {
+                metadata: {
+                  name: `Batch ${batchIndex}`,
+                  metadata: { 'evaluator:evalRunId': i.evalRunId },
+                },
               },
-              labels: {
-                [SPAN_TYPE_ATTR]: 'evaluator',
-              },
-            },
-            async (metadata, otSpan) => {
-              const spanId = otSpan.spanContext().spanId;
-              const traceId = otSpan.spanContext().traceId;
-              const evalRunPromises = batch.map((d, index) => {
-                const sampleIndex = i.batchSize
-                  ? i.batchSize * batchIndex + index
-                  : batchIndex;
-                const datapoint = d as BaseEvalDataPoint;
-                metadata.input = {
-                  input: datapoint.input,
-                  output: datapoint.output,
-                  context: datapoint.context,
-                };
-                const evalOutputPromise = runner(datapoint, i.options)
-                  .then((result) => ({
-                    ...result,
-                    traceId,
-                    spanId,
-                    sampleIndex,
-                  }))
-                  .catch((error) => {
-                    return {
-                      sampleIndex,
-                      spanId,
-                      traceId,
-                      testCaseId: datapoint.testCaseId,
-                      evaluation: {
-                        error: `Evaluation of test case ${datapoint.testCaseId} failed: \n${error}`,
-                      },
-                    };
-                  });
-                return evalOutputPromise;
-              });
-
-              const allResults = await Promise.all(evalRunPromises);
-              metadata.output =
-                allResults.length === 1 ? allResults[0] : allResults;
-              allResults.map((result) => {
-                evalResponses.push(result);
-              });
-            }
-          );
+              async (metadata, otSpan) => {
+                const results = await runBatch(
+                  runner,
+                  batch,
+                  i.batchSize,
+                  batchIndex,
+                  i.evalRunId,
+                  i.options,
+                  metadata
+                );
+                evalResponses.push(...results);
+              }
+            );
+          }
         } catch (e) {
           logger.error(
             `Evaluation of batch ${batchIndex} failed: \n${(e as Error).stack}`
@@ -357,4 +357,65 @@ function getBatchedArray<T extends { testCaseId?: string }>(
   }
 
   return batches;
+}
+
+async function runBatch<
+  EvalDataPoint extends
+    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+  EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>,
+  batch: BaseDataPoint[],
+  batchSize: number | undefined,
+  batchIndex: number,
+  evalRunId: string,
+  options: any,
+  batchMetadata?: SpanMetadata
+): Promise<EvalResponses> {
+  if (batchMetadata) {
+    batchMetadata.input = batch;
+  }
+  const evalRunPromises = batch.map((d, index) => {
+    const sampleIndex = batchSize ? batchSize * batchIndex + index : batchIndex;
+    const datapoint = d as BaseEvalDataPoint;
+    return runInNewSpan(
+      {
+        metadata: {
+          name: `Test Case ${datapoint.testCaseId}`,
+          metadata: { 'evaluator:evalRunId': evalRunId },
+        },
+      },
+      async (metadata, otSpan) => {
+        const spanId = otSpan.spanContext().spanId;
+        const traceId = otSpan.spanContext().traceId;
+        metadata.input = datapoint;
+        try {
+          const result = await runner(datapoint, options);
+          metadata.output = result;
+          return {
+            ...result,
+            traceId,
+            spanId,
+            sampleIndex,
+          };
+        } catch (error) {
+          return {
+            sampleIndex,
+            spanId,
+            traceId,
+            testCaseId: datapoint.testCaseId,
+            evaluation: {
+              error: `Evaluation of test case ${datapoint.testCaseId} failed: \n${error}`,
+            },
+          };
+        }
+      }
+    );
+  });
+
+  const allResults = await Promise.all(evalRunPromises);
+  if (batchMetadata) {
+    batchMetadata.output = allResults;
+  }
+  return allResults;
 }

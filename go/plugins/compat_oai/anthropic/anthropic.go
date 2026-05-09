@@ -16,8 +16,10 @@ package anthropic
 
 import (
 	"context"
+	"os"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go/option"
@@ -29,7 +31,37 @@ const (
 )
 
 // Supported models: https://docs.anthropic.com/en/docs/about-claude/models/all-models
-var supportedModels = map[string]ai.ModelInfo{
+var supportedModels = map[string]ai.ModelOptions{
+	"claude-opus-4-1-20250805": {
+		Label: "Claude 4.1 Opus",
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      false, // NOTE: Anthropic supports tool use, but it's not compatible with the OpenAI API
+			SystemRole: true,
+			Media:      true,
+		},
+		Versions: []string{"claude-opus-4-1-latest", "claude-opus-4-1-20250805"},
+	},
+	"claude-sonnet-4-5-20250929": {
+		Label: "Claude 4.5 Sonnet",
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      false, // NOTE: Anthropic supports tool use, but it's not compatible with the OpenAI API
+			SystemRole: true,
+			Media:      true,
+		},
+		Versions: []string{"claude-sonnet-4-5-latest", "claude-sonnet-4-5-20250929"},
+	},
+	"claude-haiku-4-5-20251001": {
+		Label: "Claude 4.5 Haiku",
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      false, // NOTE: Anthropic supports tool use, but it's not compatible with the OpenAI API
+			SystemRole: true,
+			Media:      true,
+		},
+		Versions: []string{"claude-haiku-4-5-latest", "claude-haiku-4-5-20251001"},
+	},
 	"claude-3-7-sonnet-20250219": {
 		Label: "Claude 3.7 Sonnet",
 		Supports: &ai.ModelSupports{
@@ -92,30 +124,37 @@ func (a *Anthropic) Name() string {
 	return provider
 }
 
-func (a *Anthropic) Init(ctx context.Context, g *genkit.Genkit) error {
-	// Set the base URL
-	a.Opts = append(a.Opts, option.WithBaseURL(baseURL))
+func (a *Anthropic) Init(ctx context.Context) []api.Action {
+	url := os.Getenv("ANTHROPIC_BASE_URL")
+	if url == "" {
+		url = baseURL
+	}
+	a.Opts = append([]option.RequestOption{option.WithBaseURL(url)}, a.Opts...)
+
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey != "" {
+		a.Opts = append([]option.RequestOption{option.WithAPIKey(apiKey)}, a.Opts...)
+	}
 
 	// initialize OpenAICompatible
 	a.openAICompatible.Opts = a.Opts
-	if err := a.openAICompatible.Init(ctx, g); err != nil {
-		return err
-	}
+	compatActions := a.openAICompatible.Init(ctx)
+
+	var actions []api.Action
+	actions = append(actions, compatActions...)
 
 	// define default models
-	for model, info := range supportedModels {
-		if _, err := a.DefineModel(g, model, info); err != nil {
-			return err
-		}
+	for model, opts := range supportedModels {
+		actions = append(actions, a.DefineModel(model, opts).(api.Action))
 	}
 
-	return nil
+	return actions
 }
 
-func (a *Anthropic) Model(g *genkit.Genkit, name string) ai.Model {
-	return a.openAICompatible.Model(g, name, provider)
+func (a *Anthropic) Model(g *genkit.Genkit, id string) ai.Model {
+	return a.openAICompatible.Model(g, api.NewName(provider, id))
 }
 
-func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, info ai.ModelInfo) (ai.Model, error) {
-	return a.openAICompatible.DefineModel(g, provider, name, info)
+func (a *Anthropic) DefineModel(id string, opts ai.ModelOptions) ai.Model {
+	return a.openAICompatible.DefineModel(provider, id, opts)
 }

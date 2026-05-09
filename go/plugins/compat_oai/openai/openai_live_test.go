@@ -16,7 +16,10 @@ package openai_test
 
 import (
 	"context"
+	"encoding/base64"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -40,13 +43,10 @@ func TestPlugin(t *testing.T) {
 	oai := &compat_oai.OpenAI{
 		APIKey: apiKey,
 	}
-	g, err := genkit.Init(context.Background(),
+	g := genkit.Init(context.Background(),
 		genkit.WithDefaultModel("openai/gpt-4o-mini"),
 		genkit.WithPlugins(oai),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Log("genkit initialized")
 
 	// Define a tool for calculating gablorkens
@@ -65,7 +65,7 @@ func TestPlugin(t *testing.T) {
 	t.Run("embedder", func(t *testing.T) {
 		// define embedder
 		embedder := oai.Embedder(g, "text-embedding-3-small")
-		res, err := ai.Embed(ctx, embedder, ai.WithTextDocs("yellow banana"))
+		res, err := genkit.Embed(ctx, g, ai.WithEmbedder(embedder), ai.WithTextDocs("yellow banana"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,4 +253,93 @@ func TestPlugin(t *testing.T) {
 		}
 		t.Logf("invalid config type error: %v", err)
 	})
+
+	t.Run("check history", func(t *testing.T) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithPrompt("Tell me a joke"))
+		if err != nil {
+			t.Fatal("got error: %w", err)
+		}
+		if resp.Request == nil {
+			t.Fatal("unexpected nil pointer for request")
+		}
+		if len(resp.Request.Messages) == 0 {
+			t.Fatal("expecting user messages in request")
+		}
+		resp, err = genkit.Generate(ctx, g,
+			ai.WithMessages(resp.History()...),
+			ai.WithPrompt("explain the joke that you just provided me"))
+		if err != nil {
+			t.Fatal("got error: %w", err)
+		}
+		userMsgCount := 0
+		for _, m := range resp.History() {
+			if m.Role == ai.RoleUser {
+				userMsgCount += 1
+			}
+		}
+		if userMsgCount != 2 {
+			t.Fatalf("expecting 2 user messages, got: %d", userMsgCount)
+		}
+	})
+	t.Run("image", func(t *testing.T) {
+		image, err := fetchImgAsBase64()
+		if err != nil {
+			t.Fatalf("failed to fetch image: %v", err)
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName("openai/gpt-4.1-nano"),
+			ai.WithMessages(
+				ai.NewUserMessage(
+					ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+image),
+					ai.NewTextPart("What's in the image?."),
+				),
+			),
+		)
+		if err != nil {
+			t.Fatalf("failed to generate: %v", err)
+		}
+		if !strings.Contains(resp.Text(), "cat") {
+			t.Fatalf("image detection failed, want: cat, got: %s", resp.Text())
+		}
+		mediaMessages := 0
+		textMessages := 0
+		for _, m := range resp.Request.Messages {
+			for _, p := range m.Content {
+				if p.IsText() {
+					textMessages += 1
+				}
+				if p.IsMedia() {
+					mediaMessages += 1
+				}
+			}
+		}
+		if mediaMessages > 1 {
+			t.Fatalf("unwanted media message, want: 1, got: %d", mediaMessages)
+		}
+		if textMessages > 1 {
+			t.Fatalf("unwanted text message, want: 1, got %d", textMessages)
+		}
+	})
+}
+
+func fetchImgAsBase64() (string, error) {
+	// CC0 license image
+	imgURL := "https://pd.w.org/2025/07/896686fbbcd9990c9.84605288-2048x1365.jpg"
+	resp, err := http.Get(imgURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", err
+	}
+
+	imageBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	base64string := base64.StdEncoding.EncodeToString(imageBytes)
+	return base64string, nil
 }

@@ -10,6 +10,7 @@
     "build:js-menu": "cd js-menu && npm install && npm run build",
     "build:js-prompts": "cd js-prompts && npm install && npm run build",
     "build:js-schoolAgent": "cd js-schoolAgent && npm install && npm run build",
+    "build:js-gemini": "cd js-gemini && npm install && npm run build",
     "build:all-samples": "concurrently npm:build:js-*"
   },
   "pre-commit": [

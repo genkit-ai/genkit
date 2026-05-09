@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
+import { confirm } from '@inquirer/prompts';
 import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
-import * as inquirer from 'inquirer';
 import { createInterface } from 'readline';
-import type { RuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager';
 import {
   findToolsConfig,
   isEvalField,
@@ -81,17 +81,13 @@ export async function confirmLlmUse(
     return true;
   }
 
-  const answers = await inquirer.prompt([
-    {
-      type: 'confirm',
-      name: 'confirm',
-      message:
-        'For each example, the evaluation makes calls to APIs that may result in being charged. Do you wish to proceed?',
-      default: false,
-    },
-  ]);
+  const confirmed = await confirm({
+    message:
+      'For each example, the evaluation makes calls to APIs that may result in being charged. Do you wish to proceed?',
+    default: false,
+  });
 
-  return answers.confirm;
+  return confirmed;
 }
 
 function getRootSpan(trace: TraceData): NestedSpanData | undefined {
@@ -327,13 +323,23 @@ async function readLines(fileName: string): Promise<string[]> {
 }
 
 export async function hasAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
 }): Promise<boolean> {
   const { manager, actionRef } = { ...params };
   const actionsRecord = await manager.listActions();
 
   return actionsRecord.hasOwnProperty(actionRef);
+}
+
+export async function getAction(params: {
+  manager: BaseRuntimeManager;
+  actionRef: string;
+}): Promise<Action | undefined> {
+  const { manager, actionRef } = { ...params };
+  const allActions = await manager.listActions();
+
+  return Object.values(allActions).find((action) => action.key === actionRef);
 }
 
 /** Helper function that maps string data to GenerateRequest */
@@ -355,7 +361,7 @@ export function getModelInput(data: any, modelConfig: any): GenerateRequest {
   } else {
     const maybeRequest = GenerateRequestSchema.safeParse(data);
     if (maybeRequest.success) {
-      return maybeRequest.data;
+      return { ...maybeRequest.data, config: modelConfig };
     } else {
       throw new Error(
         `Unable to parse model input as MessageSchema. Details: ${maybeRequest.error}`

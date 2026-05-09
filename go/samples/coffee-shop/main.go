@@ -98,24 +98,18 @@ type testAllCoffeeFlowsOutput struct {
 
 func main() {
 	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+	g := genkit.Init(ctx,
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
-	if err != nil {
-		log.Fatalf("failed to create Genkit: %v", err)
-	}
 
-	m := googlegenai.GoogleAIModel(g, "gemini-2.0-flash")
-	simpleGreetingPrompt, err := genkit.DefinePrompt(g, "simpleGreeting2",
+	m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+	simpleGreetingPrompt := genkit.DefinePrompt(g, "simpleGreeting2",
 		ai.WithPrompt(simpleGreetingPromptTemplate),
 		ai.WithModel(m),
 		ai.WithInputType(simpleGreetingInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	simpleGreetingFlow := genkit.DefineStreamingFlow(g, "simpleGreeting", func(ctx context.Context, input *simpleGreetingInput, cb func(context.Context, string) error) (string, error) {
 		var callback func(context.Context, *ai.ModelResponseChunk) error
@@ -134,15 +128,12 @@ func main() {
 		return resp.Text(), nil
 	})
 
-	greetingWithHistoryPrompt, err := genkit.DefinePrompt(g, "greetingWithHistory",
+	greetingWithHistoryPrompt := genkit.DefinePrompt(g, "greetingWithHistory",
 		ai.WithPrompt(greetingWithHistoryPromptTemplate),
 		ai.WithModel(m),
 		ai.WithInputType(customerTimeAndHistoryInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	greetingWithHistoryFlow := genkit.DefineFlow(g, "greetingWithHistory", func(ctx context.Context, input *customerTimeAndHistoryInput) (string, error) {
 		resp, err := greetingWithHistoryPrompt.Execute(ctx,
@@ -154,15 +145,12 @@ func main() {
 		return resp.Text(), nil
 	})
 
-	simpleStructuredGreetingPrompt, err := genkit.DefinePrompt(g, "simpleStructuredGreeting",
+	simpleStructuredGreetingPrompt := genkit.DefinePrompt(g, "simpleStructuredGreeting",
 		ai.WithPrompt(simpleStructuredGreetingPromptTemplate),
 		ai.WithModel(m),
 		ai.WithInputType(simpleGreetingInput{}),
 		ai.WithOutputType(simpleGreetingOutput{}),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	genkit.DefineStreamingFlow(g, "simpleStructuredGreeting", func(ctx context.Context, input *simpleGreetingInput, cb func(context.Context, string) error) (string, error) {
 		var callback func(context.Context, *ai.ModelResponseChunk) error

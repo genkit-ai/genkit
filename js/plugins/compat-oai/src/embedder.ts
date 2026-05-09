@@ -17,8 +17,11 @@
 
 // import { defineEmbedder, embedderRef } from '@genkit-ai/ai/embedder';
 
-import type { EmbedderAction, EmbedderReference, Genkit } from 'genkit';
+import type { EmbedderAction, EmbedderReference } from 'genkit';
+import { embedder } from 'genkit/plugin';
 import OpenAI from 'openai';
+import { PluginOptions } from './index.js';
+import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 /**
  * Method to define a new Genkit Embedder that is compatibale with the Open AI
@@ -34,24 +37,33 @@ import OpenAI from 'openai';
  * @returns the created {@link EmbedderAction}
  */
 export function defineCompatOpenAIEmbedder(params: {
-  ai: Genkit;
   name: string;
   client: OpenAI;
+  pluginOptions?: PluginOptions;
   embedderRef?: EmbedderReference;
 }): EmbedderAction {
-  const { ai, name, client, embedderRef } = params;
-  const model = name.split('/').pop();
-  return ai.defineEmbedder(
+  const { name, client: defaultClient, pluginOptions, embedderRef } = params;
+
+  const modelName = toModelName(name, pluginOptions?.name);
+  const actionName =
+    embedderRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
+
+  return embedder(
     {
-      name,
+      name: actionName,
       configSchema: embedderRef?.configSchema,
       ...embedderRef?.info,
     },
-    async (input, options) => {
-      const { encodingFormat: encoding_format, ...restOfConfig } = options;
+    async (req) => {
+      const { encodingFormat: encoding_format, ...restOfConfig } = req.options;
+      const client = maybeCreateRequestScopedOpenAIClient(
+        pluginOptions,
+        req,
+        defaultClient
+      );
       const embeddings = await client.embeddings.create({
-        model: model!,
-        input: input.map((d) => d.text),
+        model: modelName,
+        input: req.input.map((d) => d.text),
         encoding_format,
         ...restOfConfig,
       });

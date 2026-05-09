@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { z } from '@genkit-ai/core';
+import { getAsyncContext, type z } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -91,16 +91,22 @@ export class Session<S = any> {
   }
 
   /**
-   * Update session state data.
+   * Update session state data by patching the existing state.
+   * @param data Partial state update that will be merged with existing state
    */
-  async updateState(data: S): Promise<void> {
+  async updateState(data: Partial<S>): Promise<void> {
     let sessionData = this.sessionData;
     if (!sessionData) {
       sessionData = {} as SessionData<S>;
     }
-    sessionData.state = data;
-    this.sessionData = sessionData;
 
+    // Merge the new data with existing state
+    sessionData.state = {
+      ...sessionData.state,
+      ...data,
+    } as S;
+
+    this.sessionData = sessionData;
     await this.store.save(this.id, sessionData);
   }
 
@@ -290,14 +296,14 @@ export function runWithSession<S = any, O = any>(
   session: Session<S>,
   fn: () => O
 ): O {
-  return registry.asyncStore.run(sessionAlsKey, session, fn);
+  return getAsyncContext().run(sessionAlsKey, session, fn);
 }
 
 /** Returns the current session. */
 export function getCurrentSession<S = any>(
   registry: Registry
 ): Session<S> | undefined {
-  return registry.asyncStore.getStore(sessionAlsKey);
+  return getAsyncContext().getStore(sessionAlsKey);
 }
 
 /** Throw when session state errors occur, ex. missing state, etc. */

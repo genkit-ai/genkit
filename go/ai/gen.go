@@ -18,97 +18,60 @@
 
 package ai
 
-type BaseDataPoint struct {
-	Context    map[string]any `json:"context,omitempty"`
-	Input      map[string]any `json:"input,omitempty"`
-	Output     map[string]any `json:"output,omitempty"`
-	Reference  map[string]any `json:"reference,omitempty"`
-	TestCaseID string         `json:"testCaseId,omitempty"`
-	TraceIDs   []string       `json:"traceIds,omitempty"`
-}
-
-type BaseEvalDataPoint struct {
-	Context    map[string]any `json:"context,omitempty"`
-	Input      map[string]any `json:"input,omitempty"`
-	Output     map[string]any `json:"output,omitempty"`
-	Reference  map[string]any `json:"reference,omitempty"`
-	TestCaseID string         `json:"testCaseId,omitempty"`
-	TraceIDs   []string       `json:"traceIds,omitempty"`
-}
-
-type CandidateError struct {
-	Code    CandidateErrorCode `json:"code,omitempty"`
-	Index   float64            `json:"index,omitempty"`
-	Message string             `json:"message,omitempty"`
-}
-
-type CandidateErrorCode string
-
-const (
-	CandidateErrorCodeBlocked CandidateErrorCode = "blocked"
-	CandidateErrorCodeOther   CandidateErrorCode = "other"
-	CandidateErrorCodeUnknown CandidateErrorCode = "unknown"
-)
-
-type CommonRerankerOptions struct {
-	// Number of documents to rerank
-	K float64 `json:"k,omitempty"`
-}
-
-type CommonRetrieverOptions struct {
-	// Number of documents to retrieve
-	K float64 `json:"k,omitempty"`
+type ActionMetadata struct {
+	ActionType  string `json:"actionType,omitempty"`
+	Description string `json:"description,omitempty"`
+	// A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.
+	InputJsonSchema any            `json:"inputJsonSchema,omitempty"`
+	InputSchema     any            `json:"inputSchema,omitempty"`
+	Key             string         `json:"key,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+	Name            string         `json:"name,omitempty"`
+	// A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object.
+	OutputJsonSchema any `json:"outputJsonSchema,omitempty"`
+	OutputSchema     any `json:"outputSchema,omitempty"`
+	StreamSchema     any `json:"streamSchema,omitempty"`
 }
 
 type customPart struct {
-	Custom   map[string]any `json:"custom,omitempty"`
-	Data     any            `json:"data,omitempty"`
+	// Custom contains custom key-value data specific to this part.
+	Custom map[string]any `json:"custom,omitempty"`
+	// Data contains additional arbitrary data.
+	Data any `json:"data,omitempty"`
+	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 type dataPart struct {
-	Data     any            `json:"data,omitempty"`
+	// Data contains arbitrary structured data.
+	Data any `json:"data,omitempty"`
+	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+// EmbedRequest represents a request to generate embeddings for documents.
 type EmbedRequest struct {
-	Input   []*Document `json:"input,omitempty"`
-	Options any         `json:"options,omitempty"`
+	// Input is the array of documents to generate embeddings for.
+	Input []*Document `json:"input,omitempty"`
+	// Options contains embedder-specific configuration parameters.
+	Options any `json:"options,omitempty"`
 }
 
+// EmbedResponse contains the generated embeddings from an embed request.
 type EmbedResponse struct {
+	// Embeddings is the array of generated embedding vectors with metadata.
 	Embeddings []*Embedding `json:"embeddings,omitempty"`
 }
 
+// Embedding represents a vector embedding with associated metadata.
 type Embedding struct {
-	Embedding []float32      `json:"embedding,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
+	// Embedding is the vector representation of the input.
+	Embedding []float32 `json:"embedding,omitempty"`
+	// Metadata identifies which part of a document this embedding corresponds to.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-type EvalFnResponse struct {
-	Evaluation  any     `json:"evaluation,omitempty"`
-	SampleIndex float64 `json:"sampleIndex,omitempty"`
-	SpanID      string  `json:"spanId,omitempty"`
-	TestCaseID  string  `json:"testCaseId,omitempty"`
-	TraceID     string  `json:"traceId,omitempty"`
-}
-
-type EvalRequest struct {
-	Dataset   []*BaseDataPoint `json:"dataset,omitempty"`
-	EvalRunID string           `json:"evalRunId,omitempty"`
-	Options   any              `json:"options,omitempty"`
-}
-
-type EvalResponse []any
-
-type EvalStatusEnum string
-
-const (
-	EvalStatusEnumUNKNOWN EvalStatusEnum = "UNKNOWN"
-	EvalStatusEnumPASS    EvalStatusEnum = "PASS"
-	EvalStatusEnumFAIL    EvalStatusEnum = "FAIL"
-)
-
+// FinishReason indicates why generation stopped.
 type FinishReason string
 
 const (
@@ -120,25 +83,50 @@ const (
 	FinishReasonUnknown     FinishReason = "unknown"
 )
 
+// GenerateActionOptions holds configuration for a generate action request.
 type GenerateActionOptions struct {
-	Config             any                         `json:"config,omitempty"`
-	Docs               []*Document                 `json:"docs,omitempty"`
-	MaxTurns           int                         `json:"maxTurns,omitempty"`
-	Messages           []*Message                  `json:"messages,omitempty"`
-	Model              string                      `json:"model,omitempty"`
-	Output             *GenerateActionOutputConfig `json:"output,omitempty"`
-	Resume             *GenerateActionResume       `json:"resume,omitempty"`
-	ReturnToolRequests bool                        `json:"returnToolRequests,omitempty"`
-	ToolChoice         ToolChoice                  `json:"toolChoice,omitempty"`
-	Tools              []string                    `json:"tools,omitempty"`
+	// Config contains configuration parameters for the generation request.
+	Config any `json:"config,omitempty"`
+	// Docs provides retrieved documents to be used as context for this generation.
+	Docs []*Document `json:"docs,omitempty"`
+	// MaxTurns is the maximum number of tool call iterations that can be performed
+	// in a single generate call. Defaults to 5.
+	MaxTurns int `json:"maxTurns,omitempty"`
+	// Messages contains the conversation history for multi-turn prompting when supported.
+	Messages []*Message `json:"messages,omitempty"`
+	// Model is a model name (e.g., "vertexai/gemini-1.0-pro").
+	Model string `json:"model,omitempty"`
+	// Output specifies the desired output format. Defaults to the model's default if unspecified.
+	Output    *GenerateActionOutputConfig `json:"output,omitempty"`
+	Resources []string                    `json:"resources,omitempty"`
+	// Resume provides options for resuming an interrupted generation.
+	Resume *GenerateActionResume `json:"resume,omitempty"`
+	// ReturnToolRequests, when true, returns tool calls for manual processing instead of
+	// automatically resolving them.
+	ReturnToolRequests bool `json:"returnToolRequests,omitempty"`
+	// StepName is a custom step name for this generate call to display in trace views.
+	// Defaults to "generate".
+	StepName string `json:"stepName,omitempty"`
+	// ToolChoice controls tool calling mode. Auto lets the model decide, required forces
+	// the model to choose a tool, and none forces the model not to use any tools. Defaults to auto.
+	ToolChoice ToolChoice `json:"toolChoice,omitempty"`
+	// Tools is a list of registered tool names for this generation if supported.
+	Tools []string `json:"tools,omitempty"`
+	// Use is middleware to apply to this generation, referenced by name with optional config.
+	Use []*MiddlewareRef `json:"use,omitempty"`
 }
 
+// GenerateActionResume holds options for resuming an interrupted generation.
 type GenerateActionResume struct {
-	Metadata map[string]any      `json:"metadata,omitempty"`
-	Respond  []*toolResponsePart `json:"respond,omitempty"`
-	Restart  []*toolRequestPart  `json:"restart,omitempty"`
+	// Metadata contains additional context for resuming the generation.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Respond contains tool response parts to send to the model when resuming.
+	Respond []*Part `json:"respond,omitempty"`
+	// Restart contains tool request parts to restart when resuming.
+	Restart []*Part `json:"restart,omitempty"`
 }
 
+// ToolChoice controls how the model uses tools.
 type ToolChoice string
 
 const (
@@ -147,67 +135,136 @@ const (
 	ToolChoiceNone     ToolChoice = "none"
 )
 
+// GenerateActionOutputConfig specifies the desired output format for a generate action.
 type GenerateActionOutputConfig struct {
-	Constrained  bool           `json:"constrained,omitempty"`
-	ContentType  string         `json:"contentType,omitempty"`
-	Format       string         `json:"format,omitempty"`
-	Instructions *string        `json:"instructions,omitempty"`
-	JsonSchema   map[string]any `json:"jsonSchema,omitempty"`
-}
-
-// GenerationCommonConfig holds configuration for generation.
-type GenerationCommonConfig struct {
-	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
-	Temperature     float64  `json:"temperature,omitempty"`
-	TopK            int      `json:"topK,omitempty"`
-	TopP            float64  `json:"topP,omitempty"`
-	Version         string   `json:"version,omitempty"`
-}
-
-// GenerationUsage provides information about the generation process.
-type GenerationUsage struct {
-	CachedContentTokens int                `json:"cachedContentTokens,omitempty"`
-	Custom              map[string]float64 `json:"custom,omitempty"`
-	InputAudioFiles     float64            `json:"inputAudioFiles,omitempty"`
-	InputCharacters     int                `json:"inputCharacters,omitempty"`
-	InputImages         int                `json:"inputImages,omitempty"`
-	InputTokens         int                `json:"inputTokens,omitempty"`
-	InputVideos         float64            `json:"inputVideos,omitempty"`
-	OutputAudioFiles    float64            `json:"outputAudioFiles,omitempty"`
-	OutputCharacters    int                `json:"outputCharacters,omitempty"`
-	OutputImages        int                `json:"outputImages,omitempty"`
-	OutputTokens        int                `json:"outputTokens,omitempty"`
-	OutputVideos        float64            `json:"outputVideos,omitempty"`
-	ThoughtsTokens      int                `json:"thoughtsTokens,omitempty"`
-	TotalTokens         int                `json:"totalTokens,omitempty"`
-}
-
-type Media struct {
+	// Constrained indicates whether to enforce strict adherence to the schema.
+	Constrained bool `json:"constrained,omitempty"`
+	// ContentType specifies the MIME type of the output content.
 	ContentType string `json:"contentType,omitempty"`
-	Url         string `json:"url,omitempty"`
+	// Format specifies the desired output format (e.g., "json", "text").
+	Format string `json:"format,omitempty"`
+	// Instructions provides additional guidance for the output format.
+	Instructions *string `json:"instructions,omitempty"`
+	// JsonSchema is a JSON Schema describing the desired structure of JSON output.
+	JsonSchema map[string]any `json:"jsonSchema,omitempty"`
+}
+
+// GenerationCommonConfig holds configuration parameters for model generation requests.
+type GenerationCommonConfig struct {
+	// API Key to use for the model call, overrides API key provided in plugin config.
+	APIKey string `json:"apiKey,omitempty"`
+	// MaxOutputTokens limits the maximum number of tokens generated in the response.
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// StopSequences specifies sequences that will cause generation to stop when encountered.
+	StopSequences []string `json:"stopSequences,omitempty"`
+	// Temperature controls randomness in generation. Higher values (e.g., 0.9) make output more random,
+	// while lower values (e.g., 0.1) make it more deterministic. Typical range is 0.0 to 1.0.
+	Temperature float64 `json:"temperature,omitempty"`
+	// TopK limits sampling to the K most likely tokens at each step.
+	TopK int `json:"topK,omitempty"`
+	// TopP (nucleus sampling) limits sampling to tokens whose cumulative probability exceeds P.
+	TopP float64 `json:"topP,omitempty"`
+	// Version specifies a particular version of a model family,
+	// e.g., "gemini-1.0-pro-001" for the "gemini-1.0-pro" family.
+	Version string `json:"version,omitempty"`
+}
+
+// GenerationUsage provides information about resource consumption during generation.
+type GenerationUsage struct {
+	// CachedContentTokens counts tokens that were served from cache.
+	CachedContentTokens int `json:"cachedContentTokens,omitempty"`
+	// Custom contains additional usage metrics specific to the model provider.
+	Custom map[string]float64 `json:"custom,omitempty"`
+	// InputAudioFiles is the number of audio files in the input.
+	InputAudioFiles int `json:"inputAudioFiles,omitempty"`
+	// InputCharacters is the number of characters in the input.
+	InputCharacters int `json:"inputCharacters,omitempty"`
+	// InputImages is the number of images in the input.
+	InputImages int `json:"inputImages,omitempty"`
+	// InputTokens is the number of tokens in the input prompt.
+	InputTokens int `json:"inputTokens,omitempty"`
+	// InputVideos is the number of videos in the input.
+	InputVideos int `json:"inputVideos,omitempty"`
+	// OutputAudioFiles is the number of audio files generated in the output.
+	OutputAudioFiles int `json:"outputAudioFiles,omitempty"`
+	// OutputCharacters is the number of characters generated in the output.
+	OutputCharacters int `json:"outputCharacters,omitempty"`
+	// OutputImages is the number of images generated in the output.
+	OutputImages int `json:"outputImages,omitempty"`
+	// OutputTokens is the number of tokens generated in the response.
+	OutputTokens int `json:"outputTokens,omitempty"`
+	// OutputVideos is the number of videos generated in the output.
+	OutputVideos int `json:"outputVideos,omitempty"`
+	// ThoughtsTokens counts tokens used in reasoning or thinking processes.
+	ThoughtsTokens int `json:"thoughtsTokens,omitempty"`
+	// TotalTokens is the sum of input and output tokens.
+	TotalTokens int `json:"totalTokens,omitempty"`
+}
+
+// Media represents media content with a URL and content type.
+type Media struct {
+	// ContentType specifies the MIME type of the media. Inferred from the data URI if not provided.
+	ContentType string `json:"contentType,omitempty"`
+	// Url is a "data:" or "https:" URI containing the media content.
+	Url string `json:"url,omitempty"`
 }
 
 type mediaPart struct {
-	Media    *Media         `json:"media,omitempty"`
+	// Media contains the media content and metadata.
+	Media *Media `json:"media,omitempty"`
+	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// Message is the contents of a model response.
+// Message represents the contents of a model message in a conversation.
 type Message struct {
-	Content  []*Part        `json:"content,omitempty"`
+	// Content holds the message parts (text, media, tool calls, etc.).
+	Content []*Part `json:"content,omitempty"`
+	// Metadata contains arbitrary key-value data associated with this message.
 	Metadata map[string]any `json:"metadata,omitempty"`
-	Role     Role           `json:"role,omitempty"`
+	// Role indicates which entity (system, user, model, or tool) generated this message.
+	Role Role `json:"role,omitempty"`
 }
 
-type ModelInfo struct {
+// MiddlewareDesc is the registered descriptor for a middleware.
+type MiddlewareDesc struct {
+	// ConfigSchema is a JSON Schema describing the middleware's configuration.
 	ConfigSchema map[string]any `json:"configSchema,omitempty"`
-	Label        string         `json:"label,omitempty"`
-	Stage        ModelStage     `json:"stage,omitempty"`
-	Supports     *ModelSupports `json:"supports,omitempty"`
-	Versions     []string       `json:"versions,omitempty"`
+	// Description explains what the middleware does.
+	Description string `json:"description,omitempty"`
+	// Metadata contains additional context for the middleware.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Name is the middleware's unique identifier.
+	Name          string `json:"name,omitempty"`
+	buildFromJSON middlewareFactoryFunc
 }
 
+// MiddlewareRef is a serializable reference to a registered middleware with config.
+type MiddlewareRef struct {
+	// Config contains the middleware configuration.
+	Config any `json:"config,omitempty"`
+	// Name is the name of the registered middleware.
+	Name string `json:"name,omitempty"`
+}
+
+// ModelInfo contains metadata about a model's capabilities and characteristics.
+type ModelInfo struct {
+	// ConfigSchema defines the model-specific configuration schema.
+	ConfigSchema map[string]any `json:"configSchema,omitempty"`
+	// Label is a friendly display name for this model (e.g., "Google AI - Gemini Pro").
+	Label string `json:"label,omitempty"`
+	// Stage indicates the development stage of this model.
+	// Featured models are recommended for general use, stable models are well-tested,
+	// unstable models are experimental, legacy models are not recommended for new projects,
+	// and deprecated models may be removed in future versions.
+	Stage ModelStage `json:"stage,omitempty"`
+	// Supports describes the capabilities that this model supports.
+	Supports *ModelSupports `json:"supports,omitempty"`
+	// Versions lists acceptable names for this model (e.g., different versions).
+	Versions []string `json:"versions,omitempty"`
+}
+
+// ModelStage indicates the development stage of a model.
 type ModelStage string
 
 const (
@@ -218,18 +275,31 @@ const (
 	ModelStageDeprecated ModelStage = "deprecated"
 )
 
+// ModelSupports describes the capabilities that a model supports.
 type ModelSupports struct {
+	// Constrained indicates the level of constrained generation support (none, all, or no-tools).
 	Constrained ConstrainedSupport `json:"constrained,omitempty"`
-	ContentType []string           `json:"contentType,omitempty"`
-	Context     bool               `json:"context,omitempty"`
-	Media       bool               `json:"media,omitempty"`
-	Multiturn   bool               `json:"multiturn,omitempty"`
-	Output      []string           `json:"output,omitempty"`
-	SystemRole  bool               `json:"systemRole,omitempty"`
-	ToolChoice  bool               `json:"toolChoice,omitempty"`
-	Tools       bool               `json:"tools,omitempty"`
+	// ContentType lists the content types the model supports for output.
+	ContentType []string `json:"contentType,omitempty"`
+	// Context indicates whether the model can natively support document-based context grounding.
+	Context bool `json:"context,omitempty"`
+	// LongRunning indicates whether the model supports long-running operations.
+	LongRunning bool `json:"longRunning,omitempty"`
+	// Media indicates whether the model can process media as part of the prompt (multimodal input).
+	Media bool `json:"media,omitempty"`
+	// Multiturn indicates whether the model can process historical messages passed with a prompt.
+	Multiturn bool `json:"multiturn,omitempty"`
+	// Output lists the types of data the model can generate.
+	Output []string `json:"output,omitempty"`
+	// SystemRole indicates whether the model can accept messages with role "system".
+	SystemRole bool `json:"systemRole,omitempty"`
+	// ToolChoice indicates whether the model supports controlling tool choice (e.g., forced tool calling).
+	ToolChoice bool `json:"toolChoice,omitempty"`
+	// Tools indicates whether the model can perform tool calls.
+	Tools bool `json:"tools,omitempty"`
 }
 
+// ConstrainedSupport indicates the level of constrained generation support.
 type ConstrainedSupport string
 
 const (
@@ -238,89 +308,184 @@ const (
 	ConstrainedSupportNoTools ConstrainedSupport = "no-tools"
 )
 
+type ModelReference struct {
+	Config any    `json:"config,omitempty"`
+	Name   string `json:"name,omitempty"`
+}
+
 // A ModelRequest is a request to generate completions from a model.
 type ModelRequest struct {
-	Config   any         `json:"config,omitempty"`
-	Docs     []*Document `json:"docs,omitempty"`
-	Messages []*Message  `json:"messages,omitempty"`
+	// Config holds model-specific configuration parameters.
+	Config any `json:"config,omitempty"`
+	// Docs provides retrieved documents to be used as context for this generation.
+	Docs []*Document `json:"docs,omitempty"`
+	// Messages contains the conversation history for the model.
+	Messages []*Message `json:"messages,omitempty"`
 	// Output describes the desired response format.
-	Output     *ModelOutputConfig `json:"output,omitempty"`
-	ToolChoice ToolChoice         `json:"toolChoice,omitempty"`
+	Output *ModelOutputConfig `json:"output,omitempty"`
+	// ToolChoice controls how the model uses tools (auto, required, or none).
+	ToolChoice ToolChoice `json:"toolChoice,omitempty"`
 	// Tools lists the available tools that the model can ask the client to run.
 	Tools []*ToolDefinition `json:"tools,omitempty"`
 }
 
-// A ModelResponse is a model's response to a [ModelRequest].
+// A ModelResponse is a model's response to a ModelRequest.
 type ModelResponse struct {
-	Custom        any          `json:"custom,omitempty"`
-	FinishMessage string       `json:"finishMessage,omitempty"`
-	FinishReason  FinishReason `json:"finishReason,omitempty"`
+	// Custom contains model-specific extra information. Deprecated: use Raw instead.
+	Custom any `json:"custom,omitempty"`
+	// FinishMessage provides additional details about why generation finished.
+	FinishMessage string `json:"finishMessage,omitempty"`
+	// FinishReason indicates why generation stopped (e.g., stop, length, blocked).
+	FinishReason FinishReason `json:"finishReason,omitempty"`
 	// LatencyMs is the time the request took in milliseconds.
-	LatencyMs float64  `json:"latencyMs,omitempty"`
-	Message   *Message `json:"message,omitempty"`
-	// Request is the [ModelRequest] struct used to trigger this response.
+	LatencyMs float64 `json:"latencyMs,omitempty"`
+	// Message contains the generated response content.
+	Message *Message `json:"message,omitempty"`
+	// Operation provides information about a long-running background task if applicable.
+	Operation *Operation `json:"operation,omitempty"`
+	// Raw contains the unprocessed model-specific response data.
+	Raw any `json:"raw,omitempty"`
+	// Request is the ModelRequest struct used to trigger this response.
 	Request *ModelRequest `json:"request,omitempty"`
 	// Usage describes how many resources were used by this generation request.
-	Usage *GenerationUsage `json:"usage,omitempty"`
+	Usage         *GenerationUsage `json:"usage,omitempty"`
+	formatHandler StreamingFormatHandler
 }
 
-// A ModelResponseChunk is the portion of the [ModelResponse]
+// A ModelResponseChunk is the portion of the ModelResponse
 // that is passed to a streaming callback.
 type ModelResponseChunk struct {
-	Aggregated bool    `json:"aggregated,omitempty"`
-	Content    []*Part `json:"content,omitempty"`
-	Custom     any     `json:"custom,omitempty"`
-	Index      int     `json:"index,omitempty"`
-	Role       Role    `json:"role,omitempty"`
+	// Aggregated indicates whether the chunk includes all data from previous chunks.
+	// If false, the chunk is considered incremental.
+	Aggregated bool `json:"aggregated,omitempty"`
+	// Content is the chunk of message parts to stream right now.
+	Content []*Part `json:"content,omitempty"`
+	// Custom contains model-specific extra information attached to this chunk.
+	Custom any `json:"custom,omitempty"`
+	// Index of the message this chunk belongs to.
+	Index int `json:"index"`
+	// Role indicates the entity that generated this chunk.
+	Role          Role `json:"role,omitempty"`
+	formatHandler StreamingFormatHandler
+}
+
+// MultipartToolResponse represents a tool response with both structured output and content parts.
+type MultipartToolResponse struct {
+	// Content holds additional message parts providing context or details.
+	Content  []*Part        `json:"content,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Output contains the structured output data from the tool.
+	Output any `json:"output,omitempty"`
+}
+
+// Operation represents a long-running background task.
+type Operation struct {
+	// Action is the name of the action being performed by this operation.
+	Action string `json:"action"`
+	// Done indicates whether the operation has completed.
+	Done bool `json:"done"`
+	// Error contains error information if the operation failed.
+	Error *OperationError `json:"error,omitempty"`
+	// Id is the unique identifier for this operation.
+	Id string `json:"id"`
+	// Metadata contains additional information about the operation.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Output contains the result of the operation if it has completed successfully.
+	Output any `json:"output,omitempty"`
+}
+
+// OperationError contains error information for a failed operation.
+type OperationError struct {
+	// Message describes the error that occurred.
+	Message string `json:"message,omitempty"`
 }
 
 // OutputConfig describes the structure that the model's output
-// should conform to. If Format is [OutputFormatJSON], then Schema
+// should conform to. If Format is OutputFormatJSON, then Schema
 // can describe the desired form of the generated JSON.
 type ModelOutputConfig struct {
-	Constrained bool           `json:"constrained,omitempty"`
-	ContentType string         `json:"contentType,omitempty"`
-	Format      string         `json:"format,omitempty"`
-	Schema      map[string]any `json:"schema,omitempty"`
+	// Constrained indicates whether to enforce strict adherence to the schema.
+	Constrained bool `json:"constrained,omitempty"`
+	// ContentType specifies the MIME type of the output content.
+	ContentType string `json:"contentType,omitempty"`
+	// Format specifies the desired output format (e.g., "json", "text").
+	Format string `json:"format,omitempty"`
+	// Schema is a JSON Schema describing the desired structure of the output.
+	Schema map[string]any `json:"schema,omitempty"`
 }
 
+// PathMetadata contains metadata about a single execution path in a trace.
 type PathMetadata struct {
-	Error   string  `json:"error,omitempty"`
+	// Error contains error information if the path failed.
+	Error string `json:"error,omitempty"`
+	// Latency is the execution time for this path in milliseconds.
 	Latency float64 `json:"latency,omitempty"`
-	Path    string  `json:"path,omitempty"`
-	Status  string  `json:"status,omitempty"`
+	// Path is the identifier for this execution path.
+	Path string `json:"path,omitempty"`
+	// Status indicates the outcome of this path.
+	Status string `json:"status,omitempty"`
 }
 
+// RankedDocumentData represents a document with a relevance score from reranking.
 type RankedDocumentData struct {
-	Content  []*Part                 `json:"content,omitempty"`
+	// Content holds the document's parts (text and media).
+	Content []*Part `json:"content,omitempty"`
+	// Metadata contains the reranking score and other arbitrary key-value data.
 	Metadata *RankedDocumentMetadata `json:"metadata,omitempty"`
 }
 
+// RankedDocumentMetadata contains the relevance score and other metadata for a reranked document.
 type RankedDocumentMetadata struct {
+	// Score is the relevance score assigned by the reranker.
 	Score float64 `json:"score,omitempty"`
 }
 
 type reasoningPart struct {
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Reasoning string         `json:"reasoning,omitempty"`
+	// Metadata contains arbitrary key-value data for this part.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Reasoning contains the reasoning text of the message.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
+// RerankerRequest represents a request to rerank documents based on relevance.
 type RerankerRequest struct {
+	// Documents is the array of documents to rerank.
 	Documents []*Document `json:"documents,omitempty"`
-	Options   any         `json:"options,omitempty"`
-	Query     *Document   `json:"query,omitempty"`
+	// Options contains reranker-specific configuration parameters.
+	Options any `json:"options,omitempty"`
+	// Query is the document to use for reranking.
+	Query *Document `json:"query,omitempty"`
 }
 
+// RerankerResponse contains the reranked documents with relevance scores.
 type RerankerResponse struct {
+	// Documents is the array of reranked documents with scores.
 	Documents []*RankedDocumentData `json:"documents,omitempty"`
 }
 
-type RetrieverRequest struct {
-	Options any       `json:"options,omitempty"`
-	Query   *Document `json:"query,omitempty"`
+type resourcePart struct {
+	// Metadata contains arbitrary key-value data for this part.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Resource contains a reference to an external resource by URI.
+	Resource *ResourcePart `json:"resource,omitempty"`
 }
 
+type ResourcePart struct {
+	// Uri is the URI of the external resource.
+	Uri string `json:"uri,omitempty"`
+}
+
+// RetrieverRequest represents a request to retrieve relevant documents.
+type RetrieverRequest struct {
+	// Options contains retriever-specific configuration parameters.
+	Options any `json:"options,omitempty"`
+	// Query is the document to use for retrieval.
+	Query *Document `json:"query,omitempty"`
+}
+
+// RetrieverResponse contains the retrieved documents from a retriever request.
 type RetrieverResponse struct {
+	// Documents is the array of retrieved documents.
 	Documents []*Document `json:"documents,omitempty"`
 }
 
@@ -339,61 +504,83 @@ const (
 	RoleTool Role = "tool"
 )
 
+// ScoreDetails provides additional context and explanation for an evaluation score.
 type ScoreDetails struct {
+	// Reasoning explains the rationale behind the score.
 	Reasoning string `json:"reasoning,omitempty"`
 }
 
 type textPart struct {
+	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
-	Text     string         `json:"text,omitempty"`
+	// Text contains the textual content.
+	Text string `json:"text,omitempty"`
 }
 
 // A ToolDefinition describes a tool.
 type ToolDefinition struct {
+	// Description explains what the tool does and when to use it.
 	Description string `json:"description,omitempty"`
-	// Valid JSON Schema representing the input of the tool.
+	// InputSchema is a valid JSON Schema representing the input parameters of the tool.
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
-	// additional metadata for this tool definition
+	// Metadata contains additional information about this tool definition.
 	Metadata map[string]any `json:"metadata,omitempty"`
-	Name     string         `json:"name,omitempty"`
-	// Valid JSON Schema describing the output of the tool.
+	// Name is the unique identifier for this tool.
+	Name string `json:"name,omitempty"`
+	// OutputSchema is a valid JSON Schema describing the output of the tool.
 	OutputSchema map[string]any `json:"outputSchema,omitempty"`
 }
 
 // A ToolRequest is a message from the model to the client that it should run a
-// specific tool and pass a [ToolResponse] to the model on the next chat request it makes.
-// Any ToolRequest will correspond to some [ToolDefinition] previously sent by the client.
+// specific tool and pass a ToolResponse to the model on the next chat request it makes.
+// Any ToolRequest will correspond to some ToolDefinition previously sent by the client.
 type ToolRequest struct {
-	// Input is a JSON object describing the input values to the tool.
-	// An example might be map[string]any{"country":"USA", "president":3}.
-	Input any    `json:"input,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Ref   string `json:"ref,omitempty"`
+	// Input is a JSON object containing the input parameters for the tool.
+	// For example: map[string]any{"country":"USA", "president":3}.
+	Input any `json:"input,omitempty"`
+	// Name is the name of the tool to call.
+	Name string `json:"name,omitempty"`
+	// Partial indicates whether this is a partial streaming chunk.
+	Partial bool `json:"partial,omitempty"`
+	// Ref is the call ID or reference for this specific request.
+	Ref string `json:"ref,omitempty"`
 }
 
 type toolRequestPart struct {
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	ToolRequest *ToolRequest   `json:"toolRequest,omitempty"`
+	// Metadata contains arbitrary key-value data for this part.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// ToolRequest is a request for a tool to be executed, usually provided by a model.
+	ToolRequest *ToolRequest `json:"toolRequest,omitempty"`
 }
 
 // A ToolResponse is a message from the client to the model containing
 // the results of running a specific tool on the arguments passed to the client
-// by the model in a [ToolRequest].
+// by the model in a ToolRequest.
 type ToolResponse struct {
+	// Content holds additional message parts that provide context or details about the tool response.
+	Content []*Part `json:"content,omitempty"`
+	// Name is the name of the tool that was executed.
 	Name string `json:"name,omitempty"`
 	// Output is a JSON object describing the results of running the tool.
-	// An example might be map[string]any{"name":"Thomas Jefferson", "born":1743}.
-	Output any    `json:"output,omitempty"`
-	Ref    string `json:"ref,omitempty"`
+	// For example: map[string]any{"name":"Thomas Jefferson", "born":1743}.
+	Output any `json:"output,omitempty"`
+	// Ref is the call ID or reference matching the original request.
+	Ref string `json:"ref,omitempty"`
 }
 
 type toolResponsePart struct {
-	Metadata     map[string]any `json:"metadata,omitempty"`
-	ToolResponse *ToolResponse  `json:"toolResponse,omitempty"`
+	// Metadata contains arbitrary key-value data for this part.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// ToolResponse is a provided response to a tool call.
+	ToolResponse *ToolResponse `json:"toolResponse,omitempty"`
 }
 
+// TraceMetadata contains metadata about a trace execution.
 type TraceMetadata struct {
-	FeatureName string          `json:"featureName,omitempty"`
-	Paths       []*PathMetadata `json:"paths,omitempty"`
-	Timestamp   float64         `json:"timestamp,omitempty"`
+	// FeatureName identifies the feature being traced.
+	FeatureName string `json:"featureName,omitempty"`
+	// Paths contains metadata for each path executed during the trace.
+	Paths []*PathMetadata `json:"paths,omitempty"`
+	// Timestamp is when the trace was created.
+	Timestamp float64 `json:"timestamp,omitempty"`
 }

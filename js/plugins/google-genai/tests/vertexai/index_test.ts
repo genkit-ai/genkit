@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { genkit, type Genkit } from 'genkit';
+import { genkit } from 'genkit';
 import { GenerateRequest } from 'genkit/model';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
@@ -26,6 +26,7 @@ import {
 import {
   TEST_ONLY as GEMINI_TEST_ONLY,
   GeminiConfigSchema,
+  GeminiImageConfigSchema,
 } from '../../src/vertexai/gemini.js';
 import {
   TEST_ONLY as IMAGEN_TEST_ONLY,
@@ -37,7 +38,10 @@ import type {
   GlobalClientOptions,
   RegionalClientOptions,
 } from '../../src/vertexai/types.js';
-import { TEST_ONLY as UTILS_TEST_ONLY } from '../../src/vertexai/utils.js';
+import {
+  NOT_SUPPORTED_IN_EXPRESS_ERROR,
+  TEST_ONLY as UTILS_TEST_ONLY,
+} from '../../src/vertexai/utils.js';
 
 describe('VertexAI Plugin', () => {
   const regionalMockDerivedOptions: RegionalClientOptions = {
@@ -60,8 +64,11 @@ describe('VertexAI Plugin', () => {
     kind: 'express' as const,
     apiKey: 'test-express-api-key',
   };
+  const notSupportedInExpressErrorMessage = {
+    message: NOT_SUPPORTED_IN_EXPRESS_ERROR.message,
+  };
 
-  let ai: Genkit;
+  let ai: any;
 
   // Default to regional options for most tests
   beforeEach(() => {
@@ -75,7 +82,7 @@ describe('VertexAI Plugin', () => {
 
   describe('Initializer', () => {
     it('should pre-register flagship Gemini models', async () => {
-      const model1Name = Object.keys(GEMINI_TEST_ONLY.KNOWN_MODELS)[0];
+      const model1Name = Object.keys(GEMINI_TEST_ONLY.KNOWN_GEMINI_MODELS)[0];
       const model1Path = `/model/vertexai/${model1Name}`;
       const expectedBaseName = `vertexai/${model1Name}`;
       const model1 = await ai.registry.lookupAction(model1Path);
@@ -84,7 +91,17 @@ describe('VertexAI Plugin', () => {
     });
 
     it('should register all known Gemini models', async () => {
-      for (const modelName in GEMINI_TEST_ONLY.KNOWN_MODELS) {
+      for (const modelName in GEMINI_TEST_ONLY.KNOWN_GEMINI_MODELS) {
+        const modelPath = `/model/vertexai/${modelName}`;
+        const expectedBaseName = `vertexai/${modelName}`;
+        const model = await ai.registry.lookupAction(modelPath);
+        assert.ok(model, `${modelName} should be registered at ${modelPath}`);
+        assert.strictEqual(model?.__action.name, expectedBaseName);
+      }
+    });
+
+    it('should register all known Image models', async () => {
+      for (const modelName in GEMINI_TEST_ONLY.KNOWN_IMAGE_MODELS) {
         const modelPath = `/model/vertexai/${modelName}`;
         const expectedBaseName = `vertexai/${modelName}`;
         const model = await ai.registry.lookupAction(modelPath);
@@ -179,7 +196,7 @@ describe('VertexAI Plugin', () => {
 
   describe('Helper Functions', () => {
     it('vertexAI.model should return a ModelReference for Gemini with correct schema', () => {
-      const modelName = 'gemini-2.0-flash';
+      const modelName = 'gemini-2.5-flash';
       const modelRef = vertexAI.model(modelName);
       assert.strictEqual(
         modelRef.name,
@@ -194,6 +211,25 @@ describe('VertexAI Plugin', () => {
         modelRef.configSchema,
         GeminiConfigSchema,
         'Should have GeminiConfigSchema'
+      );
+    });
+
+    it('vertexAI.model should return a ModelReference for Gemini Image model with correct schema', () => {
+      const modelName = 'gemini-3-pro-image-preview';
+      const modelRef = vertexAI.model(modelName);
+      assert.strictEqual(
+        modelRef.name,
+        `vertexai/${modelName}`,
+        'Name should be prefixed'
+      );
+      assert.ok(
+        modelRef.info?.supports?.multiturn,
+        'Gemini model should support multiturn'
+      );
+      assert.strictEqual(
+        modelRef.configSchema,
+        GeminiImageConfigSchema,
+        'Should have GeminiImageConfigSchema'
       );
     });
 
@@ -246,8 +282,8 @@ describe('VertexAI Plugin', () => {
 
     it('should return an empty array if no models are returned', async () => {
       fetchMock.mock.mockImplementation(async () => createMockResponse([]));
-      const pluginProvider = vertexAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = vertexAI();
+      const actions = await plugin.list!();
       assert.deepStrictEqual(actions, [], 'Should return an empty array');
     });
 
@@ -255,14 +291,14 @@ describe('VertexAI Plugin', () => {
       const mockModels = [
         { name: 'models/gemini-2.5-pro' },
         { name: 'models/imagen-3.0-generate-001' },
-        { name: 'models/text-embedding-004' },
+        { name: 'models/gemini-embedding-001' },
         { name: 'models/other-model' },
       ];
       fetchMock.mock.mockImplementation(async () =>
         createMockResponse(mockModels)
       );
-      const pluginProvider = vertexAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = vertexAI();
+      const actions = await plugin.list!();
       const actionNames = actions.map((a) => a.name).sort();
       assert.deepStrictEqual(
         actionNames,
@@ -275,8 +311,8 @@ describe('VertexAI Plugin', () => {
 
     it('should call fetch with auth token and location-specific URL for local options', async () => {
       fetchMock.mock.mockImplementation(async () => createMockResponse([]));
-      const pluginProvider = vertexAI()(ai);
-      await pluginProvider.listActions!();
+      const plugin = vertexAI();
+      await plugin.list!();
 
       const fetchCall = fetchMock.mock.calls[0];
       const headers = fetchCall.arguments[1].headers;
@@ -297,8 +333,8 @@ describe('VertexAI Plugin', () => {
       UTILS_TEST_ONLY.setMockDerivedOptions(globalWithOptions);
       ai = genkit({ plugins: [vertexAI()] }); // Re-init
       fetchMock.mock.mockImplementation(async () => createMockResponse([]));
-      const pluginProvider = vertexAI()(ai);
-      await pluginProvider.listActions!();
+      const plugin = vertexAI();
+      await plugin.list!();
 
       const fetchCall = fetchMock.mock.calls[0];
       const headers = fetchCall.arguments[1].headers;
@@ -316,8 +352,8 @@ describe('VertexAI Plugin', () => {
       UTILS_TEST_ONLY.setMockDerivedOptions(expressMockDerivedOptions);
       ai = genkit({ plugins: [vertexAI()] }); // Re-init
       fetchMock.mock.mockImplementation(async () => createMockResponse([]));
-      const pluginProvider = vertexAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = vertexAI();
+      const actions = await plugin.list!();
       assert.strictEqual(actions.length, 0);
       assert.strictEqual(fetchMock.mock.calls.length, 0);
     });
@@ -348,7 +384,7 @@ describe('VertexAI Plugin', () => {
       });
 
       it('should use auth token for Gemini generateContent', async () => {
-        const modelRef = vertexAI.model('gemini-1.5-flash');
+        const modelRef = vertexAI.model('gemini-2.5-flash');
         const generateAction = await ai.registry.lookupAction(
           '/model/' + modelRef.name
         );
@@ -378,7 +414,7 @@ describe('VertexAI Plugin', () => {
       });
 
       it('should use auth token for Embedder embedContent', async () => {
-        const embedderRef = vertexAI.embedder('text-embedding-004');
+        const embedderRef = vertexAI.embedder('gemini-embedding-001');
         const embedAction = await ai.registry.lookupAction(
           '/embedder/' + embedderRef.name
         );
@@ -436,7 +472,7 @@ describe('VertexAI Plugin', () => {
       });
 
       it('should use API key for Gemini generateContent', async () => {
-        const modelRef = vertexAI.model('gemini-1.5-flash');
+        const modelRef = vertexAI.model('gemini-2.5-flash');
         const generateAction = await ai.registry.lookupAction(
           '/model/' + modelRef.name
         );
@@ -472,7 +508,7 @@ describe('VertexAI Plugin', () => {
       });
 
       it('should use API key for Embedder embedContent', async () => {
-        const embedderRef = vertexAI.embedder('text-embedding-004');
+        const embedderRef = vertexAI.embedder('gemini-embedding-001');
         const embedAction = await ai.registry.lookupAction(
           '/embedder/' + embedderRef.name
         );
@@ -531,7 +567,7 @@ describe('VertexAI Plugin', () => {
       });
 
       it('should use API key for Gemini generateContent', async () => {
-        const modelRef = vertexAI.model('gemini-1.5-flash');
+        const modelRef = vertexAI.model('gemini-2.5-flash');
         const generateAction = await ai.registry.lookupAction(
           '/model/' + modelRef.name
         );
@@ -567,7 +603,7 @@ describe('VertexAI Plugin', () => {
       });
 
       it('should not support Embedder embedContent', async () => {
-        const embedderRef = vertexAI.embedder('text-embedding-004');
+        const embedderRef = vertexAI.embedder('gemini-embedding-001');
         const embedAction = await ai.registry.lookupAction(
           '/embedder/' + embedderRef.name
         );
@@ -580,7 +616,7 @@ describe('VertexAI Plugin', () => {
           await embedAction({
             input: [{ content: [{ text: 'test' }] }],
           });
-        }, /This method is not supported in Vertex AI Express Mode/);
+        }, notSupportedInExpressErrorMessage);
       });
 
       it('should not support Imagen predict', async () => {
@@ -595,7 +631,7 @@ describe('VertexAI Plugin', () => {
             messages: [{ role: 'user', content: [{ text: 'a cat' }] }],
             config: {},
           } as GenerateRequest);
-        }, /This method is not supported in Vertex AI Express Mode/);
+        }, notSupportedInExpressErrorMessage);
       });
     });
   });

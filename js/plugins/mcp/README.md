@@ -1,5 +1,7 @@
 # Genkit MCP
 
+See [Genkit MCP documentation](https://genkit.dev/docs/model-context-protocol/).
+
 This plugin provides integration between Genkit and the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). MCP is an open standard allowing developers to build "servers" which provide tools, resources, and prompts to clients. Genkit MCP allows Genkit developers to:
 - Consume MCP tools, prompts, and resources as a client using `createMcpHost` or `createMcpClient`.
 - Provide Genkit tools and prompts as an MCP server using `createMcpServer`.
@@ -17,7 +19,7 @@ npm i genkit @genkit-ai/mcp
 To connect to one or more MCP servers, you use the `createMcpHost` function. This function returns a `GenkitMcpHost` instance that manages connections to the configured MCP servers.
 
 ```ts
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { createMcpHost } from '@genkit-ai/mcp';
 import { genkit } from 'genkit';
 
@@ -63,7 +65,7 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
 -   **`version`**: (optional, string) The version of the MCP host plugin. Defaults to "1.0.0".
 -   **`rawToolResponses`**: (optional, boolean) When `true`, tool responses are returned in their raw MCP format; otherwise, they are processed for Genkit compatibility. Defaults to `false`.
 -   **`mcpServers`**: (required, object) An object where each key is a client-side name (namespace) for an MCP server, and the value is the configuration for that server.
-    
+
     Each server configuration object can include:
     -   **`disabled`**: (optional, boolean) If `true`, this server connection will not be attempted. Defaults to `false`.
     -   One of the following server connection configurations:
@@ -80,7 +82,7 @@ The `createMcpHost` function initializes a `GenkitMcpHost` instance, which handl
 For scenarios where you only need to connect to a single MCP server, or prefer to manage client instances individually, you can use `createMcpClient`.
 
 ```ts
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { createMcpClient } from '@genkit-ai/mcp';
 import { genkit } from 'genkit';
 
@@ -146,7 +148,7 @@ MCP tools return a `content` array as opposed to a structured response like most
 You can also expose all of the tools and prompts from a Genkit instance as an MCP server using the `createMcpServer` function.
 
 ```ts
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { createMcpServer } from '@genkit-ai/mcp';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { genkit, z } from 'genkit/beta';

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -58,26 +59,21 @@ func (p *Pinecone) Name() string {
 // Init initializes the Pinecone plugin.
 // If apiKey is the empty string, it is read from the PINECONE_API_KEY
 // environment variable.
-func (p *Pinecone) Init(ctx context.Context, g *genkit.Genkit) (err error) {
+func (p *Pinecone) Init(ctx context.Context) []api.Action {
 	// Init initializes the Pinecone plugin.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.initted {
 		panic("pinecone.Init already called")
 	}
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("pinecone.Init: %w", err)
-		}
-	}()
 
 	client, err := newClient(ctx, p.APIKey)
 	if err != nil {
-		return err
+		panic(fmt.Errorf("pinecone.Init: %w", err))
 	}
 	p.client = client
 	p.initted = true
-	return nil
+	return []api.Action{}
 }
 
 // Config provides configuration options for [DefineRetriever].
@@ -111,12 +107,12 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, cfg Config, opts *ai
 	if err != nil {
 		return nil, nil, err
 	}
-	return ds, genkit.DefineRetriever(g, provider, cfg.IndexID, opts, ds.Retrieve), nil
+	return ds, genkit.DefineRetriever(g, api.NewName(provider, cfg.IndexID), opts, ds.Retrieve), nil
 }
 
 // IsDefinedRetriever reports whether the named [Retriever] is defined by this plugin.
 func IsDefinedRetriever(g *genkit.Genkit, name string) bool {
-	return genkit.LookupRetriever(g, provider, name) != nil
+	return genkit.LookupRetriever(g, api.NewName(provider, name)) != nil
 }
 
 func (p *Pinecone) newDocstore(ctx context.Context, cfg Config) (*Docstore, error) {
@@ -153,7 +149,7 @@ func (p *Pinecone) newDocstore(ctx context.Context, cfg Config) (*Docstore, erro
 
 // Retriever returns the retriever with the given index name.
 func Retriever(g *genkit.Genkit, name string) ai.Retriever {
-	return genkit.LookupRetriever(g, provider, name)
+	return genkit.LookupRetriever(g, api.NewName(provider, name))
 }
 
 // Docstore implements the genkit [ai.DocumentStore] interface.

@@ -34,19 +34,16 @@ func TestPlugin(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Initialize genkit with claude-3-7-sonnet as default model
-	g, err := genkit.Init(
+	// Initialize genkit with claude-4-5-sonnet as default model
+	g := genkit.Init(
 		ctx,
-		genkit.WithDefaultModel("anthropic/claude-3-7-sonnet-20250219"),
+		genkit.WithDefaultModel("anthropic/claude-sonnet-4-5-20250929"),
 		genkit.WithPlugins(&anthropic.Anthropic{
 			Opts: []option.RequestOption{
 				option.WithAPIKey(apiKey),
 			},
 		}),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Log("genkit initialized")
 
 	t.Run("basic completion", func(t *testing.T) {

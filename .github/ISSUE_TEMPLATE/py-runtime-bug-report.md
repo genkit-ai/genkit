@@ -20,11 +20,11 @@ A clear and concise description of what you expected to happen.
 If applicable, add screenshots to help explain your problem.
 
 **Runtime (please complete the following information):**
- - OS: [e.g. Linux, MacOS]
- - Genkit Version [e.g. 0.3.1]
+ - OS: [e.g. Linux, macOS]
+ - Genkit Version: [e.g. 0.3.1]
 
-** Node version
- -  run `python3 --version` at paste here
+**Python version**
+ - Run `python3 --version` at paste here
 
 **Additional context**
 Add any other context about the problem here.

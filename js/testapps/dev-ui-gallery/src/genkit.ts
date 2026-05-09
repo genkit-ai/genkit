@@ -17,8 +17,14 @@
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
-import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
-import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
+import { googleAI, vertexAI } from '@genkit-ai/google-genai';
+import {
+  fallback,
+  filesystem,
+  retry,
+  skills,
+  toolApproval,
+} from '@genkit-ai/middleware';
 import {
   VertexAIEvaluationMetricType,
   vertexAIEvaluation,
@@ -82,12 +88,12 @@ export const PERMISSIVE_SAFETY_SETTINGS: any = {
 // a second instance, just for fun
 export const ai2 = genkit({
   name: 'Instance Two',
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   plugins: [googleAI()],
 });
 
 export const ai = genkit({
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   // load at least one plugin representing each action type
   plugins: [
     // model providers
@@ -143,35 +149,42 @@ export const ai = genkit({
     chroma([
       {
         collectionName: 'chroma-collection',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),
     devLocalVectorstore([
       {
         indexName: 'naive-index',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),
     pinecone([
       {
         indexId: 'pinecone-index',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),
 
     // evaluation
     genkitEval({
-      judge: gemini15Flash,
+      judge: googleAI.model('gemini-2.5-flash'),
       judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
-      embedder: textEmbedding004,
+      embedder: googleAI.embedder('gemini-embedding-001'),
       metrics: [
         GenkitMetric.ANSWER_RELEVANCY,
         GenkitMetric.FAITHFULNESS,
         GenkitMetric.MALICIOUSNESS,
       ],
     }),
+
+    //middleware
+    fallback.plugin(),
+    filesystem.plugin(),
+    retry.plugin(),
+    skills.plugin(),
+    toolApproval.plugin(),
   ],
 });

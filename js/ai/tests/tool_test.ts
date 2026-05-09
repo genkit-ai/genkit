@@ -14,11 +14,22 @@
  * limitations under the License.
  */
 
-import { z } from '@genkit-ai/core';
+import { action, z } from '@genkit-ai/core';
+import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { afterEach, describe, it } from 'node:test';
-import { defineInterrupt, defineTool } from '../src/tool.js';
+import {
+  defineInterrupt,
+  defineTool,
+  isDynamicTool,
+  isMultipartTool,
+  respondTool,
+  restartTool,
+  tool,
+} from '../src/tool.js';
+
+initNodeFeatures();
 
 describe('defineInterrupt', () => {
   let registry = new Registry();
@@ -103,6 +114,162 @@ describe('defineInterrupt', () => {
     assert.deepStrictEqual(simple2.__action.outputJsonSchema, {
       type: 'string',
     });
+  });
+
+  describe('multipart tools', () => {
+    it('should define a multipart tool', async () => {
+      const t = defineTool(
+        registry,
+        { name: 'test', description: 'test', multipart: true },
+        async () => {
+          return {
+            output: 'main output',
+            content: [{ text: 'part 1' }],
+          };
+        }
+      );
+      assert.equal(t.__action.metadata.type, 'tool.v2');
+      assert.equal(t.__action.actionType, 'tool.v2');
+      const result = await t({});
+      assert.deepStrictEqual(result, {
+        output: 'main output',
+        content: [{ text: 'part 1' }],
+      });
+    });
+
+    it('should define a multipart tool returning metadata', async () => {
+      const t = defineTool(
+        registry,
+        { name: 'test_meta', description: 'test', multipart: true },
+        async () => {
+          return {
+            output: 'main output',
+            content: [{ text: 'part 1' }],
+            metadata: { customField: 123 },
+          };
+        }
+      );
+      assert.equal(t.__action.metadata.type, 'tool.v2');
+      assert.equal(t.__action.actionType, 'tool.v2');
+      const result = await t({});
+      assert.deepStrictEqual(result, {
+        output: 'main output',
+        content: [{ text: 'part 1' }],
+        metadata: { customField: 123 },
+      });
+    });
+
+    it('should handle fallback output', async () => {
+      const t = defineTool(
+        registry,
+        { name: 'test', description: 'test', multipart: true },
+        async () => {
+          return {
+            content: [{ text: 'part 1' }],
+          };
+        }
+      );
+      const result = await t({});
+      assert.deepStrictEqual(result, {
+        content: [{ text: 'part 1' }],
+      });
+    });
+  });
+});
+
+describe('isDynamicTool', () => {
+  let registry = new Registry();
+  registry.apiStability = 'beta';
+  afterEach(() => {
+    registry = new Registry();
+    registry.apiStability = 'beta';
+  });
+
+  it('should return true for a dynamic tool', () => {
+    const dynamic = tool({ name: 'dynamic', description: 'test' });
+    assert.strictEqual(isDynamicTool(dynamic), true);
+  });
+
+  it('should return true for a dynamic multipart tool', () => {
+    const dynamic = tool({
+      name: 'dynamic',
+      description: 'test',
+      multipart: true,
+    });
+    assert.strictEqual(isDynamicTool(dynamic), true);
+  });
+
+  it('should remain dynamic after registration', () => {
+    const dynamic = tool({ name: 'dynamic', description: 'test' });
+    assert.strictEqual(isDynamicTool(dynamic), true);
+
+    registry.registerAction('tool', dynamic);
+
+    assert.strictEqual(isDynamicTool(dynamic), true);
+  });
+
+  it('should return false for a registered tool', () => {
+    const regular = defineTool(
+      registry,
+      { name: 'regular', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(isDynamicTool(regular), false);
+  });
+
+  it('should return false for a non-tool action', () => {
+    const regularAction = action(
+      { actionType: 'util', name: 'regularAction', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(isDynamicTool(regularAction), false);
+  });
+
+  it('should return false for a non-action', () => {
+    assert.strictEqual(isDynamicTool({}), false);
+    assert.strictEqual(isDynamicTool('tool'), false);
+    assert.strictEqual(isDynamicTool(123), false);
+  });
+});
+
+describe('isMultipartTool', () => {
+  let registry = new Registry();
+  registry.apiStability = 'beta';
+  afterEach(() => {
+    registry = new Registry();
+    registry.apiStability = 'beta';
+  });
+
+  it('should return true for a multipart tool', () => {
+    const multipart = defineTool(
+      registry,
+      { name: 'multipart', description: 'test', multipart: true },
+      async () => {}
+    );
+    assert.strictEqual(isMultipartTool(multipart), true);
+  });
+
+  it('should return false for a non-multipart tool', () => {
+    const regular = defineTool(
+      registry,
+      { name: 'regular', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(isMultipartTool(regular), false);
+  });
+
+  it('should return false for a non-tool action', () => {
+    const regularAction = action(
+      { actionType: 'util', name: 'regularAction', description: 'test' },
+      async () => {}
+    );
+    assert.strictEqual(isMultipartTool(regularAction), false);
+  });
+
+  it('should return false for a non-action', () => {
+    assert.strictEqual(isMultipartTool({}), false);
+    assert.strictEqual(isMultipartTool('tool'), false);
+    assert.strictEqual(isMultipartTool(123), false);
   });
 });
 
@@ -263,5 +430,96 @@ describe('defineTool', () => {
         }
       );
     });
+  });
+
+  it('should register a v1 tool as v2 as well', async () => {
+    defineTool(registry, { name: 'test', description: 'test' }, async () => {});
+    assert.ok(await registry.lookupAction('/tool/test'));
+    assert.ok(await registry.lookupAction('/tool.v2/test'));
+  });
+
+  it('should only register a multipart tool as v2', async () => {
+    defineTool(
+      registry,
+      { name: 'test', description: 'test', multipart: true },
+      async () => {}
+    );
+    assert.ok(await registry.lookupAction('/tool.v2/test'));
+    assert.equal(await registry.lookupAction('/tool/test'), undefined);
+  });
+
+  it('should wrap v1 tool output when called as v2', async () => {
+    defineTool(
+      registry,
+      { name: 'test', description: 'test' },
+      async () => 'foo'
+    );
+    const action = await registry.lookupAction('/tool.v2/test');
+    assert.ok(action);
+    const result = await action!({});
+    assert.deepStrictEqual(result, { output: 'foo' });
+  });
+});
+
+describe('respondTool', () => {
+  it('constructs a ToolResponsePart standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(respondTool(interrupt, 'output'), {
+      toolResponse: {
+        name: 'test',
+        output: 'output',
+      },
+      metadata: {
+        interruptResponse: true,
+      },
+    });
+  });
+
+  it('includes metadata standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(
+      respondTool(interrupt, 'output', { metadata: { extra: 'data' } }),
+      {
+        toolResponse: {
+          name: 'test',
+          output: 'output',
+        },
+        metadata: {
+          interruptResponse: { extra: 'data' },
+        },
+      }
+    );
+  });
+});
+
+describe('restartTool', () => {
+  it('constructs a ToolRequestPart standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(restartTool(interrupt), {
+      toolRequest: {
+        name: 'test',
+        input: {},
+      },
+      metadata: {
+        resumed: true,
+      },
+    });
+  });
+
+  it('allows replacing input standalone', () => {
+    const interrupt = { toolRequest: { name: 'test', input: {} } };
+    assert.deepStrictEqual(
+      restartTool(interrupt, undefined, { replaceInput: 'new' }),
+      {
+        toolRequest: {
+          name: 'test',
+          input: 'new',
+        },
+        metadata: {
+          resumed: true,
+          replacedInput: {},
+        },
+      }
+    );
   });
 });

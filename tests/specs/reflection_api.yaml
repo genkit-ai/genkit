@@ -34,3 +34,6 @@ tests:
           role: model
           content:
             - text: '{"messages":[{"content":[{"text":"hello"}],"role":"user"}]}'
+        usage:
+          inputCharacters: 5
+          outputCharacters: 59

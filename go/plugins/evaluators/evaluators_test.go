@@ -36,11 +36,8 @@ func TestEvaluators(t *testing.T) {
 			MetricType: evaluators.EvaluatorJsonata,
 		},
 	}
-	g, err := genkit.Init(ctx,
+	g := genkit.Init(ctx,
 		genkit.WithPlugins(&evaluators.GenkitEval{Metrics: metrics}))
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	t.Run("deep equal", func(t *testing.T) {
 		var dataset = []*ai.Example{
@@ -64,7 +61,10 @@ func TestEvaluators(t *testing.T) {
 			EvaluationId: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval", "deep_equal")
+		evalAction := genkit.LookupEvaluator(g, "genkitEval/deep_equal")
+		if evalAction == nil {
+			t.Fatal("evalAction is nil")
+		}
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)
@@ -103,7 +103,7 @@ func TestEvaluators(t *testing.T) {
 			EvaluationId: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval", "regex")
+		evalAction := genkit.LookupEvaluator(g, "genkitEval/regex")
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestEvaluators(t *testing.T) {
 			EvaluationId: "testrun",
 		}
 
-		evalAction := genkit.LookupEvaluator(g, "genkitEval", "jsonata")
+		evalAction := genkit.LookupEvaluator(g, "genkitEval/jsonata")
 		resp, err := evalAction.Evaluate(ctx, &testRequest)
 		if err != nil {
 			t.Fatal(err)

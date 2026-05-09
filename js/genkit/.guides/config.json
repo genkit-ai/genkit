@@ -1,0 +1,39 @@
+{
+  "mcpServers": {
+    "genkit": {
+      "command": "genkit",
+      "args": ["mcp"]
+    }
+  },
+  "docs": [
+    {
+      "url": "https://genkit.dev/docs/models.md",
+      "name": "generate-content",
+      "title": "Generate Content",
+      "description": "read before generating content (text, structured data, images, videos) with Genkit."
+    },
+    {
+      "url": "https://genkit.dev/docs/flows.md",
+      "name": "flows",
+      "title": "Using Flows to build GenAI Workflows",
+      "description": "read before building API endpoints or repeatable, strongly-typed workflows with Genkit"
+    },
+    {
+      "url": "https://genkit.dev/docs/tool-calling.md",
+      "name": "tool-calling",
+      "title": "Tool Calling",
+      "description": "read before adding tools/function calls to Genkit for GenAI"
+    },
+    {
+      "url": "https://genkit.dev/docs/interrupts.md",
+      "name": "tool-calling/interrupts",
+      "title": "Interrupts (Tool Calling with Human-in-the-Loop)",
+      "description": "read to understand how to use interrupts to provide human-in-the-loop capabilities to Genkit agents"
+    },
+    {
+      "url": "https://genkit.dev/docs/context.md",
+      "name": "context",
+      "description": "read to understand how to pass context to tools and flows without exposing sensitive data to the LLM"
+    }
+  ]
+}

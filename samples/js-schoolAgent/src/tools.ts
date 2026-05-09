@@ -97,7 +97,7 @@ export const reportTardy = ai.defineTool(
         ),
       excused: z
         .boolean()
-        .describe('whether the absense is excused by the parent'),
+        .describe('whether the absence is excused by the parent'),
     }),
   },
   async (input) => {

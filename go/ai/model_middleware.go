@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/logger"
@@ -47,22 +48,147 @@ type DownloadMediaOptions struct {
 	Filter   func(part *Part) bool // Filter to apply to parts that are media URLs.
 }
 
+func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
+	if resp.Usage == nil {
+		resp.Usage = &GenerationUsage{}
+	}
+	if resp.Usage.InputCharacters == 0 {
+		resp.Usage.InputCharacters = countInputCharacters(req)
+	}
+	if resp.Usage.OutputCharacters == 0 {
+		resp.Usage.OutputCharacters = countOutputCharacters(resp)
+	}
+	if resp.Usage.InputImages == 0 {
+		resp.Usage.InputImages = countInputParts(req, func(part *Part) bool { return part.IsImage() })
+	}
+	if resp.Usage.OutputImages == 0 {
+		resp.Usage.OutputImages = countOutputParts(resp, func(part *Part) bool { return part.IsImage() })
+	}
+	if resp.Usage.InputVideos == 0 {
+		resp.Usage.InputVideos = countInputParts(req, func(part *Part) bool { return part.IsVideo() })
+	}
+	if resp.Usage.OutputVideos == 0 {
+		resp.Usage.OutputVideos = countOutputParts(resp, func(part *Part) bool { return part.IsVideo() })
+	}
+	if resp.Usage.InputAudioFiles == 0 {
+		resp.Usage.InputAudioFiles = countInputParts(req, func(part *Part) bool { return part.IsAudio() })
+	}
+	if resp.Usage.OutputAudioFiles == 0 {
+		resp.Usage.OutputAudioFiles = countOutputParts(resp, func(part *Part) bool { return part.IsAudio() })
+	}
+}
+
+// addAutomaticTelemetry creates middleware that automatically measures latency and calculates character and media counts.
+func addAutomaticTelemetry() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			startTime := time.Now()
+
+			// Call the underlying model function
+			resp, err := fn(ctx, req, cb)
+			if err != nil {
+				return nil, err
+			}
+
+			// Calculate latency
+			latencyMs := float64(time.Since(startTime).Nanoseconds()) / 1e6
+			if resp.LatencyMs == 0 {
+				resp.LatencyMs = latencyMs
+			}
+
+			CalculateInputOutputUsage(req, resp)
+
+			return resp, nil
+		}
+	}
+}
+
+// countInputParts counts parts in the input request that match the given predicate.
+func countInputParts(req *ModelRequest, predicate func(*Part) bool) int {
+	if req == nil {
+		return 0
+	}
+
+	count := 0
+	for _, msg := range req.Messages {
+		if msg == nil {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part != nil && predicate(part) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// countInputCharacters counts the total characters in the input request.
+func countInputCharacters(req *ModelRequest) int {
+	if req == nil {
+		return 0
+	}
+
+	total := 0
+	for _, msg := range req.Messages {
+		if msg == nil {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part != nil && part.Text != "" {
+				total += len(part.Text)
+			}
+		}
+	}
+	return total
+}
+
+// countOutputParts counts parts in the output response that match the given predicate.
+func countOutputParts(resp *ModelResponse, predicate func(*Part) bool) int {
+	if resp == nil || resp.Message == nil {
+		return 0
+	}
+
+	count := 0
+	for _, part := range resp.Message.Content {
+		if part != nil && predicate(part) {
+			count++
+		}
+	}
+	return count
+}
+
+// countOutputCharacters counts the total characters in the output response.
+func countOutputCharacters(resp *ModelResponse) int {
+	if resp == nil || resp.Message == nil {
+		return 0
+	}
+
+	total := 0
+	for _, part := range resp.Message.Content {
+		if part != nil && part.Text != "" {
+			total += len(part.Text)
+		}
+	}
+	return total
+}
+
 // simulateSystemPrompt provides a simulated system prompt for models that don't support it natively.
-func simulateSystemPrompt(info *ModelInfo, options map[string]string) ModelMiddleware {
+func simulateSystemPrompt(modelOpts *ModelOptions, opts map[string]string) ModelMiddleware {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			// Short-circuiting middleware if system role is supported in model.
-			if info.Supports.SystemRole {
+			if modelOpts.Supports.SystemRole {
 				return next(ctx, input, cb)
 			}
 			preface := "SYSTEM INSTRUCTIONS:\n"
 			acknowledgement := "Understood."
 
-			if options != nil {
-				if p, ok := options["preface"]; ok {
+			if opts != nil {
+				if p, ok := opts["preface"]; ok {
 					preface = p
 				}
-				if a, ok := options["acknowledgement"]; ok {
+				if a, ok := opts["acknowledgement"]; ok {
 					acknowledgement = a
 				}
 			}
@@ -88,17 +214,17 @@ func simulateSystemPrompt(info *ModelInfo, options map[string]string) ModelMiddl
 }
 
 // validateSupport validates whether a model supports the features used in the model request.
-func validateSupport(model string, info *ModelInfo) ModelMiddleware {
+func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
-			if info == nil {
-				info = &ModelInfo{
+			if opts == nil {
+				opts = &ModelOptions{
 					Supports: &ModelSupports{},
 					Versions: []string{},
 				}
 			}
 
-			if !info.Supports.Media {
+			if !opts.Supports.Media {
 				for _, msg := range input.Messages {
 					for _, part := range msg.Content {
 						if part.IsMedia() {
@@ -108,19 +234,19 @@ func validateSupport(model string, info *ModelInfo) ModelMiddleware {
 				}
 			}
 
-			if !info.Supports.Tools && len(input.Tools) > 0 {
+			if !opts.Supports.Tools && len(input.Tools) > 0 {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support tool use, but tools were provided. Request: %+v", model, input)
 			}
 
-			if !info.Supports.Multiturn && len(input.Messages) > 1 {
+			if !opts.Supports.Multiturn && len(input.Messages) > 1 {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support multiple messages, but %d were provided. Request: %+v", model, len(input.Messages), input)
 			}
 
-			if !info.Supports.ToolChoice && input.ToolChoice != "" && input.ToolChoice != ToolChoiceAuto {
+			if !opts.Supports.ToolChoice && input.ToolChoice != "" && input.ToolChoice != ToolChoiceAuto {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support tool choice, but tool choice was provided. Request: %+v", model, input)
 			}
 
-			if !info.Supports.SystemRole {
+			if !opts.Supports.SystemRole {
 				for _, msg := range input.Messages {
 					if msg.Role == RoleSystem {
 						return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support system role, but system role was provided. Request: %+v", model, input)
@@ -128,8 +254,8 @@ func validateSupport(model string, info *ModelInfo) ModelMiddleware {
 				}
 			}
 
-			if info.Stage != "" {
-				switch info.Stage {
+			if opts.Stage != "" {
+				switch opts.Stage {
 				case ModelStageDeprecated:
 					logger.FromContext(ctx).Warn("model is deprecated and may be removed in a future release", "model", model)
 				case ModelStageUnstable:
@@ -137,14 +263,14 @@ func validateSupport(model string, info *ModelInfo) ModelMiddleware {
 				}
 			}
 
-			if (info.Supports.Constrained == "" ||
-				info.Supports.Constrained == ConstrainedSupportNone ||
-				(info.Supports.Constrained == ConstrainedSupportNoTools && len(input.Tools) > 0)) &&
+			if (opts.Supports.Constrained == "" ||
+				opts.Supports.Constrained == ConstrainedSupportNone ||
+				(opts.Supports.Constrained == ConstrainedSupportNoTools && len(input.Tools) > 0)) &&
 				input.Output != nil && input.Output.Constrained {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
 			}
 
-			if err := validateVersion(model, info.Versions, input.Config); err != nil {
+			if err := validateVersion(model, opts.Versions, input.Config); err != nil {
 				return nil, err
 			}
 
@@ -206,20 +332,20 @@ func contextItemTemplate(d Document, index int, options *AugmentWithContextOptio
 }
 
 // augmentWithContext augments a request with context documents.
-func augmentWithContext(info *ModelInfo, opts *AugmentWithContextOptions) ModelMiddleware {
+func augmentWithContext(modelOpts *ModelOptions, augOpts *AugmentWithContextOptions) ModelMiddleware {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			// Short-circuiting middleware if context is supported in model.
-			if info.Supports.Context {
+			if modelOpts.Supports.Context {
 				return next(ctx, input, cb)
 			}
 			preface := contextPreface
-			if opts != nil && opts.Preface != nil {
-				preface = *opts.Preface
+			if augOpts != nil && augOpts.Preface != nil {
+				preface = *augOpts.Preface
 			}
 			itemTemplate := contextItemTemplate
-			if opts != nil && opts.ItemTemplate != nil {
-				itemTemplate = opts.ItemTemplate
+			if augOpts != nil && augOpts.ItemTemplate != nil {
+				itemTemplate = augOpts.ItemTemplate
 			}
 			// if there is no context in the request, no-op
 			if len(input.Docs) == 0 {
@@ -247,7 +373,7 @@ func augmentWithContext(info *ModelInfo, opts *AugmentWithContextOptions) ModelM
 
 			out := preface
 			for i, doc := range input.Docs {
-				out += itemTemplate(*doc, i, opts)
+				out += itemTemplate(*doc, i, augOpts)
 			}
 			out += "\n"
 
@@ -289,13 +415,13 @@ func (d *Document) concatText() string {
 }
 
 // DownloadRequestMedia downloads media from a URL and replaces the media part with a base64 encoded string.
-func DownloadRequestMedia(options *DownloadMediaOptions) ModelMiddleware {
+func DownloadRequestMedia(opts *DownloadMediaOptions) ModelMiddleware {
 	return func(next ModelFunc) ModelFunc {
 		return func(ctx context.Context, input *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 			client := &http.Client{}
 			for _, message := range input.Messages {
 				for j, part := range message.Content {
-					if !part.IsMedia() || !strings.HasPrefix(part.Text, "http") || (options != nil && options.Filter != nil && !options.Filter(part)) {
+					if !part.IsMedia() || !strings.HasPrefix(part.Text, "http") || (opts != nil && opts.Filter != nil && !opts.Filter(part)) {
 						continue
 					}
 
@@ -318,8 +444,8 @@ func DownloadRequestMedia(options *DownloadMediaOptions) ModelMiddleware {
 					}
 
 					var data []byte
-					if options != nil && options.MaxBytes > 0 {
-						limitedReader := io.LimitReader(resp.Body, int64(options.MaxBytes))
+					if opts != nil && opts.MaxBytes > 0 {
+						limitedReader := io.LimitReader(resp.Body, int64(opts.MaxBytes))
 						data, err = io.ReadAll(limitedReader)
 					} else {
 						data, err = io.ReadAll(resp.Body)

@@ -334,6 +334,43 @@ paths:
                 allOf:
                   - $ref: '#/components/schemas/CustomAny'
                   - description: An output with the type that this action returns.
+  /api/cancelAction:
+    post:
+      summary: Cancels an in-flight action by trace ID.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                traceId:
+                  type: string
+                  description: Trace ID of the action to cancel.
+              required:
+                - traceId
+      responses:
+        '200':
+          description: Action was successfully cancelled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Action cancelled'
+        '400':
+          description: Invalid request (missing or invalid traceId).
+        '404':
+          description: Action not found or already completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: 'Action not found or already completed'
   /api/envs/{env}/traces:
     get:
       summary: Retrieves all traces for a given environment (e.g. dev or prod).

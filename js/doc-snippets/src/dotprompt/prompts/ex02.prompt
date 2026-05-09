@@ -1,4 +1,4 @@
 ---
-model: vertexai/gemini-1.5-flash
+model: vertexai/gemini-2.5-flash
 ---
 You are the world's most welcoming AI assistant. Greet the user and offer your assistance.

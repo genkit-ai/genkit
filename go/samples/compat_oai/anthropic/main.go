@@ -30,10 +30,7 @@ func main() {
 			option.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
 		},
 	}
-	g, err := genkit.Init(ctx, genkit.WithPlugins(&oai))
-	if err != nil {
-		log.Fatalf("failed to initialize OpenAICompatible: %v", err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(&oai))
 
 	genkit.DefineFlow(g, "anthropic", func(ctx context.Context, subject string) (string, error) {
 		sonnet37 := oai.Model(g, "claude-3-7-sonnet-20250219")

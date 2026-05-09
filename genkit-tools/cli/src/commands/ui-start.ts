@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2025 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import {
   findProjectRoot,
   findServersDir,
@@ -30,10 +31,14 @@ import fs from 'fs/promises';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import path from 'path';
-import { SERVER_HARNESS_COMMAND } from './server-harness';
+import { detectCLIRuntime } from '../utils/runtime-detector';
+import {
+  buildServerHarnessSpawnConfig,
+  validateExecutablePath,
+} from '../utils/spawn-config';
 
 interface StartOptions {
-  port: string;
+  port?: string;
   open?: boolean;
 }
 
@@ -42,7 +47,7 @@ export const uiStart = new Command('ui:start')
   .description(
     'start the Developer UI which connects to runtimes in the same directory'
   )
-  .option('-p, --port <number>', 'Port to serve on (defaults to 4000')
+  .option('-p, --port <number>', 'Port to serve on (defaults to 4000)')
   .option('-o, --open', 'Open the browser on UI start up')
   .action(async (options: StartOptions) => {
     let port: number;
@@ -127,34 +132,76 @@ async function startAndWaitUntilHealthy(
   port: number,
   serversDir: string
 ): Promise<ChildProcess> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [SERVER_HARNESS_COMMAND, port.toString(), serversDir + '/devui.log'],
-      {
-        stdio: ['ignore', 'ignore', 'ignore'],
-      }
-    );
+  // Detect runtime environment
+  const cliRuntime = detectCLIRuntime();
+  logger.debug(
+    `Detected CLI runtime: ${cliRuntime.type} at ${cliRuntime.execPath}`
+  );
+  if (cliRuntime.scriptPath) {
+    logger.debug(`Script path: ${cliRuntime.scriptPath}`);
+  }
 
-    // Only print out logs from the child process to debug output.
-    child.on('error', (error) => reject(error));
-    child.on('exit', (code) =>
-      reject(new Error(`UI process exited (code ${code}) unexpectedly`))
+  // Build spawn configuration
+  const logPath = path.join(serversDir, 'devui.log');
+  const spawnConfig = buildServerHarnessSpawnConfig(cliRuntime, port, logPath);
+
+  // Validate executable path
+  const isExecutable = await validateExecutablePath(spawnConfig.command);
+  if (!isExecutable) {
+    throw new GenkitToolsError(
+      `Unable to execute command: ${spawnConfig.command}. ` +
+        `The file does not exist or is not executable.`
     );
+  }
+
+  logger.debug(
+    `Spawning: ${spawnConfig.command} ${spawnConfig.args.join(' ')}`
+  );
+  const child = spawn(
+    spawnConfig.command,
+    spawnConfig.args,
+    spawnConfig.options
+  );
+
+  // Wait for the process to be ready
+  return new Promise<ChildProcess>((resolve, reject) => {
+    // Handle process events
+    child.on('error', (error) => {
+      logger.error(`Failed to start UI process: ${error.message}`);
+      reject(
+        new GenkitToolsError(`Failed to start UI process: ${error.message}`, {
+          cause: error,
+        })
+      );
+    });
+
+    child.on('exit', (code) => {
+      const msg = `UI process exited unexpectedly with code ${code}`;
+      logger.error(msg);
+      reject(new GenkitToolsError(msg));
+    });
+
+    // Wait for the UI to become healthy
     waitUntilHealthy(`http://localhost:${port}`, 10000 /* 10 seconds */)
       .then((isHealthy) => {
         if (isHealthy) {
           child.unref();
           resolve(child);
         } else {
-          reject(
-            new Error(
-              'Timed out while waiting for UI to become healthy. ' +
-                'To view full logs, set DEBUG environment variable.'
-            )
-          );
+          const msg =
+            'Timed out while waiting for UI to become healthy. ' +
+            'To view full logs, set DEBUG environment variable.';
+          logger.error(msg);
+          reject(new GenkitToolsError(msg));
         }
       })
-      .catch((error) => reject(error));
+      .catch((error) => {
+        logger.error(`Health check failed: ${error.message}`);
+        reject(
+          new GenkitToolsError(`Health check failed: ${error.message}`, {
+            cause: error,
+          })
+        );
+      });
   });
 }

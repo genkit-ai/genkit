@@ -14,13 +14,24 @@
  * limitations under the License.
  */
 
-import { compatOaiImageModelRef as xaiImageModelRef } from '../image';
+import { z } from 'genkit';
+import { ModelInfo } from 'genkit/model';
+import { compatOaiImageModelRef } from '../image';
 
 /** XAI image generation ModelRef helper, same as the OpenAI-compatible model specification. */
-export { xaiImageModelRef };
+export function xaiImageModelRef<
+  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+>(params: {
+  name: string;
+  info?: ModelInfo;
+  configSchema?: CustomOptions;
+  config?: any;
+}) {
+  return compatOaiImageModelRef({ ...params, namespace: 'xai' });
+}
 
 export const SUPPORTED_IMAGE_MODELS = {
   'grok-2-image-1212': xaiImageModelRef({
-    name: 'xai/grok-2-image-1212',
+    name: 'grok-2-image-1212',
   }),
 };

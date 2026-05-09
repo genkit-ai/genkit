@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Flash, googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({
@@ -33,7 +33,7 @@ const CustomerNameSchema = z.object({
 const simpleGreetingPrompt = ai.definePrompt(
   {
     name: 'simpleGreeting',
-    model: gemini15Flash,
+    model: googleAI.model('gemini-flash-latest'),
     input: { schema: CustomerNameSchema },
     output: {
       format: 'text',
@@ -68,7 +68,7 @@ const CustomerTimeAndHistorySchema = z.object({
 const greetingWithHistoryPrompt = ai.definePrompt(
   {
     name: 'greetingWithHistory',
-    model: gemini15Flash,
+    model: googleAI.model('gemini-flash-latest'),
     input: { schema: CustomerTimeAndHistorySchema },
     output: {
       format: 'text',

@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+import { GenkitError, StatusName } from '@genkit-ai/core';
+import { HasRegistry } from '@genkit-ai/core/registry';
 import { Document } from '../document.js';
 import { injectInstructions } from '../formats/index.js';
+import { ModelArgument } from '../index.js';
 import type {
   MediaPart,
   MessageData,
@@ -23,6 +26,8 @@ import type {
   ModelMiddleware,
   Part,
 } from '../model.js';
+import { resolveModel } from '../model.js';
+
 /**
  * Preprocess a GenerateRequest to download referenced http(s) media URLs and
  * inline them as data URIs.
@@ -232,6 +237,216 @@ export function augmentWithContext(
     }
 
     return next(req);
+  };
+}
+
+/**
+ * Options for the `retry` middleware.
+ */
+export interface RetryOptions {
+  /**
+   * The maximum number of times to retry a failed request.
+   * @default 3
+   */
+  maxRetries?: number;
+  /**
+   * An array of `StatusName` values that should trigger a retry.
+   * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']
+   */
+  statuses?: StatusName[];
+  /**
+   * The initial delay between retries, in milliseconds.
+   * @default 1000
+   */
+  initialDelayMs?: number;
+  /**
+   * The maximum delay between retries, in milliseconds.
+   * @default 60000
+   */
+  maxDelayMs?: number;
+  /**
+   * The factor by which the delay increases after each retry (exponential backoff).
+   * @default 2
+   */
+  backoffFactor?: number;
+  /**
+   * Whether to disable jitter on the delay. Jitter adds a random factor to the
+   * delay to help prevent a "thundering herd" of clients all retrying at the
+   * same time.
+   * @default false
+   */
+  noJitter?: boolean;
+  /**
+   * A callback to be executed on each retry attempt.
+   */
+  onError?: (error: Error, attempt: number) => void;
+}
+
+let __setTimeout: (
+  callback: (...args: any[]) => void,
+  ms?: number
+) => NodeJS.Timeout = setTimeout;
+
+/**
+ * FOR TESTING ONLY.
+ * @internal
+ */
+export const TEST_ONLY = {
+  setRetryTimeout(
+    impl: (callback: (...args: any[]) => void, ms?: number) => NodeJS.Timeout
+  ) {
+    __setTimeout = impl;
+  },
+};
+
+const DEFAULT_RETRY_STATUSES: StatusName[] = [
+  'UNAVAILABLE',
+  'DEADLINE_EXCEEDED',
+  'RESOURCE_EXHAUSTED',
+  'ABORTED',
+  'INTERNAL',
+];
+
+const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
+  'UNAVAILABLE',
+  'DEADLINE_EXCEEDED',
+  'RESOURCE_EXHAUSTED',
+  'ABORTED',
+  'INTERNAL',
+  'NOT_FOUND',
+  'UNIMPLEMENTED',
+];
+
+/**
+ * Creates a middleware that retries requests on specific error statuses.
+ *
+ * ```ts
+ * const { text } = await ai.generate({
+ *   model: googleAI.model('gemini-pro-latest'),
+ *   prompt: 'You are a helpful AI assistant named Walt, say hello',
+ *   use: [
+ *     retry({
+ *       maxRetries: 2,
+ *       initialDelayMs: 1000,
+ *       backoffFactor: 2,
+ *     }),
+ *   ],
+ * });
+ * ```
+ */
+export function retry(options: RetryOptions = {}): ModelMiddleware {
+  const {
+    maxRetries = 3,
+    statuses = DEFAULT_RETRY_STATUSES,
+    initialDelayMs = 1000,
+    maxDelayMs = 60000,
+    backoffFactor = 2,
+    noJitter = false,
+    onError,
+  } = options;
+
+  return async (req, next) => {
+    let lastError: any;
+    let currentDelay = initialDelayMs;
+    for (let i = 0; i <= maxRetries; i++) {
+      try {
+        return await next(req);
+      } catch (e) {
+        lastError = e;
+        const error = e as Error;
+        if (i < maxRetries) {
+          let shouldRetry = false;
+          if (error instanceof GenkitError) {
+            if (statuses.includes(error.status)) {
+              shouldRetry = true;
+            }
+          } else {
+            shouldRetry = true;
+          }
+
+          if (shouldRetry) {
+            onError?.(error, i + 1);
+            let delay = currentDelay;
+            if (!noJitter) {
+              delay = delay + 1000 * Math.pow(2, i) * Math.random();
+            }
+            await new Promise((resolve) => __setTimeout(resolve, delay));
+            currentDelay = Math.min(currentDelay * backoffFactor, maxDelayMs);
+            continue;
+          }
+        }
+        throw error;
+      }
+    }
+    throw lastError;
+  };
+}
+
+/**
+ * Options for the `fallback` middleware.
+ */
+export interface FallbackOptions {
+  /**
+   * An array of models to try in order.
+   */
+  models: ModelArgument[];
+  /**
+   * An array of `StatusName` values that should trigger a fallback.
+   * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']
+   */
+  statuses?: StatusName[];
+  /**
+   * A callback to be executed on each fallback attempt.
+   */
+  onError?: (error: Error) => void;
+}
+
+/**
+ * Creates a middleware that falls back to a different model on specific error statuses.
+ *
+ * ```ts
+ * const { text } = await ai.generate({
+ *   model: googleAI.model('gemini-pro-latest'),
+ *   prompt: 'You are a helpful AI assistant named Walt, say hello',
+ *   use: [
+ *     fallback(ai, {
+ *       models: [googleAI.model('gemini-flash-latest')],
+ *       statuses: ['RESOURCE_EXHAUSTED'],
+ *     }),
+ *   ],
+ * });
+ * ```
+ */
+export function fallback(
+  ai: HasRegistry,
+  options: FallbackOptions
+): ModelMiddleware {
+  const { models, statuses = DEFAULT_FALLBACK_STATUSES, onError } = options;
+
+  return async (req, next) => {
+    try {
+      return await next(req);
+    } catch (e) {
+      if (e instanceof GenkitError && statuses.includes(e.status)) {
+        onError?.(e);
+        let lastError: any = e;
+        for (const model of models) {
+          try {
+            const resolved = await resolveModel(ai.registry, model);
+            return await resolved.modelAction(req);
+          } catch (e2) {
+            lastError = e2;
+            if (e2 instanceof GenkitError && statuses.includes(e2.status)) {
+              onError?.(e2);
+              continue;
+            }
+            throw e2;
+          }
+        }
+        throw lastError;
+      }
+      throw e;
+    }
   };
 }
 

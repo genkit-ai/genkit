@@ -1,0 +1,45 @@
+{
+  "name": "anthropic-testapp",
+  "version": "0.0.1",
+  "description": "Sample Genkit app showcasing Anthropic plugin stable and beta usage.",
+  "main": "lib/stable/basic.js",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "start:stable": "node lib/stable/basic.js",
+    "start:beta": "node lib/beta/basic.js",
+    "dev:stable": "genkit start -- npx tsx --watch src/stable/basic.ts",
+    "dev:beta": "genkit start -- npx tsx --watch src/beta/basic.ts",
+    "dev:beta:structured-output": "genkit start -- npx tsx --watch src/beta/structured_output.ts",
+    "dev:beta:files-api": "genkit start -- npx tsx --watch src/beta/files_api.ts",
+    "dev:beta:effort": "genkit start -- npx tsx --watch src/beta/effort.ts",
+    "dev:beta:additional-params": "genkit start -- npx tsx --watch src/beta/additional_params.ts",
+    "dev:beta:citations": "genkit start -- npx tsx --watch src/beta/citations.ts",
+    "dev:stable:text-plain": "genkit start -- npx tsx --watch src/stable/text-plain.ts",
+    "dev:stable:webp": "genkit start -- npx tsx --watch src/stable/webp.ts",
+    "dev:stable:pdf": "genkit start -- npx tsx --watch src/stable/pdf.ts",
+    "dev:stable:tools": "genkit start -- npx tsx --watch src/stable/tools.ts",
+    "dev:stable:vision": "genkit start -- npx tsx --watch src/stable/vision.ts",
+    "dev:stable:prompt-caching": "genkit start -- npx tsx --watch src/stable/prompt_caching.ts",
+    "genkit:dev": "cross-env GENKIT_ENV=dev npm run dev:stable",
+    "genkit:start": "cross-env GENKIT_ENV=dev genkit start -- tsx --watch src/stable/basic.ts",
+    "dev": "export GENKIT_RUNTIME_ID=$(openssl rand -hex 8) && node lib/stable/basic.js 2>&1"
+  },
+  "keywords": [
+    "genkit",
+    "anthropic",
+    "sample"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
+    "@genkit-ai/anthropic": "workspace:*",
+    "genkit": "workspace:*"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}

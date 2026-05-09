@@ -14,31 +14,34 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
+"""Test configuration for the OpenAI compatible plugin."""
+
 import pytest
 
-from genkit.plugins.compat_oai.models.model_info import GPT_4
-from genkit.plugins.compat_oai.typing import OpenAIConfig
-from genkit.types import (
-    GenerateRequest,
+from genkit import (
     Message,
+    ModelRequest,
+    Part,
     Role,
     TextPart,
 )
+from genkit.plugins.compat_oai.typing import OpenAIConfig
 
 
 @pytest.fixture
-def sample_request():
-    """Fixture to create a sample GenerateRequest object."""
-    return GenerateRequest(
+def sample_request() -> ModelRequest:
+    """Fixture to create a sample ModelRequest object."""
+    return ModelRequest(
         messages=[
             Message(
                 role=Role.SYSTEM,
-                content=[TextPart(text='You are an assistant')],
+                content=[Part(root=TextPart(text='You are an assistant'))],
             ),
-            Message(role=Role.USER, content=[TextPart(text='Hello, world!')]),
+            Message(role=Role.USER, content=[Part(root=TextPart(text='Hello, world!'))]),
         ],
         config=OpenAIConfig(
-            model=GPT_4,
+            model='gpt-4',
             top_p=0.9,
             temperature=0.7,
             stop=['stop'],

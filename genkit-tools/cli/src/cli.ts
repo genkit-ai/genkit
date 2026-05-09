@@ -23,11 +23,14 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { Command, program } from 'commander';
 import { config } from './commands/config';
+import { devTestModel } from './commands/dev-test-model';
+import { docsList, docsRead, docsSearch } from './commands/docs';
 import { evalExtractData } from './commands/eval-extract-data';
 import { evalFlow } from './commands/eval-flow';
 import { evalRun } from './commands/eval-run';
 import { flowBatchRun } from './commands/flow-batch-run';
 import { flowRun } from './commands/flow-run';
+import { initAiTools } from './commands/init-ai-tools/index';
 import { mcp } from './commands/mcp';
 import { getPluginCommands, getPluginSubCommand } from './commands/plugins';
 import {
@@ -35,8 +38,11 @@ import {
   serverHarness,
 } from './commands/server-harness';
 import { start } from './commands/start';
+import { startFlutter } from './commands/start-flutter';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
+import { detectCLIRuntime } from './utils/runtime-detector.js';
+import { showUpdateNotification } from './utils/updates';
 import { version } from './utils/version';
 
 /**
@@ -53,9 +59,15 @@ const commands: Command[] = [
   evalExtractData,
   evalRun,
   evalFlow,
+  initAiTools,
   config,
   start,
+  startFlutter,
+  devTestModel,
   mcp,
+  docsList,
+  docsRead,
+  docsSearch,
 ];
 
 /** Main entry point for CLI. */
@@ -64,9 +76,12 @@ export async function startCLI(): Promise<void> {
     .name('genkit')
     .description('Genkit CLI')
     .version(version)
-    .hook('preAction', async (_, actionCommand) => {
-      await notifyAnalyticsIfFirstRun();
-
+    .option('--no-update-notification', 'Do not show update notification')
+    .option(
+      '--non-interactive',
+      'Run in non-interactive mode. All interactions will use the default choice.'
+    )
+    .hook('preAction', async (command, actionCommand) => {
       // For now only record known command names, to avoid tools plugins causing
       // arbitrary text to get recorded. Once we launch tools plugins, we'll have
       // to give this more thought
@@ -82,8 +97,34 @@ export async function startCLI(): Promise<void> {
       } else {
         commandName = 'unknown';
       }
-      await record(new RunCommandEvent(commandName));
+
+      if (
+        !process.argv.includes('--non-interactive') &&
+        commandName !== 'config'
+      ) {
+        await notifyAnalyticsIfFirstRun();
+      }
+
+      const { isCompiledBinary } = detectCLIRuntime();
+      await record(
+        new RunCommandEvent(commandName, isCompiledBinary ? 'binary' : 'node')
+      );
     });
+
+  // Check for updates and show notification if available,
+  // unless --no-update-notification is set
+  // Run this synchronously to ensure it shows before command execution
+  const hasNoUpdateNotification = process.argv.includes(
+    '--no-update-notification'
+  );
+  if (!hasNoUpdateNotification) {
+    try {
+      await showUpdateNotification();
+    } catch (e) {
+      logger.debug('Failed to show update notification', e);
+      // Silently ignore errors - update notifications shouldn't break the CLI
+    }
+  }
 
   // When running as a spawned UI server process, argv[1] will be '__server-harness'
   // instead of a normal command. This allows the same binary to serve both CLI and server roles.
@@ -105,10 +146,11 @@ export async function startCLI(): Promise<void> {
       logger.info(program.help());
     })
   );
-  // Default action to catch unknown commands.
-  program.action(() => {
-    // print help
+  // Handle unknown commands.
+  program.on('command:*', (operands) => {
+    logger.error(`error: unknown command '${operands[0]}'`);
     logger.info(program.help());
+    process.exit(1);
   });
 
   await program.parseAsync();

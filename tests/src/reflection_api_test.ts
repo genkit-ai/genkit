@@ -78,6 +78,7 @@ async function testReflectionApi() {
         // FIXME: Go does not set telemetry/latencyMs fields.
         'telemetry',
         'latencyMs',
+        'usage',
       ],
     });
     if (diff != '') {

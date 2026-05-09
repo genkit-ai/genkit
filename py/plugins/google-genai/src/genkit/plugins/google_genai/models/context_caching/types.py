@@ -14,16 +14,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union
+"""Type definitions for Google GenAI context caching."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
 
 
 class CacheConfigSchema(BaseModel):
-    ttl_seconds: int | None = Field(..., alias='ttlSeconds')
+    """Configuration for context caching."""
 
-    class Config:
-        extra = 'allow'
+    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+
+    ttl_seconds: int | None = None
 
 
-CacheConfig = Union[bool, CacheConfigSchema]
+CacheConfig = bool | CacheConfigSchema

@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
-	"log"
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
@@ -34,13 +33,10 @@ func main() {
 	// Config parameter, the Google AI plugin will get the API key from the
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the recommended
 	// practice.
-	g, err := genkit.Init(ctx,
+	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash-preview-tts"),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// Define a simple flow that generates an audio from a given text
 	genkit.DefineFlow(g, "text-to-speech-flow", func(ctx context.Context, input any) (string, error) {

@@ -15,12 +15,14 @@
  */
 
 import { runWithContext, z, type ActionContext } from '@genkit-ai/core';
+import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import assert from 'node:assert';
 import { beforeEach, describe, it } from 'node:test';
 import { Document } from '../../src/document.js';
 import type { GenerateOptions } from '../../src/index.js';
+import { defineModel } from '../../src/model.js';
 import {
   definePrompt,
   type PromptConfig,
@@ -29,6 +31,8 @@ import {
 import { Session } from '../../src/session.js';
 import { defineTool } from '../../src/tool.js';
 import { defineEchoModel } from '../helpers.js';
+
+initNodeFeatures();
 
 describe('prompt', () => {
   let registry;
@@ -44,6 +48,26 @@ describe('prompt', () => {
         description: 'toolA descr',
       },
       async () => 'a'
+    );
+
+    // Define a special model to test AbortSignal preservation
+    defineModel(
+      registry,
+      {
+        name: 'abortTestModel',
+        apiVersion: 'v2',
+      },
+      async (request, opts) => {
+        // Store the abortSignal for verification
+        (defineModel as any).__test__lastAbortSignal = opts.abortSignal;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: 'AbortSignal preserved correctly' }],
+          },
+          finishReason: 'stop',
+        };
+      }
     );
   });
 
@@ -775,7 +799,7 @@ describe('prompt', () => {
           ? session.run(() => p(test.input, test.inputOptions))
           : p(test.input, test.inputOptions);
 
-      const { text } = await runWithContext(registry, test.context, sessionFn);
+      const { text } = await runWithContext(test.context, sessionFn);
 
       assert.strictEqual(text, test.wantTextOutput);
 
@@ -785,13 +809,28 @@ describe('prompt', () => {
           : p.render(test.input, test.inputOptions);
 
       assert.deepStrictEqual(
-        stripUndefined(
-          await runWithContext(registry, test.context, sessionRenderFn)
-        ),
+        stripUndefined(await runWithContext(test.context, sessionRenderFn)),
         test.wantRendered
       );
     });
   }
+
+  it('metadata is correctly populated', async () => {
+    definePrompt(registry, {
+      name: 'metadataTest',
+      model: 'echoModel',
+      tools: ['toolA'],
+      toolChoice: 'auto',
+      use: ['myMiddleware'],
+      prompt: 'hello',
+    });
+
+    const action = await registry.lookupAction('/prompt/metadataTest');
+    const metadata = (action as any).__action.metadata.prompt;
+    assert.deepStrictEqual(metadata.tools, ['toolA']);
+    assert.strictEqual(metadata.toolChoice, 'auto');
+    assert.deepStrictEqual(metadata.use, [{ name: 'myMiddleware' }]);
+  });
 
   it('respects output schema in the definition', async () => {
     const schema1 = z.object({
@@ -819,6 +858,49 @@ describe('prompt', () => {
     assert.deepStrictEqual(
       toJsonSchema({ schema: generateRequest.output?.schema }),
       toJsonSchema({ schema: schema1 })
+    );
+  });
+
+  it('preserves AbortSignal objects through the rendering pipeline', async () => {
+    // Test AbortSignal.timeout()
+    const timeoutSignal = AbortSignal.timeout(1000);
+    const prompt = definePrompt(registry, {
+      name: 'abortTestPrompt',
+      model: 'abortTestModel',
+      prompt: 'test message',
+    });
+
+    const rendered = await prompt.render(undefined, {
+      abortSignal: timeoutSignal,
+    });
+
+    // Verify the AbortSignal is preserved in the rendered options
+    assert.ok(rendered.abortSignal, 'AbortSignal should be preserved');
+    assert.strictEqual(
+      rendered.abortSignal,
+      timeoutSignal,
+      'Should be the exact same AbortSignal instance'
+    );
+    assert.ok(
+      rendered.abortSignal instanceof AbortSignal,
+      'Should be an AbortSignal instance'
+    );
+
+    // Test manual AbortController
+    const controller = new AbortController();
+    const rendered2 = await prompt.render(undefined, {
+      abortSignal: controller.signal,
+    });
+
+    assert.ok(rendered2.abortSignal, 'Manual AbortSignal should be preserved');
+    assert.strictEqual(
+      rendered2.abortSignal,
+      controller.signal,
+      'Should be the exact same manual AbortSignal instance'
+    );
+    assert.ok(
+      rendered2.abortSignal instanceof AbortSignal,
+      'Manual AbortSignal should be an AbortSignal instance'
     );
   });
 });

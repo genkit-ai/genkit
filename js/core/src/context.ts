@@ -15,8 +15,8 @@
  */
 
 import { runInActionRuntimeContext } from './action.js';
+import { getAsyncContext } from './async-context.js';
 import { UserFacingError } from './error.js';
-import type { HasRegistry, Registry } from './registry.js';
 
 const contextAlsKey = 'core.auth.context';
 
@@ -35,29 +35,22 @@ export interface ActionContext {
  * is a no op passthrough, the function will be invoked as is.
  */
 export function runWithContext<R>(
-  registry: Registry,
   context: ActionContext | undefined,
   fn: () => R
 ): R {
   if (context === undefined) {
     return fn();
   }
-  return registry.asyncStore.run(contextAlsKey, context, () =>
-    runInActionRuntimeContext(registry, fn)
+  return getAsyncContext().run(contextAlsKey, context, () =>
+    runInActionRuntimeContext(fn)
   );
 }
 
 /**
  * Gets the runtime context of the current flow.
  */
-export function getContext(
-  registry: Registry | HasRegistry
-): ActionContext | undefined {
-  if ((registry as HasRegistry).registry) {
-    registry = (registry as HasRegistry).registry;
-  }
-  registry = registry as Registry;
-  return registry.asyncStore.getStore<ActionContext>(contextAlsKey);
+export function getContext(): ActionContext | undefined {
+  return getAsyncContext().getStore<ActionContext>(contextAlsKey);
 }
 
 /**

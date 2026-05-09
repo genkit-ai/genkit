@@ -18,6 +18,7 @@ package base
 
 import (
 	"net/url"
+	"reflect"
 )
 
 // An Environment is the execution context in which the program is running.
@@ -37,4 +38,17 @@ func Zero[T any]() T {
 // Clean returns a valid filename for id.
 func Clean(id string) string {
 	return url.PathEscape(id)
+}
+
+// IsNil returns true if v is nil or a nil pointer/interface/map/slice/channel/func.
+func IsNil[T any](v T) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Invalid:
+		return true
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }

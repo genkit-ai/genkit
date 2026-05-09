@@ -17,7 +17,7 @@
  */
 
 /**
- * A simple, browser-safe client library for remotely runnning/streaming deployed Genkit flows.
+ * A simple, browser-safe client library for remotely running/streaming deployed Genkit flows.
  *
  * ```ts
  * import { runFlow, streamFlow } from 'genkit/beta/client';

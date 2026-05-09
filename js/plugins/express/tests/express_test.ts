@@ -23,6 +23,7 @@ import {
   type GenerateResponseData,
   type Genkit,
 } from 'genkit';
+import { InMemoryStreamManager } from 'genkit/beta';
 import { runFlow, streamFlow } from 'genkit/beta/client';
 import type { ContextProvider, RequestData } from 'genkit/context';
 import type { GenerateResponseChunkData, ModelAction } from 'genkit/model';
@@ -32,7 +33,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   expressHandler,
   startFlowServer,
-  withContextProvider,
+  withFlowOptions,
   type FlowServer,
 } from '../src/index.js';
 
@@ -144,6 +145,12 @@ describe('expressHandler', async () => {
     app.post('/stringInput', expressHandler(stringInput));
     app.post('/objectInput', expressHandler(objectInput));
     app.post('/streamingFlow', expressHandler(streamingFlow));
+    app.post(
+      '/streamingFlowDurable',
+      expressHandler(streamingFlow, {
+        streamManager: new InMemoryStreamManager(),
+      })
+    );
     app.post(
       '/flowWithAuth',
       expressHandler(flowWithAuth, { contextProvider })
@@ -333,6 +340,88 @@ describe('expressHandler', async () => {
       assert.strictEqual(await result.output, 'Echo: olleh');
     });
 
+    it('should create and subscribe to a durable stream', async () => {
+      const result = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+      });
+
+      const streamId = await result.streamId;
+      assert.ok(streamId);
+
+      const subscription = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+        streamId: streamId!,
+      });
+
+      const gotChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of subscription.stream) {
+        gotChunks.push(chunk);
+      }
+
+      // of note here is that we're consuming the original stream after re-subscription
+      // which should still work fine.
+      const originalChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of result.stream) {
+        originalChunks.push(chunk);
+      }
+
+      assert.deepStrictEqual(gotChunks, originalChunks);
+      assert.strictEqual(await subscription.output, 'Echo: durable');
+      assert.strictEqual(await result.output, 'Echo: durable');
+    });
+
+    it('should subscribe to a stream in progress', async () => {
+      const result = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+      });
+
+      const streamId = await result.streamId;
+      assert.ok(streamId);
+
+      // Don't wait for the original stream to finish.
+      const subscription = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+        streamId: streamId!,
+      });
+
+      const gotChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of subscription.stream) {
+        gotChunks.push(chunk);
+      }
+
+      assert.deepStrictEqual(gotChunks.length, 3);
+      assert.strictEqual(await subscription.output, 'Echo: durable');
+    });
+
+    it.only('should return 204 for a non-existent stream', async () => {
+      try {
+        const result = streamFlow({
+          url: `http://localhost:${port}/streamingFlowDurable`,
+          input: {
+            question: 'durable',
+          },
+          streamId: 'non-existent-stream-id',
+        });
+        for await (const _ of result.stream) {
+        }
+        assert.fail('should have thrown');
+      } catch (err: any) {
+        assert.strictEqual(err.message, 'NOT_FOUND: Stream not found.');
+      }
+    });
+
     it('stream a model', async () => {
       const result = streamFlow({
         url: `http://localhost:${port}/echoModel`,
@@ -447,8 +536,12 @@ describe('startFlowServer', async () => {
         stringInput,
         objectInput,
         streamingFlow,
+        withFlowOptions(streamingFlow, {
+          streamManager: new InMemoryStreamManager(),
+          path: 'streamingFlowDurable',
+        }),
         streamingFlowV2,
-        withContextProvider(flowWithAuth, contextProvider),
+        withFlowOptions(flowWithAuth, { contextProvider }),
       ],
       port,
     });
@@ -546,6 +639,88 @@ describe('startFlowServer', async () => {
       ]);
 
       assert.strictEqual(await result.output, 'Echo: olleh');
+    });
+
+    it('should create and subscribe to a durable stream', async () => {
+      const result = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+      });
+
+      const streamId = await result.streamId;
+      assert.ok(streamId);
+
+      const subscription = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+        streamId: streamId!,
+      });
+
+      const gotChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of subscription.stream) {
+        gotChunks.push(chunk);
+      }
+
+      // of note here is that we're consuming the original stream after re-subscription
+      // which should still work fine.
+      const originalChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of result.stream) {
+        originalChunks.push(chunk);
+      }
+
+      assert.deepStrictEqual(gotChunks, originalChunks);
+      assert.strictEqual(await subscription.output, 'Echo: durable');
+      assert.strictEqual(await result.output, 'Echo: durable');
+    });
+
+    it('should subscribe to a stream in progress', async () => {
+      const result = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+      });
+
+      const streamId = await result.streamId;
+      assert.ok(streamId);
+
+      // Don't wait for the original stream to finish.
+      const subscription = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+        streamId: streamId!,
+      });
+
+      const gotChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of subscription.stream) {
+        gotChunks.push(chunk);
+      }
+
+      assert.deepStrictEqual(gotChunks.length, 3);
+      assert.strictEqual(await subscription.output, 'Echo: durable');
+    });
+
+    it('should return 204 for a non-existent stream', async () => {
+      try {
+        const result = streamFlow({
+          url: `http://localhost:${port}/streamingFlowDurable`,
+          input: {
+            question: 'durable',
+          },
+          streamId: 'non-existent-stream-id',
+        });
+        for await (const _ of result.stream) {
+        }
+        assert.fail('should have thrown');
+      } catch (err: any) {
+        assert.strictEqual(err.message, 'NOT_FOUND: Stream not found.');
+      }
     });
   });
 

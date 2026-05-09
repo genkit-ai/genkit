@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 )
 
@@ -38,23 +39,22 @@ func (p *Postgres) Name() string {
 }
 
 // Init initialize the PostgreSQL
-func (p *Postgres) Init(ctx context.Context, g *genkit.Genkit) error {
+func (p *Postgres) Init(ctx context.Context) []api.Action {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.initted {
-		return fmt.Errorf("postgres.Init already initted")
+		panic("postgres.Init already initted")
 	}
 
 	if p.engine == nil {
-		return fmt.Errorf("postgres.Init engine is nil")
+		panic("postgres.Init engine is nil")
 	}
 
 	if p.engine.Pool == nil {
-		return fmt.Errorf("postgres.Init engine has no pool")
+		panic("postgres.Init engine has no pool")
 	}
 	p.initted = true
-	return nil
-
+	return []api.Action{}
 }
 
 // Config provides configuration options for [DefineRetriever].
@@ -88,12 +88,12 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, p *Postgres, cfg *Co
 		return nil, nil, err
 	}
 
-	return ds, genkit.DefineRetriever(g, provider, ds.config.TableName, nil, ds.Retrieve), nil
+	return ds, genkit.DefineRetriever(g, provider+"/"+ds.config.TableName, &ai.RetrieverOptions{}, ds.Retrieve), nil
 }
 
 // Retriever returns the retriever with the given index name.
 func Retriever(g *genkit.Genkit, name string) ai.Retriever {
-	return genkit.LookupRetriever(g, provider, name)
+	return genkit.LookupRetriever(g, name)
 }
 
 /* +++++++++++++++++++++++

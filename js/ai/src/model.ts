@@ -18,13 +18,17 @@ import {
   ActionFnArg,
   BackgroundAction,
   GenkitError,
+  MiddlewareWithOptions,
   Operation,
   OperationSchema,
+  action,
+  backgroundAction,
   defineAction,
-  defineBackgroundAction,
+  registerBackgroundAction,
   z,
   type Action,
   type ActionMetadata,
+  type ActionParams,
   type SimpleMiddleware,
   type StreamingCallback,
 } from '@genkit-ai/core';
@@ -32,20 +36,6 @@ import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import { performance } from 'node:perf_hooks';
-import {
-  CustomPartSchema,
-  DataPartSchema,
-  MediaPartSchema,
-  TextPartSchema,
-  ToolRequestPartSchema,
-  ToolResponsePartSchema,
-  type CustomPart,
-  type DataPart,
-  type MediaPart,
-  type TextPart,
-  type ToolRequestPart,
-  type ToolResponsePart,
-} from './document.js';
 import {
   CandidateData,
   GenerateRequest,
@@ -62,14 +52,36 @@ import {
 import {
   augmentWithContext,
   simulateConstrainedGeneration,
-  validateSupport,
 } from './model/middleware.js';
+import {
+  CustomPartSchema,
+  DataPartSchema,
+  MediaPartSchema,
+  MultipartToolResponseSchema,
+  ReasoningPartSchema,
+  ResourcePartSchema,
+  TextPartSchema,
+  ToolRequestPartSchema,
+  ToolResponsePartSchema,
+  type CustomPart,
+  type DataPart,
+  type MediaPart,
+  type MultipartToolResponse,
+  type ReasoningPart,
+  type ResourcePart,
+  type TextPart,
+  type ToolRequestPart,
+  type ToolResponsePart,
+} from './parts.js';
 export { defineGenerateAction } from './generate/action.js';
 export * from './model-types.js';
 export {
   CustomPartSchema,
   DataPartSchema,
   MediaPartSchema,
+  MultipartToolResponseSchema,
+  ReasoningPartSchema,
+  ResourcePartSchema,
   TextPartSchema,
   ToolRequestPartSchema,
   ToolResponsePartSchema,
@@ -77,6 +89,9 @@ export {
   type CustomPart,
   type DataPart,
   type MediaPart,
+  type MultipartToolResponse,
+  type ReasoningPart,
+  type ResourcePart,
   type TextPart,
   type ToolRequestPart,
   type ToolResponsePart,
@@ -106,6 +121,16 @@ export type ModelMiddleware = SimpleMiddleware<
   z.infer<typeof GenerateResponseSchema>
 >;
 
+export type ModelMiddlewareWithOptions = MiddlewareWithOptions<
+  z.infer<typeof GenerateRequestSchema>,
+  z.infer<typeof GenerateResponseSchema>,
+  z.infer<typeof GenerateResponseChunkSchema>
+>;
+
+export type ModelMiddlewareArgument =
+  | ModelMiddleware
+  | ModelMiddlewareWithOptions;
+
 export type DefineModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
@@ -119,8 +144,58 @@ export type DefineModelOptions<
   /** Descriptive name for this model e.g. 'Google AI - Gemini Pro'. */
   label?: string;
   /** Middleware to be used with this model. */
-  use?: ModelMiddleware[];
+  use?: ModelMiddlewareArgument[];
 };
+
+export function model<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+  options: DefineModelOptions<CustomOptionsSchema>,
+  runner: (
+    request: GenerateRequest<CustomOptionsSchema>,
+    options: ActionFnArg<GenerateResponseChunkData>
+  ) => Promise<GenerateResponseData>
+): ModelAction<CustomOptionsSchema> {
+  const act = action(modelActionOptions(options), (input, ctx) => {
+    const startTimeMs = performance.now();
+    return runner(input, ctx).then((response) => {
+      const timedResponse = {
+        ...response,
+        latencyMs: performance.now() - startTimeMs,
+      };
+      return timedResponse;
+    });
+  });
+  Object.assign(act, {
+    __configSchema: options.configSchema || z.unknown(),
+  });
+  return act as ModelAction<CustomOptionsSchema>;
+}
+
+function modelActionOptions<
+  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  options: DefineModelOptions<CustomOptionsSchema>
+): ActionParams<typeof GenerateRequestSchema, typeof GenerateResponseSchema> {
+  const label = options.label || options.name;
+  const middleware = getModelMiddleware(options);
+  return {
+    actionType: 'model',
+    name: options.name,
+    description: label,
+    inputSchema: GenerateRequestSchema,
+    outputSchema: GenerateResponseSchema,
+    metadata: {
+      model: {
+        label,
+        customOptions: options.configSchema
+          ? toJsonSchema({ schema: options.configSchema })
+          : undefined,
+        versions: options.versions,
+        supports: options.supports,
+      },
+    },
+    use: middleware,
+  };
+}
 
 /**
  * Defines a new model and adds it to the registry.
@@ -162,28 +237,9 @@ export function defineModel<
     options: any
   ) => Promise<GenerateResponseData>
 ): ModelAction<CustomOptionsSchema> {
-  const label = options.label || options.name;
-  const middleware = getModelMiddleware(options);
   const act = defineAction(
     registry,
-    {
-      actionType: 'model',
-      name: options.name,
-      description: label,
-      inputSchema: GenerateRequestSchema,
-      outputSchema: GenerateResponseSchema,
-      metadata: {
-        model: {
-          label,
-          customOptions: options.configSchema
-            ? toJsonSchema({ schema: options.configSchema })
-            : undefined,
-          versions: options.versions,
-          supports: options.supports,
-        },
-      },
-      use: middleware,
-    },
+    modelActionOptions(options),
     (input, ctx) => {
       const startTimeMs = performance.now();
       const secondParam =
@@ -230,9 +286,21 @@ export function defineBackgroundModel<
   registry: Registry,
   options: DefineBackgroundModelOptions<CustomOptionsSchema>
 ): BackgroundModelAction<CustomOptionsSchema> {
+  const act = backgroundModel(options);
+  registerBackgroundAction(registry, act);
+  return act;
+}
+/**
+ * Defines a new model that runs in the background.
+ */
+export function backgroundModel<
+  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  options: DefineBackgroundModelOptions<CustomOptionsSchema>
+): BackgroundModelAction<CustomOptionsSchema> {
   const label = options.label || options.name;
   const middleware = getModelMiddleware(options);
-  const act = defineBackgroundAction(registry, {
+  const act = backgroundAction({
     actionType: 'background-model',
     name: options.name,
     description: label,
@@ -279,14 +347,11 @@ export function defineBackgroundModel<
 }
 
 function getModelMiddleware(options: {
-  use?: ModelMiddleware[];
+  use?: ModelMiddlewareArgument[];
   name: string;
   supports?: ModelInfo['supports'];
 }) {
-  const middleware: ModelMiddleware[] = [
-    ...(options.use || []),
-    validateSupport(options),
-  ];
+  const middleware: ModelMiddlewareArgument[] = options.use || [];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
   const constratedSimulator = simulateConstrainedGeneration();
   middleware.push((req, next) => {
@@ -304,7 +369,13 @@ function getModelMiddleware(options: {
   return middleware;
 }
 
-export interface ModelReference<CustomOptions extends z.ZodTypeAny> {
+export const ModelReferenceSchema = z.object({
+  name: z.string(),
+  config: z.any().optional(),
+});
+
+export interface ModelReference<CustomOptions extends z.ZodTypeAny>
+  extends z.infer<typeof ModelReferenceSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: ModelInfo;
@@ -354,20 +425,31 @@ export function modelRef<
   options: Omit<
     ModelReference<CustomOptionsSchema>,
     'withConfig' | 'withVersion'
-  >
+  > & {
+    namespace?: string;
+  }
 ): ModelReference<CustomOptionsSchema> {
-  const ref: Partial<ModelReference<CustomOptionsSchema>> = { ...options };
+  let name = options.name;
+  if (options.namespace && !name.startsWith(options.namespace + '/')) {
+    name = `${options.namespace}/${name}`;
+  }
+  const ref: Partial<ModelReference<CustomOptionsSchema>> = {
+    ...options,
+    name,
+  };
   ref.withConfig = (
     cfg: z.infer<CustomOptionsSchema>
   ): ModelReference<CustomOptionsSchema> => {
     return modelRef({
       ...options,
+      name,
       config: cfg,
     });
   };
   ref.withVersion = (version: string): ModelReference<CustomOptionsSchema> => {
     return modelRef({
       ...options,
+      name,
       version,
     });
   };

@@ -126,6 +126,26 @@ var statusNameToHTTPCode = map[StatusName]int{
 	DATA_LOSS:           http.StatusInternalServerError, // 500
 }
 
+// httpCodeToStatusName is the canonical reverse of [statusNameToHTTPCode].
+// Several StatusNames share an HTTP code (e.g. 400 maps from INVALID_ARGUMENT,
+// FAILED_PRECONDITION, and OUT_OF_RANGE); this table picks the canonical
+// gRPC choice in each case, matching
+// https://cloud.google.com/apis/design/errors.
+var httpCodeToStatusName = map[int]StatusName{
+	http.StatusOK:                  OK,
+	499:                            CANCELLED,
+	http.StatusBadRequest:          INVALID_ARGUMENT,
+	http.StatusGatewayTimeout:      DEADLINE_EXCEEDED,
+	http.StatusNotFound:            NOT_FOUND,
+	http.StatusConflict:            ABORTED,
+	http.StatusForbidden:           PERMISSION_DENIED,
+	http.StatusUnauthorized:        UNAUTHENTICATED,
+	http.StatusTooManyRequests:     RESOURCE_EXHAUSTED,
+	http.StatusNotImplemented:      UNIMPLEMENTED,
+	http.StatusInternalServerError: INTERNAL,
+	http.StatusServiceUnavailable:  UNAVAILABLE,
+}
+
 // HTTPStatusCode gets the corresponding HTTP status code for a given Genkit status name.
 func HTTPStatusCode(name StatusName) int {
 	if code, ok := statusNameToHTTPCode[name]; ok {
@@ -133,6 +153,22 @@ func HTTPStatusCode(name StatusName) int {
 	}
 
 	return http.StatusInternalServerError
+}
+
+// StatusFromHTTPCode returns the canonical [StatusName] for an HTTP status
+// code, following the gRPC / Google API reverse mapping. Any 5xx code with no
+// explicit entry falls through to INTERNAL; unmapped 4xx codes return UNKNOWN.
+//
+// This is intended for plugins wrapping HTTP-based SDK errors so that
+// status-aware middleware (retry, fallback, ...) can reason about them.
+func StatusFromHTTPCode(code int) StatusName {
+	if s, ok := httpCodeToStatusName[code]; ok {
+		return s
+	}
+	if code >= 500 {
+		return INTERNAL
+	}
+	return UNKNOWN
 }
 
 // Status represents a status condition, typically used in responses or errors.

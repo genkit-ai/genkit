@@ -1,0 +1,8 @@
+This project includes code derived from the Firebase Genkit Anthropic community plugin
+(https://github.com/BloomLabsInc/genkit-plugins/tree/main/plugins/anthropic).
+
+Copyright 2024 Bloom Labs Inc.
+Copyright 2025 Google LLC.
+
+Licensed under the Apache License, Version 2.0.
+See the LICENSE file distributed with this project for the full license text.

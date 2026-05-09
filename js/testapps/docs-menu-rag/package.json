@@ -18,13 +18,13 @@
     "genkit": "workspace:*",
     "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/firebase": "workspace:*",
-    "@genkit-ai/vertexai": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "llm-chunk": "^0.0.1",
     "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
     "@types/pdf-parse": "^1.1.4",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

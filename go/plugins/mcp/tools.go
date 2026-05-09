@@ -21,15 +21,12 @@ import (
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
-	"github.com/invopop/jsonschema"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // GetActiveTools retrieves all tools available from the MCP server
-// and returns them as Genkit ToolAction objects
 func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.Tool, error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, nil
@@ -41,16 +38,15 @@ func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) 
 		return nil, err
 	}
 
-	// Register all tools
-	return c.registerTools(ctx, g, mcpTools)
+	// Create tools from MCP server
+	return c.createTools(mcpTools)
 }
 
-// registerTools registers all MCP tools with Genkit
-// It returns tools that were successfully registered
-func (c *GenkitMCPClient) registerTools(ctx context.Context, g *genkit.Genkit, mcpTools []mcp.Tool) ([]ai.Tool, error) {
+// createTools creates Genkit tools from MCP tools
+func (c *GenkitMCPClient) createTools(mcpTools []mcp.Tool) ([]ai.Tool, error) {
 	var tools []ai.Tool
 	for _, mcpTool := range mcpTools {
-		tool, err := c.registerTool(ctx, g, mcpTool)
+		tool, err := c.createTool(mcpTool)
 		if err != nil {
 			return nil, err
 		}
@@ -58,8 +54,52 @@ func (c *GenkitMCPClient) registerTools(ctx context.Context, g *genkit.Genkit, m
 			tools = append(tools, tool)
 		}
 	}
-
 	return tools, nil
+}
+
+// getInputSchema returns the MCP input schema as a generic map for Genkit
+func (c *GenkitMCPClient) getInputSchema(mcpTool mcp.Tool) (map[string]any, error) {
+	var out map[string]any
+	schemaBytes, err := json.Marshal(mcpTool.InputSchema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal MCP input schema for tool %s: %w", mcpTool.Name, err)
+	}
+	if err := json.Unmarshal(schemaBytes, &out); err != nil {
+		// Fall back to empty map if unmarshalling fails
+		out = map[string]any{}
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out, nil
+}
+
+// createTool converts a single MCP tool to a Genkit tool
+func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
+	// Use namespaced tool name
+	namespacedToolName := c.GetToolNameWithNamespace(mcpTool.Name)
+
+	toolFunc := c.createToolFunction(mcpTool)
+	inputSchema, err := c.getInputSchema(mcpTool)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get input schema for tool %s: %w", mcpTool.Name, err)
+	}
+	var tool ai.Tool
+	if len(inputSchema) > 0 {
+		tool = ai.NewTool(
+			namespacedToolName,
+			mcpTool.Description,
+			toolFunc,
+			ai.WithInputSchema(inputSchema),
+		)
+	} else {
+		tool = ai.NewTool(
+			namespacedToolName,
+			mcpTool.Description,
+			toolFunc,
+		)
+	}
+	return tool, nil
 }
 
 // getTools retrieves all tools from the MCP server by paginating through results
@@ -107,59 +147,6 @@ func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor)
 	return result.Tools, result.NextCursor, nil
 }
 
-// registerTool converts a single MCP tool to a Genkit tool
-// Returns the tool without re-registering if it already exists in the registry
-func (c *GenkitMCPClient) registerTool(ctx context.Context, g *genkit.Genkit, mcpTool mcp.Tool) (ai.Tool, error) {
-	// Use namespaced tool name
-	namespacedToolName := c.GetToolNameWithNamespace(mcpTool.Name)
-
-	// Check if the tool already exists in the registry
-	existingTool := genkit.LookupTool(g, namespacedToolName)
-	if existingTool != nil {
-		return existingTool, nil
-	}
-
-	// Process the tool's input schema
-	inputSchemaForAI, err := c.getInputSchema(mcpTool)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create the tool function that will handle execution
-	toolFunc := c.createToolFunction(mcpTool)
-
-	// Register the tool with Genkit
-	tool := genkit.DefineToolWithInputSchema(
-		g,
-		namespacedToolName,
-		mcpTool.Description,
-		inputSchemaForAI,
-		toolFunc,
-	)
-
-	return tool, nil
-}
-
-// getInputSchema exposes the MCP input schema as a jsonschema.Schema for Genkit
-func (c *GenkitMCPClient) getInputSchema(mcpTool mcp.Tool) (*jsonschema.Schema, error) {
-	var inputSchemaForAI *jsonschema.Schema
-	if mcpTool.InputSchema.Type != "" {
-		schemaBytes, err := json.Marshal(mcpTool.InputSchema)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal MCP input schema for tool %s: %w", mcpTool.Name, err)
-		}
-		inputSchemaForAI = new(jsonschema.Schema)
-		if err := json.Unmarshal(schemaBytes, inputSchemaForAI); err != nil {
-			// Fall back to empty schema if unmarshaling fails
-			inputSchemaForAI = &jsonschema.Schema{}
-		}
-	} else {
-		inputSchemaForAI = &jsonschema.Schema{}
-	}
-
-	return inputSchemaForAI, nil
-}
-
 // createToolFunction creates a Genkit tool function that will execute the MCP tool
 func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolContext, interface{}) (interface{}, error) {
 	// Capture mcpTool by value for the closure
@@ -175,18 +162,11 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 			return nil, err
 		}
 
-		// Log the MCP tool call request
-		logger.FromContext(ctx).Debug("Calling MCP tool", "tool", currentMCPTool.Name, "args", callToolArgs)
-
 		// Create and execute the MCP tool call request
 		mcpResult, err := executeToolCall(ctx, client, currentMCPTool.Name, callToolArgs)
 		if err != nil {
-			logger.FromContext(ctx).Error("MCP tool call failed", "tool", currentMCPTool.Name, "error", err)
 			return nil, fmt.Errorf("failed to call tool %s: %w", currentMCPTool.Name, err)
 		}
-
-		// Log the MCP tool call response
-		logger.FromContext(ctx).Debug("MCP tool call succeeded", "tool", currentMCPTool.Name, "result", mcpResult)
 
 		return mcpResult, nil
 	}
@@ -243,20 +223,11 @@ func executeToolCall(ctx context.Context, client *client.Client, toolName string
 		},
 	}
 
-	// Log the raw MCP request
-	reqBytes, _ := json.MarshalIndent(callReq, "", "  ")
-	logger.FromContext(ctx).Debug("Raw MCP request", "request", string(reqBytes))
-
 	result, err := client.CallTool(ctx, callReq)
 
 	if err != nil {
-		logger.FromContext(ctx).Error("Raw MCP server error", "error", err)
 		return nil, err
 	}
-
-	// Log the raw MCP response
-	respBytes, _ := json.MarshalIndent(result, "", "  ")
-	logger.FromContext(ctx).Debug("Raw MCP response", "response", string(respBytes))
 
 	return result, nil
 }

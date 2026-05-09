@@ -17,7 +17,6 @@ package mcp
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -32,19 +31,9 @@ func (c *GenkitMCPClient) GetToolNameWithNamespace(toolName string) string {
 	return fmt.Sprintf("%s_%s", c.options.Name, toolName)
 }
 
-// ContentToText extracts text content from MCP Content
-func ContentToText(contentList []mcp.Content) string {
-	var textParts []string
-	for _, contentItem := range contentList {
-		if textContent, ok := contentItem.(mcp.TextContent); ok && textContent.Type == "text" {
-			textParts = append(textParts, textContent.Text)
-		} else if erContent, ok := contentItem.(mcp.EmbeddedResource); ok {
-			if trc, ok := erContent.Resource.(mcp.TextResourceContents); ok {
-				textParts = append(textParts, trc.Text)
-			}
-		}
-	}
-	return strings.Join(textParts, "")
+// GetResourceNameWithNamespace returns a resource name prefixed with the client's namespace
+func (c *GenkitMCPClient) GetResourceNameWithNamespace(resourceName string) string {
+	return fmt.Sprintf("%s_%s", c.options.Name, resourceName)
 }
 
 // ExtractTextFromContent extracts text content from MCP Content

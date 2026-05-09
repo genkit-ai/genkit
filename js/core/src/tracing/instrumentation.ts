@@ -16,18 +16,19 @@
 
 import {
   ROOT_CONTEXT,
+  SpanOptions,
   SpanStatusCode,
   trace,
   type Span as ApiSpan,
   type Link,
 } from '@opentelemetry/api';
 import { performance } from 'node:perf_hooks';
+import { getAsyncContext } from '../async-context.js';
 import type { HasRegistry, Registry } from '../registry.js';
 import { ensureBasicTelemetryInstrumentation } from '../tracing.js';
 import type { PathMetadata, SpanMetadata, TraceMetadata } from './types.js';
 
 export const spanMetadataAlsKey = 'core.tracing.instrumentation.span';
-export const traceMetadataAlsKey = 'core.tracing.instrumentation.trace';
 
 export const ATTR_PREFIX = 'genkit';
 /** @hidden */
@@ -35,96 +36,122 @@ export const SPAN_TYPE_ATTR = ATTR_PREFIX + ':type';
 const TRACER_NAME = 'genkit-tracer';
 const TRACER_VERSION = 'v1';
 
-/**
- * @hidden
- */
-export async function newTrace<T>(
-  registry: Registry | HasRegistry,
-  opts: {
-    name: string;
-    labels?: Record<string, string>;
-    links?: Link[];
-  },
-  fn: (metadata: SpanMetadata, rootSpan: ApiSpan) => Promise<T>
-) {
-  registry = (registry as HasRegistry).registry
-    ? (registry as HasRegistry).registry
-    : (registry as Registry);
+type SpanContext = {
+  metadata: SpanMetadata;
+  labels?: Record<string, string>;
+  spanId?: string;
+} & TraceMetadata;
 
-  await ensureBasicTelemetryInstrumentation();
-  const traceMetadata: TraceMetadata = registry.asyncStore.getStore(
-    traceMetadataAlsKey
-  ) || {
-    paths: new Set<PathMetadata>(),
-    timestamp: performance.now(),
-    featureName: opts.name,
-  };
-  return await registry.asyncStore.run(traceMetadataAlsKey, traceMetadata, () =>
-    runInNewSpan(
-      registry,
-      {
-        metadata: {
-          name: opts.name,
-        },
-        labels: opts.labels,
-        links: opts.links,
-      },
-      async (metadata, otSpan) => {
-        return await fn(metadata, otSpan);
-      }
-    )
-  );
+interface RunInNewSpanOpts {
+  metadata: SpanMetadata;
+  labels?: Record<string, string>;
+  links?: Link[];
 }
+
+type RunInNewSpanFn<T> = (
+  metadata: SpanMetadata,
+  otSpan: ApiSpan,
+  isRoot: boolean
+) => Promise<T>;
 
 /**
  * Runs the provided function in a new span.
- *
+ * @deprecated
  * @hidden
  */
 export async function runInNewSpan<T>(
   registry: Registry | HasRegistry,
-  opts: {
-    metadata: SpanMetadata;
-    labels?: Record<string, string>;
-    links?: Link[];
-  },
-  fn: (metadata: SpanMetadata, otSpan: ApiSpan, isRoot: boolean) => Promise<T>
-): Promise<T> {
-  await ensureBasicTelemetryInstrumentation();
-  const resolvedRegistry = (registry as HasRegistry).registry
-    ? (registry as HasRegistry).registry
-    : (registry as Registry);
+  opts: RunInNewSpanOpts,
+  fn: RunInNewSpanFn<T>
+): Promise<T>;
 
+/**
+ * Runs the provided function in a new span.
+ * @hidden
+ */
+export async function runInNewSpan<T>(
+  opts: RunInNewSpanOpts,
+  fn: RunInNewSpanFn<T>
+): Promise<T>;
+
+/**
+ * Runs the provided function in a new span.
+ * @hidden
+ */
+export async function runInNewSpan<T>(
+  registryOrOprs: Registry | HasRegistry | RunInNewSpanOpts,
+  optsOrFn: RunInNewSpanOpts | RunInNewSpanFn<T>,
+  fnMaybe?: RunInNewSpanFn<T>
+): Promise<T> {
+  let opts: RunInNewSpanOpts;
+  let fn: RunInNewSpanFn<T>;
+  if (arguments.length === 3) {
+    opts = optsOrFn as RunInNewSpanOpts;
+    fn = fnMaybe as RunInNewSpanFn<T>;
+  } else {
+    opts = registryOrOprs as RunInNewSpanOpts;
+    fn = optsOrFn as RunInNewSpanFn<T>;
+  }
+  await ensureBasicTelemetryInstrumentation();
   const tracer = trace.getTracer(TRACER_NAME, TRACER_VERSION);
   const parentStep =
-    resolvedRegistry.asyncStore.getStore<SpanMetadata>(spanMetadataAlsKey);
-  const isInRoot = parentStep?.isRoot === true;
+    getAsyncContext().getStore<SpanContext>(spanMetadataAlsKey);
+  const isInRoot = parentStep?.metadata?.isRoot === true;
   if (!parentStep) opts.metadata.isRoot ||= true;
+
+  const spanOptions: SpanOptions = {
+    links: opts.links,
+    attributes: opts.labels,
+  };
+  if (!isDisableRootSpanDetection()) {
+    spanOptions.root = opts.metadata.isRoot;
+  }
+
   return await tracer.startActiveSpan(
     opts.metadata.name,
-    { links: opts.links, root: opts.metadata.isRoot },
+    spanOptions,
     async (otSpan) => {
-      if (opts.labels) otSpan.setAttributes(opts.labels);
+      const spanContext = {
+        ...parentStep,
+        metadata: opts.metadata,
+        labels: opts.labels,
+      } as SpanContext;
       try {
         opts.metadata.path = buildPath(
           opts.metadata.name,
-          parentStep?.path || '',
+          parentStep?.metadata?.path || '',
           opts.labels
         );
 
-        const output = await resolvedRegistry.asyncStore.run(
+        const isGenkitSpan = !!opts.labels?.[SPAN_TYPE_ATTR];
+        if (isGenkitSpan && parentStep) {
+          const parentIsGenkit = !!parentStep.labels?.[SPAN_TYPE_ATTR];
+          if (!parentIsGenkit && parentStep.spanId) {
+            otSpan.setAttribute(
+              ATTR_PREFIX + ':lastKnownParentSpanId',
+              parentStep.spanId
+            );
+          }
+        }
+
+        // Store spanId in context for Genkit spans so nested spans can reference it
+        if (isGenkitSpan) {
+          spanContext.spanId = otSpan.spanContext().spanId;
+        }
+
+        const output = await getAsyncContext().run(
           spanMetadataAlsKey,
-          opts.metadata,
+          spanContext,
           () => fn(opts.metadata, otSpan, isInRoot)
         );
         if (opts.metadata.state !== 'error') {
           opts.metadata.state = 'success';
         }
 
-        recordPath(resolvedRegistry, opts.metadata);
+        recordPath(opts.metadata, spanContext);
         return output;
       } catch (e) {
-        recordPath(resolvedRegistry, opts.metadata, e);
+        recordPath(opts.metadata, spanContext, e);
         opts.metadata.state = 'error';
         otSpan.setStatus({
           code: SpanStatusCode.ERROR,
@@ -216,12 +243,8 @@ function metadataToAttributes(metadata: SpanMetadata): Record<string, string> {
  *
  * @hidden
  */
-export function setCustomMetadataAttribute(
-  registry: Registry,
-  key: string,
-  value: string
-) {
-  const currentStep = getCurrentSpan(registry);
+export function setCustomMetadataAttribute(key: string, value: string) {
+  const currentStep = getCurrentSpan();
   if (!currentStep) {
     return;
   }
@@ -236,11 +259,8 @@ export function setCustomMetadataAttribute(
  *
  * @hidden
  */
-export function setCustomMetadataAttributes(
-  registry: Registry,
-  values: Record<string, string>
-) {
-  const currentStep = getCurrentSpan(registry);
+export function setCustomMetadataAttributes(values: Record<string, string>) {
+  const currentStep = getCurrentSpan();
   if (!currentStep) {
     return;
   }
@@ -262,12 +282,12 @@ export function toDisplayPath(path: string): string {
   return Array.from(path.matchAll(pathPartRegex), (m) => m[1]).join(' > ');
 }
 
-function getCurrentSpan(registry: Registry): SpanMetadata {
-  const step = registry.asyncStore.getStore<SpanMetadata>(spanMetadataAlsKey);
+function getCurrentSpan(): SpanMetadata {
+  const step = getAsyncContext().getStore<SpanContext>(spanMetadataAlsKey);
   if (!step) {
     throw new Error('running outside step context');
   }
-  return step;
+  return step.metadata;
 }
 
 function buildPath(
@@ -282,29 +302,26 @@ function buildPath(
   return parentPath + `/{${name}${stepType}}`;
 }
 
-function recordPath(registry: Registry, spanMeta: SpanMetadata, err?: any) {
+function recordPath(
+  spanMeta: SpanMetadata,
+  spanContext: SpanContext,
+  err?: any
+) {
   const path = spanMeta.path || '';
   const decoratedPath = decoratePathWithSubtype(spanMeta);
   // Only add the path if a child has not already been added. In the event that
   // an error is rethrown, we don't want to add each step in the unwind.
-  const paths = Array.from(
-    registry.asyncStore.getStore<TraceMetadata>(traceMetadataAlsKey)?.paths ||
-      new Set<PathMetadata>()
-  );
+  const paths = Array.from(spanContext?.paths || new Set<PathMetadata>());
   const status = err ? 'failure' : 'success';
   if (!paths.some((p) => p.path.startsWith(path) && p.status === status)) {
     const now = performance.now();
-    const start =
-      registry.asyncStore.getStore<TraceMetadata>(traceMetadataAlsKey)
-        ?.timestamp || now;
-    registry.asyncStore
-      .getStore<TraceMetadata>(traceMetadataAlsKey)
-      ?.paths?.add({
-        path: decoratedPath,
-        error: err?.name,
-        latency: now - start,
-        status,
-      });
+    const start = spanContext?.timestamp || now;
+    spanContext?.paths?.add({
+      path: decoratedPath,
+      error: err?.name,
+      latency: now - start,
+      status,
+    });
   }
   spanMeta.path = decoratedPath;
 }
@@ -327,4 +344,23 @@ function decoratePathWithSubtype(metadata: SpanMetadata): string {
   const root = `${pathComponents.slice(0, -1).join('}/{')}}/`;
   const decoratedStep = `{${pathComponents.at(-1)?.slice(0, -1)}${stepSubtype}}`;
   return root + decoratedStep;
+}
+
+const rootSpanDetectionKey = '__genkit_disableRootSpanDetection';
+
+function isDisableRootSpanDetection(): boolean {
+  return global[rootSpanDetectionKey] === true;
+}
+
+/**
+ * Disables Genkit's custom root span detection and leaves default Otel root span.
+ *
+ * This function attempts to control Genkit's internal OTel instrumentation behaviour,
+ * since internal implementation details are subject to change at any time consider
+ * this function "unstable" and subject to breaking changes as well.
+ *
+ * @hidden
+ */
+export function disableOTelRootSpanDetection() {
+  global[rootSpanDetectionKey] = true;
 }

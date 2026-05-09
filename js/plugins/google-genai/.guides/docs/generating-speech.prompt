@@ -1,0 +1,192 @@
+---
+title: Generating Speech with Gemini
+description: read this to understand how to generate realistic speech audio from a text script
+---
+
+The Google Genai plugin provides access to text-to-speech capabilities through Gemini TTS models. These models can convert text into natural-sounding speech for various applications.
+
+#### Basic Usage
+
+To generate audio using a TTS model:
+
+```ts
+import { googleAI } from '@genkit-ai/google-genai';
+import { writeFile } from 'node:fs/promises';
+import wav from 'wav'; // npm install wav && npm install -D @types/wav
+
+const ai = genkit({
+  plugins: [googleAI()],
+});
+
+const { media } = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-preview-tts'),
+  config: {
+    responseModalities: ['AUDIO'],
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: { voiceName: 'Algenib' },
+      },
+    },
+  },
+  prompt: 'Say that Genkit is an amazing Gen AI library',
+});
+
+if (!media) {
+  throw new Error('no media returned');
+}
+const audioBuffer = Buffer.from(media.url.substring(media.url.indexOf(',') + 1), 'base64');
+// The googleAI plugin returns raw PCM data, which we convert to WAV format.
+await writeFile('output.wav', await toWav(audioBuffer));
+
+async function toWav(pcmData: Buffer, channels = 1, rate = 24000, sampleWidth = 2): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // This code depends on `wav` npm library.
+    const writer = new wav.Writer({
+      channels,
+      sampleRate: rate,
+      bitDepth: sampleWidth * 8,
+    });
+
+    let bufs = [] as any[];
+    writer.on('error', reject);
+    writer.on('data', function (d) {
+      bufs.push(d);
+    });
+    writer.on('end', function () {
+      resolve(Buffer.concat(bufs).toString('base64'));
+    });
+
+    writer.write(pcmData);
+    writer.end();
+  });
+}
+```
+
+#### Multi-speaker Audio Generation
+
+You can generate audio with multiple speakers, each with their own voice:
+
+```ts
+const response = await ai.generate({
+  model: googleAI.model('gemini-2.5-flash-preview-tts'),
+  config: {
+    responseModalities: ['AUDIO'],
+    speechConfig: {
+      multiSpeakerVoiceConfig: {
+        speakerVoiceConfigs: [
+          {
+            speaker: 'Speaker1',
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Algenib' },
+            },
+          },
+          {
+            speaker: 'Speaker2',
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Achernar' },
+            },
+          },
+        ],
+      },
+    },
+  },
+  prompt: `Here's the dialog:
+    Speaker1: "Genkit is an amazing Gen AI library!"
+    Speaker2: "I thought it was a framework."`,
+});
+```
+
+When using multi-speaker configuration, the model automatically detects speaker labels in the text (like "Speaker1:" and "Speaker2:") and applies the corresponding voice to each speaker's lines.
+
+#### Configuration Options
+
+The Gemini TTS models support various configuration options:
+
+##### Voice Selection
+
+You can choose from different pre-built voices with unique characteristics:
+
+```ts
+speechConfig: {
+  voiceConfig: {
+    prebuiltVoiceConfig: {
+      voiceName: 'Algenib' // Other options: 'Achernar', 'Ankaa', etc.
+    },
+  },
+}
+```
+
+Full list of available voices:
+
+- `Zephyr`: Bright
+- `Puck`: Upbeat
+- `Charon`: Informative
+- `Kore`: Firm
+- `Fenrir`: Excitable
+- `Leda`: Youthful
+- `Orus`: Firm
+- `Aoede`: Breezy
+- `Callirrhoe`: Easy-going
+- `Autonoe`: Bright
+- `Enceladus`: Breathy
+- `Iapetus`: Clear
+- `Umbriel`: Easy-going
+- `Algieba`: Smooth
+- `Despina`: Smooth
+- `Erinome`: Clear
+- `Algenib`: Gravelly
+- `Rasalgethi`: Informative
+- `Laomedeia`: Upbeat
+- `Achernar`: Soft
+- `Alnilam`: Firm
+- `Schedar`: Even
+- `Gacrux`: Mature
+- `Pulcherrima`: Forward
+- `Achird`: Friendly
+- `Zubenelgenubi`: Casual
+- `Vindemiatrix`: Gentle
+- `Sadachbia`: Lively
+- `Sadaltager`: Knowledgeable
+- `Sulafat`: Warm
+
+##### Speech Emphasis
+
+You can use markdown-style formatting in your prompt to add emphasis:
+
+- Bold text (`**like this**`) for stronger emphasis
+- Italic text (`*like this*`) for moderate emphasis
+
+Example:
+
+```ts
+prompt: 'Genkit is an **amazing** Gen AI *library*!';
+```
+
+##### Advanced Speech Parameters
+
+For more control over the generated speech:
+
+```ts
+speechConfig: {
+  voiceConfig: {
+    prebuiltVoiceConfig: {
+      voiceName: 'Algenib',
+      speakingRate: 1.0,  // Range: 0.25 to 4.0, default is 1.0
+      pitch: 0.0,         // Range: -20.0 to 20.0, default is 0.0
+      volumeGainDb: 0.0,  // Range: -96.0 to 16.0, default is 0.0
+    },
+  },
+}
+```
+
+- `speakingRate`: Controls the speed of speech (higher values = faster speech)
+- `pitch`: Adjusts the pitch of the voice (higher values = higher pitch)
+- `volumeGainDb`: Controls the volume (higher values = louder)
+
+For more detailed information about the Gemini TTS models and their configuration options, see the [Google AI Speech Generation documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
+## Next Steps
+
+- Learn about [generating content](/docs/models) to understand how to use these models effectively
+- Explore [creating flows](/docs/flows) to build structured AI workflows
+- To use the Gemini API at enterprise scale or leverage Vertex vector search and Model Garden, see the [Vertex AI plugin](/docs/integrations/vertex-ai)

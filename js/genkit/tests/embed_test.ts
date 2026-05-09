@@ -17,7 +17,7 @@
 import { Document, embedderRef, type EmbedderAction } from '@genkit-ai/ai';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { genkit, type Genkit } from '../src/genkit';
+import { genkit, type Genkit } from '../src/index.js';
 
 describe('embed', () => {
   describe('default model', () => {

@@ -21,6 +21,7 @@ import (
 	"log"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/localvec"
@@ -59,14 +60,9 @@ type textMenuQuestionInput struct {
 
 func main() {
 	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.VertexAI{}),
-	)
-	if err != nil {
-		log.Fatalf("failed to create Genkit: %v", err)
-	}
+	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
 
-	model := googlegenai.VertexAIModel(g, "gemini-2.0-flash")
+	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 	embedder := googlegenai.VertexAIEmbedder(g, "text-embedding-004")
 
 	if err := setup01(g, model); err != nil {
@@ -79,17 +75,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = localvec.Init()
-	if err != nil {
+	if err := localvec.Init(); err != nil {
 		log.Fatal(err)
 	}
+
 	retOpts := &ai.RetrieverOptions{
-		ConfigSchema: localvec.RetrieverOptions{},
-		Info: &ai.RetrieverInfo{
-			Label: "go-menu_items",
-			Supports: &ai.RetrieverSupports{
-				Media: false,
-			},
+		ConfigSchema: core.InferSchemaMap(localvec.RetrieverOptions{}),
+		Label:        "go-menu_items",
+		Supports: &ai.RetrieverSupports{
+			Media: false,
 		},
 	}
 	docStore, retriever, err := localvec.DefineRetriever(g, "go-menu_items", localvec.Config{

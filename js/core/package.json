@@ -7,7 +7,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.15.5",
+  "version": "1.33.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -20,32 +20,35 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/core"
   },
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api-logs": "^0.52.0",
     "@opentelemetry/context-async-hooks": "~1.25.0",
     "@opentelemetry/core": "~1.25.0",
     "@opentelemetry/sdk-metrics": "~1.25.0",
     "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/sdk-logs": "^0.52.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
     "@types/json-schema": "^7.0.15",
     "ajv": "^8.12.0",
     "ajv-formats": "^3.0.1",
     "async-mutex": "^0.5.0",
-    "body-parser": "^1.20.3",
     "cors": "^2.8.5",
+    "dotprompt": "^1.1.1",
     "express": "^4.21.0",
     "get-port": "^5.1.0",
     "json-schema": "^0.4.0",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.22.4",
-    "dotprompt": "^1.1.1"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/ws": "^8.5.10",
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.30",
     "genversion": "^3.2.0",
@@ -53,7 +56,11 @@
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^4.9.0"
+    "typescript": "^5.9.3"
+  },
+  "optionalDependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "@genkit-ai/firebase": "^1.16.1"
   },
   "types": "lib/index.d.ts",
   "exports": {
@@ -92,6 +99,12 @@
       "require": "./lib/schema.js",
       "import": "./lib/schema.mjs",
       "default": "./lib/schema.js"
+    },
+    "./node": {
+      "types": "./lib/node.d.ts",
+      "require": "./lib/node.js",
+      "import": "./lib/node.mjs",
+      "default": "./lib/node.js"
     }
   },
   "typesVersions": {
@@ -116,6 +129,9 @@
       ],
       "schema": [
         "lib/schema"
+      ],
+      "node": [
+        "lib/node"
       ]
     }
   }

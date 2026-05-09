@@ -22,18 +22,10 @@ import (
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
-
-// Media describes model capabilities for Gemini models with media and text
-// input and image only output
-var Media = ai.ModelSupports{
-	Media:      true,
-	Multiturn:  false,
-	Tools:      false,
-	ToolChoice: false,
-	SystemRole: false,
-}
 
 // imagenConfigFromRequest translates an [*ai.ModelRequest] configuration to [*genai.GenerateImagesConfig]
 func imagenConfigFromRequest(input *ai.ModelRequest) (*genai.GenerateImagesConfig, error) {
@@ -45,13 +37,15 @@ func imagenConfigFromRequest(input *ai.ModelRequest) (*genai.GenerateImagesConfi
 	case *genai.GenerateImagesConfig:
 		result = *config
 	case map[string]any:
-		if err := mapToStruct(config, &result); err != nil {
-			return nil, err
+		var err error
+		result, err = base.MapToStruct[genai.GenerateImagesConfig](config)
+		if err != nil {
+			return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("The image configuration settings are not in the correct format. Check that the names and values match what the model expects: %v", err), nil)
 		}
 	case nil:
 		// empty but valid config
 	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("Invalid configuration type: %T. Expected *genai.GenerateImagesConfig. Ensure you are using the correct ModelRef helper (e.g., ImageModelRef) or passing the correct configuration struct.", input.Config), nil)
 	}
 
 	return &result, nil

@@ -15,6 +15,7 @@
  */
 
 import { VertexAI } from '@google-cloud/vertexai';
+import { getClientHeader as defaultGetClientHeader } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
 import { GoogleAuth } from 'google-auth-library';
 import type { GeminiConfigSchema } from '../gemini.js';
@@ -113,4 +114,11 @@ export async function getDerivedParams(
     vertexClientFactory,
     authClient,
   };
+}
+
+export function getGenkitClientHeader() {
+  if (process.env.MONOSPACE_ENV == 'true') {
+    return defaultGetClientHeader() + ' firebase-studio-vm';
+  }
+  return defaultGetClientHeader();
 }

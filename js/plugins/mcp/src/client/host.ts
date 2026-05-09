@@ -16,16 +16,18 @@
 
 import { Root } from '@modelcontextprotocol/sdk/types.js';
 import {
+  type DynamicActionProviderAction,
   type DynamicResourceAction,
   type ExecutablePrompt,
   type Genkit,
+  type MultipartToolAction,
   type PromptGenerateOptions,
   type ToolAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GenkitMcpClient, McpServerConfig } from './client.js';
 
-export interface McpHostOptions {
+export interface McpHostOptions<M extends boolean = false> {
   /**
    * An optional client name for this MCP host. This name is advertised to MCP Servers
    * as the connecting client name. Defaults to 'genkit-mcp'.
@@ -51,11 +53,35 @@ export interface McpHostOptions {
    */
   rawToolResponses?: boolean;
 
+  /** If true, tools will be registered as multipart tool.v2 actions. */
+  multipart?: M;
+
   /**
    * When provided, each connected MCP server will be sent the roots specified here. Overridden by any specific roots sent in the `mcpServers` config for a given server.
    */
   roots?: Root[];
 }
+
+export type McpHostOptionsWithCache<M extends boolean = false> = Omit<
+  McpHostOptions<M>,
+  'name'
+> & {
+  /**
+   * A client name for this MCP host. This name is advertised to MCP Servers
+   * as the connecting client name.
+   */
+  name: string;
+
+  /**
+   * Cache TTL. The dynamic action provider has a cache for the available actions
+   * The default TTL is 3 seconds.
+   * The cache will automatically be invalidated if any connections change.
+   *   Negative = no caching (expect noisy traces and slower resolution)
+   *   Zero or undefined = use the default 3000 millis (3 seconds)
+   *   Positive: The number of milliseconds to keep the cache.
+   */
+  cacheTTLMillis?: number;
+};
 
 /** Internal representation of client state for logging. */
 interface ClientState {
@@ -73,27 +99,40 @@ interface ClientState {
  * It allows for dynamic registration of tools from all connected and enabled MCP servers
  * into a Genkit instance.
  */
-export class GenkitMcpHost {
+export class GenkitMcpHost<Multipart extends boolean = false> {
   name: string;
-  private _clients: Record<string, GenkitMcpClient> = {};
+  private _clients: Record<string, GenkitMcpClient<Multipart>> = {};
   private _clientStates: Record<string, ClientState> = {};
   private _readyListeners: {
     resolve: () => void;
     reject: (err: Error) => void;
   }[] = [];
   private _ready = false;
+  private _dynamicActionProvider: DynamicActionProviderAction | undefined;
   private roots: Root[] | undefined;
   rawToolResponses?: boolean;
+  multipart?: Multipart;
 
-  constructor(options: McpHostOptions) {
+  constructor(options: McpHostOptions<Multipart>) {
     this.name = options.name || 'genkit-mcp';
     this.rawToolResponses = options.rawToolResponses;
+    this.multipart = options.multipart;
     this.roots = options.roots;
 
     if (options.mcpServers) {
       this.updateServers(options.mcpServers);
     } else {
       this._ready = true;
+    }
+  }
+
+  set dynamicActionProvider(dap: DynamicActionProviderAction) {
+    this._dynamicActionProvider = dap;
+  }
+
+  _invalidateCache(): void {
+    if (this._dynamicActionProvider) {
+      this._dynamicActionProvider.invalidateCache();
     }
   }
 
@@ -135,11 +174,12 @@ export class GenkitMcpHost {
       `[MCP Host] Connecting to MCP server '${serverName}' in host '${this.name}'.`
     );
     try {
-      const client = new GenkitMcpClient({
+      const client = new GenkitMcpClient<Multipart>({
         name: this.name,
         serverName: serverName,
         mcpServer: { ...config, roots: config.roots || this.roots },
         rawToolResponses: this.rawToolResponses,
+        multipart: this.multipart,
       });
       this._clients[serverName] = client;
     } catch (e) {
@@ -148,6 +188,7 @@ export class GenkitMcpHost {
         detail: `Details: ${e}`,
       });
     }
+    this._invalidateCache();
   }
 
   /**
@@ -175,6 +216,7 @@ export class GenkitMcpHost {
       });
     }
     delete this._clients[serverName];
+    this._invalidateCache();
   }
 
   /**
@@ -198,6 +240,7 @@ export class GenkitMcpHost {
       `[MCP Host] Disabling MCP server '${serverName}' in host '${this.name}'`
     );
     await client.disable();
+    this._invalidateCache();
   }
 
   /**
@@ -224,6 +267,7 @@ export class GenkitMcpHost {
         detail: `Details: ${e}`,
       });
     }
+    this._invalidateCache();
   }
 
   /**
@@ -251,6 +295,7 @@ export class GenkitMcpHost {
         detail: `Details: ${e}`,
       });
     }
+    this._invalidateCache();
   }
 
   /**
@@ -290,6 +335,8 @@ export class GenkitMcpHost {
           this._readyListeners.pop()?.reject(err);
         }
       });
+
+    this._invalidateCache();
   }
 
   /**
@@ -316,9 +363,13 @@ export class GenkitMcpHost {
    * @returns A Promise that resolves to an array of `ToolAction` from all
    * active MCP clients.
    */
-  async getActiveTools(ai: Genkit): Promise<ToolAction[]> {
+  async getActiveTools(
+    ai: Genkit
+  ): Promise<(Multipart extends true ? MultipartToolAction : ToolAction)[]> {
     await this.ready();
-    let allTools: ToolAction[] = [];
+    let allTools: (Multipart extends true
+      ? MultipartToolAction
+      : ToolAction)[] = [];
 
     for (const serverName in this._clients) {
       const client = this._clients[serverName];
@@ -446,6 +497,7 @@ export class GenkitMcpHost {
     for (const client of Object.values(this._clients)) {
       await client._disconnect();
     }
+    this._invalidateCache();
   }
 
   /** Helper method to track and log client errors. */
@@ -472,7 +524,7 @@ export class GenkitMcpHost {
   /**
    * Returns an array of all active clients.
    */
-  get activeClients(): GenkitMcpClient[] {
+  get activeClients(): GenkitMcpClient<Multipart>[] {
     return Object.values(this._clients).filter((c) => c.isEnabled());
   }
 

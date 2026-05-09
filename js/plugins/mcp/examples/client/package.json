@@ -12,7 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@genkit-ai/googleai": "file:../../../googleai",
+    "@genkit-ai/google-genai": "file:../../../google-genai",
     "@modelcontextprotocol/server-filesystem": "^0.5.1",
     "@modelcontextprotocol/server-github": "^0.5.1",
     "genkit": "file:../../../../genkit",

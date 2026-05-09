@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
@@ -36,13 +35,10 @@ type duneQuestionInput struct {
 
 func main() {
 	ctx := context.Background()
-	g, err := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash-preview-04-17"),
+	g := genkit.Init(ctx,
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	genkit.DefineFlow(g, "duneFlowGeminiAI", func(ctx context.Context, input *duneQuestionInput) (string, error) {
 		prompt := "What is the text I provided you with?"

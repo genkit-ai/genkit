@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2025 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,31 +14,8 @@
  * limitations under the License.
  */
 
-import type { Genkit } from 'genkit';
-import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
-import type { CommonPluginOptions } from '../common/types.js';
-import type { RerankerOptions } from './types.js';
-
-import { getDerivedParams } from '../common/index.js';
-
-import { vertexAiRerankers } from './reranker.js';
-
-export interface PluginOptions extends CommonPluginOptions, RerankerOptions {}
-
-/**
- * Add Google Cloud Vertex AI Rerankers API to Genkit.
- */
-export function vertexAIRerankers(options: PluginOptions): GenkitPlugin {
-  return genkitPlugin('vertexAIRerankers', async (ai: Genkit) => {
-    const { projectId, location, authClient } = await getDerivedParams(options);
-
-    await vertexAiRerankers(ai, {
-      projectId,
-      location,
-      authClient,
-      rerankOptions: options.rerankers.map((o) =>
-        typeof o === 'string' ? { model: o } : o
-      ),
-    });
-  });
-}
+export { vertexAIRerankers, type PluginOptions } from './legacy/index.js';
+export {
+  vertexRerankers,
+  type VertexRerankerPluginOptions,
+} from './v2/index.js';

@@ -1,0 +1,14 @@
+---
+config:
+  temperature: 0.75
+  topK: 10
+input:
+  schema:
+    query: string
+---
+
+{{role "system"}}
+Only write code, do not explain
+
+{{role "user"}}
+Assist the user with: {{query}}

@@ -19,11 +19,13 @@
     "@genkit-ai/express": "^1.1.0",
     "genkit": "workspace:*",
     "@genkit-ai/compat-oai": "workspace:*",
-    "tsx": "^4.19.3"
+    "tsx": "^4.19.3",
+    "wav": "^1.0.2"
   },
   "devDependencies": {
+    "@types/wav": "^1.0.4",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.5",
-    "typescript": "^5.6.2"
+    "typescript": "^5.9.3"
   }
 }

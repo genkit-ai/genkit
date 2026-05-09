@@ -15,16 +15,17 @@ pip install genkit
 pip install genkit-plugin-google-genai
 ```
 
+
 ```python
-import json
 from pydantic import BaseModel, Field
-from genkit.ai import Genkit
+from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
     model='googleai/gemini-2.0-flash',
 )
+
 
 class RpgCharacter(BaseModel):
     """An RPG game character."""
@@ -33,8 +34,9 @@ class RpgCharacter(BaseModel):
     back_story: str = Field(description='back story')
     abilities: list[str] = Field(description='list of abilities (3-4)')
 
+
 @ai.flow()
-async def generate_character(name: str):
+async def generate_character(name: str) -> RpgCharacter:
     result = await ai.generate(
         prompt=f'generate an RPG character named {name}',
         output_schema=RpgCharacter,
@@ -44,9 +46,12 @@ async def generate_character(name: str):
 
 async def main() -> None:
     """Main function."""
-    print(json.dumps(await generate_character('Goblorb')))
+    character = await generate_character('Goblorb')
+    print(character.model_dump_json(indent=2))
 
-ai.run_main(main())
+
+if __name__ == '__main__':
+    ai.run_main(main())
 ```
 
 See https://python.api.genkit.dev for more details.

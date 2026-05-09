@@ -99,7 +99,7 @@ describe('definePrompt', () => {
     const lookedUpPrompt = ai.prompt('hi');
     // This is a known limitation -- prompt lookup is async under the hood,
     // so we can't actually get the metadata...
-    assert.deepStrictEqual(lookedUpPrompt.ref, { name: 'hi' }); // ideally metadatashould be: { foo: 'bar' }
+    assert.deepStrictEqual(lookedUpPrompt.ref, { name: 'hi' }); // ideally metadata should be: { foo: 'bar' }
   });
 
   it('should apply middleware to a prompt call', async () => {
@@ -692,7 +692,7 @@ describe('definePrompt', () => {
       defineEchoModel(ai);
     });
 
-    it('renderes dotprompt messages', async () => {
+    it('renders dotprompt messages', async () => {
       const hi = ai.definePrompt({
         name: 'hi',
         input: {
@@ -1033,6 +1033,13 @@ describe('prompt', () => {
     });
     defineEchoModel(ai);
     pm = defineProgrammableModel(ai);
+    ai.defineTool(
+      {
+        name: 'toolA',
+        description: 'toolA it is',
+      },
+      async () => {}
+    );
     ai.defineSchema('myInputSchema', z.object({ foo: z.string() }));
     ai.defineSchema('myOutputSchema', z.object({ output: z.string() }));
   });
@@ -1054,6 +1061,19 @@ describe('prompt', () => {
         { content: [{ text: 'Hello from the prompt file' }], role: 'user' },
       ],
       output: {},
+    });
+  });
+
+  it('does not auto-load prompts when promptDir is null', async () => {
+    const aiWithoutPromptDir = genkit({
+      model: 'echoModel',
+      promptDir: null,
+    });
+
+    const prompt = aiWithoutPromptDir.prompt('test');
+    const response = prompt();
+    await assert.rejects(response, {
+      message: 'NOT_FOUND: Prompt test not found',
     });
   });
 
@@ -1145,6 +1165,11 @@ describe('prompt', () => {
       returnToolRequests: true,
       toolChoice: 'required',
       tools: ['toolA', 'toolB'],
+      metadata: {
+        prompt: {
+          foo: 'bar',
+        },
+      },
     });
   });
 
@@ -1289,11 +1314,17 @@ describe('prompt', () => {
         name: 'test',
         variant: 'variant',
         template: 'Hello from a variant of the hello prompt',
+        tools: ['toolA'],
+        toolChoice: undefined,
+        toolDefs: [],
+        use: [{ name: 'myMiddleware' }],
         raw: {
           config: {
             temperature: 13,
           },
           description: 'a prompt variant in a file',
+          tools: ['toolA'],
+          use: ['myMiddleware'],
         },
       },
       type: 'prompt',
@@ -1334,6 +1365,9 @@ describe('prompt', () => {
       config: {
         temperature: 0.13,
       },
+      tools: ['toolA'],
+      toolChoice: 'auto',
+      use: ['myMiddleware'],
       messages: async (input) => [],
     });
     const testPrompt: PromptAction =
@@ -1347,6 +1381,9 @@ describe('prompt', () => {
         config: {
           temperature: 0.13,
         },
+        tools: ['toolA'],
+        toolChoice: 'auto',
+        use: [{ name: 'myMiddleware' }],
         input: {
           schema: {
             type: 'object',

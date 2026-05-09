@@ -33,6 +33,8 @@ import (
 	"slices"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 )
@@ -58,23 +60,21 @@ func DefineRetriever(g *genkit.Genkit, name string, cfg Config, opts *ai.Retriev
 	}
 
 	if opts != nil && opts.ConfigSchema == nil {
-		opts.ConfigSchema = RetrieverOptions{}
+		opts.ConfigSchema = core.InferSchemaMap(RetrieverOptions{})
 	}
 
-	return ds,
-		genkit.DefineRetriever(g, provider, name, opts, ds.retrieve),
-		nil
+	return ds, genkit.DefineRetriever(g, api.NewName(provider, name), opts, ds.retrieve), nil
 }
 
 // IsDefinedRetriever reports whether the named [Retriever] is defined by this plugin.
 func IsDefinedRetriever(g *genkit.Genkit, name string) bool {
-	return genkit.LookupRetriever(g, provider, name) != nil
+	return genkit.LookupRetriever(g, api.NewName(provider, name)) != nil
 }
 
 // Retriever returns the retriever with the given name.
 // The name must match the [Config.Name] value passed to [Init].
 func Retriever(g *genkit.Genkit, name string) ai.Retriever {
-	return genkit.LookupRetriever(g, provider, name)
+	return genkit.LookupRetriever(g, api.NewName(provider, name))
 }
 
 // DocStore implements a local vector database.

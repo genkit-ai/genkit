@@ -15,7 +15,7 @@
  */
 
 import { startFlowServer } from '@genkit-ai/express';
-import { gemini15Flash, vertexAI } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/google-genai';
 import {
   VertexAIEvaluationMetricType,
   vertexAIEvaluation,
@@ -52,7 +52,10 @@ const ai = genkit({
   ],
 });
 
-const llms: ModelReference<any>[] = [gemini15Flash, llama31];
+const llms: ModelReference<any>[] = [
+  vertexAI.model('gemini-2.5-flash'),
+  llama31,
+];
 
 const historyStore = inMemoryStore();
 

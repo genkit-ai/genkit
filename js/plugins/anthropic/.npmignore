@@ -1,0 +1,17 @@
+# typescript source files
+src/
+tests/
+tsconfig.json
+tsup.common.ts
+tsup.config.ts
+
+# GitHub files
+.github/
+.gitignore
+.npmignore
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+
+# Developer related files
+.devcontainer/
+.vscode/

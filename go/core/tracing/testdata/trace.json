@@ -9,7 +9,7 @@
       "attributes": {
         "genkit:type": "flowStep",
         "genkit:name": "call-llm",
-        "genkit:path": "/dev-run-action-wrapper/basic/basic/call-llm",
+        "genkit:path": "/basic/basic/call-llm",
         "genkit:metadata:flow:stepType": "run",
         "genkit:metadata:flow:stepName": "call-llm",
         "genkit:metadata:flow:resolvedStepName": "call-llm",
@@ -40,7 +40,7 @@
       "attributes": {
         "genkit:type": "flowStep",
         "genkit:name": "call-llm",
-        "genkit:path": "/dev-run-action-wrapper/basic/basic/call-llm",
+        "genkit:path": "/basic/basic/call-llm",
         "genkit:metadata:flow:stepType": "run",
         "genkit:metadata:flow:stepName": "call-llm",
         "genkit:metadata:flow:resolvedStepName": "call-llm-1",
@@ -72,7 +72,7 @@
         "genkit:type": "flow",
         "genkit:name": "basic",
         "genkit:isRoot": true,
-        "genkit:path": "/dev-run-action-wrapper/basic/basic",
+        "genkit:path": "/basic/basic",
         "genkit:metadata:flow:execution": "0",
         "genkit:metadata:flow:name": "basic",
         "genkit:metadata:flow:id": "99112c56-4d31-4282-9998-d6539813f89a",
@@ -99,13 +99,12 @@
     "26f0aa6dbff0fcf4": {
       "spanId": "26f0aa6dbff0fcf4",
       "traceId": "0eede9d8c037dddbf32a307be30dc9a0",
-      "parentSpanId": "c1f0756a2349bef7",
       "startTime": 1710862641410000,
       "endTime": 1710862641427592,
       "attributes": {
         "genkit:type": "action",
         "genkit:name": "basic",
-        "genkit:path": "/dev-run-action-wrapper/basic",
+        "genkit:path": "/basic",
         "genkit:input": "{\"start\":{\"input\":\"hi\"}}",
         "genkit:metadata:flow:wrapperAction": "true",
         "genkit:output": "{\"flowId\":\"99112c56-4d31-4282-9998-d6539813f89a\",\"name\":\"basic\",\"startTime\":1710862641413,\"input\":\"hi\",\"cache\":{\"call-llm\":{\"value\":\"subject: hi\"},\"call-llm-1\":{\"value\":\"foo: subject: hi\"}},\"eventsTriggered\":{},\"blockedOnStep\":null,\"executions\":[{\"startTime\":1710862641415,\"traceIds\":[\"0eede9d8c037dddbf32a307be30dc9a0\"]}],\"operation\":{\"name\":\"99112c56-4d31-4282-9998-d6539813f89a\",\"done\":true,\"result\":{\"response\":\"foo: subject: hi\"}},\"traceContext\":\"{\\\"traceId\\\":\\\"0eede9d8c037dddbf32a307be30dc9a0\\\",\\\"spanId\\\":\\\"ac10ae6a3cced65e\\\",\\\"traceFlags\\\":1}\"}",
@@ -124,36 +123,10 @@
         "code": 0
       },
       "timeEvents": {}
-    },
-    "c1f0756a2349bef7": {
-      "spanId": "c1f0756a2349bef7",
-      "traceId": "0eede9d8c037dddbf32a307be30dc9a0",
-      "startTime": 1710862641406000,
-      "endTime": 1710862641430246.5,
-      "attributes": {
-        "genkit:name": "dev-run-action-wrapper",
-        "genkit:isRoot": true,
-        "genkit:path": "/dev-run-action-wrapper",
-        "genkit:metadata:genkit-dev-internal": "true",
-        "genkit:state": "success"
-      },
-      "displayName": "dev-run-action-wrapper",
-      "spanKind": "INTERNAL",
-      "sameProcessAsParentSpan": {
-        "value": true
-      },
-      "status": {
-        "code": 0
-      },
-      "timeEvents": {},
-      "instrumentationLibrary": {
-        "name": "genkit-tracer",
-        "version": "v1"
-      }
     }
   },
   "traceId": "0eede9d8c037dddbf32a307be30dc9a0",
-  "displayName": "dev-run-action-wrapper",
+  "displayName": "basic",
   "startTime": 1710862641406000,
   "endTime": 1710862641430246.5
 }

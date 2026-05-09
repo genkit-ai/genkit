@@ -19,6 +19,7 @@ package genkit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,13 +29,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type streamingCallback[Stream any] = func(context.Context, Stream) error
@@ -52,29 +54,104 @@ type runtimeFileData struct {
 // reflectionServer encapsulates everything needed to serve the Reflection API.
 type reflectionServer struct {
 	*http.Server
-	RuntimeFilePath string // Path to the runtime file that was written at startup.
+	RuntimeFilePath string            // Path to the runtime file that was written at startup.
+	activeActions   *activeActionsMap // Tracks active actions for cancellation support.
+}
+
+// activeAction represents an in-flight action that can be cancelled.
+type activeAction struct {
+	cancel    context.CancelFunc
+	startTime time.Time
+	traceID   string
+}
+
+// activeActionsMap safely manages active actions.
+type activeActionsMap struct {
+	mu      sync.RWMutex
+	actions map[string]*activeAction
+}
+
+func newActiveActionsMap() *activeActionsMap {
+	return &activeActionsMap{
+		actions: make(map[string]*activeAction),
+	}
+}
+
+func (m *activeActionsMap) Set(traceID string, action *activeAction) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.actions[traceID] = action
+}
+
+func (m *activeActionsMap) Get(traceID string) (*activeAction, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	action, ok := m.actions[traceID]
+	return action, ok
+}
+
+func (m *activeActionsMap) Delete(traceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.actions, traceID)
+}
+
+func (s *reflectionServer) runtimeID() string {
+	_, port, err := net.SplitHostPort(s.Addr)
+	if err != nil {
+		// This should not happen with a valid address.
+		return strconv.Itoa(os.Getpid())
+	}
+	return fmt.Sprintf("%d-%s", os.Getpid(), port)
+}
+
+// findAvailablePort finds the next available port starting from the given port number.
+func findAvailablePort(startPort int) (string, error) {
+	for port := startPort; port < startPort+100; port++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			listener.Close()
+			return addr, nil
+		}
+	}
+	return "", fmt.Errorf("no available port found in range %d-%d", startPort, startPort+99)
 }
 
 // startReflectionServer starts the Reflection API server listening at the
 // value of the environment variable GENKIT_REFLECTION_PORT for the port,
-// or ":3100" if it is empty.
+// or finds the next available port starting at 3100 if it is empty.
 func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, serverStartCh chan<- struct{}) *reflectionServer {
 	if g == nil {
 		errCh <- fmt.Errorf("nil Genkit provided")
 		return nil
 	}
 
-	addr := "127.0.0.1:3100"
-	if os.Getenv("GENKIT_REFLECTION_PORT") != "" {
-		addr = "127.0.0.1:" + os.Getenv("GENKIT_REFLECTION_PORT")
+	var addr string
+	if envPort := os.Getenv("GENKIT_REFLECTION_PORT"); envPort != "" {
+		// Validate that the user-provided port is a valid integer.
+		_, err := strconv.Atoi(envPort)
+		if err != nil {
+			errCh <- fmt.Errorf("invalid GENKIT_REFLECTION_PORT: %w", err)
+			return nil
+		}
+		addr = net.JoinHostPort("127.0.0.1", envPort)
+	} else {
+		var err error
+		addr, err = findAvailablePort(3100)
+		if err != nil {
+			errCh <- fmt.Errorf("failed to find available port: %w", err)
+			return nil
+		}
 	}
 
 	s := &reflectionServer{
 		Server: &http.Server{
-			Addr:    addr,
-			Handler: serveMux(g),
+			Addr: addr,
 		},
+		activeActions: newActiveActionsMap(),
 	}
+	s.Handler = serveMux(g, s)
 
 	slog.Debug("starting reflection server", "addr", s.Addr)
 
@@ -139,15 +216,17 @@ func (s *reflectionServer) writeRuntimeFile(url string) error {
 
 	runtimeID := os.Getenv("GENKIT_RUNTIME_ID")
 	if runtimeID == "" {
-		runtimeID = strconv.Itoa(os.Getpid())
+		runtimeID = s.runtimeID()
 	}
 
 	timestamp := time.Now().UTC().Format(time.RFC3339)
 	// remove colons to avoid problems with different OS file name restrictions
 	timestamp = strings.ReplaceAll(timestamp, ":", "_")
 
-	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s.json", os.Getpid(), timestamp))
+	// Extract port from the URL string.
+	_, port, _ := net.SplitHostPort(url)
 
+	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s-%s.json", os.Getpid(), port, timestamp))
 	data := runtimeFileData{
 		ID:                       runtimeID,
 		PID:                      os.Getpid(),
@@ -218,15 +297,21 @@ func findProjectRoot() (string, error) {
 }
 
 // serveMux returns a new ServeMux configured for the required Reflection API endpoints.
-func serveMux(g *Genkit) *http.ServeMux {
+func serveMux(g *Genkit, s *reflectionServer) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Skip wrapHandler here to avoid logging constant polling requests.
-	mux.HandleFunc("GET /api/__health", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/__health", func(w http.ResponseWriter, r *http.Request) {
+		if id := r.URL.Query().Get("id"); id != "" && id != s.runtimeID() {
+			http.Error(w, "Invalid runtime ID", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /api/actions", wrapReflectionHandler(handleListActions(g)))
-	mux.HandleFunc("POST /api/runAction", wrapReflectionHandler(handleRunAction(g)))
-	mux.HandleFunc("POST /api/notify", wrapReflectionHandler(handleNotify(g)))
+	mux.HandleFunc("POST /api/runAction", wrapReflectionHandler(handleRunAction(g, s.activeActions)))
+	mux.HandleFunc("POST /api/notify", wrapReflectionHandler(handleNotify()))
+	mux.HandleFunc("POST /api/cancelAction", wrapReflectionHandler(handleCancelAction(s.activeActions)))
+	mux.HandleFunc("GET /api/values", wrapReflectionHandler(handleListValues(g)))
 	return mux
 }
 
@@ -257,7 +342,7 @@ func wrapReflectionHandler(h func(w http.ResponseWriter, r *http.Request) error)
 
 // handleRunAction looks up an action by name in the registry, runs it with the
 // provided JSON input, and writes back the JSON-marshaled request.
-func handleRunAction(g *Genkit) func(w http.ResponseWriter, r *http.Request) error {
+func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		ctx := r.Context()
 
@@ -279,11 +364,54 @@ func handleRunAction(g *Genkit) func(w http.ResponseWriter, r *http.Request) err
 
 		logger.FromContext(ctx).Debug("running action", "key", body.Key, "stream", stream)
 
+		// Create cancellable context for this action
+		actionCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		// Track whether headers have been sent
+		headersSent := false
+		var callbackTraceID string // Trace ID captured from telemetry callback for early header sending
+		var mu sync.Mutex
+
+		// Set up telemetry callback to capture and send trace ID early
+		// This is used for BOTH streaming and non-streaming to match JS behavior
+		telemetryCb := func(tid string, sid string) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			if !headersSent {
+				callbackTraceID = tid
+
+				// Track active action for cancellation
+				activeActions.Set(callbackTraceID, &activeAction{
+					cancel:    cancel,
+					startTime: time.Now(),
+					traceID:   callbackTraceID,
+				})
+
+				// Send headers immediately with trace ID
+				w.Header().Set("X-Genkit-Trace-Id", callbackTraceID)
+				w.Header().Set("X-Genkit-Span-Id", sid)
+				w.Header().Set("X-Genkit-Version", "go/"+internal.Version)
+
+				if stream {
+					w.Header().Set("Content-Type", "text/plain")
+					w.Header().Set("Transfer-Encoding", "chunked")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+
+				w.WriteHeader(http.StatusOK)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				headersSent = true
+			}
+		}
+
+		// Set up streaming callback if needed
 		var cb streamingCallback[json.RawMessage]
 		if stream {
-			w.Header().Set("Content-Type", "text/plain")
-			w.Header().Set("Transfer-Encoding", "chunked")
-			// Stream results are newline-separated JSON.
 			cb = func(ctx context.Context, msg json.RawMessage) error {
 				_, err := fmt.Fprintf(w, "%s\n", msg)
 				if err != nil {
@@ -296,38 +424,159 @@ func handleRunAction(g *Genkit) func(w http.ResponseWriter, r *http.Request) err
 			}
 		}
 
-		var contextMap core.ActionContext = nil
+		contextMap := core.ActionContext{}
 		if body.Context != nil {
 			json.Unmarshal(body.Context, &contextMap)
 		}
 
-		resp, err := runAction(ctx, g, body.Key, body.Input, body.TelemetryLabels, cb, contextMap)
+		// Attach telemetry callback to context so action can invoke it when span is created
+		actionCtx = tracing.WithTelemetryCallback(actionCtx, telemetryCb)
+		resp, err := runAction(actionCtx, g, body.Key, body.Input, body.TelemetryLabels, cb, contextMap)
+
+		// Clean up active action using the trace ID from response
+		if resp != nil && resp.Telemetry.TraceID != "" {
+			activeActions.Delete(resp.Telemetry.TraceID)
+		}
+
 		if err != nil {
-			if stream {
-				reflectErr, err := json.Marshal(core.ToReflectionError(err))
-				if err != nil {
-					return err
+			// Check if context was cancelled
+			if errors.Is(err, context.Canceled) {
+				// Use gRPC CANCELLED code (1) in JSON body to match TypeScript behavior
+				var traceIDPtr *string
+				if resp != nil && resp.Telemetry.TraceID != "" {
+					traceIDPtr = &resp.Telemetry.TraceID
+				}
+				errResp := errorResponse{
+					Error: core.ReflectionError{
+						Code:    core.CodeCancelled, // gRPC CANCELLED = 1
+						Message: "Action was cancelled",
+						Details: &core.ReflectionErrorDetails{
+							TraceID: traceIDPtr,
+						},
+					},
 				}
 
-				_, err = fmt.Fprintf(w, "%s\n\n", reflectErr)
-				if err != nil {
-					return err
-				}
-
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
+				if stream {
+					// For streaming, write error as final chunk
+					json.NewEncoder(w).Encode(errResp)
+				} else {
+					// For non-streaming, return error response
+					if !headersSent {
+						w.WriteHeader(http.StatusOK) // Match TS: response.status(200).json(...)
+					}
+					json.NewEncoder(w).Encode(errResp)
 				}
 				return nil
 			}
-			return err
+
+			// Handle other errors
+			if stream {
+				refErr := core.ToReflectionError(err)
+				if resp != nil && resp.Telemetry.TraceID != "" {
+					refErr.Details.TraceID = &resp.Telemetry.TraceID
+				}
+
+				reflectErr, err := json.Marshal(refErr)
+				if err != nil {
+					logger.FromContext(ctx).Error("writing output", "err", err)
+					return nil
+				}
+				_, err = fmt.Fprintf(w, "{\"error\": %s }", reflectErr)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+
+			// Non-streaming error
+			errorResponse := core.ToReflectionError(err)
+			if resp != nil && resp.Telemetry.TraceID != "" {
+				errorResponse.Details.TraceID = &resp.Telemetry.TraceID
+			}
+
+			reflectErr, err := json.Marshal(errorResponse)
+			if err != nil {
+				logger.FromContext(ctx).Error("writing output", "err", err)
+				return nil
+			}
+
+			_, err = fmt.Fprintf(w, "{\"error\": %s }", reflectErr)
+			if err != nil {
+				return err
+			}
+			return nil
 		}
 
-		return writeJSON(ctx, w, resp)
+		// Success case
+		if stream {
+			// For streaming, write the final chunk with result and telemetry
+			// This matches JS: response.write(JSON.stringify({result, telemetry}))
+			finalResponse := runActionResponse{
+				Result:    resp.Result,
+				Telemetry: telemetry{TraceID: resp.Telemetry.TraceID},
+			}
+			data, err := json.Marshal(finalResponse)
+			if err != nil {
+				logger.FromContext(ctx).Error("writing output", "err", err)
+				return nil
+			}
+
+			w.Write(data)
+		} else {
+			// For non-streaming, headers were already sent via telemetry callback
+			// Response already includes telemetry.traceId in body
+			return writeJSON(ctx, w, resp)
+		}
+
+		return nil
+	}
+}
+
+// handleCancelAction cancels an in-flight action by trace ID.
+func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWriter, r *http.Request) error {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		var body struct {
+			TraceID string `json:"traceId"`
+		}
+
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return core.NewError(core.INVALID_ARGUMENT, err.Error())
+		}
+
+		if body.TraceID == "" {
+			return core.NewError(core.INVALID_ARGUMENT, "traceId is required")
+		}
+
+		action, exists := activeActions.Get(body.TraceID)
+		if !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return writeJSON(r.Context(), w, map[string]string{
+				"error": "Action not found or already completed",
+			})
+		}
+
+		// Cancel the action's context
+		action.cancel()
+		activeActions.Delete(body.TraceID)
+
+		return writeJSON(r.Context(), w, map[string]string{
+			"message": "Action cancelled",
+		})
+	}
+}
+
+// configureTelemetry sets up the telemetry client if not already configured via env var.
+// Shared between V1 and V2 reflection servers.
+func configureTelemetry(url string) {
+	if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && url != "" {
+		tracing.WriteTelemetryImmediate(tracing.NewHTTPTelemetryClient(url))
+		slog.Debug("connected to telemetry server", "url", url)
 	}
 }
 
 // handleNotify configures the telemetry server URL from the request.
-func handleNotify(g *Genkit) func(w http.ResponseWriter, r *http.Request) error {
+func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
 			TelemetryServerURL       string `json:"telemetryServerUrl"`
@@ -339,10 +588,7 @@ func handleNotify(g *Genkit) func(w http.ResponseWriter, r *http.Request) error 
 			return core.NewError(core.INVALID_ARGUMENT, err.Error())
 		}
 
-		if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && body.TelemetryServerURL != "" {
-			g.reg.TracingState().WriteTelemetryImmediate(tracing.NewHTTPTelemetryClient(body.TelemetryServerURL))
-			slog.Debug("connected to telemetry server", "url", body.TelemetryServerURL)
-		}
+		configureTelemetry(body.TelemetryServerURL)
 
 		if body.ReflectionApiSpecVersion != internal.GENKIT_REFLECTION_API_SPEC_VERSION {
 			slog.Error("Genkit CLI version is not compatible with runtime library. Please use `genkit-cli` version compatible with runtime library version.")
@@ -359,7 +605,7 @@ func handleNotify(g *Genkit) func(w http.ResponseWriter, r *http.Request) error 
 func handleListActions(g *Genkit) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		ads := listResolvableActions(r.Context(), g)
-		descMap := map[string]core.ActionDesc{}
+		descMap := map[string]api.ActionDesc{}
 		for _, d := range ads {
 			descMap[d.Key] = d
 		}
@@ -367,18 +613,33 @@ func handleListActions(g *Genkit) func(w http.ResponseWriter, r *http.Request) e
 	}
 }
 
+// handleListValues returns registered values filtered by type query parameter.
+// Matches JS: GET /api/values?type=middleware
+func handleListValues(g *Genkit) func(w http.ResponseWriter, r *http.Request) error {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		valueType := r.URL.Query().Get("type")
+		if valueType == "" {
+			return core.NewError(core.INVALID_ARGUMENT, `query parameter "type" is required`)
+		}
+		prefix := "/" + valueType + "/"
+		result := map[string]any{}
+		for key, val := range g.reg.ListValues() {
+			if strings.HasPrefix(key, prefix) {
+				name := strings.TrimPrefix(key, prefix)
+				result[name] = val
+			}
+		}
+		return writeJSON(r.Context(), w, result)
+	}
+}
+
 // listActions lists all the registered actions.
-func listActions(g *Genkit) []core.ActionDesc {
-	ads := []core.ActionDesc{}
+func listActions(g *Genkit) []api.ActionDesc {
+	ads := []api.ActionDesc{}
 
 	actions := g.reg.ListActions()
 	for _, a := range actions {
-		action, ok := a.(core.Action)
-		if !ok {
-			continue
-		}
-
-		ads = append(ads, action.Desc())
+		ads = append(ads, a.Desc())
 	}
 
 	sort.Slice(ads, func(i, j int) bool {
@@ -389,13 +650,18 @@ func listActions(g *Genkit) []core.ActionDesc {
 }
 
 // listResolvableActions lists all the registered and resolvable actions.
-func listResolvableActions(ctx context.Context, g *Genkit) []core.ActionDesc {
+// Schema references in the descriptors are resolved to their concrete schemas
+// so that consumers (e.g., the Dev UI) don't have to perform secondary lookups.
+func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	ads := listActions(g)
-	keys := make(map[string]struct{})
+	keys := make(map[string]struct{}, len(ads))
+	for _, d := range ads {
+		keys[d.Name] = struct{}{}
+	}
 
 	plugins := g.reg.ListPlugins()
 	for _, p := range plugins {
-		dp, ok := p.(DynamicPlugin)
+		dp, ok := p.(api.DynamicPlugin)
 		if !ok {
 			// Not all plugins are DynamicPlugins; skip if not.
 			continue
@@ -403,6 +669,7 @@ func listResolvableActions(ctx context.Context, g *Genkit) []core.ActionDesc {
 
 		for _, desc := range dp.ListActions(ctx) {
 			if _, exists := keys[desc.Name]; !exists {
+				resolveDescSchemas(g.reg, &desc)
 				ads = append(ads, desc)
 				keys[desc.Name] = struct{}{}
 			}
@@ -416,6 +683,18 @@ func listResolvableActions(ctx context.Context, g *Genkit) []core.ActionDesc {
 	return ads
 }
 
+// resolveDescSchemas best-effort resolves any "genkit:" schema references in
+// the descriptor's InputSchema and OutputSchema. Unresolvable references are
+// left as-is.
+func resolveDescSchemas(r api.Registry, desc *api.ActionDesc) {
+	if resolved, err := core.ResolveSchema(r, desc.InputSchema); err == nil {
+		desc.InputSchema = resolved
+	}
+	if resolved, err := core.ResolveSchema(r, desc.OutputSchema); err == nil {
+		desc.OutputSchema = resolved
+	}
+}
+
 // TODO: Pull these from common types in genkit-tools.
 
 type runActionResponse struct {
@@ -427,34 +706,42 @@ type telemetry struct {
 	TraceID string `json:"traceId"`
 }
 
+type errorResponse struct {
+	Error core.ReflectionError `json:"error"`
+}
+
 func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
 	action := g.reg.ResolveAction(key)
 	if action == nil {
 		return nil, core.NewError(core.NOT_FOUND, "action %q not found", key)
 	}
-	if runtimeContext != nil {
-		ctx = core.WithActionContext(ctx, runtimeContext)
+	ctx = core.WithActionContext(ctx, runtimeContext)
+
+	// Parse telemetry attributes if provided
+	var telemetryAttributes map[string]string
+	if telemetryLabels != nil {
+		err := json.Unmarshal(telemetryLabels, &telemetryAttributes)
+		if err != nil {
+			return nil, core.NewError(core.INTERNAL, "Error unmarshalling telemetryLabels: %v", err)
+		}
 	}
 
+	// Run the action and capture trace ID. We need to ensure there's a valid trace context.
 	var traceID string
-	output, err := tracing.RunInNewSpan(ctx, g.reg.TracingState(), "dev-run-action-wrapper", "", true, input, func(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
-		tracing.SetCustomMetadataAttr(ctx, "genkit-dev-internal", "true")
-		// Set telemetry labels from payload to span
-		if telemetryLabels != nil {
-			var telemetryAttributes map[string]string
-			err := json.Unmarshal(telemetryLabels, &telemetryAttributes)
-			if err != nil {
-				return nil, core.NewError(core.INTERNAL, "Error unmarshalling telemetryLabels: %v", err)
-			}
-			for k, v := range telemetryAttributes {
-				tracing.SetCustomMetadataAttr(ctx, k, v)
-			}
+	output, err := func() (json.RawMessage, error) {
+		r, err := action.RunJSONWithTelemetry(ctx, input, cb)
+		if r != nil {
+			traceID = r.TraceId
 		}
-		traceID = trace.SpanContextFromContext(ctx).TraceID().String()
-		return action.(core.Action).RunJSON(ctx, input, cb)
-	})
+		if err != nil {
+			return nil, err
+		}
+		return r.Result, err
+	}()
 	if err != nil {
-		return nil, err
+		return &runActionResponse{
+			Telemetry: telemetry{TraceID: traceID},
+		}, err
 	}
 
 	return &runActionResponse{

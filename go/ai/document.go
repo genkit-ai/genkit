@@ -19,6 +19,9 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 )
 
 // A Document is a piece of data that can be embedded, indexed, or retrieved.
@@ -38,8 +41,34 @@ type Part struct {
 	Text         string         `json:"text,omitempty"`         // valid for kind∈{text,blob}
 	ToolRequest  *ToolRequest   `json:"toolRequest,omitempty"`  // valid for kind==partToolRequest
 	ToolResponse *ToolResponse  `json:"toolResponse,omitempty"` // valid for kind==partToolResponse
+	Resource     *ResourcePart  `json:"resource,omitempty"`     // valid for kind==partResource
 	Custom       map[string]any `json:"custom,omitempty"`       // valid for plugin-specific custom parts
 	Metadata     map[string]any `json:"metadata,omitempty"`     // valid for all kinds
+}
+
+// Clone returns a shallow copy of the Part with its own Metadata and Custom
+// maps. Callers can add or remove map keys without mutating the original.
+func (p *Part) Clone() *Part {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.Custom = maps.Clone(p.Custom)
+	cp.Metadata = maps.Clone(p.Metadata)
+	return &cp
+}
+
+// Clone returns a shallow copy of the Message with its own Content slice
+// and Metadata map. Callers can replace parts or add metadata keys without
+// mutating the original.
+func (m *Message) Clone() *Message {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	cp.Content = slices.Clone(m.Content)
+	cp.Metadata = maps.Clone(m.Metadata)
+	return &cp
 }
 
 type PartKind int8
@@ -52,6 +81,7 @@ const (
 	PartToolResponse
 	PartCustom
 	PartReasoning
+	PartResource
 )
 
 // NewTextPart returns a Part containing text.
@@ -118,46 +148,88 @@ func NewReasoningPart(text string, signature []byte) *Part {
 	}
 }
 
+// NewResourcePart returns a Part containing a resource reference.
+func NewResourcePart(uri string) *Part {
+	return &Part{Kind: PartResource, Resource: &ResourcePart{Uri: uri}}
+}
+
 // IsText reports whether the [Part] contains plain text.
 func (p *Part) IsText() bool {
-	return p.Kind == PartText
+	return p != nil && p.Kind == PartText
 }
 
 // IsMedia reports whether the [Part] contains structured media data.
 func (p *Part) IsMedia() bool {
-	return p.Kind == PartMedia
+	return p != nil && p.Kind == PartMedia
 }
 
 // IsData reports whether the [Part] contains unstructured data.
 func (p *Part) IsData() bool {
-	return p.Kind == PartData
+	return p != nil && p.Kind == PartData
 }
 
 // IsToolRequest reports whether the [Part] contains a request to run a tool.
 func (p *Part) IsToolRequest() bool {
-	return p.Kind == PartToolRequest
+	return p != nil && p.Kind == PartToolRequest
 }
 
 // IsToolResponse reports whether the [Part] contains the result of running a tool.
 func (p *Part) IsToolResponse() bool {
-	return p.Kind == PartToolResponse
+	return p != nil && p.Kind == PartToolResponse
+}
+
+// IsInterrupt reports whether the [Part] contains a tool request that was interrupted.
+func (p *Part) IsInterrupt() bool {
+	return p != nil && p.IsToolRequest() && p.Metadata != nil && p.Metadata["interrupt"] != nil
 }
 
 // IsCustom reports whether the [Part] contains custom plugin-specific data.
 func (p *Part) IsCustom() bool {
-	return p.Kind == PartCustom
+	return p != nil && p.Kind == PartCustom
 }
 
 // IsReasoning reports whether the [Part] contains a reasoning text
 func (p *Part) IsReasoning() bool {
-	return p.Kind == PartReasoning
+	return p != nil && p.Kind == PartReasoning
+}
+
+// IsImage reports whether the [Part] contains an image.
+func (p *Part) IsImage() bool {
+	if p == nil || !p.IsMedia() {
+		return false
+	}
+	return IsImageContentType(p.ContentType) || strings.HasPrefix(p.Text, "data:image/")
+}
+
+// IsVideo reports whether the [Part] contains a video.
+func (p *Part) IsVideo() bool {
+	if p == nil || !p.IsMedia() {
+		return false
+	}
+	return IsVideoContentType(p.ContentType) || strings.HasPrefix(p.Text, "data:video/")
+}
+
+// IsAudio reports whether the [Part] contains an audio file.
+func (p *Part) IsAudio() bool {
+	if p == nil || !p.IsMedia() {
+		return false
+	}
+	return IsAudioContentType(p.ContentType) || strings.HasPrefix(p.Text, "data:audio/")
+}
+
+// IsResource reports whether the [Part] contains a resource reference.
+func (p *Part) IsResource() bool {
+	return p != nil && p.Kind == PartResource
 }
 
 // MarshalJSON is called by the JSON marshaler to write out a Part.
 func (p *Part) MarshalJSON() ([]byte, error) {
+	if p == nil {
+		return nil, fmt.Errorf("part is nil")
+	}
+
 	// This is not handled by the schema generator because
 	// Part is defined in TypeScript as a union.
-
 	switch p.Kind {
 	case PartText:
 		v := textPart{
@@ -192,6 +264,12 @@ func (p *Part) MarshalJSON() ([]byte, error) {
 			Metadata:     p.Metadata,
 		}
 		return json.Marshal(v)
+	case PartResource:
+		v := resourcePart{
+			Resource: p.Resource,
+			Metadata: p.Metadata,
+		}
+		return json.Marshal(v)
 	case PartCustom:
 		v := customPart{
 			Custom:   p.Custom,
@@ -215,6 +293,7 @@ type partSchema struct {
 	Data         string         `json:"data,omitempty" yaml:"data,omitempty"`
 	ToolRequest  *ToolRequest   `json:"toolRequest,omitempty" yaml:"toolRequest,omitempty"`
 	ToolResponse *ToolResponse  `json:"toolResponse,omitempty" yaml:"toolResponse,omitempty"`
+	Resource     *ResourcePart  `json:"resource,omitempty" yaml:"resource,omitempty"`
 	Custom       map[string]any `json:"custom,omitempty" yaml:"custom,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 	Reasoning    string         `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
@@ -233,9 +312,16 @@ func (p *Part) unmarshalPartFromSchema(s partSchema) {
 	case s.ToolResponse != nil:
 		p.Kind = PartToolResponse
 		p.ToolResponse = s.ToolResponse
+	case s.Resource != nil:
+		p.Kind = PartResource
+		p.Resource = s.Resource
 	case s.Custom != nil:
 		p.Kind = PartCustom
 		p.Custom = s.Custom
+	case s.Reasoning != "":
+		p.Kind = PartReasoning
+		p.Text = s.Reasoning
+		p.ContentType = "plain/text"
 	default:
 		p.Kind = PartText
 		p.Text = s.Text
@@ -290,4 +376,19 @@ func DocumentFromText(text string, metadata map[string]any) *Document {
 		},
 		Metadata: metadata,
 	}
+}
+
+// IsImageContentType checks if the content type represents an image.
+func IsImageContentType(contentType string) bool {
+	return strings.HasPrefix(contentType, "image/") || strings.HasPrefix(contentType, "data:image/")
+}
+
+// IsVideoContentType checks if the content type represents a video.
+func IsVideoContentType(contentType string) bool {
+	return strings.HasPrefix(contentType, "video/") || strings.HasPrefix(contentType, "data:video/")
+}
+
+// IsAudioContentType checks if the content type represents an audio file.
+func IsAudioContentType(contentType string) bool {
+	return strings.HasPrefix(contentType, "audio/") || strings.HasPrefix(contentType, "data:audio/")
 }

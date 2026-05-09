@@ -16,214 +16,294 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// MCPServerOptions holds configuration for creating an MCP server
+// MCPServerOptions holds configuration for GenkitMCPServer
 type MCPServerOptions struct {
-	// Name is the server name advertised to MCP clients
+	// Name for this server instance - used for MCP identification
 	Name string
-	// Version is the server version (defaults to "1.0.0" if empty)
+	// Version number for this server (defaults to "1.0.0" if empty)
 	Version string
-	// Tools is an optional list of specific tools to expose.
-	// If provided, only these tools will be exposed (no auto-discovery).
-	// If nil or empty, all tools will be auto-discovered from the registry.
-	Tools []ai.Tool
 }
 
-// GenkitMCPServer represents an MCP server that exposes Genkit tools
+// GenkitMCPServer represents an MCP server that exposes Genkit tools, prompts, and resources
 type GenkitMCPServer struct {
 	genkit    *genkit.Genkit
 	options   MCPServerOptions
 	mcpServer *server.MCPServer
 
-	// Tools discovered from Genkit registry or explicitly specified
-	tools map[string]ai.Tool
+	// Discovered actions from Genkit registry
+	toolActions     []ai.Tool
+	resourceActions []api.Action
+	actionsResolved bool
 }
 
-// NewMCPServer creates a new MCP server instance that can expose Genkit tools
+// NewMCPServer creates a new GenkitMCPServer with the provided options
 func NewMCPServer(g *genkit.Genkit, options MCPServerOptions) *GenkitMCPServer {
+	// Set default values
 	if options.Version == "" {
 		options.Version = "1.0.0"
 	}
 
-	s := &GenkitMCPServer{
+	server := &GenkitMCPServer{
 		genkit:  g,
 		options: options,
-		tools:   make(map[string]ai.Tool),
 	}
 
-	// Discover or load tools based on options
-	if len(options.Tools) > 0 {
-		s.loadExplicitTools()
-	} else {
-		s.discoverTools()
-	}
-
-	return s
+	return server
 }
 
-// loadExplicitTools loads only the specified tools
-func (s *GenkitMCPServer) loadExplicitTools() {
-	var loadedCount int
-	for _, tool := range s.options.Tools {
-		if tool != nil {
-			s.tools[tool.Name()] = tool
-			loadedCount++
-			slog.Debug("MCP Server: Loaded explicit tool", "name", tool.Name())
-		} else {
-			slog.Warn("MCP Server: Nil tool in explicit tools list")
-		}
-	}
-	slog.Info("MCP Server: Explicit tool loading complete", "loaded", loadedCount, "requested", len(s.options.Tools))
-}
-
-// discoverTools discovers all tools from the Genkit registry
-func (s *GenkitMCPServer) discoverTools() {
-	// Get all tools from the registry
-	allTools := genkit.ListTools(s.genkit)
-
-	var discoveredCount int
-	for _, tool := range allTools {
-		if tool != nil {
-			s.tools[tool.Name()] = tool
-			discoveredCount++
-			slog.Debug("MCP Server: Discovered tool", "name", tool.Name())
-		}
-	}
-
-	slog.Info("MCP Server: Tool discovery complete", "discovered", discoveredCount)
-}
-
-// setup initializes the MCP server
+// setup initializes the MCP server and discovers actions
 func (s *GenkitMCPServer) setup() error {
-	// Create MCP server with tool capabilities
+	if s.actionsResolved {
+		return nil
+	}
+
+	// Create MCP server with all capabilities
 	s.mcpServer = server.NewMCPServer(
 		s.options.Name,
 		s.options.Version,
 		server.WithToolCapabilities(true),
+		server.WithResourceCapabilities(true, true), // subscribe and listChanged capabilities
 	)
 
-	// Register all discovered tools with the MCP server
-	for toolName, tool := range s.tools {
-		if err := s.addToolToMCPServer(toolName, tool); err != nil {
-			return fmt.Errorf("failed to add tool %q to MCP server: %w", toolName, err)
+	// Discover and categorize actions from Genkit registry
+	toolActions, resourceActions, err := s.discoverAndCategorizeActions()
+	if err != nil {
+		return fmt.Errorf("failed to discover actions: %w", err)
+	}
+
+	// Store discovered actions
+	s.toolActions = toolActions
+	s.resourceActions = resourceActions
+
+	// Register tools with the MCP server
+	for _, tool := range toolActions {
+		mcpTool := s.convertGenkitToolToMCP(tool)
+		s.mcpServer.AddTool(mcpTool, s.createToolHandler(tool))
+	}
+
+	// Register resources with the MCP server
+	for _, resourceAction := range resourceActions {
+		if err := s.registerResourceWithMCP(resourceAction); err != nil {
+			slog.Warn("Failed to register resource", "resource", resourceAction.Desc().Name, "error", err)
 		}
 	}
 
-	slog.Info("MCP Server setup complete", "name", s.options.Name, "tools", len(s.tools))
+	s.actionsResolved = true
+	slog.Info("MCP Server setup complete",
+		"name", s.options.Name,
+		"tools", len(s.toolActions),
+		"resources", len(s.resourceActions))
 	return nil
 }
 
-// addToolToMCPServer converts a Genkit tool to MCP format and registers it
-func (s *GenkitMCPServer) addToolToMCPServer(toolName string, tool ai.Tool) error {
-	// Convert Genkit tool to MCP tool format
-	mcpTool, err := s.convertGenkitToolToMCP(tool)
-	if err != nil {
-		return fmt.Errorf("failed to convert Genkit tool to MCP format: %w", err)
+// discoverAndCategorizeActions discovers all actions from Genkit registry and categorizes them
+func (s *GenkitMCPServer) discoverAndCategorizeActions() ([]ai.Tool, []api.Action, error) {
+	// Use the existing List functions which properly handle the registry access
+	toolActions := genkit.ListTools(s.genkit)
+	resources := genkit.ListResources(s.genkit)
+
+	// Convert ai.Resource to api.Action
+	resourceActions := make([]api.Action, len(resources))
+	for i, resource := range resources {
+		if resourceAction, ok := resource.(api.Action); ok {
+			resourceActions[i] = resourceAction
+		} else {
+			return nil, nil, fmt.Errorf("resource %s does not implement api.Action", resource.Name())
+		}
 	}
 
-	// Create tool handler function
-	toolHandler := s.createToolHandler(tool)
-
-	// Add tool to MCP server
-	s.mcpServer.AddTool(mcpTool, toolHandler)
-	return nil
+	return toolActions, resourceActions, nil
 }
 
-// convertGenkitToolToMCP converts a Genkit tool definition to MCP tool format
-func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) (mcp.Tool, error) {
+// convertGenkitToolToMCP converts a Genkit tool to MCP format
+func (s *GenkitMCPServer) convertGenkitToolToMCP(tool ai.Tool) mcp.Tool {
 	def := tool.Definition()
 
-	// Create basic MCP tool
-	mcpTool := mcp.NewTool(def.Name, mcp.WithDescription(def.Description))
+	// Start with basic options
+	options := []mcp.ToolOption{mcp.WithDescription(def.Description)}
 
 	// Convert input schema if available
 	if def.InputSchema != nil {
-		schemaBytes, err := json.Marshal(def.InputSchema)
-		if err != nil {
-			return mcpTool, fmt.Errorf("failed to marshal input schema: %w", err)
+		// Parse the JSON schema and convert to MCP tool options
+		if properties, ok := def.InputSchema["properties"].(map[string]interface{}); ok {
+			// Convert each property to appropriate MCP option
+			for propName, propDef := range properties {
+				if propMap, ok := propDef.(map[string]interface{}); ok {
+					propType, _ := propMap["type"].(string)
+
+					switch propType {
+					case "string":
+						options = append(options, mcp.WithString(propName))
+					case "integer", "number":
+						options = append(options, mcp.WithNumber(propName))
+					case "boolean":
+						options = append(options, mcp.WithBoolean(propName))
+					}
+				}
+			}
 		}
-		mcpTool = mcp.NewToolWithRawSchema(def.Name, def.Description, schemaBytes)
 	}
 
-	return mcpTool, nil
+	return mcp.NewTool(def.Name, options...)
 }
 
-// createToolHandler creates an MCP tool handler function for a Genkit tool
+// createToolHandler creates an MCP tool handler for a Genkit tool
 func (s *GenkitMCPServer) createToolHandler(tool ai.Tool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		// Log the tool call
-		slog.Debug("MCP Server: Tool called", "name", request.Params.Name, "args", request.Params.Arguments)
-
 		// Execute the Genkit tool
 		result, err := tool.RunRaw(ctx, request.Params.Arguments)
 		if err != nil {
-			slog.Error("MCP Server: Tool execution failed", "name", request.Params.Name, "error", err)
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		// Convert result to MCP format
-		return s.convertResultToMCP(result), nil
-	}
-}
-
-// convertResultToMCP converts a Genkit tool result to MCP format
-func (s *GenkitMCPServer) convertResultToMCP(result any) *mcp.CallToolResult {
-	switch v := result.(type) {
-	case string:
-		return mcp.NewToolResultText(v)
-	case nil:
-		return mcp.NewToolResultText("")
-	default:
-		// Convert complex types to JSON
-		jsonBytes, err := json.Marshal(v)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to marshal result: %v", err))
+		switch v := result.(type) {
+		case string:
+			return mcp.NewToolResultText(v), nil
+		case nil:
+			return mcp.NewToolResultText(""), nil
+		default:
+			// Convert complex types to string
+			return mcp.NewToolResultText(fmt.Sprintf("%v", v)), nil
 		}
-		return mcp.NewToolResultText(string(jsonBytes))
 	}
 }
 
-// ServeStdio starts the MCP server with stdio transport (primary MCP transport)
-func (s *GenkitMCPServer) ServeStdio(ctx context.Context) error {
-	if err := s.setup(); err != nil {
-		return fmt.Errorf("failed to setup MCP server: %w", err)
+// registerResourceWithMCP registers a Genkit resource with the MCP server
+func (s *GenkitMCPServer) registerResourceWithMCP(resourceAction api.Action) error {
+	desc := resourceAction.Desc()
+	resourceName := strings.TrimPrefix(desc.Key, "/resource/")
+
+	// Extract original URI/template from metadata
+	var originalURI string
+	var isTemplate bool
+
+	if resourceMeta, ok := desc.Metadata["resource"].(map[string]any); ok {
+		if uri, ok := resourceMeta["uri"].(string); ok && uri != "" {
+			originalURI = uri
+			isTemplate = false
+		} else if template, ok := resourceMeta["template"].(string); ok && template != "" {
+			originalURI = template
+			isTemplate = true
+		}
 	}
 
-	slog.Info("MCP Server starting with stdio transport", "name", s.options.Name, "tools", len(s.tools))
+	// Fallback to synthetic URI if no original URI found (shouldn't happen normally)
+	if originalURI == "" {
+		originalURI = fmt.Sprintf("genkit://%s", resourceName)
+		isTemplate = false
+	}
+
+	// Create resource handler
+	handler := func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+
+		// Find matching resource for the URI and execute it
+		resourceAction, input, err := genkit.FindMatchingResource(s.genkit, request.Params.URI)
+		if err != nil {
+			return nil, fmt.Errorf("no resource found for URI %s: %w", request.Params.URI, err)
+		}
+
+		// Execute the resource
+		result, err := resourceAction.Execute(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("resource execution failed: %w", err)
+		}
+
+		// Convert result to MCP content format
+		var contents []mcp.ResourceContents
+		for _, part := range result.Content {
+			if part.Text != "" {
+				contents = append(contents, mcp.TextResourceContents{
+					URI:      request.Params.URI,
+					MIMEType: "text/plain",
+					Text:     part.Text,
+				})
+			}
+			// Handle other part types (media, data, etc.) if needed
+		}
+
+		return contents, nil
+	}
+
+	// Register as template resource or static resource based on type
+	if isTemplate {
+		// Create MCP template resource
+		mcpTemplate := mcp.NewResourceTemplate(
+			originalURI,  // Template URI like "user://profile/{id}"
+			resourceName, // Name
+			mcp.WithTemplateDescription(desc.Description),
+		)
+		s.mcpServer.AddResourceTemplate(mcpTemplate, handler)
+	} else {
+		// Create MCP static resource
+		mcpResource := mcp.NewResource(
+			originalURI,  // Static URI
+			resourceName, // Name
+			mcp.WithResourceDescription(desc.Description),
+		)
+		s.mcpServer.AddResource(mcpResource, handler)
+	}
+
+	return nil
+}
+
+// ServeStdio starts the MCP server using stdio transport
+func (s *GenkitMCPServer) ServeStdio() error {
+	if err := s.setup(); err != nil {
+		return fmt.Errorf("setup failed: %w", err)
+	}
+
 	return server.ServeStdio(s.mcpServer)
 }
 
-// ServeSSE starts the MCP server with SSE transport (for web clients)
-func (s *GenkitMCPServer) ServeSSE(ctx context.Context, addr string) error {
+// Serve starts the MCP server with a custom transport
+func (s *GenkitMCPServer) Serve(transport interface{}) error {
 	if err := s.setup(); err != nil {
-		return fmt.Errorf("failed to setup MCP server: %w", err)
+		return fmt.Errorf("setup failed: %w", err)
 	}
 
-	slog.Info("MCP Server starting with SSE transport", "name", s.options.Name, "addr", addr, "tools", len(s.tools))
-	sseServer := server.NewSSEServer(s.mcpServer)
-	return sseServer.Start(addr)
+	// For now, only stdio is supported through the server.ServeStdio function
+	return server.ServeStdio(s.mcpServer)
 }
 
-// Stop gracefully stops the MCP server
-func (s *GenkitMCPServer) Stop() error {
+// Close shuts down the MCP server
+func (s *GenkitMCPServer) Close() error {
 	// The mcp-go server handles cleanup internally
 	return nil
+}
+
+// GetServer returns the underlying MCP server instance
+func (s *GenkitMCPServer) GetServer() *server.MCPServer {
+	return s.mcpServer
 }
 
 // ListRegisteredTools returns the names of all discovered tools
 func (s *GenkitMCPServer) ListRegisteredTools() []string {
 	var toolNames []string
-	for name := range s.tools {
-		toolNames = append(toolNames, name)
+	for _, tool := range s.toolActions {
+		toolNames = append(toolNames, tool.Name())
 	}
 	return toolNames
+}
+
+// ListRegisteredResources returns the names of all discovered resources
+func (s *GenkitMCPServer) ListRegisteredResources() []string {
+	var resourceNames []string
+	for _, resourceAction := range s.resourceActions {
+		desc := resourceAction.Desc()
+		resourceName := strings.TrimPrefix(desc.Key, "/resource/")
+		resourceNames = append(resourceNames, resourceName)
+	}
+	return resourceNames
 }

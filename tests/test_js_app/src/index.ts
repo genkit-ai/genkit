@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { genkit, z } from 'genkit';
+import { MessageData, genkit, z } from 'genkit';
+import { getBasicUsageStats } from 'genkit/model';
 
 const ai = genkit({
   plugins: [],
@@ -30,16 +31,18 @@ ai.defineModel(
     // So swap the order here to match Go.
     const m = input.messages[0];
     input.messages[0] = { content: m.content, role: m.role };
+    const message: MessageData = {
+      role: 'model',
+      content: [
+        {
+          text: JSON.stringify(input),
+        },
+      ],
+    };
     return {
       finishReason: 'stop',
-      message: {
-        role: 'model',
-        content: [
-          {
-            text: JSON.stringify(input),
-          },
-        ],
-      },
+      message,
+      usage: getBasicUsageStats(input.messages, message),
     };
   }
 );

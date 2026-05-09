@@ -15,11 +15,14 @@
  */
 
 import { GenkitError, z } from '@genkit-ai/core';
+import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { defineReranker, rerank } from '../../src/reranker';
+import { defineReranker, rerank, reranker } from '../../src/reranker';
 import { Document } from '../../src/retriever';
+
+initNodeFeatures();
 
 describe('reranker', () => {
   describe('defineReranker()', () => {
@@ -30,6 +33,52 @@ describe('reranker', () => {
     it('reranks documents based on custom logic', async () => {
       const customReranker = defineReranker(
         registry,
+        {
+          name: 'reranker',
+          configSchema: z.object({
+            k: z.number().optional(),
+          }),
+        },
+        async (query, documents, options) => {
+          // Custom reranking logic: score based on string length similarity to query
+          const queryLength = query.text.length;
+          const rerankedDocs = documents.map((doc) => {
+            const score = Math.abs(queryLength - doc.text.length);
+            return {
+              ...doc,
+              metadata: { ...doc.metadata, score },
+            };
+          });
+
+          return {
+            documents: rerankedDocs
+              .sort((a, b) => a.metadata.score - b.metadata.score)
+              .slice(0, options.k || 3),
+          };
+        }
+      );
+      // Sample documents for testing
+      const documents = [
+        Document.fromText('short'),
+        Document.fromText('a bit longer'),
+        Document.fromText('this is a very long document'),
+      ];
+
+      const query = Document.fromText('medium length');
+      const rerankedDocuments = await rerank(registry, {
+        reranker: customReranker,
+        query,
+        documents,
+        options: { k: 2 },
+      });
+      // Validate the reranked results
+      assert.equal(rerankedDocuments.length, 2);
+      assert.ok(rerankedDocuments[0].text.includes('a bit longer'));
+      assert.ok(rerankedDocuments[1].text.includes('short'));
+    });
+
+    it('reranks documents based on custom logic using dynamically defined reranker', async () => {
+      const customReranker = reranker(
         {
           name: 'reranker',
           configSchema: z.object({

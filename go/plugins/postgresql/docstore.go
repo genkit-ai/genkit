@@ -34,7 +34,7 @@ func newDocStore(ctx context.Context, p *Postgres, cfg *Config) (*DocStore, erro
 	}
 
 	ds := &DocStore{
-		engine: p.engine,
+		engine: p.Engine,
 		config: cfg,
 	}
 

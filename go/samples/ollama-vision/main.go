@@ -81,10 +81,7 @@ func main() {
 	dataURI := fmt.Sprintf("data:%s;base64,%s", contentType, base64Image)
 
 	// Create a new Genkit instance
-	g, err := genkit.Init(context.Background())
-	if err != nil {
-		log.Fatalf("Failed to initialize Genkit: %v", err)
-	}
+	g := genkit.Init(context.Background())
 
 	// Initialize the Ollama plugin
 	ollamaPlugin := &ollama.Ollama{
@@ -92,10 +89,8 @@ func main() {
 	}
 
 	// Initialize the plugin
-	err = ollamaPlugin.Init(context.Background(), g)
-	if err != nil {
-		log.Fatalf("Failed to initialize Ollama plugin: %v", err)
-	}
+	actions := ollamaPlugin.Init(context.Background())
+	log.Printf("Initialized Ollama plugin with %d actions", len(actions))
 
 	// Define a model that supports images (llava is one of the supported models)
 	modelName := "llava"
@@ -109,6 +104,9 @@ func main() {
 
 	// Create a request with text and image
 	request := &ai.ModelRequest{
+		Config: &ollama.GenerateContentConfig{
+			Temperature: ollama.Ptr(0.4),
+		},
 		Messages: []*ai.Message{
 			{
 				Role: ai.RoleUser,

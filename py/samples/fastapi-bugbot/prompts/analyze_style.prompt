@@ -1,0 +1,24 @@
+---
+model: googleai/gemini-2.0-flash
+input:
+  schema:
+    code: string
+    language?: string
+output:
+  schema: Analysis
+---
+
+You are a code style expert. Analyze the following {{language}} code for style issues and best practices.
+
+Code:
+```{{language}}
+{{code}}
+```
+
+Focus on:
+- Naming conventions
+- Code organization
+- Documentation
+- Idiomatic patterns for {{language}}
+
+Return ONLY important style issues.

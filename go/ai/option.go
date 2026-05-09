@@ -22,8 +22,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/firebase/genkit/go/internal/base"
-	"github.com/invopop/jsonschema"
+	"github.com/firebase/genkit/go/core"
 )
 
 // PromptFn is a function that generates a prompt.
@@ -103,14 +102,15 @@ func WithConfig(config any) ConfigOption {
 // commonGenOptions are common options for model generation, prompt definition, and prompt execution.
 type commonGenOptions struct {
 	configOptions
-	ModelName          string            // Name of the model to use.
 	Model              ModelArg          // Model to use.
 	MessagesFn         MessagesFn        // Function to generate messages.
 	Tools              []ToolRef         // References to tools to use.
+	Resources          []Resource        // Resources to be temporarily available during generation.
 	ToolChoice         ToolChoice        // Whether tool calls are required, disabled, or optional.
 	MaxTurns           int               // Maximum number of tool call iterations.
 	ReturnToolRequests *bool             // Whether to return tool requests instead of making the tool calls and continuing the generation.
-	Middleware         []ModelMiddleware // Middleware to apply to the model request and model response.
+	Middleware         []ModelMiddleware // Deprecated: Use WithUse instead. Middleware to apply to the model request and model response.
+	Use                []Middleware      // Middleware to apply to generation (Generate, Model, and Tool hooks).
 }
 
 type CommonGenOption interface {
@@ -134,18 +134,10 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 	}
 
 	if o.Model != nil {
-		if opts.Model != nil || opts.ModelName != "" {
+		if opts.Model != nil {
 			return errors.New("cannot set model more than once (either WithModel or WithModelName)")
 		}
 		opts.Model = o.Model
-		return nil
-	}
-
-	if o.ModelName != "" {
-		if opts.Model != nil || opts.ModelName != "" {
-			return errors.New("cannot set model more than once (either WithModel or WithModelName)")
-		}
-		opts.ModelName = o.ModelName
 	}
 
 	if o.Tools != nil {
@@ -153,6 +145,13 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 			return errors.New("cannot set tools more than once (WithTools)")
 		}
 		opts.Tools = o.Tools
+	}
+
+	if o.Resources != nil {
+		if opts.Resources != nil {
+			return errors.New("cannot set resources more than once (WithResources)")
+		}
+		opts.Resources = o.Resources
 	}
 
 	if o.ToolChoice != "" {
@@ -181,6 +180,13 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 			return errors.New("cannot set middleware more than once (WithMiddleware)")
 		}
 		opts.Middleware = o.Middleware
+	}
+
+	if o.Use != nil {
+		if opts.Use != nil {
+			return errors.New("cannot set middleware more than once (WithUse)")
+		}
+		opts.Use = o.Use
 	}
 
 	return nil
@@ -222,20 +228,38 @@ func WithTools(tools ...ToolRef) CommonGenOption {
 	return &commonGenOptions{Tools: tools}
 }
 
-// WithModel sets a resolvable model reference to use for generation.
+// WithModel sets either a [Model] or a [ModelRef] that may contain a config.
+// Passing [WithConfig] will take precedence over the config in WithModel.
 func WithModel(model ModelArg) CommonGenOption {
 	return &commonGenOptions{Model: model}
 }
 
 // WithModelName sets the model name to call for generation.
-// The model name will be resolved to a Model and may error if the reference is invalid.
+// The model name will be resolved to a [Model] and may error if the reference is invalid.
 func WithModelName(name string) CommonGenOption {
-	return &commonGenOptions{ModelName: name}
+	return &commonGenOptions{Model: NewModelRef(name, nil)}
 }
 
 // WithMiddleware sets middleware to apply to the model request.
+//
+// Deprecated: Use [WithUse] instead, which supports Generate, Model, and Tool hooks.
 func WithMiddleware(middleware ...ModelMiddleware) CommonGenOption {
 	return &commonGenOptions{Middleware: middleware}
+}
+
+// WithUse sets middleware to apply to generation. Middleware hooks wrap
+// the generate loop, model calls, and tool executions.
+//
+// Accepts either a middleware config struct (produced by a plugin) or an
+// inline adapter via [MiddlewareFunc]. The chain applies outer-to-inner, so
+// WithUse(A, B) expands to A { B { ... } }.
+func WithUse(middleware ...Middleware) CommonGenOption {
+	return &commonGenOptions{Use: middleware}
+}
+
+// WithStepName sets a custom name for the generation step in traces.
+func WithStepName(name string) GenerateOption {
+	return &generateOptions{StepName: name}
 }
 
 // WithMaxTurns sets the maximum number of tool call iterations before erroring.
@@ -255,15 +279,102 @@ func WithToolChoice(toolChoice ToolChoice) CommonGenOption {
 	return &commonGenOptions{ToolChoice: toolChoice}
 }
 
+// WithResources specifies resources to be temporarily available during generation.
+// Resources are unregistered resources that get attached to a temporary registry
+// during the generation request and cleaned up afterward.
+func WithResources(resources ...Resource) CommonGenOption {
+	return &commonGenOptions{Resources: resources}
+}
+
+// inputOptions are options for the input of a prompt.
+type inputOptions struct {
+	InputSchema  map[string]any // JSON schema of the input.
+	DefaultInput map[string]any // Default input that will be used if no input is provided.
+}
+
+// InputOption is an option for the input of a prompt.
+// It applies only to DefinePrompt().
+type InputOption interface {
+	applyInput(*inputOptions) error
+	applyPrompt(*promptOptions) error
+	applyTool(*toolOptions) error
+}
+
+// applyInput applies the option to the input options.
+func (o *inputOptions) applyInput(opts *inputOptions) error {
+	if o.InputSchema != nil {
+		if opts.InputSchema != nil {
+			return errors.New("cannot set input schema more than once (WithInputType, WithInputSchema, or WithInputSchemaName)")
+		}
+		opts.InputSchema = o.InputSchema
+	}
+
+	if o.DefaultInput != nil {
+		if opts.DefaultInput != nil {
+			return errors.New("cannot set default input more than once (WithInputType)")
+		}
+		opts.DefaultInput = o.DefaultInput
+	}
+
+	return nil
+}
+
+// applyPrompt applies the option to the prompt options.
+func (o *inputOptions) applyPrompt(pOpts *promptOptions) error {
+	return o.applyInput(&pOpts.inputOptions)
+}
+
+// applyTool applies the option to the tool options.
+func (o *inputOptions) applyTool(tOpts *toolOptions) error {
+	return o.applyInput(&tOpts.inputOptions)
+}
+
+// WithInputType uses the type provided to derive the input schema.
+// The inputted value may serve as the default input if no input is given at generation time depending on the action.
+// Only supports structs and map[string]any.
+func WithInputType(input any) InputOption {
+	var defaultInput map[string]any
+
+	switch v := input.(type) {
+	case map[string]any:
+		defaultInput = v
+	default:
+		data, err := json.Marshal(input)
+		if err != nil {
+			panic(fmt.Errorf("failed to marshal default input (WithInputType): %w", err))
+		}
+
+		err = json.Unmarshal(data, &defaultInput)
+		if err != nil {
+			panic(fmt.Errorf("type %T is not supported, only structs and map[string]any are supported (WithInputType)", input))
+		}
+	}
+
+	return &inputOptions{
+		InputSchema:  core.InferSchemaMap(input),
+		DefaultInput: defaultInput,
+	}
+}
+
+// WithInputSchema manually provides a schema map for the prompt's input.
+func WithInputSchema(schema map[string]any) InputOption {
+	return &inputOptions{InputSchema: schema}
+}
+
+// WithInputSchemaName sets a pre-registered schema by name for the input.
+// The schema will be resolved lazily at execution time using [DefineSchema].
+func WithInputSchemaName(name string) InputOption {
+	return &inputOptions{InputSchema: core.SchemaRef(name)}
+}
+
 // promptOptions are options for defining a prompt.
 type promptOptions struct {
 	commonGenOptions
 	promptingOptions
+	inputOptions
 	outputOptions
-	Description  string             // Description of the prompt.
-	InputSchema  *jsonschema.Schema // Schema of the input.
-	DefaultInput map[string]any     // Default input that will be used if no input is provided.
-	Metadata     map[string]any     // Arbitrary metadata.
+	Description string         // Description of the prompt.
+	Metadata    map[string]any // Arbitrary metadata.
 }
 
 // PromptOption is an option for defining a prompt.
@@ -282,6 +393,10 @@ func (o *promptOptions) applyPrompt(opts *promptOptions) error {
 		return err
 	}
 
+	if err := o.inputOptions.applyPrompt(opts); err != nil {
+		return err
+	}
+
 	if err := o.outputOptions.applyPrompt(opts); err != nil {
 		return err
 	}
@@ -291,20 +406,6 @@ func (o *promptOptions) applyPrompt(opts *promptOptions) error {
 			return errors.New("cannot set description more than once (WithDescription)")
 		}
 		opts.Description = o.Description
-	}
-
-	if o.InputSchema != nil {
-		if opts.InputSchema != nil {
-			return errors.New("cannot set input schema more than once (WithInputType)")
-		}
-		opts.InputSchema = o.InputSchema
-	}
-
-	if o.DefaultInput != nil {
-		if opts.DefaultInput != nil {
-			return errors.New("cannot set default input more than once (WithInputType)")
-		}
-		opts.DefaultInput = o.DefaultInput
 	}
 
 	if o.Metadata != nil {
@@ -325,33 +426,6 @@ func WithDescription(description string) PromptOption {
 // WithMetadata sets arbitrary metadata for the prompt.
 func WithMetadata(metadata map[string]any) PromptOption {
 	return &promptOptions{Metadata: metadata}
-}
-
-// WithInputType uses the type provided to derive the input schema.
-// The inputted value will serve as the default input if no input is given at generation time.
-// Only supports structs and map[string]any types.
-func WithInputType(input any) PromptOption {
-	var defaultInput map[string]any
-
-	switch v := input.(type) {
-	case map[string]any:
-		defaultInput = v
-	default:
-		data, err := json.Marshal(input)
-		if err != nil {
-			panic(fmt.Errorf("failed to marshal default input (WithInputType): %w", err))
-		}
-
-		err = json.Unmarshal(data, &defaultInput)
-		if err != nil {
-			panic(fmt.Errorf("type %T is not supported, only structs and map[string]any are supported (WithInputType)", input))
-		}
-	}
-
-	return &promptOptions{
-		InputSchema:  base.InferJSONSchema(input),
-		DefaultInput: defaultInput,
-	}
 }
 
 // promptingOptions are options for the system and user prompts of a prompt or generate request.
@@ -453,7 +527,7 @@ type OutputOption interface {
 func (o *outputOptions) applyOutput(opts *outputOptions) error {
 	if o.OutputSchema != nil {
 		if opts.OutputSchema != nil {
-			return errors.New("cannot set output schema more than once (WithOutputType)")
+			return errors.New("cannot set output schema more than once (WithOutputType, WithOutputSchema, or WithOutputSchemaName)")
 		}
 		opts.OutputSchema = o.OutputSchema
 	}
@@ -486,10 +560,27 @@ func (o *outputOptions) applyGenerate(genOpts *generateOptions) error {
 	return o.applyOutput(&genOpts.outputOptions)
 }
 
-// WithOutputType sets the schema and format of the output based on the value provided.
+// WithOutputType sets the output format to JSON and the schema derived from the given value.
 func WithOutputType(output any) OutputOption {
 	return &outputOptions{
-		OutputSchema: base.SchemaAsMap(base.InferJSONSchema(output)),
+		OutputSchema: core.InferSchemaMap(output),
+		OutputFormat: OutputFormatJSON,
+	}
+}
+
+// WithOutputSchema manually provides a schema map for the prompt's output.
+// The outputted value will serve as the default output if no output is given at generation time.
+func WithOutputSchema(schema map[string]any) OutputOption {
+	return &outputOptions{
+		OutputSchema: schema,
+		OutputFormat: OutputFormatJSON,
+	}
+}
+
+// WithOutputSchemaName sets the schema name that will be resolved at execution time.
+func WithOutputSchemaName(name string) OutputOption {
+	return &outputOptions{
+		OutputSchema: core.SchemaRef(name),
 		OutputFormat: OutputFormatJSON,
 	}
 }
@@ -497,6 +588,22 @@ func WithOutputType(output any) OutputOption {
 // WithOutputFormat sets the format of the output.
 func WithOutputFormat(format string) OutputOption {
 	return &outputOptions{OutputFormat: format}
+}
+
+// WithOutputEnums sets the output format to enum and the schema based on the given values.
+// Accepts any string-based type (e.g. type MyEnum string).
+func WithOutputEnums[T ~string](values ...T) OutputOption {
+	enumStrs := make([]string, len(values))
+	for i, v := range values {
+		enumStrs[i] = string(v)
+	}
+	return &outputOptions{
+		OutputSchema: map[string]any{
+			"type": "string",
+			"enum": enumStrs,
+		},
+		OutputFormat: OutputFormatEnum,
+	}
 }
 
 // WithOutputInstructions sets custom instructions for constraining output format in the prompt.
@@ -567,7 +674,7 @@ type documentOptions struct {
 }
 
 // DocumentOption is an option for providing context or input documents.
-// It applies only to [Generate] and [Prompt.Execute].
+// It applies only to [Generate] and [prompt.Execute].
 type DocumentOption interface {
 	applyDocument(*documentOptions) error
 	applyGenerate(*generateOptions) error
@@ -625,8 +732,9 @@ func WithDocs(docs ...*Document) DocumentOption {
 // evaluatorOptions are options for providing a dataset to evaluate.
 type evaluatorOptions struct {
 	configOptions
-	Dataset []*Example // Dataset to evaluate.
-	ID      string     // ID of the evaluation.
+	Dataset   []*Example   // Dataset to evaluate.
+	ID        string       // ID of the evaluation.
+	Evaluator EvaluatorArg // Evaluator to use.
 }
 
 // EvaluatorOption is an option for providing a dataset to evaluate.
@@ -655,6 +763,13 @@ func (o *evaluatorOptions) applyEvaluator(evalOpts *evaluatorOptions) error {
 		evalOpts.ID = o.ID
 	}
 
+	if o.Evaluator != nil {
+		if evalOpts.Evaluator != nil {
+			return errors.New("cannot set evaluator more than once (WithEvaluator or WithEvaluatorName)")
+		}
+		evalOpts.Evaluator = o.Evaluator
+	}
+
 	return nil
 }
 
@@ -668,10 +783,23 @@ func WithID(ID string) EvaluatorOption {
 	return &evaluatorOptions{ID: ID}
 }
 
+// WithEvaluator sets either a [Evaluator] or a [EvaluatorRef] that may contain a config.
+// Passing [WithConfig] will take precedence over the config in WithEvaluator.
+func WithEvaluator(evaluator EvaluatorArg) EvaluatorOption {
+	return &evaluatorOptions{Evaluator: evaluator}
+}
+
+// WithEvaluatorName sets the evaluator name to call for document evaluation.
+// The evaluator name will be resolved to a [Evaluator] and may error if the reference is invalid.
+func WithEvaluatorName(name string) EvaluatorOption {
+	return &evaluatorOptions{Evaluator: NewEvaluatorRef(name, nil)}
+}
+
 // embedderOptions holds configuration and input for an embedder request.
 type embedderOptions struct {
 	configOptions
 	documentOptions
+	Embedder EmbedderArg // Embedder to use.
 }
 
 // EmbedderOption is an option for configuring an embedder request.
@@ -690,13 +818,33 @@ func (o *embedderOptions) applyEmbedder(embedOpts *embedderOptions) error {
 		return err
 	}
 
+	if o.Embedder != nil {
+		if embedOpts.Embedder != nil {
+			return errors.New("cannot set embedder more than once (WithEmbedder or WithEmbedderName)")
+		}
+		embedOpts.Embedder = o.Embedder
+	}
+
 	return nil
+}
+
+// WithEmbedder sets either a [Embedder] or a [EmbedderRef] that may contain a config.
+// Passing [WithConfig] will take precedence over the config in WithEmbedder.
+func WithEmbedder(embedder EmbedderArg) EmbedderOption {
+	return &embedderOptions{Embedder: embedder}
+}
+
+// WithEmbedderName sets the embedder name to call for document embedding.
+// The embedder name will be resolved to a [Embedder] and may error if the reference is invalid.
+func WithEmbedderName(name string) EmbedderOption {
+	return &embedderOptions{Embedder: NewEmbedderRef(name, nil)}
 }
 
 // retrieverOptions holds configuration and input for a retriever request.
 type retrieverOptions struct {
 	configOptions
 	documentOptions
+	Retriever RetrieverArg // Retriever to use.
 }
 
 // RetrieverOption is an option for configuring a retriever request.
@@ -715,7 +863,26 @@ func (o *retrieverOptions) applyRetriever(retOpts *retrieverOptions) error {
 		return err
 	}
 
+	if o.Retriever != nil {
+		if retOpts.Retriever != nil {
+			return errors.New("cannot set retriever more than once (WithRetriever or WithRetrieverName)")
+		}
+		retOpts.Retriever = o.Retriever
+	}
+
 	return nil
+}
+
+// WithRetriever sets either a [Retriever] or a [RetrieverRef] that may contain a config.
+// Passing [WithConfig] will take precedence over the config in WithRetriever.
+func WithRetriever(retriever RetrieverArg) RetrieverOption {
+	return &retrieverOptions{Retriever: retriever}
+}
+
+// WithRetrieverName sets the retriever name to call for document retrieval.
+// The retriever name will be resolved to a [Retriever] and may error if the reference is invalid.
+func WithRetrieverName(name string) RetrieverOption {
+	return &retrieverOptions{Retriever: NewRetrieverRef(name, nil)}
 }
 
 // generateOptions are options for generating a model response by calling a model directly.
@@ -727,6 +894,7 @@ type generateOptions struct {
 	documentOptions
 	RespondParts []*Part // Tool responses to return from interrupted tool calls.
 	RestartParts []*Part // Tool requests to restart interrupted tools with.
+	StepName     string  // Custom name for the generation step in traces.
 }
 
 // GenerateOption is an option for generating a model response. It applies only to Generate().
@@ -770,17 +938,42 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) error {
 		genOpts.RestartParts = o.RestartParts
 	}
 
+	if o.StepName != "" {
+		if genOpts.StepName != "" {
+			return errors.New("cannot set step name more than once (WithStepName)")
+		}
+		genOpts.StepName = o.StepName
+	}
+
 	return nil
 }
 
-// WithToolResponses sets the tool responses to return from interrupted tool calls.
+// WithToolResponses provides resolved responses for interrupted tool calls.
+// Use this when you already have the result and want to skip re-executing the tool.
 func WithToolResponses(parts ...*Part) GenerateOption {
 	return &generateOptions{RespondParts: parts}
 }
 
-// WithToolRestarts sets the tool requests to restart interrupted tools with.
+// WithToolRestarts re-executes interrupted tool calls with additional metadata.
+// Use this when the original call lacked required context (e.g., auth, user confirmation)
+// that should now allow the tool to complete successfully.
 func WithToolRestarts(parts ...*Part) GenerateOption {
 	return &generateOptions{RestartParts: parts}
+}
+
+// toolOptions holds configuration options for defining tools.
+type toolOptions struct {
+	inputOptions
+}
+
+// ToolOption is an option for defining a tool.
+type ToolOption interface {
+	applyTool(*toolOptions) error
+}
+
+// applyTool applies the option to the tool options.
+func (o *toolOptions) applyTool(opts *toolOptions) error {
+	return o.inputOptions.applyTool(opts)
 }
 
 // promptExecutionOptions are options for generating a model response by executing a prompt.
@@ -791,7 +984,7 @@ type promptExecutionOptions struct {
 	Input any // Input fields for the prompt. If not nil this should be a struct that matches the prompt's input schema.
 }
 
-// PromptExecuteOption is an option for executing a prompt. It applies only to [Prompt.Execute].
+// PromptExecuteOption is an option for executing a prompt. It applies only to [prompt.Execute].
 type PromptExecuteOption interface {
 	applyPromptExecute(*promptExecutionOptions) error
 }
@@ -821,7 +1014,7 @@ func (o *promptExecutionOptions) applyPromptExecute(pgOpts *promptExecutionOptio
 }
 
 // WithInput sets the input for the prompt request. Input must conform to the
-// prompt's input schema and can either be a map[string]any or a struct of the same type.
+// prompt's input schema and can either be a map[string]any or a struct of the same api.
 func WithInput(input any) PromptExecuteOption {
 	return &promptExecutionOptions{Input: input}
 }

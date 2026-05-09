@@ -15,7 +15,6 @@
  */
 
 import { Dotprompt } from 'dotprompt';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as z from 'zod';
 import {
   runOutsideActionRuntimeContext,
@@ -27,6 +26,7 @@ import {
   lookupBackgroundAction,
 } from './background-action.js';
 import { ActionContext } from './context.js';
+import { isDynamicActionProvider } from './dynamic-action-provider.js';
 import { GenkitError } from './error.js';
 import { logger } from './logging.js';
 import type { PluginProvider } from './plugin.js';
@@ -37,23 +37,31 @@ export type AsyncProvider<T> = () => Promise<T>;
 /**
  * Type of a runnable action.
  */
-export type ActionType =
-  | 'custom'
-  | 'embedder'
-  | 'evaluator'
-  | 'executable-prompt'
-  | 'flow'
-  | 'indexer'
-  | 'model'
-  | 'background-model'
-  | 'check-operation'
-  | 'cancel-operation'
-  | 'prompt'
-  | 'reranker'
-  | 'retriever'
-  | 'tool'
-  | 'util'
-  | 'resource';
+const ACTION_TYPES = [
+  'custom',
+  'dynamic-action-provider',
+  'embedder',
+  'evaluator',
+  'executable-prompt',
+  'flow',
+  'indexer',
+  'model',
+  'background-model',
+  'check-operation',
+  'cancel-operation',
+  'prompt',
+  'reranker',
+  'retriever',
+  'tool',
+  'tool.v2',
+  'util',
+  'resource',
+] as const;
+export type ActionType = (typeof ACTION_TYPES)[number];
+
+export function isActionType(value: string): value is ActionType {
+  return (ACTION_TYPES as readonly string[]).includes(value);
+}
 
 /**
  * A schema is either a Zod schema or a JSON schema.
@@ -72,6 +80,7 @@ function parsePluginName(registryKey: string) {
 }
 
 interface ParsedRegistryKey {
+  dynamicActionHost?: string;
   actionType: ActionType;
   pluginName?: string;
   actionName: string;
@@ -79,19 +88,44 @@ interface ParsedRegistryKey {
 
 /**
  * Parses the registry key into key parts as per the key format convention. Ex:
- *  - /model/googleai/gemini-2.0-flash
+ *  - mcp-host:tool/my-tool
+ *  - /model/googleai/gemini-2.5-flash
  *  - /prompt/my-plugin/folder/my-prompt
  *  - /util/generate
  */
 export function parseRegistryKey(
   registryKey: string
 ): ParsedRegistryKey | undefined {
+  if (registryKey.startsWith('/dynamic-action-provider')) {
+    // Dynamic Action Provider format: 'dynamic-action-provider/mcp-host:tool/mytool' or 'mcp-host:tool/*'
+    const keyTokens = registryKey.split(':');
+    const hostTokens = keyTokens[0].split('/');
+    if (hostTokens.length < 3) {
+      return undefined;
+    }
+    if (keyTokens.length < 2) {
+      return {
+        actionType: 'dynamic-action-provider',
+        actionName: hostTokens[2],
+      };
+    }
+    const tokens = keyTokens[1].split('/');
+    if (tokens.length < 2 || !isActionType(tokens[0])) {
+      return undefined;
+    }
+    return {
+      dynamicActionHost: hostTokens[2],
+      actionType: tokens[0],
+      actionName: tokens.slice(1).join('/'),
+    };
+  }
+
   const tokens = registryKey.split('/');
   if (tokens.length < 3) {
     // Invalid key format
     return undefined;
   }
-  // ex: /model/googleai/gemini-2.0-flash or /prompt/my-plugin/folder/my-prompt
+  // ex: /model/googleai/gemini-2.5-flash or /prompt/my-plugin/folder/my-prompt
   if (tokens.length >= 4) {
     return {
       actionType: tokens[1] as ActionType,
@@ -124,7 +158,6 @@ export class Registry {
   private allPluginsInitialized = false;
   public apiStability: 'stable' | 'beta' = 'stable';
 
-  readonly asyncStore: AsyncStore;
   readonly dotprompt: Dotprompt;
   readonly parent?: Registry;
   /** Additional runtime context data for flows and tools. */
@@ -134,10 +167,8 @@ export class Registry {
     if (parent) {
       this.parent = parent;
       this.apiStability = parent?.apiStability;
-      this.asyncStore = parent.asyncStore;
       this.dotprompt = parent.dotprompt;
     } else {
-      this.asyncStore = new AsyncStore();
       this.dotprompt = new Dotprompt({
         schemaResolver: async (name) => {
           const resolvedSchema = await this.lookupSchema(name);
@@ -162,6 +193,24 @@ export class Registry {
     return new Registry(parent);
   }
 
+  async resolveActionNames(key: string): Promise<string[]> {
+    const parsedKey = parseRegistryKey(key);
+    if (parsedKey?.dynamicActionHost) {
+      const hostId = `/dynamic-action-provider/${parsedKey.dynamicActionHost}`;
+      const dap = await this.lookupAction(hostId);
+      if (!dap || !isDynamicActionProvider(dap)) {
+        return [];
+      }
+      return (
+        await dap.listActionMetadata(parsedKey.actionType, parsedKey.actionName)
+      ).map((m) => `${hostId}:${parsedKey.actionType}/${m.name}`);
+    }
+    if (await this.lookupAction(key)) {
+      return [key];
+    }
+    return [];
+  }
+
   /**
    * Looks up an action in the registry.
    * @param key The key of the action to lookup.
@@ -172,8 +221,21 @@ export class Registry {
     O extends z.ZodTypeAny,
     R extends Action<I, O>,
   >(key: string): Promise<R> {
-    // We always try to initialize the plugin first.
     const parsedKey = parseRegistryKey(key);
+    if (
+      parsedKey?.dynamicActionHost &&
+      this.actionsById[
+        `/dynamic-action-provider/${parsedKey.dynamicActionHost}`
+      ]
+    ) {
+      // If it's a dynamic action provider, get the dynamic action.
+      const action = await this.getDynamicAction(parsedKey);
+      if (action) {
+        return action as R;
+      }
+    }
+
+    // We always try to initialize the plugin first.
     if (parsedKey?.pluginName && this.pluginsByName[parsedKey.pluginName]) {
       await this.initializePlugin(parsedKey.pluginName);
 
@@ -188,6 +250,7 @@ export class Registry {
         );
       }
     }
+
     return (
       ((await this.actionsById[key]) as R) || this.parent?.lookupAction(key)
     );
@@ -211,7 +274,8 @@ export class Registry {
    */
   registerAction<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
     type: ActionType,
-    action: Action<I, O>
+    action: Action<I, O>,
+    opts?: { namespace?: string }
   ) {
     if (type !== action.__action.actionType) {
       throw new GenkitError({
@@ -219,15 +283,25 @@ export class Registry {
         message: `action type (${type}) does not match type on action (${action.__action.actionType})`,
       });
     }
+    if (
+      opts?.namespace &&
+      !action.__action.name.startsWith(`${opts.namespace}/`)
+    ) {
+      action.__action.name = `${opts.namespace}/${action.__action.name}`;
+      action.__action.key = `/${type}/${action.__action.name}`;
+    }
     const key = `/${type}/${action.__action.name}`;
     logger.debug(`registering ${key}`);
     if (this.actionsById.hasOwnProperty(key)) {
-      // TODO: Make this an error!
-      logger.warn(
-        `WARNING: ${key} already has an entry in the registry. Overwriting.`
+      logger.error(
+        `ERROR: ${key} already has an entry in the registry. Overwriting.`
       );
     }
     this.actionsById[key] = action;
+    if (action.__registry) {
+      logger.error(`ERROR: ${key} already registered.`);
+    }
+    action.__registry = this;
   }
 
   /**
@@ -236,14 +310,17 @@ export class Registry {
   registerActionAsync<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
     type: ActionType,
     name: string,
-    action: PromiseLike<Action<I, O>>
+    action: PromiseLike<Action<I, O>>,
+    opts?: { namespace?: string }
   ) {
+    if (opts?.namespace && !name.startsWith(`${opts.namespace}/`)) {
+      name = `${opts.namespace}/${name}`;
+    }
     const key = `/${type}/${name}`;
     logger.debug(`registering ${key} (async)`);
     if (this.actionsById.hasOwnProperty(key)) {
-      // TODO: Make this an error!
-      logger.warn(
-        `WARNING: ${key} already has an entry in the registry. Overwriting.`
+      logger.error(
+        `ERROR: ${key} already has an entry in the registry. Overwriting.`
       );
     }
     this.actionsById[key] = action;
@@ -259,6 +336,7 @@ export class Registry {
     await Promise.all(
       Object.entries(this.actionsById).map(async ([key, action]) => {
         actions[key] = await action;
+        actions[key].__action.key = key; // For async actions with namespace
       })
     );
     return {
@@ -277,7 +355,7 @@ export class Registry {
    * @returns All resolvable action metadata as a map of <key, action metadata>.
    */
   async listResolvableActions(): Promise<ActionMetadataRecord> {
-    const resolvableActions = {} as ActionMetadataRecord;
+    let resolvableActions = {} as ActionMetadataRecord;
     // We listActions for all plugins in parallel.
     await Promise.all(
       Object.entries(this.pluginsByName).map(async ([pluginName, plugin]) => {
@@ -304,9 +382,22 @@ export class Registry {
         }
       })
     );
-    // Also add actions that are already registered.
+    // Also add actions that are already registered, and expand DAP actions
     for (const [key, action] of Object.entries(await this.listActions())) {
       resolvableActions[key] = action.__action;
+      if (isDynamicActionProvider(action)) {
+        try {
+          // Include the dynamic actions
+          const dapPrefix = `/${action.__action.actionType}/${action.__action.name}`;
+          const dapMetadataRecord =
+            await action.getActionMetadataRecord(dapPrefix);
+          resolvableActions = { ...resolvableActions, ...dapMetadataRecord };
+        } catch (e) {
+          logger.error(
+            `Error listing actions for Dynamic Action Provider ${action.__action.name}`
+          );
+        }
+      }
     }
     return {
       ...(await this.parent?.listResolvableActions()),
@@ -385,12 +476,27 @@ export class Registry {
   ) {
     const plugin = this.pluginsByName[pluginName];
     if (plugin) {
-      return await runOutsideActionRuntimeContext(this, async () => {
+      return await runOutsideActionRuntimeContext(async () => {
         if (plugin.resolver) {
           await plugin.resolver(actionType, actionName);
         }
       });
     }
+  }
+
+  async getDynamicAction(
+    key: ParsedRegistryKey
+  ): Promise<Action<z.ZodTypeAny, z.ZodTypeAny> | undefined> {
+    if (key.actionName.includes('*')) {
+      // * means multiple actions, this returns exactly one.
+      return undefined;
+    }
+    const actionId = `/dynamic-action-provider/${key.dynamicActionHost}`;
+    const dap = await this.actionsById[actionId];
+    if (!dap || !isDynamicActionProvider(dap)) {
+      return undefined;
+    }
+    return await dap.getAction(key.actionType, key.actionName);
   }
 
   /**
@@ -400,7 +506,7 @@ export class Registry {
    */
   async initializePlugin(name: string) {
     if (this.pluginsByName[name]) {
-      return await runOutsideActionRuntimeContext(this, () =>
+      return await runOutsideActionRuntimeContext(() =>
         this.pluginsByName[name].initializer()
       );
     }
@@ -454,24 +560,6 @@ export class Registry {
    */
   lookupSchema(name: string): Schema | undefined {
     return this.schemasByName[name] || this.parent?.lookupSchema(name);
-  }
-}
-
-/**
- * Manages AsyncLocalStorage instances in a single place.
- */
-export class AsyncStore {
-  private asls: Record<string, AsyncLocalStorage<any>> = {};
-
-  getStore<T>(key: string): T | undefined {
-    return this.asls[key]?.getStore();
-  }
-
-  run<T, R>(key: string, store: T, callback: () => R): R {
-    if (!this.asls[key]) {
-      this.asls[key] = new AsyncLocalStorage<T>();
-    }
-    return this.asls[key].run(store, callback);
   }
 }
 

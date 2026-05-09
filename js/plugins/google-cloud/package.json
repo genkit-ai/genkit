@@ -13,7 +13,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "1.15.5",
+  "version": "1.33.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",
@@ -25,13 +25,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/firebase/genkit.git",
+    "url": "https://github.com/genkit-ai/genkit.git",
     "directory": "js/plugins/google-cloud"
   },
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
     "@google-cloud/logging-winston": "^6.0.0",
+    "@google-cloud/modelarmor": "^0.4.1",
     "@google-cloud/opentelemetry-cloud-monitoring-exporter": "^0.19.0",
     "@google-cloud/opentelemetry-cloud-trace-exporter": "^2.4.1",
     "@google-cloud/opentelemetry-resource-util": "^2.4.0",
@@ -61,7 +62,7 @@
     "ts-jest": "^29.1.2",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^4.9.0"
+    "typescript": "^5.9.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {
@@ -70,6 +71,19 @@
       "import": "./lib/index.mjs",
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./model-armor": {
+      "require": "./lib/model-armor.js",
+      "import": "./lib/model-armor.mjs",
+      "types": "./lib/model-armor.d.ts",
+      "default": "./lib/model-armor.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "model-armor": [
+        "lib/model-armor"
+      ]
     }
   }
 }

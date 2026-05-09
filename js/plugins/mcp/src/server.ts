@@ -444,7 +444,7 @@ function toMcpResourceMessage(
       if (!url.startsWith('data:'))
         throw new GenkitError({
           status: 'UNIMPLEMENTED',
-          message: `[MCP Server] MCP prompt messages only support base64 data images.`,
+          message: `[MCP Server] MCP resource messages only support base64 data images.`,
         });
       const mimeType =
         contentType || url.substring(url.indexOf(':')! + 1, url.indexOf(';'));
@@ -455,7 +455,7 @@ function toMcpResourceMessage(
     } else {
       throw new GenkitError({
         status: 'UNIMPLEMENTED',
-        message: `[MCP Server] MCP prompt messages only support media and text parts.`,
+        message: `[MCP Server] MCP resource messages only support media and text parts.`,
       });
     }
   });

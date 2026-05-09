@@ -33,14 +33,17 @@ fi
 
 # NOTE: If you edit the ignore patterns, make sure to update the ignore patterns
 # in the corresponding check_license script.
-$HOME/go/bin/addlicense \
+"$HOME"/go/bin/addlicense \
   -c "Google LLC" \
+  -y "$(date +%Y)" \
   -s \
   -l apache \
   -ignore '**/.dist/**/*' \
   -ignore '**/.eggs/**/*' \
   -ignore '**/.idea/**/*' \
   -ignore '**/.mypy_cache/**/*' \
+  -ignore '**/.nox/**/*' \
+  -ignore '**/.tox/**/*' \
   -ignore '**/.next/**/*' \
   -ignore '**/.output/**/*' \
   -ignore '**/.pytest_cache/**/*' \
@@ -52,8 +55,13 @@ $HOME/go/bin/addlicense \
   -ignore '**/coverage/**/*' \
   -ignore '**/develop-eggs/**/*' \
   -ignore '**/dist/**/*' \
+  -ignore '**/lib/**/*' \
+  -ignore '**/next-env.d.ts' \
   -ignore '**/node_modules/**/*' \
   -ignore '**/pnpm-lock.yaml' \
   -ignore '.nx/**/*' \
   -ignore '.trunk/**/*' \
+  -ignore '**/site/**/*' \
+  -ignore '**/generated/*_pb2.py' \
+  -ignore '**/generated/*_pb2_grpc.py' \
   "$TOP_DIR"

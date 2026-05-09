@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/weaviate/weaviate-go-client/v5/weaviate"
 	"github.com/weaviate/weaviate-go-client/v5/weaviate/auth"
@@ -65,21 +66,16 @@ func (w *Weaviate) Name() string {
 }
 
 // Init initializes the Weaviate plugin.
-func (w *Weaviate) Init(ctx context.Context, g *genkit.Genkit) (err error) {
+func (w *Weaviate) Init(ctx context.Context) []api.Action {
 	if w == nil {
 		w = &Weaviate{}
 	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("weaviate.Init: %w", err)
-		}
-	}()
 
 	if w.initted {
-		return errors.New("plugin already initialized")
+		panic("plugin already initialized")
 	}
 
 	var host string
@@ -114,21 +110,21 @@ func (w *Weaviate) Init(ctx context.Context, g *genkit.Genkit) (err error) {
 
 	client, err := weaviate.NewClient(config)
 	if err != nil {
-		return fmt.Errorf("initialization failed: %v", err)
+		panic(fmt.Errorf("weaviate.Init: initialization failed: %v", err))
 	}
 
 	live, err := client.Misc().LiveChecker().Do(ctx)
 	if err != nil {
-		return fmt.Errorf("initialization failed: %v", err)
+		panic(fmt.Errorf("weaviate.Init: initialization failed: %v", err))
 	}
 	if !live {
-		return errors.New("weaviate instance not alive")
+		panic("weaviate instance not alive")
 	}
 
 	w.client = client
 	w.initted = true
 
-	return nil
+	return []api.Action{}
 }
 
 // ClassConfig holds configuration options for a retriever.
@@ -164,7 +160,7 @@ func DefineRetriever(ctx context.Context, g *genkit.Genkit, cfg ClassConfig, opt
 	if err != nil {
 		return nil, nil, err
 	}
-	retriever := genkit.DefineRetriever(g, provider, cfg.Class, opts, ds.Retrieve)
+	retriever := genkit.DefineRetriever(g, api.NewName(provider, cfg.Class), opts, ds.Retrieve)
 	return ds, retriever, nil
 }
 
@@ -210,7 +206,7 @@ func (w *Weaviate) newDocstore(ctx context.Context, cfg *ClassConfig) (*Docstore
 
 // Retriever returns the retriever for the given class.
 func Retriever(g *genkit.Genkit, class string) ai.Retriever {
-	return genkit.LookupRetriever(g, provider, class)
+	return genkit.LookupRetriever(g, api.NewName(provider, class))
 }
 
 // RetrieverOptions may be passed in the Options field

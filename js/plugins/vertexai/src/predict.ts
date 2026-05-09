@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { GENKIT_CLIENT_HEADER } from 'genkit';
 import type { GoogleAuth } from 'google-auth-library';
+import { getGenkitClientHeader } from './common/index.js';
 import type { PluginOptions } from './common/types.js';
 
 function endpoint(options: {
@@ -68,7 +68,7 @@ export function predictModel<I = unknown, R = unknown, P = unknown>(
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          'X-Goog-Api-Client': GENKIT_CLIENT_HEADER,
+          'X-Goog-Api-Client': getGenkitClientHeader(),
         },
       }
     );

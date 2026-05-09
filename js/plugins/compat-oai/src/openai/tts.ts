@@ -14,19 +14,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import {
-  compatOaiSpeechModelRef as openAISpeechModelRef,
-  SpeechConfigSchema,
-} from '../audio';
+import { z } from 'genkit';
+import { ModelInfo } from 'genkit/model';
+import { compatOaiSpeechModelRef, SpeechConfigSchema } from '../audio';
 
 /** OpenAI speech ModelRef helper, same as the OpenAI-compatible spec. */
-export { openAISpeechModelRef };
+export function openAISpeechModelRef<
+  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+>(params: {
+  name: string;
+  info?: ModelInfo;
+  configSchema?: CustomOptions;
+  config?: any;
+}) {
+  return compatOaiSpeechModelRef({ ...params, namespace: 'openai' });
+}
 
 export const SUPPORTED_TTS_MODELS = {
-  'tts-1': openAISpeechModelRef({ name: 'openai/tts-1' }),
-  'tts-1-hd': openAISpeechModelRef({ name: 'openai/tts-1-hd' }),
+  'tts-1': openAISpeechModelRef({ name: 'tts-1' }),
+  'tts-1-hd': openAISpeechModelRef({
+    name: 'tts-1-hd',
+  }),
   'gpt-4o-mini-tts': openAISpeechModelRef({
-    name: 'openai/gpt-4o-mini-tts',
+    name: 'gpt-4o-mini-tts',
     configSchema: SpeechConfigSchema.omit({ speed: true }),
   }),
 };

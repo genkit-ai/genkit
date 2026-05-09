@@ -17,6 +17,7 @@
 export {
   EmbedderInfoSchema,
   embedderRef,
+  type EmbedRequest,
   type EmbedderAction,
   type EmbedderArgument,
   type EmbedderInfo,

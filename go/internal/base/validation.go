@@ -21,13 +21,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/invopop/jsonschema"
 	"github.com/xeipuuv/gojsonschema"
 )
 
 // ValidateValue will validate any value against the expected schema.
 // It will return an error if it doesn't match the schema, otherwise it will return nil.
-func ValidateValue(data any, schema *jsonschema.Schema) error {
+func ValidateValue(data any, schema map[string]any) error {
 	if schema == nil {
 		return nil
 	}
@@ -40,11 +39,11 @@ func ValidateValue(data any, schema *jsonschema.Schema) error {
 
 // ValidateJSON will validate JSON against the expected schema.
 // It will return an error if it doesn't match the schema, otherwise it will return nil.
-func ValidateJSON(dataBytes json.RawMessage, schema *jsonschema.Schema) error {
+func ValidateJSON(dataBytes json.RawMessage, schema map[string]any) error {
 	if schema == nil {
 		return nil
 	}
-	schemaBytes, err := schema.MarshalJSON()
+	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
 		return fmt.Errorf("expected schema is not valid: %w", err)
 	}

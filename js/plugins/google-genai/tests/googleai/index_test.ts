@@ -24,6 +24,7 @@ import {
 import {
   TEST_ONLY as GEMINI_TEST_ONLY,
   GeminiConfigSchema,
+  GeminiImageConfigSchema,
   GeminiTtsConfigSchema,
   GemmaConfigSchema,
 } from '../../src/googleai/gemini.js';
@@ -134,10 +135,9 @@ describe('GoogleAI Plugin', () => {
       delete process.env.GOOGLE_API_KEY;
       delete process.env.GEMINI_API_KEY;
       delete process.env.GOOGLE_GENAI_API_KEY;
-      const ai = genkit({ plugins: [googleAI({})] });
-      const pluginProvider = googleAI()(ai);
+      const plugin = googleAI({});
       await assert.rejects(async () => {
-        await pluginProvider.initializer();
+        await plugin.init!();
       }, MISSING_API_KEY_ERROR);
     });
 
@@ -145,10 +145,9 @@ describe('GoogleAI Plugin', () => {
       delete process.env.GOOGLE_API_KEY;
       delete process.env.GEMINI_API_KEY;
       delete process.env.GOOGLE_GENAI_API_KEY;
-      const ai = genkit({ plugins: [googleAI({ apiKey: false })] });
-      const pluginProvider = googleAI({ apiKey: false })(ai);
+      const plugin = googleAI({ apiKey: false });
       await assert.doesNotReject(async () => {
-        await pluginProvider.initializer();
+        await plugin.init!();
       });
     });
   });
@@ -215,7 +214,7 @@ describe('GoogleAI Plugin', () => {
 
   describe('googleAI.model', () => {
     it('should return a gemini ModelReference with correct schema', () => {
-      const modelName = 'gemini-2.0-flash';
+      const modelName = 'gemini-2.5-flash';
       const modelRef = googleAI.model(modelName);
       assert.strictEqual(
         modelRef.name,
@@ -318,16 +317,60 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
+    it('should return an image model reference for new models', () => {
+      const modelRef = googleAI.model('gemini-new-image-foo');
+      assert.strictEqual(
+        modelRef.configSchema,
+        GeminiImageConfigSchema,
+        'Should have GeminiImageConfigSchema'
+      );
+      assert.ok(
+        modelRef.info?.supports?.multiturn,
+        'Gemini Image model should support multiturn'
+      );
+    });
+
+    it('should return an Image model reference with correct schema', () => {
+      const modelRef = googleAI.model('gemini-2.5-flash-image');
+      assert.strictEqual(
+        modelRef.configSchema,
+        GeminiImageConfigSchema,
+        'Should have GeminiImageConfigSchema'
+      );
+      assert.ok(
+        modelRef.info?.supports?.multiturn,
+        'Gemini Image model should support multiturn'
+      );
+    });
+
+    it('should have config values for image model', () => {
+      const modelRef = googleAI.model('gemini-2.5-flash-image', {
+        imageConfig: {
+          aspectRatio: '16:9',
+          imageSize: '1K',
+        },
+      });
+      assert.strictEqual(
+        modelRef.configSchema,
+        GeminiImageConfigSchema,
+        'Should have GeminiImageConfigSchema'
+      );
+      assert.deepStrictEqual(
+        modelRef.config?.imageConfig,
+        {
+          aspectRatio: '16:9',
+          imageSize: '1K',
+        },
+        'should have correct imageConfig'
+      );
+    });
+
     it('should return a Veo model reference with correct schema', () => {
       const modelRef = googleAI.model('veo-new-model');
       assert.strictEqual(
         modelRef.configSchema,
         VeoConfigSchema,
         'Should have VeoConfigSchema'
-      );
-      assert.ok(
-        modelRef.info?.supports?.longRunning,
-        'Veo should support longRunning'
       );
     });
 
@@ -387,7 +430,7 @@ describe('GoogleAI Plugin', () => {
 
   describe('googleAI.embedder', () => {
     it('should return an EmbedderReference with correct schema', () => {
-      const embedderName = 'text-embedding-004';
+      const embedderName = 'gemini-embedding-001';
       const embedderRef = googleAI.embedder(embedderName);
       assert.strictEqual(embedderRef.name, `googleai/${embedderName}`);
       assert.ok(embedderRef.info, 'Should have info');
@@ -423,30 +466,28 @@ describe('GoogleAI Plugin', () => {
     };
 
     it('should return an empty array if no models are returned', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
       fetchMock.mock.mockImplementation(async () => createMockResponse([]));
-      const pluginProvider = googleAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = googleAI();
+      const actions = await plugin.list!();
       assert.deepStrictEqual(actions, [], 'Should return an empty array');
     });
 
     it('should return metadata for models and embedders', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
       const mockModels: Partial<Model>[] = [
         {
           name: 'models/gemini-2.5-pro',
           supportedGenerationMethods: ['generateContent'],
         },
         {
-          name: 'models/text-embedding-004',
+          name: 'models/gemini-embedding-001',
           supportedGenerationMethods: ['embedContent'],
         },
         {
-          name: 'models/imagen-3.0-generate-002',
+          name: 'models/imagen-4.0-generate-001',
           supportedGenerationMethods: ['predict'],
         },
         {
-          name: 'models/veo-2.0-generate-001',
+          name: 'models/veo-3.1-generate-preview',
           supportedGenerationMethods: ['predictLongRunning'],
         },
         {
@@ -458,16 +499,16 @@ describe('GoogleAI Plugin', () => {
         createMockResponse(mockModels)
       );
 
-      const pluginProvider = googleAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = googleAI();
+      const actions = await plugin.list!();
       const actionNames = actions.map((a) => a.name).sort();
       assert.deepStrictEqual(
         actionNames,
         [
           'googleai/gemini-2.5-pro',
-          'googleai/imagen-3.0-generate-002',
-          'googleai/text-embedding-004',
-          'googleai/veo-2.0-generate-001',
+          'googleai/imagen-4.0-generate-001',
+          'googleai/gemini-embedding-001',
+          'googleai/veo-3.1-generate-preview',
         ].sort()
       );
 
@@ -477,26 +518,25 @@ describe('GoogleAI Plugin', () => {
       assert.strictEqual(modelAction?.actionType, 'model');
 
       const embedderAction = actions.find(
-        (a) => a.name === 'googleai/text-embedding-004'
+        (a) => a.name === 'googleai/gemini-embedding-001'
       );
       assert.strictEqual(embedderAction?.actionType, 'embedder');
 
       const imagenAction = actions.find(
-        (a) => a.name === 'googleai/imagen-3.0-generate-002'
+        (a) => a.name === 'googleai/imagen-4.0-generate-001'
       );
       assert.strictEqual(imagenAction?.actionType, 'model');
 
       const veoAction = actions.find(
-        (a) => a.name === 'googleai/veo-2.0-generate-001'
+        (a) => a.name === 'googleai/veo-3.1-generate-preview'
       );
       assert.strictEqual(veoAction?.actionType, 'model');
     });
 
     it('should filter out deprecated models', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
       const mockModels = [
         {
-          name: 'models/gemini-1.5-flash',
+          name: 'models/gemini-2.5-flash',
           supportedGenerationMethods: ['generateContent'],
         },
         {
@@ -523,14 +563,13 @@ describe('GoogleAI Plugin', () => {
       fetchMock.mock.mockImplementation(async () =>
         createMockResponse(mockModels)
       );
-      const pluginProvider = googleAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = googleAI();
+      const actions = await plugin.list!();
       const actionNames = actions.map((a) => a.name);
-      assert.deepStrictEqual(actionNames, ['googleai/gemini-1.5-flash']);
+      assert.deepStrictEqual(actionNames, ['googleai/gemini-2.5-flash']);
     });
 
     it('should handle fetch errors gracefully', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
       fetchMock.mock.mockImplementation(async () => {
         return Promise.resolve({
           ok: false,
@@ -540,8 +579,8 @@ describe('GoogleAI Plugin', () => {
           text: async () => JSON.stringify({ error: { message: 'API Error' } }),
         });
       });
-      const pluginProvider = googleAI()(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = googleAI();
+      const actions = await plugin.list!();
       assert.deepStrictEqual(
         actions,
         [],
@@ -549,28 +588,22 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
-    it('should return empty array if API key is missing for listActions', async () => {
+    it('should return empty list if API key is missing for listActions', async () => {
       delete process.env.GOOGLE_API_KEY;
       delete process.env.GEMINI_API_KEY;
       delete process.env.GOOGLE_GENAI_API_KEY;
-      const ai = genkit({ plugins: [googleAI({ apiKey: false })] }); // Init with apiKey: false
 
-      const pluginProvider = googleAI({ apiKey: false })(ai);
-      const actions = await pluginProvider.listActions!();
+      const plugin = googleAI({ apiKey: false });
+      const actions = await plugin.list!();
       assert.deepStrictEqual(
         actions,
         [],
         'Should return empty array if API key is not found'
       );
-      assert.strictEqual(
-        fetchMock.mock.callCount(),
-        0,
-        'Fetch should not be called'
-      );
+      assert.strictEqual(fetchMock.mock.callCount(), 0);
     });
 
     it('should use listActions cache', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
       const mockModels = [
         {
           name: 'models/gemini-1.0-pro',
@@ -580,9 +613,9 @@ describe('GoogleAI Plugin', () => {
       fetchMock.mock.mockImplementation(async () =>
         createMockResponse(mockModels)
       );
-      const pluginProvider = googleAI()(ai);
-      await pluginProvider.listActions!();
-      await pluginProvider.listActions!();
+      const plugin = googleAI();
+      await plugin.list!();
+      await plugin.list!();
       assert.strictEqual(
         fetchMock.mock.callCount(),
         1,

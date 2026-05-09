@@ -14,6 +14,12 @@ First, set your Anthropic API key as an environment variable:
 ```bash
 export ANTHROPIC_API_KEY=<your-api-key>
 ```
+By default, `baseURL` is set to "https://api.anthropic.com/v1". However, if you
+want to use a custom value, you can set `ANTHROPIC_BASE_URL` environment variable:
+
+```bash
+export ANTHROPIC_BASE_URL=<your-custom-base-url>
+```
 
 ### Running All Tests
 To run all tests in the directory:

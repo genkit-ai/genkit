@@ -17,21 +17,38 @@
 
 """OpenAI Compatible Models for Genkit."""
 
+from .audio import (
+    SUPPORTED_STT_MODELS,
+    SUPPORTED_TTS_MODELS,
+    OpenAISTTModel,
+    OpenAITTSModel,
+)
 from .handler import OpenAIModelHandler
+from .image import (
+    SUPPORTED_IMAGE_MODELS,
+    OpenAIImageModel,
+)
 from .model import OpenAIModel
-from .model_info import SUPPORTED_OPENAI_COMPAT_MODELS, SUPPORTED_OPENAI_MODELS, PluginSource, get_default_model_info
-
-
-def package_name() -> str:
-    return 'genkit.plugins.compat_oai.models'
-
+from .model_info import (
+    SUPPORTED_EMBEDDING_MODELS,
+    SUPPORTED_OPENAI_COMPAT_MODELS,
+    SUPPORTED_OPENAI_MODELS,
+    PluginSource,
+    get_default_model_info,
+)
 
 __all__ = [
+    'OpenAIImageModel',
     'OpenAIModel',
-    'PluginSource',
-    'SUPPORTED_OPENAI_MODELS',
-    'SUPPORTED_OPENAI_COMPAT_MODELS',
     'OpenAIModelHandler',
+    'OpenAISTTModel',
+    'OpenAITTSModel',
+    'PluginSource',
+    'SUPPORTED_EMBEDDING_MODELS',
+    'SUPPORTED_IMAGE_MODELS',
+    'SUPPORTED_OPENAI_COMPAT_MODELS',
+    'SUPPORTED_OPENAI_MODELS',
+    'SUPPORTED_STT_MODELS',
+    'SUPPORTED_TTS_MODELS',
     'get_default_model_info',
-    'package_name',
 ]
