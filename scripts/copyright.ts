@@ -27,7 +27,7 @@ interface FormatType {
 const FILE_OPTS: { encoding: 'utf-8' } = { encoding: 'utf-8' };
 const FORMAT_TYPES: FormatType[] = [
   {
-    regex: /\.((tsx?)|(scss)|(jsx?))$/,
+    regex: /\.((tsx?)|(s?css)|(jsx?))$/,
     header: '/**',
     body: ' *',
     footer: ' */',
