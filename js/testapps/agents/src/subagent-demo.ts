@@ -20,16 +20,26 @@
  * This sample showcases how to use the `agents` middleware to let a main
  * orchestrator agent delegate tasks to specialized sub-agents:
  *
- *   • The `researcher` sub-agent handles research tasks
- *   • The `coder` sub-agent handles code generation tasks
- *   • The `orchestrator` main agent decides which sub-agent to delegate to
+ *   • The `researcher` sub-agent handles research tasks (description
+ *     auto-discovered from the agent's `description` field).
+ *   • The `coder` sub-agent handles code generation (with an explicit
+ *     description override in the middleware config).
+ *   • The `orchestrator` main agent decides which sub-agent to delegate to.
  *
- * The middleware injects a `call_agent` tool that the orchestrator model can
- * call. When it does, the middleware intercepts the call, runs the appropriate
- * sub-agent, and returns the sub-agent's response as the tool result.
+ * The middleware injects a dedicated tool per sub-agent (e.g.
+ * `delegate_to_researcher`, `delegate_to_coder`). When the orchestrator
+ * model calls one of these tools the middleware intercepts the call, runs
+ * the appropriate sub-agent, and returns its response as the tool result.
+ *
+ * Key features demonstrated:
+ *   - Per-agent delegation tools (one tool per agent, richer descriptions)
+ *   - Auto-discovered agent descriptions from registry metadata
+ *   - Explicit description overrides via config
+ *   - `maxDelegations` guard rail to prevent runaway loops
+ *   - `historyLength` to forward conversation context to sub-agents
  */
 
-import { agents } from '@genkit-ai/middleware';
+import { agents, retry } from '@genkit-ai/middleware';
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
@@ -37,27 +47,18 @@ import { ai } from './genkit.js';
 // Sub-Agent 1: Researcher — answers research questions
 // ---------------------------------------------------------------------------
 
-const getWebResults = ai.defineTool(
-  {
-    name: 'getWebResults',
-    description: 'Search the web for information on a topic.',
-    inputSchema: z.object({ query: z.string() }),
-    outputSchema: z.object({ results: z.string() }),
-  },
-  async (input) => {
-    // Simulated web search results.
-    return {
-      results: `Top results for "${input.query}": [1] Wikipedia article about ${input.query}. [2] Recent research paper on ${input.query}.`,
-    };
-  }
-);
-
 const researcher = ai.defineAgent({
   name: 'researcher',
+  description:
+    'A thorough research assistant that searches the web and provides well-sourced answers.',
   model: 'googleai/gemini-flash-latest',
+  config: {
+    tools: [{ googleSearch: {} }],
+  },
   system:
     'You are a thorough research assistant. When asked a question, use the getWebResults tool to find information, then provide a clear, well-sourced answer.',
-  tools: [getWebResults],
+  maxTurns: 10,
+  use: [retry()],
 });
 
 // ---------------------------------------------------------------------------
@@ -66,27 +67,47 @@ const researcher = ai.defineAgent({
 
 const coder = ai.defineAgent({
   name: 'coder',
+  description: 'An expert programmer that writes clean, well-commented code.',
   model: 'googleai/gemini-flash-latest',
+  maxTurns: 10,
   system:
     'You are an expert programmer. When asked to write code, provide clean, well-commented code with explanations. Use TypeScript by default unless asked otherwise.',
+  use: [retry()],
 });
 
 // ---------------------------------------------------------------------------
 // Main Orchestrator Agent — delegates to sub-agents
+//
+// Note: the system prompt no longer needs to describe the sub-agents — the
+// middleware auto-discovers descriptions from the agent registry and injects
+// them into the system prompt automatically.
 // ---------------------------------------------------------------------------
 
 export const orchestratorAgent = ai.defineAgent({
   name: 'orchestrator',
   model: 'googleai/gemini-flash-latest',
-  system: `You are a helpful project assistant. You have access to specialized sub-agents:
+  system: `You are a helpful project assistant.
 
-- **researcher**: Use for research questions, fact-finding, looking up information
-- **coder**: Use for writing code, debugging, code explanations
-
-Analyze the user's request and delegate to the appropriate sub-agent using the call_agent tool.
+Analyze the user's request and delegate to the appropriate sub-agent.
 If the request requires both research AND code, call them sequentially.
 After receiving sub-agent responses, synthesize a final answer for the user.`,
-  use: [agents({ agents: ['researcher', 'coder'] })],
+  use: [
+    agents({
+      agents: [
+        // Auto-discover description from the agent's registry metadata:
+        'researcher',
+        // Override the description for the orchestrator's context:
+        {
+          name: 'coder',
+          description:
+            'Writes, debugs, and explains code. Use for any programming tasks.',
+        },
+      ],
+      maxDelegations: 5,
+      historyLength: 4,
+    }),
+    retry(),
+  ],
 });
 
 // ---------------------------------------------------------------------------
