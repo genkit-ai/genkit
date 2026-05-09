@@ -47,7 +47,6 @@ import { ai } from './genkit.js';
 // Sub-Agent 1: Researcher — answers research questions
 // ---------------------------------------------------------------------------
 
-
 const researcher = ai.defineAgent({
   name: 'researcher',
   description:
