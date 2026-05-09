@@ -20,7 +20,7 @@ import { describe, it } from 'node:test';
 import { agents } from '../src/agents.js';
 
 describe('agents middleware', () => {
-  it('injects call_agent tool and system prompt with agent list', async () => {
+  it('injects per-agent delegation tools and system prompt', async () => {
     const ai = genkit({});
 
     // Define a mock model for the sub-agent.
@@ -58,16 +58,21 @@ describe('agents middleware', () => {
             'System should contain sub-agent instructions'
           );
 
-          // Model calls the call_agent tool.
+          // Verify per-agent tool name appears in instructions.
+          const hasToolName = systemMsg!.content.some((p) =>
+            p.text?.includes('delegate_to_researcher')
+          );
+          assert.ok(hasToolName, 'System should reference per-agent tool name');
+
+          // Model calls the per-agent delegation tool.
           return {
             message: {
               role: 'model' as const,
               content: [
                 {
                   toolRequest: {
-                    name: 'call_agent',
+                    name: 'delegate_to_researcher',
                     input: {
-                      agent: 'researcher',
                       task: 'Explain quantum computing briefly.',
                     },
                   },
@@ -101,7 +106,10 @@ describe('agents middleware', () => {
     assert.ok(toolMsg, 'Should have a tool response message');
     const toolResponse = toolMsg!.content.find((p) => p.toolResponse);
     assert.ok(toolResponse, 'Should have a tool response part');
-    assert.strictEqual(toolResponse!.toolResponse!.name, 'call_agent');
+    assert.strictEqual(
+      toolResponse!.toolResponse!.name,
+      'delegate_to_researcher'
+    );
     const toolOutput = toolResponse!.toolResponse!.output as {
       response: string;
     };
@@ -111,7 +119,7 @@ describe('agents middleware', () => {
     );
   });
 
-  it('returns error message for unknown agent name', async () => {
+  it('returns error message for unregistered agent', async () => {
     const ai = genkit({});
 
     // Define a mock model for the coder sub-agent.
@@ -138,15 +146,15 @@ describe('agents middleware', () => {
       async () => {
         modelTurn++;
         if (modelTurn === 1) {
+          // Call the tool for an agent that is in config but not registered.
           return {
             message: {
               role: 'model' as const,
               content: [
                 {
                   toolRequest: {
-                    name: 'call_agent',
+                    name: 'delegate_to_nonexistent',
                     input: {
-                      agent: 'nonexistent',
                       task: 'do something',
                     },
                   },
@@ -164,20 +172,20 @@ describe('agents middleware', () => {
       }
     );
 
-    // 'nonexistent' is in the agents list (so the enum validates) but
-    // has no corresponding agent registered — the middleware should return
-    // an error as tool output instead of throwing.
+    // 'nonexistent' is in the agents list (so its tool exists) but has
+    // no corresponding agent registered — the middleware should return an
+    // error as tool output instead of throwing.
     const result = await ai.generate({
       model: mainModel,
       prompt: 'test',
       use: [agents({ agents: ['coder', 'nonexistent'] })],
     });
 
-    // The model should still get a response (error was returned as tool output, not thrown).
+    // The model should still get a response (error was returned as tool output).
     assert.ok(result.text);
   });
 
-  it('supports custom tool name via toolName option', async () => {
+  it('supports custom tool prefix', async () => {
     const ai = genkit({});
 
     const helperModel = ai.defineModel(
@@ -205,7 +213,7 @@ describe('agents middleware', () => {
           // Verify custom tool name in system prompt.
           const systemMsg = req.messages?.find((m) => m.role === 'system');
           const hasCustomName = systemMsg?.content.some((p) =>
-            p.text?.includes('delegate_task')
+            p.text?.includes('ask_helper')
           );
           assert.ok(hasCustomName, 'System should reference custom tool name');
 
@@ -215,8 +223,8 @@ describe('agents middleware', () => {
               content: [
                 {
                   toolRequest: {
-                    name: 'delegate_task',
-                    input: { agent: 'helper', task: 'help me' },
+                    name: 'ask_helper',
+                    input: { task: 'help me' },
                   },
                 },
               ],
@@ -234,11 +242,218 @@ describe('agents middleware', () => {
 
     const result = await ai.generate({
       model: mainModel,
-      prompt: 'test custom name',
-      use: [agents({ agents: ['helper'], toolName: 'delegate_task' })],
+      prompt: 'test custom prefix',
+      use: [agents({ agents: ['helper'], toolPrefix: 'ask' })],
     });
 
     assert.ok(result.text);
+  });
+
+  it('uses agent description objects in config', async () => {
+    const ai = genkit({});
+
+    const helperModel = ai.defineModel(
+      { name: 'desc-model-' + Math.random() },
+      async () => ({
+        message: {
+          role: 'model' as const,
+          content: [{ text: 'I helped with code!' }],
+        },
+      })
+    );
+
+    ai.defineAgent({
+      name: 'myagent',
+      description: 'Registry description (should be overridden).',
+      model: helperModel,
+      system: 'You help.',
+    });
+
+    let modelTurn = 0;
+    const mainModel = ai.defineModel(
+      { name: 'main-desc-' + Math.random() },
+      async (req) => {
+        modelTurn++;
+        if (modelTurn === 1) {
+          // Verify the override description appears in system prompt.
+          const systemMsg = req.messages?.find((m) => m.role === 'system');
+          const hasOverrideDesc = systemMsg?.content.some((p) =>
+            p.text?.includes('Custom override description')
+          );
+          assert.ok(
+            hasOverrideDesc,
+            'System should contain the override description'
+          );
+
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_myagent',
+                    input: { task: 'do it' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'done' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model: mainModel,
+      prompt: 'test descriptions',
+      use: [
+        agents({
+          agents: [
+            {
+              name: 'myagent',
+              description: 'Custom override description for tests.',
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.ok(result.text);
+  });
+
+  it('auto-discovers agent descriptions from registry', async () => {
+    const ai = genkit({});
+
+    const model = ai.defineModel(
+      { name: 'autodesc-model-' + Math.random() },
+      async () => ({
+        message: {
+          role: 'model' as const,
+          content: [{ text: 'discovered!' }],
+        },
+      })
+    );
+
+    ai.defineAgent({
+      name: 'smartagent',
+      description: 'A very smart agent that knows everything.',
+      model,
+      system: 'You know things.',
+    });
+
+    let modelTurn = 0;
+    const mainModel = ai.defineModel(
+      { name: 'main-autodesc-' + Math.random() },
+      async (req) => {
+        modelTurn++;
+        if (modelTurn === 1) {
+          // Verify the auto-discovered description appears.
+          const systemMsg = req.messages?.find((m) => m.role === 'system');
+          const hasAutoDesc = systemMsg?.content.some((p) =>
+            p.text?.includes('A very smart agent that knows everything')
+          );
+          assert.ok(
+            hasAutoDesc,
+            'System should contain auto-discovered description'
+          );
+
+          return {
+            message: {
+              role: 'model' as const,
+              content: [{ text: 'no tools needed' }],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'ok' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model: mainModel,
+      prompt: 'test auto-discovery',
+      use: [agents({ agents: ['smartagent'] })],
+    });
+
+    assert.ok(result.text);
+  });
+
+  it('enforces maxDelegations limit', async () => {
+    const ai = genkit({});
+
+    const subModel = ai.defineModel(
+      { name: 'sub-limit-' + Math.random() },
+      async () => ({
+        message: {
+          role: 'model' as const,
+          content: [{ text: 'sub result' }],
+        },
+      })
+    );
+
+    ai.defineAgent({
+      name: 'worker',
+      model: subModel,
+      system: 'You work.',
+    });
+
+    let modelTurn = 0;
+    const mainModel = ai.defineModel(
+      { name: 'main-limit-' + Math.random() },
+      async () => {
+        modelTurn++;
+        if (modelTurn <= 3) {
+          // Keep trying to delegate (should hit limit after 2).
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_worker',
+                    input: { task: `task ${modelTurn}` },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'final' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model: mainModel,
+      prompt: 'test max delegations',
+      use: [agents({ agents: ['worker'], maxDelegations: 2 })],
+    });
+
+    // The third delegation should have been rejected with a limit message.
+    const toolMsgs = result.messages.filter((m) => m.role === 'tool');
+    assert.ok(toolMsgs.length >= 3, 'Should have at least 3 tool responses');
+
+    // Find the tool response that mentions the limit.
+    const limitResponse = toolMsgs.find((m) =>
+      m.content.some((p) => {
+        const output = p.toolResponse?.output as { response?: string };
+        return output?.response?.includes('Delegation limit reached');
+      })
+    );
+    assert.ok(limitResponse, 'Should have a delegation limit response');
   });
 
   it('throws if no agents provided', () => {
@@ -251,6 +466,6 @@ describe('agents middleware', () => {
         ai,
         pluginConfig: undefined,
       });
-    }, /at least one agent name/);
+    }, /at least one agent/);
   });
 });
