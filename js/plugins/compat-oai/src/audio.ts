@@ -231,7 +231,7 @@ export function compatOaiSpeechModelRef<
   });
 }
 
-export const FILE_TYPE_TO_FILE_NAME_EXTENSION = {
+const FILE_TYPE_TO_FILE_NAME_EXTENSION: Record<string, string> = {
   'audio/flac': '.flac',
   'audio/mp4': '.mp4',
   'audio/mpeg': '.mp3',
