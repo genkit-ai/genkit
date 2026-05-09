@@ -256,7 +256,7 @@ function toSttRequest(
     media.url.slice(media.url.indexOf(',') + 1),
     'base64'
   );
-  const contentType = media.contentType ?? media.url.slice('data:'.length, media.url.indexOf(';'));
+  const contentType = (media.contentType ?? media.url.slice('data:'.length, media.url.indexOf(';'))).split(';')[0].trim();
   const extension = FILE_TYPE_TO_FILE_NAME_EXTENSION[contentType] || '';
   const mediaFile = new File([mediaBuffer], `input${extension}`, {type: contentType});
   const {
