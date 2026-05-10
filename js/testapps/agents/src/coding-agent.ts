@@ -229,7 +229,13 @@ When showing file changes, use diff-style formatting when helpful.`,
     // propagates without being caught by filesystem's error handler.
     // Reads and run_shell are auto-approved; writes require user confirmation.
     toolApproval({
-      approved: ['list_files', 'read_file', 'use_skill', 'run_shell', 'ask_user'],
+      approved: [
+        'list_files',
+        'read_file',
+        'use_skill',
+        'run_shell',
+        'ask_user',
+      ],
     }),
     // Filesystem tools scoped to the workspace directory.
     filesystem({

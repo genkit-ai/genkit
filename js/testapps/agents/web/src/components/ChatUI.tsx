@@ -187,9 +187,7 @@ export function ChatUI({
                     )}
                   </div>
                   {/* Terminal-style detail box (e.g. shell output, file content) */}
-                  {m.detail && (
-                    <pre className="message-detail">{m.detail}</pre>
-                  )}
+                  {m.detail && <pre className="message-detail">{m.detail}</pre>}
                 </div>
               )}
             </div>
@@ -199,8 +197,7 @@ export function ChatUI({
         {streamingReasoning && !streamingText && (
           <details className="thinking-block thinking-streaming" open>
             <summary className="thinking-summary">
-              <span className="thinking-icon thinking-pulse">🧠</span>{' '}
-              Thinking…
+              <span className="thinking-icon thinking-pulse">🧠</span> Thinking…
             </summary>
             <div className="thinking-content">
               <Markdown remarkPlugins={[remarkGfm]}>

@@ -213,7 +213,8 @@ export default function CodingAgent() {
               role: 'user',
               content: [
                 {
-                  text: `I denied the "${currentApproval.toolName}" tool call` +
+                  text:
+                    `I denied the "${currentApproval.toolName}" tool call` +
                     (currentApproval.toolName === 'run_shell'
                       ? ` for command: "${currentApproval.input?.command}".`
                       : ` for file: "${currentApproval.input?.filePath}".`) +
@@ -273,7 +274,10 @@ export default function CodingAgent() {
             const toolName = fsMeta.filesystemMiddlewareTool;
             const filePath = fsMeta.filePath || '';
             if (toolName === 'read_file' && filePath) {
-              setMessages((prev) => [...prev, { role: 'tool', text: `📖 Reading ${filePath}` }]);
+              setMessages((prev) => [
+                ...prev,
+                { role: 'tool', text: `📖 Reading ${filePath}` },
+              ]);
             }
             continue;
           }
@@ -288,7 +292,8 @@ export default function CodingAgent() {
             tr.name === 'write_file' ||
             tr.name === 'search_and_replace' ||
             tr.name === 'read_file'
-          ) continue;
+          )
+            continue;
           const msg = formatToolRequest(tr.name, tr.input);
           setMessages((prev) => [...prev, { role: 'tool', ...msg }]);
         } else if (part.toolResponse) {
@@ -702,10 +707,16 @@ function truncate(s: string, maxLen = 200): string {
 function previewLines(content: string, maxLines = 20): string {
   const lines = content.split('\n');
   if (lines.length <= maxLines) return content;
-  return lines.slice(0, maxLines).join('\n') + `\n… (+${lines.length - maxLines} more lines)`;
+  return (
+    lines.slice(0, maxLines).join('\n') +
+    `\n… (+${lines.length - maxLines} more lines)`
+  );
 }
 
-interface ToolMsg { text: string; detail?: string }
+interface ToolMsg {
+  text: string;
+  detail?: string;
+}
 
 /** Pretty-format a tool request for inline display. */
 function formatToolRequest(name: string, input: any): ToolMsg {
@@ -735,7 +746,8 @@ function formatToolRequest(name: string, input: any): ToolMsg {
           return `"${search}" → "${replace}"`;
         })
         .join('\n');
-      const moreNote = edits.length > 3 ? `\n… (+${edits.length - 3} more edits)` : '';
+      const moreNote =
+        edits.length > 3 ? `\n… (+${edits.length - 3} more edits)` : '';
       return { text: `✏️ Editing ${file}`, detail: diffPreview + moreNote };
     }
 
@@ -757,7 +769,8 @@ function formatToolRequest(name: string, input: any): ToolMsg {
 
 /** Pretty-format a tool response for inline display. */
 function formatToolResponse(name: string, output: any): ToolMsg {
-  const outputStr = typeof output === 'string' ? output : JSON.stringify(output);
+  const outputStr =
+    typeof output === 'string' ? output : JSON.stringify(output);
 
   switch (name) {
     case 'write_file':
@@ -776,7 +789,9 @@ function formatToolResponse(name: string, output: any): ToolMsg {
             .map((f: any) => `${f.isDirectory ? '📁' : '📄'} ${f.path}`)
             .join('\n');
         }
-      } catch { /* use raw string */ }
+      } catch {
+        /* use raw string */
+      }
       return { text: '✅ Files:', detail: fileList || '(empty)' };
     }
 

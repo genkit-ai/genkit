@@ -342,8 +342,8 @@ body {
 }
 
 .message-text .markdown-body p {
-  margin: 0 0 8px;
   line-height: 1.5;
+  margin: 0 0 8px;
 }
 
 .message-text .markdown-body p:last-child {
@@ -357,16 +357,16 @@ body {
 }
 
 .message-text .markdown-body li {
-  margin-bottom: 2px;
   line-height: 1.45;
+  margin-bottom: 2px;
 }
 
 .message-text .markdown-body h1,
 .message-text .markdown-body h2,
 .message-text .markdown-body h3,
 .message-text .markdown-body h4 {
-  margin-top: 12px;
   margin-bottom: 6px;
+  margin-top: 12px;
 }
 
 .message-text .markdown-body h1:first-child,
@@ -1803,8 +1803,8 @@ body {
 /* ── File tree ── */
 .file-tree {
   display: flex;
-  flex-direction: column;
   flex: 1;
+  flex-direction: column;
   overflow-y: auto;
   padding: 4px 0;
 }
@@ -1982,10 +1982,10 @@ body {
 
 .approval-command {
   background: #1a1a2e;
-  color: #e879f9;
-  padding: 4px 8px;
   border-radius: 4px;
+  color: #e879f9;
   font-size: 0.85rem;
+  padding: 4px 8px;
   word-break: break-all;
 }
 

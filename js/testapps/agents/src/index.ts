@@ -38,10 +38,10 @@ import {
 } from './file-store.js';
 
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
+import { codingAgent, testCodingAgent } from './coding-agent.js';
 import { taskAgent, testTaskAgent } from './custom-state-agent.js';
 import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
 import { testPromptFileAgent, tripPlannerAgent } from './prompt-file-agent.js';
-import { codingAgent, testCodingAgent } from './coding-agent.js';
 import {
   orchestratorAgent,
   testSubAgentDemo,
