@@ -21,27 +21,42 @@ import type {
   AgentStreamChunk,
   ToolRequest,
 } from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
+import { runFlow, streamFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type Message } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Coding Agent — AI coding assistant with filesystem access
 //
-// Demonstrates:
-//   • filesystem middleware (list_files, read_file, write_file, search_and_replace)
-//   • skills middleware (use_skill for coding conventions)
-//   • toolApproval middleware (interrupt for write operations)
-//   • run_shell tool with AI-powered safety gate (interrupt for risky commands)
-//   • Server-side session store for interrupt resumption
-//   • Real-time file explorer showing workspace contents
-//   • Inline tool approval dialog with file content preview
-//   • Markdown rendering for code-heavy responses
-//   • Uses `toolRestarts` (not toolResponse) to resume interrupted tools
+// This is the most advanced sample, combining multiple Genkit patterns:
+//
+// Backend APIs demonstrated:
+//   • `defineAgent` with middleware composition (filesystem, skills,
+//     toolApproval, retry)
+//   • `defineInterrupt` for the ask_user tool (respond pattern)
+//   • `defineTool` with AI-powered safety gate and manual interrupt
+//   • `defineFlow` for workspace browser (listWorkspaceFiles, readWorkspaceFile)
+//   • `FileSessionStore` for persistent sessions & interrupt resumption
+//   • `getSnapshotDataAction` for restoring sessions from URL
+//
+// Client APIs demonstrated:
+//   • `streamFlow()` for streaming agent responses
+//   • `runFlow()` for non-streaming workspace file operations
+//   • Two interrupt resumption patterns:
+//     - **Restart pattern** (toolRestarts) — for write_file, search_and_replace,
+//       run_shell. Re-executes the tool with `{ toolApproved: true }` metadata.
+//     - **Respond pattern** (role='tool' message) — for ask_user. Sends the
+//       user's answer directly without re-executing the tool.
+//   • Session continuity via snapshotId
+//   • Streaming reasoning/thinking content
 // ---------------------------------------------------------------------------
 
 const API_BASE = 'http://localhost:8080';
 const ENDPOINT = `${API_BASE}/api/codingAgent`;
+const STATE_ENDPOINT = `${API_BASE}/api/codingAgent/state`;
+const WORKSPACE_FILES_ENDPOINT = `${API_BASE}/api/workspace/files`;
+const WORKSPACE_FILE_ENDPOINT = `${API_BASE}/api/workspace/file`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,15 +83,31 @@ interface PendingQuestion {
   snapshotId: string;
 }
 
+/** Extended part type for parts that carry filesystem middleware metadata. */
+interface PartWithMetadata {
+  text?: string;
+  toolRequest?: ToolRequest;
+  toolResponse?: { name: string; ref?: string; output: unknown };
+  reasoning?: string;
+  metadata?: {
+    filesystemMiddlewareTool?: string;
+    filePath?: string;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
 export default function CodingAgent() {
+  const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
+  const navigate = useNavigate();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [loading, setLoading] = useState(false);
+  const [restoring, setRestoring] = useState(!!urlSnapshotId);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [question, setQuestion] = useState<PendingQuestion | null>(null);
   const [customAnswer, setCustomAnswer] = useState('');
@@ -89,16 +120,17 @@ export default function CodingAgent() {
 
   // Session tracking
   const stateRef = useRef<any>(undefined);
-  const snapshotIdRef = useRef<string | undefined>(undefined);
+  const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
-  // ── Fetch workspace file tree ──────────────────────────────────────────
+  // ── Fetch workspace file tree via runFlow() ────────────────────────────
   const refreshFiles = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/workspace/files`);
-      const data = await res.json();
+      const data = (await runFlow<{ files: WorkspaceFile[] }>({
+        url: WORKSPACE_FILES_ENDPOINT,
+      }));
       setFiles(data.files || []);
     } catch {
-      // ignore
+      // ignore — workspace may not exist yet
     }
   }, []);
 
@@ -107,15 +139,129 @@ export default function CodingAgent() {
     refreshFiles();
   }, [refreshFiles]);
 
-  // ── Fetch a single file's content ──────────────────────────────────────
+  // ── Restore session from snapshotId in the URL ─────────────────────────
+  useEffect(() => {
+    if (!urlSnapshotId) return;
+
+    let cancelled = false;
+
+    async function restore() {
+      try {
+        // Call the /state endpoint to fetch the snapshot data.
+        // getSnapshotDataAction takes a snapshotId string as input
+        // and returns a SessionSnapshot with the full message history.
+        const snapshot = (await runFlow({
+          url: STATE_ENDPOINT,
+          input: urlSnapshotId,
+        })) as any;
+
+        if (cancelled) return;
+
+        if (snapshot?.state?.messages) {
+          // Reconstruct chat messages from the session history.
+          const restored: Message[] = [];
+          const allMessages = snapshot.state.messages;
+
+          for (const msg of allMessages) {
+            const role = msg.role as Message['role'];
+
+            // Filter out filesystem middleware read_file text parts
+            // (same filtering we apply during streaming).
+            const textParts = (msg.content || [])
+              .filter((p: any) => {
+                if (!p.text) return false;
+                // Skip read_file content injected by filesystem middleware
+                if (p.metadata?.filesystemMiddlewareTool) return false;
+                return true;
+              })
+              .map((p: any) => p.text);
+
+            if (textParts.length > 0) {
+              restored.push({ role, text: textParts.join('') });
+            }
+
+            // Show tool calls/responses from history, but skip:
+            //   • read_file responses (the raw file content is too verbose)
+            //   • read_file requests are shown as "📖 Reading {path}" bubbles
+            for (const p of msg.content || []) {
+              if (p.toolRequest) {
+                const tmsg = formatToolRequest(p.toolRequest.name, p.toolRequest.input);
+                restored.push({ role: 'tool', ...tmsg });
+              }
+              if (p.toolResponse) {
+                if (p.toolResponse.name === 'read_file') continue;
+                const tmsg = formatToolResponse(p.toolResponse.name, p.toolResponse.output);
+                restored.push({ role: 'tool', ...tmsg });
+              }
+            }
+          }
+          setMessages(restored);
+
+          // Use the snapshot for continuing the conversation.
+          snapshotIdRef.current = snapshot.snapshotId;
+          stateRef.current = snapshot.state;
+
+          // If the last message has a pending interrupt (e.g. ask_user,
+          // write_file approval), trigger the dialog so the user can respond.
+          if (allMessages.length > 0 && snapshot.snapshotId) {
+            const lastMsg = allMessages[allMessages.length - 1];
+            for (const p of lastMsg.content || []) {
+              if (p.toolRequest) {
+                const tr = p.toolRequest;
+                if (tr.name === 'ask_user') {
+                  setQuestion({
+                    question: tr.input?.question || 'What would you like to do?',
+                    options: tr.input?.options || [],
+                    ref: tr.ref,
+                    snapshotId: snapshot.snapshotId,
+                  });
+                  break;
+                } else if (
+                  tr.name === 'write_file' ||
+                  tr.name === 'search_and_replace' ||
+                  tr.name === 'run_shell'
+                ) {
+                  setApproval({
+                    toolName: tr.name,
+                    ref: tr.ref,
+                    input: tr.input,
+                    snapshotId: snapshot.snapshotId,
+                  });
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setMessages([
+            {
+              role: 'system',
+              text: `Failed to restore session: ${err.message}`,
+            },
+          ]);
+        }
+      } finally {
+        if (!cancelled) setRestoring(false);
+      }
+    }
+
+    restore();
+    return () => {
+      cancelled = true;
+    };
+  }, []); // Only run on mount
+
+  // ── Fetch a single file's content via runFlow() ────────────────────────
   const viewFile = useCallback(async (filePath: string) => {
     setSelectedFile(filePath);
     setFileLoading(true);
     try {
-      const res = await fetch(
-        `${API_BASE}/api/workspace/file?path=${encodeURIComponent(filePath)}`
-      );
-      const data = await res.json();
+      const data = (await runFlow<{ path: string; content: string }>({
+        url: WORKSPACE_FILE_ENDPOINT,
+        input: filePath,
+      }));
       setFileContent(data.content || '');
     } catch {
       setFileContent('(failed to load file)');
@@ -138,11 +284,11 @@ export default function CodingAgent() {
         messages: [{ role: 'user', content: [{ text }] }],
       };
 
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : snapshotIdRef.current
-          ? { snapshotId: snapshotIdRef.current }
-          : {};
+      // The coding agent uses a server-managed FileSessionStore,
+      // so we always use snapshotId (not client-side state).
+      const init: AgentInit = snapshotIdRef.current
+        ? { snapshotId: snapshotIdRef.current }
+        : {};
 
       try {
         const result = await streamAndCollect(input, init);
@@ -262,14 +408,15 @@ export default function CodingAgent() {
       if (!mc) continue;
 
       for (const part of mc.content || []) {
-        if ((part as any).reasoning) {
+        const p = part as PartWithMetadata;
+        if (p.reasoning) {
           // Accumulate reasoning/thinking content
-          accumulatedReasoning += (part as any).reasoning;
+          accumulatedReasoning += p.reasoning;
           setStreamingReasoning(accumulatedReasoning);
         } else if (part.text) {
           // Filesystem middleware injects file contents as text chunks —
           // show as a tool message but don't dump raw content into streaming text
-          const fsMeta = (part as any).metadata;
+          const fsMeta = p.metadata;
           if (fsMeta?.filesystemMiddlewareTool) {
             const toolName = fsMeta.filesystemMiddlewareTool;
             const filePath = fsMeta.filePath || '';
@@ -385,7 +532,11 @@ export default function CodingAgent() {
   // ── Process a result: update session tracking & detect interrupts ────
   function processResult(result: AgentOutput) {
     if (result?.state) stateRef.current = result.state;
-    if (result?.snapshotId) snapshotIdRef.current = result.snapshotId;
+    if (result?.snapshotId) {
+      snapshotIdRef.current = result.snapshotId;
+      // Push snapshotId into the URL so the user can bookmark or reload.
+      navigate(`/coding-agent/${result.snapshotId}`, { replace: true });
+    }
 
     // Check for interrupts
     const interrupt = findToolInterrupt(result);
@@ -410,18 +561,28 @@ export default function CodingAgent() {
     }
   }
 
-  // ── New session ────────────────────────────────────────────────────────
-  const handleNewSession = useCallback(() => {
-    setMessages([]);
-    setStreamingText('');
-    setStreamingReasoning('');
-    setApproval(null);
-    setQuestion(null);
-    setCustomAnswer('');
-    stateRef.current = undefined;
-    snapshotIdRef.current = undefined;
-    refreshFiles();
-  }, [refreshFiles]);
+  // ── Restoring state — show loading UI while fetching snapshot ──────────
+  if (restoring) {
+    return (
+      <div className="coding-agent-layout">
+        <div className="chat-panel">
+          <div className="chat-header">
+            <h2>Coding Agent</h2>
+            <span className="chat-desc">Restoring session…</span>
+          </div>
+          <div className="chat-messages">
+            <div className="message">
+              <div className="message-role">system</div>
+              <div className="message-text loading">
+                Restoring session from snapshot {urlSnapshotId}…
+              </div>
+            </div>
+          </div>
+        </div>
+        <aside className="file-explorer" />
+      </div>
+    );
+  }
 
   return (
     <div className="coding-agent-layout">
@@ -443,9 +604,9 @@ export default function CodingAgent() {
         inputDisabled={!!approval || !!question}
         renderMarkdown
         headerAction={
-          <button className="btn-new-session" onClick={handleNewSession}>
-            New Session
-          </button>
+          <Link to="/coding-agent" className="btn-new-session" reloadDocument>
+            ✨ New Session
+          </Link>
         }>
         {/* Tool approval dialog */}
         {approval && (

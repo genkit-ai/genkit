@@ -53,6 +53,7 @@ js/plugins/firebase/firestore-debug.log
 .firebaserc
 js/plugins/middleware/workspace/
 js/testapps/agents/.snapshots/
+js/testapps/agents/.snapshots-coding/
 js/testapps/agents/.snapshots-pruning/
 js/testapps/agents/web/tsconfig.tsbuildinfo
 js/testapps/agents/workspace/

@@ -53,6 +53,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="trip-planner" element={<TripPlanner />} />
           <Route path="trip-planner/:snapshotId" element={<TripPlanner />} />
           <Route path="coding-agent" element={<CodingAgent />} />
+          <Route path="coding-agent/:snapshotId" element={<CodingAgent />} />
         </Route>
       </Routes>
     </BrowserRouter>

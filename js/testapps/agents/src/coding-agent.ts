@@ -45,16 +45,18 @@
 
 import { filesystem, retry, skills, toolApproval } from '@genkit-ai/middleware';
 import { exec } from 'child_process';
+import * as fs from 'fs';
 import { z } from 'genkit';
-import { InMemorySessionStore } from 'genkit/beta';
+import { FileSessionStore } from 'genkit/beta';
 import * as path from 'path';
 import { promisify } from 'util';
 import { ai } from './genkit.js';
 
 const execAsync = promisify(exec);
 
-// Server-side session store — required for interrupt resumption.
-const store = new InMemorySessionStore<{}>();
+// File-based session store — persists sessions across server restarts,
+// which is useful for a coding assistant where conversations can be long.
+const store = new FileSessionStore<{}>('./.snapshots-coding');
 
 // Resolve the workspace directory relative to the project root.
 const WORKSPACE_DIR = path.resolve(__dirname, '..', 'workspace');
@@ -104,7 +106,7 @@ const runShell = ai.defineTool(
     // Check if this is a resumed (user-approved) invocation.
     // When a user approves a risky command, toolRestarts sets
     // metadata.resumed = { toolApproved: true }.
-    const isApproved = (ctx as any).metadata?.resumed?.toolApproved === true;
+    const isApproved = ctx.metadata?.resumed?.toolApproved === true;
 
     if (!isApproved) {
       // AI-powered safety gate — use a fast/cheap model to evaluate the command.
@@ -256,6 +258,9 @@ When showing file changes, use diff-style formatting when helpful.`,
 
 // ---------------------------------------------------------------------------
 // Test flow — for programmatic / CLI testing
+//
+// Uses agent.run() consistently with other test flows. Auto-approves all
+// tool interrupts so the agent can complete its task without user input.
 // ---------------------------------------------------------------------------
 
 export const testCodingAgent = ai.defineFlow(
@@ -269,82 +274,128 @@ export const testCodingAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const session = codingAgent.streamBidi({});
-    session.send({
-      messages: [{ role: 'user', content: [{ text }] }],
-    });
-    session.close();
+    let result = await codingAgent.run(
+      { messages: [{ role: 'user', content: [{ text }] }] },
+      { onChunk: sendChunk }
+    );
 
-    for await (const chunk of session.stream) {
-      sendChunk(chunk);
-    }
-
-    let output = await session.output;
-
-    // Auto-approve all tool interrupts for the test flow using toolRestarts.
+    // Auto-approve all tool interrupts for testing.
     let maxResumes = 10;
     while (maxResumes-- > 0) {
-      const interrupt = findToolInterrupt(output);
+      const interrupt = findToolInterrupt(result.result);
       if (!interrupt) break;
 
-      const resumed = codingAgent.streamBidi({
-        snapshotId: output.snapshotId,
-      });
-
       if (interrupt.name === 'ask_user') {
-        // For ask_user interrupts, auto-respond with the first option.
-        // Uses the respond pattern: send the tool response as a role='tool'
-        // message in input.messages (the tool never executes).
+        // Respond pattern: send a role='tool' message with the answer.
+        // The tool never re-executes — we provide the output directly.
         const firstOption = interrupt.input?.options?.[0] || 'Yes';
-        sendChunk({
-          status: `Auto-answering ask_user: "${firstOption}"`,
-        });
-        resumed.send({
-          messages: [
-            {
-              role: 'tool',
-              content: [
-                {
-                  toolResponse: {
-                    name: interrupt.name,
-                    ref: interrupt.ref,
-                    output: { answer: firstOption },
+        sendChunk({ status: `Auto-answering ask_user: "${firstOption}"` });
+
+        result = await codingAgent.run(
+          {
+            messages: [
+              {
+                role: 'tool' as const,
+                content: [
+                  {
+                    toolResponse: {
+                      name: interrupt.name,
+                      ref: interrupt.ref,
+                      output: { answer: firstOption },
+                    },
+                    metadata: { interruptResponse: true },
                   },
-                  metadata: { interruptResponse: true },
-                },
-              ],
-            },
-          ],
-        });
-      } else {
-        // For other interrupts (write_file, search_and_replace, run_shell),
-        // use toolRestarts (restart pattern — re-execute the tool with approval).
-        sendChunk({
-          status: `Auto-approving tool: ${interrupt.name}`,
-        });
-        resumed.send({
-          toolRestarts: [
-            {
-              toolRequest: {
-                name: interrupt.name,
-                ref: interrupt.ref,
-                input: interrupt.input,
+                ],
               },
-              metadata: { resumed: { toolApproved: true } },
-            },
-          ],
-        });
-      }
-      resumed.close();
+            ],
+          },
+          {
+            init: { snapshotId: result.result.snapshotId },
+            onChunk: sendChunk,
+          }
+        );
+      } else {
+        // Restart pattern: use toolRestarts to re-execute the tool with
+        // approval metadata (write_file, search_and_replace, run_shell).
+        sendChunk({ status: `Auto-approving tool: ${interrupt.name}` });
 
-      for await (const chunk of resumed.stream) {
-        sendChunk(chunk);
+        result = await codingAgent.run(
+          {
+            toolRestarts: [
+              {
+                toolRequest: {
+                  name: interrupt.name,
+                  ref: interrupt.ref,
+                  input: interrupt.input,
+                },
+                metadata: { resumed: { toolApproved: true } },
+              },
+            ],
+          },
+          {
+            init: { snapshotId: result.result.snapshotId },
+            onChunk: sendChunk,
+          }
+        );
       }
-
-      output = await resumed.output;
     }
 
-    return output;
+    return result.result;
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Workspace browser flows — expose the workspace directory as Genkit flows
+// so the web UI can browse files using runFlow() instead of raw fetch().
+// ---------------------------------------------------------------------------
+
+/** Schema for a single file/directory entry in the workspace. */
+const WorkspaceFileSchema: z.ZodType<WorkspaceFile> = z.lazy(() =>
+  z.object({
+    name: z.string(),
+    path: z.string(),
+    type: z.enum(['file', 'directory']),
+    children: z.array(WorkspaceFileSchema).optional(),
+  })
+);
+
+interface WorkspaceFile {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: WorkspaceFile[];
+}
+
+/** List all files and directories in the workspace, recursively. */
+export const listWorkspaceFiles = ai.defineFlow(
+  {
+    name: 'listWorkspaceFiles',
+    inputSchema: z.void(),
+    outputSchema: z.object({ files: z.array(WorkspaceFileSchema) }),
+  },
+  async () => {
+    const files = await walkDirectory(WORKSPACE_DIR, WORKSPACE_DIR);
+    return { files };
+  }
+);
+
+/** Read the contents of a single file in the workspace. */
+export const readWorkspaceFile = ai.defineFlow(
+  {
+    name: 'readWorkspaceFile',
+    inputSchema: z.string().describe('Relative path within the workspace'),
+    outputSchema: z.object({
+      path: z.string(),
+      content: z.string(),
+    }),
+  },
+  async (filePath) => {
+    const fullPath = path.resolve(WORKSPACE_DIR, filePath);
+    if (!fullPath.startsWith(WORKSPACE_DIR)) {
+      throw new Error('Path outside workspace');
+    }
+    const content = fs.readFileSync(fullPath, 'utf8');
+    return { path: filePath, content };
   }
 );
 
@@ -359,7 +410,6 @@ function findToolInterrupt(
   if (!msg) return null;
   for (const p of msg.content || []) {
     if (p.toolRequest) {
-      // A toolRequest in the output means the agent was interrupted.
       return {
         name: p.toolRequest.name,
         ref: p.toolRequest.ref,
@@ -368,4 +418,36 @@ function findToolInterrupt(
     }
   }
   return null;
+}
+
+/** Recursively list files in a directory, sorted (directories first). */
+async function walkDirectory(
+  dir: string,
+  rootDir: string
+): Promise<WorkspaceFile[]> {
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  const result: WorkspaceFile[] = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const fullPath = path.join(dir, entry.name);
+    const relativePath = path.relative(rootDir, fullPath);
+
+    if (entry.isDirectory()) {
+      const children = await walkDirectory(fullPath, rootDir);
+      result.push({
+        name: entry.name,
+        path: relativePath,
+        type: 'directory',
+        children,
+      });
+    } else {
+      result.push({ name: entry.name, path: relativePath, type: 'file' });
+    }
+  }
+
+  return result.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
 }
