@@ -26,6 +26,10 @@ import remarkGfm from 'remark-gfm';
 export interface Message {
   role: 'user' | 'model' | 'system' | 'tool';
   text: string;
+  /** Optional reasoning/thinking content — rendered as a collapsible block. */
+  reasoning?: string;
+  /** Optional detail content — rendered as a terminal-style box below the text. */
+  detail?: string;
 }
 
 interface Props {
@@ -51,6 +55,8 @@ interface Props {
   renderMarkdown?: boolean;
   /** Suggested prompts shown in the empty state for easy copy-paste or click-to-send. */
   suggestions?: string[];
+  /** Partial reasoning text being streamed (shown as animated "thinking..." block). */
+  streamingReasoning?: string;
 }
 
 export function ChatUI({
@@ -65,13 +71,21 @@ export function ChatUI({
   headerAction,
   renderMarkdown,
   suggestions,
+  streamingReasoning,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-  }, [messages, streamingText]);
+    // Use double-rAF to ensure DOM has fully updated before scrolling
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      });
+    });
+  }, [messages, streamingText, streamingReasoning]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -136,28 +150,65 @@ export function ChatUI({
           const isSystem = m.role === 'system';
           const isTool = m.role === 'tool';
           return (
-            <div
-              key={i}
-              className={`message ${isUser ? 'message-user' : ''} ${isSystem ? 'message-system' : ''} ${isTool ? 'message-tool' : ''}`}>
-              <div className="message-role">{m.role}</div>
-              <div
-                className={`message-text ${isTool ? 'message-text-mono' : ''}`}>
-                {renderMarkdown && m.role === 'model' ? (
-                  <div className="markdown-body">
-                    <Markdown remarkPlugins={[remarkGfm]}>{m.text}</Markdown>
+            <div key={i}>
+              {/* Collapsible reasoning block (if message has reasoning) */}
+              {m.reasoning && (
+                <details className="thinking-block">
+                  <summary className="thinking-summary">
+                    <span className="thinking-icon">🧠</span> Thinking…
+                  </summary>
+                  <div className="thinking-content">
+                    <Markdown remarkPlugins={[remarkGfm]}>
+                      {m.reasoning}
+                    </Markdown>
                   </div>
-                ) : (
-                  m.text.split('\n').map((line, j) => (
-                    <span key={j}>
-                      {line}
-                      {j < m.text.split('\n').length - 1 && <br />}
-                    </span>
-                  ))
-                )}
-              </div>
+                </details>
+              )}
+              {/* Only show the message bubble if there's actual text content */}
+              {m.text && (
+                <div
+                  className={`message ${isUser ? 'message-user' : ''} ${isSystem ? 'message-system' : ''} ${isTool ? 'message-tool' : ''}`}>
+                  <div className="message-role">{m.role}</div>
+                  <div
+                    className={`message-text ${isTool ? 'message-text-mono' : ''}`}>
+                    {renderMarkdown && m.role === 'model' ? (
+                      <div className="markdown-body">
+                        <Markdown remarkPlugins={[remarkGfm]}>
+                          {m.text}
+                        </Markdown>
+                      </div>
+                    ) : (
+                      m.text.split('\n').map((line, j) => (
+                        <span key={j}>
+                          {line}
+                          {j < m.text.split('\n').length - 1 && <br />}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                  {/* Terminal-style detail box (e.g. shell output, file content) */}
+                  {m.detail && (
+                    <pre className="message-detail">{m.detail}</pre>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
+        {/* Live streaming reasoning indicator */}
+        {streamingReasoning && !streamingText && (
+          <details className="thinking-block thinking-streaming" open>
+            <summary className="thinking-summary">
+              <span className="thinking-icon thinking-pulse">🧠</span>{' '}
+              Thinking…
+            </summary>
+            <div className="thinking-content">
+              <Markdown remarkPlugins={[remarkGfm]}>
+                {streamingReasoning}
+              </Markdown>
+            </div>
+          </details>
+        )}
         {streamingText && (
           <div className="message">
             <div className="message-role">model</div>
@@ -175,7 +226,7 @@ export function ChatUI({
             </div>
           </div>
         )}
-        {loading && !streamingText && (
+        {loading && !streamingText && !streamingReasoning && (
           <div className="message">
             <div className="message-role">model</div>
             <div className="message-text loading">Thinking…</div>

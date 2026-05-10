@@ -41,6 +41,7 @@ import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
 import { taskAgent, testTaskAgent } from './custom-state-agent.js';
 import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
 import { testPromptFileAgent, tripPlannerAgent } from './prompt-file-agent.js';
+import { codingAgent, testCodingAgent } from './coding-agent.js';
 import {
   orchestratorAgent,
   testSubAgentDemo,
@@ -77,6 +78,8 @@ console.log('Loaded sub-agent demo flow:', testSubAgentDemo.__action.name);
 console.log('Loaded sub-agent simple flow:', testSubAgentSimple.__action.name);
 console.log('Loaded prompt-file agent:', tripPlannerAgent.__action.name);
 console.log('Loaded prompt-file flow:', testPromptFileAgent.__action.name);
+console.log('Loaded coding agent:', codingAgent.__action.name);
+console.log('Loaded coding flow:', testCodingAgent.__action.name);
 
 export * from './background-agent.js';
 export * from './interrupt-agent.js';
@@ -135,6 +138,39 @@ app.post(
   '/api/tripPlannerAgent/state',
   expressHandler(tripPlannerAgent.getSnapshotDataAction)
 );
+app.post('/api/codingAgent', expressHandler(codingAgent));
+app.post('/api/testCodingAgent', expressHandler(testCodingAgent));
+
+// Workspace file browser API — serves the coding agent's workspace contents
+app.get('/api/workspace/files', async (_req, res) => {
+  try {
+    const workspaceDir = require('path').resolve(__dirname, '..', 'workspace');
+    const files = await listWorkspaceFiles(workspaceDir, workspaceDir);
+    res.json({ files });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/workspace/file', async (req, res) => {
+  try {
+    const workspaceDir = require('path').resolve(__dirname, '..', 'workspace');
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      res.status(400).json({ error: 'Missing path query parameter' });
+      return;
+    }
+    const fullPath = require('path').resolve(workspaceDir, filePath);
+    if (!fullPath.startsWith(workspaceDir)) {
+      res.status(403).json({ error: 'Path outside workspace' });
+      return;
+    }
+    const content = require('fs').readFileSync(fullPath, 'utf8');
+    res.json({ path: filePath, content });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Also expose the test flows for programmatic testing
 app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
@@ -153,3 +189,52 @@ app.listen(PORT, () => {
     `   Web UI: run "cd web && npm run dev" then open http://localhost:5173\n`
   );
 });
+
+// ---------------------------------------------------------------------------
+// Helper: recursively list workspace files
+// ---------------------------------------------------------------------------
+
+interface WorkspaceFile {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: WorkspaceFile[];
+}
+
+async function listWorkspaceFiles(
+  dir: string,
+  rootDir: string
+): Promise<WorkspaceFile[]> {
+  const fs = require('fs');
+  const pathMod = require('path');
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  const result: WorkspaceFile[] = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const fullPath = pathMod.join(dir, entry.name);
+    const relativePath = pathMod.relative(rootDir, fullPath);
+
+    if (entry.isDirectory()) {
+      const children = await listWorkspaceFiles(fullPath, rootDir);
+      result.push({
+        name: entry.name,
+        path: relativePath,
+        type: 'directory',
+        children,
+      });
+    } else {
+      result.push({
+        name: entry.name,
+        path: relativePath,
+        type: 'file',
+      });
+    }
+  }
+
+  return result.sort((a, b) => {
+    // Directories first, then alphabetical
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}

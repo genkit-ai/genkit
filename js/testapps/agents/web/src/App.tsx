@@ -21,6 +21,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 // ---------------------------------------------------------------------------
 
 const NAV_ITEMS = [
+  { to: '/coding-agent', icon: '💻', label: 'Coding Agent' },
   { to: '/weather', icon: '🌤️', label: 'Weather Chat' },
   { to: '/client-state', icon: '🌤️', label: 'Weather Chat (Stateless)' },
   { to: '/banking', icon: '🏦', label: 'Banking (Interrupt)' },
