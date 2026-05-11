@@ -16,7 +16,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
@@ -27,28 +27,68 @@ import (
 func main() {
 	ctx := context.Background()
 
-	g := genkit.Init(ctx, genkit.WithPlugins(&modelgarden.Anthropic{}))
+	g := genkit.Init(ctx, genkit.WithPlugins(
+		&modelgarden.Anthropic{},
+		&modelgarden.Llama{},
+		&modelgarden.Mistral{},
+	))
 
-	// Define a simple flow that generates jokes about a given topic
-	genkit.DefineFlow(g, "jokesFlow", func(ctx context.Context, input string) (string, error) {
-		m := modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2")
+	// Anthropic flows.
+	defineFlow(g, "jokesFlow",
+		modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2@20241022"),
+		"Tell a short joke about %s",
+		ai.WithConfig(&anthropic.MessageNewParams{
+			MaxTokens:   256,
+			Temperature: anthropic.Float(1.0),
+		}),
+	)
+	defineFlow(g, "opus45Flow",
+		modelgarden.AnthropicModel(g, "claude-opus-4-5@20251101"),
+		"Write a haiku about %s",
+		ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 256}),
+	)
+
+	// Llama flow.
+	defineFlow(g, "llamaFlow",
+		modelgarden.LlamaModel(g, "meta/llama-3.3-70b-instruct-maas"),
+		"In one short sentence, describe %s",
+	)
+
+	// Mistral / Codestral flows.
+	defineFlow(g, "mistralFlow",
+		modelgarden.MistralModel(g, "mistralai/mistral-small-2503"),
+		"List three interesting facts about %s",
+	)
+	defineFlow(g, "codestralFlow",
+		modelgarden.MistralModel(g, "mistralai/codestral-2"),
+		"Write a small Go function that does the following: %s",
+	)
+
+	<-ctx.Done()
+}
+
+// defineFlow registers a Dev UI flow that generates from the given model using
+// a prompt template. Extra GenerateOption values (e.g. provider-specific
+// config) are appended to the base options.
+func defineFlow(
+	g *genkit.Genkit,
+	name string,
+	m ai.Model,
+	promptTemplate string,
+	extra ...ai.GenerateOption,
+) {
+	genkit.DefineFlow(g, name, func(ctx context.Context, input string) (string, error) {
 		if m == nil {
-			return "", errors.New("jokesFlow: failed to find model")
+			return "", fmt.Errorf("%s: model not registered", name)
 		}
-
-		resp, err := genkit.Generate(ctx, g,
+		opts := append([]ai.GenerateOption{
 			ai.WithModel(m),
-			ai.WithConfig(&anthropic.MessageNewParams{
-				Temperature: anthropic.Float(1.0),
-			}),
-			ai.WithPrompt(`Tell a short joke about %s`, input))
+			ai.WithPrompt(promptTemplate, input),
+		}, extra...)
+		resp, err := genkit.Generate(ctx, g, opts...)
 		if err != nil {
 			return "", err
 		}
-
-		text := resp.Text()
-		return text, nil
+		return resp.Text(), nil
 	})
-
-	<-ctx.Done()
 }

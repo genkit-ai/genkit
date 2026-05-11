@@ -19,6 +19,7 @@ package modelgarden
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -32,13 +33,17 @@ import (
 
 const (
 	mistralPluginName = "vertex-model-garden-mistral"
+	mistralPublisher  = "mistralai"
 )
 
 // Mistral is a Genkit plugin for interacting with Mistral and Codestral MaaS
 // models in Vertex AI Model Garden. The JS equivalent uses the native
 // @mistralai/mistralai-gcp SDK; no maintained Mistral-GCP SDK exists for Go,
-// so this plugin routes requests through the Vertex MaaS OpenAI-compatible
-// endpoint (https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral#openai-compatible).
+// and unlike Meta Llama, Mistral on Vertex is not served by the OpenAI-
+// compatible chat completions endpoint. Requests are routed to per-model
+// rawPredict / streamRawPredict URLs via a custom HTTP transport, while the
+// rest of the OpenAI-shaped request and response handling is reused from
+// compat_oai.
 type Mistral struct {
 	// ProjectID is the Google Cloud project to use for Vertex AI. If empty,
 	// the value of the environment variable GOOGLE_CLOUD_PROJECT or
@@ -73,11 +78,19 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 		panic(fmt.Errorf("modelgarden mistral: obtaining default Google token source: %w", err))
 	}
 	httpClient := oauth2.NewClient(ctx, ts)
+	// Wrap the oauth2 transport with one that rewrites /chat/completions
+	// requests to Vertex's per-model rawPredict URLs. The inner oauth2
+	// transport still adds the Bearer token.
+	httpClient.Transport = &mistralVertexTransport{
+		inner:    httpClient.Transport,
+		project:  projectID,
+		location: location,
+	}
 
-	baseURL := fmt.Sprintf(
-		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/endpoints/openapi",
-		location, projectID, location,
-	)
+	// baseURL is a sentinel: the actual outbound URL is built by
+	// mistralVertexTransport. The openai-go SDK appends "/chat/completions"
+	// to this base, which the transport then detects and rewrites.
+	baseURL := fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1", location)
 
 	m.oai.Provider = provider
 	m.oai.Opts = []option.RequestOption{
@@ -97,12 +110,17 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 }
 
 // MistralModel returns the Mistral/Codestral [ai.Model] with the given id,
-// or nil if it was not defined.
+// or nil if it was not defined. Both bare ids ("mistral-small-2503") and
+// publisher-qualified ids ("mistralai/mistral-small-2503") resolve to the
+// same registered model.
 func MistralModel(g *genkit.Genkit, id string) ai.Model {
+	id = strings.TrimPrefix(id, mistralPublisher+"/")
 	return genkit.LookupModel(g, api.NewName(provider, id))
 }
 
-// DefineModel adds a Mistral model to the registry.
+// DefineModel adds a Mistral model to the registry. The optional
+// "mistralai/" publisher prefix on name is stripped so registration stays in
+// the bare-id namespace.
 func (m *Mistral) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -112,5 +130,6 @@ func (m *Mistral) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, err
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}
+	name = strings.TrimPrefix(name, mistralPublisher+"/")
 	return m.oai.DefineModel(provider, name, *opts), nil
 }

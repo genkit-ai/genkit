@@ -140,7 +140,13 @@ var LlamaModels = map[string]ai.ModelOptions{
 
 // MistralModels lists the Mistral and Codestral models available through Vertex
 // AI Model Garden as Model-as-a-Service (MaaS) endpoints. Capabilities match
-// the JS parity target (media: false, tools: true, systemRole: true).
+// the JS parity target (media: false, tools: true, systemRole: true). Keys are
+// the bare publisher model ids ("mistral-small-2503" rather than
+// "mistralai/mistral-small-2503"). Vertex serves Mistral via per-model
+// rawPredict URLs where the publisher lives in the URL path, not the model
+// field; the Mistral plugin's HTTP transport assembles those URLs. The
+// "mistralai/" prefix is still accepted by MistralModel as a convenience for
+// callers used to the publisher-qualified form.
 var MistralModels = map[string]ai.ModelOptions{
 	"mistral-medium-3": {
 		Label:    "Mistral Medium 3",

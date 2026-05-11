@@ -45,9 +45,9 @@ func TestMistralLive(t *testing.T) {
 	})
 
 	t.Run("mistral small generation", func(t *testing.T) {
-		m := modelgarden.MistralModel(g, "mistral-small-2503")
+		m := modelgarden.MistralModel(g, "mistralai/mistral-small-2503")
 		if m == nil {
-			t.Fatal("mistral-small-2503 model was not registered")
+			t.Fatal("mistralai/mistral-small-2503 model was not registered")
 		}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(m),
@@ -63,9 +63,9 @@ func TestMistralLive(t *testing.T) {
 	})
 
 	t.Run("codestral generation", func(t *testing.T) {
-		m := modelgarden.MistralModel(g, "codestral-2")
+		m := modelgarden.MistralModel(g, "mistralai/codestral-2")
 		if m == nil {
-			t.Fatal("codestral-2 model was not registered")
+			t.Fatal("mistralai/codestral-2 model was not registered")
 		}
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(m),
@@ -76,6 +76,47 @@ func TestMistralLive(t *testing.T) {
 		}
 		if strings.TrimSpace(resp.Text()) == "" {
 			t.Fatal("expected a non-empty response")
+		}
+	})
+
+	t.Run("bare id lookup", func(t *testing.T) {
+		// Same registered action; verifies the publisher-prefix trim path.
+		m := modelgarden.MistralModel(g, "mistral-small-2503")
+		if m == nil {
+			t.Fatal("mistral-small-2503 model was not registered under bare id")
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Reply with the single word: ok."))),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(resp.Text()) == "" {
+			t.Fatal("expected a non-empty response")
+		}
+	})
+
+	t.Run("streaming", func(t *testing.T) {
+		m := modelgarden.MistralModel(g, "mistralai/mistral-small-2503")
+		out := ""
+		_, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithPrompt("Count from one to three."),
+			ai.WithStreaming(func(ctx context.Context, c *ai.ModelResponseChunk) error {
+				for _, p := range c.Content {
+					if p.IsText() {
+						out += p.Text
+					}
+				}
+				return nil
+			}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out == "" {
+			t.Fatal("expected streamed content")
 		}
 	})
 }
