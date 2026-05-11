@@ -63,7 +63,6 @@ type ToolDef[In, Out any] struct {
 	action    api.Action   // The underlying action.
 	multipart bool         // Whether this is a multipart-only tool.
 	registry  api.Registry // Registry for schema resolution. Set when registered.
-	strict    *bool        // Per-tool strict schema enforcement; nil means provider default.
 }
 
 // Tool represents a tool that can be called by a model.
@@ -294,10 +293,13 @@ func OriginalInputAs[T any](tc *ToolContext) (T, bool) {
 	return zero, false
 }
 
-// applyStrictMetadata persists the per-tool strict flag on the action metadata
-// under metadata["tool"]["strict"] so providers reading the action (rather than
-// the [ToolDef] wrapper) observe the same setting for both registered and
-// dynamic tools.
+// toolStrictKey is the metadata key under metadata["tool"] used to carry the
+// per-tool strict-schema flag through the action metadata and onto
+// [ToolDefinition.Metadata]. Plugins consume this key directly.
+const toolStrictKey = "strict"
+
+// applyStrictMetadata sets metadata["tool"][toolStrictKey] = *strict when
+// strict is non-nil. A nil value leaves the metadata untouched.
 func applyStrictMetadata(metadata map[string]any, strict *bool) {
 	if strict == nil {
 		return
@@ -307,7 +309,7 @@ func applyStrictMetadata(metadata map[string]any, strict *bool) {
 		toolMeta = map[string]any{}
 		metadata["tool"] = toolMeta
 	}
-	toolMeta["strict"] = *strict
+	toolMeta[toolStrictKey] = *strict
 }
 
 // DefineTool creates a new [ToolDef] and registers it.
@@ -334,14 +336,14 @@ func DefineTool[In, Out any](
 	}
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
-	applyStrictMetadata(metadata, toolOpts.Strict)
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
 
 	// Also register under the "tool" action type for backward compatibility.
 	provider, id := api.ParseName(name)
 	r.RegisterAction(api.NewKey(api.ActionTypeTool, provider, id), action)
 
-	return &ToolDef[In, Out]{action: action, multipart: false, registry: r, strict: toolOpts.Strict}
+	return &ToolDef[In, Out]{action: action, multipart: false, registry: r}
 }
 
 // DefineToolWithInputSchema creates a new [ToolDef] with a custom input schema and registers it.
@@ -377,9 +379,9 @@ func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts .
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
 	metadata["dynamic"] = true
-	applyStrictMetadata(metadata, toolOpts.Strict)
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-	return &ToolDef[In, Out]{action: action, multipart: false, strict: toolOpts.Strict}
+	return &ToolDef[In, Out]{action: action, multipart: false}
 }
 
 // NewToolWithInputSchema creates a new [ToolDef] with a custom input schema. It can be passed directly to [Generate].
@@ -406,9 +408,9 @@ func DefineMultipartTool[In any](
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
-	applyStrictMetadata(metadata, toolOpts.Strict)
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, registry: r, strict: toolOpts.Strict}
+	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, registry: r}
 }
 
 // NewMultipartTool creates a new multipart [ToolDef]. It can be passed directly to [Generate].
@@ -424,9 +426,9 @@ func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In]
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	metadata["dynamic"] = true
-	applyStrictMetadata(metadata, toolOpts.Strict)
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
-	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, strict: toolOpts.Strict}
+	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true}
 }
 
 // wrapToolFunc wraps a regular tool function to return MultipartToolResponse.
@@ -511,15 +513,21 @@ func (t *ToolDef[In, Out]) Definition() *ToolDefinition {
 		}
 	}
 
+	metadata := map[string]any{
+		"multipart": t.multipart,
+	}
+	if toolMeta, ok := desc.Metadata["tool"].(map[string]any); ok {
+		if s, ok := toolMeta[toolStrictKey].(bool); ok {
+			metadata[toolStrictKey] = s
+		}
+	}
+
 	return &ToolDefinition{
 		Name:         desc.Name,
 		Description:  desc.Description,
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
-		Strict:       t.strict,
-		Metadata: map[string]any{
-			"multipart": t.multipart,
-		},
+		Metadata:     metadata,
 	}
 }
 
@@ -589,20 +597,15 @@ func LookupTool(r api.Registry, name string) Tool {
 		return nil
 	}
 
-	// Check if it's a multipart-only tool
 	desc := action.Desc()
 	multipart := false
-	var strict *bool
 	if toolMeta, ok := desc.Metadata["tool"].(map[string]any); ok {
 		if mp, ok := toolMeta["multipart"].(bool); ok {
 			multipart = mp
 		}
-		if s, ok := toolMeta["strict"].(bool); ok {
-			strict = &s
-		}
 	}
 
-	return &ToolDef[any, any]{action: action, multipart: multipart, registry: r, strict: strict}
+	return &ToolDef[any, any]{action: action, multipart: multipart, registry: r}
 }
 
 // IsMultipart returns true if the tool is a multipart tool (tool.v2 only).

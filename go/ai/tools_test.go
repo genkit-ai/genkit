@@ -19,6 +19,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -438,6 +439,119 @@ func TestLookupTool(t *testing.T) {
 		if got == nil {
 			t.Error("LookupTool returned nil for registered tool")
 		}
+	})
+}
+
+// TestWithStrictSchema verifies the strict-schema flag round-trips through
+// Definition().Metadata["strict"] and LookupTool, for both registered and
+// dynamic tools.
+func TestWithStrictSchema(t *testing.T) {
+	type runOnTool func(*testing.T, Tool)
+
+	t.Run("absent by default", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := DefineTool(r, "strict/default", "no strict opt", func(ctx *ToolContext, input struct{}) (string, error) {
+			return "", nil
+		})
+		def := tl.Definition()
+		if _, ok := def.Metadata["strict"]; ok {
+			t.Errorf("expected strict metadata to be absent by default, got %v", def.Metadata["strict"])
+		}
+	})
+
+	check := func(want bool) runOnTool {
+		return func(t *testing.T, tl Tool) {
+			t.Helper()
+			def := tl.Definition()
+			got, ok := def.Metadata["strict"]
+			if !ok {
+				t.Fatalf("expected strict metadata to be present, got nothing")
+			}
+			if got != want {
+				t.Errorf("strict metadata = %v, want %v", got, want)
+			}
+		}
+	}
+
+	t.Run("DefineTool with WithStrictSchema(true) is surfaced on Definition", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := DefineTool(r, "strict/registered-true", "registered strict",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithStrictSchema(true),
+		)
+		check(true)(t, tl)
+	})
+
+	t.Run("DefineTool with WithStrictSchema(false) is surfaced on Definition", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := DefineTool(r, "strict/registered-false", "registered loose",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithStrictSchema(false),
+		)
+		check(false)(t, tl)
+	})
+
+	t.Run("LookupTool round-trips the strict flag for registered tools", func(t *testing.T) {
+		r := newTestRegistry(t)
+		DefineTool(r, "strict/lookup-true", "registered strict",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithStrictSchema(true),
+		)
+		found := LookupTool(r, "strict/lookup-true")
+		if found == nil {
+			t.Fatal("LookupTool returned nil")
+		}
+		check(true)(t, found)
+	})
+
+	t.Run("LookupTool round-trips the strict flag for dynamic tools after Register", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := NewTool("strict/dynamic-false", "dynamic loose",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithStrictSchema(false),
+		)
+		check(false)(t, tl)
+
+		tl.Register(r)
+		found := LookupTool(r, "strict/dynamic-false")
+		if found == nil {
+			t.Fatal("LookupTool returned nil")
+		}
+		check(false)(t, found)
+	})
+
+	t.Run("DefineMultipartTool plumbs strict the same way", func(t *testing.T) {
+		r := newTestRegistry(t)
+		tl := DefineMultipartTool(r, "strict/multipart", "multipart strict",
+			func(ctx *ToolContext, input struct{}) (*MultipartToolResponse, error) {
+				return &MultipartToolResponse{}, nil
+			},
+			WithStrictSchema(true),
+		)
+		check(true)(t, tl)
+	})
+
+	t.Run("setting strict twice returns an error via panic", func(t *testing.T) {
+		// DefineTool surfaces applyTool errors as a panic.
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic from setting WithStrictSchema twice, got none")
+			}
+			msg, ok := r.(error)
+			if !ok {
+				t.Fatalf("expected error from panic, got %T: %v", r, r)
+			}
+			if got := msg.Error(); !strings.Contains(got, "strict schema") {
+				t.Errorf("expected panic to mention strict schema, got %q", got)
+			}
+		}()
+		r := newTestRegistry(t)
+		DefineTool(r, "strict/double-set", "double set",
+			func(ctx *ToolContext, input struct{}) (string, error) { return "", nil },
+			WithStrictSchema(true),
+			WithStrictSchema(false),
+		)
 	})
 }
 
