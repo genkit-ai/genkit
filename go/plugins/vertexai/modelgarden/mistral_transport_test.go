@@ -19,6 +19,7 @@ package modelgarden
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -158,6 +159,42 @@ func TestMistralTransport_StripsPublisherPrefixFromURL(t *testing.T) {
 	// URL must use bare id even though body had publisher prefix.
 	if !strings.HasSuffix(inner.last.URL.Path, "/publishers/mistralai/models/codestral-2:rawPredict") {
 		t.Errorf("URL path did not strip publisher prefix: %s", inner.last.URL.Path)
+	}
+}
+
+// errReader returns an error after returning some bytes, allowing the test
+// to drive io.ReadAll into its error path without ever reaching EOF.
+type errReader struct{ closed bool }
+
+func (r *errReader) Read(p []byte) (int, error) {
+	return 0, fmt.Errorf("synthetic read error")
+}
+func (r *errReader) Close() error { r.closed = true; return nil }
+
+func TestMistralTransport_ClosesBodyOnReadError(t *testing.T) {
+	inner := &captureRoundTripper{}
+	rt := &mistralVertexTransport{
+		inner:    inner,
+		project:  "test-proj",
+		location: "us-central1",
+	}
+
+	body := &errReader{}
+	u, _ := url.Parse("https://us-central1-aiplatform.googleapis.com/v1/chat/completions")
+	req := &http.Request{
+		Method: http.MethodPost,
+		URL:    u,
+		Host:   u.Host,
+		Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body:   body,
+	}
+
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("expected error from read failure")
+	}
+	if !body.closed {
+		t.Fatal("body was not closed after read error; reader leaked")
 	}
 }
 

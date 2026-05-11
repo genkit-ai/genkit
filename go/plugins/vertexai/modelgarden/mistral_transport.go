@@ -54,10 +54,16 @@ func (t *mistralVertexTransport) RoundTrip(req *http.Request) (*http.Response, e
 	if req.Body != nil {
 		var err error
 		bodyBytes, err = io.ReadAll(req.Body)
+		// Close unconditionally so a read error does not leak the underlying
+		// reader (openai-go has no way to recover the original body once we
+		// return — GetBody would not be set on the un-rewritten request).
+		closeErr := req.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("modelgarden mistral transport: read body: %w", err)
 		}
-		req.Body.Close()
+		if closeErr != nil {
+			return nil, fmt.Errorf("modelgarden mistral transport: close body: %w", closeErr)
+		}
 	}
 
 	model, stream, err := peekModelAndStream(bodyBytes)
