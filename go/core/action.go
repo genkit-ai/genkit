@@ -582,8 +582,21 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut
 }
 
 // Output returns the final output after the action completes.
-// Blocks until done or context cancelled.
+// Blocks until done or context cancelled. If the action has finished, its
+// actual output is returned even when the context was cancelled concurrently.
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Output() (Out, error) {
+	// Fast path: if the action has already finished, return its output
+	// rather than racing with ctx.Done. This matters for callers that
+	// observe a completed action just after cancelling ctx (e.g., session
+	// flows backgrounded on client disconnect).
+	select {
+	case <-c.doneCh:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.output, c.err
+	default:
+	}
+
 	select {
 	case <-c.doneCh:
 		c.mu.Lock()

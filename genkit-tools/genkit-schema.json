@@ -1,6 +1,56 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
+    "AbortSnapshotRequest": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshotId"
+      ],
+      "additionalProperties": false
+    },
+    "AbortSnapshotResponse": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        }
+      },
+      "required": [
+        "snapshotId"
+      ],
+      "additionalProperties": false
+    },
+    "AgentMetadata": {
+      "type": "object",
+      "properties": {
+        "stateManagement": {
+          "$ref": "#/$defs/AgentMetadataStateManagement"
+        },
+        "abortable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stateManagement",
+        "abortable"
+      ],
+      "additionalProperties": false
+    },
+    "AgentMetadataStateManagement": {
+      "type": "string",
+      "enum": [
+        "server",
+        "client"
+      ]
+    },
     "Artifact": {
       "type": "object",
       "properties": {
@@ -23,6 +73,45 @@
       ],
       "additionalProperties": false
     },
+    "GetSnapshotRequest": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshotId"
+      ],
+      "additionalProperties": false
+    },
+    "GetSnapshotResponse": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        },
+        "error": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "required": [
+        "snapshotId"
+      ],
+      "additionalProperties": false
+    },
     "SessionFlowInit": {
       "type": "object",
       "properties": {
@@ -38,6 +127,9 @@
     "SessionFlowInput": {
       "type": "object",
       "properties": {
+        "detach": {
+          "type": "boolean"
+        },
         "messages": {
           "type": "array",
           "items": {
@@ -105,6 +197,42 @@
       },
       "additionalProperties": false
     },
+    "SessionSnapshot": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/SnapshotEvent"
+        },
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        },
+        "error": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "required": [
+        "snapshotId",
+        "createdAt",
+        "event",
+        "state"
+      ],
+      "additionalProperties": false
+    },
     "SessionState": {
       "type": "object",
       "properties": {
@@ -129,7 +257,49 @@
       "type": "string",
       "enum": [
         "turnEnd",
-        "invocationEnd"
+        "invocationEnd",
+        "detach"
+      ]
+    },
+    "SnapshotMetadata": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "$ref": "#/$defs/SessionSnapshot/properties/snapshotId"
+        },
+        "parentId": {
+          "$ref": "#/$defs/SessionSnapshot/properties/parentId"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/SessionSnapshot/properties/createdAt"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/SessionSnapshot/properties/updatedAt"
+        },
+        "event": {
+          "$ref": "#/$defs/SnapshotEvent"
+        },
+        "status": {
+          "$ref": "#/$defs/SessionSnapshot/properties/status"
+        },
+        "error": {
+          "$ref": "#/$defs/SessionSnapshot/properties/error"
+        }
+      },
+      "required": [
+        "snapshotId",
+        "createdAt",
+        "event"
+      ],
+      "additionalProperties": false
+    },
+    "SnapshotStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "complete",
+        "canceled",
+        "error"
       ]
     },
     "TurnEnd": {

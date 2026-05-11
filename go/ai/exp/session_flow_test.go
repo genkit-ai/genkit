@@ -18,11 +18,15 @@ package exp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -626,100 +630,133 @@ func TestSessionFlow_SetMessages(t *testing.T) {
 	}
 }
 
-func TestSessionFlow_SnapshotIDInMessageMetadata(t *testing.T) {
-	ctx := context.Background()
-	reg := newTestRegistry(t)
-	store := NewInMemorySessionStore[testState]()
-
-	af := DefineSessionFlow(reg, "metadataFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-			msgs := sess.Messages()
-			return &SessionFlowResult{Message: msgs[len(msgs)-1]}, nil
-		},
-		WithSessionStore(store),
-	)
-
-	conn, err := af.StreamBidi(ctx)
-	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
-	}
-
-	conn.SendText("hello")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
-	conn.Close()
-
-	response, err := conn.Output()
-	if err != nil {
-		t.Fatalf("Output failed: %v", err)
-	}
-
-	// The last model message should have snapshotId in its metadata.
-	if response.Message == nil {
-		t.Fatal("expected Message in response")
-	}
-	if response.Message.Metadata == nil {
-		t.Fatal("expected metadata on last message")
-	}
-	if _, ok := response.Message.Metadata["snapshotId"]; !ok {
-		t.Error("expected snapshotId in last message metadata")
-	}
-}
-
 func TestInMemorySessionStore(t *testing.T) {
-	ctx := context.Background()
-	store := NewInMemorySessionStore[testState]()
+	t.Run("GetMissing", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		snap, err := store.GetSnapshot(context.Background(), "nonexistent")
+		if err != nil {
+			t.Fatalf("GetSnapshot failed: %v", err)
+		}
+		if snap != nil {
+			t.Errorf("expected nil, got %v", snap)
+		}
+	})
 
-	// Get non-existent.
-	snap, err := store.GetSnapshot(ctx, "nonexistent")
-	if err != nil {
-		t.Fatalf("GetSnapshot failed: %v", err)
-	}
-	if snap != nil {
-		t.Errorf("expected nil, got %v", snap)
-	}
+	t.Run("SaveWithFixedID", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(existing *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				if existing != nil {
+					t.Errorf("expected nil existing on first save, got %+v", existing)
+				}
+				return &SessionSnapshot[testState]{
+					Status: SnapshotStatusComplete,
+					State:  SessionState[testState]{Custom: testState{Counter: 1}},
+				}, nil
+			})
+		if err != nil {
+			t.Fatalf("SaveSnapshot failed: %v", err)
+		}
+		if saved.SnapshotID != "snap-1" {
+			t.Errorf("saved SnapshotID = %q, want %q", saved.SnapshotID, "snap-1")
+		}
+		if saved.CreatedAt.IsZero() || saved.UpdatedAt.IsZero() {
+			t.Errorf("expected CreatedAt/UpdatedAt stamped, got created=%v updated=%v",
+				saved.CreatedAt, saved.UpdatedAt)
+		}
+	})
 
-	// Save and retrieve.
-	snapshot := &SessionSnapshot[testState]{
-		SnapshotID: "snap-1",
-		State: SessionState[testState]{
-			Custom: testState{Counter: 1},
-		},
-	}
-	if err := store.SaveSnapshot(ctx, snapshot); err != nil {
-		t.Fatalf("SaveSnapshot failed: %v", err)
-	}
+	t.Run("GetReturnsCopy", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{
+					Status: SnapshotStatusComplete,
+					State:  SessionState[testState]{Custom: testState{Counter: 1}},
+				}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		retrieved, _ := store.GetSnapshot(context.Background(), "snap-1")
+		retrieved.State.Custom.Counter = 999
+		retrieved2, _ := store.GetSnapshot(context.Background(), "snap-1")
+		if retrieved2.State.Custom.Counter != 1 {
+			t.Errorf("expected counter=1 (isolation), got %d", retrieved2.State.Custom.Counter)
+		}
+	})
 
-	retrieved, err := store.GetSnapshot(ctx, "snap-1")
-	if err != nil {
-		t.Fatalf("GetSnapshot failed: %v", err)
-	}
-	if retrieved == nil {
-		t.Fatal("expected snapshot")
-	}
-	if retrieved.State.Custom.Counter != 1 {
-		t.Errorf("expected counter=1, got %d", retrieved.State.Custom.Counter)
-	}
+	t.Run("DefaultsEmptyStatusToComplete", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		saved, err := store.SaveSnapshot(context.Background(), "",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{}, nil
+			})
+		if err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		if saved.SnapshotID == "" {
+			t.Error("expected store to generate SnapshotID")
+		}
+		if saved.Status != SnapshotStatusComplete {
+			t.Errorf("expected Status=complete by default, got %q", saved.Status)
+		}
+	})
 
-	// Verify isolation.
-	snapshot.State.Custom.Counter = 999
-	retrieved2, _ := store.GetSnapshot(ctx, "snap-1")
-	if retrieved2.State.Custom.Counter != 1 {
-		t.Errorf("expected counter=1 (isolation), got %d", retrieved2.State.Custom.Counter)
-	}
+	t.Run("NoopFnSkipsWrite", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{Status: SnapshotStatusComplete}, nil
+			}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		before, _ := store.GetSnapshot(context.Background(), "snap-1")
+		noop, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return nil, nil
+			})
+		if err != nil {
+			t.Fatalf("noop SaveSnapshot: %v", err)
+		}
+		if noop != nil {
+			t.Errorf("expected nil return on noop, got %+v", noop)
+		}
+		after, _ := store.GetSnapshot(context.Background(), "snap-1")
+		if before.UpdatedAt != after.UpdatedAt {
+			t.Errorf("noop should not bump UpdatedAt: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+		}
+	})
+
+	t.Run("PreservesCreatedAtOnUpdate", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{Status: SnapshotStatusComplete}, nil
+			})
+		if err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
+		updated, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(existing *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				if existing == nil {
+					t.Fatal("expected non-nil existing on update")
+				}
+				return &SessionSnapshot[testState]{
+					Status: SnapshotStatusComplete,
+					State:  SessionState[testState]{Custom: testState{Counter: 2}},
+				}, nil
+			})
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if !updated.CreatedAt.Equal(saved.CreatedAt) {
+			t.Errorf("CreatedAt not preserved: before=%v after=%v", saved.CreatedAt, updated.CreatedAt)
+		}
+		if !updated.UpdatedAt.After(saved.UpdatedAt) {
+			t.Errorf("UpdatedAt did not advance: before=%v after=%v", saved.UpdatedAt, updated.UpdatedAt)
+		}
+	})
 }
 
 func TestSessionFlow_TurnSpanOutput(t *testing.T) {
@@ -1708,5 +1745,1358 @@ func TestSessionFlow_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T)
 	// Should have a parent (the turn-end snapshot).
 	if snap.ParentID == "" {
 		t.Error("expected parent ID (turn-end snapshot)")
+	}
+}
+
+// --- Detach, transform, and getSnapshot tests ---
+
+// waitForSnapshot polls the store for a snapshot matching the predicate,
+// failing the test if it doesn't show up within the timeout.
+func waitForSnapshot[State any](
+	t *testing.T,
+	store SessionStore[State],
+	id string,
+	timeout time.Duration,
+	predicate func(*SessionSnapshot[State]) bool,
+) *SessionSnapshot[State] {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		snap, err := store.GetSnapshot(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetSnapshot(%q): %v", id, err)
+		}
+		if snap != nil && predicate(snap) {
+			return snap
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("snapshot %q did not satisfy predicate within %s", id, timeout)
+	return nil
+}
+
+func TestSessionFlow_TurnEnd_CarriesSnapshotID(t *testing.T) {
+	// Sanity: each TurnEnd chunk carries the snapshot ID of the turn-end
+	// snapshot, and the snapshots themselves are persisted.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineSessionFlow(reg, "turnEndSnapshotFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	var observed []TurnEnd
+	for turn := 0; turn < 3; turn++ {
+		if err := conn.SendText(fmt.Sprintf("turn %d", turn)); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		for chunk, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+			if chunk.TurnEnd != nil {
+				observed = append(observed, *chunk.TurnEnd)
+				break
+			}
+		}
+	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+
+	if got := len(observed); got != 3 {
+		t.Fatalf("observed %d TurnEnd chunks, want 3", got)
+	}
+	for i, te := range observed {
+		if te.SnapshotID == "" {
+			t.Errorf("TurnEnd[%d].SnapshotID is empty", i)
+			continue
+		}
+		snap, err := store.GetSnapshot(context.Background(), te.SnapshotID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if snap == nil {
+			t.Errorf("turn %d: snapshot %q not in store", i, te.SnapshotID)
+		}
+	}
+}
+
+func TestSessionFlow_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
+	// Detach lands while turn 0 (input A) is mid-fn and an extra turn
+	// (the detach input D itself) is waiting. The pending snapshot must:
+	//   - Be written with empty state and no parent (A was suspended, so
+	//     no turn-end snapshot landed before pending).
+	//   - NOT write a separate turn-end snapshot for A or D (suspended).
+	// After release, the finalized snapshot has both A's and D's effects.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+
+	af := DefineSessionFlow(reg, "detachInFlight",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				entered <- struct{}{}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("reply-" + input.Messages[0].Text()))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	// Drain stream chunks in the background.
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Send A and wait for it to enter fn (so it's in-flight when detach
+	// arrives).
+	if err := conn.SendText("A"); err != nil {
+		t.Fatalf("SendText A: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("A did not enter fn")
+	}
+
+	// Send D, then Detach. The eager intake reader sees D queued and the
+	// detach signal immediately, even though the runner is blocked on A.
+	if err := conn.SendText("D"); err != nil {
+		t.Fatalf("SendText D: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected pending snapshot ID")
+	}
+
+	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot pending: %v", err)
+	}
+	if pending.Status != SnapshotStatusPending {
+		t.Errorf("pending snapshot status = %q, want pending", pending.Status)
+	}
+	if got := len(pending.State.Messages); got != 0 {
+		t.Errorf("pending state messages = %d, want 0 (live state not yet committed)", got)
+	}
+
+	// No separate turn-end snapshot for A should have been written.
+	// (Walk the parent chain — pending should have no parent in this
+	// invocation since A was the first turn and got suspended.)
+	if pending.ParentID != "" {
+		t.Errorf("pending ParentID = %q, want empty (A was suspended)", pending.ParentID)
+	}
+
+	close(release)
+
+	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusComplete
+	})
+	if final.State.Custom.Counter != 2 {
+		t.Errorf("final counter = %d, want 2 (A + D both processed)", final.State.Custom.Counter)
+	}
+	if got := len(final.State.Messages); got != 4 {
+		// 2 user (A, D) + 2 model replies = 4.
+		t.Errorf("final messages = %d, want 4", got)
+	}
+}
+
+func TestSessionFlow_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
+	// Run two normal turns first, then detach during a third (in-flight)
+	// turn. The pending snapshot must chain off the second turn's snapshot.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	enter := make(chan struct{}, 4)
+	release := make(chan struct{}, 4)
+
+	af := DefineSessionFlow(reg, "detachChainParent",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				enter <- struct{}{}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	// Background drainer.
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Run two normal turns.
+	for i := 0; i < 2; i++ {
+		release <- struct{}{} // pre-load release so this turn's fn doesn't block
+		if err := conn.SendText(fmt.Sprintf("sync-%d", i)); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		<-enter
+	}
+	// Brief settle so the second turn-end snapshot lands before detach.
+	time.Sleep(20 * time.Millisecond)
+	// Drain enter signal if buffered.
+	for len(enter) > 0 {
+		<-enter
+	}
+
+	// Now start a third turn but DON'T release it — the third turn is
+	// in-flight when detach lands.
+	if err := conn.SendText("inflight"); err != nil {
+		t.Fatalf("SendText inflight: %v", err)
+	}
+	<-enter // third turn entered fn
+
+	// Send the queued input and detach.
+	if err := conn.SendText("detach-msg"); err != nil {
+		t.Fatalf("SendText detach-msg: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if pending.ParentID == "" {
+		t.Error("pending ParentID empty; expected parent = last sync turn snapshot")
+	}
+
+	// Release remaining turns and let finalize run.
+	close(release)
+	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusComplete
+	})
+}
+
+func TestSessionFlow_Detach_RequiresStore(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	af := DefineSessionFlow(reg, "detachNoStore",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				return nil
+			})
+		},
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach send: %v", err)
+	}
+	conn.Close()
+
+	_, err = conn.Output()
+	if err == nil {
+		t.Fatal("expected error when detaching without a session store")
+	}
+	if !strings.Contains(err.Error(), "detach requires a session store") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSessionFlow_Detach_PendingThenComplete(t *testing.T) {
+	// Client detaches mid-flow; flow finishes naturally; pending snapshot
+	// flips to status=complete with the full session state.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+
+	af := DefineSessionFlow(reg, "detachComplete",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("finished"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter = 42
+					return s
+				})
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	// Drain chunks so the responder isn't blocked.
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flow did not enter work phase")
+	}
+
+	// Output returns the pending snapshot ID immediately; the snapshot
+	// itself should be in the store with status=pending.
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected snapshot ID after detach")
+	}
+
+	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot pending: %v", err)
+	}
+	if pending == nil {
+		t.Fatal("pending snapshot not written")
+	}
+	if pending.Status != SnapshotStatusPending {
+		t.Errorf("expected status=%q, got %q", SnapshotStatusPending, pending.Status)
+	}
+	if got := len(pending.State.Messages); got != 0 {
+		t.Errorf("pending snapshot should not carry message history, got %d messages", got)
+	}
+
+	// Release; finalizer rewrites the snapshot with the terminal state.
+	close(release)
+
+	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusComplete
+	})
+	if finalSnap.State.Custom.Counter != 42 {
+		t.Errorf("expected counter=42 in final snapshot, got %d", finalSnap.State.Custom.Counter)
+	}
+	if got := len(finalSnap.State.Messages); got < 2 {
+		t.Errorf("expected at least 2 messages in final snapshot, got %d", got)
+	}
+}
+
+func TestSessionFlow_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
+	// SendArtifact must behave the same way regardless of whether detach
+	// has landed: the artifact is added to the session and shows up in
+	// the finalized snapshot's state. The wire forward is the only thing
+	// detach suppresses, so flow authors don't need to branch on detach.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	detached := make(chan struct{})
+	release := make(chan struct{})
+
+	af := DefineSessionFlow(reg, "detachArtifact",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				resp.SendArtifact(&Artifact{
+					Name:  "before.txt",
+					Parts: []*ai.Part{ai.NewTextPart("pre-detach")},
+				})
+				select {
+				case <-detached:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				resp.SendArtifact(&Artifact{
+					Name:  "after.txt",
+					Parts: []*ai.Part{ai.NewTextPart("post-detach")},
+				})
+				<-release
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected pending snapshot ID")
+	}
+
+	close(detached)
+	close(release)
+
+	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusComplete
+	})
+
+	names := make(map[string]bool, len(final.State.Artifacts))
+	for _, a := range final.State.Artifacts {
+		names[a.Name] = true
+	}
+	if !names["before.txt"] {
+		t.Errorf("pre-detach artifact missing from final snapshot: %v", final.State.Artifacts)
+	}
+	if !names["after.txt"] {
+		t.Errorf("post-detach artifact missing from final snapshot: %v", final.State.Artifacts)
+	}
+}
+
+func TestSessionFlow_Detach_FlowErrorsBecomesError(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	boom := errors.New("kaboom")
+
+	af := DefineSessionFlow(reg, "detachErr",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				select {
+				case entered <- struct{}{}:
+				case <-time.After(time.Second):
+				}
+				<-release
+				return boom
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	<-entered
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected pending snapshot ID")
+	}
+
+	close(release)
+
+	snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusError
+	})
+	if !strings.Contains(snap.Error, "kaboom") {
+		t.Errorf("expected snapshot.Error to contain %q, got %q", "kaboom", snap.Error)
+	}
+
+	// Resuming from an errored detached snapshot is rejected.
+	_, err = af.RunText(context.Background(), "retry", WithSnapshotID[testState](out.SnapshotID))
+	if err == nil {
+		t.Fatal("expected error when resuming from errored snapshot")
+	}
+	if !strings.Contains(err.Error(), "kaboom") {
+		t.Errorf("unexpected resume error: %v", err)
+	}
+}
+
+func TestSessionFlow_Detach_AbortSnapshotStopsFlow(t *testing.T) {
+	// Client detaches, then calls AbortSnapshot. The store's status
+	// subscriber notifies the runtime, which cancels the work context, and
+	// the finalizer rewrites the snapshot with status=canceled.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	entered := make(chan struct{})
+
+	af := DefineSessionFlow(reg, "detachAbort",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				select {
+				case entered <- struct{}{}:
+				case <-time.After(time.Second):
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	<-entered
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected pending snapshot ID")
+	}
+
+	// Abort via the store. The local caller already has the store
+	// reference from WithSessionStore.
+	meta, err := store.AbortSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("AbortSnapshot: %v", err)
+	}
+	if meta.Status != SnapshotStatusCanceled {
+		t.Errorf("AbortSnapshot status = %q, want canceled", meta.Status)
+	}
+
+	// The subscriber wakes the runtime, cancels work, and the finalizer
+	// rewrites the snapshot with the canceled status.
+	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCanceled && s.UpdatedAt.After(s.CreatedAt)
+	})
+	if finalSnap.State.Custom.Counter != 0 {
+		// The flow only blocked on ctx — no state mutation expected.
+		t.Errorf("unexpected counter value in canceled snapshot: %d", finalSnap.State.Custom.Counter)
+	}
+}
+
+func TestSessionFlow_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
+	// Sanity: a non-detached invocation against a store-backed flow still
+	// behaves like a synchronous flow (turn-end snapshots, no pending row).
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineSessionFlow(reg, "syncStillWorks",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+
+	var turnEndID string
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		if chunk.TurnEnd != nil {
+			turnEndID = chunk.TurnEnd.SnapshotID
+			break
+		}
+	}
+	if turnEndID == "" {
+		t.Fatal("expected snapshot ID on TurnEnd chunk")
+	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+
+	snap, err := store.GetSnapshot(context.Background(), turnEndID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusComplete {
+		t.Errorf("turn-end snapshot status = %q, want complete", snap.Status)
+	}
+	if snap.Event != SnapshotEventTurnEnd {
+		t.Errorf("turn-end snapshot event = %q, want %q", snap.Event, SnapshotEventTurnEnd)
+	}
+}
+
+func TestSessionFlow_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
+	// Without detach, a client cancel still cancels the work — this is
+	// the regression guard for "until detach=true is called, this is a
+	// normal HTTP/WS connection that cancels on close."
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	entered := make(chan struct{})
+	exited := make(chan error, 1)
+
+	af := DefineSessionFlow(reg, "syncCancel",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			})
+			exited <- err
+			return nil, err
+		},
+		WithSessionStore(store),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	<-entered
+	cancel()
+
+	select {
+	case fnErr := <-exited:
+		if fnErr == nil {
+			t.Error("expected fn to exit with ctx error after client cancel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fn did not exit after client cancel")
+	}
+}
+
+func TestSessionFlow_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	erroredID := "errored-456"
+	if _, err := store.SaveSnapshot(context.Background(), erroredID,
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventInvocationEnd,
+				Status: SnapshotStatusError,
+				Error:  "underlying failure",
+				State:  SessionState[testState]{},
+			}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	af := DefineSessionFlow(reg, "resumeErrored",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, nil
+		},
+		WithSessionStore(store),
+	)
+
+	_, err := af.RunText(context.Background(), "hi", WithSnapshotID[testState](erroredID))
+	if err == nil {
+		t.Fatal("expected error when resuming from errored snapshot")
+	}
+	if !strings.Contains(err.Error(), "underlying failure") {
+		t.Errorf("expected error to surface underlying failure, got: %v", err)
+	}
+}
+
+func TestSessionFlow_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	// Transform that scrubs a specific word from all messages.
+	transform := func(_ context.Context, s SessionState[testState]) SessionState[testState] {
+		for _, msg := range s.Messages {
+			for _, p := range msg.Content {
+				if p.Text != "" {
+					p.Text = strings.ReplaceAll(p.Text, "secret", "[REDACTED]")
+				}
+			}
+		}
+		return s
+	}
+
+	af := DefineSessionFlow(reg, "transformedFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("the secret is out"))
+				return nil
+			})
+		},
+		WithSessionStore(store),
+		WithStateTransform[testState](transform),
+	)
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "tell me the secret")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	// Transform is action-layer behavior: invoke the registered action
+	// directly the way a non-Go client would.
+	action := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+		reg, api.ActionTypeAgentSnapshot, "transformedFlow")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+	resp, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot action: %v", err)
+	}
+	if resp.SnapshotID != out.SnapshotID {
+		t.Errorf("SnapshotID mismatch: got %q want %q", resp.SnapshotID, out.SnapshotID)
+	}
+	if resp.Status != SnapshotStatusComplete {
+		t.Errorf("expected status=complete, got %q", resp.Status)
+	}
+	if resp.State == nil {
+		t.Fatal("expected state in response")
+	}
+	// Both messages should be redacted: user message (from input) and model reply.
+	for i, msg := range resp.State.Messages {
+		for _, p := range msg.Content {
+			if strings.Contains(p.Text, "secret") {
+				t.Errorf("message %d still contains 'secret': %q", i, p.Text)
+			}
+		}
+	}
+
+	// The stored snapshot must remain untransformed so the flow can be
+	// resumed faithfully.
+	stored, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot direct: %v", err)
+	}
+	foundRaw := false
+	for _, msg := range stored.State.Messages {
+		for _, p := range msg.Content {
+			if strings.Contains(p.Text, "secret") {
+				foundRaw = true
+			}
+		}
+	}
+	if !foundRaw {
+		t.Error("expected stored snapshot to retain the original 'secret' text")
+	}
+}
+
+func TestInMemorySessionStore_GetSnapshot_NotFound(t *testing.T) {
+	store := NewInMemorySessionStore[testState]()
+
+	snap, err := store.GetSnapshot(context.Background(), "nope")
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap != nil {
+		t.Errorf("expected nil for missing snapshot, got %+v", snap)
+	}
+}
+
+func TestSessionFlow_GetSnapshotAction_NoStore(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	DefineSessionFlow(reg, "noStoreFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, nil
+		},
+	)
+
+	// Action remains registered even without a store; it returns
+	// FAILED_PRECONDITION when invoked.
+	action := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+		reg, api.ActionTypeAgentSnapshot, "noStoreFlow")
+	if action == nil {
+		t.Fatal("getSnapshot action should be registered even without a store")
+	}
+	_, err := action.Run(context.Background(), &GetSnapshotRequest{SnapshotID: "any"}, nil)
+	if err == nil {
+		t.Fatal("expected error when store is not configured")
+	}
+	if !strings.Contains(err.Error(), "no session store configured") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// minimalStore is a SessionStore that does NOT implement SnapshotAborter.
+// Used to verify the abort action stays unregistered for stores that
+// lack the capability.
+type minimalStore[State any] struct{}
+
+func (minimalStore[State]) GetSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
+	return nil, nil
+}
+func (minimalStore[State]) SaveSnapshot(
+	context.Context, string,
+	func(*SessionSnapshot[State]) (*SessionSnapshot[State], error),
+) (*SessionSnapshot[State], error) {
+	return nil, nil
+}
+
+func TestSessionFlow_AgentMetadata(t *testing.T) {
+	// Verify the metadata["agent"] payload on the flow's action descriptor
+	// correctly reports stateManagement and abortable for each combination
+	// of store capabilities.
+	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+		return nil, nil
+	}
+
+	cases := []struct {
+		name        string
+		define      func(reg api.Registry, flowName string)
+		wantMgmt    AgentMetadataStateManagement
+		wantAbortab bool
+	}{
+		{
+			name: "no store → client-managed, not abortable",
+			define: func(reg api.Registry, flowName string) {
+				DefineSessionFlow(reg, flowName, noopFn)
+			},
+			wantMgmt:    AgentMetadataStateManagementClient,
+			wantAbortab: false,
+		},
+		{
+			name: "store missing abort capabilities → server-managed, not abortable",
+			define: func(reg api.Registry, flowName string) {
+				DefineSessionFlow(reg, flowName, noopFn,
+					WithSessionStore[testState](minimalStore[testState]{}))
+			},
+			wantMgmt:    AgentMetadataStateManagementServer,
+			wantAbortab: false,
+		},
+		{
+			name: "store with full capabilities → server-managed, abortable",
+			define: func(reg api.Registry, flowName string) {
+				DefineSessionFlow(reg, flowName, noopFn,
+					WithSessionStore(NewInMemorySessionStore[testState]()))
+			},
+			wantMgmt:    AgentMetadataStateManagementServer,
+			wantAbortab: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newTestRegistry(t)
+			flowName := "metaFlow"
+			tc.define(reg, flowName)
+
+			act := core.ResolveActionFor[*SessionFlowInit[testState], *SessionFlowOutput[testState], *SessionFlowStreamChunk[testStatus], *SessionFlowInput](
+				reg, api.ActionTypeFlow, flowName)
+			if act == nil {
+				t.Fatal("flow action not registered")
+			}
+			desc := act.Desc()
+			raw, ok := desc.Metadata["agent"]
+			if !ok {
+				t.Fatalf("metadata[\"agent\"] missing; got metadata = %+v", desc.Metadata)
+			}
+			meta, ok := raw.(AgentMetadata)
+			if !ok {
+				t.Fatalf("metadata[\"agent\"] type = %T, want AgentMetadata", raw)
+			}
+			if meta.StateManagement != tc.wantMgmt {
+				t.Errorf("stateManagement = %q, want %q", meta.StateManagement, tc.wantMgmt)
+			}
+			if meta.Abortable != tc.wantAbortab {
+				t.Errorf("abortable = %v, want %v", meta.Abortable, tc.wantAbortab)
+			}
+		})
+	}
+}
+
+func TestSessionFlow_AbortAction_GatedOnCapabilities(t *testing.T) {
+	// Verify the abort companion action is only registered when the
+	// store implements SnapshotAborter. The getSnapshot action is
+	// registered regardless.
+	t.Run("aborter capability → both registered", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := NewInMemorySessionStore[testState]() // implements SnapshotAborter
+		DefineSessionFlow(reg, "fullCaps",
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+				return nil, nil
+			},
+			WithSessionStore(store),
+		)
+		getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+			reg, api.ActionTypeAgentSnapshot, "fullCaps")
+		if getAction == nil {
+			t.Error("getSnapshot action should be registered")
+		}
+		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+			reg, api.ActionTypeAgentAbort, "fullCaps")
+		if abortAction == nil {
+			t.Error("abortSnapshot action should be registered when store implements SnapshotAborter")
+		}
+	})
+
+	t.Run("no aborter capability → abort not registered", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		DefineSessionFlow(reg, "minCaps",
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+				return nil, nil
+			},
+			WithSessionStore[testState](minimalStore[testState]{}),
+		)
+		getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+			reg, api.ActionTypeAgentSnapshot, "minCaps")
+		if getAction == nil {
+			t.Error("getSnapshot action should be registered even when store lacks SnapshotAborter")
+		}
+		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+			reg, api.ActionTypeAgentAbort, "minCaps")
+		if abortAction != nil {
+			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter")
+		}
+	})
+}
+
+func TestSessionFlow_StateTransform_ClientManagedState(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	// Client-managed state: transform should be applied to SessionFlowOutput.State.
+	transform := func(_ context.Context, s SessionState[testState]) SessionState[testState] {
+		// Zero out the counter to demonstrate the transform is applied.
+		s.Custom.Counter = -1
+		return s
+	}
+
+	af := DefineSessionFlow(reg, "clientXformFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter = 7
+					return s
+				})
+				return nil
+			})
+		},
+		WithStateTransform[testState](transform),
+	)
+
+	out, err := af.RunText(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.State == nil {
+		t.Fatal("expected client-managed state in output")
+	}
+	if out.State.Custom.Counter != -1 {
+		t.Errorf("expected transformed counter=-1, got %d", out.State.Custom.Counter)
+	}
+}
+
+func TestSessionFlow_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
+	// End-to-end: run a flow that the client detaches from, let it
+	// finalize, then resume from its snapshot as if reconnecting later.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineSessionFlow(reg, "resumeDetachedFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	ctx := context.Background()
+
+	// First invocation: detach to write a pending snapshot, then wait
+	// for finalize.
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	if err := conn.SendText("turn 1"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	first, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	finalSnap := waitForSnapshot(t, store, first.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusComplete
+	})
+	if finalSnap.State.Custom.Counter != 1 {
+		t.Fatalf("expected counter=1 in finalized snapshot, got %d", finalSnap.State.Custom.Counter)
+	}
+
+	// Resume from the finalized snapshot.
+	second, err := af.RunText(ctx, "turn 2", WithSnapshotID[testState](first.SnapshotID))
+	if err != nil {
+		t.Fatalf("resume RunText: %v", err)
+	}
+
+	snap, err := store.GetSnapshot(ctx, second.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.State.Custom.Counter != 2 {
+		t.Errorf("expected counter=2 after resume, got %d", snap.State.Custom.Counter)
+	}
+}
+
+func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemorySessionStore[testState]()
+
+	// Abort on missing snapshot returns nil metadata, no error.
+	if meta, err := store.AbortSnapshot(ctx, "nope"); err != nil || meta != nil {
+		t.Fatalf("AbortSnapshot(missing) = %+v, %v; want nil, nil", meta, err)
+	}
+
+	// Pending → canceled, UpdatedAt advances.
+	pending, err := store.SaveSnapshot(ctx, "snap-cas",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventDetach,
+				Status: SnapshotStatusPending,
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
+	meta, err := store.AbortSnapshot(ctx, "snap-cas")
+	if err != nil {
+		t.Fatalf("AbortSnapshot: %v", err)
+	}
+	if meta.Status != SnapshotStatusCanceled {
+		t.Errorf("status after first abort = %q, want canceled", meta.Status)
+	}
+	if !meta.UpdatedAt.After(pending.UpdatedAt) {
+		t.Errorf("UpdatedAt did not advance: %v vs %v", meta.UpdatedAt, pending.UpdatedAt)
+	}
+
+	// Idempotent: second abort returns canceled, no error, no further mutation.
+	firstUpdate := meta.UpdatedAt
+	meta2, err := store.AbortSnapshot(ctx, "snap-cas")
+	if err != nil {
+		t.Fatalf("AbortSnapshot (second): %v", err)
+	}
+	if meta2.Status != SnapshotStatusCanceled {
+		t.Errorf("status after second abort = %q, want canceled", meta2.Status)
+	}
+	if !meta2.UpdatedAt.Equal(firstUpdate) {
+		t.Errorf("UpdatedAt advanced on idempotent abort: %v vs %v", meta2.UpdatedAt, firstUpdate)
+	}
+
+	// Abort on terminal status is a no-op that returns the existing status.
+	if _, err := store.SaveSnapshot(ctx, "snap-complete",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventTurnEnd,
+				Status: SnapshotStatusComplete,
+			}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	meta3, err := store.AbortSnapshot(ctx, "snap-complete")
+	if err != nil {
+		t.Fatalf("AbortSnapshot on complete: %v", err)
+	}
+	if meta3.Status != SnapshotStatusComplete {
+		t.Errorf("abort on complete returned status=%q, want complete", meta3.Status)
+	}
+}
+
+func TestSessionFlow_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
+	// An abort that lands while fn is still running but does not actually
+	// stop fn (because fn does not observe ctx) must still result in
+	// status=canceled — the finalizer must not clobber canceled with
+	// complete. The subscriber observes the status flip and the finalizer
+	// reads the resulting flag.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	fnRelease := make(chan struct{})
+	entered := make(chan struct{})
+
+	af := DefineSessionFlow(reg, "raceFinalize",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				select {
+				case entered <- struct{}{}:
+				case <-time.After(time.Second):
+				}
+				<-fnRelease
+				// Return cleanly without observing ctx. Without the
+				// subscriber/recheck, this would land status=complete and
+				// clobber the abort.
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	<-entered
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+
+	// Externally abort before releasing fn.
+	if _, err := store.AbortSnapshot(context.Background(), out.SnapshotID); err != nil {
+		t.Fatalf("AbortSnapshot: %v", err)
+	}
+
+	close(fnRelease)
+
+	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCanceled || s.Status == SnapshotStatusComplete
+	})
+	if finalSnap.Status != SnapshotStatusCanceled {
+		t.Errorf("finalize clobbered canceled with %q", finalSnap.Status)
+	}
+}
+
+func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := NewInMemorySessionStore[testState]()
+
+	// Subscribe to a missing snapshot: channel returns immediately closed
+	// without yielding a value.
+	missing := store.OnSnapshotStatusChange(ctx, "nope")
+	if _, ok := <-missing; ok {
+		t.Errorf("expected channel for missing snapshot to be closed without a value")
+	}
+
+	// Persist a pending snapshot so subsequent subscribers get an initial
+	// value plus updates on each status flip.
+	if _, err := store.SaveSnapshot(ctx, "snap-sub",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventDetach,
+				Status: SnapshotStatusPending,
+			}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	subCtx, subCancel := context.WithCancel(ctx)
+	defer subCancel()
+	statusCh := store.OnSnapshotStatusChange(subCtx, "snap-sub")
+
+	// Initial value reflects current status.
+	select {
+	case status, ok := <-statusCh:
+		if !ok {
+			t.Fatal("channel closed before initial status")
+		}
+		if status != SnapshotStatusPending {
+			t.Errorf("initial status = %q, want pending", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive initial status")
+	}
+
+	// Abort flips status; subscriber observes canceled.
+	if _, err := store.AbortSnapshot(ctx, "snap-sub"); err != nil {
+		t.Fatalf("AbortSnapshot: %v", err)
+	}
+	select {
+	case status, ok := <-statusCh:
+		if !ok {
+			t.Fatal("channel closed before abort notification")
+		}
+		if status != SnapshotStatusCanceled {
+			t.Errorf("status notification = %q, want canceled", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive abort notification")
+	}
+
+	// Cancelling the subscription closes the channel.
+	subCancel()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, ok := <-statusCh
+		if !ok {
+			return
+		}
+	}
+	t.Fatal("channel did not close after subscription ctx cancel")
+}
+
+func TestSessionFlow_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
+	// Calling AbortSnapshot on an already-terminal snapshot is a no-op
+	// that returns the existing status.
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	af := DefineSessionFlow(reg, "abortNoop",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	resp, err := store.AbortSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("AbortSnapshot: %v", err)
+	}
+	if resp.Status != SnapshotStatusComplete {
+		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusComplete, resp.Status)
+	}
+
+	// Confirm the store snapshot was not flipped.
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.Status != SnapshotStatusComplete {
+		t.Errorf("snapshot status = %q after abort-on-terminal, want complete", snap.Status)
 	}
 }
