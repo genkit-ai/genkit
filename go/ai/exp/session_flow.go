@@ -1085,14 +1085,28 @@ func (af *SessionFlow[Stream, State]) Run(
 	if err != nil {
 		return nil, err
 	}
+	// If the bidi function fails fast (e.g. resuming from an errored
+	// snapshot rejects in newSessionFlowRuntime), Send / Close / Receive
+	// see a closed connection and return generic "action has completed"
+	// errors. The real fn error is on Output(). Prefer it whenever it's
+	// non-nil so callers get the meaningful failure.
 	if err := conn.Send(input); err != nil {
+		if _, outErr := conn.Output(); outErr != nil {
+			return nil, outErr
+		}
 		return nil, err
 	}
 	if err := conn.Close(); err != nil {
+		if _, outErr := conn.Output(); outErr != nil {
+			return nil, outErr
+		}
 		return nil, err
 	}
 	for _, err := range conn.Receive() {
 		if err != nil {
+			if _, outErr := conn.Output(); outErr != nil {
+				return nil, outErr
+			}
 			return nil, err
 		}
 	}
