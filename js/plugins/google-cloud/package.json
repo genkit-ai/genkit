@@ -44,7 +44,7 @@
     "@opentelemetry/instrumentation-winston": "^0.39.0",
     "@opentelemetry/resources": "~1.25.0",
     "@opentelemetry/sdk-metrics": "~1.25.0",
-    "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
     "google-auth-library": "^9.6.3",
     "node-fetch": "^3.3.2",

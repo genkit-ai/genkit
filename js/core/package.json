@@ -31,7 +31,7 @@
     "@opentelemetry/context-async-hooks": "~1.25.0",
     "@opentelemetry/core": "~1.25.0",
     "@opentelemetry/sdk-metrics": "~1.25.0",
-    "@opentelemetry/sdk-node": "^0.52.0",
+    "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/sdk-logs": "^0.52.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
     "@types/json-schema": "^7.0.15",
