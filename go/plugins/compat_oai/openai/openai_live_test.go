@@ -49,16 +49,7 @@ func TestPlugin(t *testing.T) {
 	)
 	t.Log("genkit initialized")
 
-	// Define a tool for calculating gablorkens
-	gablorkenTool := genkit.DefineTool(g, "gablorken", "use when need to calculate a gablorken",
-		func(ctx *ai.ToolContext, input struct {
-			Value float64
-			Over  float64
-		},
-		) (float64, error) {
-			return math.Pow(input.Value, input.Over), nil
-		},
-	)
+	gablorkenTool := defineGablorkenTool(g)
 
 	t.Log("openai plugin initialized")
 
@@ -321,6 +312,19 @@ func TestPlugin(t *testing.T) {
 			t.Fatalf("unwanted text message, want: 1, got %d", textMessages)
 		}
 	})
+}
+
+type gablorkenToolIn struct {
+	Value float64 `json:"value"`
+	Over  float64 `json:"over"`
+}
+
+func defineGablorkenTool(g *genkit.Genkit) *ai.ToolDef[gablorkenToolIn, float64] {
+	return genkit.DefineTool(g, "gablorken", "use when need to calculate a gablorken",
+		func(ctx *ai.ToolContext, input gablorkenToolIn) (float64, error) {
+			return math.Pow(input.Value, input.Over), nil
+		},
+	)
 }
 
 func fetchImgAsBase64() (string, error) {
