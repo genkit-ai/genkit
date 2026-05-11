@@ -271,9 +271,7 @@ export const AbortSnapshotResponseSchema = z.object({
    */
   status: SnapshotStatusSchema.optional(),
 });
-export type AbortSnapshotResponse = z.infer<
-  typeof AbortSnapshotResponseSchema
->;
+export type AbortSnapshotResponse = z.infer<typeof AbortSnapshotResponseSchema>;
 
 /**
  * Who owns session state for an agent.
