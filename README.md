@@ -51,7 +51,7 @@ them, at no cost to you.
   </tr>
   <tr>
     <td><strong>Cross-language support</strong></td>
-    <td>Build with the language that best fits your project. Genkit provides SDKs for JavaScript/TypeScript, Go, and Python (Alpha) with consistent APIs and capabilities across all supported languages.</td>
+    <td>Build with the language that best fits your project. Genkit provides SDKs for JavaScript/TypeScript, Go, Python (Beta), and Dart (Preview) with consistent APIs and capabilities across all supported languages.</td>
   </tr>
   <tr>
     <td><strong>Deploy anywhere</strong></td>
@@ -93,7 +93,7 @@ Genkit is designed for server-side deployment in multiple language environments,
 <tr>
   <td><span>1</span></td>
   <td>Choose your language and model provider</td>
-  <td>Select the Genkit SDK for your preferred language (JavaScript/TypeScript, Go, or Python (Alpha)). Choose a model provider like <a href="https://genkit.dev/docs/plugins/google-genai">Google Gemini</a> or Anthropic, and get an API key. Some providers, like <a href="https://genkit.dev/docs/plugins/vertex-ai">Vertex AI</a>, may rely on a different means of authentication.</td>
+  <td>Select the Genkit SDK for your preferred language (JavaScript/TypeScript, Go, Python (Beta), Dart (Preview)). Choose a model provider like <a href="https://genkit.dev/docs/plugins/google-genai">Google Gemini</a> or Anthropic, and get an API key. Some providers, like <a href="https://genkit.dev/docs/plugins/vertex-ai">Vertex AI</a>, may rely on a different means of authentication.</td>
 </tr>
 <tr>
   <td><span>2</span></td>
@@ -114,9 +114,10 @@ Genkit is designed for server-side deployment in multiple language environments,
 
 ## Get started
 
-- [JavaScript/TypeScript quickstart](https://genkit.dev/docs/get-started)
-- [Go quickstart](https://genkit.dev/go/docs/get-started-go)
-- [Python quickstart](https://genkit.dev/python/docs/get-started/) (Alpha)
+- [JavaScript/TypeScript quickstart](https://genkit.dev/docs/js/get-started/)
+- [Go quickstart](https://genkit.dev/docs/go/get-started/)
+- [Python quickstart](https://genkit.dev/docs/python/get-started/) (Beta)
+- [Dart quickstart](https://genkit.dev/docs/dart/get-started/) (Preview)
 
 ## Development tools
 
