@@ -29,149 +29,22 @@ import { model } from 'genkit/plugin';
 import type { ModelInfo } from 'genkit/model';
 import { BetaRunner, Runner } from './runner/index.js';
 import {
-  AnthropicBaseConfigSchema,
-  AnthropicBaseConfigSchemaType,
   AnthropicConfigSchema,
-  AnthropicThinkingConfigSchema,
   resolveBetaEnabled,
+  type AnthropicConfigSchemaType,
   type ClaudeModelParams,
   type ClaudeRunnerParams,
 } from './types.js';
+import { checkModelName, isKnownKey } from './utils.js';
 
 // This contains all the Anthropic config schema types
-type ConfigSchemaType =
-  | AnthropicBaseConfigSchemaType
-  | AnthropicThinkingConfigSchemaType;
-
-/**
- * Creates a model reference for a Claude model.
- */
-function commonRef(
-  name: string,
-  configSchema: ConfigSchemaType = AnthropicConfigSchema,
-  info?: ModelInfo
-): ModelReference<ConfigSchemaType> {
-  return modelRef({
-    name: `anthropic/${name}`,
-    configSchema,
-    info: info ?? {
-      supports: {
-        multiturn: true,
-        tools: true,
-        media: true,
-        systemRole: true,
-        output: ['text'],
-      },
-    },
-  });
-}
-
-/**
- * Maps short model names to their full API model IDs.
- * Claude 3.x models require versioned names (e.g., claude-3-5-haiku-20241022).
- * Claude 4.x models have API aliases that work directly.
- */
-const MODEL_VERSION_MAP: Record<string, string> = {
-  'claude-3-haiku': 'claude-3-haiku-20240307',
-  'claude-3-5-haiku': 'claude-3-5-haiku-20241022',
-};
-
-export const KNOWN_CLAUDE_MODELS: Record<
-  string,
-  ModelReference<
-    AnthropicBaseConfigSchemaType | AnthropicThinkingConfigSchemaType
-  >
-> = {
-  'claude-3-haiku': commonRef('claude-3-haiku', AnthropicBaseConfigSchema),
-  'claude-3-5-haiku': commonRef('claude-3-5-haiku', AnthropicBaseConfigSchema),
-  'claude-sonnet-4': commonRef(
-    'claude-sonnet-4',
-    AnthropicThinkingConfigSchema
-  ),
-  'claude-opus-4': commonRef('claude-opus-4', AnthropicThinkingConfigSchema),
-  'claude-sonnet-4-5': commonRef(
-    'claude-sonnet-4-5',
-    AnthropicThinkingConfigSchema,
-    {
-      supports: {
-        multiturn: true,
-        tools: true,
-        media: true,
-        systemRole: true,
-        output: ['text', 'json'],
-        constrained: 'all',
-      },
-    }
-  ),
-  'claude-haiku-4-5': commonRef(
-    'claude-haiku-4-5',
-    AnthropicThinkingConfigSchema,
-    {
-      supports: {
-        multiturn: true,
-        tools: true,
-        media: true,
-        systemRole: true,
-        output: ['text', 'json'],
-        constrained: 'all',
-      },
-    }
-  ),
-  'claude-opus-4-1': commonRef(
-    'claude-opus-4-1',
-    AnthropicThinkingConfigSchema,
-    {
-      supports: {
-        multiturn: true,
-        tools: true,
-        media: true,
-        systemRole: true,
-        output: ['text', 'json'],
-        constrained: 'all',
-      },
-    }
-  ),
-  'claude-opus-4-5': commonRef(
-    'claude-opus-4-5',
-    AnthropicThinkingConfigSchema.extend({
-      output_config: z
-        .object({
-          effort: z.enum(['low', 'medium', 'high']).optional(),
-        })
-        .passthrough()
-        .optional(),
-    }),
-    {
-      supports: {
-        multiturn: true,
-        tools: true,
-        media: true,
-        systemRole: true,
-        output: ['text', 'json'],
-        constrained: 'all',
-      },
-    }
-  ),
-};
-
-/**
- * Gets the API model ID from a model name.
- * Maps short names to full versioned names for Claude 3.x models.
- * Claude 4.x models pass through unchanged as they have API aliases.
- */
-export function extractVersion(
-  model: ModelReference<ConfigSchemaType> | undefined,
-  modelName: string
-): string {
-  const cleanName = modelName.replace(/^anthropic\//, '');
-  return MODEL_VERSION_MAP[cleanName] ?? cleanName;
-}
+type ConfigSchemaType = AnthropicConfigSchemaType;
 
 /**
  * Generic Claude model info for unknown/unsupported models.
  * Used when a model name is not in KNOWN_CLAUDE_MODELS.
  */
-export const GENERIC_CLAUDE_MODEL_INFO = {
+export const GENERIC_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     tools: true,
@@ -181,12 +54,57 @@ export const GENERIC_CLAUDE_MODEL_INFO = {
   },
 };
 
-export type KnownClaudeModels = keyof typeof KNOWN_CLAUDE_MODELS;
-export type ClaudeModelName = string;
-export type AnthropicConfigSchemaType = typeof AnthropicConfigSchema;
-export type AnthropicThinkingConfigSchemaType =
-  typeof AnthropicThinkingConfigSchema;
-export type ClaudeConfig = z.infer<typeof AnthropicConfigSchema>;
+/**
+ * Advanced Claude model info for models that support JSON output.
+ */
+export const ADVANCED_MODEL_INFO: ModelInfo = {
+  supports: {
+    multiturn: true,
+    tools: true,
+    media: true,
+    systemRole: true,
+    output: ['text', 'json'],
+    constrained: 'all',
+  },
+};
+
+/**
+ * Creates a model reference for a Claude model.
+ */
+function commonRef(
+  name: string,
+  info?: ModelInfo,
+  configSchema: ConfigSchemaType = AnthropicConfigSchema
+): ModelReference<ConfigSchemaType> {
+  return modelRef({
+    name: `anthropic/${name}`,
+    configSchema,
+    info: info ?? GENERIC_MODEL_INFO,
+  });
+}
+
+const KNOWN_MODELS = {
+  'claude-opus-4-7': commonRef('claude-opus-4-7', ADVANCED_MODEL_INFO),
+  'claude-opus-4-6': commonRef('claude-opus-4-6', ADVANCED_MODEL_INFO),
+  'claude-opus-4-5': commonRef('claude-opus-4-5', ADVANCED_MODEL_INFO),
+  'claude-haiku-4-5': commonRef('claude-haiku-4-5', ADVANCED_MODEL_INFO),
+  'claude-sonnet-4-6': commonRef('claude-sonnet-4-6', ADVANCED_MODEL_INFO),
+  'claude-sonnet-4-5': commonRef('claude-sonnet-4-5', ADVANCED_MODEL_INFO),
+  'claude-opus-4-1': commonRef('claude-opus-4-1', ADVANCED_MODEL_INFO),
+  'claude-sonnet-4': commonRef('claude-sonnet-4'),
+  'claude-opus-4': commonRef('claude-opus-4'),
+} as const;
+export type KnownClaudeModels = keyof typeof KNOWN_MODELS;
+export type ClaudeModelName = `claude-${string}`;
+
+export function listKnownModels(
+  client: any,
+  defaultApiVersion?: 'stable' | 'beta'
+): ModelAction<ConfigSchemaType>[] {
+  return Object.keys(KNOWN_MODELS).map((name: string) =>
+    claudeModel({ name, client, defaultApiVersion })
+  );
+}
 
 /**
  * Creates the runner used by Genkit to interact with the Claude model.
@@ -239,27 +157,25 @@ export function claudeRunner<TConfigSchema extends z.ZodTypeAny>(
 }
 
 /**
- * Strips the 'anthropic/' namespace prefix if present.
- */
-function checkModelName(name: string): string {
-  return name.startsWith('anthropic/') ? name.slice(10) : name;
-}
-
-/**
  * Creates a model reference for a Claude model.
  * This allows referencing models without initializing the plugin.
  */
 export function claudeModelReference(
   name: string,
   config: z.infer<typeof AnthropicConfigSchema> = {}
-): ModelReference<z.ZodTypeAny> {
+): ModelReference<ConfigSchemaType> {
   const modelName = checkModelName(name);
+
+  if (isKnownKey(modelName, KNOWN_MODELS)) {
+    return KNOWN_MODELS[modelName].withConfig(config);
+  }
+
   return modelRef({
     name: `anthropic/${modelName}`,
     config: config,
     configSchema: AnthropicConfigSchema,
     info: {
-      ...GENERIC_CLAUDE_MODEL_INFO,
+      ...GENERIC_MODEL_INFO,
     },
   });
 }
@@ -271,22 +187,16 @@ export function claudeModelReference(
  */
 export function claudeModel(
   params: ClaudeModelParams
-): ModelAction<z.ZodTypeAny> {
+): ModelAction<ConfigSchemaType> {
   const { name, client: runnerClient, defaultApiVersion: apiVersion } = params;
-  // Use supported model ref if available, otherwise create generic model ref
-  const knownModelRef = KNOWN_CLAUDE_MODELS[name];
-  let modelInfo = knownModelRef
-    ? knownModelRef.info
-    : GENERIC_CLAUDE_MODEL_INFO;
-  const configSchema = knownModelRef?.configSchema ?? AnthropicConfigSchema;
 
-  return model<
-    AnthropicBaseConfigSchemaType | AnthropicThinkingConfigSchemaType
-  >(
+  const ref = claudeModelReference(name);
+
+  return model<ConfigSchemaType>(
     {
-      name: `anthropic/${name}`,
-      ...modelInfo,
-      configSchema: configSchema,
+      name: ref.name,
+      ...ref.info,
+      configSchema: ref.configSchema!,
     },
     claudeRunner(
       {
@@ -294,7 +204,9 @@ export function claudeModel(
         client: runnerClient,
         defaultApiVersion: apiVersion,
       },
-      configSchema
+      ref.configSchema!
     )
   );
 }
+
+export const TEST_ONLY = { KNOWN_MODELS };

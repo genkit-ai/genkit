@@ -177,6 +177,27 @@ func (MiddlewareFunc) Name() string { return "inline" }
 
 func (f MiddlewareFunc) New(ctx context.Context) (*Hooks, error) { return f(ctx) }
 
+// middlewareRefArg is a lazy [Middleware] that carries only a registered
+// name and an opaque config payload. It exists so data-driven sources (most
+// notably dotprompt `use:` entries) can populate the same `[]Middleware`
+// channel that [WithUse] uses, while [configsToRefs] strips the adapter out
+// and routes resolution through the registry rather than the local fast
+// path. The type is unexported on purpose: users who want this shape should
+// build a [GenerateActionOptions] with [MiddlewareRef]s directly.
+type middlewareRefArg struct {
+	name   string
+	config any
+}
+
+func (r middlewareRefArg) Name() string { return r.name }
+
+// New is unreachable in normal use because [configsToRefs] swaps the adapter
+// for a name-only [MiddlewareRef] before [resolveRefs] sees it; the error
+// here surfaces a routing bug instead of returning nil hooks.
+func (middlewareRefArg) New(context.Context) (*Hooks, error) {
+	return nil, core.NewError(core.INTERNAL, "ai: middlewareRefArg must be resolved via the registry")
+}
+
 // LookupMiddleware returns the registered middleware descriptor with the
 // given name, or nil if no such descriptor exists in the registry or any
 // ancestor. Primarily useful for inspection and for the reflection API;
@@ -199,9 +220,12 @@ type MiddlewarePlugin interface {
 }
 
 // configsToRefs converts a user-supplied slice of [Middleware] values into
-// the [MiddlewareRef] entries carried on [GenerateActionOptions.Use]. The Go
-// value is stored on each ref so [resolveRefs] can build the hooks bundle
-// directly without a registry round trip for local calls.
+// the [MiddlewareRef] entries carried on [GenerateActionOptions.Use]. For
+// regular middleware the Go value is stored on each ref so [resolveRefs] can
+// build the hooks bundle directly without a registry round trip. For
+// [middlewareRefArg] only the name and raw config travel; this routes
+// [resolveRefs] through the registry-lookup path so dotprompt-supplied
+// middleware resolves like any other JSON-dispatched call.
 func configsToRefs(configs []Middleware) ([]*MiddlewareRef, error) {
 	if len(configs) == 0 {
 		return nil, nil
@@ -210,6 +234,10 @@ func configsToRefs(configs []Middleware) ([]*MiddlewareRef, error) {
 	for _, c := range configs {
 		if c == nil {
 			return nil, core.NewError(core.INVALID_ARGUMENT, "ai: nil middleware")
+		}
+		if lazy, ok := c.(middlewareRefArg); ok {
+			refs = append(refs, &MiddlewareRef{Name: lazy.name, Config: lazy.config})
+			continue
 		}
 		refs = append(refs, &MiddlewareRef{Name: c.Name(), Config: c})
 	}

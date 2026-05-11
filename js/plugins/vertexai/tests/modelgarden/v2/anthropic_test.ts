@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 
-import type {
-  Message,
-  MessageCreateParamsBase,
-} from '@anthropic-ai/sdk/resources/messages.mjs';
+import type { MessageCreateParamsBase } from '@anthropic-ai/sdk/resources/messages.mjs';
 import * as assert from 'assert';
 import type { GenerateRequest, GenerateResponseData } from 'genkit';
 import { describe, it } from 'node:test';
@@ -83,6 +80,33 @@ describe('toAnthropicRequest', () => {
       },
     },
     {
+      should: 'should transform thinking and output_config parameters',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'Refactor this.' }],
+          },
+        ],
+        config: {
+          thinking: { adaptive: true, display: 'summarized' },
+          output_config: { effort: 'xhigh' },
+        },
+      } as any,
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Refactor this.' }],
+          },
+        ],
+        thinking: { type: 'adaptive', display: 'summarized' },
+        output_config: { effort: 'xhigh' },
+      } as any,
+    },
+    {
       should:
         'should transform genkit message (inline base64 image content) correctly',
       input: {
@@ -137,7 +161,7 @@ describe('fromAnthropicResponse', () => {
   const testCases: {
     should: string;
     input: GenerateRequest<typeof AnthropicConfigSchema>;
-    response: Message;
+    response: any;
     expectedOutput: GenerateResponseData;
   }[] = [
     {
@@ -201,6 +225,84 @@ describe('fromAnthropicResponse', () => {
           outputImages: 0,
           outputTokens: 234,
           outputVideos: 0,
+          custom: {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 0,
+          },
+        },
+      },
+    },
+    {
+      should: 'should transform genkit message with thinking block correctly',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'Solve this.' }],
+          },
+        ],
+      },
+      response: {
+        id: 'abcd1234',
+        model: MODEL_ID,
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        usage: {
+          input_tokens: 10,
+          output_tokens: 50,
+        },
+        stop_sequence: null,
+        type: 'message',
+        content: [
+          {
+            type: 'thinking',
+            thinking: 'Step 1: Ponder deeply.',
+            signature: 'sig_123',
+          },
+          {
+            type: 'text',
+            text: 'The answer is 42.',
+          },
+        ],
+      },
+      expectedOutput: {
+        custom: {
+          id: 'abcd1234',
+          model: MODEL_ID,
+          type: 'message',
+        },
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Step 1: Ponder deeply.',
+              metadata: { thoughtSignature: 'sig_123' },
+            },
+            {
+              text: 'The answer is 42.',
+            },
+          ],
+        },
+        usage: {
+          inputAudioFiles: 0,
+          inputCharacters: 11,
+          inputImages: 0,
+          inputTokens: 10,
+          inputVideos: 0,
+          outputAudioFiles: 0,
+          outputCharacters: 17,
+          outputImages: 0,
+          outputTokens: 50,
+          outputVideos: 0,
+          custom: {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 0,
+          },
         },
       },
     },
@@ -298,16 +400,22 @@ describe('fromAnthropicResponse', () => {
           outputImages: 0,
           outputTokens: 234,
           outputVideos: 0,
+          custom: {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 0,
+          },
         },
       },
     },
   ];
   for (const test of testCases) {
     it(test.should, () => {
-      assert.deepEqual(
-        fromAnthropicResponse(test.input, test.response),
-        test.expectedOutput
-      );
+      assert.deepEqual(fromAnthropicResponse(test.input, test.response), {
+        ...test.expectedOutput,
+        raw: test.response,
+      });
     });
   }
 });

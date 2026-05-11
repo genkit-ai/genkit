@@ -257,6 +257,11 @@ func WithUse(middleware ...Middleware) CommonGenOption {
 	return &commonGenOptions{Use: middleware}
 }
 
+// WithStepName sets a custom name for the generation step in traces.
+func WithStepName(name string) GenerateOption {
+	return &generateOptions{StepName: name}
+}
+
 // WithMaxTurns sets the maximum number of tool call iterations before erroring.
 // A tool call happens when tools are provided in the request and a model decides to call one or more as a response.
 // Each round trip, including multiple tools in parallel, counts as one turn.
@@ -889,6 +894,7 @@ type generateOptions struct {
 	documentOptions
 	RespondParts []*Part // Tool responses to return from interrupted tool calls.
 	RestartParts []*Part // Tool requests to restart interrupted tools with.
+	StepName     string  // Custom name for the generation step in traces.
 }
 
 // GenerateOption is an option for generating a model response. It applies only to Generate().
@@ -930,6 +936,13 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) error {
 			return errors.New("cannot set restart parts more than once (WithToolRestarts)")
 		}
 		genOpts.RestartParts = o.RestartParts
+	}
+
+	if o.StepName != "" {
+		if genOpts.StepName != "" {
+			return errors.New("cannot set step name more than once (WithStepName)")
+		}
+		genOpts.StepName = o.StepName
 	}
 
 	return nil

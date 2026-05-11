@@ -446,10 +446,10 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 		if fieldName == "" {
 			fieldName = adjustIdentifier(field)
 		}
-		g.pr(fmt.Sprintf("  %s %s `%s`\n", fieldName, typeExpr, jsonTag))
+		g.pr("  %s %s `%s`\n", fieldName, typeExpr, jsonTag)
 	}
 	for _, f := range tcfg.fields {
-		g.pr(fmt.Sprintf("  %s %s\n", f.name, f.typeExpr))
+		g.pr("  %s %s\n", f.name, f.typeExpr)
 	}
 	g.pr("}\n\n")
 	return nil

@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/uuid"
+	"github.com/invopop/jsonschema"
 )
 
 // Model represents a model that can generate content based on a request.
@@ -49,6 +50,10 @@ type ModelArg interface {
 }
 
 // ModelRef is a struct to hold model name and configuration.
+//
+// ModelRef supports JSON marshaling: it serializes as a plain string when
+// only a name is present, or as {"name": "...", "config": ...} when
+// configuration is also set.
 type ModelRef struct {
 	name   string
 	config any
@@ -338,9 +343,27 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	fn = buildModelChain(mws, fn)
 	fn = core.ChainMiddleware(mmws...)(fn)
 
+	// Share one streaming format handler across middleware- and model-emitted
+	// chunks so its per-index accumulation (e.g. accumulatedText) spans both.
 	var streamingHandler StreamingFormatHandler
 	if sfh, ok := formatHandler.(StreamingFormatHandler); ok {
 		streamingHandler = sfh
+	}
+
+	// middlewareCb is the callback given to WrapGenerate hooks. It attaches the
+	// shared streamingHandler so middleware-emitted chunks can be parsed and
+	// contribute to accumulation, while preserving any Index/Role the middleware
+	// set explicitly (the model path in wrappedCb assigns those from role-based
+	// state).
+	var middlewareCb ModelStreamCallback
+	if cb != nil {
+		middlewareCb = func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if chunk.Role == "" {
+				chunk.Role = RoleModel
+			}
+			chunk.formatHandler = streamingHandler
+			return cb(ctx, chunk)
+		}
 	}
 
 	runTool := buildToolRunner(mws)
@@ -349,16 +372,20 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	var runGenerate func(context.Context, *GenerateParams) (*ModelResponse, error)
 
 	runGenerate = func(ctx context.Context, params *GenerateParams) (*ModelResponse, error) {
-		req := params.Request
-		currentTurn := params.Iteration
-		messageIndex := params.MessageIndex
+		name := params.Options.StepName
+		if name == "" {
+			name = "generate"
+		}
 		spanMetadata := &tracing.SpanMetadata{
-			Name:    "generate",
+			Name:    name,
 			Type:    "util",
 			Subtype: "util",
 		}
 
-		return tracing.RunInNewSpan(ctx, spanMetadata, req, func(ctx context.Context, req *ModelRequest) (*ModelResponse, error) {
+		return tracing.RunInNewSpan(ctx, spanMetadata, params.Options, func(ctx context.Context, _ *GenerateActionOptions) (*ModelResponse, error) {
+			req := params.Request
+			currentTurn := params.Iteration
+			messageIndex := params.MessageIndex
 			var wrappedCb ModelStreamCallback
 			currentRole := RoleModel
 			currentIndex := messageIndex
@@ -475,7 +502,7 @@ func GenerateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			Request:      req,
 			Iteration:    currentTurn,
 			MessageIndex: messageIndex,
-			Callback:     cb,
+			Callback:     middlewareCb,
 		})
 	}
 
@@ -638,30 +665,6 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		}
 	}
 
-	respondParts := []*toolResponsePart{}
-	for _, part := range genOpts.RespondParts {
-		if !part.IsToolResponse() {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Generate: respond part is not a tool response")
-		}
-
-		respondParts = append(respondParts, &toolResponsePart{
-			ToolResponse: part.ToolResponse,
-			Metadata:     part.Metadata,
-		})
-	}
-
-	restartParts := []*toolRequestPart{}
-	for _, part := range genOpts.RestartParts {
-		if !part.IsToolRequest() {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "ai.Generate: restart part is not a tool request")
-		}
-
-		restartParts = append(restartParts, &toolRequestPart{
-			ToolRequest: part.ToolRequest,
-			Metadata:    part.Metadata,
-		})
-	}
-
 	actionOpts := &GenerateActionOptions{
 		Model:              modelName,
 		Messages:           messages,
@@ -671,6 +674,7 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		ToolChoice:         genOpts.ToolChoice,
 		Docs:               genOpts.Documents,
 		ReturnToolRequests: genOpts.ReturnToolRequests != nil && *genOpts.ReturnToolRequests,
+		StepName:           genOpts.StepName,
 		Output: &GenerateActionOutputConfig{
 			JsonSchema:   genOpts.OutputSchema,
 			Format:       genOpts.OutputFormat,
@@ -679,10 +683,10 @@ func Generate(ctx context.Context, r api.Registry, opts ...GenerateOption) (*Mod
 		},
 	}
 
-	if len(respondParts) > 0 || len(restartParts) > 0 {
+	if len(genOpts.RespondParts) > 0 || len(genOpts.RestartParts) > 0 {
 		actionOpts.Resume = &GenerateActionResume{
-			Respond: respondParts,
-			Restart: restartParts,
+			Respond: genOpts.RespondParts,
+			Restart: genOpts.RestartParts,
 		}
 	}
 
@@ -1277,6 +1281,66 @@ func (m ModelRef) Config() any {
 	return m.config
 }
 
+// MarshalJSON implements [json.Marshaler]. ModelRef always marshals as a
+// JSON object with "name" and optional "config" fields.
+func (m ModelRef) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Name   string `json:"name"`
+		Config any    `json:"config,omitempty"`
+	}{
+		Name:   m.name,
+		Config: m.config,
+	})
+}
+
+// UnmarshalJSON implements [json.Unmarshaler]. It accepts either a JSON
+// object with "name" and optional "config" fields, or a plain string
+// (interpreted as the model name).
+func (m *ModelRef) UnmarshalJSON(data []byte) error {
+	// Try string shorthand first.
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		m.name = name
+		m.config = nil
+		return nil
+	}
+	var obj struct {
+		Name   string          `json:"name"`
+		Config json.RawMessage `json:"config,omitempty"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	m.name = obj.Name
+	if len(obj.Config) > 0 {
+		var config any
+		if err := json.Unmarshal(obj.Config, &config); err != nil {
+			return err
+		}
+		m.config = config
+	}
+	return nil
+}
+
+// JSONSchema implements the invopop/jsonschema customSchemaImpl interface
+// so that schema reflection produces the correct object schema instead of
+// an empty object (ModelRef has only unexported fields).
+func (ModelRef) JSONSchema() *jsonschema.Schema {
+	props := jsonschema.NewProperties()
+	props.Set("name", &jsonschema.Schema{
+		Type:        "string",
+		Description: "Model name (e.g. \"googleai/gemini-2.5-flash\")",
+	})
+	props.Set("config", &jsonschema.Schema{
+		Description: "Optional model configuration",
+	})
+	return &jsonschema.Schema{
+		Type:       "object",
+		Properties: props,
+		Required:   []string{"name"},
+	}
+}
+
 // handleResumedToolRequest resolves a tool request from a previous, interrupted model turn,
 // when generation is being resumed. It determines the outcome of the tool request based on
 // pending output, or explicit 'respond' or 'restart' directives in the resume options.
@@ -1426,6 +1490,17 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateActionOptions, runTool toolRunnerFunc) (*resumeOptionOutput, error) {
 	if genOpts.Resume == nil || (len(genOpts.Resume.Respond) == 0 && len(genOpts.Resume.Restart) == 0) {
 		return &resumeOptionOutput{revisedRequest: genOpts}, nil
+	}
+
+	for _, part := range genOpts.Resume.Respond {
+		if !part.IsToolResponse() {
+			return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumeOption: respond part is not a tool response")
+		}
+	}
+	for _, part := range genOpts.Resume.Restart {
+		if !part.IsToolRequest() {
+			return nil, core.NewError(core.INVALID_ARGUMENT, "handleResumeOption: restart part is not a tool request")
+		}
 	}
 
 	toolDefMap := make(map[string]*ToolDefinition)

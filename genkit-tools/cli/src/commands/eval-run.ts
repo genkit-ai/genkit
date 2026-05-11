@@ -22,6 +22,7 @@ import {
   runEvaluation,
   type EvalExporter,
 } from '@genkit-ai/tools-common/eval';
+import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import {
   confirmLlmUse,
   findProjectRoot,
@@ -67,11 +68,27 @@ export const evalRun = new Command('eval:run')
   )
   .option('--force', 'Automatically accept all interactive prompts')
   .action(async (dataset: string, options: EvalRunCliOptions) => {
-    await runWithManager(await findProjectRoot(), async (manager) => {
-      if (!dataset) {
-        throw new Error(
-          'No input data passed. Specify input data using [data] argument'
-        );
+    const dashDashIndex = process.argv.indexOf('--');
+    let runtimeCommand: string[] | undefined;
+    let actualDataset: string | undefined = dataset;
+
+    // Commander removes the '--' separator from evalRun.args.
+    // We find '--' in process.argv to determine which arguments belong to the runtime command.
+    if (dashDashIndex !== -1) {
+      const numArgsAfterDashDash = process.argv.length - dashDashIndex - 1;
+      runtimeCommand = evalRun.args.slice(-numArgsAfterDashDash);
+      const commandArgs = evalRun.args.slice(
+        0,
+        evalRun.args.length - numArgsAfterDashDash
+      );
+      actualDataset = commandArgs[0];
+    }
+
+    const projectRoot = await findProjectRoot();
+
+    const runAction = async (manager: BaseRuntimeManager) => {
+      if (!actualDataset) {
+        throw new Error('Missing required argument <dataset>');
       }
 
       let evaluatorActions: Action[];
@@ -100,14 +117,12 @@ export const evalRun = new Command('eval:run')
       if (!options.force) {
         const confirmed = await confirmLlmUse(evaluatorActions);
         if (!confirmed) {
-          if (!confirmed) {
-            throw new Error('User declined using billed evaluators.');
-          }
+          throw new Error('User declined using billed evaluators.');
         }
       }
 
       const evalDataset: EvalInputDataset =
-        await loadEvaluationDatasetFile(dataset);
+        await loadEvaluationDatasetFile(actualDataset);
       const evalRun = await runEvaluation({
         manager,
         evaluatorActions,
@@ -130,9 +145,9 @@ export const evalRun = new Command('eval:run')
           )
         );
       } else {
-        logger.info(
-          `Succesfully ran evaluation, with evalId: ${evalRun.key.evalRunId}`
-        );
+        logger.info(`${clc.cyan('Evaluation ID:')} ${evalRun.key.evalRunId}`);
       }
-    });
+    };
+
+    await runWithManager(projectRoot, runAction, { runtimeCommand });
   });

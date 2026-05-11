@@ -21,8 +21,14 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import (
+    GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
+    Action,
+    ActionKind,
+    create_action_key,
+)
 from genkit._core._registry import Registry
+from genkit._core._typing import ActionMetadata
 
 ActionMetadataLike = Mapping[str, object]
 DapValue = dict[str, list[Action[Any, Any]]]
@@ -110,15 +116,27 @@ class DynamicActionProvider:
             return [m for m in metadata_list if str(m.get('name', '')).startswith(prefix)]
         return [m for m in metadata_list if m.get('name') == action_name]
 
-    async def get_action_metadata_record(self, dap_prefix: str) -> dict[str, ActionMetadataLike]:
-        """Get all actions as metadata record for reflection API."""
+    async def list_action_metadata_by_key(self, dap_prefix: str) -> dict[str, ActionMetadata]:
+        """List every child action's reflection metadata, keyed by its fully-qualified DAP key."""
         result = await self._get_or_fetch(skip_trace=True)
-        dap_actions: dict[str, ActionMetadataLike] = {}
+        dap_actions: dict[str, ActionMetadata] = {}
         for action_type, actions in result.items():
             for action in actions:
                 if not action.name:
                     raise ValueError(f'Invalid metadata from {dap_prefix} - name required')
-                dap_actions[f'{dap_prefix}:{action_type}/{action.name}'] = action.metadata or {}
+                key = create_action_key(
+                    ActionKind.DYNAMIC_ACTION_PROVIDER,
+                    f'{dap_prefix}:{action_type}/{action.name}',
+                )
+                dap_actions[key] = ActionMetadata(
+                    key=key,
+                    action_type=action_type,
+                    name=action.name,
+                    description=action.description,
+                    input_schema=action.input_schema,
+                    output_schema=action.output_schema,
+                    metadata=dict(action.metadata) if action.metadata else None,
+                )
         return dap_actions
 
 
@@ -151,4 +169,10 @@ def define_dynamic_action_provider(
         metadata={**(metadata or {}), 'type': 'dynamic-action-provider'},
     )
 
-    return DynamicActionProvider(action, fn, cache_ttl_millis)
+    dap = DynamicActionProvider(action, fn, cache_ttl_millis)
+    # Attach the provider to the registered Action so anyone holding the
+    # Action (e.g. ``Registry.resolve_action_by_key`` for a DAP-qualified key,
+    # or ``Registry.list_actions`` expanding children for reflection) can
+    # recover the cache and helpers via ``getattr(action, ATTR, None)``.
+    setattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, dap)
+    return dap
