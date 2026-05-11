@@ -163,7 +163,15 @@ func (s *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotE
 	}
 
 	if err := s.store.SaveSnapshot(ctx, snapshot); err != nil {
-		logger.FromContext(ctx).Error("agent: failed to save snapshot", "err", err)
+		// Snapshot persistence is best-effort: a store failure must not
+		// kill the in-flight turn. Surface enough context in the log
+		// that the failure is diagnosable without the caller having to
+		// thread the error back up.
+		logger.FromContext(ctx).Error("agent: failed to save snapshot",
+			"snapshotId", snapshot.SnapshotID,
+			"parentId", snapshot.ParentID,
+			"event", event,
+			"err", err)
 		return ""
 	}
 
