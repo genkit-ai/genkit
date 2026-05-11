@@ -114,4 +114,3 @@ func (l *Llama) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error
 	}
 	return l.oai.DefineModel(provider, name, *opts), nil
 }
-
