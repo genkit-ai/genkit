@@ -129,7 +129,13 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 
 	var addr string
 	if envPort := os.Getenv("GENKIT_REFLECTION_PORT"); envPort != "" {
-		addr = "127.0.0.1:" + envPort
+		// Validate that the user-provided port is a valid integer.
+		_, err := strconv.Atoi(envPort)
+		if err != nil {
+			errCh <- fmt.Errorf("invalid GENKIT_REFLECTION_PORT: %w", err)
+			return nil
+		}
+		addr = net.JoinHostPort("127.0.0.1", envPort)
 	} else {
 		var err error
 		addr, err = findAvailablePort(3100)
@@ -217,8 +223,10 @@ func (s *reflectionServer) writeRuntimeFile(url string) error {
 	// remove colons to avoid problems with different OS file name restrictions
 	timestamp = strings.ReplaceAll(timestamp, ":", "_")
 
-	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s.json", os.Getpid(), timestamp))
+	// Extract port from the URL string.
+	_, port, _ := net.SplitHostPort(url)
 
+	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s-%s.json", os.Getpid(), port, timestamp))
 	data := runtimeFileData{
 		ID:                       runtimeID,
 		PID:                      os.Getpid(),
@@ -642,9 +650,14 @@ func listActions(g *Genkit) []api.ActionDesc {
 }
 
 // listResolvableActions lists all the registered and resolvable actions.
+// Schema references in the descriptors are resolved to their concrete schemas
+// so that consumers (e.g., the Dev UI) don't have to perform secondary lookups.
 func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	ads := listActions(g)
-	keys := make(map[string]struct{})
+	keys := make(map[string]struct{}, len(ads))
+	for _, d := range ads {
+		keys[d.Name] = struct{}{}
+	}
 
 	plugins := g.reg.ListPlugins()
 	for _, p := range plugins {
@@ -656,6 +669,7 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 
 		for _, desc := range dp.ListActions(ctx) {
 			if _, exists := keys[desc.Name]; !exists {
+				resolveDescSchemas(g.reg, &desc)
 				ads = append(ads, desc)
 				keys[desc.Name] = struct{}{}
 			}
@@ -667,6 +681,18 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	})
 
 	return ads
+}
+
+// resolveDescSchemas best-effort resolves any "genkit:" schema references in
+// the descriptor's InputSchema and OutputSchema. Unresolvable references are
+// left as-is.
+func resolveDescSchemas(r api.Registry, desc *api.ActionDesc) {
+	if resolved, err := core.ResolveSchema(r, desc.InputSchema); err == nil {
+		desc.InputSchema = resolved
+	}
+	if resolved, err := core.ResolveSchema(r, desc.OutputSchema); err == nil {
+		desc.OutputSchema = resolved
+	}
 }
 
 // TODO: Pull these from common types in genkit-tools.

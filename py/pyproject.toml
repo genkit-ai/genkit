@@ -269,9 +269,9 @@ select = [
 # S108 false positives on Path('/tmp/x') used as dummy non-existent paths in tests.
 # Samples have install_rich_traceback() call after imports, before other code
 # Samples are demo code and can use blocking I/O for simplicity
-"samples/*/*.py"     = ["ANN", "D", "E402", "ASYNC"]
-"samples/*/**/*.py"  = ["ANN", "D", "E402", "ASYNC"]
-"samples/*/src/*.py" = ["ANN", "D", "E402", "ASYNC"]
+"samples/*/*.py"     = ["ANN", "D", "E402", "ASYNC", "T201"]
+"samples/*/**/*.py"  = ["ANN", "D", "E402", "ASYNC", "T201"]
+"samples/*/src/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
 
 
 [tool.ruff.lint.isort]

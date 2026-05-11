@@ -121,9 +121,9 @@ type GenerateActionResume struct {
 	// Metadata contains additional context for resuming the generation.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Respond contains tool response parts to send to the model when resuming.
-	Respond []*toolResponsePart `json:"respond,omitempty"`
+	Respond []*Part `json:"respond,omitempty"`
 	// Restart contains tool request parts to restart when resuming.
-	Restart []*toolRequestPart `json:"restart,omitempty"`
+	Restart []*Part `json:"restart,omitempty"`
 }
 
 // ToolChoice controls how the model uses tools.

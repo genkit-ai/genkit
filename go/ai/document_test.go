@@ -17,6 +17,7 @@
 package ai
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -410,4 +411,109 @@ func TestNewResponseForToolRequest(t *testing.T) {
 			t.Error("expected nil for non-tool-request part")
 		}
 	})
+}
+
+// TestPartClone verifies that Part.Clone produces an independent copy.
+// Every Part field is populated so that adding a new field without updating
+// this test (and Clone) causes a failure.
+func TestPartClone(t *testing.T) {
+	orig := &Part{
+		Kind:        PartToolRequest,
+		ContentType: "application/json",
+		Text:        "body",
+		ToolRequest: &ToolRequest{Name: "tool", Input: map[string]any{"a": 1}},
+		// Normally a Part wouldn't have both ToolRequest and ToolResponse,
+		// but we populate everything to catch missing fields.
+		ToolResponse: &ToolResponse{Name: "tool", Output: "ok"},
+		Resource:     &ResourcePart{Uri: "res://x"},
+		Custom:       map[string]any{"ck": "cv"},
+		Metadata:     map[string]any{"sig": []byte{1, 2, 3}, "key": "val"},
+	}
+
+	// Guard: every field in the fixture must be non-zero.
+	// If someone adds a new field to Part this will fail, forcing them to
+	// add it here and verify Clone handles it.
+	rv := reflect.ValueOf(orig).Elem()
+	for i := range rv.NumField() {
+		if rv.Field(i).IsZero() {
+			t.Fatalf("Part field %q is zero in test fixture — populate it and verify Clone handles it", rv.Type().Field(i).Name)
+		}
+	}
+
+	cp := orig.Clone()
+
+	// Values must match.
+	if !reflect.DeepEqual(orig, cp) {
+		t.Fatal("Clone() values differ from original")
+	}
+
+	// Mutating clone's maps must not affect the original.
+	cp.Metadata["extra"] = true
+	if _, ok := orig.Metadata["extra"]; ok {
+		t.Error("mutating clone Metadata affected original")
+	}
+
+	cp.Custom["extra"] = true
+	if _, ok := orig.Custom["extra"]; ok {
+		t.Error("mutating clone Custom affected original")
+	}
+
+	// Go types in metadata (e.g. []byte) must be preserved, not string-ified.
+	sig, ok := cp.Metadata["sig"].([]byte)
+	if !ok {
+		t.Fatalf("Metadata[sig] type = %T, want []byte", cp.Metadata["sig"])
+	}
+	if !bytes.Equal(sig, []byte{1, 2, 3}) {
+		t.Errorf("Metadata[sig] = %v, want [1 2 3]", sig)
+	}
+
+	// nil Part.Clone() should return nil.
+	var nilPart *Part
+	if nilPart.Clone() != nil {
+		t.Error("nil Part.Clone() should return nil")
+	}
+}
+
+// TestMessageClone verifies that Message.Clone produces an independent copy.
+// Every Message field is populated so that adding a new field without updating
+// this test (and Clone) causes a failure.
+func TestMessageClone(t *testing.T) {
+	orig := &Message{
+		Role:     RoleModel,
+		Content:  []*Part{NewTextPart("hello"), NewTextPart("world")},
+		Metadata: map[string]any{"k": "v"},
+	}
+
+	// Guard: every field must be non-zero.
+	rv := reflect.ValueOf(orig).Elem()
+	for i := range rv.NumField() {
+		if rv.Field(i).IsZero() {
+			t.Fatalf("Message field %q is zero in test fixture — populate it and verify Clone handles it", rv.Type().Field(i).Name)
+		}
+	}
+
+	cp := orig.Clone()
+
+	// Values must match.
+	if !reflect.DeepEqual(orig, cp) {
+		t.Fatal("Clone() values differ from original")
+	}
+
+	// Mutating clone's Content slice must not affect the original.
+	cp.Content[0] = NewTextPart("replaced")
+	if orig.Content[0].Text != "hello" {
+		t.Error("mutating clone Content affected original")
+	}
+
+	// Mutating clone's Metadata must not affect the original.
+	cp.Metadata["extra"] = true
+	if _, ok := orig.Metadata["extra"]; ok {
+		t.Error("mutating clone Metadata affected original")
+	}
+
+	// nil Message.Clone() should return nil.
+	var nilMsg *Message
+	if nilMsg.Clone() != nil {
+		t.Error("nil Message.Clone() should return nil")
+	}
 }
