@@ -189,3 +189,17 @@ func FlowNameFromContext(ctx context.Context) string {
 	}
 	return ""
 }
+
+// WithFlowContext attaches flow-context metadata to ctx so that [Run] and
+// [FlowNameFromContext] work from within. Use it when wiring a custom
+// flow-like action (e.g. via [NewBidiAction] / [DefineBidiAction]) that
+// should behave like a flow from the user's perspective — letting them
+// call [Run] for sub-step tracking and see the flow name in spans —
+// without going through [NewBidiFlow] / [DefineBidiFlow].
+//
+// The Define*Flow constructors call this internally; direct callers
+// only need it when bypassing those constructors to set custom
+// [ActionOptions].
+func WithFlowContext(ctx context.Context, flowName string) context.Context {
+	return flowContextKey.NewContext(ctx, &flowContext{flowName: flowName})
+}

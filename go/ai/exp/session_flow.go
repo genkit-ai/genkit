@@ -47,10 +47,16 @@ type SessionFlowFunc[Stream, State any] = func(ctx context.Context, resp Respond
 
 // SessionFlow is a bidirectional streaming flow with automatic snapshot management.
 type SessionFlow[Stream, State any] struct {
-	flow *core.Flow[*SessionFlowInit[State], *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream], *SessionFlowInput]
+	action *core.Action[*SessionFlowInit[State], *SessionFlowOutput[State], *SessionFlowStreamChunk[Stream], *SessionFlowInput]
 }
 
-// DefineSessionFlow creates an SessionFlow with automatic snapshot management and registers it.
+// DefineSessionFlow creates an SessionFlow with automatic snapshot
+// management and registers it. The underlying action is created via
+// [core.DefineBidiAction] (rather than [core.DefineBidiFlow]) so the
+// agent capability metadata can be set at construction time — actions
+// must be immutable once registered. The flow-context wrapping that
+// makes [core.Run] work inside fn is preserved via
+// [core.WithFlowContext].
 func DefineSessionFlow[Stream, State any](
 	r api.Registry,
 	name string,
@@ -64,23 +70,27 @@ func DefineSessionFlow[Stream, State any](
 		}
 	}
 
-	flow := core.DefineBidiFlow(r, name, func(
-		ctx context.Context,
-		in *SessionFlowInit[State],
-		inCh <-chan *SessionFlowInput,
-		outCh chan<- *SessionFlowStreamChunk[Stream],
-	) (*SessionFlowOutput[State], error) {
-		rt, err := newSessionFlowRuntime(ctx, name, cfg, in, inCh, outCh)
-		if err != nil {
-			return nil, err
-		}
-		return rt.run(ctx, fn)
-	})
-	flow.SetMetadataValue("agent", agentMetadataFor(cfg.store))
+	action := core.DefineBidiAction(r, name, api.ActionTypeFlow,
+		&core.ActionOptions{
+			Metadata: map[string]any{"agent": agentMetadataFor(cfg.store)},
+		},
+		func(
+			ctx context.Context,
+			in *SessionFlowInit[State],
+			inCh <-chan *SessionFlowInput,
+			outCh chan<- *SessionFlowStreamChunk[Stream],
+		) (*SessionFlowOutput[State], error) {
+			ctx = core.WithFlowContext(ctx, name)
+			rt, err := newSessionFlowRuntime(ctx, name, cfg, in, inCh, outCh)
+			if err != nil {
+				return nil, err
+			}
+			return rt.run(ctx, fn)
+		})
 
 	registerSnapshotActions(r, name, cfg.store, cfg.transform)
 
-	return &SessionFlow[Stream, State]{flow: flow}
+	return &SessionFlow[Stream, State]{action: action}
 }
 
 // AgentMetadataStateManagement enumerates who owns session state for an
@@ -1117,7 +1127,7 @@ func (af *SessionFlow[Stream, State]) StreamBidi(
 	if err != nil {
 		return nil, err
 	}
-	conn, err := af.flow.StreamBidi(ctx, init)
+	conn, err := af.action.StreamBidi(ctx, init)
 	if err != nil {
 		return nil, err
 	}
@@ -1182,7 +1192,7 @@ func (af *SessionFlow[Stream, State]) resolveOptions(opts []InvocationOption[Sta
 	cfg := &invocationOptions[State]{}
 	for _, opt := range opts {
 		if err := opt.applyInvocation(cfg); err != nil {
-			return nil, fmt.Errorf("SessionFlow %q: %w", af.flow.Name(), err)
+			return nil, fmt.Errorf("SessionFlow %q: %w", af.action.Name(), err)
 		}
 	}
 	init := &SessionFlowInit[State]{
