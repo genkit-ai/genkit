@@ -156,9 +156,24 @@ type SnapshotWriter[State any] interface {
 	SaveSnapshot(ctx context.Context, snapshot *SessionSnapshot[State]) error
 }
 
-// SnapshotAborter atomically transitions a pending snapshot to canceled.
-// Required for detach-capable session flows so [SessionFlowInput.Detach]
-// invocations can be aborted via the abortSnapshot companion action.
+// SnapshotAborter is the optional capability layered on [SessionStore]
+// that lets a session flow's invocations be aborted. It bundles the two
+// methods that must be implemented together for the abort lifecycle to
+// function:
+//
+//   - [SnapshotAborter.AbortSnapshot] flips a pending snapshot's status
+//     to canceled (typically called by the abortSnapshot companion
+//     action or directly by a Go caller holding the store).
+//
+//   - [SnapshotAborter.OnSnapshotStatusChange] lets the session flow
+//     runtime observe the flip without polling, so it can promptly
+//     cancel the work context.
+//
+// They are bundled because neither is useful alone: flipping status
+// with no observer means the running fn never learns it was aborted;
+// observing without a way to trigger the flip means no abort can
+// happen. Splitting them into separate interfaces made the
+// "implemented one, not the other" footgun too easy to hit.
 type SnapshotAborter interface {
 	// AbortSnapshot atomically transitions a snapshot from
 	// [SnapshotStatusPending] to [SnapshotStatusCanceled] and returns the
@@ -171,29 +186,24 @@ type SnapshotAborter interface {
 	// action and finalizer rely on this to avoid a pending row being
 	// clobbered by a racing terminal write.
 	AbortSnapshot(ctx context.Context, snapshotID string) (*SnapshotMetadata, error)
-}
 
-// SnapshotStatusSubscriber notifies subscribers when a snapshot's lifecycle
-// status changes. Required for detach-capable session flows: the runtime
-// uses it to react to abortSnapshot without polling the store on a fixed
-// cadence. Implementations may push changes from a transaction log, a CDC
-// feed, or fall back to polling internally; the contract just spares
-// callers the choice.
-type SnapshotStatusSubscriber interface {
 	// OnSnapshotStatusChange returns a channel that yields the snapshot's
 	// status whenever it changes. The first value (if any) reflects the
 	// status at subscription time. The channel is closed when ctx is
 	// cancelled. If the snapshot does not exist when the subscription is
 	// established, the channel is closed without yielding a value.
+	//
+	// Implementations may push changes from a transaction log, a CDC
+	// feed, or fall back to polling internally; the contract just spares
+	// callers the choice.
 	OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus
 }
 
 // SessionStore is the minimum store interface required by
-// [WithSessionStore]. Detach-related operations (abort, status
-// subscription) are layered as separate optional interfaces and checked at
-// runtime: a store wired into a flow that intends to support detach must
-// also implement [SnapshotAborter] and [SnapshotStatusSubscriber], or the
-// runtime will reject detach attempts.
+// [WithSessionStore]. The abort lifecycle is layered as the optional
+// [SnapshotAborter] capability and checked at runtime: a store wired
+// into a flow that intends to support detach must also implement
+// [SnapshotAborter], or the runtime will reject detach attempts.
 type SessionStore[State any] interface {
 	SnapshotReader[State]
 	SnapshotWriter[State]
@@ -407,12 +417,11 @@ type AbortSnapshotResponse struct {
 //     non-Go clients; local Go callers use the store reference directly.
 //
 //   - The flow's name under [api.ActionTypeAgentAbort] — abortSnapshot,
-//     registered only when the store implements both [SnapshotAborter]
-//     and [SnapshotStatusSubscriber]. Aborting needs both capabilities:
-//     the aborter to flip the row, and the subscriber so the session
-//     flow runtime can react to the flip without polling. Surfacing the
-//     action only when both are present keeps the reflected API aligned
-//     with what the store can actually do.
+//     registered only when the store implements [SnapshotAborter]
+//     (which bundles both the abort trigger and the status-change
+//     subscription needed for the runtime to react). Surfacing the
+//     action only when the capability is present keeps the reflected
+//     API aligned with what the store can actually do.
 func registerSnapshotActions[State any](
 	r api.Registry,
 	flowName string,
@@ -459,11 +468,9 @@ func registerSnapshotActions[State any](
 			return resp, nil
 		})
 
-	aborter, hasAborter := store.(SnapshotAborter)
-	_, hasSubscriber := store.(SnapshotStatusSubscriber)
-	if !hasAborter || !hasSubscriber {
-		// Without both capabilities, abort cannot be observed by the
-		// session flow runtime in a meaningful way. Don't surface the
+	aborter, ok := store.(SnapshotAborter)
+	if !ok {
+		// Store doesn't support the abort lifecycle. Don't surface the
 		// action.
 		return
 	}

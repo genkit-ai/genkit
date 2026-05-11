@@ -2620,9 +2620,9 @@ func TestSessionFlow_GetSnapshotAction_NoStore(t *testing.T) {
 	}
 }
 
-// minimalStore is a SessionStore that does NOT implement SnapshotAborter or
-// SnapshotStatusSubscriber. Used to verify the abort action stays
-// unregistered for stores that lack the capabilities.
+// minimalStore is a SessionStore that does NOT implement SnapshotAborter.
+// Used to verify the abort action stays unregistered for stores that
+// lack the capability.
 type minimalStore[State any] struct{}
 
 func (minimalStore[State]) GetSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
@@ -2705,12 +2705,12 @@ func TestSessionFlow_AgentMetadata(t *testing.T) {
 }
 
 func TestSessionFlow_AbortAction_GatedOnCapabilities(t *testing.T) {
-	// Verify the abort companion action is only registered when the store
-	// implements both SnapshotAborter and SnapshotStatusSubscriber. The
-	// getSnapshot action is registered regardless.
-	t.Run("full capabilities → both registered", func(t *testing.T) {
+	// Verify the abort companion action is only registered when the
+	// store implements SnapshotAborter. The getSnapshot action is
+	// registered regardless.
+	t.Run("aborter capability → both registered", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		store := NewInMemorySessionStore[testState]() // implements both
+		store := NewInMemorySessionStore[testState]() // implements SnapshotAborter
 		DefineSessionFlow(reg, "fullCaps",
 			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
 				return nil, nil
@@ -2725,11 +2725,11 @@ func TestSessionFlow_AbortAction_GatedOnCapabilities(t *testing.T) {
 		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
 			reg, api.ActionTypeAgentAbort, "fullCaps")
 		if abortAction == nil {
-			t.Error("abortSnapshot action should be registered when store implements both interfaces")
+			t.Error("abortSnapshot action should be registered when store implements SnapshotAborter")
 		}
 	})
 
-	t.Run("missing capabilities → abort not registered", func(t *testing.T) {
+	t.Run("no aborter capability → abort not registered", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		DefineSessionFlow(reg, "minCaps",
 			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
@@ -2740,12 +2740,12 @@ func TestSessionFlow_AbortAction_GatedOnCapabilities(t *testing.T) {
 		getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
 			reg, api.ActionTypeAgentSnapshot, "minCaps")
 		if getAction == nil {
-			t.Error("getSnapshot action should be registered even when store lacks abort/subscribe")
+			t.Error("getSnapshot action should be registered even when store lacks SnapshotAborter")
 		}
 		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
-			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter+SnapshotStatusSubscriber")
+			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter")
 		}
 	})
 }

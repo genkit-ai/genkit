@@ -67,9 +67,8 @@ func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[St
 
 // WithSessionStore sets the store for persisting snapshots. The store must
 // implement [SnapshotReader] and [SnapshotWriter] at minimum. Detach
-// support also requires [SnapshotAborter] and [SnapshotStatusSubscriber];
-// detach attempts on a store that lacks those interfaces are rejected at
-// runtime.
+// support also requires [SnapshotAborter]; detach attempts on a store
+// that lacks that interface are rejected at runtime.
 func WithSessionStore[State any](store SessionStore[State]) SessionFlowOption[State] {
 	return &sessionFlowOptions[State]{store: store}
 }

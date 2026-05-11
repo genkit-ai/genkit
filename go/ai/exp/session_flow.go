@@ -118,8 +118,7 @@ type AgentMetadata struct {
 	// StateManagement reports who owns session state.
 	StateManagement AgentMetadataStateManagement `json:"stateManagement"`
 	// Abortable reports whether the agent's invocations can be aborted
-	// (true when the store implements both [SnapshotAborter] and
-	// [SnapshotStatusSubscriber]).
+	// (true when the store implements [SnapshotAborter]).
 	Abortable bool `json:"abortable"`
 }
 
@@ -130,9 +129,7 @@ func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	abortable := false
 	if store != nil {
 		mgmt = AgentMetadataStateManagementServer
-		_, hasAborter := store.(SnapshotAborter)
-		_, hasSubscriber := store.(SnapshotStatusSubscriber)
-		abortable = hasAborter && hasSubscriber
+		_, abortable = store.(SnapshotAborter)
 	}
 	return AgentMetadata{
 		StateManagement: mgmt,
@@ -262,8 +259,9 @@ func (rt *sessionFlowRuntime[Stream, State]) run(
 
 // checkDetachCapabilities reports whether the configured store is capable
 // of supporting detach. Detach requires a writable store (to persist the
-// pending snapshot), an aborter (to cancel mid-flight), and a status
-// subscriber (so the runtime can react to the abort without polling).
+// pending snapshot) and a [SnapshotAborter] (which bundles both abort
+// triggering and status-change subscription so the runtime can react to
+// the abort without polling).
 func (rt *sessionFlowRuntime[Stream, State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
 		return core.NewError(core.FAILED_PRECONDITION,
@@ -272,10 +270,6 @@ func (rt *sessionFlowRuntime[Stream, State]) checkDetachCapabilities() error {
 	if _, ok := rt.cfg.store.(SnapshotAborter); !ok {
 		return core.NewError(core.FAILED_PRECONDITION,
 			"session flow %q: detach requires a session store implementing SnapshotAborter", rt.name)
-	}
-	if _, ok := rt.cfg.store.(SnapshotStatusSubscriber); !ok {
-		return core.NewError(core.FAILED_PRECONDITION,
-			"session flow %q: detach requires a session store implementing SnapshotStatusSubscriber", rt.name)
 	}
 	return nil
 }
@@ -376,8 +370,8 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 
 	canceledByUser := &atomic.Bool{}
 	subCtx, stopSub := context.WithCancel(workCtx)
-	subscriber := rt.cfg.store.(SnapshotStatusSubscriber)
-	statusCh := subscriber.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
+	aborter := rt.cfg.store.(SnapshotAborter) // safe: checkDetachCapabilities ran already
+	statusCh := aborter.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
 	go func() {
 		for status := range statusCh {
 			if status == SnapshotStatusCanceled {
