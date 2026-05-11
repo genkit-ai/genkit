@@ -58,6 +58,7 @@ import {
   SessionStore,
   SnapshotCallback,
   runWithSession,
+  type SessionSnapshotInput,
   type SessionStoreOptions,
 } from './session.js';
 
@@ -256,7 +257,7 @@ export class SessionRunner<State = unknown> {
         this.session.addMessages(input.messages);
       }
 
-      const turnSnapshotId = this.newSnapshotId || crypto.randomUUID();
+      const turnSnapshotId = this.newSnapshotId;
       this.newSnapshotId = undefined;
 
       try {
@@ -352,8 +353,10 @@ export class SessionRunner<State = unknown> {
       }
     }
 
-    const snapshot: SessionSnapshot<State> = {
-      snapshotId: snapshotId || this.newSnapshotId || crypto.randomUUID(),
+    const snapshotInput: SessionSnapshotInput<State> = {
+      ...(snapshotId || this.newSnapshotId
+        ? { snapshotId: (snapshotId || this.newSnapshotId)! }
+        : {}),
       createdAt: new Date().toISOString(),
       event: event,
       state: currentState as SessionState<State>,
@@ -362,12 +365,14 @@ export class SessionRunner<State = unknown> {
       error,
     };
 
-    await this.store.saveSnapshot(snapshot, { context: getContext() });
+    const assignedId = await this.store.saveSnapshot(snapshotInput, {
+      context: getContext(),
+    });
 
-    this.lastSnapshot = snapshot;
+    this.lastSnapshot = { ...snapshotInput, snapshotId: assignedId };
     this.lastSnapshotVersion = currentVersion;
 
-    return snapshot.snapshotId;
+    return assignedId;
   }
 }
 

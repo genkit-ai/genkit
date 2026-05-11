@@ -34,6 +34,7 @@ export {
   type AgentStreamChunk,
   type GenkitBetaOptions,
   type SessionSnapshot,
+  type SessionSnapshotInput,
   type SessionState,
   type SessionStore,
   type SessionStoreOptions,
