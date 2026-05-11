@@ -23,7 +23,7 @@
       ],
       "additionalProperties": false
     },
-    "CancelSnapshotRequest": {
+    "AbortSnapshotRequest": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -35,7 +35,7 @@
       ],
       "additionalProperties": false
     },
-    "CancelSnapshotResponse": {
+    "AbortSnapshotResponse": {
       "type": "object",
       "properties": {
         "snapshotId": {
@@ -80,9 +80,6 @@
         "error": {
           "type": "string"
         },
-        "startingTurnIndex": {
-          "type": "number"
-        },
         "pendingInputs": {
           "type": "array",
           "items": {
@@ -94,8 +91,7 @@
         }
       },
       "required": [
-        "snapshotId",
-        "startingTurnIndex"
+        "snapshotId"
       ],
       "additionalProperties": false
     },
@@ -208,9 +204,6 @@
         "error": {
           "type": "string"
         },
-        "startingTurnIndex": {
-          "type": "number"
-        },
         "pendingInputs": {
           "type": "array",
           "items": {
@@ -225,7 +218,6 @@
         "snapshotId",
         "createdAt",
         "event",
-        "startingTurnIndex",
         "state"
       ],
       "additionalProperties": false
@@ -281,16 +273,12 @@
         },
         "error": {
           "$ref": "#/$defs/SessionSnapshot/properties/error"
-        },
-        "startingTurnIndex": {
-          "$ref": "#/$defs/SessionSnapshot/properties/startingTurnIndex"
         }
       },
       "required": [
         "snapshotId",
         "createdAt",
-        "event",
-        "startingTurnIndex"
+        "event"
       ],
       "additionalProperties": false
     },
@@ -308,14 +296,8 @@
       "properties": {
         "snapshotId": {
           "type": "string"
-        },
-        "turnIndex": {
-          "type": "number"
         }
       },
-      "required": [
-        "turnIndex"
-      ],
       "additionalProperties": false
     },
     "DocumentData": {

@@ -63,9 +63,6 @@ func DefineSessionFlow[Stream, State any](
 			panic(fmt.Errorf("DefineSessionFlow %q: %w", name, err))
 		}
 	}
-	if cfg.heartbeatInterval <= 0 {
-		cfg.heartbeatInterval = DefaultHeartbeatInterval
-	}
 
 	flow := core.DefineBidiFlow(r, name, func(
 		ctx context.Context,
@@ -90,18 +87,15 @@ func DefineSessionFlow[Stream, State any](
 // sessionFlowRuntime owns the per-invocation wiring of a session flow:
 // session, runner, output router, input intake, and the goroutine that runs
 // the user fn. Its methods implement the three terminal paths the flow can
-// take: detach, fn-completion, and client-cancel. Centralizing this state
-// lets each method take just the context-specific arguments instead of the
-// dozen-plus parameters that were previously threaded through.
+// take: detach, fn-completion, and client-cancel.
 type sessionFlowRuntime[Stream, State any] struct {
 	name string
 	cfg  *sessionFlowOptions[State]
 
-	session        *Session[State]
-	parentSnapshot *SessionSnapshot[State]
-	runner         *SessionRunner[State]
-	router         *chunkRouter[Stream, State]
-	intake         *detachIntake
+	session *Session[State]
+	runner  *SessionRunner[State]
+	router  *chunkRouter[Stream, State]
+	intake  *detachIntake
 
 	fnDone chan fnDoneResult[State]
 }
@@ -127,13 +121,12 @@ func newSessionFlowRuntime[Stream, State any](
 	}
 
 	rt := &sessionFlowRuntime[Stream, State]{
-		name:           name,
-		cfg:            cfg,
-		session:        session,
-		parentSnapshot: parent,
-		router:         startChunkRouter(session, outCh),
-		intake:         startDetachIntake(inCh),
-		fnDone:         make(chan fnDoneResult[State], 1),
+		name:    name,
+		cfg:     cfg,
+		session: session,
+		router:  startChunkRouter(session, outCh),
+		intake:  startDetachIntake(inCh),
+		fnDone:  make(chan fnDoneResult[State], 1),
 	}
 
 	rt.runner = &SessionRunner[State]{
@@ -153,11 +146,9 @@ func newSessionFlowRuntime[Stream, State any](
 // a turn-end snapshot (if applicable) and forwards the resulting [TurnEnd]
 // chunk through the router so clients see it on the output stream.
 func (rt *sessionFlowRuntime[Stream, State]) emitTurnEnd(ctx context.Context) {
-	turnIndex := rt.runner.TurnIndex
 	snapshotID := rt.runner.maybeSnapshot(ctx, SnapshotEventTurnEnd)
 	rt.router.send() <- &SessionFlowStreamChunk[Stream]{TurnEnd: &TurnEnd{
 		SnapshotID: snapshotID,
-		TurnIndex:  turnIndex,
 	}}
 }
 
@@ -193,10 +184,9 @@ func (rt *sessionFlowRuntime[Stream, State]) run(
 
 	select {
 	case <-rt.intake.detachSignal():
-		if rt.cfg.store == nil {
+		if err := rt.checkDetachCapabilities(); err != nil {
 			rt.drainAndWait(cancelWork)
-			return nil, core.NewError(core.FAILED_PRECONDITION,
-				"session flow %q: detach requires a session store", rt.name)
+			return nil, err
 		}
 		return rt.handleDetach(clientCtx, workCtx, cancelWork, markDetached)
 
@@ -210,6 +200,26 @@ func (rt *sessionFlowRuntime[Stream, State]) run(
 		}
 		return nil, clientCtx.Err()
 	}
+}
+
+// checkDetachCapabilities reports whether the configured store is capable
+// of supporting detach. Detach requires a writable store (to persist the
+// pending snapshot), an aborter (to cancel mid-flight), and a status
+// subscriber (so the runtime can react to the abort without polling).
+func (rt *sessionFlowRuntime[Stream, State]) checkDetachCapabilities() error {
+	if rt.cfg.store == nil {
+		return core.NewError(core.FAILED_PRECONDITION,
+			"session flow %q: detach requires a session store", rt.name)
+	}
+	if _, ok := rt.cfg.store.(SnapshotAborter); !ok {
+		return core.NewError(core.FAILED_PRECONDITION,
+			"session flow %q: detach requires a session store implementing SnapshotAborter", rt.name)
+	}
+	if _, ok := rt.cfg.store.(SnapshotStatusSubscriber); !ok {
+		return core.NewError(core.FAILED_PRECONDITION,
+			"session flow %q: detach requires a session store implementing SnapshotStatusSubscriber", rt.name)
+	}
+	return nil
 }
 
 // drainAndWait performs a synchronous shutdown: cancel work, wait for the
@@ -258,41 +268,39 @@ func (rt *sessionFlowRuntime[Stream, State]) handleFnDone(
 }
 
 // handleDetach commits the pending snapshot, returns its ID, and spawns the
-// heartbeat poller and finalizer goroutines that own the rest of the
-// invocation. Per-turn snapshots are suspended for the remainder.
+// status-subscriber and finalizer goroutines that own the rest of the
+// invocation. Per-turn snapshots are suspended for the remainder, and the
+// chunk router enters trash mode (no further outCh writes, no side effects).
 //
 // PendingInputs is FIFO: in-flight input (atomically captured with the
 // suspend flag, so it's never both turn-end-snapshotted and listed here),
 // followed by the intake's queue, followed by anything the reader drains
-// from src after detach. StartingTurnIndex is the index of the FIRST entry.
+// from src after detach.
 func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 	clientCtx, workCtx context.Context,
 	cancelWork context.CancelFunc,
 	markDetached func(),
 ) (*SessionFlowOutput[State], error) {
-	// Stop mirroring clientCtx. From here, only the heartbeat or fn
-	// completion can cancel workCtx.
+	// Stop mirroring clientCtx. From here, only the abort subscription or
+	// fn completion can cancel workCtx.
 	markDetached()
 
-	combined, startTurnIndex := rt.intake.suspendAndCapture()
+	combined := rt.intake.suspendAndCapture()
 
 	parentID := ""
 	if rt.runner.lastSnapshot != nil {
 		parentID = rt.runner.lastSnapshot.SnapshotID
-	} else if rt.parentSnapshot != nil {
-		parentID = rt.parentSnapshot.SnapshotID
 	}
 
 	now := time.Now()
 	pending := &SessionSnapshot[State]{
-		SnapshotID:        uuid.New().String(),
-		ParentID:          parentID,
-		CreatedAt:         now,
-		UpdatedAt:         now,
-		Event:             SnapshotEventDetach,
-		Status:            SnapshotStatusPending,
-		StartingTurnIndex: startTurnIndex,
-		PendingInputs:     combined,
+		SnapshotID:    uuid.New().String(),
+		ParentID:      parentID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		Event:         SnapshotEventDetach,
+		Status:        SnapshotStatusPending,
+		PendingInputs: combined,
 	}
 	if err := rt.cfg.store.SaveSnapshot(clientCtx, pending); err != nil {
 		rt.drainAndWait(cancelWork)
@@ -301,21 +309,28 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 	}
 
 	// The router can no longer write to outCh once we return; the bidi
-	// framework closes it shortly after. The router keeps draining its
-	// input channel so fn never blocks on send.
+	// framework closes it shortly after. The router stops writing and
+	// trashes any further chunks.
 	rt.router.stopAndWait()
 
 	canceledByUser := &atomic.Bool{}
-	pollerCtx, stopPolling := context.WithCancel(workCtx)
-	go runHeartbeatPoller(pollerCtx, rt.cfg.heartbeatInterval, rt.cfg.store, pending.SnapshotID, func() {
-		canceledByUser.Store(true)
-		cancelWork()
-	})
+	subCtx, stopSub := context.WithCancel(workCtx)
+	subscriber := rt.cfg.store.(SnapshotStatusSubscriber)
+	statusCh := subscriber.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
+	go func() {
+		for status := range statusCh {
+			if status == SnapshotStatusCanceled {
+				canceledByUser.Store(true)
+				cancelWork()
+				return
+			}
+		}
+	}()
 
 	finalizeCtx := context.WithoutCancel(clientCtx)
 	go func() {
 		res := <-rt.fnDone
-		stopPolling()
+		stopSub()
 		rt.intake.stopAndWait()
 		rt.router.close()
 		rt.finalizePendingSnapshot(finalizeCtx, pending, res.err, canceledByUser.Load())
@@ -327,10 +342,10 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
 // terminal state and status. canceledByUser distinguishes a context
-// cancellation from cancelSnapshot polling (status=canceled) from an
-// internal failure (status=error). Re-checks the store before writing so a
-// cancel that lands between fn-return and this write is honored rather
-// than clobbered with status=complete.
+// cancellation from abortSnapshot (status=canceled) from an internal
+// failure (status=error). Re-checks the store's current status before
+// writing so an abort that lands between fn-return and this write is
+// honored rather than clobbered with status=complete.
 func (rt *sessionFlowRuntime[Stream, State]) finalizePendingSnapshot(
 	ctx context.Context,
 	pending *SessionSnapshot[State],
@@ -338,7 +353,7 @@ func (rt *sessionFlowRuntime[Stream, State]) finalizePendingSnapshot(
 	canceledByUser bool,
 ) {
 	if !canceledByUser {
-		if meta, err := rt.cfg.store.GetSnapshotMetadata(ctx, pending.SnapshotID); err == nil && meta != nil && meta.Status == SnapshotStatusCanceled {
+		if snap, err := rt.cfg.store.GetSnapshot(ctx, pending.SnapshotID); err == nil && snap != nil && snap.Status == SnapshotStatusCanceled {
 			canceledByUser = true
 		}
 	}
@@ -357,60 +372,18 @@ func (rt *sessionFlowRuntime[Stream, State]) finalizePendingSnapshot(
 	}
 
 	final := &SessionSnapshot[State]{
-		SnapshotID:        pending.SnapshotID,
-		ParentID:          pending.ParentID,
-		CreatedAt:         pending.CreatedAt,
-		UpdatedAt:         time.Now(),
-		Event:             SnapshotEventDetach,
-		Status:            status,
-		Error:             errMsg,
-		StartingTurnIndex: pending.StartingTurnIndex,
-		State:             *rt.session.State(),
+		SnapshotID: pending.SnapshotID,
+		ParentID:   pending.ParentID,
+		CreatedAt:  pending.CreatedAt,
+		UpdatedAt:  time.Now(),
+		Event:      SnapshotEventDetach,
+		Status:     status,
+		Error:      errMsg,
+		State:      *rt.session.State(),
 	}
 	if err := rt.cfg.store.SaveSnapshot(ctx, final); err != nil {
 		logger.FromContext(ctx).Error("session flow: failed to finalize pending snapshot",
 			"snapshotId", pending.SnapshotID, "err", err)
-	}
-}
-
-// runHeartbeatPoller polls the store's metadata projection at the given
-// interval and invokes onCancel exactly once if it observes
-// [SnapshotStatusCanceled]. It exits when ctx is done or when the snapshot
-// reaches any terminal status.
-func runHeartbeatPoller[State any](
-	ctx context.Context,
-	interval time.Duration,
-	store SessionStore[State],
-	snapshotID string,
-	onCancel func(),
-) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			meta, err := store.GetSnapshotMetadata(ctx, snapshotID)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				logger.FromContext(ctx).Warn("session flow heartbeat: GetSnapshotMetadata failed",
-					"snapshotId", snapshotID, "err", err)
-				continue
-			}
-			if meta == nil {
-				return // snapshot vanished; nothing more to observe
-			}
-			switch meta.Status {
-			case SnapshotStatusCanceled:
-				onCancel()
-				return
-			case SnapshotStatusComplete, SnapshotStatusError:
-				return // terminal but not by us; stop polling
-			}
-		}
 	}
 }
 
@@ -492,8 +465,8 @@ type SessionRunner[State any] struct {
 	lastSnapshotVersion uint64
 	collectTurnOutput   func() any
 
-	// intake is the source of truth for in-flight, queued, suspended, and
-	// the turn-index counter. The runner consults it via beginTurnEnd (in
+	// intake is the source of truth for in-flight tracking, queue state,
+	// and suspended state. The runner consults it via beginTurnEnd (in
 	// maybeSnapshot) so per-turn snapshot writes and detach captures
 	// cannot race over the same input.
 	intake *detachIntake
@@ -558,18 +531,14 @@ func (s *SessionRunner[State]) Result() *SessionFlowResult {
 // For turn-end events, the runner consults the intake atomically: if
 // detach has suspended snapshots, intake.beginTurnEnd reports that and
 // the runner skips. Otherwise intake.beginTurnEnd clears the in-flight
-// input and reports its turn index, which becomes the snapshot's
-// StartingTurnIndex. This is what guarantees the in-flight input is
-// never both turn-end-snapshotted AND included in the pending snapshot's
+// input. This is what guarantees the in-flight input is never both
+// turn-end-snapshotted AND included in the pending snapshot's
 // PendingInputs.
 func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
-	startingTurnIndex := s.TurnIndex
 	if event == SnapshotEventTurnEnd && s.intake != nil {
-		suspended, idx := s.intake.beginTurnEnd()
-		if suspended {
+		if suspended := s.intake.beginTurnEnd(); suspended {
 			return ""
 		}
-		startingTurnIndex = idx
 	}
 
 	if s.store == nil {
@@ -606,13 +575,12 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 
 	now := time.Now()
 	snapshot := &SessionSnapshot[State]{
-		SnapshotID:        uuid.New().String(),
-		CreatedAt:         now,
-		UpdatedAt:         now,
-		Event:             event,
-		Status:            SnapshotStatusComplete,
-		StartingTurnIndex: startingTurnIndex,
-		State:             currentState,
+		SnapshotID: uuid.New().String(),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Event:      event,
+		Status:     SnapshotStatusComplete,
+		State:      currentState,
 	}
 	if s.lastSnapshot != nil {
 		snapshot.ParentID = s.lastSnapshot.SnapshotID
@@ -664,7 +632,10 @@ func (r Responder[Stream]) SendStatus(status Stream) {
 }
 
 // SendArtifact sends an artifact to the stream and adds it to the session.
-// If an artifact with the same name already exists in the session, it is replaced.
+// If an artifact with the same name already exists in the session, it is
+// replaced. The session-level side effect happens whether or not detach
+// has landed; only the wire forward to the client is suppressed
+// post-detach, when there is no longer a client to receive it.
 func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
 	r <- &SessionFlowStreamChunk[Stream]{Artifact: artifact}
 }
@@ -672,14 +643,14 @@ func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
 // --- chunkRouter ---
 //
 // chunkRouter owns the intermediate stream channel that all chunks flow
-// through on their way to outCh. It captures side effects (adding artifacts
-// to the session, accumulating turn chunks for span output) regardless of
-// whether the chunk is delivered to the client.
-//
-// The "stop-writing" mode exists for detached flows: on detach, the bidi
-// framework closes outCh shortly after bidiFn returns, so the router must
-// commit to not writing to outCh before we return. It keeps draining in (so
-// the fn goroutine never blocks on send) until in is closed.
+// through on their way to outCh. Every chunk gets the same in-process
+// side effects (adding artifacts to the session, accumulating turn
+// chunks for span output) regardless of whether detach has landed; the
+// wire forward to outCh is the only thing detach suppresses, since the
+// bidi framework closes outCh shortly after bidiFn returns. The router
+// commits to not writing before we return so that close is safe, and
+// keeps draining its input so the user fn never blocks on a responder
+// send.
 
 type chunkRouter[Stream, State any] struct {
 	in      chan *SessionFlowStreamChunk[Stream]
@@ -712,37 +683,50 @@ func startChunkRouter[Stream, State any](
 
 func (r *chunkRouter[Stream, State]) run() {
 	defer close(r.done)
-	stopCh := r.stopWriting
-	disable := func() {
-		if stopCh != nil {
-			close(r.writerStopped)
-			stopCh = nil
-		}
+	if !r.forward() {
+		// r.in closed before detach; nothing left to do.
+		return
 	}
+	close(r.writerStopped)
+	// Detached: keep applying side effects so the user fn's
+	// SendArtifact/SendModelChunk calls behave the same way they did
+	// pre-detach. Only the wire forward to outCh is suppressed.
+	for chunk := range r.in {
+		r.applySideEffects(chunk)
+	}
+}
+
+// applySideEffects records the chunk's effect on session state and turn
+// span output. Invoked from both forward (pre-detach) and the post-detach
+// drain so a Send call is observably the same in either mode.
+func (r *chunkRouter[Stream, State]) applySideEffects(chunk *SessionFlowStreamChunk[Stream]) {
+	if chunk.Artifact != nil {
+		r.session.AddArtifacts(chunk.Artifact)
+	}
+	if chunk.TurnEnd == nil {
+		r.turnMu.Lock()
+		r.turnChunks = append(r.turnChunks, chunk)
+		r.turnMu.Unlock()
+	}
+}
+
+// forward delivers chunks to outCh and applies side effects until detach
+// or r.in closes. Returns true if it stopped because of detach.
+func (r *chunkRouter[Stream, State]) forward() bool {
 	for {
 		select {
 		case chunk, ok := <-r.in:
 			if !ok {
-				return
+				return false
 			}
-			if chunk.Artifact != nil {
-				r.session.AddArtifacts(chunk.Artifact)
-			}
-			if chunk.TurnEnd == nil {
-				r.turnMu.Lock()
-				r.turnChunks = append(r.turnChunks, chunk)
-				r.turnMu.Unlock()
-			}
-			if stopCh == nil {
-				continue
-			}
+			r.applySideEffects(chunk)
 			select {
 			case r.out <- chunk:
-			case <-stopCh:
-				disable()
+			case <-r.stopWriting:
+				return true
 			}
-		case <-stopCh:
-			disable()
+		case <-r.stopWriting:
+			return true
 		}
 	}
 }
@@ -785,7 +769,7 @@ func (r *chunkRouter[Stream, State]) close() {
 //
 // detachIntake separates eager src reading from runner-paced forwarding,
 // and is the single source of truth for in-flight tracking, queue state,
-// suspend state, and turn-index counting.
+// and suspend state.
 //
 // The reader goroutine pulls from the bidi framework's inCh as soon as
 // inputs arrive and appends them to an internal queue. This is what makes
@@ -799,14 +783,12 @@ func (r *chunkRouter[Stream, State]) close() {
 // being tracked — closing the gap that would otherwise let detach miss it.
 //
 // The runner asks beginTurnEnd at the end of each turn: if not suspended,
-// in-flight is cleared and the turn's index is returned to be used as the
-// snapshot's StartingTurnIndex. If suspended, the runner skips its
-// snapshot and the input rolls into the pending snapshot instead.
+// in-flight is cleared. If suspended, the runner skips its snapshot and
+// the input rolls into the pending snapshot instead.
 //
 // suspendAndCapture is the detach handler's atomic read: flips suspended,
-// reads in-flight, reads queue, and reports the turn index of the first
-// pending input — all under one lock so there's no race with maybeSnapshot
-// or the forwarder.
+// reads in-flight, reads queue, all under one lock so there's no race
+// with maybeSnapshot or the forwarder.
 
 type detachIntake struct {
 	src    <-chan *SessionFlowInput
@@ -818,12 +800,10 @@ type detachIntake struct {
 	// first turn can start without a preceding turn end.
 	turnDone chan struct{}
 
-	mu                sync.Mutex
-	suspended         bool
-	inFlight          *SessionFlowInput
-	inFlightTurnIndex int
-	queue             []*SessionFlowInput
-	nextTurnIndex     int
+	mu        sync.Mutex
+	suspended bool
+	inFlight  *SessionFlowInput
+	queue     []*SessionFlowInput
 
 	readDone atomic.Bool
 	detachCh chan struct{} // signaled by reader when detach observed
@@ -956,9 +936,7 @@ func hasInputPayload(in *SessionFlowInput) bool {
 // runner signals turnDone via beginTurnEnd when it's ready for the next
 // input; until then the forwarder waits, so inFlight always reflects the
 // input actually being processed (or in transit to the runner) rather
-// than running ahead. The forwarder atomically pops the queue and sets
-// inFlight under mu, closing the gap between "removed from queue" and
-// "in flight".
+// than running ahead.
 func (i *detachIntake) forward() {
 	for {
 		// Wait for the previous turn to release us (initial credit lets
@@ -968,36 +946,42 @@ func (i *detachIntake) forward() {
 		case <-i.stop:
 			return
 		}
+		input := i.awaitInput()
+		if input == nil {
+			return // reader done with empty queue, or stop signaled
+		}
+		forwarded := *input
+		forwarded.Detach = false
+		select {
+		case i.dst <- &forwarded:
+		case <-i.stop:
+			return
+		}
+	}
+}
 
-		// Wait for at least one queued input.
-		for {
-			i.mu.Lock()
-			if len(i.queue) > 0 {
-				input := i.queue[0]
-				i.queue = i.queue[1:]
-				i.inFlight = input
-				i.inFlightTurnIndex = i.nextTurnIndex
-				i.mu.Unlock()
-
-				forwarded := *input
-				forwarded.Detach = false
-				select {
-				case i.dst <- &forwarded:
-				case <-i.stop:
-					return
-				}
-				break
-			}
-			done := i.readDone.Load()
+// awaitInput blocks until the queue has an input, the reader is done, or
+// stop is signaled. Returns the popped input (with inFlight set under mu)
+// or nil if no further inputs will arrive.
+func (i *detachIntake) awaitInput() *SessionFlowInput {
+	for {
+		i.mu.Lock()
+		if len(i.queue) > 0 {
+			input := i.queue[0]
+			i.queue = i.queue[1:]
+			i.inFlight = input
 			i.mu.Unlock()
-			if done {
-				return
-			}
-			select {
-			case <-i.notify:
-			case <-i.stop:
-				return
-			}
+			return input
+		}
+		done := i.readDone.Load()
+		i.mu.Unlock()
+		if done {
+			return nil
+		}
+		select {
+		case <-i.notify:
+		case <-i.stop:
+			return nil
 		}
 	}
 }
@@ -1023,45 +1007,36 @@ func (i *detachIntake) detachSignal() <-chan struct{} {
 // beginTurnEnd is called by [SessionRunner.maybeSnapshot] before writing
 // a turn-end snapshot. If the intake has been suspended (detach landed),
 // it returns suspended=true and the runner skips the snapshot. Otherwise
-// it clears in-flight, advances the turn-index counter, and returns the
-// just-ended turn's index for the snapshot's StartingTurnIndex.
+// it clears in-flight.
 //
 // In all cases (including suspended) the forwarder is released so it can
 // pop the next queued input — suspension stops snapshot writing, not
 // processing.
-func (i *detachIntake) beginTurnEnd() (suspended bool, turnIndex int) {
+func (i *detachIntake) beginTurnEnd() (suspended bool) {
 	i.mu.Lock()
 	if i.suspended {
 		i.mu.Unlock()
 		i.releaseForward()
-		return true, 0
+		return true
 	}
-	turnIndex = i.inFlightTurnIndex
 	i.inFlight = nil
-	i.nextTurnIndex++
 	i.mu.Unlock()
 	i.releaseForward()
-	return false, turnIndex
+	return false
 }
 
 // suspendAndCapture is called once by the detach handler. It flips
-// suspended=true, reads the in-flight input (if any) and the queue
-// snapshot, and returns the StartingTurnIndex for the pending snapshot:
-// the in-flight input's index if any, otherwise the index that the next
-// queued input will occupy. Inputs are returned in FIFO order with
-// Detach cleared.
-func (i *detachIntake) suspendAndCapture() (combined []*SessionFlowInput, startTurnIndex int) {
+// suspended=true and reads the in-flight input (if any) and the queue
+// snapshot. Inputs are returned in FIFO order with Detach cleared.
+func (i *detachIntake) suspendAndCapture() (combined []*SessionFlowInput) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.suspended = true
 
 	if i.inFlight != nil {
-		startTurnIndex = i.inFlightTurnIndex
 		c := *i.inFlight
 		c.Detach = false
 		combined = append(combined, &c)
-	} else {
-		startTurnIndex = i.nextTurnIndex
 	}
 	for _, q := range i.queue {
 		c := *q
@@ -1218,8 +1193,11 @@ func (c *SessionFlowConnection[Stream, State]) SendToolRestarts(parts ...*ai.Par
 // Detach asks the server to write a pending snapshot capturing any inputs
 // already buffered, close the connection, and continue processing in the
 // background. Output() returns the pending snapshot ID; the client can
-// later call CancelSnapshot to stop the background work or GetSnapshot to
-// observe its progression.
+// later call AbortSnapshot to stop the background work or GetSnapshot to
+// observe its progression. Streamed chunks emitted after detach are not
+// forwarded over the wire (the connection is gone), but their session-
+// level side effects still apply: artifacts sent via [Responder.SendArtifact]
+// land in the session and end up in the final snapshot's state.
 //
 // To send a final input as part of the same wire message, use
 // Send(&SessionFlowInput{Detach: true, Messages: ...}) directly.

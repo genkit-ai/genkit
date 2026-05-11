@@ -19,13 +19,7 @@ package exp
 import (
 	"context"
 	"errors"
-	"fmt"
-	"time"
 )
-
-// DefaultHeartbeatInterval is the cadence at which a detached invocation
-// polls the cancelSnapshot status when [WithHeartbeatInterval] is not set.
-const DefaultHeartbeatInterval = 10 * time.Second
 
 // --- SessionFlowOption ---
 
@@ -44,10 +38,9 @@ type SessionFlowOption[State any] interface {
 type SnapshotTransform[State any] = func(state SessionState[State]) SessionState[State]
 
 type sessionFlowOptions[State any] struct {
-	store             SessionStore[State]
-	callback          SnapshotCallback[State]
-	transform         SnapshotTransform[State]
-	heartbeatInterval time.Duration
+	store     SessionStore[State]
+	callback  SnapshotCallback[State]
+	transform SnapshotTransform[State]
 }
 
 func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[State]) error {
@@ -69,16 +62,14 @@ func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[St
 		}
 		opts.transform = o.transform
 	}
-	if o.heartbeatInterval != 0 {
-		if opts.heartbeatInterval != 0 {
-			return errors.New("cannot set heartbeat interval more than once (WithHeartbeatInterval)")
-		}
-		opts.heartbeatInterval = o.heartbeatInterval
-	}
 	return nil
 }
 
-// WithSessionStore sets the store for persisting snapshots.
+// WithSessionStore sets the store for persisting snapshots. The store must
+// implement [SnapshotReader] and [SnapshotWriter] at minimum. Detach
+// support also requires [SnapshotAborter] and [SnapshotStatusSubscriber];
+// detach attempts on a store that lacks those interfaces are rejected at
+// runtime.
 func WithSessionStore[State any](store SessionStore[State]) SessionFlowOption[State] {
 	return &sessionFlowOptions[State]{store: store}
 }
@@ -110,22 +101,6 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) SessionFlowOption[State]
 // persisted in the store or to state passed to the user flow function.
 func WithSnapshotTransform[State any](transform SnapshotTransform[State]) SessionFlowOption[State] {
 	return &sessionFlowOptions[State]{transform: transform}
-}
-
-// WithHeartbeatInterval sets the cadence at which a detached invocation
-// polls its pending snapshot's status via the getSnapshotMetadata companion
-// action. If the polled status flips to [SnapshotStatusCanceled], the
-// invocation's context is cancelled so the flow stops promptly.
-//
-// The interval applies only after a client sends [SessionFlowInput.Detach]
-// and the flow transitions to background processing; foreground invocations
-// rely on normal context cancellation. The default is
-// [DefaultHeartbeatInterval]. Must be positive.
-func WithHeartbeatInterval[State any](d time.Duration) SessionFlowOption[State] {
-	if d <= 0 {
-		panic(fmt.Errorf("WithHeartbeatInterval: interval must be positive, got %s", d))
-	}
-	return &sessionFlowOptions[State]{heartbeatInterval: d}
 }
 
 // --- InvocationOption ---

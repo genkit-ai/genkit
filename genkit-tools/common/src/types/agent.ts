@@ -54,8 +54,8 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  * - `pending`: a detached invocation is still processing the queued inputs.
  *   The snapshot will be rewritten with a terminal status once the flow exits.
  * - `complete`: the snapshot captures a settled state.
- * - `canceled`: the snapshot's invocation was cancelled via the
- *   `cancelSnapshot` companion action while detached.
+ * - `canceled`: the snapshot's invocation was aborted via the
+ *   `abortSnapshot` companion action while detached.
  * - `error`: the invocation terminated with an error. The snapshot's `error`
  *   field describes the failure and resume is rejected with that same error.
  */
@@ -91,8 +91,9 @@ export const SessionFlowInputSchema = z.object({
    * accepted. The server writes a single pending snapshot capturing the
    * queued inputs (this one and any others already buffered), returns
    * SessionFlowOutput with that snapshot ID, and continues processing in a
-   * background context. The pending snapshot is finalized once all queued
-   * inputs are processed (or the snapshot is cancelled via `cancelSnapshot`).
+   * background context. Streamed chunks emitted after detach are discarded;
+   * only the final session state is captured when the snapshot is
+   * finalized (or the snapshot is aborted via `abortSnapshot`).
    */
   detach: z.boolean().optional(),
   /** User's input messages for this turn. */
@@ -154,16 +155,6 @@ export const TurnEndSchema = z.object({
    * snapshots were suspended after detach).
    */
   snapshotId: z.string().optional(),
-  /**
-   * Zero-based index of the turn that just ended within this invocation. It
-   * restarts at 0 for each new invocation (resume, reconnect). Clients
-   * consuming a durable chunk stream use this field to anchor chunks to
-   * inputs: chunks emitted between `TurnEnd{turnIndex:N-1}` and
-   * `TurnEnd{turnIndex:N}` belong to the input at turn N. After detach,
-   * pair with `SessionSnapshot.startingTurnIndex` and
-   * `SessionSnapshot.pendingInputs` to recover input correspondence.
-   */
-  turnIndex: z.number(),
 });
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
@@ -190,8 +181,8 @@ export type SessionFlowStreamChunk = z.infer<
 
 /**
  * Zod schema for the metadata projection of a session snapshot. It exists
- * so callers (notably the detached-invocation heartbeat poller) can check
- * status without paying for a full state read.
+ * so callers can identify a snapshot and check its lifecycle status without
+ * paying for a full state read.
  */
 export const SnapshotMetadataSchema = z.object({
   /** Unique identifier for this snapshot (UUID). */
@@ -208,13 +199,6 @@ export const SnapshotMetadataSchema = z.object({
   status: SnapshotStatusSchema.optional(),
   /** Failure message for a snapshot in `error` status. */
   error: z.string().optional(),
-  /**
-   * Zero-based index of the first turn this snapshot covers within its
-   * invocation. For sync snapshots it is the index of the single turn that
-   * ended. For pending snapshots it is the index of the first input in
-   * `pendingInputs`; subsequent inputs map to startingTurnIndex+1, +2, etc.
-   */
-  startingTurnIndex: z.number(),
 });
 export type SnapshotMetadata = z.infer<typeof SnapshotMetadataSchema>;
 
@@ -266,11 +250,6 @@ export const GetSnapshotResponseSchema = z.object({
   status: SnapshotStatusSchema.optional(),
   /** Populated when status is `error`. */
   error: z.string().optional(),
-  /**
-   * Zero-based index of the first turn this snapshot covers within its
-   * invocation.
-   */
-  startingTurnIndex: z.number(),
   /** Queued inputs captured at detach time. Populated only when status is `pending`. */
   pendingInputs: z.array(SessionFlowInputSchema).optional(),
   /**
@@ -282,27 +261,27 @@ export const GetSnapshotResponseSchema = z.object({
 export type GetSnapshotResponse = z.infer<typeof GetSnapshotResponseSchema>;
 
 /**
- * Zod schema for the input of the `cancelSnapshot` companion action.
+ * Zod schema for the input of the `abortSnapshot` companion action.
  */
-export const CancelSnapshotRequestSchema = z.object({
-  /** Identifies the snapshot whose invocation should be cancelled. */
+export const AbortSnapshotRequestSchema = z.object({
+  /** Identifies the snapshot whose invocation should be aborted. */
   snapshotId: z.string(),
 });
-export type CancelSnapshotRequest = z.infer<typeof CancelSnapshotRequestSchema>;
+export type AbortSnapshotRequest = z.infer<typeof AbortSnapshotRequestSchema>;
 
 /**
- * Zod schema for the output of the `cancelSnapshot` companion action.
+ * Zod schema for the output of the `abortSnapshot` companion action.
  */
-export const CancelSnapshotResponseSchema = z.object({
+export const AbortSnapshotResponseSchema = z.object({
   /** Echoes the requested snapshot ID. */
   snapshotId: z.string(),
   /**
-   * Snapshot's status after the cancel attempt. For a pending snapshot
+   * Snapshot's status after the abort attempt. For a pending snapshot
    * this is `canceled`. For an already-terminal snapshot this is the
-   * existing terminal status (the cancel is a no-op).
+   * existing terminal status (the abort is a no-op).
    */
   status: SnapshotStatusSchema.optional(),
 });
-export type CancelSnapshotResponse = z.infer<
-  typeof CancelSnapshotResponseSchema
+export type AbortSnapshotResponse = z.infer<
+  typeof AbortSnapshotResponseSchema
 >;

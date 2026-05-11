@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -40,7 +41,7 @@ import (
 // returns its ID immediately. Background processing then either updates that
 // snapshot to [SnapshotStatusComplete] / [SnapshotStatusError] when the flow
 // finishes, or to [SnapshotStatusCanceled] if the client called
-// cancelSnapshot in the meantime.
+// abortSnapshot in the meantime.
 type SnapshotStatus string
 
 const (
@@ -51,7 +52,7 @@ const (
 	// SnapshotStatusComplete indicates the snapshot captures a settled state.
 	SnapshotStatusComplete SnapshotStatus = "complete"
 	// SnapshotStatusCanceled indicates the snapshot's invocation was
-	// cancelled via the cancelSnapshot companion action while detached.
+	// aborted via the abortSnapshot companion action while detached.
 	SnapshotStatusCanceled SnapshotStatus = "canceled"
 	// SnapshotStatusError indicates the invocation terminated with an error.
 	// The snapshot's Error field describes the failure and resume is
@@ -79,13 +80,6 @@ type SessionSnapshot[State any] struct {
 	// Error is the failure message for a snapshot in [SnapshotStatusError].
 	// Empty otherwise.
 	Error string `json:"error,omitempty"`
-	// StartingTurnIndex is the zero-based index of the first turn this
-	// snapshot covers within its invocation. For sync snapshots it is the
-	// index of the single turn that ended. For pending snapshots it is the
-	// index of the first input in [PendingInputs]; subsequent inputs map to
-	// StartingTurnIndex+1, +2, etc. Pair with [TurnEnd.TurnIndex] on
-	// chunks to correlate durable-stream chunks back to inputs.
-	StartingTurnIndex int `json:"startingTurnIndex"`
 	// PendingInputs is the inputs captured at detach time, in FIFO order.
 	// The first entry may be the input that was in flight when detach
 	// landed (its turn was suppressed because snapshots were suspended in
@@ -128,9 +122,9 @@ func applyTransform[State any](t SnapshotTransform[State], state *SessionState[S
 // --- Session store ---
 
 // SnapshotMetadata is the metadata-only projection of a [SessionSnapshot]:
-// identifying fields, lifecycle timestamps, and status. It exists so callers
-// (notably the detached-invocation heartbeat poller) can check status
-// without paying for a full state read.
+// identifying fields, lifecycle timestamps, and status. Returned by store
+// operations that surface a snapshot's lifecycle state without paying for
+// a full state read.
 type SnapshotMetadata struct {
 	// SnapshotID is the unique identifier for this snapshot.
 	SnapshotID string `json:"snapshotId"`
@@ -146,52 +140,86 @@ type SnapshotMetadata struct {
 	Status SnapshotStatus `json:"status,omitempty"`
 	// Error is the failure message for a snapshot in [SnapshotStatusError].
 	Error string `json:"error,omitempty"`
-	// StartingTurnIndex is the zero-based index of the first turn this
-	// snapshot covers within its invocation. See [SessionSnapshot.StartingTurnIndex].
-	StartingTurnIndex int `json:"startingTurnIndex"`
 }
 
-// SessionStore persists and retrieves snapshots.
-type SessionStore[State any] interface {
+// SnapshotReader retrieves snapshots. The minimum any session store must
+// implement to be used with [WithSessionStore].
+type SnapshotReader[State any] interface {
 	// GetSnapshot retrieves a snapshot by ID. Returns nil if not found.
 	GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
-	// GetSnapshotMetadata retrieves only the metadata for a snapshot.
-	// Returns nil if not found. Implementations should avoid loading the
-	// full session state — this is called by the heartbeat poller on a
-	// configured cadence while a detached invocation is in flight.
-	GetSnapshotMetadata(ctx context.Context, snapshotID string) (*SnapshotMetadata, error)
+}
+
+// SnapshotWriter persists snapshots. The minimum any session store must
+// implement to be used with [WithSessionStore].
+type SnapshotWriter[State any] interface {
 	// SaveSnapshot persists a snapshot.
 	SaveSnapshot(ctx context.Context, snapshot *SessionSnapshot[State]) error
-	// CancelSnapshot atomically transitions a snapshot from
+}
+
+// SnapshotAborter atomically transitions a pending snapshot to canceled.
+// Required for detach-capable session flows so [SessionFlowInput.Detach]
+// invocations can be aborted via the abortSnapshot companion action.
+type SnapshotAborter interface {
+	// AbortSnapshot atomically transitions a snapshot from
 	// [SnapshotStatusPending] to [SnapshotStatusCanceled] and returns the
 	// resulting metadata. If the snapshot is in any other status the
 	// operation is a no-op and the existing metadata is returned. Returns
 	// nil if the snapshot is not found.
 	//
 	// Implementations must perform the read-and-write atomically (e.g., a
-	// transaction or the equivalent of a compare-and-swap). The session
-	// flow's cancelSnapshot action and finalizer rely on this to avoid a
-	// pending row being clobbered by a racing terminal write.
-	CancelSnapshot(ctx context.Context, snapshotID string) (*SnapshotMetadata, error)
+	// transaction or a compare-and-swap). The session flow's abortSnapshot
+	// action and finalizer rely on this to avoid a pending row being
+	// clobbered by a racing terminal write.
+	AbortSnapshot(ctx context.Context, snapshotID string) (*SnapshotMetadata, error)
 }
 
-// InMemorySessionStore provides a thread-safe in-memory snapshot store.
+// SnapshotStatusSubscriber notifies subscribers when a snapshot's lifecycle
+// status changes. Required for detach-capable session flows: the runtime
+// uses it to react to abortSnapshot without polling the store on a fixed
+// cadence. Implementations may push changes from a transaction log, a CDC
+// feed, or fall back to polling internally; the contract just spares
+// callers the choice.
+type SnapshotStatusSubscriber interface {
+	// OnSnapshotStatusChange returns a channel that yields the snapshot's
+	// status whenever it changes. The first value (if any) reflects the
+	// status at subscription time. The channel is closed when ctx is
+	// cancelled. If the snapshot does not exist when the subscription is
+	// established, the channel is closed without yielding a value.
+	OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus
+}
+
+// SessionStore is the minimum store interface required by
+// [WithSessionStore]. Detach-related operations (abort, status
+// subscription) are layered as separate optional interfaces and checked at
+// runtime: a store wired into a flow that intends to support detach must
+// also implement [SnapshotAborter] and [SnapshotStatusSubscriber], or the
+// runtime will reject detach attempts.
+type SessionStore[State any] interface {
+	SnapshotReader[State]
+	SnapshotWriter[State]
+}
+
+// InMemorySessionStore provides a thread-safe in-memory snapshot store. It
+// implements the full set of optional store interfaces (reader, writer,
+// aborter, status subscriber).
 type InMemorySessionStore[State any] struct {
+	mu        sync.Mutex
 	snapshots map[string]*SessionSnapshot[State]
-	mu        sync.RWMutex
+	subs      map[string][]chan SnapshotStatus
 }
 
 // NewInMemorySessionStore creates a new in-memory snapshot store.
 func NewInMemorySessionStore[State any]() *InMemorySessionStore[State] {
 	return &InMemorySessionStore[State]{
 		snapshots: make(map[string]*SessionSnapshot[State]),
+		subs:      make(map[string][]chan SnapshotStatus),
 	}
 }
 
 // GetSnapshot retrieves a snapshot by ID. Returns nil if not found.
 func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID string) (*SessionSnapshot[State], error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	snap, ok := s.snapshots[snapshotID]
 	if !ok {
 		return nil, nil
@@ -199,22 +227,10 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 	return copySnapshot(snap)
 }
 
-// GetSnapshotMetadata retrieves only the metadata for a snapshot. Returns
-// nil if not found.
-func (s *InMemorySessionStore[State]) GetSnapshotMetadata(_ context.Context, snapshotID string) (*SnapshotMetadata, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	snap, ok := s.snapshots[snapshotID]
-	if !ok {
-		return nil, nil
-	}
-	return snapshotMetadata(snap), nil
-}
-
-// CancelSnapshot atomically flips a pending snapshot to canceled. If the
+// AbortSnapshot atomically flips a pending snapshot to canceled. If the
 // snapshot is already terminal the existing metadata is returned unchanged.
 // Returns nil if the snapshot is not found.
-func (s *InMemorySessionStore[State]) CancelSnapshot(_ context.Context, snapshotID string) (*SnapshotMetadata, error) {
+func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (*SnapshotMetadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snap, ok := s.snapshots[snapshotID]
@@ -224,6 +240,7 @@ func (s *InMemorySessionStore[State]) CancelSnapshot(_ context.Context, snapshot
 	if snap.Status == SnapshotStatusPending {
 		snap.Status = SnapshotStatusCanceled
 		snap.UpdatedAt = time.Now()
+		s.notifyLocked(snapshotID, snap.Status)
 	}
 	return snapshotMetadata(snap), nil
 }
@@ -236,21 +253,76 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(_ context.Context, snapshot *
 	if err != nil {
 		return err
 	}
+	prev, existed := s.snapshots[copied.SnapshotID]
 	s.snapshots[copied.SnapshotID] = copied
+	if !existed || prev.Status != copied.Status {
+		s.notifyLocked(copied.SnapshotID, copied.Status)
+	}
 	return nil
+}
+
+// OnSnapshotStatusChange subscribes to status changes for a snapshot. The
+// returned channel yields the current status (if any) and any subsequent
+// changes, until ctx is cancelled.
+func (s *InMemorySessionStore[State]) OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus {
+	ch := make(chan SnapshotStatus, 1)
+
+	s.mu.Lock()
+	snap, ok := s.snapshots[snapshotID]
+	if !ok {
+		s.mu.Unlock()
+		close(ch)
+		return ch
+	}
+	ch <- snap.Status
+	s.subs[snapshotID] = append(s.subs[snapshotID], ch)
+	s.mu.Unlock()
+
+	context.AfterFunc(ctx, func() { s.removeSub(snapshotID, ch) })
+	return ch
+}
+
+// removeSub detaches a subscriber and closes its channel.
+func (s *InMemorySessionStore[State]) removeSub(snapshotID string, ch chan SnapshotStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	subs := s.subs[snapshotID]
+	i := slices.Index(subs, ch)
+	if i < 0 {
+		return
+	}
+	subs = slices.Delete(subs, i, i+1)
+	if len(subs) == 0 {
+		delete(s.subs, snapshotID)
+	} else {
+		s.subs[snapshotID] = subs
+	}
+	close(ch)
+}
+
+// notifyLocked publishes status to all live subscribers of snapshotID.
+// Caller must hold s.mu. Sends are best-effort: a slow subscriber may miss
+// intermediate values, but the store guarantees the latest value visible
+// to the subscription is the one persisted at notify time.
+func (s *InMemorySessionStore[State]) notifyLocked(snapshotID string, status SnapshotStatus) {
+	for _, ch := range s.subs[snapshotID] {
+		select {
+		case ch <- status:
+		default:
+		}
+	}
 }
 
 // snapshotMetadata projects the metadata fields of a snapshot.
 func snapshotMetadata[State any](snap *SessionSnapshot[State]) *SnapshotMetadata {
 	return &SnapshotMetadata{
-		SnapshotID:        snap.SnapshotID,
-		ParentID:          snap.ParentID,
-		CreatedAt:         snap.CreatedAt,
-		UpdatedAt:         snap.UpdatedAt,
-		Event:             snap.Event,
-		Status:            snap.Status,
-		Error:             snap.Error,
-		StartingTurnIndex: snap.StartingTurnIndex,
+		SnapshotID: snap.SnapshotID,
+		ParentID:   snap.ParentID,
+		CreatedAt:  snap.CreatedAt,
+		UpdatedAt:  snap.UpdatedAt,
+		Event:      snap.Event,
+		Status:     snap.Status,
+		Error:      snap.Error,
 	}
 }
 
@@ -299,10 +371,6 @@ type GetSnapshotResponse[State any] struct {
 	Status SnapshotStatus `json:"status,omitempty"`
 	// Error is populated when Status is [SnapshotStatusError].
 	Error string `json:"error,omitempty"`
-	// StartingTurnIndex is the zero-based index of the first turn this
-	// snapshot covers within its invocation. See
-	// [SessionSnapshot.StartingTurnIndex].
-	StartingTurnIndex int `json:"startingTurnIndex"`
 	// PendingInputs is the queued inputs captured at detach time. Populated
 	// only when Status is [SnapshotStatusPending].
 	PendingInputs []*SessionFlowInput `json:"pendingInputs,omitempty"`
@@ -311,28 +379,30 @@ type GetSnapshotResponse[State any] struct {
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// CancelSnapshotRequest is the input for the cancelSnapshot companion action.
-type CancelSnapshotRequest struct {
-	// SnapshotID identifies the snapshot whose invocation should be cancelled.
+// AbortSnapshotRequest is the input for the abortSnapshot companion action.
+type AbortSnapshotRequest struct {
+	// SnapshotID identifies the snapshot whose invocation should be aborted.
 	SnapshotID string `json:"snapshotId"`
 }
 
-// CancelSnapshotResponse is the output of the cancelSnapshot companion action.
-type CancelSnapshotResponse struct {
+// AbortSnapshotResponse is the output of the abortSnapshot companion action.
+type AbortSnapshotResponse struct {
 	// SnapshotID echoes the requested snapshot ID.
 	SnapshotID string `json:"snapshotId"`
-	// Status is the snapshot's status after the cancel attempt. For a
+	// Status is the snapshot's status after the abort attempt. For a
 	// pending snapshot this is [SnapshotStatusCanceled]. For an
 	// already-terminal snapshot this is the existing terminal status (the
-	// cancel is a no-op).
+	// abort is a no-op).
 	Status SnapshotStatus `json:"status,omitempty"`
 }
 
-// registerSnapshotActions registers the getSnapshot and cancelSnapshot
+// registerSnapshotActions registers the getSnapshot and abortSnapshot
 // companion actions for a session flow, both keyed under the flow's name.
 // They exist so non-Go callers (Dev UI, other languages) can observe and
-// cancel snapshots over the reflection API. Local Go callers use the
-// store reference passed to WithSessionStore directly.
+// abort snapshots over the reflection API. Local Go callers use the store
+// reference passed to WithSessionStore directly. The abortSnapshot action
+// is only registered if the store implements [SnapshotAborter], so the
+// reflected action surface matches the store's actual capabilities.
 func registerSnapshotActions[State any](
 	r api.Registry,
 	flowName string,
@@ -366,13 +436,12 @@ func registerSnapshotActions[State any](
 			}
 
 			resp := &GetSnapshotResponse[State]{
-				SnapshotID:        snap.SnapshotID,
-				CreatedAt:         snap.CreatedAt,
-				UpdatedAt:         updatedAt,
-				Status:            status,
-				Error:             snap.Error,
-				StartingTurnIndex: snap.StartingTurnIndex,
-				PendingInputs:     snap.PendingInputs,
+				SnapshotID:    snap.SnapshotID,
+				CreatedAt:     snap.CreatedAt,
+				UpdatedAt:     updatedAt,
+				Status:        status,
+				Error:         snap.Error,
+				PendingInputs: snap.PendingInputs,
 			}
 			if status != SnapshotStatusError && status != SnapshotStatusPending {
 				resp.State = applyTransform(transform, &snap.State)
@@ -380,29 +449,23 @@ func registerSnapshotActions[State any](
 			return resp, nil
 		})
 
-	core.DefineAction(r, flowName+"/cancelSnapshot", api.ActionTypeUtil, nil, nil,
-		func(ctx context.Context, req *CancelSnapshotRequest) (*CancelSnapshotResponse, error) {
-			if store == nil {
-				return nil, core.NewError(core.FAILED_PRECONDITION,
-					"cancelSnapshot: session flow %q has no session store configured", flowName)
-			}
+	aborter, _ := store.(SnapshotAborter)
+	if aborter == nil {
+		return
+	}
+	core.DefineAction(r, flowName+"/abortSnapshot", api.ActionTypeUtil, nil, nil,
+		func(ctx context.Context, req *AbortSnapshotRequest) (*AbortSnapshotResponse, error) {
 			if req == nil || req.SnapshotID == "" {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "cancelSnapshot: snapshotId is required")
+				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
 			}
-			meta, err := store.CancelSnapshot(ctx, req.SnapshotID)
+			meta, err := aborter.AbortSnapshot(ctx, req.SnapshotID)
 			if err != nil {
-				return nil, core.NewError(core.INTERNAL, "cancelSnapshot: %v", err)
+				return nil, core.NewError(core.INTERNAL, "abortSnapshot: %v", err)
 			}
 			if meta == nil {
-				return nil, core.NewError(core.NOT_FOUND, "cancelSnapshot: snapshot %q not found", req.SnapshotID)
+				return nil, core.NewError(core.NOT_FOUND, "abortSnapshot: snapshot %q not found", req.SnapshotID)
 			}
-			// Re-read so the response reflects the snapshot's current truth,
-			// not just what the CAS returned. If a finalizer raced and won
-			// after the CAS landed, surface the resulting terminal status.
-			if verify, vErr := store.GetSnapshotMetadata(ctx, req.SnapshotID); vErr == nil && verify != nil {
-				meta = verify
-			}
-			return &CancelSnapshotResponse{SnapshotID: meta.SnapshotID, Status: meta.Status}, nil
+			return &AbortSnapshotResponse{SnapshotID: meta.SnapshotID, Status: meta.Status}, nil
 		})
 }
 

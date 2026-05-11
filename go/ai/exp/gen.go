@@ -50,8 +50,9 @@ type SessionFlowInput struct {
 	// accepted. The server writes a single pending snapshot capturing the
 	// queued inputs (this one and any others already buffered), returns
 	// [SessionFlowOutput] with that snapshot ID, and continues processing in
-	// a background context. The pending snapshot is finalized once all queued
-	// inputs are processed (or the snapshot is cancelled via cancelSnapshot).
+	// a background context. Streamed chunks emitted after detach are
+	// discarded; only the final session state is captured when the snapshot
+	// is finalized (or aborted via abortSnapshot).
 	Detach bool `json:"detach,omitempty"`
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
@@ -141,12 +142,4 @@ type TurnEnd struct {
 	// Empty if no snapshot was created (callback returned false or no store
 	// configured, or snapshots were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
-	// TurnIndex is the zero-based index of the turn that just ended within
-	// this invocation. It restarts at 0 for each new invocation (resume,
-	// reconnect). Clients consuming a durable chunk stream use this field
-	// to anchor chunks to inputs: chunks emitted between TurnEnd{turnIndex:N-1}
-	// and TurnEnd{turnIndex:N} belong to the input at turn N. After detach,
-	// pair with [SessionSnapshot.StartingTurnIndex] and
-	// [SessionSnapshot.PendingInputs] to recover input correspondence.
-	TurnIndex int `json:"turnIndex"`
 }
