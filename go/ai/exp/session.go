@@ -37,11 +37,11 @@ import (
 // written for synchronous turns or invocations are always [SnapshotStatusComplete]
 // (an empty value is also treated as complete for backwards compatibility).
 //
-// When a client sets [SessionFlowInput.Detach], the server writes a single
+// When a client sets [AgentInput.Detach], the server writes a single
 // snapshot with [SnapshotStatusPending] (and empty state) and returns its
 // ID immediately. Background processing then either rewrites that snapshot
 // with the cumulative final state and [SnapshotStatusComplete] /
-// [SnapshotStatusError] when the flow finishes, or with
+// [SnapshotStatusError] when the agent finishes, or with
 // [SnapshotStatusCanceled] if the client called abortSnapshot in the
 // meantime.
 type SnapshotStatus string
@@ -182,7 +182,7 @@ type SnapshotWriter[State any] interface {
 }
 
 // SnapshotAborter is the optional capability layered on [SessionStore]
-// that lets a session flow's invocations be aborted. It bundles the two
+// that lets an agent's invocations be aborted. It bundles the two
 // methods that must be implemented together for the abort lifecycle to
 // function:
 //
@@ -190,9 +190,9 @@ type SnapshotWriter[State any] interface {
 //     to canceled (typically called by the abortSnapshot companion
 //     action or directly by a Go caller holding the store).
 //
-//   - [SnapshotAborter.OnSnapshotStatusChange] lets the session flow
-//     runtime observe the flip without polling, so it can promptly
-//     cancel the work context.
+//   - [SnapshotAborter.OnSnapshotStatusChange] lets the agent runtime
+//     observe the flip without polling, so it can promptly cancel the
+//     work context.
 //
 // They are bundled because neither is useful alone: flipping status
 // with no observer means the running fn never learns it was aborted;
@@ -207,7 +207,7 @@ type SnapshotAborter interface {
 	// nil if the snapshot is not found.
 	//
 	// Implementations must perform the read-and-write atomically (e.g., a
-	// transaction or a compare-and-swap). The session flow's abortSnapshot
+	// transaction or a compare-and-swap). The agent's abortSnapshot
 	// action and finalizer rely on this to avoid a pending row being
 	// clobbered by a racing terminal write.
 	AbortSnapshot(ctx context.Context, snapshotID string) (*SnapshotMetadata, error)
@@ -427,9 +427,10 @@ func copySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[Sta
 
 // --- Snapshot companion actions ---
 
-// GetSnapshotRequest is the input for a session flow's getSnapshot companion
-// action. The action is registered at `{flowName}/getSnapshot` when the flow
-// is defined and is intended for Dev UI and client-side reconnect flows.
+// GetSnapshotRequest is the input for an agent's getSnapshot companion
+// action. The action is registered at `{agentName}/getSnapshot` when the
+// agent is defined and is intended for Dev UI and client-side reconnect
+// flows.
 type GetSnapshotRequest struct {
 	// SnapshotID identifies the snapshot to fetch.
 	SnapshotID string `json:"snapshotId"`
@@ -476,30 +477,30 @@ type AbortSnapshotResponse struct {
 	Status SnapshotStatus `json:"status,omitempty"`
 }
 
-// registerSnapshotActions registers the session flow's companion actions:
+// registerSnapshotActions registers the agent's companion actions:
 //
-//   - The flow's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
+//   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
 //     registered whenever a [SessionStore] is configured. The action is
 //     the remote counterpart to [SessionStore.GetSnapshot] for Dev UI and
 //     non-Go clients; local Go callers use the store reference directly.
 //
-//   - The flow's name under [api.ActionTypeAgentAbort] — abortSnapshot,
-//     registered only when the store implements [SnapshotAborter]
-//     (which bundles both the abort trigger and the status-change
-//     subscription needed for the runtime to react). Surfacing the
-//     action only when the capability is present keeps the reflected
-//     API aligned with what the store can actually do.
+//   - The agent's name under [api.ActionTypeAgentAbort] — abortSnapshot,
+//     registered only when the store implements [SnapshotAborter] (which
+//     bundles both the abort trigger and the status-change subscription
+//     needed for the runtime to react). Surfacing the action only when
+//     the capability is present keeps the reflected API aligned with
+//     what the store can actually do.
 func registerSnapshotActions[State any](
 	r api.Registry,
-	flowName string,
+	agentName string,
 	store SessionStore[State],
 	transform StateTransform[State],
 ) {
-	core.DefineAction(r, flowName, api.ActionTypeAgentSnapshot, nil, nil,
+	core.DefineAction(r, agentName, api.ActionTypeAgentSnapshot, nil, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*GetSnapshotResponse[State], error) {
 			if store == nil {
 				return nil, core.NewError(core.FAILED_PRECONDITION,
-					"getSnapshot: session flow %q has no session store configured", flowName)
+					"getSnapshot: agent %q has no session store configured", agentName)
 			}
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId is required")
@@ -540,7 +541,7 @@ func registerSnapshotActions[State any](
 		// action.
 		return
 	}
-	core.DefineAction(r, flowName, api.ActionTypeAgentAbort, nil, nil,
+	core.DefineAction(r, agentName, api.ActionTypeAgentAbort, nil, nil,
 		func(ctx context.Context, req *AbortSnapshotRequest) (*AbortSnapshotResponse, error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
@@ -625,13 +626,6 @@ func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.version++
 }
 
-// InputVariables returns the prompt input stored in the session state.
-func (s *Session[State]) InputVariables() any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state.InputVariables
-}
-
 // Artifacts returns the current artifacts.
 func (s *Session[State]) Artifacts() []*Artifact {
 	s.mu.RLock()
@@ -677,11 +671,11 @@ func (s *Session[State]) UpdateArtifacts(fn func([]*Artifact) []*Artifact) {
 func (s *Session[State]) copyStateLocked() SessionState[State] {
 	bytes, err := json.Marshal(s.state)
 	if err != nil {
-		panic(fmt.Sprintf("session flow: failed to marshal state: %v", err))
+		panic(fmt.Sprintf("agent: failed to marshal state: %v", err))
 	}
 	var copied SessionState[State]
 	if err := json.Unmarshal(bytes, &copied); err != nil {
-		panic(fmt.Sprintf("session flow: failed to unmarshal state: %v", err))
+		panic(fmt.Sprintf("agent: failed to unmarshal state: %v", err))
 	}
 	return copied
 }

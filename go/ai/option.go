@@ -31,6 +31,16 @@ type PromptFn = func(context.Context, any) (string, error)
 // MessagesFn is a function that generates messages.
 type MessagesFn = func(context.Context, any) ([]*Message, error)
 
+// No-op marker so the exp package's AgentDefineOption marker interface is
+// satisfied by every PromptOption. Lets DefineAgent accept a mixed variadic
+// of prompt options and agent-only options.
+func (*configOptions) isAgentDefineOption()    {}
+func (*commonGenOptions) isAgentDefineOption() {}
+func (*inputOptions) isAgentDefineOption()     {}
+func (*promptOptions) isAgentDefineOption()    {}
+func (*promptingOptions) isAgentDefineOption() {}
+func (*outputOptions) isAgentDefineOption()    {}
+
 // configOptions holds configuration options.
 type configOptions struct {
 	Config any // Primitive (model, embedder, retriever, etc) configuration.

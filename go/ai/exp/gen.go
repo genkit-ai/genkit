@@ -22,11 +22,11 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
-// AgentMetadata is the value placed under metadata["agent"] on a session
-// flow's action descriptor. It exposes capability information so the Dev
-// UI and other reflective callers can render the right surface (e.g.
-// hide the Abort button when the configured store doesn't support it)
-// without round-tripping through the reflection API.
+// AgentMetadata is the value placed under metadata["agent"] on an agent's
+// action descriptor. It exposes capability information so the Dev UI and
+// other reflective callers can render the right surface (e.g. hide the
+// Abort button when the configured store doesn't support it) without
+// round-tripping through the reflection API.
 type AgentMetadata struct {
 	// Abortable reports whether the agent's invocations can be aborted
 	// (true when the store implements [SnapshotAborter]).
@@ -62,9 +62,9 @@ type Artifact struct {
 	Parts []*ai.Part `json:"parts"`
 }
 
-// SessionFlowInit is the input for starting an session flow invocation.
+// AgentInit is the input for starting an agent invocation.
 // Provide either SnapshotID (to load from store) or State (direct state).
-type SessionFlowInit[State any] struct {
+type AgentInit[State any] struct {
 	// SnapshotID loads state from a persisted snapshot.
 	// Mutually exclusive with State.
 	SnapshotID string `json:"snapshotId,omitempty"`
@@ -73,15 +73,15 @@ type SessionFlowInit[State any] struct {
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// SessionFlowInput is the input sent to an session flow during a conversation turn.
-type SessionFlowInput struct {
+// AgentInput is the input sent to an agent during a conversation turn.
+type AgentInput struct {
 	// Detach signals that the client wishes to disconnect after this input is
 	// accepted. The server writes a single pending snapshot (with empty
-	// state), returns [SessionFlowOutput] with that snapshot ID, and
-	// continues processing any already-buffered inputs in a background
-	// context. The pending snapshot is finalized with the cumulative final
-	// state once all queued inputs are processed (or the snapshot is
-	// cancelled via cancelSnapshot).
+	// state), returns [AgentOutput] with that snapshot ID, and continues
+	// processing any already-buffered inputs in a background context. The
+	// pending snapshot is finalized with the cumulative final state once all
+	// queued inputs are processed (or the snapshot is cancelled via
+	// cancelSnapshot).
 	Detach bool `json:"detach,omitempty"`
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
@@ -92,9 +92,9 @@ type SessionFlowInput struct {
 	ToolRestarts []*ai.Part `json:"toolRestarts,omitempty"`
 }
 
-// SessionFlowOutput is the output when an session flow invocation completes.
-// It wraps SessionFlowResult with framework-managed fields.
-type SessionFlowOutput[State any] struct {
+// AgentOutput is the output when an agent invocation completes.
+// It wraps AgentResult with framework-managed fields.
+type AgentOutput[State any] struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Message is the last model response message from the conversation.
@@ -107,18 +107,18 @@ type SessionFlowOutput[State any] struct {
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// SessionFlowResult is the return value from an SessionFlowFunc.
+// AgentResult is the return value from an AgentFunc.
 // It contains the user-specified outputs of the agent invocation.
-type SessionFlowResult struct {
+type AgentResult struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
 }
 
-// SessionFlowStreamChunk represents a single item in the session flow's output stream.
+// AgentStreamChunk represents a single item in the agent's output stream.
 // Multiple fields can be populated in a single chunk.
-type SessionFlowStreamChunk[Stream any] struct {
+type AgentStreamChunk[Stream any] struct {
 	// Artifact contains a newly produced artifact.
 	Artifact *Artifact `json:"artifact,omitempty"`
 	// ModelChunk contains generation tokens from the model.
@@ -126,7 +126,7 @@ type SessionFlowStreamChunk[Stream any] struct {
 	// Status contains user-defined structured status information.
 	// The Stream type parameter defines the shape of this data.
 	Status Stream `json:"status,omitempty"`
-	// TurnEnd is non-nil when the session flow has finished processing the current
+	// TurnEnd is non-nil when the agent has finished processing the current
 	// input. It groups all turn-end signals (snapshot ID, etc.) so callers can
 	// check a single field. When set, the client should stop iterating and may
 	// send the next input.
@@ -140,11 +140,8 @@ type SessionState[State any] struct {
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Custom is the user-defined state associated with this conversation.
 	Custom State `json:"custom,omitempty"`
-	// InputVariables is the input used for session flows that require input variables
-	// (e.g. prompt-backed session flows).
-	InputVariables any `json:"inputVariables,omitempty"`
 	// Messages is the conversation history (user/model exchanges).
-	// Does NOT include prompt-rendered messages — those are rendered fresh each turn.
+	// Does NOT include prompt-rendered messages, those are rendered fresh each turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
 }
 
@@ -163,7 +160,7 @@ const (
 	SnapshotEventDetach SnapshotEvent = "detach"
 )
 
-// TurnEnd groups the signals emitted when a session flow turn finishes.
+// TurnEnd groups the signals emitted when an agent turn finishes.
 // A TurnEnd value is emitted exactly once per turn, regardless of whether a
 // snapshot was persisted.
 type TurnEnd struct {
