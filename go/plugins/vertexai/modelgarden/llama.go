@@ -19,7 +19,6 @@ package modelgarden
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -116,28 +115,3 @@ func (l *Llama) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error
 	return l.oai.DefineModel(provider, name, *opts), nil
 }
 
-// resolveVertexMaasEnv resolves project and location from explicit arguments
-// with fallback to the conventional environment variables. Panics if neither a
-// value nor a fallback env var is set, matching the behaviour of the existing
-// Anthropic plugin.
-func resolveVertexMaasEnv(projectID, location string) (string, string) {
-	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
-		if projectID == "" {
-			projectID = os.Getenv("GCLOUD_PROJECT")
-		}
-		if projectID == "" {
-			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard")
-		}
-	}
-	if location == "" {
-		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
-		if location == "" {
-			location = os.Getenv("GOOGLE_CLOUD_REGION")
-		}
-		if location == "" {
-			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
-		}
-	}
-	return projectID, location
-}

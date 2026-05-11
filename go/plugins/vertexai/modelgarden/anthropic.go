@@ -19,7 +19,6 @@ package modelgarden
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -61,27 +60,7 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 		panic("plugin already initialized")
 	}
 
-	projectID := a.ProjectID
-	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
-		if projectID == "" {
-			projectID = os.Getenv("GCLOUD_PROJECT")
-			if projectID == "" {
-				panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard")
-			}
-		}
-	}
-
-	location := a.Location
-	if location == "" {
-		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
-		if location == "" {
-			location = os.Getenv("GOOGLE_CLOUD_REGION")
-		}
-		if location == "" {
-			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
-		}
-	}
+	projectID, location := resolveVertexMaasEnv(a.ProjectID, a.Location)
 
 	c := anthropic.NewClient(
 		vertex.WithGoogleAuth(ctx, location, projectID, "https://www.googleapis.com/auth/cloud-platform"),
@@ -108,6 +87,11 @@ func AnthropicModel(g *genkit.Genkit, id string) ai.Model {
 
 // DefineModel adds the model to the registry
 func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.initted {
+		return nil, fmt.Errorf("modelgarden anthropic: plugin not initialized")
+	}
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}

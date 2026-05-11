@@ -17,9 +17,37 @@
 package modelgarden
 
 import (
+	"os"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/plugins/internal"
 )
+
+// resolveVertexMaasEnv resolves project and location from explicit arguments
+// with fallback to the conventional environment variables. Panics if neither a
+// value nor a fallback env var is set. Shared by all Vertex AI Model Garden
+// plugins in this package.
+func resolveVertexMaasEnv(projectID, location string) (string, string) {
+	if projectID == "" {
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+		if projectID == "" {
+			projectID = os.Getenv("GCLOUD_PROJECT")
+		}
+		if projectID == "" {
+			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard")
+		}
+	}
+	if location == "" {
+		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
+		if location == "" {
+			location = os.Getenv("GOOGLE_CLOUD_REGION")
+		}
+		if location == "" {
+			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
+		}
+	}
+	return projectID, location
+}
 
 // provider is the shared registration namespace for every Vertex AI Model
 // Garden plugin in this package (Anthropic, Llama, Mistral). Their models
@@ -106,7 +134,7 @@ var LlamaModels = map[string]ai.ModelOptions{
 	},
 	"meta/llama-3.3-70b-instruct-maas": {
 		Label:    "Llama 3.3 70B Instruct",
-		Supports: &internal.Multimodal,
+		Supports: &internal.BasicText,
 	},
 }
 
