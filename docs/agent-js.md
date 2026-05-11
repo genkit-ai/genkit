@@ -1,4 +1,4 @@
-# Design Document: Agents (Session Flows) in JS/TS
+# Design Document: Genkit Agents in JS/TS
 
 **Status**: Implemented  
 **Authors**: Antigravity  
@@ -174,7 +174,7 @@ export interface AgentConfig<State = unknown> extends PromptConfig {
 ## 7. Execution & Verification Plan
 
 1. **Phase 1: Core Types & Schemas**
-   - Declare Zod schemas in `js/ai/src/session-flow.ts`.
+   - Declare Zod schemas in `js/ai/src/agent.ts`.
 2. **Phase 2: Context Runner & Wrappers**
    - Construct the `SessionRunner` orchestrator.
    - Integrate snapshot event callbacks into execution loops.

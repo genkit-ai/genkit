@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+export * from './agent.js';
 export { cancelOperation } from './cancel-operation.js';
 export { checkOperation } from './check-operation.js';
 export { Document, DocumentDataSchema, type DocumentData } from './document.js';
@@ -147,7 +148,6 @@ export {
   type RetrieverParams,
   type RetrieverReference,
 } from './retriever.js';
-export * from './session-flow.js';
 export {
   ToolInterruptError,
   asTool,

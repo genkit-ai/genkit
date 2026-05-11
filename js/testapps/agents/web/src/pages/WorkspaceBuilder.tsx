@@ -29,7 +29,7 @@ import { ChatUI, type Message } from '../components/ChatUI';
 //
 // Demonstrates:
 //   • streamFlow() with artifact production
-//   • Reading `result.artifacts` from the session flow response
+//   • Reading `result.artifacts` from the agent response
 //   • Multi-turn session via `init: { state }` round-tripping
 //   • Displaying generated code artifacts in a side panel
 // ---------------------------------------------------------------------------

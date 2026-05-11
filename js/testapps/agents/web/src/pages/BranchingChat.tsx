@@ -362,7 +362,7 @@ const [a, b] = await Promise.all([
 }
 
 // ---------------------------------------------------------------------------
-// Helper: extract text from a session flow result
+// Helper: extract text from an agent result
 // ---------------------------------------------------------------------------
 function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';

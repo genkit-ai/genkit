@@ -39,7 +39,7 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <h1 className="sidebar-title">🔥 Genkit Agents</h1>
-        <p className="sidebar-subtitle">Session Flow Demos</p>
+        <p className="sidebar-subtitle">Genkit Agent Demos</p>
 
         <nav className="nav-list">
           {NAV_ITEMS.map((item) => (

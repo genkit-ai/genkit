@@ -20,14 +20,14 @@ import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
 import { z } from '@genkit-ai/core';
-import { definePrompt } from '../src/prompt.js';
 import {
   AgentStreamChunk,
   SessionRunner,
   defineAgent,
   defineCustomAgent,
   definePromptAgent,
-} from '../src/session-flow.js';
+} from '../src/agent.js';
+import { definePrompt } from '../src/prompt.js';
 import {
   InMemorySessionStore,
   Session,

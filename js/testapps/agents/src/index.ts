@@ -94,7 +94,7 @@ export * from './interrupt-agent.js';
 export * from './subagent-demo.js';
 
 // ---------------------------------------------------------------------------
-// Express server — exposes session flows for the web UI
+// Express server — exposes agents for the web UI
 // ---------------------------------------------------------------------------
 const app = express();
 app.use(express.json());
@@ -115,7 +115,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Expose session flows
+// Expose agents
 app.post('/api/customAgent', expressHandler(customAgent));
 app.post('/api/weatherAgent', expressHandler(weatherAgent));
 app.post(

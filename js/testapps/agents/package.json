@@ -1,7 +1,7 @@
 {
   "name": "agents-testapp",
   "version": "1.0.0",
-  "description": "Testapp for Session Flows Agents",
+  "description": "Testapp for Genkit Agents",
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
