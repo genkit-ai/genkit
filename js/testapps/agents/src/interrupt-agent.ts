@@ -101,10 +101,12 @@ export const testBankingAgent = ai.defineFlow(
       // Create a new session attached to the interrupted flow's snapshot
       session = bankingAgent.streamBidi({ snapshotId: output.snapshotId });
 
-      // Send the approval back to the flow using toolRestarts
-      // Alternatively, we can pass it as a tool message.
+      // Send the approval back to the flow using resume.respond.
+      // This provides the tool output directly without re-executing the tool.
       session.send({
-        messages: [{ role: 'tool', content: [approvalResponse] }],
+        resume: {
+          respond: [approvalResponse],
+        },
       });
       session.close();
 

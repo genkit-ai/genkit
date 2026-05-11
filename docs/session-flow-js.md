@@ -54,7 +54,10 @@ export const AgentInitSchema = z.object({
 
 export const AgentInputSchema = z.object({
   messages: z.array(MessageSchema).optional(),
-  toolRestarts: z.array(PartSchema).optional(),
+  resume: z.object({
+    respond: z.array(ToolResponsePartSchema).optional(),
+    restart: z.array(ToolRequestPartSchema).optional(),
+  }).optional(),
 });
 
 export const TurnEndSchema = z.object({
