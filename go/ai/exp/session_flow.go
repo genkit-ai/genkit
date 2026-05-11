@@ -75,7 +75,8 @@ func DefineSessionFlow[Stream, State any](
 			return nil, err
 		}
 		return rt.run(ctx, fn)
-	}, &core.ActionOptions{Metadata: agentMetadata(cfg.store)})
+	})
+	flow.SetMetadataValue("agent", agentMetadataFor(cfg.store))
 
 	registerSnapshotActions(r, name, cfg.store, cfg.transform)
 
@@ -112,10 +113,9 @@ type AgentMetadata struct {
 	Abortable bool `json:"abortable"`
 }
 
-// agentMetadata derives the metadata map placed on the session flow's
-// action descriptor under the "agent" key. The value matches
-// [AgentMetadata].
-func agentMetadata[State any](store SessionStore[State]) map[string]any {
+// agentMetadataFor derives the [AgentMetadata] value attached to the
+// session flow's action descriptor under the "agent" key.
+func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	mgmt := AgentMetadataStateManagementClient
 	abortable := false
 	if store != nil {
@@ -124,11 +124,9 @@ func agentMetadata[State any](store SessionStore[State]) map[string]any {
 		_, hasSubscriber := store.(SnapshotStatusSubscriber)
 		abortable = hasAborter && hasSubscriber
 	}
-	return map[string]any{
-		"agent": AgentMetadata{
-			StateManagement: mgmt,
-			Abortable:       abortable,
-		},
+	return AgentMetadata{
+		StateManagement: mgmt,
+		Abortable:       abortable,
 	}
 }
 

@@ -73,20 +73,13 @@ func NewStreamingFlow[In, Out, StreamOut any](name string, fn StreamingFunc[In, 
 }
 
 // NewBidiFlow creates a bidirectional streaming Flow without registering it.
-// Flow context is injected so that [Run] works inside the bidi function. An
-// optional [ActionOptions] (variadic for source compatibility — at most one
-// value is consumed) lets callers attach metadata or override schemas on the
-// underlying action descriptor.
-func NewBidiFlow[In, Out, StreamOut, StreamIn any](name string, fn BidiFunc[In, Out, StreamOut, StreamIn], opts ...*ActionOptions) *Flow[In, Out, StreamOut, StreamIn] {
+// Flow context is injected so that [Run] works inside the bidi function.
+func NewBidiFlow[In, Out, StreamOut, StreamIn any](name string, fn BidiFunc[In, Out, StreamOut, StreamIn]) *Flow[In, Out, StreamOut, StreamIn] {
 	wrapped := func(ctx context.Context, in In, inCh <-chan StreamIn, outCh chan<- StreamOut) (Out, error) {
 		ctx = flowContextKey.NewContext(ctx, &flowContext{flowName: name})
 		return fn(ctx, in, inCh, outCh)
 	}
-	var ao *ActionOptions
-	if len(opts) > 0 {
-		ao = opts[0]
-	}
-	return &Flow[In, Out, StreamOut, StreamIn]{NewBidiAction(name, api.ActionTypeFlow, ao, wrapped)}
+	return &Flow[In, Out, StreamOut, StreamIn]{NewBidiAction(name, api.ActionTypeFlow, nil, wrapped)}
 }
 
 // DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
@@ -111,13 +104,10 @@ func DefineStreamingFlow[In, Out, StreamOut any](r api.Registry, name string, fn
 	return f
 }
 
-// DefineBidiFlow creates a bidirectional streaming Flow that runs fn, and
-// registers it as an action. Flow context is injected so that [Run] works
-// inside the bidi function. Variadic [ActionOptions] (at most one) lets
-// callers attach metadata or override schemas on the underlying action
-// descriptor.
-func DefineBidiFlow[In, Out, StreamOut, StreamIn any](r api.Registry, name string, fn BidiFunc[In, Out, StreamOut, StreamIn], opts ...*ActionOptions) *Flow[In, Out, StreamOut, StreamIn] {
-	f := NewBidiFlow(name, fn, opts...)
+// DefineBidiFlow creates a bidirectional streaming Flow that runs fn, and registers it as an action.
+// Flow context is injected so that [Run] works inside the bidi function.
+func DefineBidiFlow[In, Out, StreamOut, StreamIn any](r api.Registry, name string, fn BidiFunc[In, Out, StreamOut, StreamIn]) *Flow[In, Out, StreamOut, StreamIn] {
+	f := NewBidiFlow(name, fn)
 	f.Register(r)
 	return f
 }

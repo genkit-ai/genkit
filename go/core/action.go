@@ -388,6 +388,21 @@ func (a *Action[In, Out, StreamOut, StreamIn]) Desc() api.ActionDesc {
 	return *a.desc
 }
 
+// SetMetadataValue sets a single key/value pair on the action's metadata
+// map, creating the map if necessary. Intended for callers that build
+// higher-level abstractions on top of the action and need to attach
+// reflective hints (e.g. capability flags) after construction.
+//
+// Must be called during setup, before the action is invoked or its
+// descriptor is observed concurrently — there is no synchronization
+// against [Desc] or [Run].
+func (a *Action[In, Out, StreamOut, StreamIn]) SetMetadataValue(key string, value any) {
+	if a.desc.Metadata == nil {
+		a.desc.Metadata = map[string]any{}
+	}
+	a.desc.Metadata[key] = value
+}
+
 // Register registers the action with the given registry.
 func (a *Action[In, Out, StreamOut, StreamIn]) Register(r api.Registry) {
 	a.registry = r
