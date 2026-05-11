@@ -21,20 +21,20 @@
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "@google-cloud/firestore": "^7.11.0",
-    "firebase-admin": ">=12.2",
+    "@google-cloud/firestore": "^8.5.0",
+    "firebase-admin": ">=13.9",
     "genkit": "workspace:*",
     "genkitx-chromadb": "workspace:*",
     "genkitx-pinecone": "workspace:*",
-    "google-auth-library": "^9.6.3",
+    "google-auth-library": "^10.6.2",
     "llm-chunk": "^0.0.1",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.4",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.1.0",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.1",
-    "typescript": "^5.9.3"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }

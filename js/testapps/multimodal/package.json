@@ -26,16 +26,16 @@
     "genkitx-chromadb": "workspace:*",
     "genkitx-langchain": "workspace:*",
     "genkitx-pinecone": "workspace:*",
-    "google-auth-library": "^9.6.3",
+    "google-auth-library": "^10.6.2",
     "llm-chunk": "^0.0.1",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.4",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.1.0",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.1",
-    "typescript": "^5.9.3"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }

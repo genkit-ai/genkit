@@ -21,12 +21,12 @@
     "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/middleware": "workspace:*",
-    "@google/generative-ai": "^0.15.0",
-    "@opentelemetry/sdk-trace-base": "~1.25.0",
-    "body-parser": "^1.20.3",
-    "data-urls": "^5.0.0",
-    "express": "^4.21.0",
-    "firebase-admin": ">=12.2",
+    "@google/generative-ai": "^0.24.1",
+    "@opentelemetry/sdk-trace-base": "~2.7.1",
+    "body-parser": "^2.2.2",
+    "data-urls": "^7.0.0",
+    "express": "^5.2.1",
+    "firebase-admin": ">=13.9",
     "genkit": "workspace:*",
     "node-fetch": "^3.3.2",
     "partial-json": "^0.1.7",
@@ -37,7 +37,7 @@
     "@types/node-fetch": "~2.6.11",
     "@types/wav": "^1.0.4",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }

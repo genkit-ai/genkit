@@ -18,7 +18,7 @@
   "dependencies": {
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "@google/generative-ai": "^0.15.0",
+    "@google/generative-ai": "^0.24.1",
     "colorette": "^2.0.20",
     "genkit": "workspace:*",
     "genkitx-ollama": "workspace:*",
@@ -26,6 +26,6 @@
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

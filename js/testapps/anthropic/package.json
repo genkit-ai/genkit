@@ -33,13 +33,13 @@
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
+    "@anthropic-ai/sdk": "^0.95.1",
     "@genkit-ai/anthropic": "workspace:*",
     "genkit": "workspace:*"
   },
   "devDependencies": {
     "cross-env": "^10.1.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }
