@@ -5,7 +5,8 @@
 
 - **JavaScript/TypeScript**: Production-ready with full feature support
 - **Go**: Production-ready with full feature support
-- **Python (Alpha)**: Early development with core functionality
+- **Python (Beta)**: Wide feature support approaching production-readiness
+- **Dart (Preview)**: Early development with core functionality
 
 It offers a unified interface for integrating AI models from providers like [Google](https://genkit.dev/docs/plugins/google-genai), [OpenAI](https://genkit.dev/docs/plugins/openai), [Anthropic](https://thefireco.github.io/genkit-plugins/docs/plugins/genkitx-anthropic), [Ollama](https://genkit.dev/docs/plugins/ollama/), and more. Rapidly build and deploy production-ready chatbots, automations, and recommendation systems using streamlined APIs for multimodal content, structured outputs, tool calling, and agentic workflows.
 
@@ -18,8 +19,8 @@ import { googleAI } from '@genkit-ai/google-genai';
 const ai = genkit({ plugins: [googleAI()] });
 
 const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
-    prompt: 'Why is Firebase awesome?'
+    model: googleAI.model('gemini-flash-latest'),
+    prompt: 'What is the meaning of life?'
 });
 ```
 
