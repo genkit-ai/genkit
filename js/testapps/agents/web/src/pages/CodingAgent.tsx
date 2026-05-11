@@ -44,9 +44,9 @@ import { ChatUI, type Message } from '../components/ChatUI';
 //   • `streamFlow()` for streaming agent responses
 //   • `runFlow()` for non-streaming workspace file operations
 //   • Two interrupt resumption patterns:
-//     - **Restart pattern** (toolRestarts) — for write_file, search_and_replace,
+//     - **Restart pattern** (resume.restart) — for write_file, search_and_replace,
 //       run_shell. Re-executes the tool with `{ toolApproved: true }` metadata.
-//     - **Respond pattern** (role='tool' message) — for ask_user. Sends the
+//     - **Respond pattern** (resume.respond) — for ask_user. Sends the
 //       user's answer directly without re-executing the tool.
 //   • Session continuity via snapshotId
 //   • Streaming reasoning/thinking content
@@ -125,9 +125,9 @@ export default function CodingAgent() {
   // ── Fetch workspace file tree via runFlow() ────────────────────────────
   const refreshFiles = useCallback(async () => {
     try {
-      const data = (await runFlow<{ files: WorkspaceFile[] }>({
+      const data = await runFlow<{ files: WorkspaceFile[] }>({
         url: WORKSPACE_FILES_ENDPOINT,
-      }));
+      });
       setFiles(data.files || []);
     } catch {
       // ignore — workspace may not exist yet
@@ -185,12 +185,18 @@ export default function CodingAgent() {
             //   • read_file requests are shown as "📖 Reading {path}" bubbles
             for (const p of msg.content || []) {
               if (p.toolRequest) {
-                const tmsg = formatToolRequest(p.toolRequest.name, p.toolRequest.input);
+                const tmsg = formatToolRequest(
+                  p.toolRequest.name,
+                  p.toolRequest.input
+                );
                 restored.push({ role: 'tool', ...tmsg });
               }
               if (p.toolResponse) {
                 if (p.toolResponse.name === 'read_file') continue;
-                const tmsg = formatToolResponse(p.toolResponse.name, p.toolResponse.output);
+                const tmsg = formatToolResponse(
+                  p.toolResponse.name,
+                  p.toolResponse.output
+                );
                 restored.push({ role: 'tool', ...tmsg });
               }
             }
@@ -210,7 +216,8 @@ export default function CodingAgent() {
                 const tr = p.toolRequest;
                 if (tr.name === 'ask_user') {
                   setQuestion({
-                    question: tr.input?.question || 'What would you like to do?',
+                    question:
+                      tr.input?.question || 'What would you like to do?',
                     options: tr.input?.options || [],
                     ref: tr.ref,
                     snapshotId: snapshot.snapshotId,
@@ -258,10 +265,10 @@ export default function CodingAgent() {
     setSelectedFile(filePath);
     setFileLoading(true);
     try {
-      const data = (await runFlow<{ path: string; content: string }>({
+      const data = await runFlow<{ path: string; content: string }>({
         url: WORKSPACE_FILE_ENDPOINT,
         input: filePath,
-      }));
+      });
       setFileContent(data.content || '');
     } catch {
       setFileContent('(failed to load file)');
@@ -332,26 +339,28 @@ export default function CodingAgent() {
       let input: AgentInput;
 
       if (approved) {
-        // Use toolRestarts to resume the interrupted tool.
+        // Use resume.restart to resume the interrupted tool.
         // This maps to generate()'s resume: { restart: [...] } in definePromptAgent.
         // The metadata.resumed.toolApproved flag is checked by:
         //   • toolApproval middleware (for write_file, search_and_replace)
         //   • run_shell tool handler (for risky shell commands)
         input = {
-          toolRestarts: [
-            {
-              toolRequest: {
-                name: currentApproval.toolName,
-                ref: currentApproval.ref,
-                input: currentApproval.input,
+          resume: {
+            restart: [
+              {
+                toolRequest: {
+                  name: currentApproval.toolName,
+                  ref: currentApproval.ref,
+                  input: currentApproval.input,
+                },
+                metadata: { resumed: { toolApproved: true } },
               },
-              metadata: { resumed: { toolApproved: true } },
-            },
-          ],
+            ],
+          },
         };
       } else {
         // For denial, send a user message so the model knows the tool was rejected.
-        // We don't use toolRestarts for denial because that would re-trigger the
+        // We don't use resume.restart for denial because that would re-trigger the
         // interrupt in a loop.
         input = {
           messages: [
@@ -490,25 +499,20 @@ export default function CodingAgent() {
 
       const init: AgentInit = { snapshotId: currentQuestion.snapshotId };
 
-      // Use the respond pattern — send the tool response as a role='tool'
-      // message in input.messages. The tool never executes; we provide
-      // the output directly as a ToolResponsePart in the message content.
+      // Use the respond pattern — send the tool response via resume.respond.
+      // The tool never executes; we provide the output directly.
       const input: AgentInput = {
-        messages: [
-          {
-            role: 'tool' as const,
-            content: [
-              {
-                toolResponse: {
-                  name: 'ask_user',
-                  ref: currentQuestion.ref,
-                  output: { answer },
-                },
-                metadata: { interruptResponse: true },
+        resume: {
+          respond: [
+            {
+              toolResponse: {
+                name: 'ask_user',
+                ref: currentQuestion.ref,
+                output: { answer },
               },
-            ],
-          },
-        ],
+            },
+          ],
+        },
       };
 
       try {

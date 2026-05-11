@@ -104,7 +104,7 @@ const runShell = ai.defineTool(
   },
   async (input, ctx) => {
     // Check if this is a resumed (user-approved) invocation.
-    // When a user approves a risky command, toolRestarts sets
+    // When a user approves a risky command, resume.restart sets
     // metadata.resumed = { toolApproved: true }.
     const isApproved = ctx.metadata?.resumed?.toolApproved === true;
 
@@ -286,28 +286,25 @@ export const testCodingAgent = ai.defineFlow(
       if (!interrupt) break;
 
       if (interrupt.name === 'ask_user') {
-        // Respond pattern: send a role='tool' message with the answer.
-        // The tool never re-executes — we provide the output directly.
+        // Respond pattern: provide the tool output directly via resume.respond.
+        // The tool never re-executes — we supply the answer as a ToolResponsePart.
         const firstOption = interrupt.input?.options?.[0] || 'Yes';
         sendChunk({ status: `Auto-answering ask_user: "${firstOption}"` });
 
         result = await codingAgent.run(
           {
-            messages: [
-              {
-                role: 'tool' as const,
-                content: [
-                  {
-                    toolResponse: {
-                      name: interrupt.name,
-                      ref: interrupt.ref,
-                      output: { answer: firstOption },
-                    },
-                    metadata: { interruptResponse: true },
+            resume: {
+              respond: [
+                {
+                  toolResponse: {
+                    name: interrupt.name,
+                    ref: interrupt.ref,
+                    output: { answer: firstOption },
                   },
-                ],
-              },
-            ],
+                  metadata: { interruptResponse: true },
+                },
+              ],
+            },
           },
           {
             init: { snapshotId: result.result.snapshotId },
@@ -315,22 +312,24 @@ export const testCodingAgent = ai.defineFlow(
           }
         );
       } else {
-        // Restart pattern: use toolRestarts to re-execute the tool with
+        // Restart pattern: use resume.restart to re-execute the tool with
         // approval metadata (write_file, search_and_replace, run_shell).
         sendChunk({ status: `Auto-approving tool: ${interrupt.name}` });
 
         result = await codingAgent.run(
           {
-            toolRestarts: [
-              {
-                toolRequest: {
-                  name: interrupt.name,
-                  ref: interrupt.ref,
-                  input: interrupt.input,
+            resume: {
+              restart: [
+                {
+                  toolRequest: {
+                    name: interrupt.name,
+                    ref: interrupt.ref,
+                    input: interrupt.input,
+                  },
+                  metadata: { resumed: { toolApproved: true } },
                 },
-                metadata: { resumed: { toolApproved: true } },
-              },
-            ],
+              ],
+            },
           },
           {
             init: { snapshotId: result.result.snapshotId },
