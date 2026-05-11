@@ -14,5 +14,6 @@
  * limitations under the License.
  */
 
+export { agentAdapter, type AgentInputEnvelope } from './agents.js';
 export { FirestoreStreamManager } from './stream-manager/firestore.js';
 export { RtdbStreamManager } from './stream-manager/rtdb.js';
