@@ -213,7 +213,7 @@ export function mapA2APartToGenkit(part: A2APart): GenkitPart {
 // Artifact mapping
 // ---------------------------------------------------------------------------
 
-/** Genkit Artifact type (from session-flow) */
+/** Genkit Artifact type (from Genkit Agent) */
 export interface GenkitArtifact {
   name?: string;
   parts: GenkitPart[];

@@ -23,7 +23,7 @@ synchronous request/response (`message/send` blocking mode). Streaming support
 
 ### Genkit Agent Flow
 
-The agent flow architecture (`js/ai/src/session-flow.ts`) provides:
+The agent flow architecture (`js/ai/src/agent.ts`) provides:
 
 - **`Agent`** — a `BidiAction` that accepts `AgentInput`
   (messages / resume / detach) over a bidirectional stream, maintains
