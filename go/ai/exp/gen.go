@@ -22,6 +22,35 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
+// AgentMetadata is the value placed under metadata["agent"] on an agent's
+// action descriptor. It exposes capability information so the Dev UI and
+// other reflective callers can render the right surface (e.g. hide the
+// Abort button when the configured store doesn't support it) without
+// round-tripping through the reflection API.
+type AgentMetadata struct {
+	// Abortable reports whether the agent's invocations can be aborted
+	// (true when the store implements [SnapshotAborter]).
+	Abortable bool `json:"abortable,omitempty"`
+	// StateManagement reports who owns session state.
+	StateManagement AgentMetadataStateManagement `json:"stateManagement,omitempty"`
+}
+
+// AgentMetadataStateManagement enumerates who owns session state for an
+// agent: "server" (a [SessionStore] is configured and snapshots are
+// persisted server-side) or "client" (no store; state flows through
+// invocation init / output).
+type AgentMetadataStateManagement string
+
+const (
+	// AgentMetadataStateManagementServer indicates the agent is wired with
+	// a [SessionStore] and persists snapshots server-side.
+	AgentMetadataStateManagementServer AgentMetadataStateManagement = "server"
+	// AgentMetadataStateManagementClient indicates the agent has no store;
+	// session state is client-managed and round-trips through invocation
+	// init and output.
+	AgentMetadataStateManagementClient AgentMetadataStateManagement = "client"
+)
+
 // Artifact represents a named collection of parts produced during a session.
 // Examples: generated files, images, code snippets, diagrams, etc.
 type Artifact struct {
@@ -46,6 +75,14 @@ type AgentInit[State any] struct {
 
 // AgentInput is the input sent to an agent during a conversation turn.
 type AgentInput struct {
+	// Detach signals that the client wishes to disconnect after this input is
+	// accepted. The server writes a single pending snapshot (with empty
+	// state), returns [AgentOutput] with that snapshot ID, and continues
+	// processing any already-buffered inputs in a background context. The
+	// pending snapshot is finalized with the cumulative final state once all
+	// queued inputs are processed (or the snapshot is cancelled via
+	// cancelSnapshot).
+	Detach bool `json:"detach,omitempty"`
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
 	// ToolRestarts contains tool request parts to re-execute interrupted tools.
@@ -116,6 +153,11 @@ const (
 	SnapshotEventTurnEnd SnapshotEvent = "turnEnd"
 	// InvocationEnd indicates the snapshot was triggered at the end of the invocation.
 	SnapshotEventInvocationEnd SnapshotEvent = "invocationEnd"
+	// Detach indicates the snapshot was created when the client detached the
+	// invocation and the flow continues in the background. The snapshot is
+	// initially written with [SnapshotStatusPending] and rewritten with a
+	// terminal status once the background work finishes.
+	SnapshotEventDetach SnapshotEvent = "detach"
 )
 
 // TurnEnd groups the signals emitted when an agent turn finishes.
@@ -124,6 +166,6 @@ const (
 type TurnEnd struct {
 	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
 	// Empty if no snapshot was created (callback returned false or no store
-	// configured).
+	// configured, or snapshots were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
 }

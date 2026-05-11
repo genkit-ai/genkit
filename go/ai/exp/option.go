@@ -46,9 +46,24 @@ type AgentOption[State any] interface {
 	applyAgent(*agentOptions[State]) error
 }
 
+// StateTransform rewrites session state on its way out to a client. It
+// is applied to the State returned by the getSnapshot companion action
+// and to [AgentResult.State] when state is client-managed (no store).
+// It is not applied to state persisted in the store or to state passed
+// to the user agent function.
+//
+// ctx is the request or invocation context: cancellation, deadlines,
+// and context-scoped values (e.g. the caller's identity for RBAC-aware
+// redaction) flow through here.
+//
+// The state input is a deep copy owned by the caller; the transform
+// may mutate and return it, or return a freshly-constructed value.
+type StateTransform[State any] = func(ctx context.Context, state SessionState[State]) SessionState[State]
+
 type agentOptions[State any] struct {
-	store    SessionStore[State]
-	callback SnapshotCallback[State]
+	store     SessionStore[State]
+	callback  SnapshotCallback[State]
+	transform StateTransform[State]
 }
 
 func (*agentOptions[State]) isAgentDefineOption() {}
@@ -66,10 +81,19 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 		}
 		opts.callback = o.callback
 	}
+	if o.transform != nil {
+		if opts.transform != nil {
+			return errors.New("cannot set state transform more than once (WithStateTransform)")
+		}
+		opts.transform = o.transform
+	}
 	return nil
 }
 
-// WithSessionStore sets the store for persisting snapshots.
+// WithSessionStore sets the store for persisting snapshots. The store must
+// implement [SnapshotReader] and [SnapshotWriter] at minimum. Detach
+// support also requires [SnapshotAborter]; detach attempts on a store
+// that lacks that interface are rejected at runtime.
 func WithSessionStore[State any](store SessionStore[State]) AgentOption[State] {
 	return &agentOptions[State]{store: store}
 }
@@ -92,6 +116,15 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) AgentOption[State] {
 		_, ok := set[sc.Event]
 		return ok
 	})
+}
+
+// WithStateTransform registers a transform applied to session state on
+// its way out to a client via the getSnapshot companion action or via
+// [AgentResult.State] when state is client-managed. Typical use is PII
+// redaction or stripping secrets. The transform is not applied to state
+// persisted in the store or to state passed to the user agent function.
+func WithStateTransform[State any](transform StateTransform[State]) AgentOption[State] {
+	return &agentOptions[State]{transform: transform}
 }
 
 // --- InvocationOption ---

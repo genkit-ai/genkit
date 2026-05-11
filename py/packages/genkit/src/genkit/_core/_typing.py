@@ -34,11 +34,28 @@ warnings.filterwarnings(
 )
 
 
+class AgentMetadataStateManagement(StrEnum):
+    """AgentMetadataStateManagement data type class."""
+
+    SERVER = 'server'
+    CLIENT = 'client'
+
+
 class SnapshotEvent(StrEnum):
     """SnapshotEvent data type class."""
 
     TURNEND = 'turnEnd'
     INVOCATIONEND = 'invocationEnd'
+    DETACH = 'detach'
+
+
+class SnapshotStatus(StrEnum):
+    """SnapshotStatus data type class."""
+
+    PENDING = 'pending'
+    COMPLETE = 'complete'
+    CANCELED = 'canceled'
+    ERROR = 'error'
 
 
 class EvalStatusEnum(StrEnum):
@@ -86,6 +103,21 @@ Metadata = dict[str, Any]  # type alias for flexible metadata
 Custom = dict[str, Any]  # type alias for flexible custom data
 
 
+class AbortSnapshotRequest(GenkitModel):
+    """Model for abortsnapshotrequest data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+
+
+class AbortSnapshotResponse(GenkitModel):
+    """Model for abortsnapshotresponse data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+    status: SnapshotStatus | None = None
+
+
 class AgentInit(GenkitModel):
     """Model for agentinit data."""
 
@@ -98,8 +130,17 @@ class AgentInput(GenkitModel):
     """Model for agentinput data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    detach: bool | None = None
     messages: list[MessageData] | None = None
     tool_restarts: list[Part] | None = None
+
+
+class AgentMetadata(GenkitModel):
+    """Model for agentmetadata data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    state_management: AgentMetadataStateManagement = Field(...)
+    abortable: bool = Field(...)
 
 
 class AgentOutput(GenkitModel):
@@ -139,6 +180,39 @@ class Artifact(GenkitModel):
     metadata: Metadata | None = None
 
 
+class GetSnapshotRequest(GenkitModel):
+    """Model for getsnapshotrequest data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+
+
+class GetSnapshotResponse(GenkitModel):
+    """Model for getsnapshotresponse data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+    created_at: str | None = None
+    updated_at: str | None = None
+    status: SnapshotStatus | None = None
+    error: str | None = None
+    state: SessionState | None = None
+
+
+class SessionSnapshot(GenkitModel):
+    """Model for sessionsnapshot data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+    parent_id: str | None = None
+    created_at: str = Field(...)
+    updated_at: str | None = None
+    event: SnapshotEvent = Field(...)
+    status: SnapshotStatus | None = None
+    error: str | None = None
+    state: SessionState = Field(...)
+
+
 class SessionState(GenkitModel):
     """Model for sessionstate data."""
 
@@ -146,6 +220,19 @@ class SessionState(GenkitModel):
     messages: list[MessageData] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
+
+
+class SnapshotMetadata(GenkitModel):
+    """Model for snapshotmetadata data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+    parent_id: str | None = None
+    created_at: str = Field(...)
+    updated_at: str | None = None
+    event: SnapshotEvent = Field(...)
+    status: Any | None = Field(default=None)
+    error: str | None = None
 
 
 class TurnEnd(GenkitModel):
