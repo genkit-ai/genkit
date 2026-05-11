@@ -38,8 +38,9 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  * - `invocationEnd`: snapshot was triggered at the end of the invocation.
  * - `detach`: snapshot was created when the client detached the invocation
  *   and the flow continues in the background. Initially written with
- *   `pending` status and rewritten with a terminal status once the
- *   background work finishes.
+ *   `pending` status (and empty state) and rewritten with a terminal
+ *   status and the final cumulative state once the background work
+ *   finishes.
  */
 export const SnapshotEventSchema = z.enum([
   'turnEnd',
@@ -52,7 +53,8 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  * Zod schema for a snapshot's lifecycle status.
  *
  * - `pending`: a detached invocation is still processing the queued inputs.
- *   The snapshot will be rewritten with a terminal status once the flow exits.
+ *   The snapshot's state is empty until the flow exits, at which point it
+ *   is rewritten with the cumulative final state and a terminal status.
  * - `complete`: the snapshot captures a settled state.
  * - `canceled`: the snapshot's invocation was aborted via the
  *   `abortSnapshot` companion action while detached.
@@ -88,11 +90,11 @@ export type SessionState = z.infer<typeof SessionStateSchema>;
 export const SessionFlowInputSchema = z.object({
   /**
    * Detach signals that the client wishes to disconnect after this input is
-   * accepted. The server writes a single pending snapshot capturing the
-   * queued inputs (this one and any others already buffered), returns
-   * SessionFlowOutput with that snapshot ID, and continues processing in a
-   * background context. Streamed chunks emitted after detach are discarded;
-   * only the final session state is captured when the snapshot is
+   * accepted. The server writes a single pending snapshot (with empty
+   * state), returns SessionFlowOutput with that snapshot ID, and continues
+   * processing any already-buffered inputs in a background context.
+   * Streamed chunks emitted after detach are not forwarded over the wire;
+   * only the final cumulative state is captured when the snapshot is
    * finalized (or the snapshot is aborted via `abortSnapshot`).
    */
   detach: z.boolean().optional(),
@@ -207,17 +209,10 @@ export type SnapshotMetadata = z.infer<typeof SnapshotMetadataSchema>;
  */
 export const SessionSnapshotSchema = SnapshotMetadataSchema.extend({
   /**
-   * Inputs captured at detach time, in FIFO order. The first entry may be
-   * the input that was in flight when detach landed (its turn was
-   * suppressed because snapshots were suspended in the same atomic step
-   * that captured it); the rest were queued behind it. Set only on
-   * snapshots in `pending` status; cleared when the snapshot is finalized.
-   */
-  pendingInputs: z.array(SessionFlowInputSchema).optional(),
-  /**
-   * Conversation state. Empty on a pending snapshot (the queued inputs are
-   * in `pendingInputs` and the live state is not yet committed); populated
-   * on terminal snapshots.
+   * Conversation state. Empty on a pending snapshot (the live state is
+   * not yet committed; the background invocation is still processing
+   * queued inputs); populated on terminal snapshots with the cumulative
+   * final state.
    */
   state: SessionStateSchema,
 });
@@ -250,8 +245,6 @@ export const GetSnapshotResponseSchema = z.object({
   status: SnapshotStatusSchema.optional(),
   /** Populated when status is `error`. */
   error: z.string().optional(),
-  /** Queued inputs captured at detach time. Populated only when status is `pending`. */
-  pendingInputs: z.array(SessionFlowInputSchema).optional(),
   /**
    * Session state captured by the snapshot, after any configured transform.
    * Empty when status is `pending` or `error`.

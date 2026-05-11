@@ -294,13 +294,11 @@ func (rt *sessionFlowRuntime[Stream, State]) handleFnDone(
 
 // handleDetach commits the pending snapshot, returns its ID, and spawns the
 // status-subscriber and finalizer goroutines that own the rest of the
-// invocation. Per-turn snapshots are suspended for the remainder, and the
-// chunk router enters trash mode (no further outCh writes, no side effects).
-//
-// PendingInputs is FIFO: in-flight input (atomically captured with the
-// suspend flag, so it's never both turn-end-snapshotted and listed here),
-// followed by the intake's queue, followed by anything the reader drains
-// from src after detach.
+// invocation. Per-turn snapshots are suspended for the remainder so the
+// queued inputs roll into a single finalize rewrite; the chunk router
+// stops writing to outCh but keeps applying in-process side effects
+// (e.g. artifacts added via Responder.SendArtifact) so user code does
+// not have to branch on detach.
 func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 	clientCtx, workCtx context.Context,
 	cancelWork context.CancelFunc,
@@ -310,7 +308,7 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 	// fn completion can cancel workCtx.
 	markDetached()
 
-	combined := rt.intake.suspendAndCapture()
+	rt.intake.suspend()
 
 	parentID := ""
 	if rt.runner.lastSnapshot != nil {
@@ -319,13 +317,12 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 
 	now := time.Now()
 	pending := &SessionSnapshot[State]{
-		SnapshotID:    uuid.New().String(),
-		ParentID:      parentID,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		Event:         SnapshotEventDetach,
-		Status:        SnapshotStatusPending,
-		PendingInputs: combined,
+		SnapshotID: uuid.New().String(),
+		ParentID:   parentID,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Event:      SnapshotEventDetach,
+		Status:     SnapshotStatusPending,
 	}
 	// Detach intends to outlive the client connection. If clientCtx was
 	// already cancelled (or cancels mid-write), we still want the pending
@@ -556,12 +553,11 @@ func (s *SessionRunner[State]) Result() *SessionFlowResult {
 // callback approves, state changed, detach has not suspended snapshots).
 // Returns the snapshot ID or empty string.
 //
-// For turn-end events, the runner consults the intake atomically: if
-// detach has suspended snapshots, intake.beginTurnEnd reports that and
-// the runner skips. Otherwise intake.beginTurnEnd clears the in-flight
-// input. This is what guarantees the in-flight input is never both
-// turn-end-snapshotted AND included in the pending snapshot's
-// PendingInputs.
+// For turn-end events, the runner asks the intake whether snapshots
+// have been suspended (i.e. detach has landed). If so, the runner skips
+// the turn-end snapshot — the pending row already captures the
+// invocation and a single finalize rewrite will record the cumulative
+// state once the queued inputs drain.
 func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
 	if event == SnapshotEventTurnEnd && s.intake != nil {
 		if suspended := s.intake.beginTurnEnd(); suspended {
@@ -619,27 +615,9 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 		return ""
 	}
 
-	s.tagLastMessage(snapshot.SnapshotID)
 	s.lastSnapshot = snapshot
 	s.lastSnapshotVersion = currentVersion
 	return snapshot.SnapshotID
-}
-
-// tagLastMessage records snapshotID in the metadata of the last message in
-// session history, so clients can correlate messages with the snapshot that
-// captured them.
-func (s *SessionRunner[State]) tagLastMessage(snapshotID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	msgs := s.state.Messages
-	if len(msgs) == 0 {
-		return
-	}
-	last := msgs[len(msgs)-1]
-	if last.Metadata == nil {
-		last.Metadata = make(map[string]any)
-	}
-	last.Metadata["snapshotId"] = snapshotID
 }
 
 // --- Responder ---
@@ -796,8 +774,7 @@ func (r *chunkRouter[Stream, State]) close() {
 // --- detachIntake ---
 //
 // detachIntake separates eager src reading from runner-paced forwarding,
-// and is the single source of truth for in-flight tracking, queue state,
-// and suspend state.
+// and owns the queue and suspend state.
 //
 // The reader goroutine pulls from the bidi framework's inCh as soon as
 // inputs arrive and appends them to an internal queue. This is what makes
@@ -806,17 +783,17 @@ func (r *chunkRouter[Stream, State]) close() {
 // waiting for the runner to finish whatever it's processing.
 //
 // The forwarder goroutine pops the queue and writes to dst, blocking on
-// the runner. Crucially, it sets in-flight (under the same mutex it pops
-// under) BEFORE the dst send, so an input is never "in transit" without
-// being tracked — closing the gap that would otherwise let detach miss it.
+// the runner via turnDone so it stays in step with turn pacing.
 //
-// The runner asks beginTurnEnd at the end of each turn: if not suspended,
-// in-flight is cleared. If suspended, the runner skips its snapshot and
-// the input rolls into the pending snapshot instead.
+// The runner asks beginTurnEnd at the end of each turn: if suspended
+// (detach has landed), the runner skips its turn-end snapshot — the
+// pending row already captures the invocation and a single finalize
+// will rewrite it with the cumulative state once the queued inputs
+// drain. If not suspended, a normal turn-end snapshot is written.
 //
-// suspendAndCapture is the detach handler's atomic read: flips suspended,
-// reads in-flight, reads queue, all under one lock so there's no race
-// with maybeSnapshot or the forwarder.
+// suspend is called once by the detach handler under the same mutex
+// that beginTurnEnd reads from, ensuring memory ordering: any
+// beginTurnEnd that returns after suspend completes sees suspended=true.
 
 type detachIntake struct {
 	src    <-chan *SessionFlowInput
@@ -830,7 +807,6 @@ type detachIntake struct {
 
 	mu        sync.Mutex
 	suspended bool
-	inFlight  *SessionFlowInput
 	queue     []*SessionFlowInput
 
 	readDone atomic.Bool
@@ -914,13 +890,13 @@ func (i *detachIntake) enqueue(input *SessionFlowInput) {
 }
 
 // handleDetach drains any buffered src inputs into the queue and signals
-// the detach handler. The detach handler then calls suspendAndCapture for
-// the atomic read of the full state.
+// the detach handler. The detach handler then calls suspend to halt
+// turn-end snapshots while the queued inputs finish processing.
 //
 // A pure detach signal (no Messages, no ToolRestarts) is dropped rather
-// than enqueued: it carries no payload to process, so adding it to
-// PendingInputs would just leave a stray empty input there. Callers that
-// want to ride a final input on the detach signal can do so by calling
+// than enqueued: it carries no payload to process, so it would just
+// trigger a no-op turn. Callers that want to ride a final input on the
+// detach signal can do so by calling
 // Send(&SessionFlowInput{Detach: true, Messages: ...}) explicitly.
 func (i *detachIntake) handleDetach(first *SessionFlowInput) {
 	var drained []*SessionFlowInput
@@ -954,17 +930,16 @@ drainLoop:
 }
 
 // hasInputPayload reports whether the input carries data the runner would
-// otherwise process. Used to filter pure detach signals out of
-// PendingInputs.
+// otherwise process. Used to filter pure detach signals out of the
+// queue so they don't trigger no-op turns.
 func hasInputPayload(in *SessionFlowInput) bool {
 	return in != nil && (len(in.Messages) > 0 || len(in.ToolRestarts) > 0)
 }
 
 // forward pops the queue and writes to dst at the runner's pace. The
 // runner signals turnDone via beginTurnEnd when it's ready for the next
-// input; until then the forwarder waits, so inFlight always reflects the
-// input actually being processed (or in transit to the runner) rather
-// than running ahead.
+// input; until then the forwarder waits, so it never gets ahead of the
+// runner.
 func (i *detachIntake) forward() {
 	for {
 		// Wait for the previous turn to release us (initial credit lets
@@ -989,15 +964,14 @@ func (i *detachIntake) forward() {
 }
 
 // awaitInput blocks until the queue has an input, the reader is done, or
-// stop is signaled. Returns the popped input (with inFlight set under mu)
-// or nil if no further inputs will arrive.
+// stop is signaled. Returns the popped input or nil if no further inputs
+// will arrive.
 func (i *detachIntake) awaitInput() *SessionFlowInput {
 	for {
 		i.mu.Lock()
 		if len(i.queue) > 0 {
 			input := i.queue[0]
 			i.queue = i.queue[1:]
-			i.inFlight = input
 			i.mu.Unlock()
 			return input
 		}
@@ -1034,44 +1008,27 @@ func (i *detachIntake) detachSignal() <-chan struct{} {
 
 // beginTurnEnd is called by [SessionRunner.maybeSnapshot] before writing
 // a turn-end snapshot. If the intake has been suspended (detach landed),
-// it returns suspended=true and the runner skips the snapshot. Otherwise
-// it clears in-flight.
+// it returns suspended=true and the runner skips the snapshot.
 //
 // In all cases (including suspended) the forwarder is released so it can
 // pop the next queued input — suspension stops snapshot writing, not
 // processing.
 func (i *detachIntake) beginTurnEnd() (suspended bool) {
 	i.mu.Lock()
-	if i.suspended {
-		i.mu.Unlock()
-		i.releaseForward()
-		return true
-	}
-	i.inFlight = nil
+	suspended = i.suspended
 	i.mu.Unlock()
 	i.releaseForward()
-	return false
+	return suspended
 }
 
-// suspendAndCapture is called once by the detach handler. It flips
-// suspended=true and reads the in-flight input (if any) and the queue
-// snapshot. Inputs are returned in FIFO order with Detach cleared.
-func (i *detachIntake) suspendAndCapture() (combined []*SessionFlowInput) {
+// suspend is called once by the detach handler. It flips suspended=true
+// under the mutex so subsequent beginTurnEnd calls observe the change
+// and skip their turn-end snapshot writes; the queued inputs roll into
+// a single finalize rewrite of the pending row instead.
+func (i *detachIntake) suspend() {
 	i.mu.Lock()
-	defer i.mu.Unlock()
 	i.suspended = true
-
-	if i.inFlight != nil {
-		c := *i.inFlight
-		c.Detach = false
-		combined = append(combined, &c)
-	}
-	for _, q := range i.queue {
-		c := *q
-		c.Detach = false
-		combined = append(combined, &c)
-	}
-	return
+	i.mu.Unlock()
 }
 
 // stopAndWait forces the intake to exit and waits for both reader and
@@ -1232,14 +1189,18 @@ func (c *SessionFlowConnection[Stream, State]) SendToolRestarts(parts ...*ai.Par
 	return c.conn.Send(&SessionFlowInput{ToolRestarts: parts})
 }
 
-// Detach asks the server to write a pending snapshot capturing any inputs
-// already buffered, close the connection, and continue processing in the
-// background. Output() returns the pending snapshot ID; the client can
-// later call AbortSnapshot to stop the background work or GetSnapshot to
-// observe its progression. Streamed chunks emitted after detach are not
-// forwarded over the wire (the connection is gone), but their session-
-// level side effects still apply: artifacts sent via [Responder.SendArtifact]
-// land in the session and end up in the final snapshot's state.
+// Detach asks the server to write a pending snapshot, close the
+// connection, and continue processing any already-buffered inputs in
+// the background. Output() returns the pending snapshot ID; the client
+// can later call AbortSnapshot to stop the background work or
+// GetSnapshot to observe its progression. The pending snapshot is
+// finalized with the cumulative final state once the queued inputs
+// are processed.
+//
+// Streamed chunks emitted after detach are not forwarded over the wire
+// (the connection is gone), but their session-level side effects still
+// apply: artifacts sent via [Responder.SendArtifact] land in the
+// session and end up in the final snapshot's state.
 //
 // To send a final input as part of the same wire message, use
 // Send(&SessionFlowInput{Detach: true, Messages: ...}) directly.

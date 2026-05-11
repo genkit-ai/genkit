@@ -630,59 +630,6 @@ func TestSessionFlow_SetMessages(t *testing.T) {
 	}
 }
 
-func TestSessionFlow_SnapshotIDInMessageMetadata(t *testing.T) {
-	ctx := context.Background()
-	reg := newTestRegistry(t)
-	store := NewInMemorySessionStore[testState]()
-
-	af := DefineSessionFlow(reg, "metadataFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *SessionFlowInput) error {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil
-			})
-			if err != nil {
-				return nil, err
-			}
-			msgs := sess.Messages()
-			return &SessionFlowResult{Message: msgs[len(msgs)-1]}, nil
-		},
-		WithSessionStore(store),
-	)
-
-	conn, err := af.StreamBidi(ctx)
-	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
-	}
-
-	conn.SendText("hello")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
-	conn.Close()
-
-	response, err := conn.Output()
-	if err != nil {
-		t.Fatalf("Output failed: %v", err)
-	}
-
-	// The last model message should have snapshotId in its metadata.
-	if response.Message == nil {
-		t.Fatal("expected Message in response")
-	}
-	if response.Message.Metadata == nil {
-		t.Fatal("expected metadata on last message")
-	}
-	if _, ok := response.Message.Metadata["snapshotId"]; !ok {
-		t.Error("expected snapshotId in last message metadata")
-	}
-}
-
 func TestInMemorySessionStore(t *testing.T) {
 	ctx := context.Background()
 	store := NewInMemorySessionStore[testState]()
@@ -1801,11 +1748,12 @@ func TestSessionFlow_TurnEnd_CarriesSnapshotID(t *testing.T) {
 	}
 }
 
-func TestSessionFlow_Detach_CapturesInFlightAndQueued(t *testing.T) {
+func TestSessionFlow_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	// Detach lands while turn 0 (input A) is mid-fn and an extra turn
 	// (the detach input D itself) is waiting. The pending snapshot must:
-	//   - Include A AND D in PendingInputs (in FIFO order)
-	//   - NOT write a separate turn-end snapshot for A (suspended)
+	//   - Be written with empty state and no parent (A was suspended, so
+	//     no turn-end snapshot landed before pending).
+	//   - NOT write a separate turn-end snapshot for A or D (suspended).
 	// After release, the finalized snapshot has both A's and D's effects.
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
@@ -1878,19 +1826,8 @@ func TestSessionFlow_Detach_CapturesInFlightAndQueued(t *testing.T) {
 	if pending.Status != SnapshotStatusPending {
 		t.Errorf("pending snapshot status = %q, want pending", pending.Status)
 	}
-	if got := len(pending.PendingInputs); got != 2 {
-		t.Fatalf("pending PendingInputs len = %d, want 2 (in-flight A + queued D)", got)
-	}
-	if msg := pending.PendingInputs[0].Messages[0].Text(); msg != "A" {
-		t.Errorf("PendingInputs[0] = %q, want A", msg)
-	}
-	if msg := pending.PendingInputs[1].Messages[0].Text(); msg != "D" {
-		t.Errorf("PendingInputs[1] = %q, want D", msg)
-	}
-	for i, p := range pending.PendingInputs {
-		if p.Detach {
-			t.Errorf("PendingInputs[%d] retained Detach=true", i)
-		}
+	if got := len(pending.State.Messages); got != 0 {
+		t.Errorf("pending state messages = %d, want 0 (live state not yet committed)", got)
 	}
 
 	// No separate turn-end snapshot for A should have been written.
@@ -1912,15 +1849,11 @@ func TestSessionFlow_Detach_CapturesInFlightAndQueued(t *testing.T) {
 		// 2 user (A, D) + 2 model replies = 4.
 		t.Errorf("final messages = %d, want 4", got)
 	}
-	if final.PendingInputs != nil {
-		t.Errorf("final PendingInputs not cleared: %d entries", len(final.PendingInputs))
-	}
 }
 
 func TestSessionFlow_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	// Run two normal turns first, then detach during a third (in-flight)
-	// turn. The pending snapshot must chain off the second turn's snapshot
-	// and capture the in-flight + queued inputs in FIFO order.
+	// turn. The pending snapshot must chain off the second turn's snapshot.
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
@@ -1990,12 +1923,6 @@ func TestSessionFlow_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
-	}
-	if got := len(pending.PendingInputs); got != 2 {
-		t.Fatalf("PendingInputs len = %d, want 2 (in-flight + detach)", got)
-	}
-	if msg := pending.PendingInputs[0].Messages[0].Text(); msg != "inflight" {
-		t.Errorf("PendingInputs[0] = %q, want inflight", msg)
 	}
 	if pending.ParentID == "" {
 		t.Error("pending ParentID empty; expected parent = last sync turn snapshot")
@@ -2112,13 +2039,6 @@ func TestSessionFlow_Detach_PendingThenComplete(t *testing.T) {
 	if pending.Status != SnapshotStatusPending {
 		t.Errorf("expected status=%q, got %q", SnapshotStatusPending, pending.Status)
 	}
-	if got := len(pending.PendingInputs); got != 1 {
-		t.Errorf("expected 1 pending input, got %d", got)
-	} else if pending.PendingInputs[0].Detach {
-		t.Error("pending input retained Detach=true; expected it cleared")
-	} else if got := pending.PendingInputs[0].Messages[0].Text(); got != "go" {
-		t.Errorf("pending input message = %q, want %q", got, "go")
-	}
 	if got := len(pending.State.Messages); got != 0 {
 		t.Errorf("pending snapshot should not carry message history, got %d messages", got)
 	}
@@ -2134,9 +2054,6 @@ func TestSessionFlow_Detach_PendingThenComplete(t *testing.T) {
 	}
 	if got := len(finalSnap.State.Messages); got < 2 {
 		t.Errorf("expected at least 2 messages in final snapshot, got %d", got)
-	}
-	if finalSnap.PendingInputs != nil {
-		t.Errorf("expected PendingInputs cleared on finalize, got %d", len(finalSnap.PendingInputs))
 	}
 }
 

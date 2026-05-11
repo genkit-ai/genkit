@@ -76,11 +76,12 @@ type SessionFlowInit[State any] struct {
 // SessionFlowInput is the input sent to an session flow during a conversation turn.
 type SessionFlowInput struct {
 	// Detach signals that the client wishes to disconnect after this input is
-	// accepted. The server writes a single pending snapshot capturing the
-	// queued inputs (this one and any others already buffered), returns
-	// [SessionFlowOutput] with that snapshot ID, and continues processing in
-	// a background context. The pending snapshot is finalized once all queued
-	// inputs are processed (or the snapshot is cancelled via cancelSnapshot).
+	// accepted. The server writes a single pending snapshot (with empty
+	// state), returns [SessionFlowOutput] with that snapshot ID, and
+	// continues processing any already-buffered inputs in a background
+	// context. The pending snapshot is finalized with the cumulative final
+	// state once all queued inputs are processed (or the snapshot is
+	// cancelled via cancelSnapshot).
 	Detach bool `json:"detach,omitempty"`
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`

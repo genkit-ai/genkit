@@ -103,12 +103,6 @@
         "error": {
           "type": "string"
         },
-        "pendingInputs": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionFlowInput"
-          }
-        },
         "state": {
           "$ref": "#/$defs/SessionState"
         }
@@ -226,12 +220,6 @@
         },
         "error": {
           "type": "string"
-        },
-        "pendingInputs": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SessionFlowInput"
-          }
         },
         "state": {
           "$ref": "#/$defs/SessionState"

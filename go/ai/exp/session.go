@@ -37,11 +37,12 @@ import (
 // (an empty value is also treated as complete for backwards compatibility).
 //
 // When a client sets [SessionFlowInput.Detach], the server writes a single
-// snapshot with [SnapshotStatusPending] capturing the queued inputs and
-// returns its ID immediately. Background processing then either updates that
-// snapshot to [SnapshotStatusComplete] / [SnapshotStatusError] when the flow
-// finishes, or to [SnapshotStatusCanceled] if the client called
-// abortSnapshot in the meantime.
+// snapshot with [SnapshotStatusPending] (and empty state) and returns its
+// ID immediately. Background processing then either rewrites that snapshot
+// with the cumulative final state and [SnapshotStatusComplete] /
+// [SnapshotStatusError] when the flow finishes, or with
+// [SnapshotStatusCanceled] if the client called abortSnapshot in the
+// meantime.
 type SnapshotStatus string
 
 const (
@@ -80,16 +81,10 @@ type SessionSnapshot[State any] struct {
 	// Error is the failure message for a snapshot in [SnapshotStatusError].
 	// Empty otherwise.
 	Error string `json:"error,omitempty"`
-	// PendingInputs is the inputs captured at detach time, in FIFO order.
-	// The first entry may be the input that was in flight when detach
-	// landed (its turn was suppressed because snapshots were suspended in
-	// the same atomic step that captured it); the rest were queued behind
-	// it. Set only on snapshots in [SnapshotStatusPending]; cleared when
-	// the snapshot is finalized.
-	PendingInputs []*SessionFlowInput `json:"pendingInputs,omitempty"`
 	// State is the actual conversation state. Empty on a pending snapshot
-	// (the queued inputs are in [PendingInputs] and the live state is not
-	// yet committed); populated on terminal snapshots.
+	// (the live state is not yet committed; the background invocation is
+	// still processing queued inputs); populated on terminal snapshots
+	// with the cumulative final state.
 	State SessionState[State] `json:"state"`
 }
 
@@ -384,9 +379,6 @@ type GetSnapshotResponse[State any] struct {
 	Status SnapshotStatus `json:"status,omitempty"`
 	// Error is populated when Status is [SnapshotStatusError].
 	Error string `json:"error,omitempty"`
-	// PendingInputs is the queued inputs captured at detach time. Populated
-	// only when Status is [SnapshotStatusPending].
-	PendingInputs []*SessionFlowInput `json:"pendingInputs,omitempty"`
 	// State is the session state captured by the snapshot, after any
 	// configured transform. Empty when Status is pending or error.
 	State *SessionState[State] `json:"state,omitempty"`
@@ -455,12 +447,11 @@ func registerSnapshotActions[State any](
 			}
 
 			resp := &GetSnapshotResponse[State]{
-				SnapshotID:    snap.SnapshotID,
-				CreatedAt:     snap.CreatedAt,
-				UpdatedAt:     updatedAt,
-				Status:        status,
-				Error:         snap.Error,
-				PendingInputs: snap.PendingInputs,
+				SnapshotID: snap.SnapshotID,
+				CreatedAt:  snap.CreatedAt,
+				UpdatedAt:  updatedAt,
+				Status:     status,
+				Error:      snap.Error,
 			}
 			if status != SnapshotStatusError && status != SnapshotStatusPending {
 				resp.State = applyTransform(transform, &snap.State)
