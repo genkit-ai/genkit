@@ -14,24 +14,25 @@ This plugin provides five concrete middleware implementations for common use cas
 
 ## Quick start
 
-Register all five at once with `middleware_bundle()` and reference them by name:
+Import the middleware classes you need and pass instances directly into `use=[]`:
 
 ```python
-from genkit import Genkit, MiddlewareRef
-from genkit.plugins.middleware import middleware_bundle
+from genkit import Genkit
+from genkit.plugins.middleware import Retry, Fallback, Middleware
 
-ai = Genkit(plugins=[middleware_bundle()])
+ai = Genkit(plugins=[Middleware()])
 
 response = await ai.generate(
     model='googleai/gemini-2.5-flash',
     prompt='Hello!',
-    use=[MiddlewareRef(name='retry', config={'max_retries': 5})],
+    use=[
+        Retry(max_retries=5),
+        Fallback(models=['googleai/gemini-2.5-pro']),
+    ],
 )
 ```
 
-Or import and pass instances directly into `use=[]` (see per-middleware sections
-below). Both styles are equivalent — the bundle is just a convenience for
-JSON-dispatched / Dev UI scenarios.
+These pre-packaged middlewares will be available to play with in the Dev UI by default.
 
 ## Installation
 

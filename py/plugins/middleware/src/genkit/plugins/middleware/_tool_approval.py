@@ -23,9 +23,10 @@ Useful for sensitive operations or user confirmation flows.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._tracing import run_in_new_span
@@ -69,14 +70,19 @@ class ToolApproval(BaseMiddleware):
         if isinstance(resumed, dict) and resumed.get('toolApproved'):
             return await next_fn(params)
 
-        # Wrap the interrupt in a tool-shaped span so it is visible in traces,
-        # attributed to the specific tool that was blocked.
-        # run_in_new_span records the exception and re-raises, so Interrupt
-        # propagates normally to the engine.
+        # Emit a tool-shaped span so the interrupt is attributed to the tool in traces,
+        # mirroring JS (ai.run around ToolInterruptError) and Go (RunInNewSpan with
+        # action/tool metadata).
+        tool_input = params.tool_request_part.tool_request.input
         with run_in_new_span(
-            SpanMetadata(
-                name=tool_name,
-                input=params.tool_request_part.tool_request.input,
-            )
-        ):
+            SpanMetadata(name=tool_name, input=tool_input),
+            labels={
+                'genkit:type': 'action',
+                'genkit:metadata:subtype': 'tool',
+                'genkit:name': tool_name,
+            },
+        ) as span:
+            if tool_input is not None:
+                inp_json = tool_input.model_dump_json() if isinstance(tool_input, BaseModel) else json.dumps(tool_input)
+                span.set_attribute('genkit:input', inp_json)
             raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})

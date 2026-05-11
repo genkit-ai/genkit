@@ -62,6 +62,7 @@ class ConciseReplyMiddleware(BaseMiddleware):
     ``instruction`` is a pydantic field: override it per call via ``ConciseReplyMiddleware(instruction=...)``
     or via ``MiddlewareRef(name='concise_reply_mw', config={'instruction': ...})``.
     """
+
     instruction: str = 'Answer in one short paragraph.'
 
     async def wrap_model(
