@@ -26,7 +26,6 @@ import (
 	"iter"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
@@ -34,7 +33,6 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
-	"github.com/google/uuid"
 )
 
 // --- SessionFlow ---
@@ -287,7 +285,7 @@ func (rt *sessionFlowRuntime[Stream, State]) handleFnDone(
 		out.Artifacts = res.result.Artifacts
 	}
 	if rt.cfg.store == nil {
-		out.State = applyTransform(rt.cfg.transform, rt.session.State())
+		out.State = applyTransform(ctx, rt.cfg.transform, rt.session.State())
 	}
 	return out, nil
 }
@@ -310,27 +308,23 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 
 	rt.intake.suspend()
 
-	parentID := ""
-	if rt.runner.lastSnapshot != nil {
-		parentID = rt.runner.lastSnapshot.SnapshotID
-	}
+	parentID := rt.runner.parentSnapshotID()
 
-	now := time.Now()
-	pending := &SessionSnapshot[State]{
-		SnapshotID: uuid.New().String(),
-		ParentID:   parentID,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		Event:      SnapshotEventDetach,
-		Status:     SnapshotStatusPending,
-	}
 	// Detach intends to outlive the client connection. If clientCtx was
 	// already cancelled (or cancels mid-write), we still want the pending
 	// row durable so observers can find it later. Decouple this write.
-	if err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), pending); err != nil {
+	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), "",
+		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			return &SessionSnapshot[State]{
+				ParentID: parentID,
+				Event:    SnapshotEventDetach,
+				Status:   SnapshotStatusPending,
+			}, nil
+		})
+	if err != nil {
 		rt.drainAndWait(cancelWork)
 		return nil, core.NewError(core.INTERNAL,
-			"session flow %q: detach: save pending snapshot %q: %v", rt.name, pending.SnapshotID, err)
+			"session flow %q: detach: save pending snapshot: %v", rt.name, err)
 	}
 
 	// The router can no longer write to outCh once we return; the bidi
@@ -368,45 +362,47 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 // finalizePendingSnapshot rewrites the pending snapshot row with the
 // terminal state and status. canceledByUser distinguishes a context
 // cancellation from abortSnapshot (status=canceled) from an internal
-// failure (status=error). Re-checks the store's current status before
-// writing so an abort that lands between fn-return and this write is
-// honored rather than clobbered with status=complete.
+// failure (status=error). The write is funneled through SaveSnapshot
+// so the read-and-rewrite is one atomic step: if the row has already
+// transitioned to canceled (a late abort racing this finalize),
+// SaveSnapshot sees it inside fn and we leave the row untouched.
 func (rt *sessionFlowRuntime[Stream, State]) finalizePendingSnapshot(
 	ctx context.Context,
 	pending *SessionSnapshot[State],
 	fnErr error,
 	canceledByUser bool,
 ) {
-	if !canceledByUser {
-		if snap, err := rt.cfg.store.GetSnapshot(ctx, pending.SnapshotID); err == nil && snap != nil && snap.Status == SnapshotStatusCanceled {
-			canceledByUser = true
-		}
-	}
+	finalState := *rt.session.State()
 
-	status := SnapshotStatusComplete
-	errMsg := ""
-	switch {
-	case canceledByUser:
-		status = SnapshotStatusCanceled
-		if fnErr != nil {
-			errMsg = fnErr.Error() // canceled status takes precedence; preserve text
-		}
-	case fnErr != nil:
-		status = SnapshotStatusError
-		errMsg = fnErr.Error()
-	}
+	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
+		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			// Late abort wins over the terminal we were about to land.
+			if existing != nil && existing.Status == SnapshotStatusCanceled {
+				return nil, nil
+			}
 
-	final := &SessionSnapshot[State]{
-		SnapshotID: pending.SnapshotID,
-		ParentID:   pending.ParentID,
-		CreatedAt:  pending.CreatedAt,
-		UpdatedAt:  time.Now(),
-		Event:      SnapshotEventDetach,
-		Status:     status,
-		Error:      errMsg,
-		State:      *rt.session.State(),
-	}
-	if err := rt.cfg.store.SaveSnapshot(ctx, final); err != nil {
+			status := SnapshotStatusComplete
+			errMsg := ""
+			switch {
+			case canceledByUser:
+				status = SnapshotStatusCanceled
+				if fnErr != nil {
+					errMsg = fnErr.Error() // canceled wins, preserve text
+				}
+			case fnErr != nil:
+				status = SnapshotStatusError
+				errMsg = fnErr.Error()
+			}
+
+			return &SessionSnapshot[State]{
+				ParentID: pending.ParentID,
+				Event:    SnapshotEventDetach,
+				Status:   status,
+				Error:    errMsg,
+				State:    finalState,
+			}, nil
+		})
+	if err != nil {
 		logger.FromContext(ctx).Error("session flow: failed to finalize pending snapshot",
 			"snapshotId", pending.SnapshotID, "err", err)
 	}
@@ -495,6 +491,16 @@ type SessionRunner[State any] struct {
 	// maybeSnapshot) so per-turn snapshot writes and detach captures
 	// cannot race over the same input.
 	intake *detachIntake
+}
+
+// parentSnapshotID returns the ID of the most recent snapshot in this
+// invocation (used to chain new snapshots via ParentID), or "" if no
+// snapshot has been written yet.
+func (s *SessionRunner[State]) parentSnapshotID() string {
+	if s.lastSnapshot == nil {
+		return ""
+	}
+	return s.lastSnapshot.SnapshotID
 }
 
 // Run loops over the input channel, calling fn for each turn. Each turn is
@@ -597,27 +603,25 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 		}
 	}
 
-	now := time.Now()
-	snapshot := &SessionSnapshot[State]{
-		SnapshotID: uuid.New().String(),
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		Event:      event,
-		Status:     SnapshotStatusComplete,
-		State:      currentState,
-	}
-	if s.lastSnapshot != nil {
-		snapshot.ParentID = s.lastSnapshot.SnapshotID
-	}
+	parentID := s.parentSnapshotID()
 
-	if err := s.store.SaveSnapshot(ctx, snapshot); err != nil {
+	saved, err := s.store.SaveSnapshot(ctx, "",
+		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			return &SessionSnapshot[State]{
+				ParentID: parentID,
+				Event:    event,
+				Status:   SnapshotStatusComplete,
+				State:    currentState,
+			}, nil
+		})
+	if err != nil {
 		logger.FromContext(ctx).Error("session flow: failed to save snapshot", "err", err)
 		return ""
 	}
 
-	s.lastSnapshot = snapshot
+	s.lastSnapshot = saved
 	s.lastSnapshotVersion = currentVersion
-	return snapshot.SnapshotID
+	return saved.SnapshotID
 }
 
 // --- Responder ---

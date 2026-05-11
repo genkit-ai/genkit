@@ -631,46 +631,132 @@ func TestSessionFlow_SetMessages(t *testing.T) {
 }
 
 func TestInMemorySessionStore(t *testing.T) {
-	ctx := context.Background()
-	store := NewInMemorySessionStore[testState]()
+	t.Run("GetMissing", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		snap, err := store.GetSnapshot(context.Background(), "nonexistent")
+		if err != nil {
+			t.Fatalf("GetSnapshot failed: %v", err)
+		}
+		if snap != nil {
+			t.Errorf("expected nil, got %v", snap)
+		}
+	})
 
-	// Get non-existent.
-	snap, err := store.GetSnapshot(ctx, "nonexistent")
-	if err != nil {
-		t.Fatalf("GetSnapshot failed: %v", err)
-	}
-	if snap != nil {
-		t.Errorf("expected nil, got %v", snap)
-	}
+	t.Run("SaveWithFixedID", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(existing *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				if existing != nil {
+					t.Errorf("expected nil existing on first save, got %+v", existing)
+				}
+				return &SessionSnapshot[testState]{
+					Status: SnapshotStatusComplete,
+					State:  SessionState[testState]{Custom: testState{Counter: 1}},
+				}, nil
+			})
+		if err != nil {
+			t.Fatalf("SaveSnapshot failed: %v", err)
+		}
+		if saved.SnapshotID != "snap-1" {
+			t.Errorf("saved SnapshotID = %q, want %q", saved.SnapshotID, "snap-1")
+		}
+		if saved.CreatedAt.IsZero() || saved.UpdatedAt.IsZero() {
+			t.Errorf("expected CreatedAt/UpdatedAt stamped, got created=%v updated=%v",
+				saved.CreatedAt, saved.UpdatedAt)
+		}
+	})
 
-	// Save and retrieve.
-	snapshot := &SessionSnapshot[testState]{
-		SnapshotID: "snap-1",
-		State: SessionState[testState]{
-			Custom: testState{Counter: 1},
-		},
-	}
-	if err := store.SaveSnapshot(ctx, snapshot); err != nil {
-		t.Fatalf("SaveSnapshot failed: %v", err)
-	}
+	t.Run("GetReturnsCopy", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{
+					Status: SnapshotStatusComplete,
+					State:  SessionState[testState]{Custom: testState{Counter: 1}},
+				}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		retrieved, _ := store.GetSnapshot(context.Background(), "snap-1")
+		retrieved.State.Custom.Counter = 999
+		retrieved2, _ := store.GetSnapshot(context.Background(), "snap-1")
+		if retrieved2.State.Custom.Counter != 1 {
+			t.Errorf("expected counter=1 (isolation), got %d", retrieved2.State.Custom.Counter)
+		}
+	})
 
-	retrieved, err := store.GetSnapshot(ctx, "snap-1")
-	if err != nil {
-		t.Fatalf("GetSnapshot failed: %v", err)
-	}
-	if retrieved == nil {
-		t.Fatal("expected snapshot")
-	}
-	if retrieved.State.Custom.Counter != 1 {
-		t.Errorf("expected counter=1, got %d", retrieved.State.Custom.Counter)
-	}
+	t.Run("DefaultsEmptyStatusToComplete", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		saved, err := store.SaveSnapshot(context.Background(), "",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{}, nil
+			})
+		if err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		if saved.SnapshotID == "" {
+			t.Error("expected store to generate SnapshotID")
+		}
+		if saved.Status != SnapshotStatusComplete {
+			t.Errorf("expected Status=complete by default, got %q", saved.Status)
+		}
+	})
 
-	// Verify isolation.
-	snapshot.State.Custom.Counter = 999
-	retrieved2, _ := store.GetSnapshot(ctx, "snap-1")
-	if retrieved2.State.Custom.Counter != 1 {
-		t.Errorf("expected counter=1 (isolation), got %d", retrieved2.State.Custom.Counter)
-	}
+	t.Run("NoopFnSkipsWrite", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{Status: SnapshotStatusComplete}, nil
+			}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		before, _ := store.GetSnapshot(context.Background(), "snap-1")
+		noop, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return nil, nil
+			})
+		if err != nil {
+			t.Fatalf("noop SaveSnapshot: %v", err)
+		}
+		if noop != nil {
+			t.Errorf("expected nil return on noop, got %+v", noop)
+		}
+		after, _ := store.GetSnapshot(context.Background(), "snap-1")
+		if before.UpdatedAt != after.UpdatedAt {
+			t.Errorf("noop should not bump UpdatedAt: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+		}
+	})
+
+	t.Run("PreservesCreatedAtOnUpdate", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				return &SessionSnapshot[testState]{Status: SnapshotStatusComplete}, nil
+			})
+		if err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
+		updated, err := store.SaveSnapshot(context.Background(), "snap-1",
+			func(existing *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+				if existing == nil {
+					t.Fatal("expected non-nil existing on update")
+				}
+				return &SessionSnapshot[testState]{
+					Status: SnapshotStatusComplete,
+					State:  SessionState[testState]{Custom: testState{Counter: 2}},
+				}, nil
+			})
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if !updated.CreatedAt.Equal(saved.CreatedAt) {
+			t.Errorf("CreatedAt not preserved: before=%v after=%v", saved.CreatedAt, updated.CreatedAt)
+		}
+		if !updated.UpdatedAt.After(saved.UpdatedAt) {
+			t.Errorf("UpdatedAt did not advance: before=%v after=%v", saved.UpdatedAt, updated.UpdatedAt)
+		}
+	})
 }
 
 func TestSessionFlow_TurnSpanOutput(t *testing.T) {
@@ -2392,14 +2478,15 @@ func TestSessionFlow_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	erroredID := "errored-456"
-	if err := store.SaveSnapshot(context.Background(), &SessionSnapshot[testState]{
-		SnapshotID: erroredID,
-		CreatedAt:  time.Now(),
-		Event:      SnapshotEventInvocationEnd,
-		Status:     SnapshotStatusError,
-		Error:      "underlying failure",
-		State:      SessionState[testState]{},
-	}); err != nil {
+	if _, err := store.SaveSnapshot(context.Background(), erroredID,
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventInvocationEnd,
+				Status: SnapshotStatusError,
+				Error:  "underlying failure",
+				State:  SessionState[testState]{},
+			}, nil
+		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 
@@ -2424,7 +2511,7 @@ func TestSessionFlow_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	// Transform that scrubs a specific word from all messages.
-	transform := func(s SessionState[testState]) SessionState[testState] {
+	transform := func(_ context.Context, s SessionState[testState]) SessionState[testState] {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -2443,7 +2530,7 @@ func TestSessionFlow_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 			})
 		},
 		WithSessionStore(store),
-		WithSnapshotTransform[testState](transform),
+		WithStateTransform[testState](transform),
 	)
 
 	ctx := context.Background()
@@ -2545,8 +2632,11 @@ type minimalStore[State any] struct{}
 func (minimalStore[State]) GetSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
 	return nil, nil
 }
-func (minimalStore[State]) SaveSnapshot(context.Context, *SessionSnapshot[State]) error {
-	return nil
+func (minimalStore[State]) SaveSnapshot(
+	context.Context, string,
+	func(*SessionSnapshot[State]) (*SessionSnapshot[State], error),
+) (*SessionSnapshot[State], error) {
+	return nil, nil
 }
 
 func TestSessionFlow_AgentMetadata(t *testing.T) {
@@ -2667,11 +2757,11 @@ func TestSessionFlow_AbortAction_GatedOnCapabilities(t *testing.T) {
 	})
 }
 
-func TestSessionFlow_SnapshotTransform_ClientManagedState(t *testing.T) {
+func TestSessionFlow_StateTransform_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	// Client-managed state: transform should be applied to SessionFlowOutput.State.
-	transform := func(s SessionState[testState]) SessionState[testState] {
+	transform := func(_ context.Context, s SessionState[testState]) SessionState[testState] {
 		// Zero out the counter to demonstrate the transform is applied.
 		s.Custom.Counter = -1
 		return s
@@ -2687,7 +2777,7 @@ func TestSessionFlow_SnapshotTransform_ClientManagedState(t *testing.T) {
 				return nil
 			})
 		},
-		WithSnapshotTransform[testState](transform),
+		WithStateTransform[testState](transform),
 	)
 
 	out, err := af.RunText(context.Background(), "go")
@@ -2779,17 +2869,17 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	}
 
 	// Pending → canceled, UpdatedAt advances.
-	created := time.Now().Add(-time.Hour)
-	pending := &SessionSnapshot[testState]{
-		SnapshotID: "snap-cas",
-		CreatedAt:  created,
-		UpdatedAt:  created,
-		Event:      SnapshotEventDetach,
-		Status:     SnapshotStatusPending,
-	}
-	if err := store.SaveSnapshot(ctx, pending); err != nil {
+	pending, err := store.SaveSnapshot(ctx, "snap-cas",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventDetach,
+				Status: SnapshotStatusPending,
+			}, nil
+		})
+	if err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
+	time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
 	meta, err := store.AbortSnapshot(ctx, "snap-cas")
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
@@ -2797,8 +2887,8 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	if meta.Status != SnapshotStatusCanceled {
 		t.Errorf("status after first abort = %q, want canceled", meta.Status)
 	}
-	if !meta.UpdatedAt.After(created) {
-		t.Errorf("UpdatedAt did not advance: %v vs %v", meta.UpdatedAt, created)
+	if !meta.UpdatedAt.After(pending.UpdatedAt) {
+		t.Errorf("UpdatedAt did not advance: %v vs %v", meta.UpdatedAt, pending.UpdatedAt)
 	}
 
 	// Idempotent: second abort returns canceled, no error, no further mutation.
@@ -2815,14 +2905,13 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	}
 
 	// Abort on terminal status is a no-op that returns the existing status.
-	complete := &SessionSnapshot[testState]{
-		SnapshotID: "snap-complete",
-		CreatedAt:  created,
-		UpdatedAt:  created,
-		Event:      SnapshotEventTurnEnd,
-		Status:     SnapshotStatusComplete,
-	}
-	if err := store.SaveSnapshot(ctx, complete); err != nil {
+	if _, err := store.SaveSnapshot(ctx, "snap-complete",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventTurnEnd,
+				Status: SnapshotStatusComplete,
+			}, nil
+		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 	meta3, err := store.AbortSnapshot(ctx, "snap-complete")
@@ -2917,13 +3006,13 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 
 	// Persist a pending snapshot so subsequent subscribers get an initial
 	// value plus updates on each status flip.
-	pending := &SessionSnapshot[testState]{
-		SnapshotID: "snap-sub",
-		CreatedAt:  time.Now(),
-		Event:      SnapshotEventDetach,
-		Status:     SnapshotStatusPending,
-	}
-	if err := store.SaveSnapshot(ctx, pending); err != nil {
+	if _, err := store.SaveSnapshot(ctx, "snap-sub",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventDetach,
+				Status: SnapshotStatusPending,
+			}, nil
+		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 

@@ -28,19 +28,24 @@ type SessionFlowOption[State any] interface {
 	applySessionFlow(*sessionFlowOptions[State]) error
 }
 
-// SnapshotTransform rewrites session state before it is surfaced to a client.
-// It is applied to the State returned by the getSnapshot companion action and
-// to [SessionFlowOutput.State] when state is client-managed (no store).
+// StateTransform rewrites session state on its way out to a client. It
+// is applied to the State returned by the getSnapshot companion action
+// and to [SessionFlowOutput.State] when state is client-managed (no
+// store). It is not applied to state persisted in the store or to
+// state passed to the user flow function.
 //
-// The input is a deep copy owned by the caller; the transform may mutate and
-// return it, or return a freshly-constructed value. The transform must not
-// modify any state that is persisted in the store.
-type SnapshotTransform[State any] = func(state SessionState[State]) SessionState[State]
+// ctx is the request or invocation context: cancellation, deadlines,
+// and context-scoped values (e.g. the caller's identity for RBAC-aware
+// redaction) flow through here.
+//
+// The state input is a deep copy owned by the caller; the transform
+// may mutate and return it, or return a freshly-constructed value.
+type StateTransform[State any] = func(ctx context.Context, state SessionState[State]) SessionState[State]
 
 type sessionFlowOptions[State any] struct {
 	store     SessionStore[State]
 	callback  SnapshotCallback[State]
-	transform SnapshotTransform[State]
+	transform StateTransform[State]
 }
 
 func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[State]) error {
@@ -58,7 +63,7 @@ func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[St
 	}
 	if o.transform != nil {
 		if opts.transform != nil {
-			return errors.New("cannot set snapshot transform more than once (WithSnapshotTransform)")
+			return errors.New("cannot set state transform more than once (WithStateTransform)")
 		}
 		opts.transform = o.transform
 	}
@@ -93,12 +98,13 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) SessionFlowOption[State]
 	})
 }
 
-// WithSnapshotTransform registers a transform that is applied to snapshot
-// state before it is returned to a client via the getSnapshot companion action
-// or via [SessionFlowOutput.State] when state is client-managed. Typical use
-// is PII redaction or stripping secrets. The transform is not applied to state
-// persisted in the store or to state passed to the user flow function.
-func WithSnapshotTransform[State any](transform SnapshotTransform[State]) SessionFlowOption[State] {
+// WithStateTransform registers a transform applied to session state on
+// its way out to a client via the getSnapshot companion action or via
+// [SessionFlowOutput.State] when state is client-managed. Typical use
+// is PII redaction or stripping secrets. The transform is not applied
+// to state persisted in the store or to state passed to the user flow
+// function.
+func WithStateTransform[State any](transform StateTransform[State]) SessionFlowOption[State] {
 	return &sessionFlowOptions[State]{transform: transform}
 }
 

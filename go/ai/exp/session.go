@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/google/uuid"
 )
 
 // --- Snapshot ---
@@ -106,11 +107,11 @@ type SnapshotCallback[State any] = func(ctx context.Context, sc *SnapshotContext
 
 // applyTransform returns the result of applying t to *state, or state
 // unchanged if t is nil. A nil state is returned as-is.
-func applyTransform[State any](t SnapshotTransform[State], state *SessionState[State]) *SessionState[State] {
+func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) *SessionState[State] {
 	if t == nil || state == nil {
 		return state
 	}
-	transformed := t(*state)
+	transformed := t(ctx, *state)
 	return &transformed
 }
 
@@ -147,8 +148,37 @@ type SnapshotReader[State any] interface {
 // SnapshotWriter persists snapshots. The minimum any session store must
 // implement to be used with [WithSessionStore].
 type SnapshotWriter[State any] interface {
-	// SaveSnapshot persists a snapshot.
-	SaveSnapshot(ctx context.Context, snapshot *SessionSnapshot[State]) error
+	// SaveSnapshot atomically reads the snapshot at id (if any), applies
+	// fn, and persists the result. The store owns identity and
+	// lifecycle-timestamp fields:
+	//
+	//   - SnapshotID: if id is empty, the store generates a fresh ID;
+	//     otherwise the store uses id (any SnapshotID populated by fn is
+	//     overridden).
+	//   - CreatedAt: stamped to the wall clock on first write; preserved
+	//     from the existing row on update.
+	//   - UpdatedAt: stamped to the wall clock on every commit.
+	//   - Status: if the snapshot returned by fn has Status="", it is
+	//     defaulted to [SnapshotStatusComplete] (the common case for
+	//     synchronous turn-end and invocation-end writes). Callers
+	//     writing a pending row must set Status explicitly.
+	//
+	// fn receives the existing snapshot (or nil if id is empty or the
+	// row does not exist) and returns the snapshot to commit, or
+	// (nil, nil) to skip the write without changing the row.
+	//
+	// Under contention, stores that use optimistic concurrency or
+	// transaction retries may call fn multiple times. fn must therefore
+	// be a pure function of its input: no side effects (channel sends,
+	// logging, external I/O) inside fn.
+	//
+	// Returns the snapshot as persisted (with the store-owned fields
+	// populated), or nil if fn declined to write.
+	SaveSnapshot(
+		ctx context.Context,
+		id string,
+		fn func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error),
+	) (*SessionSnapshot[State], error)
 }
 
 // SnapshotAborter is the optional capability layered on [SessionStore]
@@ -253,20 +283,65 @@ func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotI
 	return snapshotMetadata(snap), nil
 }
 
-// SaveSnapshot persists a snapshot.
-func (s *InMemorySessionStore[State]) SaveSnapshot(_ context.Context, snapshot *SessionSnapshot[State]) error {
+// SaveSnapshot atomically reads, applies fn, and persists. See the
+// [SnapshotWriter] interface for the full contract; this implementation
+// satisfies it by holding s.mu for the entire read-modify-write so fn
+// is called exactly once per SaveSnapshot call.
+func (s *InMemorySessionStore[State]) SaveSnapshot(
+	_ context.Context,
+	id string,
+	fn func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error),
+) (*SessionSnapshot[State], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	copied, err := copySnapshot(snapshot)
+
+	if id == "" {
+		id = uuid.New().String()
+	}
+
+	var existing *SessionSnapshot[State]
+	if stored, ok := s.snapshots[id]; ok {
+		copied, err := copySnapshot(stored)
+		if err != nil {
+			return nil, err
+		}
+		existing = copied
+	}
+
+	next, err := fn(existing)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	prev, existed := s.snapshots[copied.SnapshotID]
-	s.snapshots[copied.SnapshotID] = copied
-	if !existed || prev.Status != copied.Status {
-		s.notifyLocked(copied.SnapshotID, copied.Status)
+	if next == nil {
+		return nil, nil
 	}
-	return nil
+
+	next.SnapshotID = id
+	now := time.Now()
+	if existing != nil {
+		next.CreatedAt = existing.CreatedAt
+	} else {
+		next.CreatedAt = now
+	}
+	next.UpdatedAt = now
+	if next.Status == "" {
+		next.Status = SnapshotStatusComplete
+	}
+
+	copied, err := copySnapshot(next)
+	if err != nil {
+		return nil, err
+	}
+	s.snapshots[id] = copied
+	if existing == nil || existing.Status != next.Status {
+		s.notifyLocked(id, next.Status)
+	}
+	// Return next (the freshly-allocated struct from fn) rather than
+	// copied: copied is the pointer the store retains, so returning it
+	// would alias the caller's view with the stored row and let future
+	// in-place mutations (e.g. AbortSnapshot updating UpdatedAt) leak
+	// through.
+	return next, nil
 }
 
 // OnSnapshotStatusChange subscribes to status changes for a snapshot. The
@@ -362,7 +437,7 @@ type GetSnapshotRequest struct {
 
 // GetSnapshotResponse is the output of the getSnapshot companion action. It
 // is a client-facing view of the stored snapshot: identifying metadata plus
-// the session state, with [WithSnapshotTransform] applied if configured.
+// the session state, with [WithStateTransform] applied if configured.
 //
 // Unlike the raw [SessionSnapshot], this response intentionally omits
 // internal fields (parent ID, event) and does not leak the snapshot
@@ -418,7 +493,7 @@ func registerSnapshotActions[State any](
 	r api.Registry,
 	flowName string,
 	store SessionStore[State],
-	transform SnapshotTransform[State],
+	transform StateTransform[State],
 ) {
 	core.DefineAction(r, flowName, api.ActionTypeAgentSnapshot, nil, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*GetSnapshotResponse[State], error) {
@@ -454,7 +529,7 @@ func registerSnapshotActions[State any](
 				Error:      snap.Error,
 			}
 			if status != SnapshotStatusError && status != SnapshotStatusPending {
-				resp.State = applyTransform(transform, &snap.State)
+				resp.State = applyTransform(ctx, transform, &snap.State)
 			}
 			return resp, nil
 		})
