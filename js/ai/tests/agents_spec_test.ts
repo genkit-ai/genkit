@@ -36,7 +36,7 @@ import {
   defineCustomAgent,
   type Agent,
   type AgentStreamChunk,
-} from '../src/session-flow.js';
+} from '../src/agent.js';
 import { InMemorySessionStore } from '../src/session.js';
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from './helpers.js';
