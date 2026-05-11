@@ -203,7 +203,10 @@ type SessionStore[State any] interface {
 // implements the full set of optional store interfaces (reader, writer,
 // aborter, status subscriber).
 type InMemorySessionStore[State any] struct {
-	mu        sync.Mutex
+	// mu is RWMutex so GetSnapshot (which JSON-marshals while holding the
+	// lock) can run concurrently with other readers. All writers (Save,
+	// Abort, OnSnapshotStatusChange, removeSub) take the full Lock().
+	mu        sync.RWMutex
 	snapshots map[string]*SessionSnapshot[State]
 	subs      map[string][]chan SnapshotStatus
 }
@@ -218,8 +221,8 @@ func NewInMemorySessionStore[State any]() *InMemorySessionStore[State] {
 
 // GetSnapshot retrieves a snapshot by ID. Returns nil if not found.
 func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID string) (*SessionSnapshot[State], error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	snap, ok := s.snapshots[snapshotID]
 	if !ok {
 		return nil, nil

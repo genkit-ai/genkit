@@ -302,10 +302,13 @@ func (rt *sessionFlowRuntime[Stream, State]) handleDetach(
 		Status:        SnapshotStatusPending,
 		PendingInputs: combined,
 	}
-	if err := rt.cfg.store.SaveSnapshot(clientCtx, pending); err != nil {
+	// Detach intends to outlive the client connection. If clientCtx was
+	// already cancelled (or cancels mid-write), we still want the pending
+	// row durable so observers can find it later. Decouple this write.
+	if err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), pending); err != nil {
 		rt.drainAndWait(cancelWork)
 		return nil, core.NewError(core.INTERNAL,
-			"session flow %q: failed to write pending snapshot: %v", rt.name, err)
+			"session flow %q: detach: save pending snapshot %q: %v", rt.name, pending.SnapshotID, err)
 	}
 
 	// The router can no longer write to outCh once we return; the bidi
