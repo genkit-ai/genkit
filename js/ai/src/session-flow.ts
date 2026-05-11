@@ -16,6 +16,7 @@
 
 import {
   GenkitError,
+  deepEqual,
   defineAction,
   defineBidiAction,
   getContext,
@@ -34,9 +35,13 @@ import {
   MessageData,
   MessageSchema,
   ModelResponseChunkSchema,
-  PartSchema,
 } from './model-types.js';
-import { type ToolRequestPart } from './parts.js';
+import {
+  ToolRequestPartSchema,
+  ToolResponsePartSchema,
+  type ToolRequestPart,
+  type ToolResponsePart,
+} from './parts.js';
 import {
   definePrompt,
   type PromptAction,
@@ -79,7 +84,13 @@ export interface AgentInit<S = unknown> {
  */
 export const AgentInputSchema = z.object({
   messages: z.array(MessageSchema).optional(),
-  toolRestarts: z.array(PartSchema).optional(),
+  /** Options for resuming an interrupted generation. */
+  resume: z
+    .object({
+      respond: z.array(ToolResponsePartSchema).optional(),
+      restart: z.array(ToolRequestPartSchema).optional(),
+    })
+    .optional(),
   detach: z.boolean().optional(),
 });
 
@@ -581,7 +592,9 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
               // Only forward to runner if the input carries a payload beyond the
               // detach directive; a detach-only message has no turn to process.
               const hasPayload = !!(
-                input.messages?.length || input.toolRestarts?.length
+                input.messages?.length ||
+                input.resume?.restart?.length ||
+                input.resume?.respond?.length
               );
               if (hasPayload) {
                 runnerInputChannel.send(input);
@@ -863,9 +876,19 @@ export function definePromptAgent<State = unknown>(
         });
       }
 
-      if (input.toolRestarts && input.toolRestarts.length > 0) {
+      if (input.resume) {
+        // Safety: validate that every restart/respond entry references
+        // a tool request that actually exists in the session history.
+        // For restarts, also verify that the input has not been tampered with.
+        validateResumeAgainstHistory(input.resume, sess.getMessages());
+
         genOpts.resume = {
-          restart: input.toolRestarts as ToolRequestPart[],
+          ...(input.resume.restart?.length && {
+            restart: input.resume.restart as ToolRequestPart[],
+          }),
+          ...(input.resume.respond?.length && {
+            respond: input.resume.respond as ToolResponsePart[],
+          }),
         };
       }
 
@@ -925,6 +948,97 @@ export function definePromptAgent<State = unknown>(
     },
     fn
   );
+}
+
+// ---------------------------------------------------------------------------
+// Resume validation — ensure restart/respond entries match session history
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates that every `resume.restart` and `resume.respond` entry references
+ * a tool request that actually exists in the session history.
+ *
+ * For **restart** entries, also validates that the `input` has not been modified
+ * compared to the original tool request — preventing a malicious client from
+ * forging tool inputs.
+ *
+ * For **respond** entries, validates that a matching tool request (by name + ref)
+ * exists in history.
+ *
+ * Searches the **entire history** (all model messages), not just the last one.
+ */
+export function validateResumeAgainstHistory(
+  resume: {
+    restart?: Array<{
+      toolRequest: { name: string; ref?: string; input?: unknown };
+      metadata?: Record<string, unknown>;
+    }>;
+    respond?: Array<{
+      toolResponse: { name: string; ref?: string; output?: unknown };
+    }>;
+  },
+  history: MessageData[]
+): void {
+  // Collect all tool requests from all model messages in the stored history.
+  const allToolRequests: Array<{
+    name: string;
+    ref?: string;
+    input?: unknown;
+  }> = [];
+  for (const msg of history) {
+    if (msg.role === 'model') {
+      for (const part of msg.content) {
+        if (part.toolRequest) {
+          allToolRequests.push(part.toolRequest);
+        }
+      }
+    }
+  }
+
+  // Validate restart entries: name + ref must exist AND input must match exactly
+  for (const restart of resume.restart || []) {
+    const { name, ref, input } = restart.toolRequest;
+    const match = allToolRequests.find(
+      (tr) => tr.name === name && tr.ref === ref
+    );
+    if (!match) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          `resume.restart references tool '${name}'` +
+          (ref ? ` (ref: ${ref})` : '') +
+          ` which was not found in session history.`,
+      });
+    }
+    if (!deepEqual(input, match.input)) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          `resume.restart for tool '${name}'` +
+          (ref ? ` (ref: ${ref})` : '') +
+          ` has modified inputs that do not match the original tool request ` +
+          `in session history. Restart inputs must exactly match the ` +
+          `interrupted tool request.`,
+      });
+    }
+  }
+
+  // Validate respond entries: name + ref must match a tool request in history
+  for (const respond of resume.respond || []) {
+    const { name, ref } = respond.toolResponse;
+    const match = allToolRequests.find(
+      (tr) => tr.name === name && tr.ref === ref
+    );
+    if (!match) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          `resume.respond references tool '${name}'` +
+          (ref ? ` (ref: ${ref})` : '') +
+          ` which was not found in session history.`,
+      });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
