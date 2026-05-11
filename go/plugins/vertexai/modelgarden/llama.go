@@ -68,11 +68,14 @@ func (l *Llama) Init(ctx context.Context) []api.Action {
 
 	projectID, location := resolveVertexMaasEnv(l.ProjectID, l.Location)
 
-	ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	// The token source and oauth2 client outlive Init's ctx — they back every
+	// future generate call. Bind them to context.Background() so a short-lived
+	// Init ctx (or its cancellation) does not break token refreshes later.
+	ts, err := google.DefaultTokenSource(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
 	if err != nil {
 		panic(fmt.Errorf("modelgarden llama: obtaining default Google token source: %w", err))
 	}
-	httpClient := oauth2.NewClient(ctx, ts)
+	httpClient := oauth2.NewClient(context.Background(), ts)
 
 	baseURL := fmt.Sprintf(
 		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/endpoints/openapi",
