@@ -328,7 +328,7 @@ runFlow({
 }
 
 // ---------------------------------------------------------------------------
-// Helper: pull displayable text out of a session flow result
+// Helper: pull displayable text out of an agent result
 // ---------------------------------------------------------------------------
 function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';

@@ -277,7 +277,7 @@ setTasks(custom.tasks);`}</pre>
 }
 
 // ---------------------------------------------------------------------------
-// Helper: extract displayable text from a session flow result
+// Helper: extract displayable text from an agent result
 // ---------------------------------------------------------------------------
 function extractText(result: AgentOutput): string {
   if (!result) return '(no result)';
