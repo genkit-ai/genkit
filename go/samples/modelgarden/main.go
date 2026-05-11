@@ -27,25 +27,26 @@ import (
 func main() {
 	ctx := context.Background()
 
+	// Vertex AI MaaS regional availability differs per publisher: Anthropic
+	// Claude models live in us-east5 / europe-west4, while Meta Llama and
+	// Mistral live in us-central1. Each plugin takes its own Location to
+	// avoid forcing one global region.
 	g := genkit.Init(ctx, genkit.WithPlugins(
-		&modelgarden.Anthropic{},
-		&modelgarden.Llama{},
-		&modelgarden.Mistral{},
+		&modelgarden.Anthropic{Location: "us-east5"},
+		&modelgarden.Llama{Location: "us-central1"},
+		&modelgarden.Mistral{Location: "us-central1"},
 	))
 
-	// Anthropic flows.
-	defineFlow(g, "jokesFlow",
-		modelgarden.AnthropicModel(g, "claude-3-5-sonnet-v2@20241022"),
-		"Tell a short joke about %s",
+	// Anthropic flow. Add additional flows pointing at other Claude variants
+	// (e.g. claude-sonnet-4-5-20250929, claude-haiku-4-5-20251001) once they
+	// are enabled in the Vertex Model Garden for your project.
+	defineFlow(g, "opus45Flow",
+		modelgarden.AnthropicModel(g, "claude-opus-4-5@20251101"),
+		"Write a haiku about %s",
 		ai.WithConfig(&anthropic.MessageNewParams{
 			MaxTokens:   256,
 			Temperature: anthropic.Float(1.0),
 		}),
-	)
-	defineFlow(g, "opus45Flow",
-		modelgarden.AnthropicModel(g, "claude-opus-4-5@20251101"),
-		"Write a haiku about %s",
-		ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 256}),
 	)
 
 	// Llama flow.
