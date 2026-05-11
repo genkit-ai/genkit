@@ -28,6 +28,29 @@
       ],
       "additionalProperties": false
     },
+    "AgentMetadata": {
+      "type": "object",
+      "properties": {
+        "stateManagement": {
+          "$ref": "#/$defs/AgentMetadataStateManagement"
+        },
+        "abortable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stateManagement",
+        "abortable"
+      ],
+      "additionalProperties": false
+    },
+    "AgentMetadataStateManagement": {
+      "type": "string",
+      "enum": [
+        "server",
+        "client"
+      ]
+    },
     "Artifact": {
       "type": "object",
       "properties": {

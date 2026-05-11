@@ -285,3 +285,34 @@ export const AbortSnapshotResponseSchema = z.object({
 export type AbortSnapshotResponse = z.infer<
   typeof AbortSnapshotResponseSchema
 >;
+
+/**
+ * Who owns session state for an agent.
+ *
+ * - `server`: a session store is configured and snapshots are persisted
+ *   server-side.
+ * - `client`: no store; state flows through the agent's invocation init
+ *   and output payloads.
+ */
+export const AgentMetadataStateManagementSchema = z.enum(['server', 'client']);
+export type AgentMetadataStateManagement = z.infer<
+  typeof AgentMetadataStateManagementSchema
+>;
+
+/**
+ * Zod schema for the agent capability metadata placed under
+ * `metadata.agent` on a session flow's action descriptor. Lets the Dev
+ * UI and other reflective callers render the right surface (e.g. hide
+ * the Abort button when the configured store doesn't support it)
+ * without round-tripping through the reflection API.
+ */
+export const AgentMetadataSchema = z.object({
+  /** Who owns session state for this agent. */
+  stateManagement: AgentMetadataStateManagementSchema,
+  /**
+   * Whether the agent's invocations can be aborted. True only when the
+   * configured store implements the abort lifecycle.
+   */
+  abortable: z.boolean(),
+});
+export type AgentMetadata = z.infer<typeof AgentMetadataSchema>;

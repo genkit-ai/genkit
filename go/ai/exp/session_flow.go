@@ -93,37 +93,10 @@ func DefineSessionFlow[Stream, State any](
 	return &SessionFlow[Stream, State]{action: action}
 }
 
-// AgentMetadataStateManagement enumerates who owns session state for an
-// agent: "server" (a [SessionStore] is configured and snapshots are
-// persisted server-side) or "client" (no store; state flows through
-// invocation init / output).
-type AgentMetadataStateManagement string
-
-const (
-	// AgentMetadataStateManagementServer indicates the agent is wired
-	// with a [SessionStore] and persists snapshots server-side.
-	AgentMetadataStateManagementServer AgentMetadataStateManagement = "server"
-	// AgentMetadataStateManagementClient indicates the agent has no
-	// store; session state is client-managed and round-trips through
-	// invocation init and output.
-	AgentMetadataStateManagementClient AgentMetadataStateManagement = "client"
-)
-
-// AgentMetadata is the value placed under metadata["agent"] on a session
-// flow's action descriptor. It exposes capability information so the Dev
-// UI and other reflective callers can render the right surface (e.g.,
-// hide the Abort button when the configured store doesn't support it)
-// without round-tripping through the reflection API.
-type AgentMetadata struct {
-	// StateManagement reports who owns session state.
-	StateManagement AgentMetadataStateManagement `json:"stateManagement"`
-	// Abortable reports whether the agent's invocations can be aborted
-	// (true when the store implements [SnapshotAborter]).
-	Abortable bool `json:"abortable"`
-}
-
 // agentMetadataFor derives the [AgentMetadata] value attached to the
-// session flow's action descriptor under the "agent" key.
+// session flow's action descriptor under the "agent" key. [AgentMetadata]
+// itself is generated from agent.ts; this constructor is hand-written
+// because it inspects the configured store's optional capabilities.
 func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	mgmt := AgentMetadataStateManagementClient
 	abortable := false

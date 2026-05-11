@@ -22,6 +22,35 @@ import (
 	"github.com/firebase/genkit/go/ai"
 )
 
+// AgentMetadata is the value placed under metadata["agent"] on a session
+// flow's action descriptor. It exposes capability information so the Dev
+// UI and other reflective callers can render the right surface (e.g.
+// hide the Abort button when the configured store doesn't support it)
+// without round-tripping through the reflection API.
+type AgentMetadata struct {
+	// Abortable reports whether the agent's invocations can be aborted
+	// (true when the store implements [SnapshotAborter]).
+	Abortable bool `json:"abortable,omitempty"`
+	// StateManagement reports who owns session state.
+	StateManagement AgentMetadataStateManagement `json:"stateManagement,omitempty"`
+}
+
+// AgentMetadataStateManagement enumerates who owns session state for an
+// agent: "server" (a [SessionStore] is configured and snapshots are
+// persisted server-side) or "client" (no store; state flows through
+// invocation init / output).
+type AgentMetadataStateManagement string
+
+const (
+	// AgentMetadataStateManagementServer indicates the agent is wired with
+	// a [SessionStore] and persists snapshots server-side.
+	AgentMetadataStateManagementServer AgentMetadataStateManagement = "server"
+	// AgentMetadataStateManagementClient indicates the agent has no store;
+	// session state is client-managed and round-trips through invocation
+	// init and output.
+	AgentMetadataStateManagementClient AgentMetadataStateManagement = "client"
+)
+
 // Artifact represents a named collection of parts produced during a session.
 // Examples: generated files, images, code snippets, diagrams, etc.
 type Artifact struct {
@@ -50,9 +79,8 @@ type SessionFlowInput struct {
 	// accepted. The server writes a single pending snapshot capturing the
 	// queued inputs (this one and any others already buffered), returns
 	// [SessionFlowOutput] with that snapshot ID, and continues processing in
-	// a background context. Streamed chunks emitted after detach are
-	// discarded; only the final session state is captured when the snapshot
-	// is finalized (or aborted via abortSnapshot).
+	// a background context. The pending snapshot is finalized once all queued
+	// inputs are processed (or the snapshot is cancelled via cancelSnapshot).
 	Detach bool `json:"detach,omitempty"`
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`

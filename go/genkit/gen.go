@@ -18,7 +18,9 @@
 
 package genkit
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 // ReflectionCancelActionParams is the payload for the "cancelAction" request
 // sent by the CLI manager to cancel a running action.
