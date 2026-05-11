@@ -136,6 +136,40 @@ export abstract class BaseRuntimeManager {
   }
 
   /**
+   * Retrieves all logs
+   */
+  async listLogs(input: apis.ListLogsRequest): Promise<apis.ListLogsResponse> {
+    const { limit, continuationToken, filter } = input;
+
+    let url = `${this.telemetryServerUrl}/api/logs`;
+    if (filter?.traceId) {
+      url = `${this.telemetryServerUrl}/api/traces/${filter.traceId}/logs`;
+      if (filter.spanId) {
+        url = `${this.telemetryServerUrl}/api/traces/${filter.traceId}/spans/${filter.spanId}/logs`;
+      }
+    }
+
+    let query = '';
+    if (limit) {
+      query += `limit=${limit}`;
+    }
+    if (continuationToken) {
+      if (query !== '') query += '&';
+      query += `continuationToken=${continuationToken}`;
+    }
+
+    const fullUrl = query !== '' ? `${url}?${query}` : url;
+
+    const response = await axios
+      .get(fullUrl)
+      .catch((err) =>
+        this.httpErrorHandler(err, `Error listing logs for url='${fullUrl}'.`)
+      );
+
+    return apis.ListLogsResponseSchema.parse(response.data);
+  }
+
+  /**
    * Retrieves a trace for a given ID.
    */
   async getTrace(input: apis.GetTraceRequest): Promise<TraceData> {

@@ -223,13 +223,26 @@ async def test_gets_action_metadata_record(registry: Registry, tool1: Action, to
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
-    record = await dap.get_action_metadata_record('dap/my-dap')
-    assert 'dap/my-dap:tool/tool1' in record
-    assert 'dap/my-dap:tool/tool2' in record
-    assert 'dap/my-dap:flow/tool1' in record
-    assert record['dap/my-dap:tool/tool1'] == tool1.metadata
-    assert record['dap/my-dap:tool/tool2'] == tool2.metadata
-    assert record['dap/my-dap:flow/tool1'] == tool1.metadata
+    record = await dap.list_action_metadata_by_key('my-dap')
+    tool1_key = '/dynamic-action-provider/my-dap:tool/tool1'
+    tool2_key = '/dynamic-action-provider/my-dap:tool/tool2'
+    flow1_key = '/dynamic-action-provider/my-dap:flow/tool1'
+    assert tool1_key in record
+    assert tool2_key in record
+    assert flow1_key in record
+    tool1_meta = record[tool1_key]
+    assert tool1_meta.key == tool1_key
+    assert tool1_meta.name == 'tool1'
+    assert tool1_meta.action_type == 'tool'
+    assert tool1_meta.description == tool1.description
+    assert tool1_meta.input_schema == tool1.input_schema
+    assert tool1_meta.output_schema == tool1.output_schema
+    assert tool1_meta.metadata == tool1.metadata
+    assert record[tool2_key].name == 'tool2'
+    assert record[tool2_key].action_type == 'tool'
+    assert record[tool2_key].metadata == tool2.metadata
+    assert record[flow1_key].name == 'tool1'
+    assert record[flow1_key].action_type == 'flow'
     assert call_count == 1
 
 
@@ -362,7 +375,7 @@ async def test_zero_ttl_uses_default(registry: Registry, tool1: Action, tool2: A
 
 
 @pytest.mark.asyncio
-async def test_get_action_metadata_record_raises_on_missing_name(registry: Registry) -> None:
+async def test_list_action_metadata_by_key_raises_on_missing_name(registry: Registry) -> None:
     async def nameless_fn(input: str) -> str:
         return 'nameless'
 
@@ -380,7 +393,7 @@ async def test_get_action_metadata_record_raises_on_missing_name(registry: Regis
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
     with pytest.raises(ValueError, match='name required'):
-        await dap.get_action_metadata_record('dap/my-dap')
+        await dap.list_action_metadata_by_key('my-dap')
 
 
 def test_define_dap_with_full_options(registry: Registry) -> None:

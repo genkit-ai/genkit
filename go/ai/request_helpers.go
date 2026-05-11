@@ -51,7 +51,7 @@ func NewModelMessage(parts ...*Part) *Message {
 	return NewMessage(RoleModel, nil, parts...)
 }
 
-// NewUserTextMessage creates a new Message with role "model" and content with
+// NewModelTextMessage creates a new Message with role "model" and content with
 // a single text part with the content of provided text.
 func NewModelTextMessage(text string) *Message {
 	return NewTextMessage(RoleModel, text)
@@ -63,7 +63,7 @@ func NewSystemMessage(parts ...*Part) *Message {
 	return NewMessage(RoleSystem, nil, parts...)
 }
 
-// NewUserTextMessage creates a new Message with role "system" and content with
+// NewSystemTextMessage creates a new Message with role "system" and content with
 // a single text part with the content of provided text.
 func NewSystemTextMessage(text string) *Message {
 	return NewTextMessage(RoleSystem, text)

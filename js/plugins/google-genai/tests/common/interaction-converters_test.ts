@@ -278,7 +278,6 @@ describe('Interaction Converters', () => {
           url: 'data:image/png;base64,BASE64DATA',
           contentType: 'image/png',
         },
-        metadata: { resolution: undefined },
       });
     });
 
@@ -294,7 +293,6 @@ describe('Interaction Converters', () => {
           url: 'gs://bucket/image.png',
           contentType: 'image/png',
         },
-        metadata: { resolution: undefined },
       });
     });
 

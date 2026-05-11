@@ -29,7 +29,7 @@
     "genkit": "workspace:^"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2"
+    "@anthropic-ai/sdk": "^0.90.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
@@ -64,7 +64,6 @@
     "build": "npm-run-all build:clean check compile",
     "build:watch": "tsup-node --watch",
     "test": "tsx --test tests/*_test.ts",
-    "test:live": "tsx --test tests/live_test.ts",
     "test:file": "tsx --test",
     "test:live": "tsx --test tests/live_test.ts",
     "test:coverage": "check-node-version --node '>=22' && tsx --test --experimental-test-coverage --test-coverage-include='src/**/*.ts' ./tests/**/*_test.ts"
