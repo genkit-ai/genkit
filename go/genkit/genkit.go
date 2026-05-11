@@ -414,8 +414,8 @@ func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.St
 //	// Get the final output:
 //	output, err := conn.Output()
 //	fmt.Println(output) // Output: "processed 2 messages"
-func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn core.BidiFunc[In, Out, StreamOut, StreamIn]) *core.Flow[In, Out, StreamOut, StreamIn] {
-	return core.DefineBidiFlow(g.reg, name, fn)
+func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn core.BidiFunc[In, Out, StreamOut, StreamIn], opts ...*core.ActionOptions) *core.Flow[In, Out, StreamOut, StreamIn] {
+	return core.DefineBidiFlow(g.reg, name, fn, opts...)
 }
 
 // DefineSessionFlow defines a custom session flow with full control over the

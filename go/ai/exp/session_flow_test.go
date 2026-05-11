@@ -2632,6 +2632,78 @@ func (minimalStore[State]) SaveSnapshot(context.Context, *SessionSnapshot[State]
 	return nil
 }
 
+func TestSessionFlow_AgentMetadata(t *testing.T) {
+	// Verify the metadata["agent"] payload on the flow's action descriptor
+	// correctly reports stateManagement and abortable for each combination
+	// of store capabilities.
+	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*SessionFlowResult, error) {
+		return nil, nil
+	}
+
+	cases := []struct {
+		name        string
+		define      func(reg api.Registry, flowName string)
+		wantMgmt    AgentMetadataStateManagement
+		wantAbortab bool
+	}{
+		{
+			name: "no store → client-managed, not abortable",
+			define: func(reg api.Registry, flowName string) {
+				DefineSessionFlow(reg, flowName, noopFn)
+			},
+			wantMgmt:    AgentMetadataStateManagementClient,
+			wantAbortab: false,
+		},
+		{
+			name: "store missing abort capabilities → server-managed, not abortable",
+			define: func(reg api.Registry, flowName string) {
+				DefineSessionFlow(reg, flowName, noopFn,
+					WithSessionStore[testState](minimalStore[testState]{}))
+			},
+			wantMgmt:    AgentMetadataStateManagementServer,
+			wantAbortab: false,
+		},
+		{
+			name: "store with full capabilities → server-managed, abortable",
+			define: func(reg api.Registry, flowName string) {
+				DefineSessionFlow(reg, flowName, noopFn,
+					WithSessionStore(NewInMemorySessionStore[testState]()))
+			},
+			wantMgmt:    AgentMetadataStateManagementServer,
+			wantAbortab: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := newTestRegistry(t)
+			flowName := "metaFlow"
+			tc.define(reg, flowName)
+
+			act := core.ResolveActionFor[*SessionFlowInit[testState], *SessionFlowOutput[testState], *SessionFlowStreamChunk[testStatus], *SessionFlowInput](
+				reg, api.ActionTypeFlow, flowName)
+			if act == nil {
+				t.Fatal("flow action not registered")
+			}
+			desc := act.Desc()
+			raw, ok := desc.Metadata["agent"]
+			if !ok {
+				t.Fatalf("metadata[\"agent\"] missing; got metadata = %+v", desc.Metadata)
+			}
+			meta, ok := raw.(AgentMetadata)
+			if !ok {
+				t.Fatalf("metadata[\"agent\"] type = %T, want AgentMetadata", raw)
+			}
+			if meta.StateManagement != tc.wantMgmt {
+				t.Errorf("stateManagement = %q, want %q", meta.StateManagement, tc.wantMgmt)
+			}
+			if meta.Abortable != tc.wantAbortab {
+				t.Errorf("abortable = %v, want %v", meta.Abortable, tc.wantAbortab)
+			}
+		})
+	}
+}
+
 func TestSessionFlow_AbortAction_GatedOnCapabilities(t *testing.T) {
 	// Verify the abort companion action is only registered when the store
 	// implements both SnapshotAborter and SnapshotStatusSubscriber. The

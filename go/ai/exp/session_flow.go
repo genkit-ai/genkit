@@ -75,11 +75,61 @@ func DefineSessionFlow[Stream, State any](
 			return nil, err
 		}
 		return rt.run(ctx, fn)
-	})
+	}, &core.ActionOptions{Metadata: agentMetadata(cfg.store)})
 
 	registerSnapshotActions(r, name, cfg.store, cfg.transform)
 
 	return &SessionFlow[Stream, State]{flow: flow}
+}
+
+// AgentMetadataStateManagement enumerates who owns session state for an
+// agent: "server" (a [SessionStore] is configured and snapshots are
+// persisted server-side) or "client" (no store; state flows through
+// invocation init / output).
+type AgentMetadataStateManagement string
+
+const (
+	// AgentMetadataStateManagementServer indicates the agent is wired
+	// with a [SessionStore] and persists snapshots server-side.
+	AgentMetadataStateManagementServer AgentMetadataStateManagement = "server"
+	// AgentMetadataStateManagementClient indicates the agent has no
+	// store; session state is client-managed and round-trips through
+	// invocation init and output.
+	AgentMetadataStateManagementClient AgentMetadataStateManagement = "client"
+)
+
+// AgentMetadata is the value placed under metadata["agent"] on a session
+// flow's action descriptor. It exposes capability information so the Dev
+// UI and other reflective callers can render the right surface (e.g.,
+// hide the Abort button when the configured store doesn't support it)
+// without round-tripping through the reflection API.
+type AgentMetadata struct {
+	// StateManagement reports who owns session state.
+	StateManagement AgentMetadataStateManagement `json:"stateManagement"`
+	// Abortable reports whether the agent's invocations can be aborted
+	// (true when the store implements both [SnapshotAborter] and
+	// [SnapshotStatusSubscriber]).
+	Abortable bool `json:"abortable"`
+}
+
+// agentMetadata derives the metadata map placed on the session flow's
+// action descriptor under the "agent" key. The value matches
+// [AgentMetadata].
+func agentMetadata[State any](store SessionStore[State]) map[string]any {
+	mgmt := AgentMetadataStateManagementClient
+	abortable := false
+	if store != nil {
+		mgmt = AgentMetadataStateManagementServer
+		_, hasAborter := store.(SnapshotAborter)
+		_, hasSubscriber := store.(SnapshotStatusSubscriber)
+		abortable = hasAborter && hasSubscriber
+	}
+	return map[string]any{
+		"agent": AgentMetadata{
+			StateManagement: mgmt,
+			Abortable:       abortable,
+		},
+	}
 }
 
 // --- sessionFlowRuntime ---
