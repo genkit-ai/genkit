@@ -28,6 +28,39 @@
       ],
       "additionalProperties": false
     },
+    "AgentInit": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentInput": {
+      "type": "object",
+      "properties": {
+        "detach": {
+          "type": "boolean"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "toolRestarts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "AgentMetadata": {
       "type": "object",
       "properties": {
@@ -50,6 +83,58 @@
         "server",
         "client"
       ]
+    },
+    "AgentOutput": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentResult": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStreamChunk": {
+      "type": "object",
+      "properties": {
+        "modelChunk": {
+          "$ref": "#/$defs/ModelResponseChunk"
+        },
+        "status": {},
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        },
+        "turnEnd": {
+          "$ref": "#/$defs/TurnEnd"
+        }
+      },
+      "additionalProperties": false
     },
     "Artifact": {
       "type": "object",
@@ -112,91 +197,6 @@
       ],
       "additionalProperties": false
     },
-    "SessionFlowInit": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowInput": {
-      "type": "object",
-      "properties": {
-        "detach": {
-          "type": "boolean"
-        },
-        "messages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Message"
-          }
-        },
-        "toolRestarts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Part"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowOutput": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        },
-        "message": {
-          "$ref": "#/$defs/Message"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Artifact"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowResult": {
-      "type": "object",
-      "properties": {
-        "message": {
-          "$ref": "#/$defs/Message"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Artifact"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowStreamChunk": {
-      "type": "object",
-      "properties": {
-        "modelChunk": {
-          "$ref": "#/$defs/ModelResponseChunk"
-        },
-        "status": {},
-        "artifact": {
-          "$ref": "#/$defs/Artifact"
-        },
-        "turnEnd": {
-          "$ref": "#/$defs/TurnEnd"
-        }
-      },
-      "additionalProperties": false
-    },
     "SessionSnapshot": {
       "type": "object",
       "properties": {
@@ -248,8 +248,7 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
-        },
-        "inputVariables": {}
+        }
       },
       "additionalProperties": false
     },

@@ -118,12 +118,57 @@ class AbortSnapshotResponse(GenkitModel):
     status: SnapshotStatus | None = None
 
 
+class AgentInit(GenkitModel):
+    """Model for agentinit data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+
+
+class AgentInput(GenkitModel):
+    """Model for agentinput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    detach: bool | None = None
+    messages: list[MessageData] | None = None
+    tool_restarts: list[Part] | None = None
+
+
 class AgentMetadata(GenkitModel):
     """Model for agentmetadata data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     state_management: AgentMetadataStateManagement = Field(...)
     abortable: bool = Field(...)
+
+
+class AgentOutput(GenkitModel):
+    """Model for agentoutput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+    message: MessageData | None = None
+    artifacts: list[Artifact] | None = None
+
+
+class AgentResult(GenkitModel):
+    """Model for agentresult data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    message: MessageData | None = None
+    artifacts: list[Artifact] | None = None
+
+
+class AgentStreamChunk(GenkitModel):
+    """Model for agentstreamchunk data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_chunk: ModelResponseChunk | None = None
+    status: Any | None = Field(default=None)
+    artifact: Artifact | None = None
+    turn_end: TurnEnd | None = None
 
 
 class Artifact(GenkitModel):
@@ -154,51 +199,6 @@ class GetSnapshotResponse(GenkitModel):
     state: SessionState | None = None
 
 
-class SessionFlowInit(GenkitModel):
-    """Model for sessionflowinit data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    snapshot_id: str | None = None
-    state: SessionState | None = None
-
-
-class SessionFlowInput(GenkitModel):
-    """Model for sessionflowinput data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    detach: bool | None = None
-    messages: list[MessageData] | None = None
-    tool_restarts: list[Part] | None = None
-
-
-class SessionFlowOutput(GenkitModel):
-    """Model for sessionflowoutput data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    snapshot_id: str | None = None
-    state: SessionState | None = None
-    message: MessageData | None = None
-    artifacts: list[Artifact] | None = None
-
-
-class SessionFlowResult(GenkitModel):
-    """Model for sessionflowresult data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    message: MessageData | None = None
-    artifacts: list[Artifact] | None = None
-
-
-class SessionFlowStreamChunk(GenkitModel):
-    """Model for sessionflowstreamchunk data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    model_chunk: ModelResponseChunk | None = None
-    status: Any | None = Field(default=None)
-    artifact: Artifact | None = None
-    turn_end: TurnEnd | None = None
-
-
 class SessionSnapshot(GenkitModel):
     """Model for sessionsnapshot data."""
 
@@ -220,7 +220,6 @@ class SessionState(GenkitModel):
     messages: list[MessageData] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None
-    input_variables: Any | None = Field(default=None)
 
 
 class SnapshotMetadata(GenkitModel):

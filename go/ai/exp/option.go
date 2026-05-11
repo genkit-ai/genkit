@@ -21,18 +21,36 @@ import (
 	"errors"
 )
 
-// --- SessionFlowOption ---
+// --- AgentDefineOption ---
 
-// SessionFlowOption configures an SessionFlow.
-type SessionFlowOption[State any] interface {
-	applySessionFlow(*sessionFlowOptions[State]) error
+// AgentDefineOption is the marker interface for any option that can be passed
+// to [DefineAgent]. It is satisfied by every [github.com/firebase/genkit/go/ai.PromptOption]
+// (which configures the underlying prompt) and by every [AgentOption] (which
+// configures the agent itself).
+//
+// The State type parameter is phantom: a single concrete option satisfies
+// [AgentDefineOption] for any State, so type inference cannot pick a State
+// from the variadic. Callers of [DefineAgent] must specify [State] explicitly
+// (use [any] when no typed Custom state is needed).
+type AgentDefineOption[State any] interface {
+	isAgentDefineOption()
+}
+
+// --- AgentOption ---
+
+// AgentOption configures an agent at definition time. It also satisfies
+// [AgentDefineOption] so it can be passed to [DefineAgent] alongside
+// [github.com/firebase/genkit/go/ai.PromptOption] values.
+type AgentOption[State any] interface {
+	AgentDefineOption[State]
+	applyAgent(*agentOptions[State]) error
 }
 
 // StateTransform rewrites session state on its way out to a client. It
 // is applied to the State returned by the getSnapshot companion action
-// and to [SessionFlowOutput.State] when state is client-managed (no
-// store). It is not applied to state persisted in the store or to
-// state passed to the user flow function.
+// and to [AgentResult.State] when state is client-managed (no store).
+// It is not applied to state persisted in the store or to state passed
+// to the user agent function.
 //
 // ctx is the request or invocation context: cancellation, deadlines,
 // and context-scoped values (e.g. the caller's identity for RBAC-aware
@@ -42,13 +60,15 @@ type SessionFlowOption[State any] interface {
 // may mutate and return it, or return a freshly-constructed value.
 type StateTransform[State any] = func(ctx context.Context, state SessionState[State]) SessionState[State]
 
-type sessionFlowOptions[State any] struct {
+type agentOptions[State any] struct {
 	store     SessionStore[State]
 	callback  SnapshotCallback[State]
 	transform StateTransform[State]
 }
 
-func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[State]) error {
+func (*agentOptions[State]) isAgentDefineOption() {}
+
+func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 	if o.store != nil {
 		if opts.store != nil {
 			return errors.New("cannot set session store more than once (WithSessionStore)")
@@ -74,20 +94,20 @@ func (o *sessionFlowOptions[State]) applySessionFlow(opts *sessionFlowOptions[St
 // implement [SnapshotReader] and [SnapshotWriter] at minimum. Detach
 // support also requires [SnapshotAborter]; detach attempts on a store
 // that lacks that interface are rejected at runtime.
-func WithSessionStore[State any](store SessionStore[State]) SessionFlowOption[State] {
-	return &sessionFlowOptions[State]{store: store}
+func WithSessionStore[State any](store SessionStore[State]) AgentOption[State] {
+	return &agentOptions[State]{store: store}
 }
 
 // WithSnapshotCallback configures when snapshots are created.
 // If not provided and a store is configured, snapshots are always created.
-func WithSnapshotCallback[State any](cb SnapshotCallback[State]) SessionFlowOption[State] {
-	return &sessionFlowOptions[State]{callback: cb}
+func WithSnapshotCallback[State any](cb SnapshotCallback[State]) AgentOption[State] {
+	return &agentOptions[State]{callback: cb}
 }
 
 // WithSnapshotOn configures snapshots to be created only for the specified events.
 // For example, WithSnapshotOn[MyState](SnapshotEventTurnEnd) skips the
 // invocation-end snapshot.
-func WithSnapshotOn[State any](events ...SnapshotEvent) SessionFlowOption[State] {
+func WithSnapshotOn[State any](events ...SnapshotEvent) AgentOption[State] {
 	set := make(map[SnapshotEvent]struct{}, len(events))
 	for _, e := range events {
 		set[e] = struct{}{}
@@ -100,25 +120,23 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) SessionFlowOption[State]
 
 // WithStateTransform registers a transform applied to session state on
 // its way out to a client via the getSnapshot companion action or via
-// [SessionFlowOutput.State] when state is client-managed. Typical use
-// is PII redaction or stripping secrets. The transform is not applied
-// to state persisted in the store or to state passed to the user flow
-// function.
-func WithStateTransform[State any](transform StateTransform[State]) SessionFlowOption[State] {
-	return &sessionFlowOptions[State]{transform: transform}
+// [AgentResult.State] when state is client-managed. Typical use is PII
+// redaction or stripping secrets. The transform is not applied to state
+// persisted in the store or to state passed to the user agent function.
+func WithStateTransform[State any](transform StateTransform[State]) AgentOption[State] {
+	return &agentOptions[State]{transform: transform}
 }
 
 // --- InvocationOption ---
 
-// InvocationOption configures an session flow invocation (StreamBidi, Run, or RunText).
+// InvocationOption configures an agent invocation (StreamBidi, Run, or RunText).
 type InvocationOption[State any] interface {
 	applyInvocation(*invocationOptions[State]) error
 }
 
 type invocationOptions[State any] struct {
-	state       *SessionState[State]
-	snapshotID  string
-	promptInput any
+	state      *SessionState[State]
+	snapshotID string
 }
 
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
@@ -140,12 +158,6 @@ func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State
 		}
 		opts.snapshotID = o.snapshotID
 	}
-	if o.promptInput != nil {
-		if opts.promptInput != nil {
-			return errors.New("cannot set prompt input more than once (WithPromptInput)")
-		}
-		opts.promptInput = o.promptInput
-	}
 	return nil
 }
 
@@ -159,10 +171,4 @@ func WithState[State any](state *SessionState[State]) InvocationOption[State] {
 // Use this for server-managed state where snapshots are stored.
 func WithSnapshotID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{snapshotID: id}
-}
-
-// WithInputVariables overrides the default input variables for a prompt-backed session flow.
-// Used with DefineSessionFlowFromPrompt to customize the input variables per invocation.
-func WithInputVariables[State any](input any) InvocationOption[State] {
-	return &invocationOptions[State]{promptInput: input}
 }

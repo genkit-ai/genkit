@@ -79,19 +79,17 @@ export const SessionStateSchema = z.object({
   custom: z.any().optional(),
   /** Named collections of parts produced during the conversation. */
   artifacts: z.array(ArtifactSchema).optional(),
-  /** Input used for session flows that require input variables. */
-  inputVariables: z.any().optional(),
 });
 export type SessionState = z.infer<typeof SessionStateSchema>;
 
 /**
- * Zod schema for session flow input (per-turn).
+ * Zod schema for agent input (per-turn).
  */
-export const SessionFlowInputSchema = z.object({
+export const AgentInputSchema = z.object({
   /**
    * Detach signals that the client wishes to disconnect after this input is
    * accepted. The server writes a single pending snapshot (with empty
-   * state), returns SessionFlowOutput with that snapshot ID, and continues
+   * state), returns AgentOutput with that snapshot ID, and continues
    * processing any already-buffered inputs in a background context.
    * Streamed chunks emitted after detach are not forwarded over the wire;
    * only the final cumulative state is captured when the snapshot is
@@ -103,34 +101,34 @@ export const SessionFlowInputSchema = z.object({
   /** Tool request parts to re-execute interrupted tools. */
   toolRestarts: z.array(PartSchema).optional(),
 });
-export type SessionFlowInput = z.infer<typeof SessionFlowInputSchema>;
+export type AgentInput = z.infer<typeof AgentInputSchema>;
 
 /**
- * Zod schema for session flow initialization.
+ * Zod schema for agent initialization.
  */
-export const SessionFlowInitSchema = z.object({
+export const AgentInitSchema = z.object({
   /** Loads state from a persisted snapshot. Mutually exclusive with state. */
   snapshotId: z.string().optional(),
   /** Direct state for the invocation. Mutually exclusive with snapshotId. */
   state: SessionStateSchema.optional(),
 });
-export type SessionFlowInit = z.infer<typeof SessionFlowInitSchema>;
+export type AgentInit = z.infer<typeof AgentInitSchema>;
 
 /**
- * Zod schema for session flow result.
+ * Zod schema for agent result.
  */
-export const SessionFlowResultSchema = z.object({
+export const AgentResultSchema = z.object({
   /** Last model response message from the conversation. */
   message: MessageSchema.optional(),
   /** Artifacts produced during the session. */
   artifacts: z.array(ArtifactSchema).optional(),
 });
-export type SessionFlowResult = z.infer<typeof SessionFlowResultSchema>;
+export type AgentResult = z.infer<typeof AgentResultSchema>;
 
 /**
- * Zod schema for session flow output.
+ * Zod schema for agent output.
  */
-export const SessionFlowOutputSchema = z.object({
+export const AgentOutputSchema = z.object({
   /** ID of the snapshot created at the end of this invocation. */
   snapshotId: z.string().optional(),
   /** Final conversation state (only when client-managed). */
@@ -140,10 +138,10 @@ export const SessionFlowOutputSchema = z.object({
   /** Artifacts produced during the session. */
   artifacts: z.array(ArtifactSchema).optional(),
 });
-export type SessionFlowOutput = z.infer<typeof SessionFlowOutputSchema>;
+export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
 /**
- * Zod schema for the turn-end signal emitted by a session flow.
+ * Zod schema for the turn-end signal emitted by an agent.
  *
  * A TurnEnd value is emitted exactly once per turn, regardless of whether a
  * snapshot was persisted. Grouping all turn-end signals here lets callers
@@ -161,9 +159,9 @@ export const TurnEndSchema = z.object({
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
 /**
- * Zod schema for session flow stream chunk.
+ * Zod schema for agent stream chunk.
  */
-export const SessionFlowStreamChunkSchema = z.object({
+export const AgentStreamChunkSchema = z.object({
   /** Generation tokens from the model. */
   modelChunk: ModelResponseChunkSchema.optional(),
   /** User-defined structured status information. */
@@ -171,15 +169,13 @@ export const SessionFlowStreamChunkSchema = z.object({
   /** A newly produced artifact. */
   artifact: ArtifactSchema.optional(),
   /**
-   * Non-null when the session flow has finished processing the current
-   * input. Groups all turn-end signals; the client should stop iterating and
-   * may send the next input.
+   * Non-null when the agent has finished processing the current input.
+   * Groups all turn-end signals; the client should stop iterating and may
+   * send the next input.
    */
   turnEnd: TurnEndSchema.optional(),
 });
-export type SessionFlowStreamChunk = z.infer<
-  typeof SessionFlowStreamChunkSchema
->;
+export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
 
 /**
  * Zod schema for the metadata projection of a session snapshot. It exists
@@ -219,9 +215,9 @@ export const SessionSnapshotSchema = SnapshotMetadataSchema.extend({
 export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
 /**
- * Zod schema for the input of a session flow's `getSnapshot` companion
- * action. The action is registered at `{flowName}/getSnapshot` when the
- * flow is defined.
+ * Zod schema for the input of an agent's `getSnapshot` companion action.
+ * The action is registered at `{agentName}/getSnapshot` when the agent
+ * is defined.
  */
 export const GetSnapshotRequestSchema = z.object({
   /** Identifies the snapshot to fetch. */
@@ -232,7 +228,7 @@ export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
 /**
  * Zod schema for the output of the `getSnapshot` companion action. It is a
  * client-facing view of the stored snapshot: identifying metadata plus the
- * session state, with `WithSnapshotTransform` applied if configured.
+ * session state, with `WithStateTransform` applied if configured.
  */
 export const GetSnapshotResponseSchema = z.object({
   /** Echoes the requested snapshot ID. */
@@ -275,9 +271,7 @@ export const AbortSnapshotResponseSchema = z.object({
    */
   status: SnapshotStatusSchema.optional(),
 });
-export type AbortSnapshotResponse = z.infer<
-  typeof AbortSnapshotResponseSchema
->;
+export type AbortSnapshotResponse = z.infer<typeof AbortSnapshotResponseSchema>;
 
 /**
  * Who owns session state for an agent.
@@ -294,8 +288,8 @@ export type AgentMetadataStateManagement = z.infer<
 
 /**
  * Zod schema for the agent capability metadata placed under
- * `metadata.agent` on a session flow's action descriptor. Lets the Dev
- * UI and other reflective callers render the right surface (e.g. hide
+ * `metadata.agent` on an agent's action descriptor. Lets the Dev UI
+ * and other reflective callers render the right surface (e.g. hide
  * the Abort button when the configured store doesn't support it)
  * without round-tripping through the reflection API.
  */
