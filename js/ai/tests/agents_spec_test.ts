@@ -38,7 +38,7 @@ import {
   type AgentStreamChunk,
 } from '../src/session-flow.js';
 import { InMemorySessionStore } from '../src/session.js';
-import { defineTool, interrupt } from '../src/tool.js';
+import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from './helpers.js';
 
 initNodeFeatures();
@@ -296,6 +296,25 @@ function setupHarness(
   });
   registry.registerAction('tool', interruptToolDef);
 
+  // restartTool is a regular tool that uses ToolInterruptError to pause
+  // execution on first call, then succeeds on restart when `resumed`
+  // metadata is provided.
+  defineTool(
+    registry,
+    {
+      name: 'restartTool',
+      description: 'A tool that requires confirmation before executing',
+      inputSchema: z.object({ action: z.string() }),
+      outputSchema: z.object({ result: z.string() }),
+    },
+    async (input, { resumed }) => {
+      if (!resumed) {
+        throw new ToolInterruptError({ requiresConfirmation: true });
+      }
+      return { result: `confirmed: ${input.action}` };
+    }
+  );
+
   // --- Agents ---
 
   // promptAgent: client-managed, no tools
@@ -327,6 +346,16 @@ function setupHarness(
     model: 'programmableModel',
     config: { temperature: 1 },
     tools: ['interruptTool'],
+    store: new InMemorySessionStore(),
+  });
+
+  // promptAgentWithRestartTool: server-managed, with restartTool.
+  // Used for resume.restart conformance tests.
+  const promptAgentWithRestartTool = defineAgent(registry, {
+    name: 'promptAgentWithRestartTool',
+    model: 'programmableModel',
+    config: { temperature: 1 },
+    tools: ['restartTool'],
     store: new InMemorySessionStore(),
   });
 
@@ -422,6 +451,7 @@ function setupHarness(
     promptAgentWithStore,
     promptAgentWithTools,
     promptAgentWithInterrupt,
+    promptAgentWithRestartTool,
     customAgentBlocking,
     customAgentFailing,
     customAgentWithArtifacts,

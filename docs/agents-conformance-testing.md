@@ -42,7 +42,7 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 |-------|------|-------------|
 | `type` | `"send"` | Required. |
 | `init` | `AgentInit` | Initialization payload. May contain `snapshotId`, `state`, or be empty `{}`. |
-| `inputs` | `AgentInput[]` | Ordered list of inputs to send. Each may contain `messages`, `toolRestarts`, and/or `detach`. |
+| `inputs` | `AgentInput[]` | Ordered list of inputs to send. Each may contain `messages`, `resume` (with `respond` and/or `restart`), and/or `detach`. |
 | `modelResponses` | `GenerateResponseData[]` | Pre-programmed responses for the programmable model, one per `generate` call made by the agent. |
 | `streamChunks` | `GenerateResponseChunkData[][]` | Optional. Pre-programmed streaming chunks, indexed by model call. Each inner array is emitted as a stream before the corresponding `modelResponses` entry. |
 | `expectChunks` | `AgentStreamChunk[]` | **Strict ordered** list of expected stream chunks. |
@@ -166,6 +166,7 @@ via the `modelResponses` / `streamChunks` fields in `send` steps.
 | `promptAgentWithStore` | Same as `promptAgent` but with a **server-managed** in-memory session store. |
 | `promptAgentWithTools` | A prompt agent with `testTool` registered. Client-managed state. |
 | `promptAgentWithInterrupt` | A prompt agent with `interruptTool` registered and a server-managed store (for snapshot-based resume). |
+| `promptAgentWithRestartTool` | A prompt agent with `restartTool` registered and a server-managed store. Used for `resume.restart` tests. |
 
 #### Custom agents (hardcoded behavior)
 
@@ -186,6 +187,7 @@ is not needed for tests targeting these agents.
 |-----------|-------------|--------------|--------|
 | `testTool` | A simple tool | `{}` (empty) | `"tool called"` (string) |
 | `interruptTool` | An interrupt tool | `{ query: string }` | `{ answer: string }` |
+| `restartTool` | A tool that requires confirmation; throws `ToolInterruptError` on first call, succeeds when `resumed` metadata is provided | `{ action: string }` | `{ result: string }` |
 
 ### Programmable Model
 
@@ -221,7 +223,7 @@ _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
 ## 5. Test Coverage
 
-The spec currently covers the following categories (19 tests total):
+The spec currently covers the following categories (22 tests total):
 
 | Category | Tests |
 |----------|-------|
@@ -230,6 +232,8 @@ The spec currently covers the following categories (19 tests total):
 | Multi-turn | Multiple turns in one step |
 | Tool calling | Automatic tool execution |
 | Interrupt & resume | Snapshot-based tool interrupt resume |
+| Interrupt & restart | Tool interrupt with `resume.restart` (re-execute with metadata) |
+| Resume validation | Forged restart inputs rejected, non-existent tool respond rejected |
 | Snapshot chaining | Parent chain across steps |
 | Client-managed state | State seeding across steps |
 | Server-managed state | Init state ignored for server-managed agents |
