@@ -73,11 +73,14 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 
 	projectID, location := resolveVertexMaasEnv(m.ProjectID, m.Location)
 
-	ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	// The token source and oauth2 client outlive Init's ctx — they back every
+	// future generate call. Bind them to context.Background() so a short-lived
+	// Init ctx (or its cancellation) does not break token refreshes later.
+	ts, err := google.DefaultTokenSource(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
 	if err != nil {
 		panic(fmt.Errorf("modelgarden mistral: obtaining default Google token source: %w", err))
 	}
-	httpClient := oauth2.NewClient(ctx, ts)
+	httpClient := oauth2.NewClient(context.Background(), ts)
 	// Wrap the oauth2 transport with one that rewrites /chat/completions
 	// requests to Vertex's per-model rawPredict URLs. The inner oauth2
 	// transport still adds the Bearer token.
