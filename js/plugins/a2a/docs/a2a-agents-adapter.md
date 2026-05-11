@@ -26,7 +26,7 @@ synchronous request/response (`message/send` blocking mode). Streaming support
 The agent flow architecture (`js/ai/src/session-flow.ts`) provides:
 
 - **`Agent`** — a `BidiAction` that accepts `AgentInput`
-  (messages / toolRestarts / detach) over a bidirectional stream, maintains
+  (messages / resume / detach) over a bidirectional stream, maintains
   session state via `SessionRunner`, and emits `AgentStreamChunk` (modelChunk,
   status, artifact, turnEnd) plus a final `AgentOutput`.
 - **`defineCustomAgent`** — register an agent with a custom handler (`AgentFn`).
