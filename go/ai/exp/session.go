@@ -399,20 +399,27 @@ type AbortSnapshotResponse struct {
 	Status SnapshotStatus `json:"status,omitempty"`
 }
 
-// registerSnapshotActions registers the getSnapshot and abortSnapshot
-// companion actions for a session flow, both keyed under the flow's name.
-// They exist so non-Go callers (Dev UI, other languages) can observe and
-// abort snapshots over the reflection API. Local Go callers use the store
-// reference passed to WithSessionStore directly. The abortSnapshot action
-// is only registered if the store implements [SnapshotAborter], so the
-// reflected action surface matches the store's actual capabilities.
+// registerSnapshotActions registers the session flow's companion actions:
+//
+//   - The flow's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
+//     registered whenever a [SessionStore] is configured. The action is
+//     the remote counterpart to [SessionStore.GetSnapshot] for Dev UI and
+//     non-Go clients; local Go callers use the store reference directly.
+//
+//   - The flow's name under [api.ActionTypeAgentAbort] — abortSnapshot,
+//     registered only when the store implements both [SnapshotAborter]
+//     and [SnapshotStatusSubscriber]. Aborting needs both capabilities:
+//     the aborter to flip the row, and the subscriber so the session
+//     flow runtime can react to the flip without polling. Surfacing the
+//     action only when both are present keeps the reflected API aligned
+//     with what the store can actually do.
 func registerSnapshotActions[State any](
 	r api.Registry,
 	flowName string,
 	store SessionStore[State],
 	transform SnapshotTransform[State],
 ) {
-	core.DefineAction(r, flowName+"/getSnapshot", api.ActionTypeUtil, nil, nil,
+	core.DefineAction(r, flowName, api.ActionTypeAgentSnapshot, nil, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*GetSnapshotResponse[State], error) {
 			if store == nil {
 				return nil, core.NewError(core.FAILED_PRECONDITION,
@@ -452,11 +459,15 @@ func registerSnapshotActions[State any](
 			return resp, nil
 		})
 
-	aborter, _ := store.(SnapshotAborter)
-	if aborter == nil {
+	aborter, hasAborter := store.(SnapshotAborter)
+	_, hasSubscriber := store.(SnapshotStatusSubscriber)
+	if !hasAborter || !hasSubscriber {
+		// Without both capabilities, abort cannot be observed by the
+		// session flow runtime in a meaningful way. Don't surface the
+		// action.
 		return
 	}
-	core.DefineAction(r, flowName+"/abortSnapshot", api.ActionTypeUtil, nil, nil,
+	core.DefineAction(r, flowName, api.ActionTypeAgentAbort, nil, nil,
 		func(ctx context.Context, req *AbortSnapshotRequest) (*AbortSnapshotResponse, error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
