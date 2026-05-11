@@ -91,6 +91,7 @@ export {
   type ModelReference,
   type ModelRequest,
   type ModelResponseData,
+  type MultipartToolAction,
   type OutputOptions,
   type Part,
   type PromptAction,

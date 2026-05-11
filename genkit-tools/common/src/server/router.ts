@@ -149,6 +149,7 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
           model: input.model.replace('/model/', ''),
           config: input.config,
           tools: input.tools?.map((toolDefinition) => toolDefinition.name),
+          use: input.use,
         };
         return fromMessages(frontmatter, input.messages);
       }),
@@ -158,6 +159,13 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
       .input(apis.ListTracesRequestSchema)
       .query(async ({ input }) => {
         return manager.listTraces(input);
+      }),
+
+    /** Retrieves all logs. */
+    listLogs: loggedProcedure
+      .input(apis.ListLogsRequestSchema)
+      .query(async ({ input }) => {
+        return manager.listLogs(input);
       }),
 
     /** Retrieves a trace for a given ID. */

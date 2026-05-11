@@ -90,10 +90,9 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   let server: Server;
   const app = express();
 
-  // Allow all origins and expose trace ID header
   app.use(
     cors({
-      origin: '*',
+      origin: /^http:\/\/localhost:\d+$/,
       allowedHeaders: ['Content-Type'],
       exposedHeaders: ['X-Genkit-Trace-Id'],
     })

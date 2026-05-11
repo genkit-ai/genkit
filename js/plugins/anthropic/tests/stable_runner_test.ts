@@ -1084,8 +1084,8 @@ describe('toAnthropicRequestBody', () => {
     expectedOutput: MessageCreateParams;
   }[] = [
     {
-      should: '(claude-3-5-haiku) handles request with text messages',
-      modelName: 'claude-3-5-haiku',
+      should: '(claude-haiku-4-5) handles request with text messages',
+      modelName: 'claude-haiku-4-5',
       genkitRequest: {
         messages: [
           { role: 'user', content: [{ text: 'Tell a joke about dogs.' }] },
@@ -1112,15 +1112,15 @@ describe('toAnthropicRequestBody', () => {
             role: 'user',
           },
         ],
-        model: 'claude-3-5-haiku-20241022',
+        model: 'claude-haiku-4-5',
         metadata: {
           user_id: 'exampleUser123',
         },
       },
     },
     {
-      should: '(claude-3-haiku) handles request with text messages',
-      modelName: 'claude-3-haiku',
+      should: '(claude-sonnet-4-5) handles request with text messages',
+      modelName: 'claude-sonnet-4-5',
       genkitRequest: {
         messages: [
           { role: 'user', content: [{ text: 'Tell a joke about dogs.' }] },
@@ -1147,7 +1147,7 @@ describe('toAnthropicRequestBody', () => {
             role: 'user',
           },
         ],
-        model: 'claude-3-haiku-20240307',
+        model: 'claude-sonnet-4-5',
         metadata: {
           user_id: 'exampleUser123',
         },
@@ -1177,7 +1177,7 @@ describe('toAnthropicRequestBody', () => {
   it('should throw if output format is not text', () => {
     assert.throws(
       () =>
-        testRunner.toAnthropicRequestBody('claude-3-5-haiku', {
+        testRunner.toAnthropicRequestBody('claude-haiku-4-5', {
           messages: [],
           tools: [],
           output: { format: 'media' },
@@ -1205,7 +1205,7 @@ describe('toAnthropicRequestBody', () => {
 
     // Test with caching enabled
     const outputWithCaching = testRunner.toAnthropicRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       request
     );
     assert.deepStrictEqual(outputWithCaching.system, [
@@ -1239,7 +1239,7 @@ describe('toAnthropicRequestBody', () => {
     };
 
     assert.throws(
-      () => testRunner.toAnthropicRequestBody('claude-3-5-haiku', request),
+      () => testRunner.toAnthropicRequestBody('claude-haiku-4-5', request),
       /System messages can only contain text content/
     );
   });
@@ -1260,7 +1260,7 @@ describe('toAnthropicRequestBody', () => {
     };
 
     assert.throws(
-      () => testRunner.toAnthropicRequestBody('claude-3-5-haiku', request),
+      () => testRunner.toAnthropicRequestBody('claude-haiku-4-5', request),
       /System messages can only contain text content/
     );
   });
@@ -1281,7 +1281,7 @@ describe('toAnthropicRequestBody', () => {
     };
 
     assert.throws(
-      () => testRunner.toAnthropicRequestBody('claude-3-5-haiku', request),
+      () => testRunner.toAnthropicRequestBody('claude-haiku-4-5', request),
       /System messages can only contain text content/
     );
   });
@@ -1295,12 +1295,12 @@ describe('toAnthropicStreamingRequestBody', () => {
     };
 
     const output = testRunner.toAnthropicStreamingRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       request
     );
 
     assert.strictEqual(output.stream, true);
-    assert.strictEqual(output.model, 'claude-3-5-haiku-20241022');
+    assert.strictEqual(output.model, 'claude-haiku-4-5');
     assert.strictEqual(output.max_tokens, 4096);
   });
 
@@ -1322,7 +1322,7 @@ describe('toAnthropicStreamingRequestBody', () => {
     };
 
     const output = testRunner.toAnthropicStreamingRequestBody(
-      'claude-3-5-haiku',
+      'claude-haiku-4-5',
       request
     );
     assert.deepStrictEqual(output.system, [
@@ -1353,7 +1353,7 @@ describe('claudeRunner', () => {
 
     const runner = claudeRunner(
       {
-        name: 'claude-3-5-haiku',
+        name: 'claude-haiku-4-5',
         client: mockClient,
       },
       AnthropicConfigSchema
@@ -1368,7 +1368,7 @@ describe('claudeRunner', () => {
     assert.strictEqual(createStub.mock.calls.length, 1);
     assert.deepStrictEqual(createStub.mock.calls[0].arguments, [
       {
-        model: 'claude-3-5-haiku-20241022',
+        model: 'claude-haiku-4-5',
         max_tokens: 4096,
         messages: [],
       },
@@ -1404,7 +1404,7 @@ describe('claudeRunner', () => {
     const streamingCallback = mock.fn();
     const runner = claudeRunner(
       {
-        name: 'claude-3-5-haiku',
+        name: 'claude-haiku-4-5',
         client: mockClient,
       },
       AnthropicConfigSchema
@@ -1419,7 +1419,7 @@ describe('claudeRunner', () => {
     assert.strictEqual(streamStub.mock.calls.length, 1);
     assert.deepStrictEqual(streamStub.mock.calls[0].arguments, [
       {
-        model: 'claude-3-5-haiku-20241022',
+        model: 'claude-haiku-4-5',
         max_tokens: 4096,
         messages: [],
         stream: true,
@@ -1445,7 +1445,7 @@ describe('claudeRunner', () => {
 
     const runner = claudeRunner(
       {
-        name: 'claude-3-5-haiku',
+        name: 'claude-haiku-4-5',
         client: mockClient,
       },
       AnthropicConfigSchema
@@ -1481,7 +1481,7 @@ describe('claudeRunner', () => {
 
     const runner = claudeRunner(
       {
-        name: 'claude-3-5-haiku',
+        name: 'claude-haiku-4-5',
         client: mockClient,
         defaultApiVersion: 'beta',
       },
@@ -1518,7 +1518,7 @@ describe('claudeRunner', () => {
     // defaultApiVersion is 'stable', but request overrides to 'beta'
     const runner = claudeRunner(
       {
-        name: 'claude-3-5-haiku',
+        name: 'claude-haiku-4-5',
         client: mockClient,
         defaultApiVersion: 'stable',
       },
@@ -2428,7 +2428,7 @@ describe('Runner request bodies and error branches', () => {
       client: mockClient,
     }) as Runner & RunnerProtectedMethods;
 
-    const body = runner['toAnthropicRequestBody']('claude-3-5-haiku', {
+    const body = runner['toAnthropicRequestBody']('claude-haiku-4-5', {
       messages: [
         {
           role: 'system',
@@ -2458,7 +2458,7 @@ describe('Runner request bodies and error branches', () => {
       ],
     } as unknown as GenerateRequest<typeof AnthropicConfigSchema>);
 
-    assert.strictEqual(body.model, 'claude-3-5-haiku-20241022');
+    assert.strictEqual(body.model, 'claude-haiku-4-5');
     assert.ok(Array.isArray(body.system));
     assert.strictEqual(body.system?.[0].cache_control?.type, undefined);
     assert.strictEqual(body.max_tokens, 256);
@@ -2482,7 +2482,7 @@ describe('Runner request bodies and error branches', () => {
       client: mockClient,
     }) as Runner & RunnerProtectedMethods;
 
-    const body = runner['toAnthropicStreamingRequestBody']('claude-3-5-haiku', {
+    const body = runner['toAnthropicStreamingRequestBody']('claude-haiku-4-5', {
       messages: [
         {
           role: 'system',
@@ -2531,11 +2531,11 @@ describe('Runner request bodies and error branches', () => {
   it('should disable thinking when explicitly turned off', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new Runner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient,
     }) as Runner & RunnerProtectedMethods;
 
-    const body = runner['toAnthropicRequestBody']('claude-3-5-haiku', {
+    const body = runner['toAnthropicRequestBody']('claude-haiku-4-5', {
       messages: [],
       config: {
         thinking: { enabled: false },
@@ -2548,23 +2548,23 @@ describe('Runner request bodies and error branches', () => {
   it('should not leak maxOutputTokens, stopSequences, version, or apiKey into the request body', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new Runner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient,
     }) as Runner & RunnerProtectedMethods;
 
-    const body = runner['toAnthropicRequestBody']('claude-3-5-haiku', {
+    const body = runner['toAnthropicRequestBody']('claude-haiku-4-5', {
       messages: [],
       config: {
         maxOutputTokens: 100,
         stopSequences: ['END'],
-        version: 'claude-3-5-haiku-custom',
+        version: 'claude-haiku-4-5-custom',
         apiKey: 'fake-api-key',
         temperature: 0.5,
       },
     } as unknown as GenerateRequest<typeof AnthropicConfigSchema>);
 
     assert.deepStrictEqual(body, {
-      model: 'claude-3-5-haiku-custom',
+      model: 'claude-haiku-4-5-custom',
       max_tokens: 100,
       messages: [],
       stop_sequences: ['END'],
@@ -2575,7 +2575,7 @@ describe('Runner request bodies and error branches', () => {
   it('should throw descriptive errors for missing tool refs', () => {
     const mockClient = createMockAnthropicClient();
     const runner = new Runner({
-      name: 'claude-3-5-haiku',
+      name: 'claude-haiku-4-5',
       client: mockClient,
     }) as Runner & RunnerProtectedMethods;
 

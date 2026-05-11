@@ -463,14 +463,15 @@ async function makeRequest(
               .map((d: any) => {
                 if (d.detail && typeof d.detail === 'string') {
                   const match = d.detail.match(/\[ORIGINAL ERROR\]\s*([^[]+)/);
-                  return match ? match[1].trim() : d.detail;
+                  const detailText = match ? match[1].trim() : d.detail;
+                  return `${detailText}\nRaw: ${JSON.stringify(d, null, 2)}`;
                 }
-                return JSON.stringify(d);
+                return JSON.stringify(d, null, 2);
               })
               .filter(Boolean)
               .join('\n');
             if (detailsText) {
-              errorMessage += `\nDetails: ${detailsText}`;
+              errorMessage += `\nDetails:\n${detailsText}`;
             }
           }
         }

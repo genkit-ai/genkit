@@ -105,6 +105,7 @@ interface BaseClientOptions {
   /** timeout in milli seconds. time out value needs to be non negative. */
   timeout?: number;
   signal?: AbortSignal;
+  customHeaders?: Record<string, string>;
 }
 
 export interface RegionalClientOptions extends BaseClientOptions {

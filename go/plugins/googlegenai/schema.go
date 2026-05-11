@@ -32,22 +32,33 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		return toGeminiSchema(originalSchema, s)
 	}
 
-	// Handle "anyOf" subschemas by finding the first valid schema definition
+	// Handle "anyOf" subschemas by finding the first valid schema definition.
+	// JSON unmarshal produces []any, but schemas built directly in Go code may
+	// use []map[string]any, so accept both. Recurse into each subschema so that
+	// non-trivial forms (e.g. {"type": ["string", "null"]} or nested $ref) are
+	// recognized, not just the simple {"type": "string"} case.
 	if v, ok := genkitSchema["anyOf"]; ok {
-		if anyOfList, isList := v.([]map[string]any); isList {
-			for _, subSchema := range anyOfList {
-				if subSchemaType, hasType := subSchema["type"]; hasType {
-					if typeStr, isString := subSchemaType.(string); isString && typeStr != "null" {
-						if title, ok := genkitSchema["title"]; ok {
-							subSchema["title"] = title
-						}
-						if description, ok := genkitSchema["description"]; ok {
-							subSchema["description"] = description
-						}
-						// Found a schema like: {"type": "string"}
-						return toGeminiSchema(originalSchema, subSchema)
-					}
+		var anyOfList []map[string]any
+		switch list := v.(type) {
+		case []map[string]any:
+			anyOfList = list
+		case []any:
+			for _, item := range list {
+				if m, isMap := item.(map[string]any); isMap {
+					anyOfList = append(anyOfList, m)
 				}
+			}
+		}
+		for _, subSchema := range anyOfList {
+			if title, ok := genkitSchema["title"]; ok {
+				subSchema["title"] = title
+			}
+			if description, ok := genkitSchema["description"]; ok {
+				subSchema["description"] = description
+			}
+			res, err := toGeminiSchema(originalSchema, subSchema)
+			if err == nil && res != nil && res.Type != "" {
+				return res, nil
 			}
 		}
 	}
@@ -58,12 +69,43 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		return nil, fmt.Errorf("schema is missing the 'type' field: %#v", genkitSchema)
 	}
 
-	typeStr, ok := typeVal.(string)
-	if !ok {
+	// JSON Schema 2020-12 allows "type" to be an array of types, e.g.
+	// ["string", "null"] to denote a nullable string. Normalize to a single
+	// concrete type plus the Nullable flag when "null" is present. JSON
+	// unmarshal produces []any, but schemas built directly in Go code may use
+	// []string, so accept both.
+	var typeStr string
+	var typeList []string
+	switch tv := typeVal.(type) {
+	case string:
+		typeStr = tv
+	case []any:
+		for _, t := range tv {
+			s, isString := t.(string)
+			if !isString {
+				return nil, fmt.Errorf("schema 'type' array contains non-string element of type %T", t)
+			}
+			typeList = append(typeList, s)
+		}
+	case []string:
+		typeList = tv
+	default:
 		return nil, fmt.Errorf("schema 'type' field is not a string, but %T", typeVal)
+	}
+	for _, s := range typeList {
+		if s == "null" {
+			schema.Nullable = genai.Ptr(true)
+			continue
+		}
+		if typeStr != "" {
+			return nil, fmt.Errorf("schema 'type' array contains multiple non-null types: %v", typeList)
+		}
+		typeStr = s
 	}
 
 	switch typeStr {
+	case "":
+		// Only "null" was specified (or similar); leave Type unset and rely on Nullable.
 	case "string":
 		schema.Type = genai.TypeString
 	case "float64", "number":
@@ -77,7 +119,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	case "array":
 		schema.Type = genai.TypeArray
 	default:
-		return nil, fmt.Errorf("schema type %q not allowed", genkitSchema["type"])
+		return nil, fmt.Errorf("schema type %q not allowed", typeStr)
 	}
 	if v, ok := genkitSchema["required"]; ok {
 		schema.Required = castToStringArray(v)

@@ -312,14 +312,22 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
   ):
     | { type: 'enabled'; budget_tokens: number }
     | { type: 'disabled' }
+    | { type: 'adaptive'; display?: 'summarized' | 'omitted' }
     | undefined {
     if (!config) return undefined;
 
-    const { enabled, budgetTokens } = config;
+    const { enabled, budgetTokens, adaptive, display } = config;
+
+    if (adaptive === true) {
+      return {
+        type: 'adaptive',
+        ...(display !== undefined && { display }),
+      };
+    }
 
     if (enabled === true) {
       if (budgetTokens === undefined) {
-        return undefined;
+        throw new Error('budgetTokens is required when thinking is enabled');
       }
       return { type: 'enabled', budget_tokens: budgetTokens };
     }

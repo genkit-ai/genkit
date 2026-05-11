@@ -25,7 +25,6 @@ import { chunk } from 'llm-chunk';
 import path from 'path';
 import pdf from 'pdf-parse';
 import { ai } from './genkit.js';
-import { augmentedPrompt } from './prompt.js';
 
 export const pdfChatRetriever = devLocalRetrieverRef('pdfQA');
 
@@ -45,15 +44,12 @@ export const pdfQA = ai.defineFlow(
       options: { k: 3 },
     });
 
-    return augmentedPrompt(
-      {
-        question: query,
-        context: docs.map((d) => d.text),
-      },
-      {
-        onChunk: (c) => sendChunk(c.text),
-      }
-    ).then((r) => r.text);
+    const { text } = await ai.generate({
+      prompt: query,
+      docs,
+      onChunk: (c) => sendChunk(c.text),
+    });
+    return text;
   }
 );
 

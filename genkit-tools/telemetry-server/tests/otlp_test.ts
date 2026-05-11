@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { traceDataFromOtlp } from '../src/utils/otlp';
+import { logDataFromOtlp, traceDataFromOtlp } from '../src/utils/otlp';
 
 describe('otlp-traces', () => {
   it('should transform OTLP payload to TraceData', () => {
@@ -212,5 +212,86 @@ describe('otlp-traces', () => {
 
     const result = traceDataFromOtlp(otlpPayload as any);
     assert.deepStrictEqual(result, expectedTraceData);
+  });
+});
+
+describe('otlp-logs', () => {
+  it('should transform OTLP log payload to LogRecordData', () => {
+    const otlpPayload = {
+      resourceLogs: [
+        {
+          resource: {
+            attributes: [],
+            droppedAttributesCount: 0,
+          },
+          scopeLogs: [
+            {
+              scope: { name: 'genkit-tracer', version: 'v1' },
+              logRecords: [
+                {
+                  timeUnixNano: '1760827335359000000',
+                  severityText: 'INFO',
+                  severityNumber: 9,
+                  body: { stringValue: 'This is a test log message' },
+                  traceId: 'c5892692eb25cce482eb13587b73c425',
+                  spanId: '86dc3d35cc11e336',
+                  attributes: [
+                    {
+                      key: 'genkit:name',
+                      value: { stringValue: 'generateContentStream' },
+                    },
+                  ],
+                },
+                {
+                  timeUnixNano: '1760827336695073000',
+                  severityText: 'ERROR',
+                  severityNumber: 17,
+                  body: { stringValue: 'An error occurred' },
+                  traceId: 'c5892692eb25cce482eb13587b73c425',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const expectedLogData = [
+      {
+        logId: '',
+        traceId: 'c5892692eb25cce482eb13587b73c425',
+        spanId: '86dc3d35cc11e336',
+        timestamp: 1760827335359,
+        severityNumber: 9,
+        severityText: 'INFO',
+        body: 'This is a test log message',
+        attributes: {
+          'genkit:name': 'generateContentStream',
+        },
+        instrumentationLibrary: {
+          name: 'genkit-tracer',
+          version: 'v1',
+        },
+      },
+      {
+        logId: '',
+        traceId: 'c5892692eb25cce482eb13587b73c425',
+        spanId: undefined,
+        timestamp: 1760827336695,
+        severityNumber: 17,
+        severityText: 'ERROR',
+        body: 'An error occurred',
+        attributes: {},
+        instrumentationLibrary: {
+          name: 'genkit-tracer',
+          version: 'v1',
+        },
+      },
+    ];
+
+    const result = logDataFromOtlp(otlpPayload);
+    // Overwrite the random logId generator for deep strict equal
+    result.forEach((log) => (log.logId = ''));
+    assert.deepStrictEqual(result, expectedLogData);
   });
 });
