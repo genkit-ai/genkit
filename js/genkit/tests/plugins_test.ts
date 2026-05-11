@@ -36,9 +36,21 @@ const v1Plugin = genkitPlugin(
   async (ai, actionType, name) => {
     switch (actionType) {
       case 'model':
-        ai.defineModel({ name: 'myV1Plugin/' + name }, async () => {
-          return {};
-        });
+        if (name === 'with-token-counter') {
+          ai.defineModel(
+            {
+              name: 'myV1Plugin/' + name,
+              countTokens: async () => ({ totalTokens: 66 }),
+            },
+            async () => {
+              return {};
+            }
+          );
+        } else {
+          ai.defineModel({ name: 'myV1Plugin/' + name }, async () => {
+            return {};
+          });
+        }
       case 'background-model':
         ai.defineBackgroundModel({
           name: 'myV1Plugin/' + name,
@@ -80,6 +92,17 @@ const v2Plugin = genkitPluginV2({
       case 'model':
         if (name === 'not-found') {
           return undefined;
+        }
+        if (name === 'with-token-counter') {
+          return model(
+            {
+              name,
+              countTokens: async () => ({ totalTokens: 55 }),
+            },
+            async () => {
+              return {};
+            }
+          );
         }
         return model({ name }, async () => {
           return {};
@@ -173,6 +196,23 @@ describe('session', () => {
     );
   });
 
+  it('resolves and registers model-token-counter action from v1 plugin', async () => {
+    const act = await ai.registry.lookupAction(
+      '/model/myV1Plugin/with-token-counter'
+    );
+    assert.ok(act);
+
+    // The countTokens action should be registered under model-token-counter
+    const tokenAct = await ai.registry.lookupAction(
+      '/model-token-counter/myV1Plugin/with-token-counter'
+    );
+    assert.ok(tokenAct);
+    assert.strictEqual(tokenAct.__action.actionType, 'model-token-counter');
+
+    const result = await tokenAct({ messages: [] });
+    assert.deepStrictEqual(result, { totalTokens: 66 });
+  });
+
   it('resolves background model from v1 plugin', async () => {
     const act = await ai.registry.lookupAction(
       '/background-model/myV1Plugin/bg-model'
@@ -218,6 +258,23 @@ describe('session', () => {
         '/model/myV2Plugin/potential_model',
       ])
     );
+  });
+
+  it('resolves and registers model-token-counter action from v2 plugin', async () => {
+    const act = await ai.registry.lookupAction(
+      '/model/myV2Plugin/with-token-counter'
+    );
+    assert.ok(act);
+
+    // The countTokens action should be registered under model-token-counter
+    const tokenAct = await ai.registry.lookupAction(
+      '/model-token-counter/myV2Plugin/with-token-counter'
+    );
+    assert.ok(tokenAct);
+    assert.strictEqual(tokenAct.__action.actionType, 'model-token-counter');
+
+    const result = await tokenAct({ messages: [] });
+    assert.deepStrictEqual(result, { totalTokens: 55 });
   });
 
   it('resolves background model from v2 plugin', async () => {

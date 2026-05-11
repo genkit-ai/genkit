@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { GenkitError, StatusName } from '@genkit-ai/core';
+import { GenkitError, SimpleMiddleware, StatusName } from '@genkit-ai/core';
 import { HasRegistry } from '@genkit-ai/core/registry';
 import { Document } from '../document.js';
 import { injectInstructions } from '../formats/index.js';
 import { ModelArgument } from '../index.js';
+import { GenerateRequestData, GenerateResponseData } from '../model-types.js';
 import type {
   MediaPart,
   MessageData,
@@ -199,9 +200,9 @@ const CONTEXT_ITEM_TEMPLATE = (
   return out;
 };
 
-export function augmentWithContext(
+export function augmentWithContext<O = GenerateResponseData>(
   options?: AugmentWithContextOptions
-): ModelMiddleware {
+): SimpleMiddleware<GenerateRequestData, O> {
   const preface =
     typeof options?.preface === 'undefined' ? CONTEXT_PREFACE : options.preface;
   const itemTemplate = options?.itemTemplate || CONTEXT_ITEM_TEMPLATE;
@@ -467,9 +468,9 @@ ${JSON.stringify(schema)}
  * Model middleware that simulates constrained generation by injecting generation
  * instructions into the user message.
  */
-export function simulateConstrainedGeneration(
+export function simulateConstrainedGeneration<O = GenerateResponseData>(
   options?: SimulatedConstrainedGenerationOptions
-): ModelMiddleware {
+): SimpleMiddleware<GenerateRequestData, O> {
   return (req, next) => {
     let instructions: string | undefined;
     if (req.output?.constrained && req.output?.schema) {

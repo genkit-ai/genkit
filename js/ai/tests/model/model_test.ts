@@ -28,6 +28,7 @@ import {
   GenerateResponseChunkData,
   GenerateResponseData,
   model,
+  registerModelAction,
 } from '../../src/model.js';
 
 initNodeFeatures();
@@ -41,6 +42,52 @@ const GENERATE_RESPONSE = {
 } as GenerateResponseData;
 
 describe('model', () => {
+  describe('registerModelAction', () => {
+    it('registers both model and token counter actions', async () => {
+      const registry = new Registry();
+      const myModel = model(
+        {
+          name: 'testModel',
+          countTokens: async () => ({ totalTokens: 42 }),
+        },
+        async () => GENERATE_RESPONSE
+      );
+
+      registerModelAction(registry, myModel);
+
+      const resolvedModel = await registry.lookupAction('/model/testModel');
+      assert.ok(resolvedModel);
+
+      const resolvedCounter = await registry.lookupAction(
+        '/model-token-counter/testModel'
+      );
+      assert.ok(resolvedCounter);
+
+      const usage = await resolvedCounter({ messages: [] });
+      assert.deepStrictEqual(usage, { totalTokens: 42 });
+    });
+
+    it('does not crash or register token counter if countTokens is absent', async () => {
+      const registry = new Registry();
+      const myModel = model(
+        { name: 'noCounterModel' },
+        async () => GENERATE_RESPONSE
+      );
+
+      registerModelAction(registry, myModel);
+
+      const resolvedModel = await registry.lookupAction(
+        '/model/noCounterModel'
+      );
+      assert.ok(resolvedModel);
+
+      const resolvedCounter = await registry.lookupAction(
+        '/model-token-counter/noCounterModel'
+      );
+      assert.strictEqual(resolvedCounter, undefined);
+    });
+  });
+
   describe('v1', () => {
     it('defines a model', async () => {
       const registry = new Registry();
@@ -120,6 +167,36 @@ describe('model', () => {
       delete response.latencyMs;
       assert.deepStrictEqual(response, GENERATE_RESPONSE);
       assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
+    });
+
+    it('creates a model-token-counter action if countTokens is provided', async () => {
+      const registry = new Registry();
+      const myModel = defineModel(
+        registry,
+        {
+          name: 'tokenModel',
+          countTokens: async (req) => ({ totalTokens: 99 }),
+        },
+        async () => GENERATE_RESPONSE
+      );
+
+      assert.ok(myModel.__tokenCounterAction);
+      const usage = await myModel.__tokenCounterAction({ messages: [] });
+      assert.deepStrictEqual(usage, { totalTokens: 99 });
+    });
+
+    it('creates a model-token-counter action on a dynamic model if countTokens is provided', async () => {
+      const myModel = model(
+        {
+          name: 'tokenModel',
+          countTokens: async (req) => ({ totalTokens: 101 }),
+        },
+        async () => GENERATE_RESPONSE
+      );
+
+      assert.ok(myModel.__tokenCounterAction);
+      const usage = await myModel.__tokenCounterAction({ messages: [] });
+      assert.deepStrictEqual(usage, { totalTokens: 101 });
     });
 
     it('defines a dynamic model', async () => {

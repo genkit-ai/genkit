@@ -34,6 +34,7 @@ import {
   type EmbeddingBatch,
 } from './embedder.js';
 import {
+  countTokens,
   generate,
   generateStream,
   type GenerateOptions,
@@ -41,7 +42,11 @@ import {
   type GenerateStreamOptions,
   type GenerateStreamResponse,
 } from './generate.js';
-import { GenerationCommonConfigSchema, type Part } from './model-types.js';
+import {
+  GenerationCommonConfigSchema,
+  type GenerationUsage,
+  type Part,
+} from './model-types.js';
 
 /**
  * `GenkitAI` encapsulates Genkit's AI APIs.
@@ -261,6 +266,89 @@ export class GenkitAI {
       options = { prompt: options };
     }
     return generateStream(this.registry, options);
+  }
+
+  /**
+   * Make a countTokens call to the default model with a simple text prompt.
+   *
+   * ```ts
+   * const ai = genkit({
+   *   plugins: [googleAI()],
+   *   model: googleAI.model('gemini-flash-latest'), // default model
+   * })
+   *
+   * const usage = await ai.countTokens('hi');
+   * ```
+   */
+  countTokens(strPrompt: string): Promise<GenerationUsage>;
+
+  /**
+   * Make a countTokens call to the default model with a multipart request.
+   *
+   * ```ts
+   * const ai = genkit({
+   *   plugins: [googleAI()],
+   *   model: googleAI.model('gemini-flash-latest'), // default model
+   * })
+   *
+   * const usage = await ai.countTokens([
+   *   { media: {url: 'http://....'} },
+   *   { text: 'describe this image' }
+   * ]);
+   * ```
+   */
+  countTokens(parts: Part[]): Promise<GenerationUsage>;
+
+  /**
+   * Count tokens calculates the token usage of a generative model based on the provided prompt and configuration.
+   *
+   * See {@link GenerateOptions} for detailed information about available options.
+   *
+   * ```ts
+   * const ai = genkit({
+   *   plugins: [googleAI()],
+   * })
+   *
+   * const usage = await ai.countTokens({
+   *   system: 'talk like a pirate',
+   *   prompt: [
+   *     { media: { url: 'http://....' } },
+   *     { text: 'describe this image' }
+   *   ],
+   *   messages: conversationHistory,
+   *   tools: [ userInfoLookup ],
+   *   model: googleAI.model('gemini-flash-latest'),
+   * });
+   * ```
+   */
+  countTokens<
+    O extends z.ZodTypeAny = z.ZodTypeAny,
+    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  >(
+    opts:
+      | GenerateOptions<O, CustomOptions>
+      | PromiseLike<GenerateOptions<O, CustomOptions>>
+  ): Promise<GenerationUsage>;
+
+  async countTokens<
+    O extends z.ZodTypeAny = z.ZodTypeAny,
+    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  >(
+    options:
+      | string
+      | Part[]
+      | GenerateOptions<O, CustomOptions>
+      | PromiseLike<GenerateOptions<O, CustomOptions>>
+  ): Promise<GenerationUsage> {
+    if (typeof options === 'string' || Array.isArray(options)) {
+      options = { prompt: options };
+    }
+    return countTokens(
+      this.registry,
+      options as
+        | GenerateOptions<O, CustomOptions>
+        | PromiseLike<GenerateOptions<O, CustomOptions>>
+    );
   }
 
   /**

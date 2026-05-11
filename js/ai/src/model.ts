@@ -45,6 +45,7 @@ import {
   GenerateResponseData,
   GenerateResponseSchema,
   GenerationUsage,
+  GenerationUsageSchema,
   MessageData,
   ModelInfo,
   Part,
@@ -105,7 +106,34 @@ export type ModelAction<
   typeof GenerateResponseChunkSchema
 > & {
   __configSchema: CustomOptionsSchema;
+  __tokenCounterAction?: Action<
+    typeof GenerateRequestSchema,
+    typeof GenerationUsageSchema
+  >;
 };
+
+export function registerModelAction<
+  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  registry: Registry,
+  action: ModelAction<CustomOptionsSchema>,
+  opts?: { namespace?: string }
+) {
+  registry.registerAction(action.__action.actionType!, action, opts);
+  if (action.__tokenCounterAction) {
+    registry.registerAction(
+      'model-token-counter',
+      action.__tokenCounterAction,
+      opts
+    );
+  }
+}
+
+export function isModelAction(
+  action: Action<z.ZodTypeAny, z.ZodTypeAny>
+): action is ModelAction<z.ZodTypeAny> {
+  return action.__action.actionType === 'model';
+}
 
 export type BackgroundModelAction<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
@@ -115,6 +143,17 @@ export type BackgroundModelAction<
 > & {
   __configSchema: CustomOptionsSchema;
 };
+
+export type TokenCounterAction<
+  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+> = Action<typeof GenerateRequestSchema, typeof GenerationUsageSchema> & {
+  __configSchema: CustomOptionsSchema;
+};
+
+export type TokenCounterMiddleware = SimpleMiddleware<
+  z.infer<typeof GenerateRequestSchema>,
+  z.infer<typeof GenerationUsageSchema>
+>;
 
 export type ModelMiddleware = SimpleMiddleware<
   z.infer<typeof GenerateRequestSchema>,
@@ -145,6 +184,10 @@ export type DefineModelOptions<
   label?: string;
   /** Middleware to be used with this model. */
   use?: ModelMiddlewareArgument[];
+  /** Optional token counting logic for this model. */
+  countTokens?: (
+    request: GenerateRequest<CustomOptionsSchema>
+  ) => Promise<GenerationUsage>;
 };
 
 export function model<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
@@ -164,10 +207,36 @@ export function model<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
       return timedResponse;
     });
   });
-  Object.assign(act, {
+  const modelAct = Object.assign(act, {
     __configSchema: options.configSchema || z.unknown(),
-  });
-  return act as ModelAction<CustomOptionsSchema>;
+  }) as ModelAction<CustomOptionsSchema>;
+
+  if (options.countTokens) {
+    const tcOptions: ActionParams<
+      typeof GenerateRequestSchema,
+      typeof GenerationUsageSchema
+    > = {
+      actionType: 'model-token-counter',
+      name: options.name,
+      description: options.label || options.name,
+      inputSchema: GenerateRequestSchema,
+      outputSchema: GenerationUsageSchema,
+      use: getTokenCounterMiddleware(options),
+      metadata: {
+        model: {
+          label: options.label || options.name,
+          customOptions: options.configSchema
+            ? toJsonSchema({ schema: options.configSchema })
+            : undefined,
+          versions: options.versions,
+          supports: options.supports,
+        },
+      },
+    };
+    const tcAct = action(tcOptions, (input) => options.countTokens!(input));
+    modelAct.__tokenCounterAction = tcAct;
+  }
+  return modelAct;
 }
 
 function modelActionOptions<
@@ -257,10 +326,38 @@ export function defineModel<
       });
     }
   );
-  Object.assign(act, {
+  const modelAct = Object.assign(act, {
     __configSchema: options.configSchema || z.unknown(),
-  });
-  return act as ModelAction<CustomOptionsSchema>;
+  }) as ModelAction<CustomOptionsSchema>;
+
+  if (options.countTokens) {
+    const tcOptions: ActionParams<
+      typeof GenerateRequestSchema,
+      typeof GenerationUsageSchema
+    > = {
+      actionType: 'model-token-counter',
+      name: options.name,
+      description: options.label || options.name,
+      inputSchema: GenerateRequestSchema,
+      outputSchema: GenerationUsageSchema,
+      use: getTokenCounterMiddleware(options),
+      metadata: {
+        model: {
+          label: options.label || options.name,
+          customOptions: options.configSchema
+            ? toJsonSchema({ schema: options.configSchema })
+            : undefined,
+          versions: options.versions,
+          supports: options.supports,
+        },
+      },
+    };
+    const tcAct = defineAction(registry, tcOptions, (input) =>
+      options.countTokens!(input)
+    );
+    modelAct.__tokenCounterAction = tcAct;
+  }
+  return modelAct;
 }
 
 export type DefineBackgroundModelOptions<
@@ -353,7 +450,7 @@ function getModelMiddleware(options: {
 }) {
   const middleware: ModelMiddlewareArgument[] = options.use || [];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
-  const constratedSimulator = simulateConstrainedGeneration();
+  const constrainedSimulator = simulateConstrainedGeneration();
   middleware.push((req, next) => {
     if (
       !options?.supports?.constrained ||
@@ -361,7 +458,37 @@ function getModelMiddleware(options: {
       (options?.supports?.constrained === 'no-tools' &&
         (req.tools?.length ?? 0) > 0)
     ) {
-      return constratedSimulator(req, next);
+      return constrainedSimulator(req, next);
+    }
+    return next(req);
+  });
+
+  return middleware;
+}
+
+function getTokenCounterMiddleware(options: {
+  name: string;
+  supports?: ModelInfo['supports'];
+}) {
+  const middleware: SimpleMiddleware<
+    z.infer<typeof GenerateRequestSchema>,
+    z.infer<typeof GenerationUsageSchema>
+  >[] = [];
+
+  if (!options?.supports?.context)
+    middleware.push(
+      augmentWithContext<z.infer<typeof GenerationUsageSchema>>()
+    );
+  const constrainedSimulator =
+    simulateConstrainedGeneration<z.infer<typeof GenerationUsageSchema>>();
+  middleware.push((req, next) => {
+    if (
+      !options?.supports?.constrained ||
+      options?.supports?.constrained === 'none' ||
+      (options?.supports?.constrained === 'no-tools' &&
+        (req.tools?.length ?? 0) > 0)
+    ) {
+      return constrainedSimulator(req, next);
     }
     return next(req);
   });

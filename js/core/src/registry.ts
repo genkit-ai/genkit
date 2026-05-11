@@ -47,6 +47,7 @@ const ACTION_TYPES = [
   'indexer',
   'model',
   'background-model',
+  'model-token-counter',
   'check-operation',
   'cancel-operation',
   'prompt',

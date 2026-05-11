@@ -156,6 +156,94 @@ describe('generate', () => {
       assert.strictEqual((await response).text, 'Echo: hi; config: {}');
       assert.deepStrictEqual(chunks, ['3', '2', '1']);
     });
+
+    it('counts tokens on the default model', async () => {
+      let receivedRequest: any;
+
+      const aiWithTokenModel = genkit({
+        model: 'tokenModel',
+      });
+
+      aiWithTokenModel.defineModel(
+        {
+          name: 'tokenModel',
+          countTokens: async (req) => {
+            receivedRequest = req;
+            return { totalTokens: 42 };
+          },
+        },
+        async () => {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+      );
+
+      const usage = await aiWithTokenModel.countTokens('hi');
+      assert.deepStrictEqual(usage, { totalTokens: 42 });
+      assert.deepStrictEqual(receivedRequest.messages, [
+        { role: 'user', content: [{ text: 'hi' }] },
+      ]);
+
+      const partsUsage = await aiWithTokenModel.countTokens([{ text: 'hi' }]);
+      assert.deepStrictEqual(partsUsage, { totalTokens: 42 });
+      assert.deepStrictEqual(receivedRequest.messages, [
+        { role: 'user', content: [{ text: 'hi' }] },
+      ]);
+
+      const optionsUsage = await aiWithTokenModel.countTokens({
+        prompt: 'hi',
+        config: { temperature: 0.5 },
+      });
+      assert.deepStrictEqual(optionsUsage, { totalTokens: 42 });
+      assert.strictEqual(receivedRequest.config.temperature, 0.5);
+    });
+
+    it('counts tokens on the default model with a complex request', async () => {
+      let receivedRequest: any;
+
+      const aiWithTokenModel = genkit({
+        model: 'tokenModel',
+      });
+
+      aiWithTokenModel.defineModel(
+        {
+          name: 'tokenModel',
+          countTokens: async (req) => {
+            receivedRequest = req;
+            return { totalTokens: 100 };
+          },
+        },
+        async () => {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+      );
+
+      aiWithTokenModel.defineTool(
+        { name: 'testTool', description: 'description' },
+        async () => 'tool called'
+      );
+
+      const usage = await aiWithTokenModel.countTokens({
+        system: 'talk like a pirate',
+        prompt: 'hello world',
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        tools: ['testTool'],
+      });
+
+      assert.deepStrictEqual(usage, { totalTokens: 100 });
+      assert.deepStrictEqual(receivedRequest.messages, [
+        { role: 'system', content: [{ text: 'talk like a pirate' }] },
+        { role: 'user', content: [{ text: 'hi' }] },
+        { role: 'user', content: [{ text: 'hello world' }] },
+      ]);
+      assert.strictEqual(receivedRequest.tools.length, 1);
+      assert.strictEqual(receivedRequest.tools[0].name, 'testTool');
+    });
   });
 
   describe('explicit model', () => {

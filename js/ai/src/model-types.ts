@@ -266,7 +266,10 @@ export const GenerationUsageSchema = z.object({
   outputVideos: z.number().optional(),
   inputAudioFiles: z.number().optional(),
   outputAudioFiles: z.number().optional(),
+  /** @deprecated use `metadata` or `raw` instead */
   custom: z.record(z.number()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  raw: z.unknown().optional(),
   thoughtsTokens: z.number().optional(),
   cachedContentTokens: z.number().optional(),
 });
