@@ -51,4 +51,15 @@ func TestDefineModelBeforeInit(t *testing.T) {
 			t.Fatalf("expected 'not initialized' error, got: %v", err)
 		}
 	})
+
+	t.Run("Mistral", func(t *testing.T) {
+		m := &modelgarden.Mistral{}
+		_, err := m.DefineModel("mistral-test", opts)
+		if err == nil {
+			t.Fatal("expected error when DefineModel called before Init, got nil")
+		}
+		if !strings.Contains(err.Error(), "not initialized") {
+			t.Fatalf("expected 'not initialized' error, got: %v", err)
+		}
+	})
 }
