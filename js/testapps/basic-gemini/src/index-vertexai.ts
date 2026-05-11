@@ -37,6 +37,19 @@ ai.defineFlow('basic-hi', async () => {
   return text;
 });
 
+// Flex/Priority PayGo
+ai.defineFlow('paygo', async () => {
+  const response = await ai.generate({
+    model: vertexAI.model('gemini-3.1-flash-lite-preview'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello.',
+    config: {
+      payGo: 'priority', // or priority-only, flex, flex-only.
+    },
+  });
+
+  return response;
+});
+
 // Gemini 3.1 thinkingLevel config
 ai.defineFlow(
   {
@@ -544,7 +557,7 @@ ai.defineFlow('imagen-try-on', async (_) => {
 
 ai.defineFlow('veo-text-prompt', async (_, { sendChunk }) => {
   let { operation } = await ai.generate({
-    model: vertexAI.model('veo-3.0-generate-001'),
+    model: vertexAI.model('veo-3.1-lite-generate-001'),
     prompt: [
       {
         text: 'slowly flying over a meadow in full bloom',

@@ -42,13 +42,12 @@ import type {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 
-import { KNOWN_CLAUDE_MODELS, extractVersion } from '../models.js';
 import {
   AnthropicConfigSchema,
   type AnthropicDocumentOptions,
   type ClaudeRunnerParams,
 } from '../types.js';
-import { removeUndefinedProperties } from '../utils.js';
+import { checkModelName, removeUndefinedProperties } from '../utils.js';
 import { BaseRunner } from './base.js';
 import {
   betaServerToolUseBlockToPart,
@@ -89,6 +88,7 @@ const BETA_APIS = [
   'effort-2025-11-24',
   // 'advanced-tool-use-2025-11-20',
   'structured-outputs-2025-11-13',
+  'task-budgets-2026-03-13',
 ];
 
 /**
@@ -306,10 +306,9 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
     modelName: string,
     request: GenerateRequest<typeof AnthropicConfigSchema>
   ): BetaMessageCreateParamsNonStreaming {
-    const model = KNOWN_CLAUDE_MODELS[modelName];
     const { system, messages } = this.toAnthropicMessages(request.messages);
     const mappedModelName =
-      request.config?.version ?? extractVersion(model, modelName);
+      request.config?.version ?? checkModelName(modelName);
 
     const thinkingConfig = this.toAnthropicThinkingConfig(
       request.config?.thinking
@@ -366,10 +365,9 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
     modelName: string,
     request: GenerateRequest<typeof AnthropicConfigSchema>
   ): BetaMessageCreateParamsStreaming {
-    const model = KNOWN_CLAUDE_MODELS[modelName];
     const { system, messages } = this.toAnthropicMessages(request.messages);
     const mappedModelName =
-      request.config?.version ?? extractVersion(model, modelName);
+      request.config?.version ?? checkModelName(modelName);
 
     const thinkingConfig = this.toAnthropicThinkingConfig(
       request.config?.thinking
@@ -439,6 +437,7 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
         outputTokens: message.usage.output_tokens,
       },
       custom: message,
+      raw: message,
     };
   }
 

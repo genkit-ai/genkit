@@ -169,7 +169,7 @@ class TestDefineDynamicActionProvider:
         assert hasattr(result, 'get_action')
         assert hasattr(result, 'list_action_metadata')
         assert hasattr(result, 'invalidate_cache')
-        assert hasattr(result, 'get_action_metadata_record')
+        assert hasattr(result, 'list_action_metadata_by_key')
 
 
 if __name__ == '__main__':

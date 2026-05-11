@@ -19,9 +19,12 @@ import { genkit, type ActionMetadata } from 'genkit';
 import type { ModelInfo } from 'genkit/model';
 import { describe, it } from 'node:test';
 import anthropic from '../src/index.js';
-import { KNOWN_CLAUDE_MODELS } from '../src/models.js';
+import { TEST_ONLY } from '../src/models.js';
 import { PluginOptions, __testClient } from '../src/types.js';
+
 import { createMockAnthropicClient } from './mocks/anthropic-client.js';
+
+const { KNOWN_MODELS } = TEST_ONLY;
 
 function getModelInfo(
   metadata: ActionMetadata | undefined
@@ -37,7 +40,7 @@ describe('Anthropic Plugin', () => {
       plugins: [anthropic({ [__testClient]: mockClient } as PluginOptions)],
     });
 
-    for (const modelName of Object.keys(KNOWN_CLAUDE_MODELS)) {
+    for (const modelName of Object.keys(KNOWN_MODELS)) {
       const modelPath = `/model/anthropic/${modelName}`;
       const expectedBaseName = `anthropic/${modelName}`;
       const model = await ai.registry.lookupAction(modelPath);
@@ -93,7 +96,7 @@ describe('Anthropic Plugin', () => {
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
     // Test resolving a valid model
-    const validModel = plugin.resolve!('model', 'anthropic/claude-3-5-haiku');
+    const validModel = plugin.resolve!('model', 'anthropic/claude-haiku-4-5');
     assert.ok(validModel, 'Should resolve valid model');
     assert.strictEqual(typeof validModel, 'function');
 
@@ -113,7 +116,7 @@ describe('Anthropic Plugin', () => {
     // Test resolving with invalid action type (using 'tool' as invalid for this context)
     const invalidActionType = plugin.resolve!(
       'tool',
-      'anthropic/claude-3-5-haiku'
+      'anthropic/claude-haiku-4-5'
     );
     assert.strictEqual(
       invalidActionType,
@@ -125,13 +128,13 @@ describe('Anthropic Plugin', () => {
   it('should list available models from API', async () => {
     const mockClient = createMockAnthropicClient({
       modelList: [
-        { id: 'claude-3-5-haiku-20241022', display_name: 'Claude 3.5 Haiku' },
+        { id: 'claude-haiku-4-5', display_name: 'Claude 4.5 Haiku' },
         {
-          id: 'claude-3-5-haiku-latest',
-          display_name: 'Claude 3.5 Haiku Latest',
+          id: 'claude-haiku-4-5-latest',
+          display_name: 'Claude 4.5 Haiku Latest',
         },
-        { id: 'claude-3-5-sonnet-20241022', display_name: 'Claude 3.5 Sonnet' },
-        { id: 'claude-sonnet-4-20250514', display_name: 'Claude 4 Sonnet' },
+        { id: 'claude-sonnet-4-5', display_name: 'Claude 4.5 Sonnet' },
+        { id: 'claude-sonnet-4', display_name: 'Claude 4 Sonnet' },
         { id: 'claude-new-5-20251212', display_name: 'Claude New 5' },
         { id: 'claude-experimental-latest' },
       ],
@@ -148,19 +151,19 @@ describe('Anthropic Plugin', () => {
     const names = models.map((model) => model.name).sort();
     // Models are listed with their full IDs from the API (no normalization)
     assert.ok(
-      names.includes('anthropic/claude-3-5-haiku-20241022'),
+      names.includes('anthropic/claude-haiku-4-5'),
       'Known model should be listed with full model ID from API'
     );
     assert.ok(
-      names.includes('anthropic/claude-3-5-haiku-latest'),
+      names.includes('anthropic/claude-haiku-4-5-latest'),
       'Latest variant should be listed separately'
     );
     assert.ok(
-      names.includes('anthropic/claude-3-5-sonnet-20241022'),
-      'Unknown Claude 3.5 Sonnet should be listed with full model ID'
+      names.includes('anthropic/claude-sonnet-4-5'),
+      'Unknown Claude 4.5 Sonnet should be listed with full model ID'
     );
     assert.ok(
-      names.includes('anthropic/claude-sonnet-4-20250514'),
+      names.includes('anthropic/claude-sonnet-4'),
       'Known Claude Sonnet 4 model should be listed with full model ID'
     );
     assert.ok(
@@ -173,7 +176,7 @@ describe('Anthropic Plugin', () => {
     );
 
     const haikuMetadata = models.find(
-      (model) => model.name === 'anthropic/claude-3-5-haiku-20241022'
+      (model) => model.name === 'anthropic/claude-haiku-4-5'
     );
     assert.ok(haikuMetadata, 'Haiku metadata should exist');
     const haikuInfo = getModelInfo(haikuMetadata);
@@ -200,9 +203,7 @@ describe('Anthropic Plugin', () => {
 
   it('should cache list results on subsequent calls?', async () => {
     const mockClient = createMockAnthropicClient({
-      modelList: [
-        { id: 'claude-3-5-haiku-20241022', display_name: 'Claude 3.5 Haiku' },
-      ],
+      modelList: [{ id: 'claude-haiku-4-5', display_name: 'Claude 4.5 Haiku' }],
     });
 
     const plugin = anthropic({ [__testClient]: mockClient } as PluginOptions);
@@ -238,19 +239,19 @@ describe('Anthropic resolve helpers', () => {
     const mockClient = createMockAnthropicClient();
     const plugin = anthropic({ [__testClient]: mockClient } as PluginOptions);
 
-    const action = plugin.resolve?.('model', 'claude-3-5-haiku');
+    const action = plugin.resolve?.('model', 'claude-haiku-4-5');
     assert.ok(action, 'Should resolve model without prefix');
     assert.strictEqual(typeof action, 'function');
   });
 
   it('anthropic.model should return model reference with config', () => {
-    const reference = anthropic.model('claude-3-5-haiku', {
+    const reference = anthropic.model('claude-haiku-4-5', {
       temperature: 0.25,
     });
 
     const referenceAny = reference as any;
     assert.ok(referenceAny, 'Model reference should be created');
-    assert.ok(referenceAny.name.includes('claude-3-5-haiku'));
+    assert.ok(referenceAny.name.includes('claude-haiku-4-5'));
     assert.strictEqual(referenceAny.config?.temperature, 0.25);
   });
 
@@ -260,7 +261,7 @@ describe('Anthropic resolve helpers', () => {
       [__testClient]: mockClient,
     } as PluginOptions);
 
-    const action = plugin.resolve?.('model', 'anthropic/claude-3-5-haiku');
+    const action = plugin.resolve?.('model', 'anthropic/claude-haiku-4-5');
     assert.ok(action, 'Action should be resolved');
 
     const abortSignal = new AbortController().signal;

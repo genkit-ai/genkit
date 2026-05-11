@@ -15,11 +15,11 @@ from pydantic import BaseModel, Field
 from genkit import (
     Document,
     Genkit,
+    Interrupt,
     Message,
     ModelResponse,
     ModelResponseChunk,
-    ToolRunContext,
-    tool_response,
+    respond_to_interrupt,
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
@@ -390,9 +390,9 @@ async def test_generate_with_interrupting_tools(
         return (input.value or 0) + 7
 
     @ai.tool(name='test_interrupt')
-    async def test_interrupt(input: ToolInput, ctx: ToolRunContext) -> None:
+    async def test_interrupt(input: ToolInput) -> None:
         """The interrupt."""
-        ctx.interrupt({'banana': 'yes please'})
+        raise Interrupt({'banana': 'yes please'})
 
     tool_request_msg = Message(
         Message(
@@ -503,9 +503,9 @@ async def test_generate_with_interrupt_respond(
         return (input.value or 0) + 7
 
     @ai.tool(name='test_interrupt')
-    async def test_interrupt(input: ToolInput, ctx: ToolRunContext) -> None:
+    async def test_interrupt(input: ToolInput) -> None:
         """The interrupt."""
-        ctx.interrupt({'banana': 'yes please'})
+        raise Interrupt({'banana': 'yes please'})
 
     tool_request_msg = Message(
         Message(
@@ -579,10 +579,12 @@ async def test_generate_with_interrupt_respond(
         ),
     ]
 
+    respond_wrapped = respond_to_interrupt({'bar': 2}, interrupt=interrupted_response.interrupts[0])
+    assert isinstance(respond_wrapped, ToolResponsePart)
     response = await ai.generate(
         model='programmableModel',
         messages=interrupted_response.messages,
-        tool_responses=[tool_response(interrupted_response.interrupts[0], {'bar': 2})],
+        resume_respond=[respond_wrapped],
         tools=['test_tool', 'test_interrupt'],
     )
 
@@ -590,11 +592,11 @@ async def test_generate_with_interrupt_respond(
 
     assert response.messages == [
         Message(
-            role='user',
+            role=Role.USER,
             content=[Part(root=TextPart(text='hi'))],
         ),
         Message(
-            role='model',
+            role=Role.MODEL,
             content=[
                 Part(root=TextPart(text='call these tools')),
                 Part(
@@ -606,14 +608,14 @@ async def test_generate_with_interrupt_respond(
                 Part(
                     root=ToolRequestPart(
                         tool_request=ToolRequest(ref='234', name='test_tool', input={'value': 5}),
-                        metadata={'pendingOutput': 12},
+                        metadata=None,
                     )
                 ),
             ],
             metadata=None,
         ),
         Message(
-            role='tool',
+            role=Role.TOOL,
             content=[
                 Part(
                     root=ToolResponsePart(
@@ -631,7 +633,7 @@ async def test_generate_with_interrupt_respond(
             metadata={'resumed': True},
         ),
         Message(
-            role='model',
+            role=Role.MODEL,
             content=[Part(root=TextPart(text='tool called'))],
             metadata=None,
         ),

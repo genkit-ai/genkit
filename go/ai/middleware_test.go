@@ -400,6 +400,28 @@ func TestMiddlewareStreamsAccumulateWithModel(t *testing.T) {
 	if len(chunks) != 2 {
 		t.Fatalf("got %d chunks, want 2", len(chunks))
 	}
+	if chunks[0].Role != RoleModel {
+		t.Errorf("chunks[0].Role = %q, want %q", chunks[0].Role, RoleModel)
+	}
+	if chunks[0].Index != chunks[1].Index {
+		t.Errorf("chunks[0].Index=%d chunks[1].Index=%d; want equal", chunks[0].Index, chunks[1].Index)
+	}
+
+	var midText string
+	if err := chunks[0].Output(&midText); err != nil {
+		t.Fatalf("middleware chunk Output error: %v", err)
+	}
+	if midText != "middleware chunk " {
+		t.Errorf("middleware chunk Output = %q, want %q", midText, "middleware chunk ")
+	}
+
+	var modelText string
+	if err := chunks[1].Output(&modelText); err != nil {
+		t.Fatalf("model chunk Output error: %v", err)
+	}
+	if modelText != "middleware chunk model chunk" {
+		t.Errorf("model chunk Output = %q, want %q", modelText, "middleware chunk model chunk")
+	}
 }
 
 // --- tool contribution: Tools on *Middleware ---
@@ -680,3 +702,39 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 }
 
 var testCtx = context.Background()
+
+// --- middlewareRefArg: lazy reference used by the dotprompt loader ---
+
+func TestConfigsToRefs_StripsLazyAdapter(t *testing.T) {
+	refs, err := configsToRefs([]Middleware{
+		middlewareRefArg{name: "test/foo"},
+		middlewareRefArg{name: "test/bar", config: map[string]any{"k": "v"}},
+		counterConfig{},
+	})
+	assertNoError(t, err)
+	if len(refs) != 3 {
+		t.Fatalf("got %d refs, want 3", len(refs))
+	}
+
+	if refs[0].Name != "test/foo" || refs[0].Config != nil {
+		t.Errorf("name-only adapter: got {Name:%q Config:%v}, want {test/foo nil}", refs[0].Name, refs[0].Config)
+	}
+
+	cfg, ok := refs[1].Config.(map[string]any)
+	if refs[1].Name != "test/bar" || !ok || cfg["k"] != "v" {
+		t.Errorf("adapter with config: got {Name:%q Config:%v}, want {test/bar map[k:v]}", refs[1].Name, refs[1].Config)
+	}
+
+	if _, ok := refs[2].Config.(Middleware); !ok {
+		t.Errorf("regular middleware ref: Config should retain Middleware value for fast path, got %T", refs[2].Config)
+	}
+}
+
+func TestMiddlewareRefArg_NewErrors(t *testing.T) {
+	// Defensive: configsToRefs strips the adapter, so resolveRefs should
+	// never call New on it. If routing ever regresses, fail loudly instead
+	// of silently producing nil hooks.
+	if _, err := (middlewareRefArg{name: "x"}).New(testCtx); err == nil {
+		t.Fatal("expected middlewareRefArg.New to return an error")
+	}
+}

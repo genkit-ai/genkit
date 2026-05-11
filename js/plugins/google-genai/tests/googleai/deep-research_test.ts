@@ -96,7 +96,7 @@ describe('Deep Research', () => {
       assert.deepStrictEqual(body.response_modalities, ['text', 'image']);
     });
 
-    it('passes thinkingSummaries to the API', async () => {
+    it('passes agent_config options to the API', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -107,6 +107,8 @@ describe('Deep Research', () => {
         ...minimalRequest,
         config: {
           thinkingSummaries: 'AUTO',
+          visualization: 'AUTO',
+          collaborativePlanning: true,
         },
       };
 
@@ -119,6 +121,8 @@ describe('Deep Research', () => {
       assert.deepStrictEqual(body.agent_config, {
         type: 'deep-research',
         thinking_summaries: 'auto',
+        visualization: 'auto',
+        collaborative_planning: true,
       });
     });
 
@@ -361,7 +365,7 @@ describe('Deep Research', () => {
       });
     });
 
-    it('passes through arbitrary config like fileSearch', async () => {
+    it('passes through arbitrary config', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -371,9 +375,8 @@ describe('Deep Research', () => {
       const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
         ...minimalRequest,
         config: {
-          fileSearch: {
-            fileSearchStoreNames: ['stores/123'],
-            metadataFilter: 'foo=bar',
+          someArbitraryConfig: {
+            foo: 'bar',
           },
         } as any,
       };
@@ -384,10 +387,61 @@ describe('Deep Research', () => {
       const options = fetchStub.lastCall.args[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.fileSearch, {
-        fileSearchStoreNames: ['stores/123'],
-        metadataFilter: 'foo=bar',
+      assert.deepStrictEqual(body.someArbitraryConfig, {
+        foo: 'bar',
       });
+    });
+
+    it('maps built-in tools into the tools array', async () => {
+      const model = defineModel(
+        'deep-research-pro-preview-12-2025',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
+        ...minimalRequest,
+        config: {
+          googleSearch: true,
+          urlContext: true,
+          codeExecution: true,
+          fileSearch: {
+            fileSearchStoreNames: ['stores/123'],
+          },
+          mcpServers: [
+            {
+              name: 'MyServer',
+              url: 'http://localhost:8080',
+              headers: { Authorization: 'Bearer token' },
+              allowedTools: ['tool1', 'tool2'],
+            },
+          ],
+        },
+      };
+
+      await model.start(request);
+
+      sinon.assert.calledOnce(fetchStub);
+      const options = fetchStub.lastCall.args[1];
+      const body = JSON.parse(options.body);
+
+      assert.strictEqual(body.fileSearch, undefined);
+      assert.deepStrictEqual(body.tools, [
+        { type: 'google_search' },
+        { type: 'url_context' },
+        { type: 'code_execution' },
+        {
+          type: 'file_search',
+          file_search_store_names: ['stores/123'],
+        },
+        {
+          type: 'mcp_server',
+          name: 'MyServer',
+          url: 'http://localhost:8080',
+          headers: { Authorization: 'Bearer token' },
+          allowed_tools: ['tool1', 'tool2'],
+        },
+      ]);
     });
 
     it('handles 200 response for cancellation request', async () => {

@@ -197,7 +197,7 @@ export class Registry {
     const parsedKey = parseRegistryKey(key);
     if (parsedKey?.dynamicActionHost) {
       const hostId = `/dynamic-action-provider/${parsedKey.dynamicActionHost}`;
-      const dap = await this.actionsById[hostId];
+      const dap = await this.lookupAction(hostId);
       if (!dap || !isDynamicActionProvider(dap)) {
         return [];
       }

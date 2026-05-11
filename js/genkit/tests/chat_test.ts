@@ -676,3 +676,68 @@ describe('preamble', () => {
     ]);
   });
 });
+
+describe('session state', () => {
+  let ai: Genkit;
+
+  beforeEach(() => {
+    ai = genkit({
+      model: 'echoModel',
+    });
+    defineEchoModel(ai);
+  });
+
+  it('properly patches partial state updates', async () => {
+    const session = ai.createSession({
+      initialState: { userName: 'John', color: 'Blue', age: 25 },
+    });
+
+    // Update single property
+    await session.updateState({ color: 'Green' });
+    assert.deepStrictEqual(
+      session.state,
+      { userName: 'John', color: 'Green', age: 25 },
+      'should preserve existing properties when updating a single field'
+    );
+
+    // Update multiple properties
+    await session.updateState({ userName: 'Jane', color: 'red', age: 26 });
+    assert.deepStrictEqual(
+      session.state,
+      { userName: 'Jane', color: 'red', age: 26 },
+      'should preserve non-updated properties when updating multiple fields'
+    );
+
+    // Update with undefined state
+    const emptySession = ai.createSession();
+    await emptySession.updateState({ newProp: 'value' });
+    assert.deepStrictEqual(
+      emptySession.state,
+      { newProp: 'value' },
+      'should handle updates when initial state is undefined'
+    );
+  });
+
+  it('maintains state across chat messages', async () => {
+    const session = ai.createSession({
+      initialState: { userName: 'Pavel' },
+    });
+
+    const chat = session.chat();
+    await chat.send('hi');
+
+    assert.deepStrictEqual(
+      session.state,
+      { userName: 'Pavel' },
+      'should preserve state between chat messages'
+    );
+    await session.updateState({ userName: 'Jacob' });
+
+    await chat.send('bye');
+    assert.deepStrictEqual(
+      session.state,
+      { userName: 'Jacob' },
+      'state should remain stable after chat messages'
+    );
+  });
+});

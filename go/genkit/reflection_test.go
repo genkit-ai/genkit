@@ -152,6 +152,40 @@ func TestServeMux(t *testing.T) {
 		}
 	})
 
+	t.Run("list actions resolves schema references", func(t *testing.T) {
+		core.DefineSchema(g.reg, "AgentRequest", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+			},
+		})
+		core.DefineAction(g.reg, "test/withRef", api.ActionTypeCustom, nil,
+			core.SchemaRef("AgentRequest"),
+			func(ctx context.Context, in any) (any, error) { return nil, nil })
+
+		res, err := http.Get(ts.URL + "/api/actions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+
+		var actions map[string]api.ActionDesc
+		if err := json.NewDecoder(res.Body).Decode(&actions); err != nil {
+			t.Fatal(err)
+		}
+
+		desc, ok := actions["/custom/test/withRef"]
+		if !ok {
+			t.Fatal("action /custom/test/withRef not found in response")
+		}
+		if _, hasRef := desc.InputSchema["$ref"]; hasRef {
+			t.Errorf("InputSchema still contains $ref, expected resolved schema: %v", desc.InputSchema)
+		}
+		if got, want := desc.InputSchema["type"], "object"; got != want {
+			t.Errorf("InputSchema type = %v, want %v", got, want)
+		}
+	})
+
 	t.Run("run action", func(t *testing.T) {
 		tests := []struct {
 			name       string

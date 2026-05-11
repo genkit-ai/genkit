@@ -424,7 +424,7 @@ The Python samples are intentionally short and beginner-friendly. Use this table
 | `middleware` | Middleware | Observe or modify model requests with `use=[...]` |
 | `output-formats` | Structured Output | Text, enum, JSON object, array, and JSONL outputs |
 | `prompts` | Prompt, Dotprompt | Use `.prompt` files, helpers, variants, and streaming |
-| `tool-interrupts` | Tool | Pause tool execution for human approval |
+| `tool-interrupts` | Tool | Trivia (`respond_example.py`) and bank approval (`approval_example.py`) for interrupt / resume |
 | `tracing` | Tracing | Watch spans appear in the Dev UI as they start |
 | `vertexai-imagen` | Vertex AI, Image Generation | Generate an image with Vertex AI Imagen |
 

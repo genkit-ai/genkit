@@ -103,6 +103,7 @@ describe('start command', () => {
       corsOrigin: undefined,
       experimentalReflectionV2: undefined,
       reflectionV2Port: 3200,
+      telemetryServerUrl: 'http://localhost:4033',
     });
     expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
     expect(startServerSpy).toHaveBeenCalled();
