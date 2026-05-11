@@ -24,13 +24,14 @@ features by seamlessly switching to backup models.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Any, cast
 
 from pydantic import Field
 
 from genkit import GenkitError
-from genkit._core._action import ActionKind
+from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
+from genkit._core._protocols import RegistryLike
 from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
@@ -59,12 +60,33 @@ class Fallback(BaseMiddleware):
     If ``models`` is empty and the primary fails with a retryable status, the original
     error is re-raised unchanged.
 
-    ``self._registry`` is injected at resolve time so model lookup works whether
-    Fallback is passed inline or registered via ``middleware_plugin``.
+    Fallback names are resolved on the **same call-scoped registry** as the rest of the
+    ``generate()`` pipeline (the engine attaches it when your ``Fallback`` instance runs
+    inside ``use=[...]``). Constructing ``Fallback`` outside an active generate call means
+    no registry is available and fallback cannot look up models.
     """
 
     models: list[str] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_FALLBACK_STATUSES))
+
+    async def _resolve_fallback_model(self, model_name: str) -> Action[Any, Any, Any]:
+        """Look up a fallback model action via the pipeline registry."""
+        reg: RegistryLike | None = self._registry
+        if reg is None:
+            raise GenkitError(
+                status='INTERNAL',
+                message=(
+                    'Cannot look up fallback models: this middleware is not running inside '
+                    'an active generate() call. Pass Fallback in ai.generate(..., use=[...]).'
+                ),
+            )
+        action = await reg.resolve_action(ActionKind.MODEL, model_name)
+        if action is None:
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f'No model named "{model_name}" is registered on this app.',
+            )
+        return action
 
     async def wrap_model(
         self,
@@ -80,26 +102,12 @@ class Fallback(BaseMiddleware):
                 raise
             last_error = exc
 
-        if not self._registry:
-            raise GenkitError(
-                status='INTERNAL',
-                message=(
-                    'Fallback middleware requires registry access. '
-                    'Ensure it is resolved via generate(use=[...]) or registered with middleware_plugin.'
-                ),
-            )
-
         assert last_error is not None  # noqa: S101
         # Pass the streaming callback through so fallback models can stream
         # to the same caller as the primary model would have.
         on_chunk = cast(Callable[[object], None], params.on_chunk) if params.on_chunk else None
         for model_name in self.models:
-            fallback_action = await self._registry.resolve_action(ActionKind.MODEL, model_name)
-            if fallback_action is None:
-                raise GenkitError(
-                    status='NOT_FOUND',
-                    message=f'Fallback model "{model_name}" not found in registry.',
-                )
+            fallback_action = await self._resolve_fallback_model(model_name)
             try:
                 result = await fallback_action.run(
                     input=params.request,

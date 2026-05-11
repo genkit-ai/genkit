@@ -27,6 +27,7 @@ import asyncio
 import math
 import random
 from collections.abc import Awaitable, Callable
+
 from pydantic import Field
 
 from genkit import GenkitError
@@ -71,9 +72,6 @@ class Retry(BaseMiddleware):
         """Retry the model call up to max_retries times on transient failures."""
         current_delay_ms = float(self.initial_delay_ms)
 
-        # ``range(max_retries + 1)`` always yields at least one attempt thanks to
-        # ``Field(ge=0)`` on ``max_retries``, so the loop returns or raises before
-        # falling out — no unreachable-arm needed.
         for attempt in range(self.max_retries + 1):
             try:
                 return await next_fn(params)

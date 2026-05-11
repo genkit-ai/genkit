@@ -43,17 +43,12 @@ dependencies = [
   "genkit>=0.5.2",
   "pyyaml>=6.0",
 ]
-description = "Genkit middleware plugin: retry, fallback, tool_approval, skills, filesystem"
+description = "A collection of middleware implementations for Genkit."
 keywords = [
   "genkit",
   "ai",
   "llm",
   "middleware",
-  "retry",
-  "fallback",
-  "tools",
-  "skills",
-  "filesystem",
 ]
 license = "Apache-2.0"
 name = "genkit-plugin-middleware"

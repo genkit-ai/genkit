@@ -24,13 +24,19 @@ Provides concrete middleware implementations:
 - ``Skills``       — exposes a SKILL.md library as system prompts + ``use_skill`` tool
 - ``Filesystem``   — sandboxed filesystem operations (list/read/write/edit)
 
-Quick start — register all five at once:
+Import the classes you need and pass instances into ``use=[...]``:
 
-    from genkit.plugins.middleware import Middleware
+    from genkit.plugins.middleware import Retry, Fallback
 
-    ai = Genkit(plugins=[Middleware()])
+    response = await ai.generate(
+        prompt='Hello',
+        use=[Retry(max_retries=5), Fallback(models=['googleai/gemini-2.5-pro'])],
+    )
+
+Or register all five with the ``Middleware`` plugin so they appear in the Dev UI.
 """
 
+from genkit.middleware import MiddlewareDesc
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, new_middleware
 from genkit.plugins.middleware._fallback import Fallback
 from genkit.plugins.middleware._filesystem import Filesystem
@@ -42,32 +48,38 @@ from genkit.plugins.middleware._tool_approval import ToolApproval
 class Middleware(Plugin):
     """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
-    Registers all five middleware descriptors so they can be referenced by name
-    in ``generate(use=[MiddlewareRef(...)])`` calls and from the Dev UI.
+    Registers all five middleware descriptors so they show up in the Dev UI.
 
-    ``Filesystem`` has no default root: supply ``root_dir`` in the ref config
-    (or pass a ``Filesystem(root_dir=...)`` instance inline). Resolving
-    ``Filesystem`` with empty config raises a validation error.
+    ``Filesystem`` has no default root: supply ``root_dir`` when constructing
+    an instance (e.g. ``Filesystem(root_dir='./workspace')``).
 
     Usage::
 
+        from genkit.plugins.middleware import Middleware, Retry, Skills
+
         ai = Genkit(plugins=[GoogleAI(), Middleware()])
-        # Then reference by name in generate():
-        await ai.generate(use=[MiddlewareRef(name='retry', config={'max_retries': 5})])
+        await ai.generate(
+            prompt='Hello',
+            use=[Retry(max_retries=5), Skills(skill_paths=['skills'])],
+        )
     """
 
     name = 'genkit-middleware'
 
     async def init(self) -> list[Action]:
+        """No actions to register; this plugin only contributes middleware."""
         return []
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """No dynamic actions to resolve."""
         return None
 
     async def list_actions(self) -> list[ActionMetadata]:
+        """No actions to list."""
         return []
 
-    def list_middleware(self):
+    def list_middleware(self) -> list[MiddlewareDesc]:
+        """Return descriptors for all middleware exposed by this plugin."""
         return [
             new_middleware(Retry),
             new_middleware(Fallback),
