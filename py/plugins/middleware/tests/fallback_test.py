@@ -30,16 +30,26 @@ from genkit.plugins.middleware import Fallback
 def _make_params() -> ModelHookParams:
     return ModelHookParams(
         request=ModelRequest(messages=[]),
-        registry=Registry(),
         on_chunk=None,
         context={},
     )
 
 
+def _make_fallback(**kwargs) -> Fallback:
+    """Return a Fallback with framework-bound ``self.registry`` set.
+
+    The engine binds ``self.registry`` before any hook fires in production;
+    direct unit tests have to simulate that step explicitly.
+    """
+    fb = Fallback(**kwargs)
+    fb.registry = Registry()
+    return fb
+
+
 @pytest.mark.asyncio
 async def test_fallback_success_on_first_model() -> None:
     """Test that successful primary model calls pass through."""
-    fallback = Fallback(models=['model2', 'model3'])
+    fallback = _make_fallback(models=['model2', 'model3'])
 
     async def next_fn(params):
         return ModelResponse(message=None)
@@ -51,7 +61,7 @@ async def test_fallback_success_on_first_model() -> None:
 @pytest.mark.asyncio
 async def test_fallback_on_retryable_error() -> None:
     """Test that retryable errors are classified correctly."""
-    fallback = Fallback(models=['model2'])
+    fallback = _make_fallback(models=['model2'])
 
     async def next_fn(params) -> NoReturn:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
@@ -63,7 +73,7 @@ async def test_fallback_on_retryable_error() -> None:
 @pytest.mark.asyncio
 async def test_fallback_non_retryable_error() -> None:
     """Test that non-retryable errors fail immediately."""
-    fallback = Fallback(models=['model2'])
+    fallback = _make_fallback(models=['model2'])
 
     async def next_fn(params) -> NoReturn:
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
@@ -75,7 +85,7 @@ async def test_fallback_non_retryable_error() -> None:
 @pytest.mark.asyncio
 async def test_fallback_non_genkit_error() -> None:
     """Test that non-GenkitError exceptions fail immediately."""
-    fallback = Fallback(models=['model2'])
+    fallback = _make_fallback(models=['model2'])
 
     async def next_fn(params) -> NoReturn:
         raise ConnectionError('Network failure')

@@ -82,7 +82,6 @@ class ConciseReplyMiddleware(BaseMiddleware):
         return await next_fn(
             ModelHookParams(
                 request=new_req,
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
