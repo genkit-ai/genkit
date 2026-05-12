@@ -16,7 +16,11 @@
 
 import { z } from 'zod';
 import { MessageSchema, ModelResponseChunkSchema } from './model';
-import { PartSchema } from './parts';
+import {
+  PartSchema,
+  ToolRequestPartSchema,
+  ToolResponsePartSchema,
+} from './parts';
 
 /**
  * Zod schema for an artifact produced during a session.
@@ -55,17 +59,17 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  * - `pending`: a detached invocation is still processing the queued inputs.
  *   The snapshot's state is empty until the flow exits, at which point it
  *   is rewritten with the cumulative final state and a terminal status.
- * - `complete`: the snapshot captures a settled state.
- * - `canceled`: the snapshot's invocation was aborted via the
+ * - `succeeded`: the snapshot captures a settled state.
+ * - `aborted`: the snapshot's invocation was aborted via the
  *   `abortSnapshot` companion action while detached.
- * - `error`: the invocation terminated with an error. The snapshot's `error`
+ * - `failed`: the invocation terminated with an error. The snapshot's `error`
  *   field describes the failure and resume is rejected with that same error.
  */
 export const SnapshotStatusSchema = z.enum([
   'pending',
-  'complete',
-  'canceled',
-  'error',
+  'succeeded',
+  'aborted',
+  'failed',
 ]);
 export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
 
@@ -98,8 +102,13 @@ export const AgentInputSchema = z.object({
   detach: z.boolean().optional(),
   /** User's input messages for this turn. */
   messages: z.array(MessageSchema).optional(),
-  /** Tool request parts to re-execute interrupted tools. */
-  toolRestarts: z.array(PartSchema).optional(),
+  /** Options for resuming an interrupted generation. */
+  resume: z
+    .object({
+      respond: z.array(ToolResponsePartSchema).optional(),
+      restart: z.array(ToolRequestPartSchema).optional(),
+    })
+    .optional(),
 });
 export type AgentInput = z.infer<typeof AgentInputSchema>;
 
@@ -195,24 +204,10 @@ export const SnapshotMetadataSchema = z.object({
   event: SnapshotEventSchema,
   /** Lifecycle state of this snapshot. Empty is treated as `complete`. */
   status: SnapshotStatusSchema.optional(),
-  /** Failure message for a snapshot in `error` status. */
-  error: z.string().optional(),
+  /** Structured failure information for a snapshot in `error` status. */
+  error: z.any().optional(),
 });
 export type SnapshotMetadata = z.infer<typeof SnapshotMetadataSchema>;
-
-/**
- * Zod schema for a persisted point-in-time capture of session state.
- */
-export const SessionSnapshotSchema = SnapshotMetadataSchema.extend({
-  /**
-   * Conversation state. Empty on a pending snapshot (the live state is
-   * not yet committed; the background invocation is still processing
-   * queued inputs); populated on terminal snapshots with the cumulative
-   * final state.
-   */
-  state: SessionStateSchema,
-});
-export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
 /**
  * Zod schema for the input of an agent's `getSnapshot` companion action.
@@ -239,8 +234,8 @@ export const GetSnapshotResponseSchema = z.object({
   updatedAt: z.string().optional(),
   /** Lifecycle state of the snapshot. */
   status: SnapshotStatusSchema.optional(),
-  /** Populated when status is `error`. */
-  error: z.string().optional(),
+  /** Structured failure information; populated when status is `error`. */
+  error: z.any().optional(),
   /**
    * Session state captured by the snapshot, after any configured transform.
    * Empty when status is `pending` or `error`.
@@ -281,9 +276,9 @@ export type AbortSnapshotResponse = z.infer<typeof AbortSnapshotResponseSchema>;
  * - `client`: no store; state flows through the agent's invocation init
  *   and output payloads.
  */
-export const AgentMetadataStateManagementSchema = z.enum(['server', 'client']);
-export type AgentMetadataStateManagement = z.infer<
-  typeof AgentMetadataStateManagementSchema
+export const AgentStateManagementSchema = z.enum(['server', 'client']);
+export type AgentStateManagement = z.infer<
+  typeof AgentStateManagementSchema
 >;
 
 /**
@@ -295,7 +290,7 @@ export type AgentMetadataStateManagement = z.infer<
  */
 export const AgentMetadataSchema = z.object({
   /** Who owns session state for this agent. */
-  stateManagement: AgentMetadataStateManagementSchema,
+  stateManagement: AgentStateManagementSchema,
   /**
    * Whether the agent's invocations can be aborted. True only when the
    * configured store implements the abort lifecycle.

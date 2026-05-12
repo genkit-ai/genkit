@@ -531,8 +531,8 @@ func DefinePromptAgent[State, PromptIn any](
 // minor version release.
 //
 // The provided function fn receives a [aix.Responder] for streaming output
-// to the client and an [aix.AgentSession] for accessing conversation state.
-// Call [aix.AgentSession.Run] to enter the turn loop, which blocks until the
+// to the client and an [aix.SessionRunner] for accessing conversation state.
+// Call [aix.SessionRunner.Run] to enter the turn loop, which blocks until the
 // client sends the next message.
 //
 // For agents backed by a prompt, use [DefineAgent] (inline) or
@@ -551,7 +551,7 @@ func DefinePromptAgent[State, PromptIn any](
 // Example:
 //
 //	chatAgent := genkit.DefineCustomAgent(g, "chat",
-//		func(ctx context.Context, resp aix.Responder[any], sess *aix.AgentSession[any]) (*aix.AgentResult, error) {
+//		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 //			var lastMessage *ai.Message
 //			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) error {
 //				for result, err := range genkit.GenerateStream(ctx, g,

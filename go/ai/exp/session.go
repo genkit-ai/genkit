@@ -33,35 +33,6 @@ import (
 
 // --- Snapshot ---
 
-// SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
-// written for synchronous turns or invocations are always [SnapshotStatusComplete]
-// (an empty value is also treated as complete for backwards compatibility).
-//
-// When a client sets [AgentInput.Detach], the server writes a single
-// snapshot with [SnapshotStatusPending] (and empty state) and returns its
-// ID immediately. Background processing then either rewrites that snapshot
-// with the cumulative final state and [SnapshotStatusComplete] /
-// [SnapshotStatusError] when the agent finishes, or with
-// [SnapshotStatusCanceled] if the client called abortSnapshot in the
-// meantime.
-type SnapshotStatus string
-
-const (
-	// SnapshotStatusPending indicates a detached invocation is still
-	// processing the queued inputs. The snapshot will be rewritten with a
-	// terminal status once the flow exits.
-	SnapshotStatusPending SnapshotStatus = "pending"
-	// SnapshotStatusComplete indicates the snapshot captures a settled state.
-	SnapshotStatusComplete SnapshotStatus = "complete"
-	// SnapshotStatusCanceled indicates the snapshot's invocation was
-	// aborted via the abortSnapshot companion action while detached.
-	SnapshotStatusCanceled SnapshotStatus = "canceled"
-	// SnapshotStatusError indicates the invocation terminated with an error.
-	// The snapshot's Error field describes the failure and resume is
-	// rejected with that same error.
-	SnapshotStatusError SnapshotStatus = "error"
-)
-
 // SessionSnapshot is a persisted point-in-time capture of session state.
 type SessionSnapshot[State any] struct {
 	// SnapshotID is the unique identifier for this snapshot (UUID).
@@ -70,23 +41,23 @@ type SessionSnapshot[State any] struct {
 	ParentID string `json:"parentId,omitempty"`
 	// CreatedAt is when the snapshot was created.
 	CreatedAt time.Time `json:"createdAt"`
-	// UpdatedAt is when the snapshot was last written. For pending snapshots
-	// it equals CreatedAt; once the snapshot is finalized it reflects the
-	// terminal write.
+	// UpdatedAt is when the snapshot was last written. For pending
+	// snapshots it equals CreatedAt; once the snapshot is finalized it
+	// reflects the terminal write.
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 	// Event is what triggered this snapshot.
 	Event SnapshotEvent `json:"event"`
 	// Status is the lifecycle state of this snapshot. Empty is treated as
-	// [SnapshotStatusComplete] for backwards compatibility.
+	// [SnapshotStatusSucceeded] for backwards compatibility.
 	Status SnapshotStatus `json:"status,omitempty"`
-	// Error is the failure message for a snapshot in [SnapshotStatusError].
-	// Empty otherwise.
-	Error string `json:"error,omitempty"`
-	// State is the actual conversation state. Empty on a pending snapshot
-	// (the live state is not yet committed; the background invocation is
-	// still processing queued inputs); populated on terminal snapshots
-	// with the cumulative final state.
-	State SessionState[State] `json:"state"`
+	// Error is the structured failure information for a snapshot in
+	// [SnapshotStatusFailed]. Nil otherwise.
+	Error *core.GenkitError `json:"error,omitempty"`
+	// State is the conversation state captured at this point. Nil on a
+	// pending snapshot (the live state is not yet committed; the
+	// background invocation is still processing queued inputs); populated
+	// on terminal snapshots with the cumulative final state.
+	State *SessionState[State] `json:"state,omitempty"`
 }
 
 // SnapshotContext provides context for snapshot decision callbacks.
@@ -117,27 +88,6 @@ func applyTransform[State any](ctx context.Context, t StateTransform[State], sta
 
 // --- Session store ---
 
-// SnapshotMetadata is the metadata-only projection of a [SessionSnapshot]:
-// identifying fields, lifecycle timestamps, and status. Returned by store
-// operations that surface a snapshot's lifecycle state without paying for
-// a full state read.
-type SnapshotMetadata struct {
-	// SnapshotID is the unique identifier for this snapshot.
-	SnapshotID string `json:"snapshotId"`
-	// ParentID is the ID of the previous snapshot in this timeline.
-	ParentID string `json:"parentId,omitempty"`
-	// CreatedAt is when the snapshot was first written.
-	CreatedAt time.Time `json:"createdAt"`
-	// UpdatedAt is when the snapshot was last written.
-	UpdatedAt time.Time `json:"updatedAt,omitempty"`
-	// Event is what triggered this snapshot.
-	Event SnapshotEvent `json:"event"`
-	// Status is the lifecycle state of this snapshot.
-	Status SnapshotStatus `json:"status,omitempty"`
-	// Error is the failure message for a snapshot in [SnapshotStatusError].
-	Error string `json:"error,omitempty"`
-}
-
 // SnapshotReader retrieves snapshots. The minimum any session store must
 // implement to be used with [WithSessionStore].
 type SnapshotReader[State any] interface {
@@ -159,7 +109,7 @@ type SnapshotWriter[State any] interface {
 	//     from the existing row on update.
 	//   - UpdatedAt: stamped to the wall clock on every commit.
 	//   - Status: if the snapshot returned by fn has Status="", it is
-	//     defaulted to [SnapshotStatusComplete] (the common case for
+	//     defaulted to [SnapshotStatusSucceeded] (the common case for
 	//     synchronous turn-end and invocation-end writes). Callers
 	//     writing a pending row must set Status explicitly.
 	//
@@ -176,7 +126,7 @@ type SnapshotWriter[State any] interface {
 	// populated), or nil if fn declined to write.
 	SaveSnapshot(
 		ctx context.Context,
-		id string,
+		snapshotID string,
 		fn func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error),
 	) (*SessionSnapshot[State], error)
 }
@@ -187,7 +137,7 @@ type SnapshotWriter[State any] interface {
 // function:
 //
 //   - [SnapshotAborter.AbortSnapshot] flips a pending snapshot's status
-//     to canceled (typically called by the abortSnapshot companion
+//     to aborted (typically called by the abortSnapshot companion
 //     action or directly by a Go caller holding the store).
 //
 //   - [SnapshotAborter.OnSnapshotStatusChange] lets the agent runtime
@@ -201,7 +151,7 @@ type SnapshotWriter[State any] interface {
 // "implemented one, not the other" footgun too easy to hit.
 type SnapshotAborter interface {
 	// AbortSnapshot atomically transitions a snapshot from
-	// [SnapshotStatusPending] to [SnapshotStatusCanceled] and returns the
+	// [SnapshotStatusPending] to [SnapshotStatusAborted] and returns the
 	// resulting metadata. If the snapshot is in any other status the
 	// operation is a no-op and the existing metadata is returned. Returns
 	// nil if the snapshot is not found.
@@ -265,7 +215,7 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 	return copySnapshot(snap)
 }
 
-// AbortSnapshot atomically flips a pending snapshot to canceled. If the
+// AbortSnapshot atomically flips a pending snapshot to aborted. If the
 // snapshot is already terminal the existing metadata is returned unchanged.
 // Returns nil if the snapshot is not found.
 func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (*SnapshotMetadata, error) {
@@ -276,7 +226,7 @@ func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotI
 		return nil, nil
 	}
 	if snap.Status == SnapshotStatusPending {
-		snap.Status = SnapshotStatusCanceled
+		snap.Status = SnapshotStatusAborted
 		snap.UpdatedAt = time.Now()
 		s.notifyLocked(snapshotID, snap.Status)
 	}
@@ -325,7 +275,7 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	}
 	next.UpdatedAt = now
 	if next.Status == "" {
-		next.Status = SnapshotStatusComplete
+		next.Status = SnapshotStatusSucceeded
 	}
 
 	copied, err := copySnapshot(next)
@@ -427,56 +377,6 @@ func copySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[Sta
 
 // --- Snapshot companion actions ---
 
-// GetSnapshotRequest is the input for an agent's getSnapshot companion
-// action. The action is registered at `{agentName}/getSnapshot` when the
-// agent is defined and is intended for Dev UI and client-side reconnect
-// flows.
-type GetSnapshotRequest struct {
-	// SnapshotID identifies the snapshot to fetch.
-	SnapshotID string `json:"snapshotId"`
-}
-
-// GetSnapshotResponse is the output of the getSnapshot companion action. It
-// is a client-facing view of the stored snapshot: identifying metadata plus
-// the session state, with [WithStateTransform] applied if configured.
-//
-// Unlike the raw [SessionSnapshot], this response intentionally omits
-// internal fields (parent ID, event) and does not leak the snapshot
-// envelope beyond what callers need to repopulate a UI.
-type GetSnapshotResponse[State any] struct {
-	// SnapshotID echoes the requested snapshot ID.
-	SnapshotID string `json:"snapshotId"`
-	// CreatedAt is when the snapshot record was first written.
-	CreatedAt time.Time `json:"createdAt,omitempty"`
-	// UpdatedAt is when the snapshot record was last written. Equals
-	// CreatedAt for snapshots that have not been rewritten.
-	UpdatedAt time.Time `json:"updatedAt,omitempty"`
-	// Status is the lifecycle state of the snapshot. See [SnapshotStatus].
-	Status SnapshotStatus `json:"status,omitempty"`
-	// Error is populated when Status is [SnapshotStatusError].
-	Error string `json:"error,omitempty"`
-	// State is the session state captured by the snapshot, after any
-	// configured transform. Empty when Status is pending or error.
-	State *SessionState[State] `json:"state,omitempty"`
-}
-
-// AbortSnapshotRequest is the input for the abortSnapshot companion action.
-type AbortSnapshotRequest struct {
-	// SnapshotID identifies the snapshot whose invocation should be aborted.
-	SnapshotID string `json:"snapshotId"`
-}
-
-// AbortSnapshotResponse is the output of the abortSnapshot companion action.
-type AbortSnapshotResponse struct {
-	// SnapshotID echoes the requested snapshot ID.
-	SnapshotID string `json:"snapshotId"`
-	// Status is the snapshot's status after the abort attempt. For a
-	// pending snapshot this is [SnapshotStatusCanceled]. For an
-	// already-terminal snapshot this is the existing terminal status (the
-	// abort is a no-op).
-	Status SnapshotStatus `json:"status,omitempty"`
-}
-
 // registerSnapshotActions registers the agent's companion actions:
 //
 //   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
@@ -515,7 +415,7 @@ func registerSnapshotActions[State any](
 
 			status := snap.Status
 			if status == "" {
-				status = SnapshotStatusComplete
+				status = SnapshotStatusSucceeded
 			}
 			updatedAt := snap.UpdatedAt
 			if updatedAt.IsZero() {
@@ -529,8 +429,8 @@ func registerSnapshotActions[State any](
 				Status:     status,
 				Error:      snap.Error,
 			}
-			if status != SnapshotStatusError && status != SnapshotStatusPending {
-				resp.State = applyTransform(ctx, transform, &snap.State)
+			if status != SnapshotStatusFailed && status != SnapshotStatusPending {
+				resp.State = applyTransform(ctx, transform, snap.State)
 			}
 			return resp, nil
 		})

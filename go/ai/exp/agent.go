@@ -35,20 +35,20 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 )
 
-// --- AgentSession ---
+// --- SessionRunner ---
 
-// AgentSession extends Session with agent-runtime functionality:
+// SessionRunner extends Session with agent-runtime functionality:
 // turn management, snapshot persistence, and input channel handling.
-type AgentSession[State any] struct {
+type SessionRunner[State any] struct {
 	*Session[State]
 
 	// InputCh is the channel that delivers per-turn inputs from the client.
-	// It is consumed automatically by [AgentSession.Run], but is exposed
+	// It is consumed automatically by [SessionRunner.Run], but is exposed
 	// for advanced use cases that need direct access to the input stream
 	// (e.g., custom turn loops or fan-out patterns).
 	InputCh <-chan *AgentInput
 	// TurnIndex is the zero-based index of the current conversation turn.
-	// It is incremented automatically by [AgentSession.Run], but is exposed
+	// It is incremented automatically by [SessionRunner.Run], but is exposed
 	// for advanced use cases that need to track or manipulate turn ordering
 	// directly.
 	TurnIndex int
@@ -69,7 +69,7 @@ type AgentSession[State any] struct {
 // parentSnapshotID returns the ID of the most recent snapshot in this
 // invocation (used to chain new snapshots via ParentID), or "" if no
 // snapshot has been written yet.
-func (s *AgentSession[State]) parentSnapshotID() string {
+func (s *SessionRunner[State]) parentSnapshotID() string {
 	if s.lastSnapshot == nil {
 		return ""
 	}
@@ -80,7 +80,7 @@ func (s *AgentSession[State]) parentSnapshotID() string {
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
 // TurnEnd chunk is sent and a snapshot check is triggered.
-func (s *AgentSession[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) error) error {
+func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) error) error {
 	for input := range s.InputCh {
 		spanMeta := &tracing.SpanMetadata{
 			Name:    fmt.Sprintf("agent/turn/%d", s.TurnIndex),
@@ -112,7 +112,7 @@ func (s *AgentSession[State]) Run(ctx context.Context, fn func(ctx context.Conte
 // the last message in the conversation history and all artifacts.
 // It is a convenience for custom agents that don't need to construct the
 // result manually.
-func (s *AgentSession[State]) Result() *AgentResult {
+func (s *SessionRunner[State]) Result() *AgentResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -137,7 +137,7 @@ func (s *AgentSession[State]) Result() *AgentResult {
 // the turn-end snapshot — the pending row already captures the
 // invocation and a single finalize rewrite will record the cumulative
 // state once the queued inputs drain.
-func (s *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
+func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
 	if event == SnapshotEventTurnEnd && s.intake != nil {
 		if suspended := s.intake.beginTurnEnd(); suspended {
 			return ""
@@ -164,7 +164,7 @@ func (s *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotE
 	if s.snapshotCallback != nil {
 		var prevState *SessionState[State]
 		if s.lastSnapshot != nil {
-			prevState = &s.lastSnapshot.State
+			prevState = s.lastSnapshot.State
 		}
 		if !s.snapshotCallback(ctx, &SnapshotContext[State]{
 			State:     &currentState,
@@ -183,8 +183,8 @@ func (s *AgentSession[State]) maybeSnapshot(ctx context.Context, event SnapshotE
 			return &SessionSnapshot[State]{
 				ParentID: parentID,
 				Event:    event,
-				Status:   SnapshotStatusComplete,
-				State:    currentState,
+				Status:   SnapshotStatusSucceeded,
+				State:    &currentState,
 			}, nil
 		})
 	if err != nil {
@@ -236,7 +236,7 @@ func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
 // Type parameters:
 //   - Stream: Type for status updates sent via the responder
 //   - State: Type for user-defined state in snapshots
-type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Stream], sess *AgentSession[State]) (*AgentResult, error)
+type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Stream], sess *SessionRunner[State]) (*AgentResult, error)
 
 // Agent is a bidirectional streaming agent with automatic snapshot management.
 type Agent[Stream, State any] struct {
@@ -353,10 +353,10 @@ func DefineCustomAgent[Stream, State any](
 // itself is generated from agent.ts; this constructor is hand-written
 // because it inspects the configured store's optional capabilities.
 func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
-	mgmt := AgentMetadataStateManagementClient
+	mgmt := AgentStateManagementClient
 	abortable := false
 	if store != nil {
-		mgmt = AgentMetadataStateManagementServer
+		mgmt = AgentStateManagementServer
 		_, abortable = store.(SnapshotAborter)
 	}
 	return AgentMetadata{
@@ -376,7 +376,7 @@ type agentRuntime[Stream, State any] struct {
 	cfg  *agentOptions[State]
 
 	session *Session[State]
-	sess    *AgentSession[State]
+	sess    *SessionRunner[State]
 	router  *chunkRouter[Stream, State]
 	intake  *detachIntake
 
@@ -412,7 +412,7 @@ func newAgentRuntime[Stream, State any](
 		fnDone:  make(chan fnDoneResult[State], 1),
 	}
 
-	rt.sess = &AgentSession[State]{
+	rt.sess = &SessionRunner[State]{
 		Session:          session,
 		InputCh:          rt.intake.out(),
 		snapshotCallback: cfg.callback,
@@ -611,14 +611,14 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 	// trashes any further chunks.
 	rt.router.stopAndWait()
 
-	canceledByUser := &atomic.Bool{}
+	abortedByUser := &atomic.Bool{}
 	subCtx, stopSub := context.WithCancel(workCtx)
 	aborter := rt.cfg.store.(SnapshotAborter) // safe: checkDetachCapabilities ran already
 	statusCh := aborter.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
 	go func() {
 		for status := range statusCh {
-			if status == SnapshotStatusCanceled {
-				canceledByUser.Store(true)
+			if status == SnapshotStatusAborted {
+				abortedByUser.Store(true)
 				cancelWork()
 				return
 			}
@@ -631,7 +631,7 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 		stopSub()
 		rt.intake.stopAndWait()
 		rt.router.close()
-		rt.finalizePendingSnapshot(finalizeCtx, pending, res.err, canceledByUser.Load())
+		rt.finalizePendingSnapshot(finalizeCtx, pending, res.err, abortedByUser.Load())
 		cancelWork()
 	}()
 
@@ -639,46 +639,46 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 }
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
-// terminal state and status. canceledByUser distinguishes a context
-// cancellation from abortSnapshot (status=canceled) from an internal
-// failure (status=error). The write is funneled through SaveSnapshot
+// terminal state and status. abortedByUser distinguishes a context
+// cancellation from abortSnapshot (status=aborted) from an internal
+// failure (status=failed). The write is funneled through SaveSnapshot
 // so the read-and-rewrite is one atomic step: if the row has already
-// transitioned to canceled (a late abort racing this finalize),
+// transitioned to aborted (a late abort racing this finalize),
 // SaveSnapshot sees it inside fn and we leave the row untouched.
 func (rt *agentRuntime[Stream, State]) finalizePendingSnapshot(
 	ctx context.Context,
 	pending *SessionSnapshot[State],
 	fnErr error,
-	canceledByUser bool,
+	abortedByUser bool,
 ) {
 	finalState := *rt.session.State()
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			// Late abort wins over the terminal we were about to land.
-			if existing != nil && existing.Status == SnapshotStatusCanceled {
+			if existing != nil && existing.Status == SnapshotStatusAborted {
 				return nil, nil
 			}
 
-			status := SnapshotStatusComplete
-			errMsg := ""
+			status := SnapshotStatusSucceeded
+			var snapErr *core.GenkitError
 			switch {
-			case canceledByUser:
-				status = SnapshotStatusCanceled
+			case abortedByUser:
+				status = SnapshotStatusAborted
 				if fnErr != nil {
-					errMsg = fnErr.Error() // canceled wins, preserve text
+					snapErr = core.AsGenkitError(fnErr) // aborted wins, preserve text
 				}
 			case fnErr != nil:
-				status = SnapshotStatusError
-				errMsg = fnErr.Error()
+				status = SnapshotStatusFailed
+				snapErr = core.AsGenkitError(fnErr)
 			}
 
 			return &SessionSnapshot[State]{
 				ParentID: pending.ParentID,
 				Event:    SnapshotEventDetach,
 				Status:   status,
-				Error:    errMsg,
-				State:    finalState,
+				Error:    snapErr,
+				State:    &finalState,
 			}, nil
 		})
 	if err != nil {
@@ -723,21 +723,23 @@ func loadSession[State any](
 		return nil, nil, core.NewError(core.NOT_FOUND, "snapshot %q not found", init.SnapshotID)
 	}
 	switch snap.Status {
-	case SnapshotStatusError:
-		msg := snap.Error
-		if msg == "" {
-			msg = "snapshot recorded an error"
+	case SnapshotStatusFailed:
+		msg := "snapshot recorded an error"
+		if snap.Error != nil && snap.Error.Message != "" {
+			msg = snap.Error.Message
 		}
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
 			"snapshot %q terminated with error: %s", init.SnapshotID, msg)
 	case SnapshotStatusPending:
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
 			"snapshot %q is still pending; wait for it to finalize before resuming", init.SnapshotID)
-	case SnapshotStatusCanceled:
+	case SnapshotStatusAborted:
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-			"snapshot %q was canceled", init.SnapshotID)
+			"snapshot %q was aborted", init.SnapshotID)
 	}
-	s.state = snap.State
+	if snap.State != nil {
+		s.state = *snap.State
+	}
 	return s, snap, nil
 }
 
@@ -988,10 +990,10 @@ func (i *detachIntake) enqueue(input *AgentInput) {
 // the detach handler. The detach handler then calls suspend to halt
 // turn-end snapshots while the queued inputs finish processing.
 //
-// A pure detach signal (no Messages, no ToolRestarts) is dropped rather
-// than enqueued: it carries no payload to process, so it would just
-// trigger a no-op turn. Callers that want to ride a final input on the
-// detach signal can do so by calling
+// A pure detach signal (no Messages, no Resume payload) is dropped
+// rather than enqueued: it carries no payload to process, so it would
+// just trigger a no-op turn. Callers that want to ride a final input
+// on the detach signal can do so by calling
 // Send(&AgentInput{Detach: true, Messages: ...}) explicitly.
 func (i *detachIntake) handleDetach(first *AgentInput) {
 	var drained []*AgentInput
@@ -1028,7 +1030,16 @@ drainLoop:
 // otherwise process. Used to filter pure detach signals out of the
 // queue so they don't trigger no-op turns.
 func hasInputPayload(in *AgentInput) bool {
-	return in != nil && (len(in.Messages) > 0 || len(in.ToolRestarts) > 0)
+	if in == nil {
+		return false
+	}
+	if len(in.Messages) > 0 {
+		return true
+	}
+	if in.Resume != nil && (len(in.Resume.Respond) > 0 || len(in.Resume.Restart) > 0) {
+		return true
+	}
+	return false
 }
 
 // forward pops the queue and writes to dst at the runner's pace. The
@@ -1101,7 +1112,7 @@ func (i *detachIntake) detachSignal() <-chan struct{} {
 	return i.detachCh
 }
 
-// beginTurnEnd is called by [AgentSession.maybeSnapshot] before writing
+// beginTurnEnd is called by [SessionRunner.maybeSnapshot] before writing
 // a turn-end snapshot. If the intake has been suspended (detach landed),
 // it returns suspended=true and the runner skips the snapshot.
 //
@@ -1146,7 +1157,7 @@ const promptMessageKey = "_genkit_prompt"
 // nil for [DefineAgent], where the inline-defined prompt has no per-turn
 // input.
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
-	return func(ctx context.Context, resp Responder[any], sess *AgentSession[State]) (*AgentResult, error) {
+	return func(ctx context.Context, resp Responder[any], sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 			actionOpts, err := prompt.Render(ctx, defaultInput)
 			if err != nil {
@@ -1165,15 +1176,14 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 			// Append conversation history after the base messages.
 			actionOpts.Messages = append(actionOpts.Messages, sess.Messages()...)
 
-			// If tool restarts were provided, set the resume option so
-			// handleResumeOption re-executes the interrupted tools.
-			if len(input.ToolRestarts) > 0 {
-				for _, p := range input.ToolRestarts {
-					if !p.IsToolRequest() {
-						return core.NewError(core.INVALID_ARGUMENT, "ToolRestarts: part is not a tool request")
-					}
+			// If a resume payload was provided, forward it to the
+			// generate call so handleResumeOption re-executes the
+			// interrupted tools and / or applies the responses.
+			if input.Resume != nil {
+				actionOpts.Resume = &ai.GenerateActionResume{
+					Respond: input.Resume.Respond,
+					Restart: input.Resume.Restart,
 				}
-				actionOpts.Resume = ai.NewResume(input.ToolRestarts, nil)
 			}
 
 			modelResp, err := ai.GenerateWithRequest(ctx, r, actionOpts, nil,
@@ -1361,10 +1371,11 @@ func (c *AgentConnection[Stream, State]) SendText(text string) error {
 	})
 }
 
-// SendToolRestarts sends tool restart parts to resume interrupted tool calls.
-// Parts should be created via [ai.ToolDef.RestartWith].
-func (c *AgentConnection[Stream, State]) SendToolRestarts(parts ...*ai.Part) error {
-	return c.conn.Send(&AgentInput{ToolRestarts: parts})
+// SendResume sends a resume payload to continue an interrupted generation.
+// Construct the payload with [ai.ToolDef.RestartWith] or
+// [ai.ToolDef.RespondWith] parts.
+func (c *AgentConnection[Stream, State]) SendResume(resume *ToolResume) error {
+	return c.conn.Send(&AgentInput{Resume: resume})
 }
 
 // Detach asks the server to write a pending snapshot, close the
