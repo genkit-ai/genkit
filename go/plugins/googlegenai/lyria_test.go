@@ -309,6 +309,25 @@ func TestTranslateLyriaResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("missing mime type defaults to audio/wav", func(t *testing.T) {
+		resp := &lyriaPredictResponse{
+			Predictions: []lyriaPrediction{
+				{BytesBase64Encoded: "UklGRg==", MimeType: ""},
+			},
+		}
+		res := translateLyriaResponse(resp, &ai.ModelRequest{})
+		if len(res.Message.Content) != 1 {
+			t.Fatalf("expected 1 part, got %d", len(res.Message.Content))
+		}
+		p := res.Message.Content[0]
+		if p.ContentType != "audio/wav" {
+			t.Errorf("ContentType = %q, want audio/wav (Vertex omits mimeType in real responses)", p.ContentType)
+		}
+		if p.Text != "data:audio/wav;base64,UklGRg==" {
+			t.Errorf("data URL = %q", p.Text)
+		}
+	})
+
 	t.Run("multiple predictions", func(t *testing.T) {
 		resp := &lyriaPredictResponse{
 			Predictions: []lyriaPrediction{
