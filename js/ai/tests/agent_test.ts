@@ -195,7 +195,7 @@ describe('Agent', () => {
         event: 'turnEnd' as const,
         state: { custom: { foo: 'bar' } },
       };
-      await store.saveSnapshot(snapshot);
+      await store.saveSnapshot('snap-123', () => snapshot);
 
       const got = await store.getSnapshot('snap-123');
       assert.deepStrictEqual(got, snapshot);
@@ -216,7 +216,7 @@ describe('Agent', () => {
         event: 'turnEnd' as const,
         state: { custom: state },
       };
-      await store.saveSnapshot(snapshot);
+      await store.saveSnapshot('snap-123', () => snapshot);
 
       // Mutate local state
       state.foo = 'baz';
@@ -677,7 +677,7 @@ describe('Agent', () => {
       assert.strictEqual(aborted, true);
     });
 
-    it('should return "done" when aborting an already-completed flow', async () => {
+    it('should not override terminal status when aborting an already-completed flow', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
       const flow = defineCustomAgent<unknown, { foo: string }>(
@@ -707,11 +707,13 @@ describe('Agent', () => {
       const snapBefore = await store.getSnapshot(output.snapshotId!);
       assert.strictEqual(snapBefore?.status, 'done');
 
+      // Abort returns the previous status but does not override terminal states
       const previousStatus = await flow.abort(output.snapshotId!);
       assert.strictEqual(previousStatus, 'done');
 
+      // Snapshot should still be 'done' — the mutator skips terminal states
       const snapAfter = await store.getSnapshot(output.snapshotId!);
-      assert.strictEqual(snapAfter?.status, 'aborted');
+      assert.strictEqual(snapAfter?.status, 'done');
     });
 
     it('should return undefined when aborting a non-existent snapshot', async () => {
@@ -824,7 +826,13 @@ describe('Agent', () => {
         onSnapshotStateChange: undefined,
         getSnapshot: baseStore.getSnapshot.bind(baseStore),
         saveSnapshot: baseStore.saveSnapshot.bind(baseStore),
-      }) as InMemorySessionStore;
+      }) as InMemorySessionStore<any>;
+
+      let resolveBlock: () => void = () => {};
+      const blockPromise = new Promise<void>((resolve) => {
+        resolveBlock = resolve;
+      });
+
       const flow = defineCustomAgent<unknown, { foo: string }>(
         new Registry(),
         {
@@ -832,7 +840,9 @@ describe('Agent', () => {
           store,
         },
         async (sess, { sendChunk }) => {
-          await sess.run(async () => {});
+          await sess.run(async () => {
+            await blockPromise; // Keep flow pending until abort is called
+          });
           return {
             artifacts: [],
             message: { role: 'model', content: [{ text: 'hi' }] },
@@ -849,10 +859,18 @@ describe('Agent', () => {
       const output = await session.output;
       const snapshotId = output.snapshotId;
 
+      // Snapshot should be 'pending' since the flow is still blocked
+      const snapBefore = await store.getSnapshot(snapshotId!);
+      assert.strictEqual(snapBefore?.status, 'pending');
+
       await flow.abort(snapshotId!);
 
       const snapshot = await store.getSnapshot(snapshotId!);
       assert.strictEqual(snapshot?.status, 'aborted');
+
+      // Release the flow so it doesn't hang
+      resolveBlock();
+      session.close();
     });
 
     it('should fetch snapshot data via companion action', async () => {

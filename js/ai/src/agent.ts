@@ -309,6 +309,11 @@ export class SessionRunner<State = unknown> {
 
   /**
    * Evaluates whether to save a snapshot to the persistent store.
+   *
+   * Uses the mutator-based `saveSnapshot` to atomically check that the
+   * snapshot has not been concurrently aborted before writing — preventing
+   * a race where a "done" write could overwrite a concurrent "aborted"
+   * status.
    */
   async maybeSnapshot(
     event: 'turnEnd' | 'invocationEnd',
@@ -321,15 +326,6 @@ export class SessionRunner<State = unknown> {
       (this.isDetached && snapshotId !== this.lastSnapshot?.snapshotId)
     )
       return this.lastSnapshot?.snapshotId;
-
-    if (snapshotId) {
-      const existing = await this.store.getSnapshot(snapshotId, {
-        context: getContext(),
-      });
-      if (existing?.status === 'aborted') {
-        return snapshotId;
-      }
-    }
 
     const currentVersion = this.session.getVersion();
     if (currentVersion === this.lastSnapshotVersion && !status) {
@@ -364,9 +360,26 @@ export class SessionRunner<State = unknown> {
       error,
     };
 
-    const assignedId = await this.store.saveSnapshot(snapshotInput, {
-      context: getContext(),
-    });
+    const effectiveId = snapshotId || this.newSnapshotId;
+
+    // Use the mutator-based saveSnapshot to atomically check the current
+    // status before writing.  If the snapshot was concurrently aborted,
+    // the mutator returns null and the write is skipped.
+    const assignedId = await this.store.saveSnapshot(
+      effectiveId,
+      (current) => {
+        if (current?.status === 'aborted') {
+          return null; // Respect the abort — skip the write.
+        }
+        return snapshotInput;
+      },
+      { context: getContext() }
+    );
+    if (assignedId === null) {
+      // Snapshot was aborted concurrently; preserve the existing ID
+      // without overwriting.
+      return effectiveId;
+    }
 
     this.lastSnapshot = { ...snapshotInput, snapshotId: assignedId };
     this.lastSnapshotVersion = currentVersion;
@@ -758,16 +771,24 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           message: `abort requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      const snapshot = await config.store.getSnapshot(snapshotId, {
-        context: getContext(),
-      });
-      if (snapshot) {
-        const previousStatus = snapshot.status;
-        snapshot.status = 'aborted';
-        await config.store.saveSnapshot(snapshot, { context: getContext() });
-        return previousStatus;
-      }
-      return undefined;
+      let previousStatus: SessionSnapshot['status'] | undefined;
+      await config.store.saveSnapshot(
+        snapshotId,
+        (current) => {
+          if (!current) return null;
+          previousStatus = current.status;
+          if (
+            current.status === 'done' ||
+            current.status === 'failed' ||
+            current.status === 'aborted'
+          ) {
+            return null; // Already terminal — don't override.
+          }
+          return { ...current, status: 'aborted' };
+        },
+        { context: getContext() }
+      );
+      return previousStatus;
     }
   );
 
@@ -792,14 +813,24 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           message: `abort requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      const snapshot = await config.store.getSnapshot(snapshotId, options);
-      if (snapshot) {
-        const previousStatus = snapshot.status;
-        snapshot.status = 'aborted';
-        await config.store.saveSnapshot(snapshot, options);
-        return previousStatus;
-      }
-      return undefined;
+      let previousStatus: SessionSnapshot['status'] | undefined;
+      await config.store.saveSnapshot(
+        snapshotId,
+        (current) => {
+          if (!current) return null;
+          previousStatus = current.status;
+          if (
+            current.status === 'done' ||
+            current.status === 'failed' ||
+            current.status === 'aborted'
+          ) {
+            return null; // Already terminal — don't override.
+          }
+          return { ...current, status: 'aborted' };
+        },
+        options
+      );
+      return previousStatus;
     },
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
