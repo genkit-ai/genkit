@@ -525,7 +525,9 @@ tests:
   - name: abort completed agent
     description: >
       Abort an agent that has already finished. The abort returns
-      "done" as previous status and sets the snapshot to "aborted".
+      "done" as previous status but the snapshot remains "done"
+      because terminal states (done, failed, aborted) cannot be
+      overridden — only "pending" can transition to "aborted".
     agent: promptAgentWithStore
     steps:
       - type: send
@@ -544,7 +546,7 @@ tests:
       - type: getSnapshotData
         snapshotId: '{{snap1}}'
         expectSnapshot:
-          status: aborted
+          status: done
 
   - name: server-managed agent rejects init state
     description: >
