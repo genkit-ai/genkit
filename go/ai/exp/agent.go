@@ -287,21 +287,25 @@ func DefineAgent[State any](
 // The agent is registered under the same name as the prompt, sharing its
 // namespace.
 //
-// defaultInput is used to render the prompt on every turn. PromptIn is
-// captured for compile-time type checking on defaultInput; it is not
-// propagated through the [Agent] type.
+// defaultInput is used to render the prompt on every turn. DefinePromptAgent
+// invokes the prompt's Render once at definition time as a smoke check, so
+// a defaultInput that fails the prompt's input schema panics here rather
+// than failing on the first invocation.
 //
 // For an agent that defines its prompt inline, use [DefineAgent]. For full
 // control over the per-turn loop, use [DefineCustomAgent].
-func DefinePromptAgent[State, PromptIn any](
+func DefinePromptAgent[State any](
 	r api.Registry,
 	promptName string,
-	defaultInput PromptIn,
+	defaultInput any,
 	opts ...AgentOption[State],
 ) *Agent[any, State] {
 	prompt := ai.LookupPrompt(r, promptName)
 	if prompt == nil {
 		panic(fmt.Sprintf("DefinePromptAgent: prompt %q not found", promptName))
+	}
+	if _, err := prompt.Render(context.Background(), defaultInput); err != nil {
+		panic(fmt.Sprintf("DefinePromptAgent %q: defaultInput does not satisfy prompt schema: %v", promptName, err))
 	}
 	return DefineCustomAgent(r, promptName, agentLoop[State](r, prompt, defaultInput), opts...)
 }
