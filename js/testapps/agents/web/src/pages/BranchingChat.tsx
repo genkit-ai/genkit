@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
-import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  Part,
+  SessionSnapshot,
+} from 'genkit/beta';
 import { runFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -68,10 +74,10 @@ export default function BranchingChat() {
 
     async function restore() {
       try {
-        const snapshot = (await runFlow({
+        const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
           input: urlSnapshotId,
-        })) as any;
+        });
 
         if (cancelled) return;
 
@@ -81,8 +87,8 @@ export default function BranchingChat() {
             const role = msg.role as ChatMessage['role'];
             if (role !== 'user' && role !== 'model') continue;
             const textParts = (msg.content || [])
-              .filter((p: any) => p.text)
-              .map((p: any) => p.text);
+              .filter((p: Part) => p.text)
+              .map((p: Part) => p.text);
             if (textParts.length > 0) {
               restored.push({ role, text: textParts.join('') });
             }

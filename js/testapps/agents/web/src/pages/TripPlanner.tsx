@@ -19,11 +19,14 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  Part,
+  SessionSnapshot,
+  SessionState,
 } from 'genkit/beta';
 import { runFlow, streamFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Trip Planner — demonstrates definePromptAgent with a .prompt file
@@ -46,13 +49,13 @@ export default function TripPlanner() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
 
   // Session tracking
-  const stateRef = useRef<any>(undefined);
+  const stateRef = useRef<SessionState | undefined>(undefined);
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
   // ── Restore session from snapshotId on mount ───────────────────────
@@ -63,26 +66,26 @@ export default function TripPlanner() {
 
     async function restore() {
       try {
-        const snapshot = (await runFlow({
+        const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
           input: urlSnapshotId,
-        })) as any;
+        });
 
         if (cancelled) return;
 
         if (snapshot?.state?.messages) {
-          const restored: Message[] = [];
+          const restored: ChatMessage[] = [];
           for (const msg of snapshot.state.messages) {
-            const role = msg.role as Message['role'];
+            const role = msg.role as ChatMessage['role'];
             const textParts = (msg.content || [])
-              .filter((p: any) => p.text)
-              .map((p: any) => p.text);
+              .filter((p: Part) => p.text)
+              .map((p: Part) => p.text);
 
             if (textParts.length > 0) {
               restored.push({ role, text: textParts.join('') });
             }
 
-            for (const p of msg.content || []) {
+            for (const p of (msg.content as Part[]) || []) {
               if (p.toolRequest) {
                 restored.push({
                   role: 'tool',

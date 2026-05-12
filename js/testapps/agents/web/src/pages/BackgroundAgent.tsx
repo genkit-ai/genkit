@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
-import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
+import type {
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  MessageData,
+  Part,
+} from 'genkit/beta';
 import { runFlow } from 'genkit/beta/client';
 import { useCallback, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
@@ -84,14 +90,14 @@ export default function BackgroundAgent() {
             stopPolling();
             setStatus('done');
             // Extract the model's response from the snapshot state
-            const messages = snapshot.state?.messages || [];
+            const messages: MessageData[] = snapshot.state?.messages || [];
             const modelMessages = messages.filter(
-              (m: any) => m.role === 'model'
+              (m: MessageData) => m.role === 'model'
             );
             const lastModel = modelMessages[modelMessages.length - 1];
-            const text = lastModel?.content
-              ?.filter((p: any) => p.text)
-              .map((p: any) => p.text)
+            const text = (lastModel?.content || [])
+              .filter((p: Part) => p.text)
+              .map((p: Part) => p.text)
               .join('');
             setReport(text || '(empty report)');
           } else if (s === 'failed') {

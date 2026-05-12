@@ -23,7 +23,7 @@ import remarkGfm from 'remark-gfm';
 // Contains NO genkit logic. Each page owns its own session/streaming code.
 // ---------------------------------------------------------------------------
 
-export interface Message {
+export interface ChatMessage {
   role: 'user' | 'model' | 'system' | 'tool';
   text: string;
   /** Optional reasoning/thinking content — rendered as a collapsible block. */
@@ -38,7 +38,7 @@ interface Props {
   /** Short description below the title. */
   description?: string;
   /** Conversation messages to render. */
-  messages: Message[];
+  messages: ChatMessage[];
   /** Partial text being streamed in (shown with a cursor). */
   streamingText?: string;
   /** Whether the agent is currently processing. */

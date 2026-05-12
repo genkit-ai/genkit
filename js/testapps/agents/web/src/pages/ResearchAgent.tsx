@@ -19,10 +19,11 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  SessionState,
 } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import { useCallback, useRef, useState } from 'react';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Research Agent — Multi-Step Orchestration (defineCustomAgent)
@@ -52,7 +53,7 @@ interface ResearchState {
 }
 
 export default function ResearchAgent() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
@@ -63,7 +64,7 @@ export default function ResearchAgent() {
   );
 
   // Session state — round-tripped to the server each turn
-  const stateRef = useRef<any>(undefined);
+  const stateRef = useRef<SessionState | undefined>(undefined);
 
   const handleSend = useCallback(
     async (text: string) => {
