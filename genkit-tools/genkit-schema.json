@@ -52,11 +52,23 @@
             "$ref": "#/$defs/Message"
           }
         },
-        "toolRestarts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Part"
-          }
+        "resume": {
+          "type": "object",
+          "properties": {
+            "respond": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ToolResponsePart"
+              }
+            },
+            "restart": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ToolRequestPart"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -65,7 +77,7 @@
       "type": "object",
       "properties": {
         "stateManagement": {
-          "$ref": "#/$defs/AgentMetadataStateManagement"
+          "$ref": "#/$defs/AgentStateManagement"
         },
         "abortable": {
           "type": "boolean"
@@ -76,13 +88,6 @@
         "abortable"
       ],
       "additionalProperties": false
-    },
-    "AgentMetadataStateManagement": {
-      "type": "string",
-      "enum": [
-        "server",
-        "client"
-      ]
     },
     "AgentOutput": {
       "type": "object",
@@ -119,6 +124,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentStateManagement": {
+      "type": "string",
+      "enum": [
+        "server",
+        "client"
+      ]
     },
     "AgentStreamChunk": {
       "type": "object",
@@ -185,51 +197,13 @@
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
         },
-        "error": {
-          "type": "string"
-        },
+        "error": {},
         "state": {
           "$ref": "#/$defs/SessionState"
         }
       },
       "required": [
         "snapshotId"
-      ],
-      "additionalProperties": false
-    },
-    "SessionSnapshot": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "parentId": {
-          "type": "string"
-        },
-        "createdAt": {
-          "type": "string"
-        },
-        "updatedAt": {
-          "type": "string"
-        },
-        "event": {
-          "$ref": "#/$defs/SnapshotEvent"
-        },
-        "status": {
-          "$ref": "#/$defs/SnapshotStatus"
-        },
-        "error": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        }
-      },
-      "required": [
-        "snapshotId",
-        "createdAt",
-        "event",
-        "state"
       ],
       "additionalProperties": false
     },
@@ -264,26 +238,24 @@
       "type": "object",
       "properties": {
         "snapshotId": {
-          "$ref": "#/$defs/SessionSnapshot/properties/snapshotId"
+          "type": "string"
         },
         "parentId": {
-          "$ref": "#/$defs/SessionSnapshot/properties/parentId"
+          "type": "string"
         },
         "createdAt": {
-          "$ref": "#/$defs/SessionSnapshot/properties/createdAt"
+          "type": "string"
         },
         "updatedAt": {
-          "$ref": "#/$defs/SessionSnapshot/properties/updatedAt"
+          "type": "string"
         },
         "event": {
           "$ref": "#/$defs/SnapshotEvent"
         },
         "status": {
-          "$ref": "#/$defs/SessionSnapshot/properties/status"
+          "$ref": "#/$defs/SnapshotStatus"
         },
-        "error": {
-          "$ref": "#/$defs/SessionSnapshot/properties/error"
-        }
+        "error": {}
       },
       "required": [
         "snapshotId",
@@ -296,9 +268,9 @@
       "type": "string",
       "enum": [
         "pending",
-        "complete",
-        "canceled",
-        "error"
+        "succeeded",
+        "aborted",
+        "failed"
       ]
     },
     "TurnEnd": {

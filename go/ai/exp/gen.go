@@ -20,46 +20,25 @@ package exp
 
 import (
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
+	"time"
 )
 
-// AgentMetadata is the value placed under metadata["agent"] on an agent's
-// action descriptor. It exposes capability information so the Dev UI and
-// other reflective callers can render the right surface (e.g. hide the
-// Abort button when the configured store doesn't support it) without
-// round-tripping through the reflection API.
-type AgentMetadata struct {
-	// Abortable reports whether the agent's invocations can be aborted
-	// (true when the store implements [SnapshotAborter]).
-	Abortable bool `json:"abortable,omitempty"`
-	// StateManagement reports who owns session state.
-	StateManagement AgentMetadataStateManagement `json:"stateManagement,omitempty"`
+// AbortSnapshotRequest is the input for the abortSnapshot companion action.
+type AbortSnapshotRequest struct {
+	// SnapshotID identifies the snapshot whose invocation should be aborted.
+	SnapshotID string `json:"snapshotId"`
 }
 
-// AgentMetadataStateManagement enumerates who owns session state for an
-// agent: "server" (a [SessionStore] is configured and snapshots are
-// persisted server-side) or "client" (no store; state flows through
-// invocation init / output).
-type AgentMetadataStateManagement string
-
-const (
-	// AgentMetadataStateManagementServer indicates the agent is wired with
-	// a [SessionStore] and persists snapshots server-side.
-	AgentMetadataStateManagementServer AgentMetadataStateManagement = "server"
-	// AgentMetadataStateManagementClient indicates the agent has no store;
-	// session state is client-managed and round-trips through invocation
-	// init and output.
-	AgentMetadataStateManagementClient AgentMetadataStateManagement = "client"
-)
-
-// Artifact represents a named collection of parts produced during a session.
-// Examples: generated files, images, code snippets, diagrams, etc.
-type Artifact struct {
-	// Metadata contains additional artifact-specific data.
-	Metadata map[string]any `json:"metadata,omitempty"`
-	// Name identifies the artifact (e.g., "generated_code.go", "diagram.png").
-	Name string `json:"name,omitempty"`
-	// Parts contains the artifact content (text, media, etc.).
-	Parts []*ai.Part `json:"parts"`
+// AbortSnapshotResponse is the output of the abortSnapshot companion action.
+type AbortSnapshotResponse struct {
+	// SnapshotID echoes the requested snapshot ID.
+	SnapshotID string `json:"snapshotId"`
+	// Status is the snapshot's status after the abort attempt. For a
+	// pending snapshot this is [SnapshotStatusAborted]. For an
+	// already-terminal snapshot this is the existing terminal status (the
+	// abort is a no-op).
+	Status SnapshotStatus `json:"status,omitempty"`
 }
 
 // AgentInit is the input for starting an agent invocation.
@@ -85,11 +64,34 @@ type AgentInput struct {
 	Detach bool `json:"detach,omitempty"`
 	// Messages contains the user's input for this turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
-	// ToolRestarts contains tool request parts to re-execute interrupted tools.
-	// Use [ai.ToolDef.RestartWith] to create these parts from an interrupted
-	// tool request. When set, the generate call resumes with these restarts
-	// instead of treating Messages as tool responses.
-	ToolRestarts []*ai.Part `json:"toolRestarts,omitempty"`
+	// Resume provides options for resuming an interrupted generation.
+	// Construct using [ai.ToolDef.RestartWith] / [ai.ToolDef.RespondWith]
+	// parts. When set, the generate call resumes with these parts instead
+	// of treating Messages as tool responses.
+	Resume *ToolResume `json:"resume,omitempty"`
+}
+
+// ToolResume holds the parts that resume an interrupted agent turn.
+// Mirrors [ai.GenerateActionResume] but is named for the tool-call
+// callsite where it is set on an [AgentInput].
+type ToolResume struct {
+	// Respond contains tool response parts to send to the model when resuming.
+	Respond []*ai.Part `json:"respond,omitempty"`
+	// Restart contains tool request parts to restart when resuming.
+	Restart []*ai.Part `json:"restart,omitempty"`
+}
+
+// AgentMetadata is the value placed under metadata["agent"] on an agent's
+// action descriptor. It exposes capability information so the Dev UI and
+// other reflective callers can render the right surface (e.g. hide the
+// Abort button when the configured store doesn't support it) without
+// round-tripping through the reflection API.
+type AgentMetadata struct {
+	// Abortable reports whether the agent's invocations can be aborted
+	// (true when the store implements [SnapshotAborter]).
+	Abortable bool `json:"abortable,omitempty"`
+	// StateManagement reports who owns session state.
+	StateManagement AgentStateManagement `json:"stateManagement,omitempty"`
 }
 
 // AgentOutput is the output when an agent invocation completes.
@@ -116,6 +118,22 @@ type AgentResult struct {
 	Message *ai.Message `json:"message,omitempty"`
 }
 
+// AgentStateManagement enumerates who owns session state for an
+// agent: "server" (a [SessionStore] is configured and snapshots are
+// persisted server-side) or "client" (no store; state flows through
+// invocation init / output).
+type AgentStateManagement string
+
+const (
+	// AgentStateManagementServer indicates the agent is wired with
+	// a [SessionStore] and persists snapshots server-side.
+	AgentStateManagementServer AgentStateManagement = "server"
+	// AgentStateManagementClient indicates the agent has no store;
+	// session state is client-managed and round-trips through invocation
+	// init and output.
+	AgentStateManagementClient AgentStateManagement = "client"
+)
+
 // AgentStreamChunk represents a single item in the agent's output stream.
 // Multiple fields can be populated in a single chunk.
 type AgentStreamChunk[Stream any] struct {
@@ -133,6 +151,51 @@ type AgentStreamChunk[Stream any] struct {
 	TurnEnd *TurnEnd `json:"turnEnd,omitempty"`
 }
 
+// Artifact represents a named collection of parts produced during a session.
+// Examples: generated files, images, code snippets, diagrams, etc.
+type Artifact struct {
+	// Metadata contains additional artifact-specific data.
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Name identifies the artifact (e.g., "generated_code.go", "diagram.png").
+	Name string `json:"name,omitempty"`
+	// Parts contains the artifact content (text, media, etc.).
+	Parts []*ai.Part `json:"parts"`
+}
+
+// GetSnapshotRequest is the input for an agent's getSnapshot companion
+// action. The action is registered at `{agentName}/getSnapshot` when the
+// agent is defined and is intended for Dev UI and client-side reconnect
+// flows.
+type GetSnapshotRequest struct {
+	// SnapshotID identifies the snapshot to fetch.
+	SnapshotID string `json:"snapshotId"`
+}
+
+// GetSnapshotResponse is the output of the getSnapshot companion action. It
+// is a client-facing view of the stored snapshot: identifying metadata plus
+// the session state, with [WithStateTransform] applied if configured.
+//
+// Unlike the raw [SessionSnapshot], this response intentionally omits
+// internal fields (parent ID, event) and does not leak the snapshot
+// envelope beyond what callers need to repopulate a UI.
+type GetSnapshotResponse[State any] struct {
+	// CreatedAt is when the snapshot record was first written.
+	CreatedAt time.Time `json:"createdAt,omitempty"`
+	// Error is the structured failure information; populated when Status
+	// is [SnapshotStatusFailed].
+	Error *core.GenkitError `json:"error,omitempty"`
+	// SnapshotID echoes the requested snapshot ID.
+	SnapshotID string `json:"snapshotId"`
+	// State is the session state captured by the snapshot, after any
+	// configured transform. Empty when Status is pending or error.
+	State *SessionState[State] `json:"state,omitempty"`
+	// Status is the lifecycle state of the snapshot. See [SnapshotStatus].
+	Status SnapshotStatus `json:"status,omitempty"`
+	// UpdatedAt is when the snapshot record was last written. Equals
+	// CreatedAt for snapshots that have not been rewritten.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
 // SessionState is the portable conversation state that flows between client
 // and server. It contains only the data needed for conversation continuity.
 type SessionState[State any] struct {
@@ -141,7 +204,7 @@ type SessionState[State any] struct {
 	// Custom is the user-defined state associated with this conversation.
 	Custom State `json:"custom,omitempty"`
 	// Messages is the conversation history (user/model exchanges).
-	// Does NOT include prompt-rendered messages, those are rendered fresh each turn.
+	// Does NOT include prompt-rendered messages — those are rendered fresh each turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
 }
 
@@ -158,6 +221,58 @@ const (
 	// initially written with [SnapshotStatusPending] and rewritten with a
 	// terminal status once the background work finishes.
 	SnapshotEventDetach SnapshotEvent = "detach"
+)
+
+// SnapshotMetadata is the metadata-only projection of a [SessionSnapshot]:
+// identifying fields, lifecycle timestamps, and status. Returned by store
+// operations that surface a snapshot's lifecycle state without paying for
+// a full state read.
+type SnapshotMetadata struct {
+	// CreatedAt is when the snapshot was first written.
+	CreatedAt time.Time `json:"createdAt"`
+	// Error is the structured failure information for a snapshot in
+	// [SnapshotStatusFailed].
+	Error *core.GenkitError `json:"error,omitempty"`
+	// Event is what triggered this snapshot.
+	Event SnapshotEvent `json:"event"`
+	// ParentID is the ID of the previous snapshot in this timeline.
+	ParentID string `json:"parentId,omitempty"`
+	// SnapshotID is the unique identifier for this snapshot.
+	SnapshotID string `json:"snapshotId"`
+	// Status is the lifecycle state of this snapshot.
+	Status SnapshotStatus `json:"status,omitempty"`
+	// UpdatedAt is when the snapshot was last written.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
+// SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
+// written for synchronous turns or invocations are always
+// [SnapshotStatusSucceeded] (an empty value is also treated as succeeded
+// for backwards compatibility).
+//
+// When a client sets [AgentInput.Detach], the server writes a single
+// snapshot with [SnapshotStatusPending] (and empty state) and returns its
+// ID immediately. Background processing then either rewrites that snapshot
+// with the cumulative final state and [SnapshotStatusSucceeded] /
+// [SnapshotStatusFailed] when the agent finishes, or with
+// [SnapshotStatusAborted] if the client called abortSnapshot in the
+// meantime.
+type SnapshotStatus string
+
+const (
+	// SnapshotStatusPending indicates a detached invocation is still
+	// processing the queued inputs. The snapshot will be rewritten with a
+	// terminal status once the flow exits.
+	SnapshotStatusPending SnapshotStatus = "pending"
+	// SnapshotStatusSucceeded indicates the snapshot captures a settled state.
+	SnapshotStatusSucceeded SnapshotStatus = "succeeded"
+	// SnapshotStatusAborted indicates the snapshot's invocation was
+	// aborted via the abortSnapshot companion action while detached.
+	SnapshotStatusAborted SnapshotStatus = "aborted"
+	// SnapshotStatusFailed indicates the invocation terminated with an error.
+	// The snapshot's Error field describes the failure and resume is
+	// rejected with that same error.
+	SnapshotStatusFailed SnapshotStatus = "failed"
 )
 
 // TurnEnd groups the signals emitted when an agent turn finishes.

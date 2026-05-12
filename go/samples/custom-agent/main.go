@@ -36,7 +36,7 @@ func main() {
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	chatAgent := genkit.DefineCustomAgent(g, "chat",
-		func(ctx context.Context, resp aix.Responder[any], sess *aix.AgentSession[any]) (*aix.AgentResult, error) {
+		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) error {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
 					ai.WithModel(googlegenai.ModelRef("googleai/gemini-3-flash-preview", &genai.GenerateContentConfig{

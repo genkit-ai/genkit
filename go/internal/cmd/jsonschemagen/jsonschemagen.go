@@ -544,11 +544,20 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 		if ic != nil && ic.name != "" {
 			name = ic.name
 		}
+		// If the target type is generic, append its type-args so the
+		// reference is well-formed (e.g. `*SessionState[State]`). The
+		// referencing type is responsible for declaring matching
+		// typeparams; otherwise the generated code won't compile.
+		// Callers can override this with an explicit `type` directive.
+		var typeArgs string
+		if ic != nil {
+			typeArgs = typeParamArgs(ic.typeparams)
+		}
 		if s2.Enum != nil {
-			return name, nil
+			return name + typeArgs, nil
 		}
 		// If it's not an enum, it's a struct. Use a pointer to it.
-		return "*" + name, nil
+		return "*" + name + typeArgs, nil
 	}
 	// If there is no specified type, assume the schema represents any type.
 	if s.Type.Any() == nil {
@@ -665,6 +674,33 @@ func sortedKeys[K cmp.Ordered, V any](m map[K]V) []K {
 	return keys
 }
 
+// typeParamArgs converts a Go type-parameter list like "[State any]" or
+// "[A any, B comparable]" into the matching type-argument list "[State]"
+// or "[A, B]". Returns "" for an empty input. Used to forward the
+// type-args of a generic target type onto a reference (e.g. turn a ref
+// to `SessionState` into `SessionState[State]` when SessionState has
+// `typeparams [State any]`).
+func typeParamArgs(typeparams string) string {
+	inner := strings.TrimSpace(typeparams)
+	if inner == "" {
+		return ""
+	}
+	inner = strings.TrimPrefix(inner, "[")
+	inner = strings.TrimSuffix(inner, "]")
+	var names []string
+	for _, clause := range strings.Split(inner, ",") {
+		fields := strings.Fields(strings.TrimSpace(clause))
+		if len(fields) == 0 {
+			continue
+		}
+		names = append(names, fields[0])
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(names, ", ") + "]"
+}
+
 // config is the configuration for a schema file.
 // It describes modifications to the defaults of the code generator.
 type config struct {
@@ -721,7 +757,11 @@ type extraField struct {
 //	import
 //	    path of package to import (for packages only, may be repeated)
 //	typeparams PARAMS
-//	    Go type parameters to add to the type declaration (e.g., "[State any]")
+//	    Go type parameters to add to the type declaration (e.g., "[State any]").
+//	    References to this type from other generated fields are
+//	    automatically rewritten to include the matching type-args
+//	    (e.g., "*SessionState[State]"). The referencing type must
+//	    declare matching typeparams.
 //	noomitempty
 //	    don't add omitempty to this field's json tag
 //	field NAME TYPE

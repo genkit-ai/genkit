@@ -49,7 +49,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "basicFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				resp.SendStatus(testStatus{Phase: "generating"})
 				// Echo back the user's message.
@@ -125,7 +125,7 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "snapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -195,7 +195,7 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "resumeFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -284,7 +284,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "clientStateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -347,7 +347,7 @@ func TestAgent_Artifacts(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "artifactFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 
 				resp.SendArtifact(&Artifact{
@@ -420,7 +420,7 @@ func TestAgent_SnapshotCallback(t *testing.T) {
 	// Only snapshot on even turns.
 	callbackCalls := 0
 	af := DefineCustomAgent(reg, "callbackFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -476,7 +476,7 @@ func TestAgent_SendMessages(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "sendMsgsFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				return nil
 			})
@@ -523,7 +523,7 @@ func TestAgent_SessionContext(t *testing.T) {
 
 	var retrievedCounter int
 	af := DefineCustomAgent(reg, "contextFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				// Session should be retrievable from context.
 				ctxSess := SessionFromContext[testState](ctx)
@@ -568,7 +568,7 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "errorFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				return fmt.Errorf("turn failed")
 			})
@@ -594,7 +594,7 @@ func TestAgent_SetMessages(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "setMsgsFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				// Replace all messages with just one.
 				sess.SetMessages([]*ai.Message{ai.NewModelTextMessage("replaced")})
@@ -650,8 +650,8 @@ func TestInMemorySessionStore(t *testing.T) {
 					t.Errorf("expected nil existing on first save, got %+v", existing)
 				}
 				return &SessionSnapshot[testState]{
-					Status: SnapshotStatusComplete,
-					State:  SessionState[testState]{Custom: testState{Counter: 1}},
+					Status: SnapshotStatusSucceeded,
+					State:  &SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			})
 		if err != nil {
@@ -671,8 +671,8 @@ func TestInMemorySessionStore(t *testing.T) {
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 				return &SessionSnapshot[testState]{
-					Status: SnapshotStatusComplete,
-					State:  SessionState[testState]{Custom: testState{Counter: 1}},
+					Status: SnapshotStatusSucceeded,
+					State:  &SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			}); err != nil {
 			t.Fatalf("SaveSnapshot: %v", err)
@@ -697,7 +697,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		if saved.SnapshotID == "" {
 			t.Error("expected store to generate SnapshotID")
 		}
-		if saved.Status != SnapshotStatusComplete {
+		if saved.Status != SnapshotStatusSucceeded {
 			t.Errorf("expected Status=complete by default, got %q", saved.Status)
 		}
 	})
@@ -706,7 +706,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
-				return &SessionSnapshot[testState]{Status: SnapshotStatusComplete}, nil
+				return &SessionSnapshot[testState]{Status: SnapshotStatusSucceeded}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -731,7 +731,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
-				return &SessionSnapshot[testState]{Status: SnapshotStatusComplete}, nil
+				return &SessionSnapshot[testState]{Status: SnapshotStatusSucceeded}, nil
 			})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
@@ -743,8 +743,8 @@ func TestInMemorySessionStore(t *testing.T) {
 					t.Fatal("expected non-nil existing on update")
 				}
 				return &SessionSnapshot[testState]{
-					Status: SnapshotStatusComplete,
-					State:  SessionState[testState]{Custom: testState{Counter: 2}},
+					Status: SnapshotStatusSucceeded,
+					State:  &SessionState[testState]{Custom: testState{Counter: 2}},
 				}, nil
 			})
 		if err != nil {
@@ -766,7 +766,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	var capturedOutputs []any
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			// Wrap collectTurnOutput to capture what each turn produces.
 			originalCollect := sess.collectTurnOutput
 			sess.collectTurnOutput = func() any {
@@ -845,7 +845,7 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	var capturedOutputs []any
 
 	af := DefineCustomAgent(reg, "turnOutputSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			originalCollect := sess.collectTurnOutput
 			sess.collectTurnOutput = func() any {
 				output := originalCollect()
@@ -1334,7 +1334,7 @@ func TestAgent_RunText(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "runTextFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Messages[0].Content[0].Text))
@@ -1367,7 +1367,7 @@ func TestAgent_Run(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "runFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				if len(input.Messages) > 0 {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -1400,7 +1400,7 @@ func TestAgent_RunText_WithState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "runStateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -1441,7 +1441,7 @@ func TestAgent_RunText_WithSnapshot(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "runSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -1513,7 +1513,7 @@ func TestAgent_SingleTurnSnapshotDedup(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "dedupFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -1557,7 +1557,7 @@ func TestAgent_MultiTurnSnapshotDedup(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "multiDedupFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -1619,7 +1619,7 @@ func TestAgent_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "postRunMutateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil
@@ -1672,7 +1672,7 @@ func TestAgent_FnPanicReturnsError(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "panicFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				resp.SendStatus(testStatus{Phase: "before-panic"})
 				panic("boom")
@@ -1726,7 +1726,7 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 	emitting := make(chan struct{})
 	fnDone := make(chan struct{})
 	af := DefineCustomAgent(reg, "cancelFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			defer close(fnDone)
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				close(emitting)
@@ -1820,7 +1820,7 @@ func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "turnEndSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return nil
@@ -1886,7 +1886,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	release := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachInFlight",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				entered <- struct{}{}
 				<-release
@@ -1950,8 +1950,8 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	if pending.Status != SnapshotStatusPending {
 		t.Errorf("pending snapshot status = %q, want pending", pending.Status)
 	}
-	if got := len(pending.State.Messages); got != 0 {
-		t.Errorf("pending state messages = %d, want 0 (live state not yet committed)", got)
+	if pending.State != nil {
+		t.Errorf("pending state = %+v, want nil (live state not yet committed)", pending.State)
 	}
 
 	// No separate turn-end snapshot for A should have been written.
@@ -1964,7 +1964,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	close(release)
 
 	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusComplete
+		return s.Status == SnapshotStatusSucceeded
 	})
 	if final.State.Custom.Counter != 2 {
 		t.Errorf("final counter = %d, want 2 (A + D both processed)", final.State.Custom.Counter)
@@ -1985,7 +1985,7 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	release := make(chan struct{}, 4)
 
 	af := DefineCustomAgent(reg, "detachChainParent",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				enter <- struct{}{}
 				<-release
@@ -2055,7 +2055,7 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	// Release remaining turns and let finalize run.
 	close(release)
 	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusComplete
+		return s.Status == SnapshotStatusSucceeded
 	})
 }
 
@@ -2063,7 +2063,7 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "detachNoStore",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				return nil
 			})
@@ -2090,7 +2090,7 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 
 func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	// Client detaches mid-flow; flow finishes naturally; pending snapshot
-	// flips to status=complete with the full session state.
+	// flips to status=succeeded with the full session state.
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
@@ -2098,7 +2098,7 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachComplete",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				select {
 				case entered <- struct{}{}:
@@ -2163,15 +2163,15 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	if pending.Status != SnapshotStatusPending {
 		t.Errorf("expected status=%q, got %q", SnapshotStatusPending, pending.Status)
 	}
-	if got := len(pending.State.Messages); got != 0 {
-		t.Errorf("pending snapshot should not carry message history, got %d messages", got)
+	if pending.State != nil {
+		t.Errorf("pending snapshot should not carry session state, got %+v", pending.State)
 	}
 
 	// Release; finalizer rewrites the snapshot with the terminal state.
 	close(release)
 
 	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusComplete
+		return s.Status == SnapshotStatusSucceeded
 	})
 	if finalSnap.State.Custom.Counter != 42 {
 		t.Errorf("expected counter=42 in final snapshot, got %d", finalSnap.State.Custom.Counter)
@@ -2193,7 +2193,7 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	release := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachArtifact",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				resp.SendArtifact(&Artifact{
 					Name:  "before.txt",
@@ -2246,7 +2246,7 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	close(release)
 
 	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusComplete
+		return s.Status == SnapshotStatusSucceeded
 	})
 
 	names := make(map[string]bool, len(final.State.Artifacts))
@@ -2270,7 +2270,7 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	boom := errors.New("kaboom")
 
 	af := DefineCustomAgent(reg, "detachErr",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				select {
 				case entered <- struct{}{}:
@@ -2314,10 +2314,10 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	close(release)
 
 	snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusError
+		return s.Status == SnapshotStatusFailed
 	})
-	if !strings.Contains(snap.Error, "kaboom") {
-		t.Errorf("expected snapshot.Error to contain %q, got %q", "kaboom", snap.Error)
+	if snap.Error == nil || !strings.Contains(snap.Error.Message, "kaboom") {
+		t.Errorf("expected snapshot.Error.Message to contain %q, got %+v", "kaboom", snap.Error)
 	}
 
 	// Resuming from an errored detached snapshot is rejected.
@@ -2333,14 +2333,14 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 	// Client detaches, then calls AbortSnapshot. The store's status
 	// subscriber notifies the runtime, which cancels the work context, and
-	// the finalizer rewrites the snapshot with status=canceled.
+	// the finalizer rewrites the snapshot with status=aborted.
 	reg := newTestRegistry(t)
 	store := NewInMemorySessionStore[testState]()
 
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachAbort",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				select {
 				case entered <- struct{}{}:
@@ -2387,18 +2387,20 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if meta.Status != SnapshotStatusCanceled {
-		t.Errorf("AbortSnapshot status = %q, want canceled", meta.Status)
+	if meta.Status != SnapshotStatusAborted {
+		t.Errorf("AbortSnapshot status = %q, want aborted", meta.Status)
 	}
 
 	// The subscriber wakes the runtime, cancels work, and the finalizer
-	// rewrites the snapshot with the canceled status.
+	// rewrites the snapshot with the aborted status.
 	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusCanceled && s.UpdatedAt.After(s.CreatedAt)
+		return s.Status == SnapshotStatusAborted && s.UpdatedAt.After(s.CreatedAt)
 	})
-	if finalSnap.State.Custom.Counter != 0 {
-		// The flow only blocked on ctx — no state mutation expected.
-		t.Errorf("unexpected counter value in canceled snapshot: %d", finalSnap.State.Custom.Counter)
+	// The flow only blocked on ctx — no state mutation expected. State
+	// may be nil (when AbortSnapshot landed before the finalizer's write
+	// could populate it) or a populated zero-value struct.
+	if finalSnap.State != nil && finalSnap.State.Custom.Counter != 0 {
+		t.Errorf("unexpected counter value in aborted snapshot: %d", finalSnap.State.Custom.Counter)
 	}
 }
 
@@ -2409,7 +2411,7 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "syncStillWorks",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return nil
@@ -2448,8 +2450,8 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if snap.Status != SnapshotStatusComplete {
-		t.Errorf("turn-end snapshot status = %q, want complete", snap.Status)
+	if snap.Status != SnapshotStatusSucceeded {
+		t.Errorf("turn-end snapshot status = %q, want succeeded", snap.Status)
 	}
 	if snap.Event != SnapshotEventTurnEnd {
 		t.Errorf("turn-end snapshot event = %q, want %q", snap.Event, SnapshotEventTurnEnd)
@@ -2467,7 +2469,7 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	exited := make(chan error, 1)
 
 	af := DefineCustomAgent(reg, "syncCancel",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				select {
 				case entered <- struct{}{}:
@@ -2520,16 +2522,19 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				Event:  SnapshotEventInvocationEnd,
-				Status: SnapshotStatusError,
-				Error:  "underlying failure",
-				State:  SessionState[testState]{},
+				Status: SnapshotStatusFailed,
+				Error: &core.GenkitError{
+					Status:  core.INTERNAL,
+					Message: "underlying failure",
+				},
+				State: &SessionState[testState]{},
 			}, nil
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 
 	af := DefineCustomAgent(reg, "resumeErrored",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, nil
 		},
 		WithSessionStore(store),
@@ -2561,7 +2566,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	}
 
 	af := DefineCustomAgent(reg, "transformedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("the secret is out"))
 				return nil
@@ -2591,8 +2596,8 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	if resp.SnapshotID != out.SnapshotID {
 		t.Errorf("SnapshotID mismatch: got %q want %q", resp.SnapshotID, out.SnapshotID)
 	}
-	if resp.Status != SnapshotStatusComplete {
-		t.Errorf("expected status=complete, got %q", resp.Status)
+	if resp.Status != SnapshotStatusSucceeded {
+		t.Errorf("expected status=succeeded, got %q", resp.Status)
 	}
 	if resp.State == nil {
 		t.Fatal("expected state in response")
@@ -2641,7 +2646,7 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	DefineCustomAgent(reg, "noStoreFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, nil
 		},
 	)
@@ -2681,14 +2686,14 @@ func TestAgent_AgentMetadata(t *testing.T) {
 	// Verify the metadata["agent"] payload on the flow's action descriptor
 	// correctly reports stateManagement and abortable for each combination
 	// of store capabilities.
-	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, nil
 	}
 
 	cases := []struct {
 		name        string
 		define      func(reg api.Registry, flowName string)
-		wantMgmt    AgentMetadataStateManagement
+		wantMgmt    AgentStateManagement
 		wantAbortab bool
 	}{
 		{
@@ -2696,7 +2701,7 @@ func TestAgent_AgentMetadata(t *testing.T) {
 			define: func(reg api.Registry, flowName string) {
 				DefineCustomAgent(reg, flowName, noopFn)
 			},
-			wantMgmt:    AgentMetadataStateManagementClient,
+			wantMgmt:    AgentStateManagementClient,
 			wantAbortab: false,
 		},
 		{
@@ -2705,7 +2710,7 @@ func TestAgent_AgentMetadata(t *testing.T) {
 				DefineCustomAgent(reg, flowName, noopFn,
 					WithSessionStore[testState](minimalStore[testState]{}))
 			},
-			wantMgmt:    AgentMetadataStateManagementServer,
+			wantMgmt:    AgentStateManagementServer,
 			wantAbortab: false,
 		},
 		{
@@ -2714,7 +2719,7 @@ func TestAgent_AgentMetadata(t *testing.T) {
 				DefineCustomAgent(reg, flowName, noopFn,
 					WithSessionStore(NewInMemorySessionStore[testState]()))
 			},
-			wantMgmt:    AgentMetadataStateManagementServer,
+			wantMgmt:    AgentStateManagementServer,
 			wantAbortab: true,
 		},
 	}
@@ -2757,7 +2762,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		reg := newTestRegistry(t)
 		store := NewInMemorySessionStore[testState]() // implements SnapshotAborter
 		DefineCustomAgent(reg, "fullCaps",
-			func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, nil
 			},
 			WithSessionStore(store),
@@ -2777,7 +2782,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 	t.Run("no aborter capability → abort not registered", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		DefineCustomAgent(reg, "minCaps",
-			func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, nil
 			},
 			WithSessionStore[testState](minimalStore[testState]{}),
@@ -2806,7 +2811,7 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	}
 
 	af := DefineCustomAgent(reg, "clientXformFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter = 7
@@ -2837,7 +2842,7 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "resumeDetachedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -2876,7 +2881,7 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 		t.Fatalf("Output: %v", err)
 	}
 	finalSnap := waitForSnapshot(t, store, first.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusComplete
+		return s.Status == SnapshotStatusSucceeded
 	})
 	if finalSnap.State.Custom.Counter != 1 {
 		t.Fatalf("expected counter=1 in finalized snapshot, got %d", finalSnap.State.Custom.Counter)
@@ -2906,7 +2911,7 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		t.Fatalf("AbortSnapshot(missing) = %+v, %v; want nil, nil", meta, err)
 	}
 
-	// Pending → canceled, UpdatedAt advances.
+	// Pending → aborted, UpdatedAt advances.
 	pending, err := store.SaveSnapshot(ctx, "snap-cas",
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
@@ -2922,21 +2927,21 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if meta.Status != SnapshotStatusCanceled {
-		t.Errorf("status after first abort = %q, want canceled", meta.Status)
+	if meta.Status != SnapshotStatusAborted {
+		t.Errorf("status after first abort = %q, want aborted", meta.Status)
 	}
 	if !meta.UpdatedAt.After(pending.UpdatedAt) {
 		t.Errorf("UpdatedAt did not advance: %v vs %v", meta.UpdatedAt, pending.UpdatedAt)
 	}
 
-	// Idempotent: second abort returns canceled, no error, no further mutation.
+	// Idempotent: second abort returns aborted, no error, no further mutation.
 	firstUpdate := meta.UpdatedAt
 	meta2, err := store.AbortSnapshot(ctx, "snap-cas")
 	if err != nil {
 		t.Fatalf("AbortSnapshot (second): %v", err)
 	}
-	if meta2.Status != SnapshotStatusCanceled {
-		t.Errorf("status after second abort = %q, want canceled", meta2.Status)
+	if meta2.Status != SnapshotStatusAborted {
+		t.Errorf("status after second abort = %q, want aborted", meta2.Status)
 	}
 	if !meta2.UpdatedAt.Equal(firstUpdate) {
 		t.Errorf("UpdatedAt advanced on idempotent abort: %v vs %v", meta2.UpdatedAt, firstUpdate)
@@ -2947,7 +2952,7 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				Event:  SnapshotEventTurnEnd,
-				Status: SnapshotStatusComplete,
+				Status: SnapshotStatusSucceeded,
 			}, nil
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
@@ -2956,15 +2961,15 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbortSnapshot on complete: %v", err)
 	}
-	if meta3.Status != SnapshotStatusComplete {
-		t.Errorf("abort on complete returned status=%q, want complete", meta3.Status)
+	if meta3.Status != SnapshotStatusSucceeded {
+		t.Errorf("abort on complete returned status=%q, want succeeded", meta3.Status)
 	}
 }
 
 func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	// An abort that lands while fn is still running but does not actually
 	// stop fn (because fn does not observe ctx) must still result in
-	// status=canceled — the finalizer must not clobber canceled with
+	// status=aborted — the finalizer must not clobber aborted with
 	// complete. The subscriber observes the status flip and the finalizer
 	// reads the resulting flag.
 	reg := newTestRegistry(t)
@@ -2974,7 +2979,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "raceFinalize",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				select {
 				case entered <- struct{}{}:
@@ -2982,7 +2987,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 				}
 				<-fnRelease
 				// Return cleanly without observing ctx. Without the
-				// subscriber/recheck, this would land status=complete and
+				// subscriber/recheck, this would land status=succeeded and
 				// clobber the abort.
 				return nil
 			})
@@ -3023,10 +3028,10 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	close(fnRelease)
 
 	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusCanceled || s.Status == SnapshotStatusComplete
+		return s.Status == SnapshotStatusAborted || s.Status == SnapshotStatusSucceeded
 	})
-	if finalSnap.Status != SnapshotStatusCanceled {
-		t.Errorf("finalize clobbered canceled with %q", finalSnap.Status)
+	if finalSnap.Status != SnapshotStatusAborted {
+		t.Errorf("finalize clobbered aborted with %q", finalSnap.Status)
 	}
 }
 
@@ -3071,7 +3076,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 		t.Fatal("did not receive initial status")
 	}
 
-	// Abort flips status; subscriber observes canceled.
+	// Abort flips status; subscriber observes aborted.
 	if _, err := store.AbortSnapshot(ctx, "snap-sub"); err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
@@ -3080,8 +3085,8 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 		if !ok {
 			t.Fatal("channel closed before abort notification")
 		}
-		if status != SnapshotStatusCanceled {
-			t.Errorf("status notification = %q, want canceled", status)
+		if status != SnapshotStatusAborted {
+			t.Errorf("status notification = %q, want aborted", status)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("did not receive abort notification")
@@ -3106,7 +3111,7 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	af := DefineCustomAgent(reg, "abortNoop",
-		func(ctx context.Context, resp Responder[testStatus], sess *AgentSession[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil
@@ -3125,8 +3130,8 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if resp.Status != SnapshotStatusComplete {
-		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusComplete, resp.Status)
+	if resp.Status != SnapshotStatusSucceeded {
+		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusSucceeded, resp.Status)
 	}
 
 	// Confirm the store snapshot was not flipped.
@@ -3134,7 +3139,7 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if snap.Status != SnapshotStatusComplete {
-		t.Errorf("snapshot status = %q after abort-on-terminal, want complete", snap.Status)
+	if snap.Status != SnapshotStatusSucceeded {
+		t.Errorf("snapshot status = %q after abort-on-terminal, want succeeded", snap.Status)
 	}
 }
