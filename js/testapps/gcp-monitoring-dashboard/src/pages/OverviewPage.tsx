@@ -1,70 +1,43 @@
-import { BarChart3, Clock, TrendingUp } from 'lucide-react';
+import { RequestsChart } from '../components/charts/RequestsChart';
+import { SuccessRateChart } from '../components/charts/SuccessRateChart';
+import { LatencyChart } from '../components/charts/LatencyChart';
+import { FeatureTable } from '../components/FeatureTable';
+import { useDashboard } from '../contexts/DashboardContext';
+import { AlertTriangle } from 'lucide-react';
 
 export function OverviewPage() {
+  const { projectId } = useDashboard();
+
+  if (!projectId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <AlertTriangle className="mb-4 h-10 w-10 text-accent-orange" />
+        <h2 className="mb-2 text-lg font-semibold text-text-primary">
+          No project selected
+        </h2>
+        <p className="text-sm text-text-secondary">
+          Select a GCP project using the dropdown in the header to view
+          monitoring data.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Monitoring</h2>
-        <span className="text-sm text-text-secondary">
-          Last 24 hours
-        </span>
+      {/* Charts row */}
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <RequestsChart />
+        <SuccessRateChart />
+        <LatencyChart />
       </div>
 
-      {/* Placeholder charts */}
-      <div className="mb-8 grid grid-cols-3 gap-4">
-        <div className="card p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm text-text-secondary">
-            <BarChart3 className="h-4 w-4" />
-            Requests
-          </div>
-          <div className="flex h-32 items-center justify-center text-text-tertiary">
-            Chart placeholder
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm text-text-secondary">
-            <TrendingUp className="h-4 w-4" />
-            Success rate
-          </div>
-          <div className="flex h-32 items-center justify-center text-text-tertiary">
-            Chart placeholder
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="mb-3 flex items-center gap-2 text-sm text-text-secondary">
-            <Clock className="h-4 w-4" />
-            Latency (p95)
-          </div>
-          <div className="flex h-32 items-center justify-center text-text-tertiary">
-            Chart placeholder
-          </div>
-        </div>
-      </div>
-
-      {/* Placeholder feature table */}
-      <div className="card">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-border text-left text-sm text-text-secondary">
-              <th className="px-4 py-3 font-medium">Feature</th>
-              <th className="px-4 py-3 font-medium">Success rate</th>
-              <th className="px-4 py-3 font-medium">Requests</th>
-              <th className="px-4 py-3 font-medium">Latency (p95)</th>
-              <th className="px-4 py-3 font-medium">
-                Input / Output / Thinking
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-b border-border text-sm text-text-tertiary">
-              <td className="px-4 py-4" colSpan={5}>
-                <div className="flex items-center justify-center gap-2">
-                  <span>Connect to a GCP project to see data</span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      {/* Feature table */}
+      <div>
+        <h3 className="mb-3 text-sm font-medium text-text-secondary">
+          Features
+        </h3>
+        <FeatureTable />
       </div>
     </div>
   );

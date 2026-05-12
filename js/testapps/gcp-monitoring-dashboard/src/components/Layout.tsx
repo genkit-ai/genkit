@@ -1,11 +1,13 @@
 import { Activity } from 'lucide-react';
 import { Link, Outlet } from 'react-router-dom';
+import { ProjectSelector } from './ProjectSelector';
+import { TimeRangeSelector } from './TimeRangeSelector';
 
 export function Layout() {
   return (
     <div className="min-h-screen bg-surface-0">
       {/* Header */}
-      <header className="border-b border-border bg-surface-1 px-6 py-3">
+      <header className="sticky top-0 z-40 border-b border-border bg-surface-1/95 backdrop-blur px-6 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link to="/" className="flex items-center gap-2 hover:opacity-80">
@@ -14,11 +16,13 @@ export function Layout() {
                 Genkit
               </h1>
             </Link>
-          </div>
-          <div className="flex items-center gap-4">
             <span className="text-xs text-text-tertiary">
               Monitoring Dashboard
             </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <TimeRangeSelector />
+            <ProjectSelector />
           </div>
         </div>
       </header>

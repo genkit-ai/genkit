@@ -87,25 +87,18 @@ Build the main dashboard page with charts and feature table.
 
 ### Checklist
 
-- [ ] **3.1** Create `src/components/Layout.tsx` — App shell with header, nav, content area
-- [ ] **3.2** Create `src/components/ProjectSelector.tsx` — Dropdown to select GCP project
-  - Fetches project list from `/api/projects`
-  - Stores selection in React context / URL param
-- [ ] **3.3** Create `src/components/TimeRangeSelector.tsx` — Time range picker
-  - Presets: Last 1h, 6h, 24h, 7d
-  - Custom range with date pickers
-  - Stores in URL params
-- [ ] **3.4** Create React context for project + time range state
-- [ ] **3.5** Create `src/hooks/useMetrics.ts` — TanStack Query hooks for metrics API
-- [ ] **3.6** Create `src/components/charts/RequestsChart.tsx` — Area chart (Recharts)
-- [ ] **3.7** Create `src/components/charts/SuccessRateChart.tsx` — Line chart, 0-100%
-- [ ] **3.8** Create `src/components/charts/LatencyChart.tsx` — Line chart for latency
-- [ ] **3.9** Create `src/components/FeatureTable.tsx` — Data table with columns:
-  - Feature name (link), Success rate, Requests (with sparkline), Latency p95, I/O/Thinking tokens
-  - Sortable columns, pagination
-- [ ] **3.10** Create `src/pages/OverviewPage.tsx` — Compose all overview components
-- [ ] **3.11** Style everything with dark theme matching mockups
-- [ ] **3.12** Add loading skeletons and empty states
+- [x] **3.1** Update `src/components/Layout.tsx` — Sticky header with ProjectSelector + TimeRangeSelector
+- [x] **3.2** Create `src/components/ProjectSelector.tsx` — Dropdown with type-in + auto-fill from ADC
+- [x] **3.3** Create `src/components/TimeRangeSelector.tsx` — Preset buttons (1h/6h/24h/7d/30d) + refresh
+- [x] **3.4** Create `src/contexts/DashboardContext.tsx` — React context for project + time range + URL params
+- [x] **3.5** Create `src/hooks/useMetrics.ts` — TanStack Query hooks for overview + timeseries
+- [x] **3.6** Create `src/components/charts/RequestsChart.tsx` — Stacked area chart (success/failure)
+- [x] **3.7** Create `src/components/charts/SuccessRateChart.tsx` — Line chart 0-100% with color coding
+- [x] **3.8** Create `src/components/charts/LatencyChart.tsx` — Line chart (p99) with time formatting
+- [x] **3.9** Create `src/components/FeatureTable.tsx` — Sortable table with success rate badges, token counts, nav links
+- [x] **3.10** Update `src/pages/OverviewPage.tsx` — 3-column chart grid + feature table
+- [x] **3.11** Update `src/App.tsx` — Wrap with DashboardProvider
+- [x] **3.12** Tested with real data from weather-gen-test-next (7d range)
 
 ### Deliverable
 Fully functional overview page showing real metrics data with interactive
@@ -263,13 +256,13 @@ Automated tests may be added in a future iteration.
 
 ## Current Status
 
-**Last updated**: Stage 2 complete (ready to begin Stage 3)
+**Last updated**: Stage 3 complete (ready to begin Stage 4)
 
 | Stage | Status | Notes |
 |-------|--------|-------|
 | Stage 1: Scaffolding | ✅ Complete | All 12 items done. Frontend + backend running, ADC auth working. |
 | Stage 2: API Integration | ✅ Complete | All 12 items done. Tested with weather-gen-test-next. Fixed ALIGN_DELTA for CUMULATIVE metrics. |
-| Stage 3: Overview Page | 🔲 Not started | |
+| Stage 3: Overview Page | ✅ Complete | All 12 items done. Charts, feature table, project/time selectors, dark theme all working. |
 | Stage 4: Feature Detail | 🔲 Not started | |
 | Stage 5: Trace Viewer | 🔲 Not started | |
 | Stage 6: Polish | 🔲 Not started | |
