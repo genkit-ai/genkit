@@ -48,12 +48,11 @@ from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions
 from genkit._core._registry import Registry
-from genkit._core._tracing import run_in_new_span
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     Part,
     Role,
-    SpanMetadata,
     ToolDefinition,
     ToolRequest,
     ToolRequestPart,
@@ -191,10 +190,7 @@ async def generate_action(
     so reflection runs do not stack another util span on the action span.
     """
     span_name = 'generate'
-    with run_in_new_span(
-        SpanMetadata(name=span_name),
-        labels={'genkit:type': 'util'},
-    ) as span:
+    with run_in_new_span(SpanMetadata(name=span_name, type='util')) as span:
         span.set_attribute('genkit:name', span_name)
         with contextlib.suppress(Exception):
             span.set_attribute('genkit:input', raw_request.model_dump_json(by_alias=True, exclude_none=True))

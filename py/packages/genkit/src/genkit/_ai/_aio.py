@@ -95,7 +95,7 @@ from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
-from genkit._core._tracing import run_in_new_span
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -105,7 +105,6 @@ from genkit._core._typing import (
     ModelInfo,
     Operation,
     Part,
-    SpanMetadata,
     ToolChoice,
     ToolRequestPart,
     ToolResponsePart,
@@ -1134,8 +1133,8 @@ class Genkit:
         if not inspect.iscoroutinefunction(fn):
             raise TypeError('fn must be a coroutine function')
 
-        span_metadata = SpanMetadata(name=name, metadata=metadata)
-        with run_in_new_span(span_metadata, labels={'genkit:type': 'flowStep'}) as span:
+        span_metadata = SpanMetadata(name=name, type='flowStep', metadata=metadata)
+        with run_in_new_span(span_metadata) as span:
             try:
                 result = await fn()
                 output = (
