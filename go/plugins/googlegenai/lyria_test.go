@@ -117,6 +117,42 @@ func TestLyriaConfigFromRequest(t *testing.T) {
 	}
 }
 
+func TestLyriaPredictURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		location string
+		project  string
+		model    string
+		want     string
+	}{
+		{
+			name:     "global location uses bare aiplatform host",
+			location: "global",
+			project:  "my-proj",
+			model:    "lyria-002",
+			want:     "https://aiplatform.googleapis.com/v1beta1/projects/my-proj/locations/global/publishers/google/models/lyria-002:predict",
+		},
+		{
+			name:     "regional location uses host prefix",
+			location: "us-central1",
+			project:  "my-proj",
+			model:    "lyria-002",
+			want:     "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/my-proj/locations/us-central1/publishers/google/models/lyria-002:predict",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lyriaPredictURL(tt.location, tt.project, tt.model)
+			if got != tt.want {
+				t.Errorf("lyriaPredictURL() =\n  %s\nwant\n  %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTranslateLyriaResponse(t *testing.T) {
 	t.Parallel()
 

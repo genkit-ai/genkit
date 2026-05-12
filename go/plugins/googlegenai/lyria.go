@@ -110,11 +110,18 @@ func translateLyriaResponse(resp *lyriaPredictResponse, input *ai.ModelRequest) 
 }
 
 // lyriaPredictURL builds the Vertex AI `:predict` endpoint URL for a Lyria
-// music model in the given project + location.
+// music model in the given project + location. Mirrors the host + version
+// scheme in js/plugins/google-genai/src/vertexai/client.ts: the bare
+// aiplatform host is used for the "global" location and a regional prefix
+// is added otherwise.
 func lyriaPredictURL(location, project, model string) string {
+	host := "aiplatform.googleapis.com"
+	if location != "global" {
+		host = location + "-" + host
+	}
 	return fmt.Sprintf(
-		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
-		location, project, location, model,
+		"https://%s/v1beta1/projects/%s/locations/%s/publishers/google/models/%s:predict",
+		host, project, location, model,
 	)
 }
 
