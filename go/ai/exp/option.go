@@ -58,9 +58,11 @@ type AgentOption[State any] interface {
 // and context-scoped values (e.g. the caller's identity for RBAC-aware
 // redaction) flow through here.
 //
-// The state input is a deep copy owned by the caller; the transform
-// may mutate and return it, or return a freshly-constructed value.
-type StateTransform[State any] = func(ctx context.Context, state SessionState[State]) SessionState[State]
+// state is a fresh deep copy made for this call: the transform owns it
+// and may mutate in place, return a new pointer, or return nil to omit
+// state from the response entirely. Do not retain the pointer past the
+// call; the framework drops its reference after the transform returns.
+type StateTransform[State any] = func(ctx context.Context, state *SessionState[State]) *SessionState[State]
 
 type agentOptions[State any] struct {
 	store     SessionStore[State]
@@ -114,7 +116,7 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) AgentOption[State] {
 	for _, e := range events {
 		set[e] = struct{}{}
 	}
-	return WithSnapshotCallback[State](func(_ context.Context, sc *SnapshotContext[State]) bool {
+	return WithSnapshotCallback(func(_ context.Context, sc *SnapshotContext[State]) bool {
 		_, ok := set[sc.Event]
 		return ok
 	})

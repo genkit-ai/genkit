@@ -49,14 +49,13 @@ type SnapshotContext[State any] struct {
 // If not provided and a store is configured, snapshots are always created.
 type SnapshotCallback[State any] = func(ctx context.Context, sc *SnapshotContext[State]) bool
 
-// applyTransform returns the result of applying t to *state, or state
+// applyTransform returns the result of applying t to state, or state
 // unchanged if t is nil. A nil state is returned as-is.
 func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) *SessionState[State] {
 	if t == nil || state == nil {
 		return state
 	}
-	transformed := t(ctx, *state)
-	return &transformed
+	return t(ctx, state)
 }
 
 // --- Session store ---
