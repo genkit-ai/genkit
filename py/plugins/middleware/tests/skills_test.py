@@ -21,7 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from genkit._core._model import GenerateActionOptions, GenerateHookParams, ModelRequest, ModelResponse
+from genkit import ModelRequest, ModelResponse
+from genkit._core._model import GenerateActionOptions
+from genkit.middleware import GenerateHookParams
 from genkit.plugins.middleware import Skills
 
 
