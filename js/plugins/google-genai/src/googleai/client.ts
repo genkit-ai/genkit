@@ -55,16 +55,19 @@ export async function createInteraction(
     resourcePath: 'interactions',
     clientOptions,
   });
+
   const fetchOptions = getFetchOptions({
     method: 'POST',
     apiKey,
     clientOptions,
     body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
   });
 
   const response = await makeRequest(url, fetchOptions);
+  const responseJson = await response.json();
 
-  return await response.json();
+  return responseJson;
 }
 
 /**
@@ -84,15 +87,18 @@ export async function getInteraction(
     resourcePath: `interactions/${interactionId}`,
     clientOptions,
   });
+
   const fetchOptions = getFetchOptions({
     method: 'GET',
     apiKey,
     clientOptions,
+    isInteraction: true,
   });
 
   const response = await makeRequest(url, fetchOptions);
+  const responseJson = await response.json();
 
-  return await response.json();
+  return responseJson;
 }
 
 /**
@@ -116,6 +122,7 @@ export async function cancelInteraction(
     method: 'POST',
     apiKey,
     clientOptions,
+    isInteraction: true,
   });
 
   try {
@@ -371,10 +378,15 @@ function getFetchOptions(params: {
   apiKey: string | undefined;
   body?: string;
   clientOptions?: ClientOptions;
+  isInteraction?: boolean;
 }) {
   const fetchOptions: RequestInit = {
     method: params.method,
-    headers: getHeaders(params.apiKey, params.clientOptions),
+    headers: getHeaders(
+      params.apiKey,
+      params.clientOptions,
+      params.isInteraction
+    ),
   };
   if (params.body) {
     fetchOptions.body = params.body;
@@ -414,7 +426,8 @@ function getAbortSignal(
  */
 function getHeaders(
   apiKey?: string,
-  clientOptions?: ClientOptions
+  clientOptions?: ClientOptions,
+  isInteraction?: boolean
 ): HeadersInit {
   let customHeaders = {};
   if (clientOptions?.customHeaders) {
@@ -427,6 +440,10 @@ function getHeaders(
     'Content-Type': 'application/json',
     'x-goog-api-client': getGenkitClientHeader(),
   };
+
+  if (isInteraction) {
+    headers['Api-Revision'] = '2026-05-20';
+  }
 
   if (apiKey) {
     headers['x-goog-api-key'] = apiKey;

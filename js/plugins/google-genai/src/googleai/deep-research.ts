@@ -22,22 +22,19 @@ import {
   modelRef,
 } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
-import {
-  ensureToolIds,
-  fromInteraction,
-  toInteractionTool,
-  toInteractionTurn,
-} from '../common/interaction-converters.js';
-import {
-  InteractionTool,
-  ResponseModality,
-} from '../common/interaction-types.js';
 import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
   cancelInteraction,
   createInteraction,
   getInteraction,
 } from './client.js';
+import {
+  ensureToolIds,
+  fromInteraction,
+  toInteractionSteps,
+  toInteractionTool,
+} from './interaction-converters.js';
+import { InteractionTool, ResponseModality } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -338,15 +335,17 @@ export function defineModel(
         }
       }
 
-      let responseMimeType = request.output?.contentType;
       let responseFormat: any = undefined;
       if (
         request.output?.format === 'json' ||
         request.output?.contentType === 'application/json'
       ) {
-        responseMimeType = 'application/json';
+        responseFormat = {
+          type: 'text',
+          mime_type: 'application/json',
+        };
         if (request.output.schema) {
-          responseFormat = cleanSchema(request.output.schema);
+          responseFormat.schema = cleanSchema(request.output.schema);
         }
       }
 
@@ -359,7 +358,7 @@ export function defineModel(
 
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
-        input: ensureToolIds(messages).map(toInteractionTurn),
+        input: toInteractionSteps(ensureToolIds(messages)),
         background: true,
         agent_config: {
           type: 'deep-research',
@@ -376,7 +375,6 @@ export function defineModel(
         previous_interaction_id: previousInteractionId,
         store,
         tools: tools.length ? tools : undefined,
-        response_mime_type: responseMimeType,
         response_format: responseFormat,
         response_modalities: responseModalitiesConverted,
         ...rest,

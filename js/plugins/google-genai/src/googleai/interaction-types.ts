@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 import { ToolChoice } from 'genkit';
-import { FunctionDeclaration, ToolConfig } from './types';
+import { FunctionDeclaration, ToolConfig } from '../common/types.js';
 
 /**
  * A tool that can be used by the model.
@@ -81,11 +81,17 @@ export declare type InteractionTool =
  * Citation information for model-generated content.
  */
 declare interface TextAnnotation {
+  /** The type of annotation (e.g. 'url_citation') */
+  type?: string;
   /** Start of segment of the response that is attributed to this source. */
   start_index?: number;
   /** End of the attributed segment, exclusive. */
   end_index?: number;
-  /** Source attributed for a portion of the text. Could be a URL, title, or other identifier. */
+  /** The URL for a url_citation annotation. */
+  url?: string;
+  /** The title for a url_citation annotation. */
+  title?: string;
+  /** Legacy source attributed for a portion of the text. */
   source?: string;
 }
 
@@ -180,7 +186,7 @@ export declare interface FunctionCallContent {
   /** The name of the tool to call. */
   name: string;
   /** The arguments to pass to the function. */
-  arguments?: Record<string, any>;
+  arguments?: Record<string, unknown>;
   /** A unique ID for this specific tool call. */
   id: string;
 }
@@ -195,7 +201,7 @@ export declare interface FunctionResultContent {
   /** Whether the tool call resulted in an error. */
   is_error?: boolean;
   /** The result of the tool call. */
-  result?: Record<string, any> | string;
+  result?: Record<string, unknown> | string;
   /** ID to match the ID from the function call block. */
   call_id: string;
 }
@@ -212,6 +218,53 @@ export type Content =
   | ThoughtContent
   | FunctionCallContent
   | FunctionResultContent;
+
+export declare interface ModelOutputStep {
+  type: 'model_output';
+  content: Content[];
+}
+
+export declare interface UserInputStep {
+  type: 'user_input';
+  content: Content[];
+}
+
+export declare interface GoogleSearchCallStep {
+  type: 'google_search_call';
+  id: string;
+  arguments: { queries: string[] };
+  signature?: string;
+}
+
+export declare interface GoogleSearchResultStep {
+  type: 'google_search_result';
+  call_id: string;
+  result: Record<string, unknown>;
+  signature?: string;
+}
+
+export declare interface CodeExecutionCallStep {
+  type: 'code_execution_call';
+  id: string;
+  arguments: { code: string; language?: string; [key: string]: unknown };
+  signature?: string;
+}
+
+export declare interface CodeExecutionResultStep {
+  type: 'code_execution_result';
+  call_id: string;
+  result: Record<string, unknown> | string;
+  signature?: string;
+}
+
+export type Step =
+  | ModelOutputStep
+  | UserInputStep
+  | Content
+  | GoogleSearchCallStep
+  | GoogleSearchResultStep
+  | CodeExecutionCallStep
+  | CodeExecutionResultStep;
 
 /**
  * A turn in a conversation.
@@ -354,7 +407,7 @@ export declare interface CreateInteractionRequest {
   agent?: string;
 
   /** The inputs for the interaction. */
-  input: string | Content[] | Turn[] | Content;
+  input: string | Step[] | Step;
 
   /** System instruction for the interaction. */
   system_instruction?: string;
@@ -363,9 +416,7 @@ export declare interface CreateInteractionRequest {
   tools?: InteractionTool[];
 
   /** Enforces that the generated response is a JSON object that complies with the JSON schema specified in this field */
-  response_format?: Record<string, any>;
-  /** Required if responseFormat is set. */
-  response_mime_type?: string;
+  response_format?: Record<string, unknown> | Record<string, unknown>[];
 
   /** The requested modalities of the response (TEXT, IMAGE, AUDIO). */
   response_modalities?: ResponseModality[];
@@ -408,8 +459,8 @@ export declare interface GeminiInteraction {
   updated?: string;
   /** The role of the interaction. */
   role?: string;
-  /** Responses from the model. */
-  outputs?: Content[];
+  /** Steps comprising the interaction timeline. */
+  steps?: Step[];
   /** Statistics on the interaction request's token usage. */
   usage?: Usage;
 }

@@ -18,11 +18,11 @@ import * as assert from 'assert';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
-import { GeminiInteraction } from '../../src/common/interaction-types.js';
 import {
   DeepResearchConfigSchema,
   defineModel,
 } from '../../src/googleai/deep-research.js';
+import { GeminiInteraction } from '../../src/googleai/interaction-types.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
 
 describe('Deep Research', () => {
@@ -68,7 +68,12 @@ describe('Deep Research', () => {
   const mockInteractionResponse: GeminiInteraction = {
     id: 'interaction-123',
     status: 'completed',
-    outputs: [{ type: 'text', text: 'Here is the report...' }],
+    steps: [
+      {
+        type: 'model_output',
+        content: [{ type: 'text', text: 'Here is the report...' }],
+      },
+    ],
   };
 
   describe('defineModel', () => {
@@ -174,7 +179,7 @@ describe('Deep Research', () => {
       assert.strictEqual(body.system_instruction, undefined);
       assert.deepStrictEqual(body.input, [
         {
-          role: 'user',
+          type: 'user_input',
           content: [
             {
               type: 'text',
@@ -183,7 +188,7 @@ describe('Deep Research', () => {
           ],
         },
         {
-          role: 'user',
+          type: 'user_input',
           content: [
             {
               type: 'text',
@@ -215,10 +220,14 @@ describe('Deep Research', () => {
       const options = fetchStub.lastCall.args[1];
       const body = JSON.parse(options.body);
 
-      assert.strictEqual(body.response_mime_type, 'application/json');
+      assert.strictEqual(body.response_mime_type, undefined);
       assert.deepStrictEqual(body.response_format, {
-        type: 'object',
-        properties: { foo: { type: 'string' } },
+        type: 'text',
+        mime_type: 'application/json',
+        schema: {
+          type: 'object',
+          properties: { foo: { type: 'string' } },
+        },
       });
     });
 

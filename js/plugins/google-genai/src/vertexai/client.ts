@@ -18,14 +18,14 @@ import { GenkitError, StatusName } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GoogleAuth } from 'google-auth-library';
 import {
-  CreateInteractionRequest,
-  GeminiInteraction,
-} from '../common/interaction-types.js';
-import {
   extractErrMsg,
   getGenkitClientHeader,
   processStream,
 } from '../common/utils.js';
+import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from './interaction-types.js';
 import {
   ClientOptions,
   EmbedContentRequest,
