@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates DefinePromptAgent, which creates a multi-turn
-// conversational agent backed by a .prompt file. The conversation loop
-// (render prompt, call model, stream chunks, update history) is handled
-// automatically. Compare with agent-custom (DefineCustomAgent), which
-// wires the same loop manually, and agent-inline (DefineAgent), which
-// defines the prompt inline alongside the agent.
+// This sample demonstrates DefineAgent with aix.FromPrompt, which
+// creates a multi-turn conversational agent backed by a .prompt file.
+// The conversation loop (render prompt, call model, stream chunks,
+// update history) is handled automatically. Compare with agent-custom
+// (DefineCustomAgent), which wires the same loop manually, and
+// agent-inline (DefineAgent + aix.FromInline), which defines the
+// prompt inline alongside the agent.
 package main
 
 import (
@@ -40,8 +41,8 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	chatAgent := genkit.DefinePromptAgent(g, "chat",
-		ChatPromptInput{Personality: "a sarcastic pirate"},
+	chatAgent := genkit.DefineAgent(g, "chat",
+		aix.FromPrompt(ChatPromptInput{Personality: "a sarcastic pirate"}),
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {
 			return sc.Event == aix.SnapshotEventInvocationEnd || sc.TurnIndex%5 == 0

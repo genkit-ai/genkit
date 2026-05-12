@@ -950,7 +950,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState](reg, "testPrompt", nil)
+	af := DefineAgent[testState](reg, "testPrompt", FromPrompt())
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1037,7 +1037,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefinePromptAgent[testState](reg, "historyPrompt", nil)
+	af := DefineAgent[testState](reg, "historyPrompt", FromPrompt())
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1111,7 +1111,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState](reg, "snapPrompt", nil,
+	af := DefineAgent[testState](reg, "snapPrompt", FromPrompt(),
 		WithSessionStore(store),
 	)
 
@@ -1252,7 +1252,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
-	af := DefinePromptAgent[testState](reg, "toolPrompt", nil)
+	af := DefineAgent[testState](reg, "toolPrompt", FromPrompt())
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1491,7 +1491,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState](reg, "runTextPrompt", nil)
+	af := DefineAgent[testState](reg, "runTextPrompt", FromPrompt())
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {
@@ -1762,59 +1762,6 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 		t.Fatal("agent fn did not return after ctx cancel; goroutine deadlock")
 	}
 	conn.Close()
-}
-
-// TestAgent_DefineAgent_StateMismatchPanics verifies that every typed
-// AgentOption variant panics at definition time when its State type
-// parameter does not match the State declared on DefineAgent. This is
-// the runtime backstop for DefineAgent's mixed variadic (which cannot
-// enforce State at compile time because AgentDefineOption's State is
-// phantom). DefineCustomAgent and DefinePromptAgent both declare
-// `opts ...AgentOption[State]`, so they catch the same mismatch at
-// compile time and need no runtime test.
-func TestAgent_DefineAgent_StateMismatchPanics(t *testing.T) {
-	type otherState struct{ X int }
-	reg := newTestRegistry(t)
-
-	cases := []struct {
-		name string
-		opt  AgentDefineOption[otherState]
-	}{
-		{
-			name: "WithSessionStore",
-			opt:  WithSessionStore[testState](NewInMemorySessionStore[testState]()),
-		},
-		{
-			name: "WithSnapshotCallback",
-			opt: WithSnapshotCallback[testState](func(context.Context, *SnapshotContext[testState]) bool {
-				return true
-			}),
-		},
-		{
-			name: "WithSnapshotOn",
-			opt:  WithSnapshotOn[testState](SnapshotEventTurnEnd),
-		},
-		{
-			name: "WithStateTransform",
-			opt:  WithStateTransform[testState](func(_ context.Context, s *SessionState[testState]) *SessionState[testState] { return s }),
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatalf("expected panic on State mismatch via %s", tc.name)
-				}
-				msg := fmt.Sprintf("%v", r)
-				if !strings.Contains(msg, "does not match agent State") {
-					t.Errorf("panic message missing expected substring: %s", msg)
-				}
-			}()
-			_ = DefineAgent[otherState](reg, "mismatch-"+tc.name, tc.opt)
-		})
-	}
 }
 
 // --- Detach, transform, and getSnapshot tests ---

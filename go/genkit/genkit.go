@@ -430,9 +430,8 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 	return core.DefineBidiFlow(g.reg, name, fn)
 }
 
-// DefineAgent defines an agent that wraps a prompt defined inline from the
-// given options, registers both under name as actions on the registry, and
-// returns an [aix.Agent].
+// DefineAgent defines a prompt-backed agent and registers it as an
+// action on the registry. Returns an [aix.Agent].
 //
 // Experimental: This API is under active development and may change in any
 // minor version release.
@@ -443,85 +442,54 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 // handles session state, conversation history, and optional snapshot
 // persistence automatically.
 //
-// opts is a mixed list of [ai.PromptOption] values (which configure the
-// underlying prompt) and [aix.AgentOption] values (which configure the agent
-// itself). The State type parameter must be specified explicitly: use [any]
-// when no typed Custom state is needed; use [Foo] when an
-// [aix.SessionStore[Foo]] is provided. Mismatches panic at definition time.
+// source selects how the prompt is backed:
 //
-// For an agent backed by an existing prompt, use [DefinePromptAgent]. For
-// full control over the per-turn loop, use [DefineCustomAgent].
+//   - [aix.FromInline] defines the prompt inline from a set of
+//     [ai.PromptOption] values; the prompt is registered under name.
+//   - [aix.FromPrompt] references an existing prompt registered with
+//     the registry under name (e.g. one defined via [DefinePrompt] or
+//     loaded from a .prompt file).
+//
+// The State type parameter is inferred from the typed agent options
+// (e.g. [aix.WithSessionStore], [aix.WithSnapshotOn]); pass an explicit
+// [State] only when no typed option is provided.
+//
+// For full control over the per-turn loop, use [DefineCustomAgent].
 //
 // # Options
 //
-//   - any [ai.PromptOption]: e.g., [ai.WithModel], [ai.WithSystem], [ai.WithTools]
 //   - [aix.WithSessionStore]: Enable snapshot persistence
 //   - [aix.WithSnapshotCallback]: Control when snapshots are created
 //   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
+//   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
-// Example:
+// Example (inline prompt):
 //
-//	chatAgent := genkit.DefineAgent[any](g, "chat",
-//		ai.WithModelName("googleai/gemini-3-flash-preview"),
-//		ai.WithSystem("You are a helpful assistant."),
+//	chatAgent := genkit.DefineAgent(g, "chat",
+//		aix.FromInline(
+//			ai.WithModelName("googleai/gemini-3-flash-preview"),
+//			ai.WithSystem("You are a helpful assistant."),
+//		),
 //		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 //	)
 //
-//	conn, err := chatAgent.StreamBidi(ctx)
-//	if err != nil {
-//		// handle error
-//	}
-//	conn.SendText("Hello!")
-//	for chunk, err := range conn.Receive() {
-//		if chunk.TurnEnd != nil {
-//			break
-//		}
-//		fmt.Print(chunk.ModelChunk.Text())
-//	}
-//	conn.Close()
-func DefineAgent[State any](
-	g *Genkit,
-	name string,
-	opts ...aix.AgentDefineOption[State],
-) *aix.Agent[any, State] {
-	return aix.DefineAgent(g.reg, name, opts...)
-}
-
-// DefinePromptAgent defines an agent backed by a prompt already registered
-// with the registry (via [DefinePrompt] or loaded from a .prompt file). The
-// agent is registered under the same name as the prompt.
-//
-// Experimental: This API is under active development and may change in any
-// minor version release.
-//
-// defaultInput is used to render the prompt on every turn. The prompt's
-// Render is invoked once at definition time as a smoke check, so a
-// defaultInput that fails the prompt's input schema panics here rather
-// than failing on the first invocation.
-//
-// For an agent that defines its prompt inline, use [DefineAgent]. For full
-// control over the per-turn loop, use [DefineCustomAgent].
-//
-// Type parameters:
-//   - State: Type for user-defined state persisted in snapshots
-//
-// Example:
+// Example (existing prompt):
 //
 //	type ChatInput struct {
 //		Personality string `json:"personality"`
 //	}
 //
-//	chatAgent := genkit.DefinePromptAgent[any](g, "chat",
-//		ChatInput{Personality: "a sarcastic pirate"},
+//	chatAgent := genkit.DefineAgent(g, "chat",
+//		aix.FromPrompt(ChatInput{Personality: "a sarcastic pirate"}),
 //		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 //	)
-func DefinePromptAgent[State any](
+func DefineAgent[State any](
 	g *Genkit,
-	promptName string,
-	defaultInput any,
+	name string,
+	source aix.AgentSource,
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[any, State] {
-	return aix.DefinePromptAgent(g.reg, promptName, defaultInput, opts...)
+	return aix.DefineAgent(g.reg, name, source, opts...)
 }
 
 // DefineCustomAgent defines an agent with full control over the conversation
@@ -536,8 +504,8 @@ func DefinePromptAgent[State any](
 // Call [aix.SessionRunner.Run] to enter the turn loop, which blocks until the
 // client sends the next message.
 //
-// For agents backed by a prompt, use [DefineAgent] (inline) or
-// [DefinePromptAgent] (existing prompt) instead.
+// For agents backed by a prompt, use [DefineAgent] with [aix.FromInline]
+// (inline prompt) or [aix.FromPrompt] (existing prompt) instead.
 //
 // # Options
 //
