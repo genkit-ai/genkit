@@ -95,13 +95,22 @@ func lyriaConfigFromRequest(input *ai.ModelRequest) (*LyriaConfig, error) {
 	return &result, nil
 }
 
+// defaultLyriaMimeType is the audio mime type assumed when Vertex does not
+// include one in a prediction. lyria-002 returns WAV (RIFF) bytes without
+// labeling them.
+const defaultLyriaMimeType = "audio/wav"
+
 // translateLyriaResponse converts a raw Lyria predict response into an
 // *ai.ModelResponse with one media part per returned audio clip.
 func translateLyriaResponse(resp *lyriaPredictResponse, input *ai.ModelRequest) *ai.ModelResponse {
 	msg := &ai.Message{Role: ai.RoleModel}
 	for _, p := range resp.Predictions {
-		url := fmt.Sprintf("data:%s;base64,%s", p.MimeType, p.BytesBase64Encoded)
-		msg.Content = append(msg.Content, ai.NewMediaPart(p.MimeType, url))
+		mime := p.MimeType
+		if mime == "" {
+			mime = defaultLyriaMimeType
+		}
+		url := fmt.Sprintf("data:%s;base64,%s", mime, p.BytesBase64Encoded)
+		msg.Content = append(msg.Content, ai.NewMediaPart(mime, url))
 	}
 	return &ai.ModelResponse{
 		FinishReason: ai.FinishReasonStop,
