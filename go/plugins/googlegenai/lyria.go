@@ -170,7 +170,7 @@ func generateMusic(
 		return nil, core.NewPublicError(core.FAILED_PRECONDITION, "Lyria is only available through the Vertex AI backend", nil)
 	}
 	if cc.HTTPClient == nil {
-		return nil, fmt.Errorf("lyria: genai.Client has no HTTP client configured")
+		return nil, core.NewPublicError(core.FAILED_PRECONDITION, "lyria: genai.Client has no HTTP client configured", nil)
 	}
 
 	cfg, err := lyriaConfigFromRequest(input)
@@ -221,7 +221,7 @@ func generateMusic(
 		return nil, err
 	}
 	if len(lp.Predictions) == 0 {
-		return nil, fmt.Errorf("lyria: no predictions returned (possibly content-filtered)")
+		return nil, core.NewPublicError(core.INTERNAL, "lyria: no predictions returned (possibly content-filtered)", nil)
 	}
 	warnLyriaCountMismatch(ctx, req.Parameters.SampleCount, len(lp.Predictions))
 
@@ -260,7 +260,7 @@ func doLyriaPredict(ctx context.Context, httpClient *http.Client, url string, re
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("lyria: %s: %s", resp.Status, string(data))
+		return nil, core.NewPublicError(core.INTERNAL, fmt.Sprintf("lyria: %s: %s", resp.Status, string(data)), nil)
 	}
 
 	var lp lyriaPredictResponse

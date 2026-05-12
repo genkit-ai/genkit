@@ -268,6 +268,13 @@ func TestDoLyriaPredict_NonOKStatusReturnsError(t *testing.T) {
 	if !strings.Contains(err.Error(), "400") {
 		t.Errorf("error = %v, want it to mention 400", err)
 	}
+	var ufe *core.UserFacingError
+	if !errors.As(err, &ufe) {
+		t.Fatalf("error %T is not *core.UserFacingError: %v", err, err)
+	}
+	if ufe.Status != core.INTERNAL {
+		t.Errorf("status = %s, want INTERNAL", ufe.Status)
+	}
 }
 
 func TestTranslateLyriaResponse(t *testing.T) {
