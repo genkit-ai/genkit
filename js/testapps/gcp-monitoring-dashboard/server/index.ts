@@ -2,6 +2,8 @@ import cors from 'cors';
 import express from 'express';
 import { getAuthClient, getProjectId } from './auth.js';
 import { cache } from './cache.js';
+import metricsRouter from './routes/metrics.js';
+import tracesRouter from './routes/traces.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,8 +37,6 @@ app.get('/api/auth/status', async (_req, res) => {
   try {
     const client = await getAuthClient();
     const projectId = await getProjectId();
-
-    // Try to get credentials to verify they work
     const credentials = await client.getAccessToken();
 
     res.json({
@@ -66,11 +66,10 @@ app.get('/api/cache/stats', (_req, res) => {
   });
 });
 
-// Placeholder routes for metrics and traces (will be implemented in Stage 2)
+// Projects
 app.get('/api/projects', async (_req, res) => {
   try {
     const projectId = await getProjectId();
-    // For now, just return the default project from ADC
     const projects = projectId
       ? [{ projectId, name: projectId }]
       : [];
@@ -82,34 +81,9 @@ app.get('/api/projects', async (_req, res) => {
   }
 });
 
-app.get('/api/metrics/overview', (_req, res) => {
-  res.json({
-    features: [],
-    _note: 'Not yet implemented — coming in Stage 2',
-  });
-});
-
-app.get('/api/metrics/timeseries', (_req, res) => {
-  res.json({
-    timeSeries: [],
-    _note: 'Not yet implemented — coming in Stage 2',
-  });
-});
-
-app.get('/api/traces', (_req, res) => {
-  res.json({
-    traces: [],
-    _note: 'Not yet implemented — coming in Stage 2',
-  });
-});
-
-app.get('/api/traces/:traceId', (req, res) => {
-  res.json({
-    traceId: req.params.traceId,
-    spans: [],
-    _note: 'Not yet implemented — coming in Stage 2',
-  });
-});
+// Mount route modules
+app.use('/api/metrics', metricsRouter);
+app.use('/api/traces', tracesRouter);
 
 // Error handling middleware
 app.use(
@@ -128,5 +102,7 @@ app.use(
 
 app.listen(PORT, () => {
   console.log(`\n🔍 Genkit Monitoring API server running at http://localhost:${PORT}`);
-  console.log(`   Health check: http://localhost:${PORT}/api/health\n`);
+  console.log(`   Health check: http://localhost:${PORT}/api/health`);
+  console.log(`   Metrics:      http://localhost:${PORT}/api/metrics/overview`);
+  console.log(`   Traces:       http://localhost:${PORT}/api/traces\n`);
 });

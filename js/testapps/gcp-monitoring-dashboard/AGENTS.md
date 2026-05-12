@@ -15,7 +15,7 @@ metric data from GCP APIs, and renders a monitoring dashboard.
 ┌─────────────────────┐     ┌──────────────────────┐     ┌─────────────────┐
 │  React Frontend     │────▶│  Express Backend      │────▶│  GCP APIs       │
 │  (Vite, port 5173)  │     │  (proxy, port 3000)   │     │  - Monitoring v3│
-│  Recharts, Tailwind │     │  ADC auth + cache     │     │  - Trace v2     │
+│  Recharts, Tailwind │     │  ADC auth + cache     │     │  - Trace v1     │
 └─────────────────────┘     └──────────────────────┘     └─────────────────┘
 ```
 
@@ -93,7 +93,7 @@ js/testapps/gcp-monitoring-dashboard/
 - **Time Series**: `projects.timeSeries.list` — fetches metric data over time
 - **Metric Descriptors**: `projects.metricDescriptors.list` — discover available metrics
 
-**Genkit metric names** (prefixed with `custom.googleapis.com/opencensus/`):
+**Genkit metric names** (prefixed with `workload.googleapis.com/genkit/`):
 - `genkit/feature/requests` — feature-level request counts
 - `genkit/feature/latency` — feature-level latency histogram
 - `genkit/feature/path/requests` — path-level request counts (errors)
@@ -111,11 +111,13 @@ js/testapps/gcp-monitoring-dashboard/
 **Common metric dimensions/labels**:
 - `featureName`, `modelName`, `path`, `status`, `error`, `source`, `sourceVersion`
 
-### Cloud Trace API v2
+### Cloud Trace API v1
 
-- **List traces**: `projects.traces.list` — paginated trace listing with filters
+- **List traces**: `projects.traces.list` — paginated trace listing with filters (use `view=ROOTSPAN`)
 - **Get trace**: `projects.traces.get` — get all spans for a trace
-- **Batch get**: `projects.traces.batchGet` — batch fetch
+
+> **Note**: Cloud Trace v2 is write-only (for ingesting spans). Reading traces
+> requires the v1 API at `https://cloudtrace.googleapis.com/v1`.
 
 **Genkit span attributes** (normalized with `/` instead of `:`):
 - `genkit/type` — action, flow, flowStep, util, userEngagement

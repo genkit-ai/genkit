@@ -44,28 +44,36 @@ Implement the backend GCP API clients and REST routes.
 
 ### Checklist
 
-- [ ] **2.1** Create `server/gcp/monitoring.ts` — Cloud Monitoring API client
-  - `listMetricDescriptors()` — discover available genkit metrics
+- [x] **2.1** Create `server/gcp/monitoring.ts` — Cloud Monitoring API client
   - `queryTimeSeries()` — fetch time series data with filters and alignment
   - `queryFeatureOverview()` — aggregate metrics across features
-- [ ] **2.2** Create `server/gcp/tracing.ts` — Cloud Trace API client
-  - `listTraces()` — list traces with filters and pagination
+  - `normalizeTimeSeries()` — convert GCP format to simplified format
+  - `computeAlignmentPeriod()` — auto-compute based on time range
+  - **Note**: Metric prefix is `workload.googleapis.com/genkit/` (not `custom.googleapis.com/opencensus/`)
+- [x] **2.2** Create `server/gcp/tracing.ts` — Cloud Trace v1 API client
+  - `listTraces()` — list traces with filters and pagination (v1 API, ROOTSPAN view)
   - `getTrace()` — get all spans for a specific trace
-  - Helper: `buildSpanTree()` — organize flat spans into tree structure
-- [ ] **2.3** Create `server/routes/metrics.ts` — Metrics API routes
-  - `GET /api/metrics/overview` — aggregated feature overview
-  - `GET /api/metrics/timeseries` — time series for charts
-- [ ] **2.4** Create `server/routes/traces.ts` — Traces API routes
-  - `GET /api/traces` — list traces with filters
-  - `GET /api/traces/:traceId` — get full trace
-- [ ] **2.5** Create `GET /api/projects` route — list accessible projects
-- [ ] **2.6** Create `POST /api/cache/clear` route
-- [ ] **2.7** Wire all routes into `server/index.ts`
-- [ ] **2.8** Add caching to all GCP API calls
-- [ ] **2.9** Add error handling middleware (auth errors, API errors, validation)
-- [ ] **2.10** Test with real GCP project: verify metrics and traces are returned
-- [ ] **2.11** Create `src/api/client.ts` — Frontend API client (typed fetch wrapper)
-- [ ] **2.12** Create `src/types/index.ts` — Shared TypeScript types for API responses
+  - `buildSpanTree()` — organize flat spans into tree structure
+  - `normalizeTraceForList()` — summary format for list view
+  - `flattenSpanTree()` — flatten tree back to list
+  - **Note**: Cloud Trace v2 is write-only; reading requires v1 API
+- [x] **2.3** Create `server/routes/metrics.ts` — Metrics API routes
+  - `GET /api/metrics/overview` — aggregated feature overview (cached)
+  - `GET /api/metrics/timeseries` — time series for charts (cached)
+- [x] **2.4** Create `server/routes/traces.ts` — Traces API routes
+  - `GET /api/traces` — list traces with filters, pagination, shorthand params (cached)
+  - `GET /api/traces/:traceId` — get full trace with span tree (cached)
+- [x] **2.5** Create `GET /api/projects` route — list accessible projects (in server/index.ts)
+- [x] **2.6** Create `POST /api/cache/clear` route (in server/index.ts)
+- [x] **2.7** Wire all routes into `server/index.ts`
+- [x] **2.8** Add caching to all GCP API calls (metrics: 60s, trace list: 30s, trace detail: 5min)
+- [x] **2.9** Add error handling middleware (auth errors, API errors, validation)
+- [x] **2.10** Test with real GCP project: verify metrics and traces are returned
+  - Tested with `weather-gen-test-next` project
+  - Fixed: ALIGN_SUM → ALIGN_DELTA for CUMULATIVE metrics
+  - Verified: metrics overview, timeseries, trace list, trace detail all working
+- [x] **2.11** Create `src/api/client.ts` — Frontend API client (typed fetch wrapper with ApiError class)
+- [x] **2.12** Create `src/types/index.ts` — Shared TypeScript types for API responses
 
 ### Deliverable
 Backend API fully functional. Can `curl localhost:3000/api/metrics/overview?projectId=...`
@@ -255,12 +263,12 @@ Automated tests may be added in a future iteration.
 
 ## Current Status
 
-**Last updated**: Stage 1 complete (ready to begin Stage 2)
+**Last updated**: Stage 2 complete (ready to begin Stage 3)
 
 | Stage | Status | Notes |
 |-------|--------|-------|
 | Stage 1: Scaffolding | ✅ Complete | All 12 items done. Frontend + backend running, ADC auth working. |
-| Stage 2: API Integration | 🔲 Not started | |
+| Stage 2: API Integration | ✅ Complete | All 12 items done. Tested with weather-gen-test-next. Fixed ALIGN_DELTA for CUMULATIVE metrics. |
 | Stage 3: Overview Page | 🔲 Not started | |
 | Stage 4: Feature Detail | 🔲 Not started | |
 | Stage 5: Trace Viewer | 🔲 Not started | |
