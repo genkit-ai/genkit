@@ -15,8 +15,9 @@
 // This sample demonstrates DefinePromptAgent, which creates a multi-turn
 // conversational agent backed by a .prompt file. The conversation loop
 // (render prompt, call model, stream chunks, update history) is handled
-// automatically. Compare with custom-agent which wires the same loop
-// manually.
+// automatically. Compare with agent-custom (DefineCustomAgent), which
+// wires the same loop manually, and agent-inline (DefineAgent), which
+// defines the prompt inline alongside the agent.
 package main
 
 import (

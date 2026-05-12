@@ -31,15 +31,24 @@ type PromptFn = func(context.Context, any) (string, error)
 // MessagesFn is a function that generates messages.
 type MessagesFn = func(context.Context, any) ([]*Message, error)
 
-// No-op marker so the exp package's AgentDefineOption marker interface is
-// satisfied by every PromptOption. Lets DefineAgent accept a mixed variadic
-// of prompt options and agent-only options.
-func (*configOptions) isAgentDefineOption()    {}
-func (*commonGenOptions) isAgentDefineOption() {}
-func (*inputOptions) isAgentDefineOption()     {}
-func (*promptOptions) isAgentDefineOption()    {}
-func (*promptingOptions) isAgentDefineOption() {}
-func (*outputOptions) isAgentDefineOption()    {}
+// AgentDefineOption is the marker satisfied by every option that can be
+// passed to [github.com/firebase/genkit/go/ai/exp.DefineAgent]. Embedded
+// in each prompt-definition option interface in this package and in
+// [github.com/firebase/genkit/go/ai/exp.AgentOption] so DefineAgent can
+// accept a mixed variadic of prompt options and agent-only options
+// through a single static type.
+//
+// IsAgentDefineOption is an inert marker; callers never invoke it.
+type AgentDefineOption interface {
+	IsAgentDefineOption()
+}
+
+func (*configOptions) IsAgentDefineOption()    {}
+func (*commonGenOptions) IsAgentDefineOption() {}
+func (*inputOptions) IsAgentDefineOption()     {}
+func (*promptOptions) IsAgentDefineOption()    {}
+func (*promptingOptions) IsAgentDefineOption() {}
+func (*outputOptions) IsAgentDefineOption()    {}
 
 // configOptions holds configuration options.
 type configOptions struct {
@@ -48,6 +57,7 @@ type configOptions struct {
 
 // ConfigOption is an option for model configuration.
 type ConfigOption interface {
+	AgentDefineOption
 	applyConfig(*configOptions) error
 	applyCommonGen(*commonGenOptions) error
 	applyPrompt(*promptOptions) error
@@ -124,6 +134,7 @@ type commonGenOptions struct {
 }
 
 type CommonGenOption interface {
+	AgentDefineOption
 	applyCommonGen(*commonGenOptions) error
 	applyPrompt(*promptOptions) error
 	applyGenerate(*generateOptions) error
@@ -305,6 +316,7 @@ type inputOptions struct {
 // InputOption is an option for the input of a prompt.
 // It applies only to DefinePrompt().
 type InputOption interface {
+	AgentDefineOption
 	applyInput(*inputOptions) error
 	applyPrompt(*promptOptions) error
 	applyTool(*toolOptions) error
@@ -390,6 +402,7 @@ type promptOptions struct {
 // PromptOption is an option for defining a prompt.
 // It applies only to DefinePrompt().
 type PromptOption interface {
+	AgentDefineOption
 	applyPrompt(*promptOptions) error
 }
 
@@ -447,6 +460,7 @@ type promptingOptions struct {
 // PromptingOption is an option for the system and user prompts of a prompt or generate request.
 // It applies only to DefinePrompt() and Generate().
 type PromptingOption interface {
+	AgentDefineOption
 	applyPrompting(*promptingOptions) error
 	applyPrompt(*promptOptions) error
 	applyGenerate(*generateOptions) error
@@ -528,6 +542,7 @@ type outputOptions struct {
 // OutputOption is an option for the output of a prompt or generate request.
 // It applies only to DefinePrompt() and Generate().
 type OutputOption interface {
+	AgentDefineOption
 	applyOutput(*outputOptions) error
 	applyPrompt(*promptOptions) error
 	applyGenerate(*generateOptions) error
