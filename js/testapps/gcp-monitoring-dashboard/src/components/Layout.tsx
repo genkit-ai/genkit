@@ -18,7 +18,7 @@ export function Layout() {
             </Link>
             <div className="h-4 w-px bg-border/60" />
             <span className="text-xs font-medium text-text-tertiary">
-              Monitoring
+              Google Cloud Monitoring
             </span>
           </div>
           <div className="flex items-center gap-3">

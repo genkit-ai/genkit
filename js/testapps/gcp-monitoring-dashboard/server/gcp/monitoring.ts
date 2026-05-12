@@ -69,6 +69,8 @@ interface GcpTimeSeriesResponse {
 
 /**
  * Compute an appropriate alignment period based on the time range.
+ * Uses finer granularity to avoid collapsing all data into a single point.
+ * Targets roughly 60-150 buckets across the time range for good chart resolution.
  */
 export function computeAlignmentPeriod(
   startTime: string,
@@ -78,11 +80,11 @@ export function computeAlignmentPeriod(
     new Date(endTime).getTime() - new Date(startTime).getTime();
   const hours = durationMs / (1000 * 60 * 60);
 
-  if (hours <= 1) return '60s';
-  if (hours <= 6) return '300s';
-  if (hours <= 24) return '3600s';
-  if (hours <= 168) return '21600s'; // 7 days -> 6h buckets
-  return '86400s'; // 30+ days -> 1 day buckets
+  if (hours <= 1) return '60s';       // 1h  -> 1-min buckets  (~60 points)
+  if (hours <= 6) return '120s';      // 6h  -> 2-min buckets  (~180 points)
+  if (hours <= 24) return '600s';     // 24h -> 10-min buckets (~144 points)
+  if (hours <= 168) return '3600s';   // 7d  -> 1-hr buckets   (~168 points)
+  return '14400s';                    // 30d -> 4-hr buckets   (~180 points)
 }
 
 /**
