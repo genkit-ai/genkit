@@ -48,7 +48,6 @@ from genkit._core._typing import (
     MediaPart,
     Part,
     TextPart,
-    ToolRequestPart,
 )
 from genkit.middleware import (
     BaseMiddleware,
@@ -127,14 +126,15 @@ class _FileState:
 class Filesystem(BaseMiddleware):
     """Filesystem middleware with sandboxed file operations.
 
-    Contributes the following tools via ``tools(enqueue_parts)``:
+    Contributes the following tools via ``tools()``:
 
     * ``list_files`` and ``read_file`` — always.
     * ``write_file`` and ``edit_file`` — only when
       ``allow_write_access=True``.
 
     All paths are restricted to ``root_dir``. Tool errors are queued as
-    user messages via ``enqueue_parts`` so the model can observe the
+    user messages via ``self.enqueue_parts`` (bound by the engine at the
+    start of each ``generate()`` call) so the model can observe the
     failure and self-correct.
 
     A per-call file-state cache (mtime + size) is allocated inside
@@ -398,7 +398,7 @@ class Filesystem(BaseMiddleware):
     # Middleware hooks
     # ------------------------------------------------------------------
 
-    def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Any]:
+    def tools(self) -> list[Any]:
         """Return call-scoped filesystem tool actions.
 
         A fresh file-state cache and lock are allocated here so each
@@ -406,15 +406,16 @@ class Filesystem(BaseMiddleware):
         Concurrent calls on the same ``Filesystem`` instance cannot
         interfere with each other's write guards.
 
-        Tool closures capture ``enqueue_parts`` so they can queue file
-        content and error messages as user messages for the next generate
-        iteration.
+        Tool closures capture ``self.enqueue_parts`` (bound by the engine
+        before this hook runs) so they can queue file content and error
+        messages as user messages for the next generate iteration.
         """
         # Per-call state: each generate() call gets its own cache so write guards
         # from one call cannot block a different concurrent call that read the same
         # file independently.
         _call_cache: OrderedDict[str, _FileState] = OrderedDict()
         _call_lock: threading.Lock = threading.Lock()
+        enqueue_parts = self.enqueue_parts
 
         scratch = Registry()
 
@@ -490,17 +491,16 @@ class Filesystem(BaseMiddleware):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[
-            [ToolHookParams],
-            Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-        ],
-    ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+    ) -> MultipartToolResponse:
         """Catch filesystem tool errors and enqueue them as user messages.
 
-        On success, returns the tool result as-is. On failure (excluding
-        ``Interrupt``), queues a brief error description and returns a
-        minimal ``MultipartToolResponse`` so the model receives an
-        acknowledgement of the failure and can retry.
+        On success, returns the tool result as-is.  ``Interrupt`` (from
+        ``next_fn`` or anywhere downstream) propagates unchanged so the
+        engine can turn it into a wire interrupt.  Any *other* exception
+        from a filesystem tool is converted into a brief acknowledgement
+        response, with the error text queued via ``self.enqueue_parts`` so
+        the model sees the failure on the next turn and can self-correct.
         """
         if params.tool.name not in self._fs_tool_name_set:
             return await next_fn(params)
@@ -511,9 +511,6 @@ class Filesystem(BaseMiddleware):
             raise
         except Exception as exc:
             error_msg = f'Tool "{params.tool.name}" failed: {exc}'
-            if params.enqueue_parts:
-                params.enqueue_parts([Part(root=TextPart(text=error_msg))])
-            return (
-                MultipartToolResponse(output='Tool call failed; see user message below for details.'),
-                None,
-            )
+            if self.enqueue_parts is not None:
+                self.enqueue_parts([Part(root=TextPart(text=error_msg))])
+            return MultipartToolResponse(output='Tool call failed; see user message below for details.')

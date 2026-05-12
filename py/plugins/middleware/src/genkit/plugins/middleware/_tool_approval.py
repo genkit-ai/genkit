@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._tracing import run_in_new_span
-from genkit._core._typing import SpanMetadata, ToolRequestPart
+from genkit._core._typing import SpanMetadata
 from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams, middleware
 
 
@@ -58,12 +58,15 @@ class ToolApproval(BaseMiddleware):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[
-            [ToolHookParams],
-            Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-        ],
-    ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
-        """Intercept tool execution and require approval if not in allowed list."""
+        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+    ) -> MultipartToolResponse:
+        """Intercept tool execution and require approval if not in allowed list.
+
+        Tools in ``allowed_tools`` (or those resumed with explicit approval)
+        pass through to ``next_fn``.  All others raise ``Interrupt`` with a
+        message identifying the blocked tool — the engine converts that into
+        the wire-shape interrupt ``ToolRequestPart`` the caller sees.
+        """
         tool_name = params.tool.name
 
         # Tools in the allowed list run without interruption.

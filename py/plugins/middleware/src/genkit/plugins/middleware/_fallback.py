@@ -31,7 +31,6 @@ from pydantic import Field
 from genkit import GenkitError
 from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
-from genkit._core._protocols import RegistryLike
 from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
@@ -62,17 +61,17 @@ class Fallback(BaseMiddleware):
     the original error is re-raised unchanged.
 
     Fallback names are resolved on the **same call-scoped registry** as
-    the rest of the ``generate()`` pipeline — the engine supplies it
-    through ``params.registry`` whenever your ``Fallback`` instance runs
-    inside ``use=[...]``.
+    the rest of the ``generate()`` pipeline — the engine binds it to
+    ``self.registry`` whenever your ``Fallback`` instance runs inside
+    ``use=[...]``.
     """
 
     models: list[str] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_FALLBACK_STATUSES))
 
-    async def _resolve_fallback_model(self, registry: RegistryLike, model_name: str) -> Action[Any, Any, Any]:
-        """Look up a fallback model action on the per-call registry."""
-        action = await registry.resolve_action(ActionKind.MODEL, model_name)
+    async def _resolve_fallback_model(self, model_name: str) -> Action[Any, Any, Any]:
+        """Look up a fallback model action on the per-call registry bound to ``self``."""
+        action = await self.registry.resolve_action(ActionKind.MODEL, model_name)
         if action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -99,7 +98,7 @@ class Fallback(BaseMiddleware):
         # to the same caller as the primary model would have.
         on_chunk = cast(Callable[[object], None], params.on_chunk) if params.on_chunk else None
         for model_name in self.models:
-            fallback_action = await self._resolve_fallback_model(params.registry, model_name)
+            fallback_action = await self._resolve_fallback_model(model_name)
             try:
                 result = await fallback_action.run(
                     input=params.request,

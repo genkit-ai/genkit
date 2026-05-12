@@ -23,7 +23,6 @@ from pydantic import ValidationError
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._error import GenkitError
-from genkit._core._registry import Registry
 from genkit.middleware import ModelHookParams
 from genkit.plugins.middleware import Retry
 
@@ -31,7 +30,6 @@ from genkit.plugins.middleware import Retry
 def _make_params() -> ModelHookParams:
     return ModelHookParams(
         request=ModelRequest(messages=[]),
-        registry=Registry(),
         on_chunk=None,
         context={},
     )

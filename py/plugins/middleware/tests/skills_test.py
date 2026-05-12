@@ -23,7 +23,6 @@ import pytest
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._model import GenerateActionOptions
-from genkit._core._registry import Registry
 from genkit.middleware import GenerateHookParams
 from genkit.plugins.middleware import Skills
 
@@ -33,7 +32,6 @@ def _make_params() -> GenerateHookParams:
         options=GenerateActionOptions(messages=[]),
         request=ModelRequest(messages=[]),
         iteration=0,
-        registry=Registry(),
     )
 
 

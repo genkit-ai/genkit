@@ -163,7 +163,7 @@ class Skills(BaseMiddleware):
 
     # --- middleware hooks ---
 
-    def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Any]:
+    def tools(self) -> list[Any]:
         """Return a ``use_skill`` action scoped to the current generate call.
 
         Skills are scanned fresh inside ``use_skill``, so ``SKILL.md``

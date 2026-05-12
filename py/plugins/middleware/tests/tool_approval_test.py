@@ -41,12 +41,12 @@ async def test_tool_approval_allowed_tool() -> None:
     approval = ToolApproval(allowed_tools=['get_weather'])
 
     async def next_fn(params):
-        return (MultipartToolResponse(output='sunny'), None)
+        return MultipartToolResponse(output='sunny')
 
     tool = _make_tool('get_weather')
     tool_request = ToolRequest(name='get_weather', input={})
     tool_request_part = ToolRequestPart(tool_request=tool_request)
-    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool, registry=Registry())
+    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     result = await approval.wrap_tool(params, next_fn)
     assert result is not None
@@ -58,12 +58,12 @@ async def test_tool_approval_non_allowed_tool() -> None:
     approval = ToolApproval(allowed_tools=['get_weather'])
 
     async def next_fn(params):
-        return (MultipartToolResponse(output=None), None)
+        return MultipartToolResponse(output=None)
 
     tool = _make_tool('delete_database')
     tool_request = ToolRequest(name='delete_database', input={})
     tool_request_part = ToolRequestPart(tool_request=tool_request)
-    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool, registry=Registry())
+    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt) as exc_info:
         await approval.wrap_tool(params, next_fn)
@@ -76,7 +76,7 @@ async def test_tool_approval_resumed_with_approval() -> None:
     approval = ToolApproval(allowed_tools=[])
 
     async def next_fn(params):
-        return (MultipartToolResponse(output='approved'), None)
+        return MultipartToolResponse(output='approved')
 
     tool = _make_tool('some_tool')
     tool_request = ToolRequest(name='some_tool', input={})
@@ -84,7 +84,7 @@ async def test_tool_approval_resumed_with_approval() -> None:
         tool_request=tool_request,
         metadata={'resumed': {'toolApproved': True}},
     )
-    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool, registry=Registry())
+    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     result = await approval.wrap_tool(params, next_fn)
     assert result is not None
@@ -96,12 +96,12 @@ async def test_tool_approval_empty_allowed_list() -> None:
     approval = ToolApproval(allowed_tools=[])
 
     async def next_fn(params):
-        return (MultipartToolResponse(output=None), None)
+        return MultipartToolResponse(output=None)
 
     tool = _make_tool('any_tool')
     tool_request = ToolRequest(name='any_tool', input={})
     tool_request_part = ToolRequestPart(tool_request=tool_request)
-    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool, registry=Registry())
+    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt):
         await approval.wrap_tool(params, next_fn)
