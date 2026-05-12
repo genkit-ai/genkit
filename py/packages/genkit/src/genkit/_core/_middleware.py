@@ -109,8 +109,7 @@ class GenerateHookParams(BaseModel):
     """Params passed to the ``wrap_generate`` hook.
 
     Covers one full iteration of the tool loop: a model call plus optional tool
-    resolution. ``message_index`` and ``on_chunk`` support streaming; ``enqueue_parts``
-    lets middleware inject an extra user message before the next iteration.
+    resolution. ``message_index`` and ``on_chunk`` support streaming.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
@@ -118,10 +117,8 @@ class GenerateHookParams(BaseModel):
     options: GenerateActionOptions
     request: ModelRequest
     iteration: int
-    registry: RegistryLike
     message_index: int = 0
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
-    enqueue_parts: Callable[[list[Part]], None] | None = None
 
 
 class ModelHookParams(BaseModel):
@@ -130,24 +127,17 @@ class ModelHookParams(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     request: ModelRequest
-    registry: RegistryLike
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     context: dict[str, object] = Field(default_factory=dict)
 
 
 class ToolHookParams(BaseModel):
-    """Params passed to the ``wrap_tool`` hook (each individual tool execution).
-
-    ``enqueue_parts`` lets middleware queue extra conversational messages alongside
-    the tool response (e.g. error details for the next model turn).
-    """
+    """Params passed to the ``wrap_tool`` hook (each individual tool execution)."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     tool_request_part: ToolRequestPart
     tool: Action
-    registry: RegistryLike
-    enqueue_parts: Callable[[list[Part]], None] | None = None
 
 
 class BaseMiddleware(BaseModel):
@@ -162,6 +152,20 @@ class BaseMiddleware(BaseModel):
       with ``Genkit.define_middleware`` (or ``middleware_plugin`` /
       ``Plugin.list_middleware``) and reference it by name with
       :class:`MiddlewareRef`.
+
+    Inside any hook, two framework-injected attributes are guaranteed to be set:
+
+    * ``self.registry`` — the per-call child registry. Use it to resolve actions
+      and to inspect what else is in scope for this call. Anything you register
+      through it is automatically scoped to the call and torn down at the end.
+    * ``self.enqueue_parts(parts)`` — queue an extra user message to be injected
+      into the conversation at the start of the next generate iteration. Use it
+      from a tool closure or from ``wrap_tool`` to surface error details, file
+      contents, or other rich context to the model without forging a tool
+      response.
+
+    Outside a ``generate()`` call these attributes are ``None`` — they only
+    become valid once the engine binds the instance to a specific call.
 
     Example:
         @middleware(name='logger')
@@ -185,9 +189,13 @@ class BaseMiddleware(BaseModel):
         )
 
     Concurrency:
-        Instances may be reused across concurrent ``generate()`` calls. Put
-        per-call state in method locals; shared state on ``self`` is the
-        author's concurrency responsibility (same convention as Django /
+        Each ``generate()`` call works on its own shallow copy of the
+        middleware instance with a freshly bound ``self.registry`` and
+        ``self.enqueue_parts``, so those framework attributes are safe
+        even when the same instance is reused across concurrent calls.
+        Author-added state on ``self`` is *not* deep-copied — keep
+        per-call state in method locals, or override ``model_copy`` if
+        you need stronger isolation (same convention as Django /
         Starlette middleware).
     """
 
@@ -203,22 +211,31 @@ class BaseMiddleware(BaseModel):
     middleware_config_schema: ClassVar[dict[str, Any] | None] = None
     middleware_metadata: ClassVar[dict[str, object] | None] = None
 
-    def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Action]:
+    # Framework-injected at the start of each generate() call (see the class
+    # docstring). They are public fields, not PrivateAttrs, so a middleware
+    # author writing ``self.`` in their IDE sees them in autocomplete and knows
+    # they exist.  Annotated as required so hooks can write
+    # ``self.registry.lookup_action(...)`` without a None-narrow; the runtime
+    # default of ``None`` lets bare constructors like ``Retry(max_retries=3)``
+    # work, with the engine rebinding before any hook fires.
+    registry: RegistryLike = Field(default=None, exclude=True, repr=False)  # type: ignore[assignment]
+    enqueue_parts: Callable[[list[Part]], None] = Field(default=None, exclude=True, repr=False)  # type: ignore[assignment]
+
+    def tools(self) -> list[Action]:
         """Return additional tools to expose to the model for this generate call.
 
-        Tools are registered on a call-scoped child registry, so they do
-        not pollute the root registry and are invisible to other
+        Called once per ``generate()`` call after the engine has bound
+        ``self.registry`` and ``self.enqueue_parts``. Tool closures may
+        capture ``self.enqueue_parts`` to queue extra user messages
+        alongside the normal ``ToolResponsePart`` (e.g. filesystem
+        error details for the next turn).
+
+        Tools are registered on a call-scoped child registry, so they
+        do not pollute the root registry and are invisible to other
         concurrent ``generate()`` calls.
 
-        Override to contribute tools dynamically. The default returns ``[]``.
-
-        Args:
-            enqueue_parts: Call this with a list of ``Part`` objects to
-                queue an extra user message that will be injected into the
-                conversation at the start of the next generate iteration.
-                Tool closures can capture this to report errors or rich
-                context alongside the normal ``ToolResponsePart`` (e.g.
-                filesystem error details).
+        Override to contribute tools dynamically. The default returns
+        ``[]``.
         """
         return []
 
@@ -277,8 +294,8 @@ class MiddlewareDesc(MiddlewareDescData):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # Factory takes ``config`` and mints a fresh BaseMiddleware instance per
-    # generate() call.  Per-call registry access is on the hook params
-    # (``ModelHookParams.registry`` etc.), not on the instance.
+    # generate() call. The engine binds per-call attrs (``self.registry``,
+    # ``self.enqueue_parts``) onto the result before any hook fires.
     _factory: Callable[[dict[str, Any] | None], BaseMiddleware] = PrivateAttr()
 
     def __init__(

@@ -332,7 +332,6 @@ class PreMiddleware(BaseMiddleware):
                         Message(role=Role.USER, content=[Part(TextPart(text=f'PRE {txt}'))]),
                     ],
                 ),
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -396,7 +395,6 @@ class ConfiguredPrefixMiddleware(BaseMiddleware):
                         Message(role=Role.USER, content=[Part(TextPart(text=f'{self.prefix} {txt}'))]),
                     ],
                 ),
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -508,7 +506,6 @@ class AddContextMiddleware(BaseMiddleware):
         return await next_fn(
             ModelHookParams(
                 request=params.request,
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context={**params.context, 'banana': True},
             )
@@ -529,7 +526,6 @@ class InjectContextMiddleware(BaseMiddleware):
                         ),
                     ],
                 ),
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -593,7 +589,6 @@ async def test_generate_middleware_can_modify_stream() -> None:
 
             new_params = ModelHookParams(
                 request=params.request,
-                registry=params.registry,
                 on_chunk=chunk_handler,
                 context=params.context,
             )
@@ -889,7 +884,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     class ToolProviderMiddleware(BaseMiddleware):
         """Middleware that contributes a tool dynamically per generate() call."""
 
-        def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list:
+        def tools(self) -> list:
             # Build a tool action on a throw-away registry; the generate engine
             # will adopt it into a call-scoped child registry.
             scratch = Registry()
@@ -944,10 +939,10 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     This verifies:
 
     - **Cooperation:** Middleware A contributes a tool via ``tools()`` and
-      middleware B resolves it through ``params.registry`` in the same call
+      middleware B resolves it through ``self.registry`` in the same call
       (proves both middleware see the same per-call child registry, so they
       can pass tools and other actions to one another).
-    - **Isolation:** Anything middleware writes via ``params.registry`` does NOT
+    - **Isolation:** Anything middleware writes via ``self.registry`` does NOT
       survive the call (proves writes are auto-cleaned and cannot leak into the
       root registry or across concurrent generate() calls).
     """
@@ -955,7 +950,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
 
     @middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
-        def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list:
+        def tools(self) -> list:
             scratch = Registry()
 
             async def shared_tool() -> str:
@@ -973,11 +968,11 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await params.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await self.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # params.registry must not survive the call.
+            # self.registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -985,7 +980,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            params.registry.register_action_from_instance(leak)
+            self.registry.register_action_from_instance(leak)
             return await next_fn(params)
 
     ai = Genkit(
@@ -1046,8 +1041,7 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
             ],
         ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
             result = await next_fn(params)
-            if params.enqueue_parts:
-                params.enqueue_parts([Part(TextPart(text='extra-context'))])
+            self.enqueue_parts([Part(TextPart(text='extra-context'))])
             return result
 
     ai = Genkit(plugins=[middleware_plugin([new_middleware(EnqueuingMW)])])

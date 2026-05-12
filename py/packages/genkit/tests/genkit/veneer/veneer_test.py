@@ -1014,7 +1014,6 @@ class PreMiddleware(BaseMiddleware):
                         Message(role=Role.USER, content=[Part(root=TextPart(text=f'PRE {txt}'))]),
                     ],
                 ),
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -1081,7 +1080,6 @@ class InjectContextMiddleware(BaseMiddleware):
                         ),
                     ],
                 ),
-                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
