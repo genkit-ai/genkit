@@ -437,8 +437,8 @@ For each chart, we query the appropriate metric with time alignment:
 |-----------|-----------------|
 | 1 hour | 60s |
 | 6 hours | 300s |
-| 24 hours | 3600s |
-| 7 days | 86400s |
+| 24 hours | 600s |
+| 7 days | 3600s |
 
 ### 7.3 Fetching Traces
 

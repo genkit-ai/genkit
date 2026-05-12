@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "pnpm dev",
     "dev": "concurrently -k -n server,frontend -c blue,green \"pnpm dev:server\" \"pnpm dev:frontend\"",
     "dev:frontend": "vite",
     "dev:server": "tsx watch server/index.ts",

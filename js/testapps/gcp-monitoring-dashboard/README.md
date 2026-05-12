@@ -67,7 +67,7 @@ Open http://localhost:5173 in your browser.
 ```
 Browser (localhost:5173)  →  Express Backend (localhost:3000)  →  GCP APIs
    React + Recharts              ADC Auth + Cache                Monitoring v3
-   Tailwind CSS                                                  Trace v2
+   Tailwind CSS                                                  Trace v1
 ```
 
 The backend acts as an authenticated proxy to GCP APIs. It caches responses
@@ -81,6 +81,7 @@ to minimize API calls:
 
 | Command | Description |
 |---------|-------------|
+| `pnpm start` | Start frontend + backend (alias for `dev`) |
 | `pnpm dev` | Start frontend + backend (development) |
 | `pnpm dev:frontend` | Start frontend only |
 | `pnpm dev:server` | Start backend only |
