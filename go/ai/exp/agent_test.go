@@ -1796,7 +1796,7 @@ func TestAgent_DefineAgent_StateMismatchPanics(t *testing.T) {
 		},
 		{
 			name: "WithStateTransform",
-			opt:  WithStateTransform[testState](func(_ context.Context, s SessionState[testState]) SessionState[testState] { return s }),
+			opt:  WithStateTransform[testState](func(_ context.Context, s *SessionState[testState]) *SessionState[testState] { return s }),
 		},
 	}
 
@@ -2585,7 +2585,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	store := NewInMemorySessionStore[testState]()
 
 	// Transform that scrubs a specific word from all messages.
-	transform := func(_ context.Context, s SessionState[testState]) SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
 				if p.Text != "" {
@@ -2944,7 +2944,7 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	// Client-managed state: transform should be applied to AgentOutput.State.
-	transform := func(_ context.Context, s SessionState[testState]) SessionState[testState] {
+	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
 		// Zero out the counter to demonstrate the transform is applied.
 		s.Custom.Counter = -1
 		return s
