@@ -22,7 +22,7 @@ import type {
 } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import { useCallback, useRef, useState } from 'react';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Sub-Agent Delegation — orchestrator delegates to researcher & coder
@@ -38,7 +38,7 @@ import { ChatUI, type Message } from '../components/ChatUI';
 const ENDPOINT = '/api/orchestratorAgent';
 
 export default function SubAgentChat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 

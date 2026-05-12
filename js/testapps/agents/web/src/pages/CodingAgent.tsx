@@ -19,12 +19,15 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  Part,
+  SessionSnapshot,
+  SessionState,
   ToolRequest,
 } from 'genkit/beta';
 import { runFlow, streamFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Coding Agent — AI coding assistant with filesystem access
@@ -84,16 +87,12 @@ interface PendingQuestion {
 }
 
 /** Extended part type for parts that carry filesystem middleware metadata. */
-interface PartWithMetadata {
-  text?: string;
-  toolRequest?: ToolRequest;
-  toolResponse?: { name: string; ref?: string; output: unknown };
-  reasoning?: string;
+type PartWithMetadata = Part & {
   metadata?: {
     filesystemMiddlewareTool?: string;
     filePath?: string;
   };
-}
+};
 
 // ---------------------------------------------------------------------------
 // Component
@@ -103,7 +102,7 @@ export default function CodingAgent() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [loading, setLoading] = useState(false);
@@ -119,7 +118,7 @@ export default function CodingAgent() {
   const [fileLoading, setFileLoading] = useState(false);
 
   // Session tracking
-  const stateRef = useRef<any>(undefined);
+  const stateRef = useRef<SessionState | undefined>(undefined);
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
   // ── Fetch workspace file tree via runFlow() ────────────────────────────
@@ -150,31 +149,31 @@ export default function CodingAgent() {
         // Call the /state endpoint to fetch the snapshot data.
         // getSnapshotDataAction takes a snapshotId string as input
         // and returns a SessionSnapshot with the full message history.
-        const snapshot = (await runFlow({
+        const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
           input: urlSnapshotId,
-        })) as any;
+        });
 
         if (cancelled) return;
 
         if (snapshot?.state?.messages) {
           // Reconstruct chat messages from the session history.
-          const restored: Message[] = [];
+          const restored: ChatMessage[] = [];
           const allMessages = snapshot.state.messages;
 
           for (const msg of allMessages) {
-            const role = msg.role as Message['role'];
+            const role = msg.role as ChatMessage['role'];
 
             // Filter out filesystem middleware read_file text parts
             // (same filtering we apply during streaming).
             const textParts = (msg.content || [])
-              .filter((p: any) => {
+              .filter((p: PartWithMetadata) => {
                 if (!p.text) return false;
                 // Skip read_file content injected by filesystem middleware
                 if (p.metadata?.filesystemMiddlewareTool) return false;
                 return true;
               })
-              .map((p: any) => p.text);
+              .map((p: Part) => p.text);
 
             if (textParts.length > 0) {
               restored.push({ role, text: textParts.join('') });
@@ -183,7 +182,7 @@ export default function CodingAgent() {
             // Show tool calls/responses from history, but skip:
             //   • read_file responses (the raw file content is too verbose)
             //   • read_file requests are shown as "📖 Reading {path}" bubbles
-            for (const p of msg.content || []) {
+            for (const p of (msg.content as Part[]) || []) {
               if (p.toolRequest) {
                 const tmsg = formatToolRequest(
                   p.toolRequest.name,
@@ -215,10 +214,13 @@ export default function CodingAgent() {
               if (p.toolRequest) {
                 const tr = p.toolRequest;
                 if (tr.name === 'ask_user') {
+                  const askInput = tr.input as
+                    | { question?: string; options?: string[] }
+                    | undefined;
                   setQuestion({
                     question:
-                      tr.input?.question || 'What would you like to do?',
-                    options: tr.input?.options || [],
+                      askInput?.question || 'What would you like to do?',
+                    options: askInput?.options || [],
                     ref: tr.ref,
                     snapshotId: snapshot.snapshotId,
                   });

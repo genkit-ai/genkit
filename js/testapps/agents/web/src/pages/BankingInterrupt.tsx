@@ -19,11 +19,12 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  SessionState,
   ToolRequest,
 } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import { useCallback, useRef, useState } from 'react';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Banking Interrupt — interrupt/approval workflow
@@ -47,7 +48,7 @@ interface PendingInterrupt {
 }
 
 export default function BankingInterrupt() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
   const [interrupt, setInterrupt] = useState<PendingInterrupt | null>(null);
@@ -55,7 +56,7 @@ export default function BankingInterrupt() {
 
   // This agent uses a server-side store, so we track state for stateless
   // fallback AND snapshotId for interrupt resumption.
-  const stateRef = useRef<any>(undefined);
+  const stateRef = useRef<SessionState | undefined>(undefined);
   const snapshotIdRef = useRef<string | undefined>(undefined);
 
   // ── Send a regular user message ──────────────────────────────────────

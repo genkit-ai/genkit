@@ -19,11 +19,14 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  Part,
+  SessionSnapshot,
+  SessionState,
 } from 'genkit/beta';
 import { runFlow, streamFlow } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Weather Chat — multi-turn streaming chat with tool-calling + session restore
@@ -43,13 +46,13 @@ export default function WeatherChat() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
 
   // Session tracking
-  const stateRef = useRef<any>(undefined);
+  const stateRef = useRef<SessionState | undefined>(undefined);
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
   // ── Restore session from snapshotId on mount ───────────────────────
@@ -63,28 +66,28 @@ export default function WeatherChat() {
         // Call the /state endpoint to fetch the snapshot data.
         // The getSnapshotDataAction takes a snapshotId string as input
         // and returns a SessionSnapshot with the full session state.
-        const snapshot = (await runFlow({
+        const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
           input: urlSnapshotId,
-        })) as any;
+        });
 
         if (cancelled) return;
 
         if (snapshot?.state?.messages) {
           // Reconstruct chat messages from the session history.
-          const restored: Message[] = [];
+          const restored: ChatMessage[] = [];
           for (const msg of snapshot.state.messages) {
-            const role = msg.role as Message['role'];
+            const role = msg.role as ChatMessage['role'];
             const textParts = (msg.content || [])
-              .filter((p: any) => p.text)
-              .map((p: any) => p.text);
+              .filter((p: Part) => p.text)
+              .map((p: Part) => p.text);
 
             if (textParts.length > 0) {
               restored.push({ role, text: textParts.join('') });
             }
 
             // Also show tool calls/responses from history
-            for (const p of msg.content || []) {
+            for (const p of (msg.content as Part[]) || []) {
               if (p.toolRequest) {
                 restored.push({
                   role: 'tool',

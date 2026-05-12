@@ -19,10 +19,11 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  SessionState,
 } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import { useCallback, useRef, useState } from 'react';
-import { ChatUI, type Message } from '../components/ChatUI';
+import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Client-Managed State — weather chat with NO server store
@@ -42,7 +43,7 @@ import { ChatUI, type Message } from '../components/ChatUI';
 const ENDPOINT = '/api/clientStateAgent';
 
 export default function ClientState() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -51,7 +52,7 @@ export default function ClientState() {
   const [stateDisplay, setStateDisplay] = useState<string>(
     '(no state yet — first turn will create it)'
   );
-  const stateRef = useRef<any>(undefined);
+  const stateRef = useRef<SessionState | undefined>(undefined);
 
   const handleSend = useCallback(
     async (text: string) => {
