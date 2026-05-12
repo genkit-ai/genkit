@@ -119,8 +119,7 @@ class GenerateHookParams(BaseModel):
 
 
 class ModelHookParams(BaseModel):
-    """Params passed to the ``wrap_model`` hook (each raw model API call).
-    """
+    """Params passed to the ``wrap_model`` hook (each raw model API call)."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
