@@ -312,7 +312,9 @@ def _define_tool(
     if not inspect.iscoroutinefunction(func):
         raise TypeError(f'Tool function must be async. Got sync function: {getattr(func, "__name__", repr(func))}')
 
-    tool_name = name if name is not None else getattr(func, '__name__', 'unnamed_tool')
+    tool_name = name if name is not None else getattr(func, '__name__', None)
+    if tool_name is None:
+        raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
     tool_description = _get_func_description(func, description)
 
     input_spec = inspect.getfullargspec(func)
