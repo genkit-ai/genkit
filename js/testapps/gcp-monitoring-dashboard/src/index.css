@@ -78,4 +78,25 @@
   .type-badge-util {
     @apply bg-text-tertiary/20 text-text-secondary;
   }
+
+  .type-badge-executable-prompt {
+    @apply bg-accent-purple/20 text-accent-purple;
+  }
+
+  .type-badge-unknown {
+    @apply bg-text-tertiary/20 text-text-tertiary;
+  }
+}
+
+/* JSON syntax highlighting */
+.json-string {
+  color: #a5d6ff;
+}
+
+.json-number {
+  color: #79c0ff;
+}
+
+.json-keyword {
+  color: #ff7b72;
 }

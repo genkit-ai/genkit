@@ -152,26 +152,32 @@ Build the trace viewer with span tree and detail panel.
 
 ### Checklist
 
-- [ ] **5.1** Create `src/components/SpanTree.tsx` — Collapsible span tree
-  - Tree structure built from parent/child relationships
-  - Each node: status icon, span name, duration, type badge
-  - Type badges: flow, step, dotprompt, util, model, tool (color-coded)
-  - Expand/collapse controls
-  - Click to select span
-  - Highlight selected span
-- [ ] **5.2** Create `src/components/SpanDetail.tsx` — Span detail panel
-  - Header: span name, trace ID (copyable), status badge, type badge, duration, timestamp
-  - Input section: syntax-highlighted JSON with copy button
-  - Output section: syntax-highlighted JSON or `<redacted>` notice
-  - For model spans: model name, token usage if available
+- [x] **5.1** Create `src/components/SpanTree.tsx` — Collapsible span tree
+  - Recursive tree with expand/collapse (auto-expand first 3 levels)
+  - Each node: status icon, span name, type badge (color-coded), timing bar, duration
+  - Timing bars show relative position & width vs root span duration
+  - Color-coded bars: red (error), orange (model), blue (flow), green (tool), purple (other)
+  - Click to select span (blue left border highlight)
+- [x] **5.2** Create `src/components/SpanDetail.tsx` — Span detail panel
+  - Header: span name, status badge, type badge, model name badge (for model spans)
+  - Metadata grid: trace ID (copyable), span ID (copyable), duration, start time, path
+  - Input/Output sections with JSON syntax highlighting (CSS-based) or `<redacted>` notice
+  - Copy buttons on IDs and input/output values
+  - Labels section: filtered genkit-specific labels with clean display names
   - Scrollable content
-- [ ] **5.3** Create `src/pages/TraceViewerPage.tsx` — Compose span tree + detail
-  - Two-panel layout (resizable divider?)
-  - Breadcrumb: Genkit > featureName > Trace viewer
-  - Auto-select root span on load
-- [ ] **5.4** Add JSON syntax highlighting (simple CSS-based or use a lightweight lib)
-- [ ] **5.5** Wire up React Router link from TracesList → TraceViewerPage
-- [ ] **5.6** Style and test with real trace data
+- [x] **5.3** Create `src/pages/TraceViewerPage.tsx` — Compose span tree + detail
+  - Two-panel 50/50 layout with full viewport height
+  - Breadcrumb: Genkit > featureName > Trace viewer (links back to feature page)
+  - Auto-select root span on load, shows span count
+  - Loading/error/empty states
+- [x] **5.4** Add JSON syntax highlighting (CSS-based: strings blue, numbers cyan, keywords red)
+  - Added type badges for `executable-prompt` and `unknown` subtypes
+- [x] **5.5** Wire up React Router link from TracesList → TraceViewerPage (done in Stage 1)
+- [x] **5.6** Tested with real trace data from pavelj-genkit-test1
+  - Verified: generate → googleai/gemini-3-flash-preview → POST span tree
+  - Span selection, type badges, timing bars, model name display all working
+  - Full navigation flow: Overview → Feature → Trace → back all working
+  - Note: Cloud Trace v1 API may return fewer results with 7d+ time ranges + label filters; 24h range works reliably
 
 ### Deliverable
 Full trace viewer with interactive span tree. Complete navigation flow:
@@ -261,7 +267,7 @@ Automated tests may be added in a future iteration.
 
 ## Current Status
 
-**Last updated**: Stage 4 complete (ready to begin Stage 5)
+**Last updated**: Stage 5 complete (ready to begin Stage 6)
 
 | Stage | Status | Notes |
 |-------|--------|-------|
@@ -269,5 +275,5 @@ Automated tests may be added in a future iteration.
 | Stage 2: API Integration | ✅ Complete | All 12 items done. Tested with weather-gen-test-next. Fixed ALIGN_DELTA for CUMULATIVE metrics. |
 | Stage 3: Overview Page | ✅ Complete | All 12 items done. Charts, feature table, project/time selectors, dark theme all working. |
 | Stage 4: Feature Detail | ✅ Complete | All 8 items done. StabilityMetrics, charts with feature filtering, TracesList with pagination. Fixed metric label name vs featureName mismatch. |
-| Stage 5: Trace Viewer | 🔲 Not started | |
+| Stage 5: Trace Viewer | ✅ Complete | All 6 items done. SpanTree with timing bars, SpanDetail with JSON highlighting, two-panel layout. Tested with pavelj-genkit-test1 (generate → model → POST spans). |
 | Stage 6: Polish | 🔲 Not started | |
