@@ -41,6 +41,7 @@ js/testapps/rag/*.json
 js/testapps/evals/__db*.json
 js/testapps/menu/**/__db*.json
 js/testapps/personal-testing
+ref/
 
 # Test files
 last_recording.mp4
