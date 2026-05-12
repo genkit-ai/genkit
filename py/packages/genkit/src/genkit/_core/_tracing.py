@@ -136,7 +136,7 @@ if is_dev_environment():
 def _to_json_attr(value: object) -> str:
     """Serialize an arbitrary object for a ``genkit:input``/``genkit:output`` attribute."""
     if isinstance(value, BaseModel):
-        return value.model_dump_json()
+        return value.model_dump_json(by_alias=True, exclude_none=True)
     try:
         return json.dumps(value)
     except (TypeError, ValueError):
