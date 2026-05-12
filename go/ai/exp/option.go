@@ -19,32 +19,14 @@ package exp
 import (
 	"context"
 	"errors"
-
-	"github.com/firebase/genkit/go/ai"
 )
-
-// --- AgentDefineOption ---
-
-// AgentDefineOption is the marker interface for any option that can be passed
-// to [DefineAgent]. It is satisfied by every [github.com/firebase/genkit/go/ai.PromptOption]
-// (which configures the underlying prompt) and by every [AgentOption] (which
-// configures the agent itself), both of which embed [ai.AgentDefineOption].
-//
-// The State type parameter is phantom: a single concrete option satisfies
-// [AgentDefineOption] for any State, so type inference cannot pick a State
-// from the variadic. Callers of [DefineAgent] must specify [State] explicitly
-// (use [any] when no typed Custom state is needed).
-type AgentDefineOption[State any] interface {
-	ai.AgentDefineOption
-}
 
 // --- AgentOption ---
 
-// AgentOption configures an agent at definition time. It also satisfies
-// [AgentDefineOption] so it can be passed to [DefineAgent] alongside
-// [github.com/firebase/genkit/go/ai.PromptOption] values.
+// AgentOption configures an agent at definition time. It is accepted by
+// [DefineAgent] and [DefineCustomAgent] as a typed variadic, so a State
+// mismatch fails at compile time.
 type AgentOption[State any] interface {
-	AgentDefineOption[State]
 	applyAgent(*agentOptions[State]) error
 }
 
@@ -69,8 +51,6 @@ type agentOptions[State any] struct {
 	callback  SnapshotCallback[State]
 	transform StateTransform[State]
 }
-
-func (*agentOptions[State]) IsAgentDefineOption() {}
 
 func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 	if o.store != nil {

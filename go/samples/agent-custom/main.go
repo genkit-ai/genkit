@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates DefineCustomAgent, which gives the caller full
-// control over the per-turn loop (model selection, history management,
-// streaming chunks). It runs a CLI REPL where conversation history is
-// maintained by the session. Compare with agent-prompt (DefinePromptAgent)
-// and agent-inline (DefineAgent), which both auto-wire the loop and
-// differ only in where the prompt is defined.
+// This sample demonstrates DefineCustomAgent, which gives the caller
+// full control over the per-turn loop (model selection, history
+// management, streaming chunks). It runs a CLI REPL where conversation
+// history is maintained by the session. Compare with agent-prompt
+// (DefineAgent + aix.FromPrompt) and agent-inline (DefineAgent +
+// aix.FromInline), which both auto-wire the loop and differ only in
+// where the prompt is defined.
 package main
 
 import (

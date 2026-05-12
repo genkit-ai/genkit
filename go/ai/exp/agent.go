@@ -243,71 +243,46 @@ type Agent[Stream, State any] struct {
 	action *core.Action[*AgentInit[State], *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInput]
 }
 
-// DefineAgent defines an agent that wraps a prompt defined inline from the
-// given options, and registers both under name. Each turn renders the prompt,
-// appends conversation history, calls the model with streaming, and updates
-// session state.
+// DefineAgent defines a prompt-backed agent and registers it. Each turn
+// renders the agent's prompt, appends conversation history, calls the
+// model with streaming, and updates session state.
 //
-// opts is a mixed list of [github.com/firebase/genkit/go/ai.PromptOption]
-// values (which configure the prompt) and [AgentOption] values (which
-// configure the agent itself, e.g., [WithSessionStore]).
+// source selects how the prompt is backed:
 //
-// State is phantom in the variadic, so it cannot be inferred. Specify [any]
-// when no typed Custom state is needed; specify [Foo] when a
-// [SessionStore[Foo]] is provided. A mismatch panics at definition time with
-// a clear message.
+//   - [FromInline] defines the prompt inline from a set of
+//     [ai.PromptOption] values; the prompt is registered under name.
+//   - [FromPrompt] references an existing prompt registered with the
+//     registry under name (e.g. one defined via [ai.DefinePrompt] or
+//     loaded from a .prompt file).
 //
-// For an agent backed by an existing prompt, use [DefinePromptAgent]. For
-// full control over the per-turn loop, use [DefineCustomAgent].
+// State is inferred from the typed agent options (e.g.
+// [WithSessionStore], [WithSnapshotOn]); pass an explicit [State] only
+// when no typed option is provided. A typed option that disagrees with
+// the inferred State fails at compile time.
+//
+// For full control over the per-turn loop, use [DefineCustomAgent].
 func DefineAgent[State any](
 	r api.Registry,
 	name string,
-	opts ...AgentDefineOption[State],
-) *Agent[any, State] {
-	var promptOpts []ai.PromptOption
-	var agentOpts []AgentOption[State]
-	for _, opt := range opts {
-		if ao, ok := opt.(AgentOption[State]); ok {
-			agentOpts = append(agentOpts, ao)
-			continue
-		}
-		if po, ok := opt.(ai.PromptOption); ok {
-			promptOpts = append(promptOpts, po)
-			continue
-		}
-		panic(fmt.Sprintf("DefineAgent %q: option of type %T does not match agent State %T (likely a typed AgentOption with a different State than the one declared on DefineAgent)", name, opt, *new(State)))
-	}
-
-	prompt := ai.DefinePrompt(r, name, promptOpts...)
-	return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), agentOpts...)
-}
-
-// DefinePromptAgent defines an agent backed by a prompt already registered
-// with the registry (via [ai.DefinePrompt] or loaded from a .prompt file).
-// The agent is registered under the same name as the prompt, sharing its
-// namespace.
-//
-// defaultInput is used to render the prompt on every turn. DefinePromptAgent
-// invokes the prompt's Render once at definition time as a smoke check, so
-// a defaultInput that fails the prompt's input schema panics here rather
-// than failing on the first invocation.
-//
-// For an agent that defines its prompt inline, use [DefineAgent]. For full
-// control over the per-turn loop, use [DefineCustomAgent].
-func DefinePromptAgent[State any](
-	r api.Registry,
-	promptName string,
-	defaultInput any,
+	source AgentSource,
 	opts ...AgentOption[State],
 ) *Agent[any, State] {
-	prompt := ai.LookupPrompt(r, promptName)
-	if prompt == nil {
-		panic(fmt.Sprintf("DefinePromptAgent: prompt %q not found", promptName))
+	switch s := source.(type) {
+	case inlineSource:
+		prompt := ai.DefinePrompt(r, name, s.opts...)
+		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, nil), opts...)
+	case promptSource:
+		prompt := ai.LookupPrompt(r, name)
+		if prompt == nil {
+			panic(fmt.Sprintf("DefineAgent %q: prompt %q not found", name, name))
+		}
+		if _, err := prompt.Render(context.Background(), s.defaultInput); err != nil {
+			panic(fmt.Sprintf("DefineAgent %q: defaultInput does not satisfy prompt schema: %v", name, err))
+		}
+		return DefineCustomAgent(r, name, agentLoop[State](r, prompt, s.defaultInput), opts...)
+	default:
+		panic(fmt.Sprintf("DefineAgent %q: unknown source type %T", name, source))
 	}
-	if _, err := prompt.Render(context.Background(), defaultInput); err != nil {
-		panic(fmt.Sprintf("DefinePromptAgent %q: defaultInput does not satisfy prompt schema: %v", promptName, err))
-	}
-	return DefineCustomAgent(r, promptName, agentLoop[State](r, prompt, defaultInput), opts...)
 }
 
 // DefineCustomAgent defines an agent with full control over the conversation

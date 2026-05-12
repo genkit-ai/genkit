@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This sample demonstrates DefineAgent, which creates a multi-turn
-// conversational agent backed by a prompt defined inline alongside the
-// agent. The conversation loop (render prompt, call model, stream chunks,
-// update history) is handled automatically. Compare with agent-prompt
-// (DefinePromptAgent), which sources its prompt from a .prompt file, and
-// agent-custom (DefineCustomAgent), which wires the same loop manually.
+// This sample demonstrates DefineAgent with aix.FromInline, which
+// creates a multi-turn conversational agent backed by a prompt defined
+// inline alongside the agent. The conversation loop (render prompt,
+// call model, stream chunks, update history) is handled automatically.
+// Compare with agent-prompt (DefineAgent + aix.FromPrompt), which
+// sources its prompt from a .prompt file, and agent-custom
+// (DefineCustomAgent), which wires the same loop manually.
 package main
 
 import (
@@ -38,13 +39,15 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	chatAgent := genkit.DefineAgent[any](g, "chat",
-		ai.WithModel(googlegenai.ModelRef("googleai/gemini-3-flash-preview", &genai.GenerateContentConfig{
-			ThinkingConfig: &genai.ThinkingConfig{
-				ThinkingBudget: genai.Ptr[int32](0),
-			},
-		})),
-		ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
+	chatAgent := genkit.DefineAgent(g, "chat",
+		aix.FromInline(
+			ai.WithModel(googlegenai.ModelRef("googleai/gemini-3-flash-preview", &genai.GenerateContentConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingBudget: genai.Ptr[int32](0),
+				},
+			})),
+			ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
+		),
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
