@@ -59,7 +59,6 @@ export type SessionState = z.infer<typeof SessionStateSchema>;
  */
 export const AgentInitSchema = z.object({
   snapshotId: z.string().optional(),
-  newSnapshotId: z.string().optional(),
   state: SessionStateSchema.optional(),
 });
 export type AgentInit = z.infer<typeof AgentInitSchema>;
