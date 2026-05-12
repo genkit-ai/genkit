@@ -748,11 +748,8 @@ class TrackToolMiddleware(BaseMiddleware):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[
-            [ToolHookParams],
-            Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-        ],
-    ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+    ) -> MultipartToolResponse:
         self.tool_names.append(params.tool_request_part.tool_request.name)
         return await next_fn(params)
 
@@ -821,8 +818,8 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[[ToolHookParams], Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]]],
-        ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
             raise Interrupt({'blocked': True})
 
     ai = Genkit(
@@ -1035,11 +1032,8 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[
-                [ToolHookParams],
-                Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-            ],
-        ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
             result = await next_fn(params)
             self.enqueue_parts([Part(TextPart(text='extra-context'))])
             return result
@@ -1103,11 +1097,8 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[
-                [ToolHookParams],
-                Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-            ],
-        ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
             invocations.append(params.tool.name)
             return await next_fn(params)
 

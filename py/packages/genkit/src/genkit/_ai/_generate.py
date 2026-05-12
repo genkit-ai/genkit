@@ -191,16 +191,14 @@ def _bind_call_state(
 async def _chain_tool_middleware(
     middleware: list[BaseMiddleware],
     params: ToolHookParams,
-    next_fn: Callable[
-        [ToolHookParams],
-        Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-    ],
-) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
-    """Run the tool middleware chain and return (multipart_response, interrupt_part)."""
-    runner: Callable[
-        [ToolHookParams],
-        Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-    ] = next_fn
+    next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+) -> MultipartToolResponse:
+    """Run the tool middleware chain and return the tool response.
+
+    Interrupts propagate as ``Interrupt`` exceptions (or ``GenkitError`` wrapping
+    one) for the caller to catch and convert to wire-shape ``ToolRequestPart``.
+    """
+    runner: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = next_fn
     for mw in reversed(middleware):
         _mw = mw
         _inner = runner
@@ -209,11 +207,8 @@ async def _chain_tool_middleware(
             p: ToolHookParams,
             *,
             _m: BaseMiddleware = _mw,
-            _i: Callable[
-                [ToolHookParams],
-                Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-            ] = _inner,
-        ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+            _i: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = _inner,
+        ) -> MultipartToolResponse:
             return await _m.wrap_tool(p, _i)
 
         runner = run_next
@@ -1134,37 +1129,27 @@ async def resolve_tool_requests(
     async def _resolve_one_tool(
         tool: Action, trp: ToolRequestPart
     ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
-        if mw_list:
-            params = ToolHookParams(
-                tool_request_part=trp,
-                tool=tool,
-            )
+        params = ToolHookParams(tool_request_part=trp, tool=tool)
 
-            async def next_fn(
-                p: ToolHookParams,
-            ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
-                return await _resolve_tool_request(p.tool, p.tool_request_part)
+        async def base(p: ToolHookParams) -> MultipartToolResponse:
+            return await _resolve_tool_request(p.tool, p.tool_request_part)
 
-            try:
-                return await _chain_tool_middleware(mw_list, params, next_fn)
-            except Exception as e:
-                intr = _interrupt_from_tool_exc(e)
-                if intr is None:
-                    raise
-                # Middleware raised Interrupt without calling next_fn — convert to
-                # the same wire shape that _resolve_tool_request produces.  Any
-                # tracing span is the middleware's responsibility (e.g. ToolApproval
-                # wraps its raise in run_in_new_span explicitly).
-                payload: dict[str, Any] | bool = intr.metadata if intr.metadata else True
-                tool_meta = trp.metadata or {}
-                return (
-                    None,
-                    ToolRequestPart(
-                        tool_request=trp.tool_request,
-                        metadata={**tool_meta, 'interrupt': payload},
-                    ),
-                )
-        return await _resolve_tool_request(tool, trp)
+        try:
+            if mw_list:
+                multipart = await _chain_tool_middleware(mw_list, params, base)
+            else:
+                multipart = await base(params)
+            return (multipart, None)
+        except Exception as e:
+            # Interrupts (raised by the tool body or by middleware) become a
+            # wire-shape interrupt ``ToolRequestPart``.  Any tracing span is the
+            # middleware's responsibility (e.g. ToolApproval wraps its raise in
+            # ``run_in_new_span`` explicitly).  Non-Interrupt exceptions are real
+            # failures and propagate to ``asyncio.gather``.
+            intr = _interrupt_from_tool_exc(e)
+            if intr is None:
+                raise
+            return (None, _interrupt_request_part(trp, intr))
 
     outs = await asyncio.gather(*[_resolve_one_tool(tool, trp) for _, tool, trp in work])
 
@@ -1215,36 +1200,29 @@ def _interrupt_from_tool_exc(exc: BaseException) -> Interrupt | None:
     return None
 
 
-async def _resolve_tool_request(
-    tool: Action, tool_request_part: ToolRequestPart
-) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
-    """Execute a tool.
+async def _resolve_tool_request(tool: Action, tool_request_part: ToolRequestPart) -> MultipartToolResponse:
+    """Execute a tool and return its response.
 
-    Returns ``(MultipartToolResponse, None)`` on success or ``(None, ToolRequestPart)``
-    when interrupted.  The caller unpacks ``MultipartToolResponse`` into the wire
-    ``ToolResponsePart`` so the 1-to-1 request/response LLM contract is preserved.
+    Interrupts from the tool body propagate to the caller (the engine
+    converts them to a wire ``ToolRequestPart`` at the top of
+    ``_resolve_one_tool``).  This keeps the contract symmetric with
+    ``BaseMiddleware.wrap_tool``: responses are return values, interrupts
+    are exceptions.
     """
-    try:
-        tool_response = (await tool.run(tool_request_part.tool_request.input)).response
-        return (
-            MultipartToolResponse(
-                output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
-            ),
-            None,
-        )
-    except Exception as e:
-        intr = _interrupt_from_tool_exc(e)
-        if intr is not None:
-            payload: dict[str, Any] | bool = intr.metadata if intr.metadata else True
-            tool_meta = tool_request_part.metadata or {}
-            return (
-                None,
-                ToolRequestPart(
-                    tool_request=tool_request_part.tool_request,
-                    metadata={**tool_meta, 'interrupt': payload},
-                ),
-            )
-        raise
+    tool_response = (await tool.run(tool_request_part.tool_request.input)).response
+    return MultipartToolResponse(
+        output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
+    )
+
+
+def _interrupt_request_part(trp: ToolRequestPart, intr: Interrupt) -> ToolRequestPart:
+    """Convert an Interrupt exception into the wire-shape interrupt ToolRequestPart."""
+    payload: dict[str, Any] | bool = intr.metadata if intr.metadata else True
+    tool_meta = trp.metadata or {}
+    return ToolRequestPart(
+        tool_request=trp.tool_request,
+        metadata={**tool_meta, 'interrupt': payload},
+    )
 
 
 async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
@@ -1452,33 +1430,26 @@ async def _run_restart_through_middleware(
         tool=tool,
     )
 
-    async def next_fn(
-        p: ToolHookParams,
-    ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+    async def next_fn(p: ToolHookParams) -> MultipartToolResponse:
         executed = await run_tool_after_restart(p.tool, restart_trp)
-        return (
-            MultipartToolResponse(
-                output=executed.tool_response.output,
-                content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],
-            ),
-            None,
+        return MultipartToolResponse(
+            output=executed.tool_response.output,
+            content=[Part.model_validate(c) for c in (executed.tool_response.content or [])],
         )
 
-    multipart, interrupt_part = await _chain_tool_middleware(mw_list, params, next_fn)
-    if interrupt_part is not None:
-        # Re-interrupting during restart is a hard error — same as the legacy
-        # run_tool_after_restart path, which raises FAILED_PRECONDITION when
-        # the inner tool throws an Interrupt during restart.
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message='Tool interrupted again during a restart execution; not supported yet.',
-        )
-    if multipart is None:
-        # Defensive: middleware contract requires exactly one of the two to be set.
-        raise GenkitError(
-            status='INTERNAL',
-            message='Tool middleware returned (None, None) for a restart execution.',
-        )
+    try:
+        multipart = await _chain_tool_middleware(mw_list, params, next_fn)
+    except Exception as e:
+        if _interrupt_from_tool_exc(e) is not None:
+            # Re-interrupting during restart is a hard error — same as the legacy
+            # run_tool_after_restart path, which raises FAILED_PRECONDITION when
+            # the inner tool throws an Interrupt during restart.
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='Tool interrupted again during a restart execution; not supported yet.',
+            ) from e
+        raise
+
     return ToolResponsePart(
         tool_response=ToolResponse(
             name=restart_trp.tool_request.name,

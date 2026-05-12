@@ -258,14 +258,25 @@ class BaseMiddleware(BaseModel):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[
-            [ToolHookParams],
-            Awaitable[tuple[MultipartToolResponse | None, ToolRequestPart | None]],
-        ],
-    ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
+        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+    ) -> MultipartToolResponse:
         """Wrap each tool execution.
 
-        Return ``(tool_response, interrupt)``: one of the tuple elements is non-``None``.
+        Return a ``MultipartToolResponse`` to forward (or substitute) the
+        tool's result.  Raise ``Interrupt(metadata)`` to halt this tool call
+        and surface an interrupt to the caller — the engine attaches
+        ``metadata`` to the pending ``ToolRequestPart`` exactly like an
+        interrupt raised by the tool body itself.  Mirroring the tool-side
+        convention means authors learn one rule: **responses are return
+        values, interrupts are exceptions, everywhere**.
+
+        Example (tool approval gate)::
+
+            class Approval(BaseMiddleware):
+                async def wrap_tool(self, params, next_fn):
+                    if params.tool.name == 'transfer_money' and not approved():
+                        raise Interrupt({'reason': 'requires_approval'})
+                    return await next_fn(params)
         """
         return await next_fn(params)
 
