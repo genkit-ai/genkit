@@ -15,28 +15,15 @@
  */
 
 import { z, type Action } from 'genkit';
-import type { AgentInit, AgentInput, AgentOutput } from 'genkit/beta';
-
-// Re-define the agent schemas locally so we don't need a direct dependency on
-// `@genkit-ai/ai` or `@genkit-ai/core`.  These mirror the canonical schemas in
-// `@genkit-ai/ai/agent` and must be kept in sync.
-
-const AgentInitSchema = z.object({
-  snapshotId: z.string().optional(),
-  newSnapshotId: z.string().optional(),
-  state: z.any().optional(),
-});
-
-const AgentInputSchema = z.object({
-  messages: z.array(z.any()).optional(),
-  resume: z
-    .object({
-      respond: z.array(z.any()).optional(),
-      restart: z.array(z.any()).optional(),
-    })
-    .optional(),
-  detach: z.boolean().optional(),
-});
+import {
+  AgentInitSchema,
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentStreamChunkSchema,
+  type AgentInit,
+  type AgentInput,
+  type AgentOutput,
+} from 'genkit/beta';
 
 /**
  * Envelope schema that combines agent `init` and `input` into a single input
@@ -94,7 +81,21 @@ export interface AgentInputEnvelope {
  * });
  * ```
  */
-export function agentAdapter(agent: Action): Action {
+export function agentAdapter(
+  agent: Action<
+    typeof AgentInputSchema,
+    typeof AgentOutputSchema,
+    typeof AgentStreamChunkSchema,
+    any,
+    typeof AgentInitSchema
+  >
+): Action<
+  typeof AgentInputEnvelopeSchema,
+  typeof AgentOutputSchema,
+  typeof AgentStreamChunkSchema,
+  any,
+  typeof AgentInitSchema
+> {
   // We build a wrapper action by cloning the agent's callable interface
   // and re-mapping input/output schemas.  The wrapper intercepts every
   // call, unpacks the envelope, and delegates to the real agent.
@@ -109,13 +110,19 @@ export function agentAdapter(agent: Action): Action {
     });
   };
 
-  const wrapperFn = async (
+  const wrapperFn = (async (
     envelope?: AgentInputEnvelope,
     options?: any
   ): Promise<AgentOutput> => {
     const result = await wrapperRun(envelope!, options);
     return result.result;
-  };
+  }) as Action<
+    typeof AgentInputEnvelopeSchema,
+    typeof AgentOutputSchema,
+    typeof AgentStreamChunkSchema,
+    any,
+    typeof AgentInitSchema
+  >;
 
   const wrapperStream = (envelope?: AgentInputEnvelope, opts?: any) => {
     return agent.stream(envelope?.input as any, {
@@ -126,14 +133,13 @@ export function agentAdapter(agent: Action): Action {
 
   // Attach Action metadata so transports (e.g. onCallGenkit) can inspect
   // the schemas and treat this as a regular flow/action.
-  (wrapperFn as any).__action = {
+  wrapperFn.__action = {
     ...agent.__action,
     actionType: 'flow',
     inputSchema: AgentInputEnvelopeSchema,
-    // Keep output and stream schemas from the agent
   };
-  (wrapperFn as any).run = wrapperRun;
-  (wrapperFn as any).stream = wrapperStream;
+  wrapperFn.run = wrapperRun;
+  wrapperFn.stream = wrapperStream;
 
-  return wrapperFn as unknown as Action;
+  return wrapperFn;
 }
