@@ -2383,12 +2383,12 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 
 	// Abort via the store. The local caller already has the store
 	// reference from WithSessionStore.
-	meta, err := store.AbortSnapshot(context.Background(), out.SnapshotID)
+	status, err := store.AbortSnapshot(context.Background(), out.SnapshotID)
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if meta.Status != SnapshotStatusAborted {
-		t.Errorf("AbortSnapshot status = %q, want aborted", meta.Status)
+	if status != SnapshotStatusAborted {
+		t.Errorf("AbortSnapshot status = %q, want aborted", status)
 	}
 
 	// The subscriber wakes the runtime, cancels work, and the finalizer
@@ -2643,6 +2643,8 @@ func TestInMemorySessionStore_GetSnapshot_NotFound(t *testing.T) {
 }
 
 func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
+	// With no SessionStore configured, neither companion action should
+	// be registered: there is no server-side snapshot to fetch or abort.
 	reg := newTestRegistry(t)
 
 	DefineCustomAgent(reg, "noStoreFlow",
@@ -2651,20 +2653,96 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 		},
 	)
 
-	// Action remains registered even without a store; it returns
-	// FAILED_PRECONDITION when invoked.
-	action := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+	getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
 		reg, api.ActionTypeAgentSnapshot, "noStoreFlow")
-	if action == nil {
-		t.Fatal("getSnapshot action should be registered even without a store")
+	if getAction != nil {
+		t.Error("getSnapshot action should NOT be registered without a store")
 	}
-	_, err := action.Run(context.Background(), &GetSnapshotRequest{SnapshotID: "any"}, nil)
-	if err == nil {
-		t.Fatal("expected error when store is not configured")
+	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+		reg, api.ActionTypeAgentAbort, "noStoreFlow")
+	if abortAction != nil {
+		t.Error("abortSnapshot action should NOT be registered without a store")
 	}
-	if !strings.Contains(err.Error(), "no session store configured") {
-		t.Errorf("unexpected error: %v", err)
+}
+
+func TestLoadSession_AgentInitValidation(t *testing.T) {
+	// loadSession enforces the AgentInit invariants:
+	//   - snapshotId and state are mutually exclusive,
+	//   - snapshotId requires a store (server-managed state),
+	//   - state requires the absence of a store (client-managed state).
+	ctx := context.Background()
+	store := NewInMemorySessionStore[testState]()
+	state := &SessionState[testState]{Custom: testState{Counter: 1}}
+
+	cases := []struct {
+		name    string
+		init    *AgentInit[testState]
+		store   SessionStore[testState]
+		wantErr string
+	}{
+		{
+			name:    "both snapshotId and state set",
+			init:    &AgentInit[testState]{SnapshotID: "snap-1", State: state},
+			store:   store,
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "both set, no store",
+			init:    &AgentInit[testState]{SnapshotID: "snap-1", State: state},
+			store:   nil,
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "state with server-managed agent",
+			init:    &AgentInit[testState]{State: state},
+			store:   store,
+			wantErr: "server-managed state",
+		},
+		{
+			name:    "snapshotId with client-managed agent",
+			init:    &AgentInit[testState]{SnapshotID: "snap-1"},
+			store:   nil,
+			wantErr: "client-managed state",
+		},
 	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := loadSession(ctx, tc.init, tc.store)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+
+	t.Run("empty init with server store is allowed", func(t *testing.T) {
+		sess, snap, err := loadSession(ctx, &AgentInit[testState]{}, store)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if sess == nil {
+			t.Fatal("expected session, got nil")
+		}
+		if snap != nil {
+			t.Errorf("expected no snapshot, got %+v", snap)
+		}
+	})
+
+	t.Run("empty init with no store is allowed", func(t *testing.T) {
+		sess, snap, err := loadSession(ctx, &AgentInit[testState]{}, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if sess == nil {
+			t.Fatal("expected session, got nil")
+		}
+		if snap != nil {
+			t.Errorf("expected no snapshot, got %+v", snap)
+		}
+	})
 }
 
 // minimalStore is a SessionStore that does NOT implement SnapshotAborter.
@@ -2800,6 +2878,37 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 	})
 }
 
+func TestAgent_AbortAction_NotFound(t *testing.T) {
+	// The store's "not found" sentinel (empty status, nil error) must
+	// surface as a core.NOT_FOUND GenkitError on the abort companion
+	// action so callers (Dev UI, remote clients) see a proper status.
+	reg := newTestRegistry(t)
+	DefineCustomAgent(reg, "missingFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, nil
+		},
+		WithSessionStore(NewInMemorySessionStore[testState]()),
+	)
+
+	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+		reg, api.ActionTypeAgentAbort, "missingFlow")
+	if abortAction == nil {
+		t.Fatal("abortSnapshot action should be registered")
+	}
+
+	_, err := abortAction.Run(context.Background(), &AbortSnapshotRequest{SnapshotID: "no-such-snap"}, nil)
+	if err == nil {
+		t.Fatal("expected error for missing snapshot, got nil")
+	}
+	var ge *core.GenkitError
+	if !errors.As(err, &ge) {
+		t.Fatalf("expected *core.GenkitError, got %T: %v", err, err)
+	}
+	if ge.Status != core.NOT_FOUND {
+		t.Errorf("status = %q, want %q", ge.Status, core.NOT_FOUND)
+	}
+}
+
 func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
@@ -2906,12 +3015,12 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store := NewInMemorySessionStore[testState]()
 
-	// Abort on missing snapshot returns nil metadata, no error.
-	if meta, err := store.AbortSnapshot(ctx, "nope"); err != nil || meta != nil {
-		t.Fatalf("AbortSnapshot(missing) = %+v, %v; want nil, nil", meta, err)
+	// Abort on missing snapshot returns empty status, no error.
+	if status, err := store.AbortSnapshot(ctx, "nope"); err != nil || status != "" {
+		t.Fatalf("AbortSnapshot(missing) = %q, %v; want \"\", nil", status, err)
 	}
 
-	// Pending → aborted, UpdatedAt advances.
+	// Pending → aborted, UpdatedAt advances (verified via GetSnapshot).
 	pending, err := store.SaveSnapshot(ctx, "snap-cas",
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
@@ -2923,28 +3032,36 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 	time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
-	meta, err := store.AbortSnapshot(ctx, "snap-cas")
+	status, err := store.AbortSnapshot(ctx, "snap-cas")
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if meta.Status != SnapshotStatusAborted {
-		t.Errorf("status after first abort = %q, want aborted", meta.Status)
+	if status != SnapshotStatusAborted {
+		t.Errorf("status after first abort = %q, want aborted", status)
 	}
-	if !meta.UpdatedAt.After(pending.UpdatedAt) {
-		t.Errorf("UpdatedAt did not advance: %v vs %v", meta.UpdatedAt, pending.UpdatedAt)
+	afterFirst, err := store.GetSnapshot(ctx, "snap-cas")
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if !afterFirst.UpdatedAt.After(pending.UpdatedAt) {
+		t.Errorf("UpdatedAt did not advance: %v vs %v", afterFirst.UpdatedAt, pending.UpdatedAt)
 	}
 
 	// Idempotent: second abort returns aborted, no error, no further mutation.
-	firstUpdate := meta.UpdatedAt
-	meta2, err := store.AbortSnapshot(ctx, "snap-cas")
+	firstUpdate := afterFirst.UpdatedAt
+	status2, err := store.AbortSnapshot(ctx, "snap-cas")
 	if err != nil {
 		t.Fatalf("AbortSnapshot (second): %v", err)
 	}
-	if meta2.Status != SnapshotStatusAborted {
-		t.Errorf("status after second abort = %q, want aborted", meta2.Status)
+	if status2 != SnapshotStatusAborted {
+		t.Errorf("status after second abort = %q, want aborted", status2)
 	}
-	if !meta2.UpdatedAt.Equal(firstUpdate) {
-		t.Errorf("UpdatedAt advanced on idempotent abort: %v vs %v", meta2.UpdatedAt, firstUpdate)
+	afterSecond, err := store.GetSnapshot(ctx, "snap-cas")
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if !afterSecond.UpdatedAt.Equal(firstUpdate) {
+		t.Errorf("UpdatedAt advanced on idempotent abort: %v vs %v", afterSecond.UpdatedAt, firstUpdate)
 	}
 
 	// Abort on terminal status is a no-op that returns the existing status.
@@ -2957,12 +3074,12 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
-	meta3, err := store.AbortSnapshot(ctx, "snap-complete")
+	status3, err := store.AbortSnapshot(ctx, "snap-complete")
 	if err != nil {
 		t.Fatalf("AbortSnapshot on complete: %v", err)
 	}
-	if meta3.Status != SnapshotStatusSucceeded {
-		t.Errorf("abort on complete returned status=%q, want succeeded", meta3.Status)
+	if status3 != SnapshotStatusSucceeded {
+		t.Errorf("abort on complete returned status=%q, want succeeded", status3)
 	}
 }
 
@@ -3126,12 +3243,12 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 
-	resp, err := store.AbortSnapshot(ctx, out.SnapshotID)
+	status, err := store.AbortSnapshot(ctx, out.SnapshotID)
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if resp.Status != SnapshotStatusSucceeded {
-		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusSucceeded, resp.Status)
+	if status != SnapshotStatusSucceeded {
+		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusSucceeded, status)
 	}
 
 	// Confirm the store snapshot was not flipped.

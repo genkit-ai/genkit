@@ -42,13 +42,22 @@ type AbortSnapshotResponse struct {
 }
 
 // AgentInit is the input for starting an agent invocation.
-// Provide either SnapshotID (to load from store) or State (direct state).
+// Exactly one of SnapshotID or State may be set, and the choice must match
+// the agent's state management:
+// - Server-managed state (a session store is configured): callers must
+// use SnapshotID; sending State is rejected.
+// - Client-managed state (no session store): callers must use State;
+// sending SnapshotID is rejected.
+// Sending both fields is always rejected. Sending neither starts a fresh
+// invocation with empty state.
 type AgentInit[State any] struct {
-	// SnapshotID loads state from a persisted snapshot.
-	// Mutually exclusive with State.
+	// SnapshotID loads state from a persisted snapshot. Only valid when the
+	// agent is server-managed (a session store is configured). Mutually
+	// exclusive with State.
 	SnapshotID string `json:"snapshotId,omitempty"`
-	// State provides direct state for the invocation.
-	// Mutually exclusive with SnapshotID.
+	// State provides direct state for the invocation. Only valid when the
+	// agent is client-managed (no session store). Mutually exclusive with
+	// SnapshotID.
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
@@ -196,6 +205,34 @@ type GetSnapshotResponse[State any] struct {
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
+// SessionSnapshot is a persisted point-in-time capture of session state. It
+// is the canonical record written to and read from a [SessionStore].
+type SessionSnapshot[State any] struct {
+	// CreatedAt is when the snapshot was created.
+	CreatedAt time.Time `json:"createdAt"`
+	// Error is the structured failure information for a snapshot in
+	// [SnapshotStatusFailed]. Nil otherwise.
+	Error *core.GenkitError `json:"error,omitempty"`
+	// Event is what triggered this snapshot.
+	Event SnapshotEvent `json:"event"`
+	// ParentID is the ID of the previous snapshot in this timeline.
+	ParentID string `json:"parentId,omitempty"`
+	// SnapshotID is the unique identifier for this snapshot (UUID).
+	SnapshotID string `json:"snapshotId"`
+	// State is the conversation state captured at this point. Nil on a
+	// pending snapshot (the live state is not yet committed; the background
+	// invocation is still processing queued inputs); populated on terminal
+	// snapshots with the cumulative final state.
+	State *SessionState[State] `json:"state,omitempty"`
+	// Status is the lifecycle state of this snapshot. Empty is treated as
+	// [SnapshotStatusSucceeded] for backwards compatibility.
+	Status SnapshotStatus `json:"status,omitempty"`
+	// UpdatedAt is when the snapshot was last written. For pending snapshots
+	// it equals CreatedAt; once the snapshot is finalized it reflects the
+	// terminal write.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
 // SessionState is the portable conversation state that flows between client
 // and server. It contains only the data needed for conversation continuity.
 type SessionState[State any] struct {
@@ -222,28 +259,6 @@ const (
 	// terminal status once the background work finishes.
 	SnapshotEventDetach SnapshotEvent = "detach"
 )
-
-// SnapshotMetadata is the metadata-only projection of a [SessionSnapshot]:
-// identifying fields, lifecycle timestamps, and status. Returned by store
-// operations that surface a snapshot's lifecycle state without paying for
-// a full state read.
-type SnapshotMetadata struct {
-	// CreatedAt is when the snapshot was first written.
-	CreatedAt time.Time `json:"createdAt"`
-	// Error is the structured failure information for a snapshot in
-	// [SnapshotStatusFailed].
-	Error *core.GenkitError `json:"error,omitempty"`
-	// Event is what triggered this snapshot.
-	Event SnapshotEvent `json:"event"`
-	// ParentID is the ID of the previous snapshot in this timeline.
-	ParentID string `json:"parentId,omitempty"`
-	// SnapshotID is the unique identifier for this snapshot.
-	SnapshotID string `json:"snapshotId"`
-	// Status is the lifecycle state of this snapshot.
-	Status SnapshotStatus `json:"status,omitempty"`
-	// UpdatedAt is when the snapshot was last written.
-	UpdatedAt time.Time `json:"updatedAt,omitempty"`
-}
 
 // SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
 // written for synchronous turns or invocations are always
