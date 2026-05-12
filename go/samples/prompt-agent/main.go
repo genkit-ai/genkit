@@ -39,7 +39,7 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
-	chatAgent := genkit.DefinePromptAgent[any](g, "chat",
+	chatAgent := genkit.DefinePromptAgent(g, "chat",
 		ChatPromptInput{Personality: "a sarcastic pirate"},
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {

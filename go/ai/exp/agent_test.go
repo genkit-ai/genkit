@@ -950,7 +950,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "testPrompt", nil)
+	af := DefinePromptAgent[testState](reg, "testPrompt", nil)
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1037,7 +1037,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 		ai.WithSystem("system prompt"),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "historyPrompt", nil)
+	af := DefinePromptAgent[testState](reg, "historyPrompt", nil)
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1111,7 +1111,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "snapPrompt", nil,
+	af := DefinePromptAgent[testState](reg, "snapPrompt", nil,
 		WithSessionStore(store),
 	)
 
@@ -1252,7 +1252,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		ai.WithTools(ai.ToolName("greet"), ai.ToolName("farewell")),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "toolPrompt", nil)
+	af := DefinePromptAgent[testState](reg, "toolPrompt", nil)
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
@@ -1491,7 +1491,7 @@ func TestPromptAgent_RunText(t *testing.T) {
 		ai.WithSystem("You are a test assistant."),
 	)
 
-	af := DefinePromptAgent[testState, any](reg, "runTextPrompt", nil)
+	af := DefinePromptAgent[testState](reg, "runTextPrompt", nil)
 
 	response, err := af.RunText(ctx, "hello")
 	if err != nil {

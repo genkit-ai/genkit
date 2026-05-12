@@ -494,15 +494,16 @@ func DefineAgent[State any](
 // Experimental: This API is under active development and may change in any
 // minor version release.
 //
-// defaultInput is used to render the prompt on every turn. PromptIn is
-// captured for compile-time type checking on defaultInput.
+// defaultInput is used to render the prompt on every turn. The prompt's
+// Render is invoked once at definition time as a smoke check, so a
+// defaultInput that fails the prompt's input schema panics here rather
+// than failing on the first invocation.
 //
 // For an agent that defines its prompt inline, use [DefineAgent]. For full
 // control over the per-turn loop, use [DefineCustomAgent].
 //
 // Type parameters:
 //   - State: Type for user-defined state persisted in snapshots
-//   - PromptIn: The prompt input type (inferred from defaultInput)
 //
 // Example:
 //
@@ -514,10 +515,10 @@ func DefineAgent[State any](
 //		ChatInput{Personality: "a sarcastic pirate"},
 //		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
 //	)
-func DefinePromptAgent[State, PromptIn any](
+func DefinePromptAgent[State any](
 	g *Genkit,
 	promptName string,
-	defaultInput PromptIn,
+	defaultInput any,
 	opts ...aix.AgentOption[State],
 ) *aix.Agent[any, State] {
 	return aix.DefinePromptAgent(g.reg, promptName, defaultInput, opts...)
