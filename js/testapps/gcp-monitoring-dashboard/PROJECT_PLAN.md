@@ -15,22 +15,22 @@ that can authenticate with GCP.
 
 ### Checklist
 
-- [ ] **1.1** Create `package.json` with all dependencies
+- [x] **1.1** Create `package.json` with all dependencies
   - Frontend: react, react-dom, react-router-dom, recharts, @tanstack/react-query, lucide-react
   - Backend: express, googleapis, google-auth-library, cors
   - Dev: vite, @vitejs/plugin-react, typescript, tsx, tailwindcss, postcss, autoprefixer, concurrently
   - Scripts: `dev`, `dev:frontend`, `dev:server`, `build`
-- [ ] **1.2** Create TypeScript configs (`tsconfig.json`, `tsconfig.node.json`)
-- [ ] **1.3** Create Vite config with proxy to backend (`vite.config.ts`)
-- [ ] **1.4** Create Tailwind config with dark theme defaults (`tailwind.config.js`, `postcss.config.js`)
-- [ ] **1.5** Create `index.html` entry point
-- [ ] **1.6** Create `src/main.tsx` and `src/App.tsx` with React Router skeleton
-- [ ] **1.7** Create `src/index.css` with Tailwind directives and dark theme base styles
-- [ ] **1.8** Create `server/index.ts` — Express server with health check endpoint
-- [ ] **1.9** Create `server/auth.ts` — ADC authentication helper using `google-auth-library`
-- [ ] **1.10** Create `server/cache.ts` — In-memory LRU cache with TTL
-- [ ] **1.11** Verify: `pnpm install` succeeds, `pnpm dev` starts both servers
-- [ ] **1.12** Create `README.md` with setup and usage instructions
+- [x] **1.2** Create TypeScript configs (`tsconfig.json`, `tsconfig.node.json`)
+- [x] **1.3** Create Vite config with proxy to backend (`vite.config.ts`)
+- [x] **1.4** Create Tailwind config with dark theme defaults (`tailwind.config.js`, `postcss.config.js`)
+- [x] **1.5** Create `index.html` entry point
+- [x] **1.6** Create `src/main.tsx` and `src/App.tsx` with React Router skeleton
+- [x] **1.7** Create `src/index.css` with Tailwind directives and dark theme base styles
+- [x] **1.8** Create `server/index.ts` — Express server with health check endpoint
+- [x] **1.9** Create `server/auth.ts` — ADC authentication helper using `google-auth-library`
+- [x] **1.10** Create `server/cache.ts` — In-memory LRU cache with TTL
+- [x] **1.11** Verify: `pnpm install` succeeds, `pnpm dev` starts both servers
+- [x] **1.12** Create `README.md` with setup and usage instructions
 
 ### Deliverable
 Running app at localhost:5173 showing a placeholder page. Backend at
@@ -255,11 +255,11 @@ Automated tests may be added in a future iteration.
 
 ## Current Status
 
-**Last updated**: Stage 0 (Planning complete, ready to begin Stage 1)
+**Last updated**: Stage 1 complete (ready to begin Stage 2)
 
 | Stage | Status | Notes |
 |-------|--------|-------|
-| Stage 1: Scaffolding | 🔲 Not started | |
+| Stage 1: Scaffolding | ✅ Complete | All 12 items done. Frontend + backend running, ADC auth working. |
 | Stage 2: API Integration | 🔲 Not started | |
 | Stage 3: Overview Page | 🔲 Not started | |
 | Stage 4: Feature Detail | 🔲 Not started | |

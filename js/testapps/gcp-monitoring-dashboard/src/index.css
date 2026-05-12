@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply min-h-screen antialiased;
+  }
+
+  /* Custom scrollbar for dark theme */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-0;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border-light;
+  }
+}
+
+@layer components {
+  /* Card container */
+  .card {
+    @apply bg-surface-1 border border-border rounded-lg;
+  }
+
+  /* Metric badge */
+  .metric-badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium;
+  }
+
+  /* Status indicators */
+  .status-success {
+    @apply text-accent-green;
+  }
+
+  .status-error {
+    @apply text-accent-red;
+  }
+
+  /* Type badges for spans */
+  .type-badge {
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-surface-3;
+  }
+
+  .type-badge-flow {
+    @apply bg-accent-blue/20 text-accent-blue;
+  }
+
+  .type-badge-step {
+    @apply bg-accent-purple/20 text-accent-purple;
+  }
+
+  .type-badge-model {
+    @apply bg-accent-orange/20 text-accent-orange;
+  }
+
+  .type-badge-tool {
+    @apply bg-accent-green/20 text-accent-green;
+  }
+
+  .type-badge-dotprompt {
+    @apply bg-accent-purple/20 text-accent-purple;
+  }
+
+  .type-badge-util {
+    @apply bg-text-tertiary/20 text-text-secondary;
+  }
+}
