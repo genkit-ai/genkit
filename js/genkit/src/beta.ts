@@ -48,4 +48,5 @@ export {
   type SessionStoreOptions,
   type SnapshotCallback,
   type SnapshotContext,
+  type SnapshotMutator,
 } from './genkit-beta.js';

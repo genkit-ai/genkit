@@ -50,6 +50,7 @@ import {
   type SessionStoreOptions,
   type SnapshotCallback,
   type SnapshotContext,
+  type SnapshotMutator,
 } from '@genkit-ai/ai/session';
 
 import { type Operation, type z } from '@genkit-ai/core';
@@ -69,6 +70,7 @@ export type {
   SessionStoreOptions,
   SnapshotCallback,
   SnapshotContext,
+  SnapshotMutator,
 };
 
 /**
