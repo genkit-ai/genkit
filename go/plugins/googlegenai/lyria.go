@@ -138,12 +138,12 @@ func generateMusic(
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
 	if cb != nil {
-		return nil, fmt.Errorf("streaming mode not supported for music generation")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "streaming mode is not supported for Lyria music generation", nil)
 	}
 
 	cc := client.ClientConfig()
 	if cc.Backend != genai.BackendVertexAI {
-		return nil, fmt.Errorf("lyria is only available through the Vertex AI backend")
+		return nil, core.NewPublicError(core.FAILED_PRECONDITION, "Lyria is only available through the Vertex AI backend", nil)
 	}
 	if cc.HTTPClient == nil {
 		return nil, fmt.Errorf("lyria: genai.Client has no HTTP client configured")
@@ -165,7 +165,7 @@ func generateMusic(
 	}
 	userPrompt := strings.Join(parts, "\n")
 	if userPrompt == "" {
-		return nil, fmt.Errorf("error generating music: empty prompt detected")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "lyria requires a non-empty text prompt", nil)
 	}
 
 	req := lyriaPredictRequest{
@@ -185,10 +185,10 @@ func generateMusic(
 		location = cfg.Location
 	}
 	if location == "" {
-		return nil, fmt.Errorf("lyria requires a Vertex AI location")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "lyria requires a Vertex AI location", nil)
 	}
 	if cc.Project == "" {
-		return nil, fmt.Errorf("lyria requires a Vertex AI project id")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "lyria requires a Vertex AI project id", nil)
 	}
 
 	url := lyriaPredictURL(location, cc.Project, model)
