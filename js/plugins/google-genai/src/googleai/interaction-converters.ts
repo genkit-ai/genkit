@@ -116,14 +116,17 @@ export function toInteractionTool(tool: ToolDefinition): InteractionTool {
  * @returns The corresponding Interaction Content object.
  * @throws Error if the part type is unsupported.
  */
-export function toInteractionContent(part: Part): Content {
+export function toInteractionContent(part: Part): Content | undefined {
   if (part.text !== undefined) {
     return { type: 'text', text: part.text };
   }
   if (part.media) {
     return toInteractionMedia(part);
   }
-  throw new Error('Unsupported part type for Interaction input');
+  console.warn(
+    `Unsupported part type for Interaction input: ${JSON.stringify(part)}`
+  );
+  return undefined;
 }
 
 function toInteractionMedia(part: Part): Content {
@@ -197,6 +200,26 @@ const RecordUnknownSchema = z.record(z.unknown());
 const RecordUnknownOrStringSchema = z.union([RecordUnknownSchema, z.string()]);
 const OptionalStringSchema = z.string().optional();
 
+const GoogleSearchCallSchema = z.object({
+  id: z.string(),
+  arguments: GoogleSearchArgsSchema,
+});
+
+const GoogleSearchResultSchema = z.object({
+  callId: z.string(),
+  result: RecordUnknownSchema,
+});
+
+const ExecutableCodeSchema = z.object({
+  code: z.string(),
+  language: z.string().default('PYTHON'),
+});
+
+const CodeExecutionResultSchema = z.object({
+  output: z.string(),
+  outcome: z.string().optional(),
+});
+
 /**
  * Converts an array of Genkit MessageData objects into an array of Interaction Steps.
  */
@@ -211,7 +234,9 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         steps.push({
           type: 'function_call',
           name: part.toolRequest.name,
-          arguments: RecordUnknownSchema.parse(part.toolRequest.input),
+          arguments: RecordUnknownSchema.optional().parse(
+            part.toolRequest.input
+          ),
           id: part.toolRequest.ref || '',
         });
       } else if (part.toolResponse) {
@@ -226,67 +251,54 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         steps.push({
           type: 'function_result',
           name: part.toolResponse.name,
-          result: RecordUnknownOrStringSchema.parse(output),
+          result: RecordUnknownOrStringSchema.optional().parse(output),
           call_id: part.toolResponse.ref || '',
         });
       } else if (part.custom?.googleSearchCall) {
-        const gsCall = part.custom.googleSearchCall as Record<string, unknown>;
+        const gsCall = GoogleSearchCallSchema.parse(
+          part.custom.googleSearchCall
+        );
         steps.push({
           type: 'google_search_call',
-          id: typeof gsCall.id === 'string' ? gsCall.id : 'gs_0',
-          arguments: GoogleSearchArgsSchema.parse(gsCall.arguments),
+          id: gsCall.id,
+          arguments: gsCall.arguments,
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
           ),
         });
       } else if (part.custom?.googleSearchResult) {
-        const gsResult = part.custom.googleSearchResult as Record<
-          string,
-          unknown
-        >;
+        const gsResult = GoogleSearchResultSchema.parse(
+          part.custom.googleSearchResult
+        );
         steps.push({
           type: 'google_search_result',
-          call_id:
-            typeof gsResult.callId === 'string' ? gsResult.callId : 'gs_0',
-          result: RecordUnknownSchema.parse(gsResult.result),
+          call_id: gsResult.callId,
+          result: gsResult.result,
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
           ),
         });
       } else if (part.custom?.executableCode) {
-        const execCode = part.custom.executableCode as Record<string, unknown>;
+        const execCode = ExecutableCodeSchema.parse(part.custom.executableCode);
         steps.push({
           type: 'code_execution_call',
-          id:
-            typeof part.metadata?.callId === 'string'
-              ? part.metadata.callId
-              : 'ce_0',
+          id: z.string().parse(part.metadata?.callId),
           arguments: {
-            code: typeof execCode.code === 'string' ? execCode.code : '',
-            language:
-              typeof execCode.language === 'string'
-                ? execCode.language
-                : 'PYTHON',
+            code: execCode.code,
+            language: execCode.language,
           },
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
           ),
         });
       } else if (part.custom?.codeExecutionResult) {
-        const execResult = part.custom.codeExecutionResult as Record<
-          string,
-          unknown
-        >;
+        const execResult = CodeExecutionResultSchema.parse(
+          part.custom.codeExecutionResult
+        );
         steps.push({
           type: 'code_execution_result',
-          call_id:
-            typeof part.metadata?.callId === 'string'
-              ? part.metadata.callId
-              : 'ce_0',
-          result:
-            typeof execResult.output === 'string'
-              ? execResult.output
-              : JSON.stringify(execResult),
+          call_id: z.string().parse(part.metadata?.callId),
+          result: execResult.output,
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
           ),
@@ -300,7 +312,10 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
           ),
         });
       } else {
-        normalContent.push(toInteractionContent(part));
+        const content = toInteractionContent(part);
+        if (content) {
+          normalContent.push(content);
+        }
       }
     }
 
@@ -349,10 +364,11 @@ export function fromInteractionContent(content: Content): Part {
     case 'function_result':
       return fromFunctionResultContent(content);
     default:
-      // We need the 'any' because currently this is an exhaustive list
-      throw new Error(
-        `Unsupported content type: ${(content as any).type}. Raw content: ${JSON.stringify(content)}`
-      );
+      return {
+        custom: {
+          unknownContent: content,
+        },
+      };
   }
 }
 
