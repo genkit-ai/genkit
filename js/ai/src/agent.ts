@@ -67,7 +67,6 @@ import {
  */
 export const AgentInitSchema = z.object({
   snapshotId: z.string().optional(),
-  newSnapshotId: z.string().optional(),
   state: SessionStateSchema.optional(),
 });
 
