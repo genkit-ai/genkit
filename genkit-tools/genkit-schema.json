@@ -240,7 +240,6 @@
             "details": {}
           },
           "required": [
-            "status",
             "message"
           ],
           "additionalProperties": false

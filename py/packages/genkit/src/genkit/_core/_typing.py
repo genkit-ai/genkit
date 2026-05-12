@@ -940,7 +940,7 @@ class Error(GenkitModel):
     """Model for error data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-    status: str = Field(...)
+    status: str | None = None
     message: str = Field(...)
     details: Any | None = Field(default=None)
 
