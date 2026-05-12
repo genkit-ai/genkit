@@ -16,9 +16,10 @@
 
 """Tool approval middleware for Genkit.
 
-Requires explicit approval for tool calls by interrupting execution and waiting
-for the caller to approve and resume. Tools in the allowed list bypass approval.
-Useful for sensitive operations or user confirmation flows.
+Requires explicit approval for tool calls by interrupting execution and
+waiting for the caller to approve and resume. Tools in the allowed list
+bypass approval. Useful for sensitive operations or user confirmation
+flows.
 """
 
 from __future__ import annotations
@@ -38,12 +39,18 @@ from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookPar
 class ToolApproval(BaseMiddleware):
     """Tool approval middleware that interrupts execution for non-allowed tools.
 
-    Interrupts tool execution unless the tool is in the allowed list or the call
-    is being resumed with explicit approval metadata (``resumed.toolApproved: true``).
-    An empty ``allowed_tools`` list requires approval for every tool call.
+    A tool call is allowed through only when one of the following is true:
 
-    Allowed-list entries must match the plain tool name as passed to ``define_tool``
-    (e.g. ``'search'``), not the full registry key (e.g. ``'/tool/search'``).
+    * The tool's name appears in ``allowed_tools``.
+    * The call is being resumed with explicit approval metadata
+      (``resumed.toolApproved: true``).
+
+    An empty ``allowed_tools`` list therefore requires approval for every
+    tool call.
+
+    Allowed-list entries must match the plain tool name as passed to
+    ``define_tool`` (e.g. ``'search'``), not the full registry key
+    (e.g. ``'/tool/search'``).
     """
 
     allowed_tools: list[str] = Field(default_factory=list)

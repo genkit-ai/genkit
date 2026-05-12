@@ -49,20 +49,22 @@ _DEFAULT_FALLBACK_STATUSES: list[str] = [
 class Fallback(BaseMiddleware):
     """Fallback middleware to try alternative models on failure.
 
-    When the primary model call fails with a retryable ``GenkitError`` status (one of
-    the ``statuses`` list), each model in ``models`` is tried in order until one
-    succeeds or all are exhausted.
+    When the primary model call fails with a retryable ``GenkitError``
+    status (one of the ``statuses`` list), each model in ``models`` is
+    tried in order until one succeeds or all are exhausted.
 
-    Only ``GenkitError`` failures with a matching status trigger fallback — raw network
-    errors, ``TimeoutError``, or other non-``GenkitError`` exceptions propagate immediately
-    without trying any fallback model. (Use ``Retry`` for transient non-API errors.)
+    Only ``GenkitError`` failures with a matching status trigger fallback.
+    Raw network errors, ``TimeoutError``, and other non-``GenkitError``
+    exceptions propagate immediately without trying any fallback model.
+    (Use ``Retry`` for transient non-API errors.)
 
-    If ``models`` is empty and the primary fails with a retryable status, the original
-    error is re-raised unchanged.
+    If ``models`` is empty and the primary fails with a retryable status,
+    the original error is re-raised unchanged.
 
-    Fallback names are resolved on the **same call-scoped registry** as the rest of the
-    ``generate()`` pipeline — the engine passes it through ``params.registry`` whenever
-    your ``Fallback`` instance runs inside ``use=[...]``.
+    Fallback names are resolved on the **same call-scoped registry** as
+    the rest of the ``generate()`` pipeline — the engine supplies it
+    through ``params.registry`` whenever your ``Fallback`` instance runs
+    inside ``use=[...]``.
     """
 
     models: list[str] = Field(default_factory=list)

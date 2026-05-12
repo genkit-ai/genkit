@@ -16,9 +16,10 @@
 
 """Retry middleware for Genkit model calls.
 
-Automatically retries model API calls on transient failures with exponential backoff.
-Non-retryable errors (like INVALID_ARGUMENT) are raised immediately, while transient
-errors (UNAVAILABLE, DEADLINE_EXCEEDED, etc.) trigger retry with configurable delay.
+Automatically retries model API calls on transient failures with
+exponential backoff. Non-retryable errors (e.g. ``INVALID_ARGUMENT``) are
+raised immediately, while transient errors (``UNAVAILABLE``,
+``DEADLINE_EXCEEDED``, …) trigger retry with a configurable delay.
 """
 
 from __future__ import annotations
@@ -47,13 +48,17 @@ _DEFAULT_RETRY_STATUSES: list[str] = [
 class Retry(BaseMiddleware):
     """Retry middleware with exponential backoff for transient failures.
 
-    Retries model API calls when they fail with retryable status codes.
-    Non-GenkitError exceptions (network failures, etc.) are always retried.
-    Non-retryable GenkitError statuses (INVALID_ARGUMENT, etc.) fail immediately.
+    Retries model API calls when they fail with retryable status codes:
 
-    Jitter grows with attempt number: ``1s * 2^attempt * random()`` is added on top
-    of the base delay, with the total capped at ``max_delay_ms``. Prevents thundering-herd
-    retries while guaranteeing sleep never exceeds the configured maximum.
+    * Non-``GenkitError`` exceptions (network failures, etc.) are always
+      retried.
+    * Non-retryable ``GenkitError`` statuses (``INVALID_ARGUMENT``, etc.)
+      fail immediately.
+
+    Jitter grows with the attempt number: ``1s * 2^attempt * random()`` is
+    added on top of the base delay, with the total capped at
+    ``max_delay_ms``. This prevents thundering-herd retries while
+    guaranteeing sleep never exceeds the configured maximum.
     """
 
     max_retries: int = Field(default=3, ge=0)
