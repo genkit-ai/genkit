@@ -23,8 +23,18 @@ import pytest
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._model import GenerateActionOptions
+from genkit._core._registry import Registry
 from genkit.middleware import GenerateHookParams
 from genkit.plugins.middleware import Skills
+
+
+def _make_params() -> GenerateHookParams:
+    return GenerateHookParams(
+        options=GenerateActionOptions(messages=[]),
+        request=ModelRequest(messages=[]),
+        iteration=0,
+        registry=Registry(),
+    )
 
 
 @pytest.mark.asyncio
@@ -35,11 +45,7 @@ async def test_skills_no_paths() -> None:
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    request = ModelRequest(messages=[])
-    options = GenerateActionOptions(messages=[])
-    params = GenerateHookParams(options=options, request=request, iteration=0)
-
-    result = await skills.wrap_generate(params, next_fn)
+    result = await skills.wrap_generate(_make_params(), next_fn)
     assert result is not None
 
 
@@ -51,11 +57,7 @@ async def test_skills_nonexistent_path() -> None:
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    request = ModelRequest(messages=[])
-    options = GenerateActionOptions(messages=[])
-    params = GenerateHookParams(options=options, request=request, iteration=0)
-
-    result = await skills.wrap_generate(params, next_fn)
+    result = await skills.wrap_generate(_make_params(), next_fn)
     assert result is not None
 
 
@@ -80,11 +82,7 @@ You are a test assistant.
             assert len(params.request.messages) > 0
             return ModelResponse(message=None)
 
-        request = ModelRequest(messages=[])
-        options = GenerateActionOptions(messages=[])
-        params = GenerateHookParams(options=options, request=request, iteration=0)
-
-        result = await skills.wrap_generate(params, next_fn)
+        result = await skills.wrap_generate(_make_params(), next_fn)
         assert result is not None
 
 

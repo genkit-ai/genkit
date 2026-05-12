@@ -61,26 +61,16 @@ class Fallback(BaseMiddleware):
     error is re-raised unchanged.
 
     Fallback names are resolved on the **same call-scoped registry** as the rest of the
-    ``generate()`` pipeline (the engine attaches it when your ``Fallback`` instance runs
-    inside ``use=[...]``). Constructing ``Fallback`` outside an active generate call means
-    no registry is available and fallback cannot look up models.
+    ``generate()`` pipeline — the engine passes it through ``params.registry`` whenever
+    your ``Fallback`` instance runs inside ``use=[...]``.
     """
 
     models: list[str] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_FALLBACK_STATUSES))
 
-    async def _resolve_fallback_model(self, model_name: str) -> Action[Any, Any, Any]:
-        """Look up a fallback model action via the pipeline registry."""
-        reg: RegistryLike | None = self._registry
-        if reg is None:
-            raise GenkitError(
-                status='INTERNAL',
-                message=(
-                    'Cannot look up fallback models: this middleware is not running inside '
-                    'an active generate() call. Pass Fallback in ai.generate(..., use=[...]).'
-                ),
-            )
-        action = await reg.resolve_action(ActionKind.MODEL, model_name)
+    async def _resolve_fallback_model(self, registry: RegistryLike, model_name: str) -> Action[Any, Any, Any]:
+        """Look up a fallback model action on the per-call registry."""
+        action = await registry.resolve_action(ActionKind.MODEL, model_name)
         if action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -107,7 +97,7 @@ class Fallback(BaseMiddleware):
         # to the same caller as the primary model would have.
         on_chunk = cast(Callable[[object], None], params.on_chunk) if params.on_chunk else None
         for model_name in self.models:
-            fallback_action = await self._resolve_fallback_model(model_name)
+            fallback_action = await self._resolve_fallback_model(params.registry, model_name)
             try:
                 result = await fallback_action.run(
                     input=params.request,

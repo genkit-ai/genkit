@@ -23,8 +23,18 @@ from pydantic import ValidationError
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._error import GenkitError
+from genkit._core._registry import Registry
 from genkit.middleware import ModelHookParams
 from genkit.plugins.middleware import Retry
+
+
+def _make_params() -> ModelHookParams:
+    return ModelHookParams(
+        request=ModelRequest(messages=[]),
+        registry=Registry(),
+        on_chunk=None,
+        context={},
+    )
 
 
 @pytest.mark.asyncio
@@ -35,8 +45,7 @@ async def test_retry_success_on_first_attempt() -> None:
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
-    result = await retry.wrap_model(params, next_fn)
+    result = await retry.wrap_model(_make_params(), next_fn)
     assert result is not None
 
 
@@ -54,8 +63,7 @@ async def test_retry_on_retryable_error() -> None:
             raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
         return ModelResponse(message=None)
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
-    result = await retry.wrap_model(params, next_fn)
+    result = await retry.wrap_model(_make_params(), next_fn)
     assert result is not None
     assert call_count == 2
 
@@ -68,9 +76,8 @@ async def test_retry_exhausted() -> None:
     async def next_fn(params) -> NoReturn:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
     with pytest.raises(GenkitError):
-        await retry.wrap_model(params, next_fn)
+        await retry.wrap_model(_make_params(), next_fn)
 
 
 @pytest.mark.asyncio
@@ -85,9 +92,8 @@ async def test_retry_non_retryable_error() -> None:
         call_count += 1
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
     with pytest.raises(GenkitError):
-        await retry.wrap_model(params, next_fn)
+        await retry.wrap_model(_make_params(), next_fn)
     assert call_count == 1
 
 
@@ -116,7 +122,6 @@ async def test_retry_non_genkit_error() -> None:
             raise ConnectionError('Network failure')
         return ModelResponse(message=None)
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
-    result = await retry.wrap_model(params, next_fn)
+    result = await retry.wrap_model(_make_params(), next_fn)
     assert result is not None
     assert call_count == 2

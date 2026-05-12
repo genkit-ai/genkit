@@ -22,8 +22,18 @@ import pytest
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._error import GenkitError
+from genkit._core._registry import Registry
 from genkit.middleware import ModelHookParams
 from genkit.plugins.middleware import Fallback
+
+
+def _make_params() -> ModelHookParams:
+    return ModelHookParams(
+        request=ModelRequest(messages=[]),
+        registry=Registry(),
+        on_chunk=None,
+        context={},
+    )
 
 
 @pytest.mark.asyncio
@@ -34,8 +44,7 @@ async def test_fallback_success_on_first_model() -> None:
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
-    result = await fallback.wrap_model(params, next_fn)
+    result = await fallback.wrap_model(_make_params(), next_fn)
     assert result is not None
 
 
@@ -47,9 +56,8 @@ async def test_fallback_on_retryable_error() -> None:
     async def next_fn(params) -> NoReturn:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
     with pytest.raises(GenkitError):
-        await fallback.wrap_model(params, next_fn)
+        await fallback.wrap_model(_make_params(), next_fn)
 
 
 @pytest.mark.asyncio
@@ -60,9 +68,8 @@ async def test_fallback_non_retryable_error() -> None:
     async def next_fn(params) -> NoReturn:
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
     with pytest.raises(GenkitError):
-        await fallback.wrap_model(params, next_fn)
+        await fallback.wrap_model(_make_params(), next_fn)
 
 
 @pytest.mark.asyncio
@@ -73,6 +80,5 @@ async def test_fallback_non_genkit_error() -> None:
     async def next_fn(params) -> NoReturn:
         raise ConnectionError('Network failure')
 
-    params = ModelHookParams(request=ModelRequest(messages=[]), on_chunk=None, context={})
     with pytest.raises(ConnectionError):
-        await fallback.wrap_model(params, next_fn)
+        await fallback.wrap_model(_make_params(), next_fn)
