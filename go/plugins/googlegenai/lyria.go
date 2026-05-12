@@ -191,20 +191,40 @@ func generateMusic(
 		return nil, fmt.Errorf("lyria requires a Vertex AI project id")
 	}
 
+	url := lyriaPredictURL(location, cc.Project, model)
+	lp, err := doLyriaPredict(ctx, cc.HTTPClient, url, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(lp.Predictions) == 0 {
+		return nil, fmt.Errorf("lyria: no predictions returned (possibly content-filtered)")
+	}
+
+	return translateLyriaResponse(lp, input), nil
+}
+
+// doLyriaPredict issues an authenticated POST to the Vertex AI Lyria
+// `:predict` endpoint at url. It attaches the standard Genkit client
+// header on top of whatever the supplied httpClient already injects
+// (credentials, quota project, OTel tracing).
+func doLyriaPredict(ctx context.Context, httpClient *http.Client, url string, req lyriaPredictRequest) (*lyriaPredictResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("lyria: marshaling request: %w", err)
 	}
-
-	url := lyriaPredictURL(location, cc.Project, model)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	for k, vs := range genkitClientHeader {
+		for _, v := range vs {
+			httpReq.Header.Add(k, v)
+		}
+	}
 
-	resp, err := cc.HTTPClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("lyria: request failed: %w", err)
 	}
@@ -222,9 +242,5 @@ func generateMusic(
 	if err := json.Unmarshal(data, &lp); err != nil {
 		return nil, fmt.Errorf("lyria: unmarshaling response: %w", err)
 	}
-	if len(lp.Predictions) == 0 {
-		return nil, fmt.Errorf("lyria: no predictions returned (possibly content-filtered)")
-	}
-
-	return translateLyriaResponse(&lp, input), nil
+	return &lp, nil
 }
