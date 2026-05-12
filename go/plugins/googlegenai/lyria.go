@@ -27,6 +27,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
@@ -107,6 +108,20 @@ func translateLyriaResponse(resp *lyriaPredictResponse, input *ai.ModelRequest) 
 		Message:      msg,
 		Request:      input,
 	}
+}
+
+// warnLyriaCountMismatch logs a warning when Lyria returns fewer audio
+// predictions than were requested via SampleCount. Vertex silently truncates
+// in some cases (content filter, quota), and a silent drop is easy to miss.
+func warnLyriaCountMismatch(ctx context.Context, requested, received int) {
+	if received >= requested {
+		return
+	}
+	logger.FromContext(ctx).Warn(
+		"lyria returned fewer predictions than requested",
+		"requested", requested,
+		"received", received,
+	)
 }
 
 // lyriaPredictURL builds the Vertex AI `:predict` endpoint URL for a Lyria
@@ -199,6 +214,7 @@ func generateMusic(
 	if len(lp.Predictions) == 0 {
 		return nil, fmt.Errorf("lyria: no predictions returned (possibly content-filtered)")
 	}
+	warnLyriaCountMismatch(ctx, req.Parameters.SampleCount, len(lp.Predictions))
 
 	return translateLyriaResponse(lp, input), nil
 }
