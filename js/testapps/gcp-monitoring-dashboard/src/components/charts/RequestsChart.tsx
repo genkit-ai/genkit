@@ -23,10 +23,15 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
-export function RequestsChart() {
+export function RequestsChart({ featureName }: { featureName?: string }) {
+  const filterStr = featureName
+    ? `metric.label.name="${featureName}"`
+    : undefined;
+
   const { data, isLoading, error } = useTimeSeries(METRIC_TYPE, {
     groupBy: 'metric.label.status',
     reducer: 'REDUCE_SUM',
+    filter: filterStr,
   });
 
   // Merge all series into a single timeline with success/failure columns

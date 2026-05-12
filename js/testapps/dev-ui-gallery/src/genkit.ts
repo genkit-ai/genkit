@@ -39,7 +39,8 @@ import { pinecone } from 'genkitx-pinecone';
 logger.setLogLevel('debug');
 
 enableFirebaseTelemetry({
-  forceDevExport: false,
+  projectId: 'pavelj-genkit-test1',
+  forceDevExport: true,
   metricExportIntervalMillis: 5_000,
   metricExportTimeoutMillis: 5_000,
   autoInstrumentation: true,

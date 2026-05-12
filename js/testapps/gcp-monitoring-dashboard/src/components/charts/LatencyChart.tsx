@@ -22,12 +22,17 @@ function formatLatency(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
-export function LatencyChart() {
+export function LatencyChart({ featureName }: { featureName?: string }) {
+  const filterStr = featureName
+    ? `metric.label.name="${featureName}"`
+    : undefined;
+
   // For distribution metrics, ALIGN_DELTA converts cumulative distribution to delta,
   // then REDUCE_PERCENTILE_95 gives us p95 across series
   const { data, isLoading, error } = useTimeSeries(METRIC_TYPE, {
     aligner: 'ALIGN_DELTA',
     reducer: 'REDUCE_PERCENTILE_99',
+    filter: filterStr,
   });
 
   const chartData = (() => {

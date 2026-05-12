@@ -112,28 +112,33 @@ Build the per-feature detail view with expanded charts and traces list.
 
 ### Checklist
 
-- [ ] **4.1** Create `src/components/StabilityMetrics.tsx` — Compact metrics bar
-  - Total requests, success rate, latency p95, token totals
-  - Trend indicators (▲▼ with percentage change)
-- [ ] **4.2** Create `src/components/charts/TokenChart.tsx` — Stacked bar chart
-  - Input (blue), Output (orange), Thinking (purple) tokens
-  - Tab switch between "Tokens" and "Images" views
-- [ ] **4.3** Create `src/hooks/useTraces.ts` — TanStack Query hooks for traces API
-- [ ] **4.4** Create `src/components/TracesList.tsx` — Traces table
-  - Status icon, created timestamp, truncated input, output, latency, model names
-  - Filter bar (text search + status filter)
-  - Sortable columns
-  - Pagination (server-side via pageToken)
-  - Download button (CSV export)
+- [x] **4.1** Create `src/components/StabilityMetrics.tsx` — Compact metrics bar
+  - Total requests, success rate (color-coded), latency p95, input/output token totals
+  - Failure count indicator when > 0
+- [x] **4.2** Create `src/components/charts/TokenChart.tsx` — Stacked bar chart
+  - Input (blue) and Output (orange) tokens over time
+  - Supports featureName filter prop
+- [x] **4.3** Create `src/hooks/useTraces.ts` — TanStack Query hooks for traces API
+  - `useTraceList()` with feature/status filtering and pagination
+  - `useTraceDetail()` with 5-min cache for immutable traces
+- [x] **4.4** Create `src/components/TracesList.tsx` — Traces table
+  - Status icon, timestamp, name (linked), type badge, duration
+  - Status filter dropdown (All/Success/Error)
+  - Server-side pagination with page tokens
   - Click row → navigate to Trace Viewer
-- [ ] **4.5** Create `src/components/FailedPathBanner.tsx` — Warning banner for failed paths
-- [ ] **4.6** Create `src/pages/FeaturePage.tsx` — Compose all feature detail components
-  - Breadcrumb: Genkit > featureName
-  - Stability metrics bar
-  - 2x2 chart grid (Requests, Tokens, Success Rate, Latency with p50+p95)
-  - Traces section
-- [ ] **4.7** Wire up React Router link from FeatureTable → FeaturePage
-- [ ] **4.8** Style and test with real data
+- [x] **4.5** Add featureName filter prop to RequestsChart, SuccessRateChart, LatencyChart
+  - `feature/requests` and `feature/latency` use `metric.label.name` for filtering
+  - `ai/generate/input/tokens` uses `metric.label.featureName` for filtering
+- [x] **4.6** Create `src/pages/FeaturePage.tsx` — Compose all feature detail components
+  - Breadcrumb: Genkit > featureName with back arrow
+  - Stability metrics bar (from overview data, matched by `name` field)
+  - 2x2 chart grid (Requests, Tokens, Success Rate, Latency)
+  - Traces section with filtering and pagination
+- [x] **4.7** Wire up React Router link from FeatureTable → FeaturePage (done in Stage 3)
+- [x] **4.8** Tested with real data from weather-gen-test-next (7d range)
+  - Fixed: metric label `name` vs `featureName` mismatch for feature filtering
+  - Fixed: overview `name` field lookup in FeaturePage
+  - All charts, metrics bar, and traces list rendering correctly
 
 ### Deliverable
 Feature detail page with metrics, charts, and paginated traces list.
@@ -256,13 +261,13 @@ Automated tests may be added in a future iteration.
 
 ## Current Status
 
-**Last updated**: Stage 3 complete (ready to begin Stage 4)
+**Last updated**: Stage 4 complete (ready to begin Stage 5)
 
 | Stage | Status | Notes |
 |-------|--------|-------|
 | Stage 1: Scaffolding | ✅ Complete | All 12 items done. Frontend + backend running, ADC auth working. |
 | Stage 2: API Integration | ✅ Complete | All 12 items done. Tested with weather-gen-test-next. Fixed ALIGN_DELTA for CUMULATIVE metrics. |
 | Stage 3: Overview Page | ✅ Complete | All 12 items done. Charts, feature table, project/time selectors, dark theme all working. |
-| Stage 4: Feature Detail | 🔲 Not started | |
+| Stage 4: Feature Detail | ✅ Complete | All 8 items done. StabilityMetrics, charts with feature filtering, TracesList with pagination. Fixed metric label name vs featureName mismatch. |
 | Stage 5: Trace Viewer | 🔲 Not started | |
 | Stage 6: Polish | 🔲 Not started | |

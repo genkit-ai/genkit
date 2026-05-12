@@ -17,10 +17,15 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export function SuccessRateChart() {
+export function SuccessRateChart({ featureName }: { featureName?: string }) {
+  const filterStr = featureName
+    ? `metric.label.name="${featureName}"`
+    : undefined;
+
   const { data, isLoading, error } = useTimeSeries(METRIC_TYPE, {
     groupBy: 'metric.label.status',
     reducer: 'REDUCE_SUM',
+    filter: filterStr,
   });
 
   // Compute success rate over time
