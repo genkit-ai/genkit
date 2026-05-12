@@ -133,6 +133,7 @@ def define_evaluator(
             span_metadata = SpanMetadata(
                 name=f'Test Case {datapoint.test_case_id}',
                 type='evaluator',
+                input=datapoint,
                 metadata={'evaluator:evalRunId': req.eval_run_id},
             )
             try:
