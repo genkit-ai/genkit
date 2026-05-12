@@ -1764,26 +1764,57 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 	conn.Close()
 }
 
-// TestAgent_DefineAgent_StateMismatchPanics verifies that passing a typed
-// AgentOption (e.g., a session store) with a different State than the
-// declared one on DefineAgent panics with a clear message.
+// TestAgent_DefineAgent_StateMismatchPanics verifies that every typed
+// AgentOption variant panics at definition time when its State type
+// parameter does not match the State declared on DefineAgent. This is
+// the runtime backstop for DefineAgent's mixed variadic (which cannot
+// enforce State at compile time because AgentDefineOption's State is
+// phantom). DefineCustomAgent and DefinePromptAgent both declare
+// `opts ...AgentOption[State]`, so they catch the same mismatch at
+// compile time and need no runtime test.
 func TestAgent_DefineAgent_StateMismatchPanics(t *testing.T) {
 	type otherState struct{ X int }
 	reg := newTestRegistry(t)
-	store := NewInMemorySessionStore[testState]()
 
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic on State mismatch")
-		}
-		msg := fmt.Sprintf("%v", r)
-		if !strings.Contains(msg, "does not match agent State") {
-			t.Errorf("panic message missing expected substring: %s", msg)
-		}
-	}()
+	cases := []struct {
+		name string
+		opt  AgentDefineOption[otherState]
+	}{
+		{
+			name: "WithSessionStore",
+			opt:  WithSessionStore[testState](NewInMemorySessionStore[testState]()),
+		},
+		{
+			name: "WithSnapshotCallback",
+			opt: WithSnapshotCallback[testState](func(context.Context, *SnapshotContext[testState]) bool {
+				return true
+			}),
+		},
+		{
+			name: "WithSnapshotOn",
+			opt:  WithSnapshotOn[testState](SnapshotEventTurnEnd),
+		},
+		{
+			name: "WithStateTransform",
+			opt:  WithStateTransform[testState](func(_ context.Context, s SessionState[testState]) SessionState[testState] { return s }),
+		},
+	}
 
-	_ = DefineAgent[otherState](reg, "mismatch", WithSessionStore(store))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("expected panic on State mismatch via %s", tc.name)
+				}
+				msg := fmt.Sprintf("%v", r)
+				if !strings.Contains(msg, "does not match agent State") {
+					t.Errorf("panic message missing expected substring: %s", msg)
+				}
+			}()
+			_ = DefineAgent[otherState](reg, "mismatch-"+tc.name, tc.opt)
+		})
+	}
 }
 
 // --- Detach, transform, and getSnapshot tests ---
