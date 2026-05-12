@@ -208,7 +208,7 @@ export const SessionSnapshotSchema = z.object({
   error: z
     .object({
       /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
-      status: z.string(),
+      status: z.string().optional(),
       /** Human-readable error message. */
       message: z.string(),
       /** Optional structured details describing the failure. */
