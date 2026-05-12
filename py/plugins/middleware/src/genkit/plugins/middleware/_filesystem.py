@@ -16,10 +16,13 @@
 
 """Filesystem middleware for Genkit.
 
-Provides sandboxed file operations (list_files, read_file, write_file, edit_file)
-confined to a root directory. Tracks file mtime/size to detect external modifications
-and to suppress redundant reads. Error messages are queued as user-role messages via
-the engine's ``enqueue_parts`` mechanism so the model can self-correct.
+Provides sandboxed file operations — ``list_files``, ``read_file``,
+``write_file``, ``edit_file`` — confined to a configurable root directory.
+
+Tracks file mtime and size to detect external modifications and to
+suppress redundant reads. Error messages are queued as user-role
+messages via the engine's ``enqueue_parts`` mechanism so the model can
+observe the failure and self-correct.
 """
 
 from __future__ import annotations
@@ -124,15 +127,21 @@ class _FileState:
 class Filesystem(BaseMiddleware):
     """Filesystem middleware with sandboxed file operations.
 
-    Contributes ``list_files``, ``read_file``, and (if ``allow_write_access``) ``write_file``
-    and ``edit_file`` tools via ``tools(enqueue_parts)``. All paths are restricted to
-    ``root_dir``. Tool errors are queued as user messages via ``enqueue_parts`` so the
-    model can observe and self-correct.
+    Contributes the following tools via ``tools(enqueue_parts)``:
 
-    A per-call file-state cache (mtime + size) is allocated inside ``tools()`` so that
-    each ``generate()`` call has its own independent read/write tracking. Concurrent calls
-    on the same ``Filesystem`` instance are fully isolated — write guards from one call
-    cannot block another.
+    * ``list_files`` and ``read_file`` — always.
+    * ``write_file`` and ``edit_file`` — only when
+      ``allow_write_access=True``.
+
+    All paths are restricted to ``root_dir``. Tool errors are queued as
+    user messages via ``enqueue_parts`` so the model can observe the
+    failure and self-correct.
+
+    A per-call file-state cache (mtime + size) is allocated inside
+    ``tools()``, so each ``generate()`` call has its own independent
+    read/write tracking. Concurrent calls on the same ``Filesystem``
+    instance are fully isolated — write guards from one call cannot
+    block another.
     """
 
     root_dir: str
@@ -392,12 +401,14 @@ class Filesystem(BaseMiddleware):
     def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Any]:
         """Return call-scoped filesystem tool actions.
 
-        A fresh file-state cache and lock are allocated here so each generate()
-        call gets its own isolated read/write tracking — concurrent calls on the
-        same ``Filesystem`` instance cannot interfere with each other's write guards.
+        A fresh file-state cache and lock are allocated here so each
+        ``generate()`` call gets its own isolated read/write tracking.
+        Concurrent calls on the same ``Filesystem`` instance cannot
+        interfere with each other's write guards.
 
-        Tool closures capture ``enqueue_parts`` so they can queue file content and
-        error messages as user messages for the next generate iteration.
+        Tool closures capture ``enqueue_parts`` so they can queue file
+        content and error messages as user messages for the next generate
+        iteration.
         """
         # Per-call state: each generate() call gets its own cache so write guards
         # from one call cannot block a different concurrent call that read the same
@@ -486,9 +497,10 @@ class Filesystem(BaseMiddleware):
     ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
         """Catch filesystem tool errors and enqueue them as user messages.
 
-        On success, returns the tool result as-is. On failure (excluding Interrupt),
-        queues a brief error description and returns a minimal ``MultipartToolResponse``
-        so the model receives acknowledgement of the failure and can retry.
+        On success, returns the tool result as-is. On failure (excluding
+        ``Interrupt``), queues a brief error description and returns a
+        minimal ``MultipartToolResponse`` so the model receives an
+        acknowledgement of the failure and can retry.
         """
         if params.tool.name not in self._fs_tool_name_set:
             return await next_fn(params)

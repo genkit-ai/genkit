@@ -59,8 +59,12 @@ class LoggingMiddleware(BaseMiddleware):
 class ConciseReplyMiddleware(BaseMiddleware):
     """Add a short system instruction before the model call.
 
-    ``instruction`` is a pydantic field: override it per call via ``ConciseReplyMiddleware(instruction=...)``
-    or via ``MiddlewareRef(name='concise_reply_mw', config={'instruction': ...})``.
+    ``instruction`` is a pydantic field, so you can override it per call
+    in either of two ways:
+
+    * inline: ``ConciseReplyMiddleware(instruction=...)``
+    * by name: ``MiddlewareRef(name='concise_reply_mw',
+      config={'instruction': ...})``
     """
 
     instruction: str = 'Answer in one short paragraph.'

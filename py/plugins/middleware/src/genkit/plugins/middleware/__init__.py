@@ -18,11 +18,14 @@
 
 Provides concrete middleware implementations:
 
-- ``Retry``        — retries model calls on transient errors with exponential backoff
-- ``Fallback``     — falls back to alternative models on failure
-- ``ToolApproval`` — requires approval before executing tools
-- ``Skills``       — exposes a SKILL.md library as system prompts + ``use_skill`` tool
-- ``Filesystem``   — sandboxed filesystem operations (list/read/write/edit)
+* ``Retry`` — retries model calls on transient errors with exponential
+  backoff.
+* ``Fallback`` — falls back to alternative models on failure.
+* ``ToolApproval`` — requires approval before executing tools.
+* ``Skills`` — exposes a ``SKILL.md`` library as system prompts plus a
+  ``use_skill`` tool.
+* ``Filesystem`` — sandboxed filesystem operations (list / read / write /
+  edit).
 
 Import the classes you need and pass instances into ``use=[...]``:
 
@@ -30,10 +33,14 @@ Import the classes you need and pass instances into ``use=[...]``:
 
     response = await ai.generate(
         prompt='Hello',
-        use=[Retry(max_retries=5), Fallback(models=['googleai/gemini-2.5-pro'])],
+        use=[
+            Retry(max_retries=5),
+            Fallback(models=['googleai/gemini-2.5-pro']),
+        ],
     )
 
-Or register all five with the ``Middleware`` plugin so they appear in the Dev UI.
+Or register all five with the ``Middleware`` plugin so they appear in
+the Dev UI.
 """
 
 from genkit.middleware import MiddlewareDesc
@@ -48,13 +55,14 @@ from genkit.plugins.middleware._tool_approval import ToolApproval
 class Middleware(Plugin):
     """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
-    Registers all five middleware descriptors so they show up in the Dev UI.
+    Registers all five middleware descriptors so they show up in the Dev
+    UI.
 
-    ``Filesystem`` has no default root: supply ``root_dir`` when constructing
-    an instance (e.g. ``Filesystem(root_dir='./workspace')``).
+    ``Filesystem`` has no default root — supply ``root_dir`` when
+    constructing an instance, for example
+    ``Filesystem(root_dir='./workspace')``.
 
-    Usage::
-
+    Usage:
         from genkit.plugins.middleware import Middleware, Retry, Skills
 
         ai = Genkit(plugins=[GoogleAI(), Middleware()])

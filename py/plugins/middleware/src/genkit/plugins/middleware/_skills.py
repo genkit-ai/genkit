@@ -16,9 +16,10 @@
 
 """Skills middleware for Genkit.
 
-Scans skill directories for SKILL.md files and injects a system prompt describing
-available skills. Provides a ``use_skill`` tool for loading full skill instructions
-into the conversation context on demand.
+Scans skill directories for ``SKILL.md`` files and injects a system
+prompt describing the available skills. Also contributes a ``use_skill``
+tool for loading the full skill instructions into the conversation
+context on demand.
 """
 
 from __future__ import annotations
@@ -47,15 +48,18 @@ _MISSING_DESCRIPTION = 'No description provided.'
 
 @middleware(name='skills', description='Provides access to skill library for specialized instructions')
 class Skills(BaseMiddleware):
-    """Skills middleware that exposes SKILL.md files as loadable instructions.
+    """Skills middleware that exposes ``SKILL.md`` files as loadable instructions.
 
-    Scans directories for subdirectories containing SKILL.md files. Each skill is
-    exposed via a system prompt that lists available skills and their descriptions.
-    A ``use_skill`` tool is contributed per generate call so the model can load the
-    full SKILL.md content on demand.
+    Scans the configured directories for subdirectories containing a
+    ``SKILL.md`` file. Each discovered skill is exposed via:
 
-    Skills are scanned once per generate() call (inside ``tools()``) so filesystem
-    changes between calls are always picked up.
+    * a system prompt that lists every available skill and its
+      description; and
+    * a ``use_skill`` tool, contributed per generate call, that the model
+      can invoke to load the full ``SKILL.md`` content on demand.
+
+    Skills are scanned once per ``generate()`` call (inside ``tools()``),
+    so filesystem changes between calls are always picked up.
     """
 
     skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
@@ -162,9 +166,10 @@ class Skills(BaseMiddleware):
     def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Any]:
         """Return a ``use_skill`` action scoped to the current generate call.
 
-        Skills are scanned fresh inside ``use_skill`` so SKILL.md files added or
-        modified mid-conversation are picked up — matches ``wrap_generate``,
-        which re-scans each turn to refresh the system prompt.
+        Skills are scanned fresh inside ``use_skill``, so ``SKILL.md``
+        files added or modified mid-conversation are picked up. This
+        matches ``wrap_generate``, which also re-scans each turn to
+        refresh the system prompt.
         """
         # Initial scan only decides whether to expose the tool at all; the
         # closure rescans on every invocation so the model sees up-to-date
