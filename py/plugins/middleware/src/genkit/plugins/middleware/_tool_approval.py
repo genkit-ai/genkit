@@ -71,8 +71,8 @@ class ToolApproval(BaseMiddleware):
             return await next_fn(params)
 
         # Emit a tool-shaped span so the interrupt is attributed to the tool in traces.
-        # From the trace tree, the consumer of Dev UI should see that a tool action span 
-        # was created and immediately interrupted. 
+        # From the trace tree, the consumer of Dev UI should see that a tool action span
+        # was created and immediately interrupted.
         tool_input = params.tool_request_part.tool_request.input
         with run_in_new_span(
             SpanMetadata(name=tool_name, input=tool_input),

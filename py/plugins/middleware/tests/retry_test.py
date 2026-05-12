@@ -21,8 +21,9 @@ from typing import NoReturn
 import pytest
 from pydantic import ValidationError
 
+from genkit import ModelRequest, ModelResponse
 from genkit._core._error import GenkitError
-from genkit._core._model import ModelHookParams, ModelRequest, ModelResponse
+from genkit.middleware import ModelHookParams
 from genkit.plugins.middleware import Retry
 
 

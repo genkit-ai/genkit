@@ -19,10 +19,9 @@
 import pytest
 
 from genkit._ai._tools import Interrupt, define_tool
-from genkit._core._model import ToolHookParams
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolRequest, ToolRequestPart
-from genkit.middleware import MultipartToolResponse
+from genkit.middleware import MultipartToolResponse, ToolHookParams
 from genkit.plugins.middleware import ToolApproval
 
 
