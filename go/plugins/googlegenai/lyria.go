@@ -109,6 +109,15 @@ func translateLyriaResponse(resp *lyriaPredictResponse, input *ai.ModelRequest) 
 	}
 }
 
+// lyriaPredictURL builds the Vertex AI `:predict` endpoint URL for a Lyria
+// music model in the given project + location.
+func lyriaPredictURL(location, project, model string) string {
+	return fmt.Sprintf(
+		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
+		location, project, location, model,
+	)
+}
+
 // generateMusic calls the Vertex AI `predict` endpoint for Lyria music models.
 // The `google.golang.org/genai` SDK does not expose a music-specific method, so
 // this function issues the HTTPS call directly, reusing the authenticated
@@ -180,10 +189,7 @@ func generateMusic(
 		return nil, fmt.Errorf("lyria: marshaling request: %w", err)
 	}
 
-	url := fmt.Sprintf(
-		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
-		location, cc.Project, location, model,
-	)
+	url := lyriaPredictURL(location, cc.Project, model)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
