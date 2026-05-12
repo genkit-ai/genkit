@@ -33,12 +33,12 @@
 @layer components {
   /* Card container */
   .card {
-    @apply bg-surface-1 border border-border rounded-lg;
+    @apply bg-surface-1 border border-border/60 rounded-lg shadow-sm shadow-black/10;
   }
 
   /* Metric badge */
   .metric-badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium;
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium;
   }
 
   /* Status indicators */
@@ -52,39 +52,44 @@
 
   /* Type badges for spans */
   .type-badge {
-    @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-surface-3;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold tracking-wide uppercase bg-surface-3;
   }
 
   .type-badge-flow {
-    @apply bg-accent-blue/20 text-accent-blue;
+    @apply bg-accent-blue/15 text-accent-blue border border-accent-blue/20;
   }
 
   .type-badge-step {
-    @apply bg-accent-purple/20 text-accent-purple;
+    @apply bg-accent-purple/15 text-accent-purple border border-accent-purple/20;
   }
 
   .type-badge-model {
-    @apply bg-accent-orange/20 text-accent-orange;
+    @apply bg-accent-orange/15 text-accent-orange border border-accent-orange/20;
   }
 
   .type-badge-tool {
-    @apply bg-accent-green/20 text-accent-green;
+    @apply bg-accent-green/15 text-accent-green border border-accent-green/20;
   }
 
   .type-badge-dotprompt {
-    @apply bg-accent-purple/20 text-accent-purple;
+    @apply bg-accent-purple/15 text-accent-purple border border-accent-purple/20;
   }
 
   .type-badge-util {
-    @apply bg-text-tertiary/20 text-text-secondary;
+    @apply bg-text-tertiary/15 text-text-secondary border border-text-tertiary/20;
   }
 
   .type-badge-executable-prompt {
-    @apply bg-accent-purple/20 text-accent-purple;
+    @apply bg-accent-purple/15 text-accent-purple border border-accent-purple/20;
   }
 
   .type-badge-unknown {
-    @apply bg-text-tertiary/20 text-text-tertiary;
+    @apply bg-text-tertiary/15 text-text-tertiary border border-text-tertiary/20;
+  }
+
+  /* Section title */
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-wider text-text-tertiary;
   }
 }
 

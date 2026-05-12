@@ -51,7 +51,7 @@ export function FeaturePage() {
       )}
 
       {/* 2x2 Chart Grid */}
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2">
         <RequestsChart featureName={featureName} />
         <TokenChart featureName={featureName} />
         <SuccessRateChart featureName={featureName} />

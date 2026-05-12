@@ -83,7 +83,7 @@ export function FeatureTable() {
     sortId: SortKey;
     className?: string;
   }) => (
-    <th className={`px-4 py-3 font-medium ${className}`}>
+    <th className={`px-4 py-3.5 font-medium ${className}`}>
       <button
         onClick={() => toggleSort(sortId)}
         className="flex items-center gap-1 hover:text-text-primary transition-colors"
@@ -155,8 +155,8 @@ export function FeatureTable() {
 
 function FeatureRow({ feature }: { feature: FeatureOverview }) {
   return (
-    <tr className="group border-b border-border last:border-0 hover:bg-surface-2 transition-colors">
-      <td className="px-4 py-3">
+    <tr className="group border-b border-border/60 last:border-0 hover:bg-surface-2/60 transition-colors">
+      <td className="px-4 py-3.5">
         <Link
           to={`/feature/${encodeURIComponent(feature.name)}`}
           className="text-sm font-medium text-accent-blue hover:underline"
@@ -164,10 +164,10 @@ function FeatureRow({ feature }: { feature: FeatureOverview }) {
           {feature.name}
         </Link>
       </td>
-      <td className="px-4 py-3 text-sm">
+      <td className="px-4 py-3.5 text-sm">
         <SuccessRateBadge rate={feature.successRate} />
       </td>
-      <td className="px-4 py-3 text-sm text-text-primary">
+      <td className="px-4 py-3.5 text-sm text-text-primary">
         <span>{formatNumber(feature.totalRequests)}</span>
         {feature.failureCount > 0 && (
           <span className="ml-1 text-xs text-accent-red">
@@ -175,13 +175,13 @@ function FeatureRow({ feature }: { feature: FeatureOverview }) {
           </span>
         )}
       </td>
-      <td className="px-4 py-3 text-sm text-text-secondary">
+      <td className="px-4 py-3.5 text-sm text-text-secondary">
         {formatNumber(feature.inputTokens)}
       </td>
-      <td className="px-4 py-3 text-sm text-text-secondary">
+      <td className="px-4 py-3.5 text-sm text-text-secondary">
         {formatNumber(feature.outputTokens)}
       </td>
-      <td className="px-2 py-3">
+      <td className="px-2 py-3.5">
         <Link
           to={`/feature/${encodeURIComponent(feature.name)}`}
           className="text-text-tertiary group-hover:text-text-secondary transition-colors"

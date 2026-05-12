@@ -81,12 +81,12 @@ function SpanNode({
   return (
     <div>
       <div
-        className={`group flex cursor-pointer items-center border-l-2 transition-colors ${
+        className={`group flex cursor-pointer items-center border-l-2 py-1 transition-colors ${
           isSelected
-            ? 'border-accent-blue bg-accent-blue/10'
-            : 'border-transparent hover:bg-surface-2'
+            ? 'border-accent-blue bg-accent-blue/8'
+            : 'border-transparent hover:bg-surface-2/60'
         }`}
-        style={{ paddingLeft: `${depth * 20 + 8}px` }}
+        style={{ paddingLeft: `${depth * 20 + 10}px`, paddingRight: '10px' }}
         onClick={() => onSelect(span)}
       >
         {/* Expand/collapse toggle */}
@@ -170,7 +170,7 @@ export function SpanTree({
   const rootDuration = rootSpan.durationMs;
 
   return (
-    <div className="divide-y divide-border/50">
+    <div className="divide-y divide-border/30">
       <SpanNode
         span={rootSpan}
         depth={0}

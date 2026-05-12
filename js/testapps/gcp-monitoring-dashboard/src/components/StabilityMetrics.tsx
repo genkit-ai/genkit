@@ -18,10 +18,10 @@ export function StabilityMetrics({ feature }: { feature: FeatureOverview }) {
   const isHealthy = feature.successRate >= 0.95;
 
   return (
-    <div className="card mb-6 grid grid-cols-2 gap-0 divide-x divide-border md:grid-cols-5">
+    <div className="card mb-6 grid grid-cols-2 gap-0 divide-x divide-border/40 md:grid-cols-5">
       {/* Total Requests */}
-      <div className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-xs text-text-tertiary">
+      <div className="px-5 py-4">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
           <Activity className="h-3 w-3" />
           Total Requests
         </div>
@@ -31,8 +31,8 @@ export function StabilityMetrics({ feature }: { feature: FeatureOverview }) {
       </div>
 
       {/* Success Rate */}
-      <div className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-xs text-text-tertiary">
+      <div className="px-5 py-4">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
           {isHealthy ? (
             <CheckCircle2 className="h-3 w-3 text-accent-green" />
           ) : (
@@ -55,8 +55,8 @@ export function StabilityMetrics({ feature }: { feature: FeatureOverview }) {
       </div>
 
       {/* Latency */}
-      <div className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-xs text-text-tertiary">
+      <div className="px-5 py-4">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
           <Clock className="h-3 w-3" />
           Latency p95
         </div>
@@ -66,8 +66,8 @@ export function StabilityMetrics({ feature }: { feature: FeatureOverview }) {
       </div>
 
       {/* Input Tokens */}
-      <div className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-xs text-text-tertiary">
+      <div className="px-5 py-4">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
           <Hash className="h-3 w-3" />
           Input Tokens
         </div>
@@ -77,8 +77,8 @@ export function StabilityMetrics({ feature }: { feature: FeatureOverview }) {
       </div>
 
       {/* Output Tokens */}
-      <div className="p-4">
-        <div className="mb-1 flex items-center gap-1.5 text-xs text-text-tertiary">
+      <div className="px-5 py-4">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
           <Hash className="h-3 w-3" />
           Output Tokens
         </div>

@@ -68,10 +68,10 @@ export function LatencyChart({ featureName }: { featureName?: string }) {
       : null;
 
   return (
-    <div className="card p-4">
-      <div className="mb-1 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <Clock className="h-4 w-4" />
+    <div className="card p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-tertiary">
+          <Clock className="h-3.5 w-3.5" />
           Latency (p99)
         </div>
         {avgLatency !== null && (
@@ -81,7 +81,7 @@ export function LatencyChart({ featureName }: { featureName?: string }) {
         )}
       </div>
 
-      <div className="h-36">
+      <div className="h-44">
         {isLoading ? (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-5 w-5 animate-spin text-text-tertiary" />

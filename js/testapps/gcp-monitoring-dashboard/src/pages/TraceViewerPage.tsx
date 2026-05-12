@@ -23,7 +23,7 @@ export function TraceViewerPage() {
   return (
     <div className="flex h-[calc(100vh-64px)] flex-col">
       {/* Breadcrumb */}
-      <div className="flex-shrink-0 px-0 pb-4">
+      <div className="flex-shrink-0 px-0 pb-5">
         <div className="mb-1 flex items-center gap-2 text-sm text-text-secondary">
           <Link to="/" className="hover:text-accent-blue">
             Genkit
@@ -81,8 +81,8 @@ export function TraceViewerPage() {
         <div className="flex min-h-0 flex-1 gap-4">
           {/* Left: Span Tree */}
           <div className="card flex w-1/2 flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-              <h3 className="text-sm font-medium text-text-secondary">
+            <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
                 Span Tree
               </h3>
               <span className="text-xs text-text-tertiary">

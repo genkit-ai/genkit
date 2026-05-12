@@ -66,9 +66,9 @@ export function TokenChart({ featureName }: { featureName?: string }) {
   })();
 
   return (
-    <div className="card p-4">
-      <div className="mb-1 flex items-center gap-2 text-sm text-text-secondary">
-        <Hash className="h-4 w-4" />
+    <div className="card p-5">
+      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-tertiary">
+        <Hash className="h-3.5 w-3.5" />
         Token Usage
       </div>
 

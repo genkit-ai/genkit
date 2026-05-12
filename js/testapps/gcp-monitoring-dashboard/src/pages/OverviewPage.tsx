@@ -26,7 +26,7 @@ export function OverviewPage() {
   return (
     <div>
       {/* Charts row */}
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-3">
         <RequestsChart />
         <SuccessRateChart />
         <LatencyChart />
@@ -34,7 +34,7 @@ export function OverviewPage() {
 
       {/* Feature table */}
       <div>
-        <h3 className="mb-3 text-sm font-medium text-text-secondary">
+        <h3 className="section-title mb-3">
           Features
         </h3>
         <FeatureTable />

@@ -70,7 +70,7 @@ export function TracesList({
     <div>
       {/* Filter bar */}
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-medium text-text-secondary">Traces</h3>
+        <h3 className="section-title">Traces</h3>
         <div className="flex items-center gap-2">
           <select
             value={statusFilter}
@@ -123,7 +123,7 @@ export function TracesList({
               traces.map((trace) => (
                 <tr
                   key={trace.traceId}
-                  className="group border-b border-border last:border-0 hover:bg-surface-2 transition-colors"
+                  className="group border-b border-border/60 last:border-0 hover:bg-surface-2/60 transition-colors"
                 >
                   <td className="px-3 py-2.5">
                     <StatusIcon status={trace.rootSpan.status} />

@@ -160,7 +160,7 @@ export function SpanDetail({
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       {/* Header */}
-      <div className="border-b border-border px-4 py-3">
+      <div className="border-b border-border/60 px-4 py-3.5">
         <div className="mb-2 flex items-center gap-2">
           <h3 className="truncate text-base font-semibold text-text-primary">
             {span.name}
@@ -178,8 +178,8 @@ export function SpanDetail({
       </div>
 
       {/* Metadata */}
-      <div className="border-b border-border px-4 py-3">
-        <div className="grid grid-cols-2 gap-3 text-xs">
+      <div className="border-b border-border/60 px-4 py-3.5">
+        <div className="grid grid-cols-2 gap-4 text-xs">
           <div>
             <span className="text-text-tertiary">Trace ID</span>
             <div className="mt-0.5 flex items-center gap-1">
@@ -225,7 +225,7 @@ export function SpanDetail({
       </div>
 
       {/* Input */}
-      <div className="border-b border-border px-4 py-3">
+      <div className="border-b border-border/60 px-4 py-3.5">
         <div className="mb-2 flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
             <FileText className="h-3 w-3" /> Input
@@ -238,7 +238,7 @@ export function SpanDetail({
       </div>
 
       {/* Output */}
-      <div className="border-b border-border px-4 py-3">
+      <div className="border-b border-border/60 px-4 py-3.5">
         <div className="mb-2 flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
             <FileText className="h-3 w-3" /> Output
@@ -252,7 +252,7 @@ export function SpanDetail({
 
       {/* Labels */}
       {Object.keys(span.labels).length > 0 && (
-        <div className="px-4 py-3">
+        <div className="px-4 py-3.5">
           <span className="mb-2 flex items-center gap-1.5 text-xs font-medium text-text-secondary">
             <Tag className="h-3 w-3" /> Labels
           </span>
