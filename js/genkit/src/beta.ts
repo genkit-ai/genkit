@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-export type { AgentInit, AgentInput, AgentOutput } from '@genkit-ai/ai';
+export {
+  AgentInitSchema,
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentStreamChunkSchema,
+  type AgentInit,
+  type AgentInput,
+  type AgentOutput,
+} from '@genkit-ai/ai';
 export {
   InMemoryStreamManager,
   StreamNotFoundError,
