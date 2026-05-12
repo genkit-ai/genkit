@@ -207,6 +207,55 @@
       ],
       "additionalProperties": false
     },
+    "SessionSnapshot": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/SnapshotEvent"
+        },
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "details": {}
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "required": [
+        "snapshotId",
+        "createdAt",
+        "event"
+      ],
+      "additionalProperties": false
+    },
     "SessionState": {
       "type": "object",
       "properties": {
@@ -233,36 +282,6 @@
         "invocationEnd",
         "detach"
       ]
-    },
-    "SnapshotMetadata": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "parentId": {
-          "type": "string"
-        },
-        "createdAt": {
-          "type": "string"
-        },
-        "updatedAt": {
-          "type": "string"
-        },
-        "event": {
-          "$ref": "#/$defs/SnapshotEvent"
-        },
-        "status": {
-          "$ref": "#/$defs/SnapshotStatus"
-        },
-        "error": {}
-      },
-      "required": [
-        "snapshotId",
-        "createdAt",
-        "event"
-      ],
-      "additionalProperties": false
     },
     "SnapshotStatus": {
       "type": "string",

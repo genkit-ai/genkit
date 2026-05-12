@@ -706,6 +706,10 @@ func loadSession[State any](
 
 	if init.SnapshotID == "" {
 		if init.State != nil {
+			if store != nil {
+				return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+					"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
+			}
 			s.state = *init.State
 		}
 		return s, nil, nil
@@ -713,7 +717,7 @@ func loadSession[State any](
 
 	if store == nil {
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-			"snapshot ID %q provided but no session store configured", init.SnapshotID)
+			"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
 	}
 	snap, err := store.GetSnapshot(ctx, init.SnapshotID)
 	if err != nil {

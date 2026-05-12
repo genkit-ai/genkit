@@ -33,33 +33,6 @@ import (
 
 // --- Snapshot ---
 
-// SessionSnapshot is a persisted point-in-time capture of session state.
-type SessionSnapshot[State any] struct {
-	// SnapshotID is the unique identifier for this snapshot (UUID).
-	SnapshotID string `json:"snapshotId"`
-	// ParentID is the ID of the previous snapshot in this timeline.
-	ParentID string `json:"parentId,omitempty"`
-	// CreatedAt is when the snapshot was created.
-	CreatedAt time.Time `json:"createdAt"`
-	// UpdatedAt is when the snapshot was last written. For pending
-	// snapshots it equals CreatedAt; once the snapshot is finalized it
-	// reflects the terminal write.
-	UpdatedAt time.Time `json:"updatedAt,omitempty"`
-	// Event is what triggered this snapshot.
-	Event SnapshotEvent `json:"event"`
-	// Status is the lifecycle state of this snapshot. Empty is treated as
-	// [SnapshotStatusSucceeded] for backwards compatibility.
-	Status SnapshotStatus `json:"status,omitempty"`
-	// Error is the structured failure information for a snapshot in
-	// [SnapshotStatusFailed]. Nil otherwise.
-	Error *core.GenkitError `json:"error,omitempty"`
-	// State is the conversation state captured at this point. Nil on a
-	// pending snapshot (the live state is not yet committed; the
-	// background invocation is still processing queued inputs); populated
-	// on terminal snapshots with the cumulative final state.
-	State *SessionState[State] `json:"state,omitempty"`
-}
-
 // SnapshotContext provides context for snapshot decision callbacks.
 type SnapshotContext[State any] struct {
 	// State is the current state that will be snapshotted if the callback returns true.
@@ -147,20 +120,20 @@ type SnapshotWriter[State any] interface {
 // They are bundled because neither is useful alone: flipping status
 // with no observer means the running fn never learns it was aborted;
 // observing without a way to trigger the flip means no abort can
-// happen. Splitting them into separate interfaces made the
-// "implemented one, not the other" footgun too easy to hit.
+// happen.
 type SnapshotAborter interface {
 	// AbortSnapshot atomically transitions a snapshot from
 	// [SnapshotStatusPending] to [SnapshotStatusAborted] and returns the
-	// resulting metadata. If the snapshot is in any other status the
-	// operation is a no-op and the existing metadata is returned. Returns
-	// nil if the snapshot is not found.
+	// resulting status. If the snapshot is in any other status the
+	// operation is a no-op and the existing status is returned. Returns
+	// an empty status with a nil error if the snapshot is not found, so
+	// callers can distinguish "not found" from a real error.
 	//
 	// Implementations must perform the read-and-write atomically (e.g., a
 	// transaction or a compare-and-swap). The agent's abortSnapshot
 	// action and finalizer rely on this to avoid a pending row being
 	// clobbered by a racing terminal write.
-	AbortSnapshot(ctx context.Context, snapshotID string) (*SnapshotMetadata, error)
+	AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error)
 
 	// OnSnapshotStatusChange returns a channel that yields the snapshot's
 	// status whenever it changes. The first value (if any) reflects the
@@ -216,21 +189,21 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 }
 
 // AbortSnapshot atomically flips a pending snapshot to aborted. If the
-// snapshot is already terminal the existing metadata is returned unchanged.
-// Returns nil if the snapshot is not found.
-func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (*SnapshotMetadata, error) {
+// snapshot is already terminal the existing status is returned unchanged.
+// Returns an empty status if the snapshot is not found.
+func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (SnapshotStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snap, ok := s.snapshots[snapshotID]
 	if !ok {
-		return nil, nil
+		return "", nil
 	}
 	if snap.Status == SnapshotStatusPending {
 		snap.Status = SnapshotStatusAborted
 		snap.UpdatedAt = time.Now()
 		s.notifyLocked(snapshotID, snap.Status)
 	}
-	return snapshotMetadata(snap), nil
+	return snap.Status, nil
 }
 
 // SaveSnapshot atomically reads, applies fn, and persists. See the
@@ -346,19 +319,6 @@ func (s *InMemorySessionStore[State]) notifyLocked(snapshotID string, status Sna
 	}
 }
 
-// snapshotMetadata projects the metadata fields of a snapshot.
-func snapshotMetadata[State any](snap *SessionSnapshot[State]) *SnapshotMetadata {
-	return &SnapshotMetadata{
-		SnapshotID: snap.SnapshotID,
-		ParentID:   snap.ParentID,
-		CreatedAt:  snap.CreatedAt,
-		UpdatedAt:  snap.UpdatedAt,
-		Event:      snap.Event,
-		Status:     snap.Status,
-		Error:      snap.Error,
-	}
-}
-
 // copySnapshot creates a deep copy of a snapshot using JSON marshaling.
 func copySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 	if snap == nil {
@@ -377,31 +337,33 @@ func copySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[Sta
 
 // --- Snapshot companion actions ---
 
-// registerSnapshotActions registers the agent's companion actions:
+// registerSnapshotActions registers the agent's companion actions when
+// the agent has a [SessionStore] configured:
 //
 //   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
-//     registered whenever a [SessionStore] is configured. The action is
 //     the remote counterpart to [SessionStore.GetSnapshot] for Dev UI and
-//     non-Go clients; local Go callers use the store reference directly.
+//     non-Go clients. Local Go callers use the store reference directly.
 //
 //   - The agent's name under [api.ActionTypeAgentAbort] — abortSnapshot,
-//     registered only when the store implements [SnapshotAborter] (which
-//     bundles both the abort trigger and the status-change subscription
-//     needed for the runtime to react). Surfacing the action only when
-//     the capability is present keeps the reflected API aligned with
-//     what the store can actually do.
+//     registered only when the store also implements [SnapshotAborter]
+//     (which bundles both the abort trigger and the status-change
+//     subscription needed for the runtime to react).
+//
+// When the agent is client-managed (no store configured), neither action
+// is registered: there is no server-side snapshot to fetch or abort.
+// Surfacing actions only when the underlying capabilities exist keeps the
+// reflected API aligned with what the agent can actually do.
 func registerSnapshotActions[State any](
 	r api.Registry,
 	agentName string,
 	store SessionStore[State],
 	transform StateTransform[State],
 ) {
+	if store == nil {
+		return
+	}
 	core.DefineAction(r, agentName, api.ActionTypeAgentSnapshot, nil, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*GetSnapshotResponse[State], error) {
-			if store == nil {
-				return nil, core.NewError(core.FAILED_PRECONDITION,
-					"getSnapshot: agent %q has no session store configured", agentName)
-			}
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId is required")
 			}
@@ -446,14 +408,14 @@ func registerSnapshotActions[State any](
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
 			}
-			meta, err := aborter.AbortSnapshot(ctx, req.SnapshotID)
+			status, err := aborter.AbortSnapshot(ctx, req.SnapshotID)
 			if err != nil {
 				return nil, core.NewError(core.INTERNAL, "abortSnapshot: %v", err)
 			}
-			if meta == nil {
+			if status == "" {
 				return nil, core.NewError(core.NOT_FOUND, "abortSnapshot: snapshot %q not found", req.SnapshotID)
 			}
-			return &AbortSnapshotResponse{SnapshotID: meta.SnapshotID, Status: meta.Status}, nil
+			return &AbortSnapshotResponse{SnapshotID: req.SnapshotID, Status: status}, nil
 		})
 }
 

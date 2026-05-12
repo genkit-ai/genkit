@@ -199,17 +199,8 @@ class GetSnapshotResponse(GenkitModel):
     state: SessionState | None = None
 
 
-class SessionState(GenkitModel):
-    """Model for sessionstate data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    messages: list[MessageData] | None = None
-    custom: Any | None = Field(default=None)
-    artifacts: list[Artifact] | None = None
-
-
-class SnapshotMetadata(GenkitModel):
-    """Model for snapshotmetadata data."""
+class SessionSnapshot(GenkitModel):
+    """Model for sessionsnapshot data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str = Field(...)
@@ -218,7 +209,17 @@ class SnapshotMetadata(GenkitModel):
     updated_at: str | None = None
     event: SnapshotEvent = Field(...)
     status: SnapshotStatus | None = None
-    error: Any | None = Field(default=None)
+    error: Error | None = None
+    state: SessionState | None = None
+
+
+class SessionState(GenkitModel):
+    """Model for sessionstate data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    messages: list[MessageData] | None = None
+    custom: Any | None = Field(default=None)
+    artifacts: list[Artifact] | None = None
 
 
 class TurnEnd(GenkitModel):
@@ -935,6 +936,15 @@ class Resume(GenkitModel):
     metadata: Metadata | None = None
 
 
+class Error(GenkitModel):
+    """Model for error data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    status: str = Field(...)
+    message: str = Field(...)
+    details: Any | None = Field(default=None)
+
+
 class Details(GenkitModel):
     """Model for details data."""
 
@@ -972,13 +982,6 @@ class Supports(GenkitModel):
     constrained: Constrained | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None
-
-
-class Error(GenkitModel):
-    """Model for error data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-    message: str = Field(...)
 
 
 class Resource(GenkitModel):

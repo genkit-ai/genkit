@@ -187,27 +187,42 @@ export const AgentStreamChunkSchema = z.object({
 export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
 
 /**
- * Zod schema for the metadata projection of a session snapshot. It exists
- * so callers can identify a snapshot and check its lifecycle status without
- * paying for a full state read.
+ * Zod schema for a persisted point-in-time capture of session state. It is
+ * the canonical record written to and read from a session store; the wire
+ * representation is shared across language runtimes and the Dev UI.
  */
-export const SnapshotMetadataSchema = z.object({
+export const SessionSnapshotSchema = z.object({
   /** Unique identifier for this snapshot (UUID). */
   snapshotId: z.string(),
   /** ID of the previous snapshot in this timeline. */
   parentId: z.string().optional(),
   /** When the snapshot was first written (RFC 3339). */
   createdAt: z.string(),
-  /** When the snapshot was last written (RFC 3339). */
+  /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
   updatedAt: z.string().optional(),
   /** What triggered this snapshot. */
   event: SnapshotEventSchema,
-  /** Lifecycle state of this snapshot. Empty is treated as `complete`. */
+  /** Lifecycle state of this snapshot. Empty is treated as `succeeded`. */
   status: SnapshotStatusSchema.optional(),
-  /** Structured failure information for a snapshot in `error` status. */
-  error: z.any().optional(),
+  /** Structured failure information for a snapshot in `failed` status. */
+  error: z
+    .object({
+      /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
+      status: z.string(),
+      /** Human-readable error message. */
+      message: z.string(),
+      /** Optional structured details describing the failure. */
+      details: z.any().optional(),
+    })
+    .optional(),
+  /**
+   * Conversation state captured at this point. Empty on a pending snapshot
+   * (the live state is not yet committed); populated on terminal snapshots
+   * with the cumulative final state.
+   */
+  state: SessionStateSchema.optional(),
 });
-export type SnapshotMetadata = z.infer<typeof SnapshotMetadataSchema>;
+export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
 /**
  * Zod schema for the input of an agent's `getSnapshot` companion action.
