@@ -28,7 +28,6 @@ import {
 } from 'genkit/model';
 import { downloadRequestMedia } from 'genkit/model/middleware';
 import { model as pluginModel } from 'genkit/plugin';
-import { runInNewSpan } from 'genkit/tracing';
 import {
   fromGeminiCandidate,
   toGeminiFunctionModeEnum,
@@ -37,11 +36,7 @@ import {
   toGeminiTool,
 } from '../common/converters.js';
 import { isKnownKey } from '../common/utils.js';
-import {
-  generateContent,
-  generateContentStream,
-  getVertexAIUrl,
-} from './client.js';
+import { generateContent, generateContentStream } from './client.js';
 import { toGeminiLabels, toGeminiSafetySettings } from './converters.js';
 import {
   ClientOptions,
@@ -757,94 +752,59 @@ export function defineModel(
         }
       }
 
-      const callGemini = async () => {
-        let response: GenerateContentResponse;
+      let response: GenerateContentResponse;
 
-        // Handle streaming and non-streaming responses
-        if (streamingRequested) {
-          const result = await generateContentStream(
-            modelVersion,
-            generateContentRequest,
-            clientOpt
-          );
-
-          const chunks: CandidateData[] = [];
-          for await (const item of result.stream) {
-            (item as GenerateContentResponse).candidates?.forEach(
-              (candidate) => {
-                const c = fromGeminiCandidate(candidate, chunks);
-                chunks.push(c);
-                sendChunk({
-                  index: c.index,
-                  content: c.message.content,
-                });
-              }
-            );
-          }
-          response = await result.response;
-        } else {
-          response = await generateContent(
-            modelVersion,
-            generateContentRequest,
-            clientOpt
-          );
-        }
-
-        if (!response.candidates?.length) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message: 'No valid candidates returned.',
-          });
-        }
-
-        const candidateData = response.candidates.map((c) =>
-          fromGeminiCandidate(c)
+      // Handle streaming and non-streaming responses
+      if (streamingRequested) {
+        const result = await generateContentStream(
+          modelVersion,
+          generateContentRequest,
+          clientOpt
         );
 
-        return {
-          candidates: candidateData,
-          custom: response,
-          usage: {
-            ...getBasicUsageStats(request.messages, candidateData),
-            inputTokens: response.usageMetadata?.promptTokenCount,
-            outputTokens: response.usageMetadata?.candidatesTokenCount,
-            thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
-            totalTokens: response.usageMetadata?.totalTokenCount,
-            cachedContentTokens:
-              response.usageMetadata?.cachedContentTokenCount,
-          },
-        };
-      };
+        const chunks: CandidateData[] = [];
+        for await (const item of result.stream) {
+          (item as GenerateContentResponse).candidates?.forEach((candidate) => {
+            const c = fromGeminiCandidate(candidate, chunks);
+            chunks.push(c);
+            sendChunk({
+              index: c.index,
+              content: c.message.content,
+            });
+          });
+        }
+        response = await result.response;
+      } else {
+        response = await generateContent(
+          modelVersion,
+          generateContentRequest,
+          clientOpt
+        );
+      }
 
-      // If debugTraces is enabled, we wrap the actual model call with a span,
-      // add raw API params as for input.
-      const msg = toGeminiMessage(messages[messages.length - 1], ref);
-      return pluginOptions?.experimental_debugTraces
-        ? await runInNewSpan(
-            {
-              metadata: {
-                name: streamingRequested ? 'sendMessageStream' : 'sendMessage',
-              },
-            },
-            async (metadata) => {
-              metadata.input = {
-                apiEndpoint: getVertexAIUrl({
-                  includeProjectAndLocation: false,
-                  resourcePath: '',
-                  clientOptions: clientOpt,
-                }),
-                cache: {},
-                model: modelVersion,
-                generateContentOptions: generateContentRequest,
-                parts: msg.parts,
-                options: clientOpt,
-              };
-              const response = await callGemini();
-              metadata.output = response.custom;
-              return response;
-            }
-          )
-        : await callGemini();
+      if (!response.candidates?.length) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: 'No valid candidates returned.',
+        });
+      }
+
+      const candidateData = response.candidates.map((c) =>
+        fromGeminiCandidate(c)
+      );
+
+      return {
+        candidates: candidateData,
+        custom: response,
+        usage: {
+          ...getBasicUsageStats(request.messages, candidateData),
+          inputTokens: response.usageMetadata?.promptTokenCount,
+          outputTokens: response.usageMetadata?.candidatesTokenCount,
+          thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
+          totalTokens: response.usageMetadata?.totalTokenCount,
+          cachedContentTokens: response.usageMetadata?.cachedContentTokenCount,
+        },
+      };
     }
   );
 }
