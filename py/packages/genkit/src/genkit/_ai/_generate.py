@@ -58,7 +58,6 @@ from genkit._core._model import (
     Document,
     GenerateActionOptions,
 )
-from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._tracing import run_in_new_span
 from genkit._core._typing import (
@@ -115,16 +114,11 @@ def registry_with_inline_middleware(
             count = name_counts.get(base_name, 0)
             name_counts[base_name] = count + 1
             reg_name = base_name if count == 0 else f'{base_name}__{count}'
-            # Clone before registering so the caller's instance is never mutated.
-            inst = entry.model_copy()
-            inst._registry = registry
-            # Wrap in a MiddlewareDesc so resolve_middleware_from_use can find it.
-            _inst_ref = inst  # capture for the closure; mypy needs a non-lambda factory
 
             def _make_factory(
-                _i: BaseMiddleware = _inst_ref,
-            ) -> Callable[[dict[str, Any] | None, RegistryLike | None], BaseMiddleware]:
-                def _factory(_cfg: dict[str, Any] | None, _reg: RegistryLike | None) -> BaseMiddleware:
+                _i: BaseMiddleware = entry,  # capture for the closure; mypy needs a non-lambda factory
+            ) -> Callable[[dict[str, Any] | None], BaseMiddleware]:
+                def _factory(_cfg: dict[str, Any] | None) -> BaseMiddleware:
                     return _i
 
                 return _factory
@@ -156,7 +150,7 @@ def resolve_middleware_from_use(
         defn = registry.lookup_value('middleware', entry.name)
         if isinstance(defn, MiddlewareDesc):
             cfg = entry.config if isinstance(entry.config, dict) else None
-            out.append(defn(cfg, registry))
+            out.append(defn(cfg))
             continue
         raise GenkitError(
             status='NOT_FOUND',
@@ -624,6 +618,7 @@ async def _generate_action(
         return await runner(
             ModelHookParams(
                 request=req,
+                registry=registry,
                 on_chunk=chunk_callback,
                 context=context or {},
             )
@@ -798,6 +793,7 @@ async def _generate_action(
         options=raw_request,
         request=request,
         iteration=current_turn,
+        registry=registry,
         message_index=message_index,
         on_chunk=on_chunk,
         enqueue_parts=_enqueue_parts,
@@ -1113,7 +1109,12 @@ async def resolve_tool_requests(
         tool: Action, trp: ToolRequestPart
     ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
         if mw_list:
-            params = ToolHookParams(tool_request_part=trp, tool=tool, enqueue_parts=enqueue_parts)
+            params = ToolHookParams(
+                tool_request_part=trp,
+                tool=tool,
+                registry=registry,
+                enqueue_parts=enqueue_parts,
+            )
 
             async def next_fn(
                 p: ToolHookParams,
@@ -1384,7 +1385,7 @@ async def _resolve_resumed_tool_request(
     if restart_trp:
         tool = await resolve_tool(registry, tool_req_root.tool_request.name)
         executed = await _run_restart_through_middleware(
-            tool, restart_trp, middleware=middleware, enqueue_parts=enqueue_parts
+            tool, restart_trp, registry=registry, middleware=middleware, enqueue_parts=enqueue_parts
         )
         metadata = dict(tool_req_root.metadata) if tool_req_root.metadata else {}
         interrupt = metadata.get('interrupt')
@@ -1414,6 +1415,7 @@ async def _run_restart_through_middleware(
     tool: Action,
     restart_trp: ToolRequestPart,
     *,
+    registry: Registry,
     middleware: list[BaseMiddleware] | None,
     enqueue_parts: Callable[[list[Part]], None] | None,
 ) -> ToolResponsePart:
@@ -1428,7 +1430,12 @@ async def _run_restart_through_middleware(
     if not mw_list:
         return await run_tool_after_restart(tool, restart_trp)
 
-    params = ToolHookParams(tool_request_part=restart_trp, tool=tool, enqueue_parts=enqueue_parts)
+    params = ToolHookParams(
+        tool_request_part=restart_trp,
+        tool=tool,
+        registry=registry,
+        enqueue_parts=enqueue_parts,
+    )
 
     async def next_fn(
         p: ToolHookParams,

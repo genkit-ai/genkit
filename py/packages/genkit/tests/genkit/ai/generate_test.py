@@ -332,6 +332,7 @@ class PreMiddleware(BaseMiddleware):
                         Message(role=Role.USER, content=[Part(TextPart(text=f'PRE {txt}'))]),
                     ],
                 ),
+                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -395,6 +396,7 @@ class ConfiguredPrefixMiddleware(BaseMiddleware):
                         Message(role=Role.USER, content=[Part(TextPart(text=f'{self.prefix} {txt}'))]),
                     ],
                 ),
+                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -506,6 +508,7 @@ class AddContextMiddleware(BaseMiddleware):
         return await next_fn(
             ModelHookParams(
                 request=params.request,
+                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context={**params.context, 'banana': True},
             )
@@ -526,6 +529,7 @@ class InjectContextMiddleware(BaseMiddleware):
                         ),
                     ],
                 ),
+                registry=params.registry,
                 on_chunk=params.on_chunk,
                 context=params.context,
             )
@@ -589,6 +593,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
 
             new_params = ModelHookParams(
                 request=params.request,
+                registry=params.registry,
                 on_chunk=chunk_handler,
                 context=params.context,
             )
@@ -678,12 +683,12 @@ async def test_wrap_generate_called_per_turn() -> None:
                 MiddlewareDesc(
                     name='track_gen',
                     description='track generate',
-                    factory=lambda _opts, _reg=None: track_mw,
+                    factory=lambda _opts: track_mw,
                 ),
                 MiddlewareDesc(
                     name='track_gen2',
                     description='track generate 2',
-                    factory=lambda _opts, _reg=None: track_mw2,
+                    factory=lambda _opts: track_mw2,
                 ),
             ])
         ],
@@ -767,7 +772,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
                 MiddlewareDesc(
                     name='track_tool',
                     description='track tool',
-                    factory=lambda _opts, _reg=None: track_mw,
+                    factory=lambda _opts: track_mw,
                 ),
             ])
         ],
@@ -831,7 +836,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
                 MiddlewareDesc(
                     name='interrupt_all',
                     description='interrupt all tools',
-                    factory=lambda _opts, _reg=None: InterruptingMiddleware(),
+                    factory=lambda _opts: InterruptingMiddleware(),
                 ),
             ])
         ],
@@ -933,16 +938,18 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_middleware_self_registry_is_per_call_scope() -> None:
-    """``self._registry`` points to the per-call child, not the root.
+async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
+    """Middleware in the same generate() call share an isolated registry.
 
-    Two assertions:
+    This verifies:
 
-    - Middleware A contributes a tool via ``tools()`` and middleware B
-      resolves it through ``self._registry`` in the same call (proves the
-      shared per-call scope).
-    - Anything middleware writes via ``self._registry.register_action`` does
-      NOT survive after the call (proves writes are auto-cleaned).
+    - **Cooperation:** Middleware A contributes a tool via ``tools()`` and
+      middleware B resolves it through ``params.registry`` in the same call
+      (proves both middleware see the same per-call child registry, so they
+      can pass tools and other actions to one another).
+    - **Isolation:** Anything middleware writes via ``params.registry`` does NOT
+      survive the call (proves writes are auto-cleaned and cannot leak into the
+      root registry or across concurrent generate() calls).
     """
     seen_by_b: list[str] = []
 
@@ -964,14 +971,13 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
             params: GenerateHookParams,
             next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            assert self._registry is not None
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await self._registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await params.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # self._registry must not survive the call.
+            # params.registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -979,7 +985,7 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            self._registry.register_action_from_instance(leak)
+            params.registry.register_action_from_instance(leak)
             return await next_fn(params)
 
     ai = Genkit(
@@ -1014,40 +1020,6 @@ async def test_middleware_self_registry_is_per_call_scope() -> None:
     # Neither tool may leak into the root registry after the call ends.
     assert await ai.registry.resolve_action(ActionKind.TOOL, 'shared_tool') is None
     assert await ai.registry.resolve_action(ActionKind.TOOL, 'leaky_tool') is None
-
-
-@pytest.mark.asyncio
-async def test_inline_middleware_instance_is_not_mutated_across_calls() -> None:
-    """Inline ``BaseMiddleware`` instances passed in ``use=`` must not have their
-    ``_registry`` mutated in place — the engine clones with ``model_copy()``.
-    """
-
-    @middleware(name='identity_mw')
-    class IdentityMW(BaseMiddleware):
-        pass
-
-    ai_a = Genkit()
-    ai_b = Genkit()
-    define_programmable_model(ai_a)
-    define_programmable_model(ai_b)
-    shared = IdentityMW()
-
-    from genkit._ai._generate import registry_with_inline_middleware
-
-    child_a = ai_a.registry.new_child()
-    child_b = ai_b.registry.new_child()
-    refs_a = registry_with_inline_middleware(child_a, [shared])
-    refs_b = registry_with_inline_middleware(child_b, [shared])
-
-    assert refs_a
-    assert refs_b
-    # Caller's instance is untouched.
-    assert shared._registry is None
-    # Each normalization registered a distinct cloned instance into its own child registry.
-    inst_a = child_a.lookup_value('middleware', 'identity_mw')
-    inst_b = child_b.lookup_value('middleware', 'identity_mw')
-    assert inst_a is not None
-    assert inst_b is not None
 
 
 @pytest.mark.asyncio

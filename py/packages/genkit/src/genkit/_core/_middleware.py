@@ -112,17 +112,20 @@ class GenerateHookParams(BaseModel):
     options: GenerateActionOptions
     request: ModelRequest
     iteration: int
+    registry: RegistryLike
     message_index: int = 0
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     enqueue_parts: Callable[[list[Part]], None] | None = None
 
 
 class ModelHookParams(BaseModel):
-    """Params passed to the ``wrap_model`` hook (each raw model API call)."""
+    """Params passed to the ``wrap_model`` hook (each raw model API call).
+    """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     request: ModelRequest
+    registry: RegistryLike
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     context: dict[str, object] = Field(default_factory=dict)
 
@@ -138,6 +141,7 @@ class ToolHookParams(BaseModel):
 
     tool_request_part: ToolRequestPart
     tool: Action
+    registry: RegistryLike
     enqueue_parts: Callable[[list[Part]], None] | None = None
 
 
@@ -184,10 +188,6 @@ class BaseMiddleware(BaseModel):
     description: ClassVar[str | None] = None
     middleware_config_schema: ClassVar[dict[str, Any] | None] = None
     middleware_metadata: ClassVar[dict[str, object] | None] = None
-
-    # Injected at resolve time by ``resolve_middleware_from_use`` so hooks can
-    # do model lookup, action resolution, etc. as ``self._registry``.
-    _registry: RegistryLike | None = PrivateAttr(default=None)
 
     def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Action]:
         """Return additional tools to expose to the model for this generate call.
@@ -259,15 +259,15 @@ class MiddlewareDesc(MiddlewareDescData):
     # parent's ``alias_generator`` and ``extra='forbid'`` settings are inherited.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # Factory takes ``(config, registry)`` and mints a fresh BaseMiddleware
-    # instance per generate() call.  ``registry`` is ``None`` only when the
-    # factory is called outside a generate context (e.g. tests or tooling).
-    _factory: Callable[[dict[str, Any] | None, RegistryLike | None], BaseMiddleware] = PrivateAttr()
+    # Factory takes ``config`` and mints a fresh BaseMiddleware instance per
+    # generate() call.  Per-call registry access is on the hook params
+    # (``ModelHookParams.registry`` etc.), not on the instance.
+    _factory: Callable[[dict[str, Any] | None], BaseMiddleware] = PrivateAttr()
 
     def __init__(
         self,
         *,
-        factory: Callable[[dict[str, Any] | None, RegistryLike | None], BaseMiddleware],
+        factory: Callable[[dict[str, Any] | None], BaseMiddleware],
         name: str,
         description: str | None = None,
         config_schema: object | None = None,
@@ -282,13 +282,9 @@ class MiddlewareDesc(MiddlewareDescData):
         )
         self._factory = factory
 
-    def __call__(
-        self,
-        config: dict[str, Any] | None = None,
-        registry: RegistryLike | None = None,
-    ) -> BaseMiddleware:
+    def __call__(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
         """Return a fresh BaseMiddleware instance for this generate() call."""
-        return self._factory(config, registry)
+        return self._factory(config)
 
     def with_name(self, name: str) -> MiddlewareDesc:
         """Return a copy with the same factory and metadata but a different registry name."""
@@ -362,12 +358,10 @@ def new_middleware(middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
         raise ValueError(f'{middleware_cls.__qualname__}.name must be set for new_middleware(MyClass).')
     _validate_middleware_key_segment(str(reg_name), label=f'{middleware_cls.__qualname__}.name')
 
-    def _factory(config: dict[str, Any] | None, registry: RegistryLike | None = None) -> BaseMiddleware:
+    def _factory(config: dict[str, Any] | None) -> BaseMiddleware:
         # Instantiate with the incoming config so registered use is equivalent to
         # ``use=[middleware_cls(**config)]``; empty/None config uses class defaults.
-        inst = middleware_cls(**(config or {}))
-        inst._registry = registry
-        return inst
+        return middleware_cls(**(config or {}))
 
     return MiddlewareDesc(
         name=reg_name,
