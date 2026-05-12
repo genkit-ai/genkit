@@ -170,7 +170,7 @@ func TestGenkitErrorJSONRoundtrip(t *testing.T) {
 			Status:   NOT_FOUND,
 			Message:  "missing",
 			Details:  map[string]any{"id": "abc"},
-			HTTPCode: 999,                        // not on the wire
+			HTTPCode: 999,                                      // not on the wire
 			Source:   func() *string { s := "x"; return &s }(), // not on the wire
 		}
 		got, err := json.Marshal(ge)

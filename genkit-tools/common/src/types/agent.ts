@@ -277,9 +277,7 @@ export type AbortSnapshotResponse = z.infer<typeof AbortSnapshotResponseSchema>;
  *   and output payloads.
  */
 export const AgentStateManagementSchema = z.enum(['server', 'client']);
-export type AgentStateManagement = z.infer<
-  typeof AgentStateManagementSchema
->;
+export type AgentStateManagement = z.infer<typeof AgentStateManagementSchema>;
 
 /**
  * Zod schema for the agent capability metadata placed under
