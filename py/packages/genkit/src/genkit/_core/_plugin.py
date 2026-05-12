@@ -54,12 +54,13 @@ class Plugin(abc.ABC):
     def list_middleware(self) -> list[MiddlewareDesc]:
         """Return middleware descriptors for this plugin to register on the app.
 
-        This runs while Genkit is being constructed, after built-in middleware is
-        registered. Use unique flat names without slash characters so they do not
-        collide with built-ins or other plugins.
+        This runs while :class:`Genkit` is being constructed, after
+        built-in middleware is registered. Use unique flat names without
+        slash characters so they do not collide with built-ins or other
+        plugins.
 
         Returns:
-            Descriptors to list in the developer UI and to resolve by name from
+            Descriptors to list in the Dev UI and to resolve by name from
             ``generate(use=...)``.
         """
         return []
@@ -109,32 +110,41 @@ def middleware_plugin(
 ) -> Plugin:
     """Wrap a list of middleware descriptors as a single plugin (for ``plugins=[...]``).
 
-    Pass all descriptors for this plugin in one list so one plugin can register several
-    middlewares together. Example:
+    Pass all descriptors for this plugin in one list so one plugin can
+    register several middlewares together.
 
+    Example:
         Genkit(plugins=[
-            middleware_plugin([
-                new_middleware(PrefixPromptMiddleware),
-                new_middleware(OtherMiddleware),
-            ], namespace='myapp'),
+            middleware_plugin(
+                [
+                    new_middleware(PrefixPromptMiddleware),
+                    new_middleware(OtherMiddleware),
+                ],
+                namespace='myapp',
+            ),
         ])
 
-    Build each item with ``new_middleware`` in ``genkit.middleware`` or the same API on
-    your ``Genkit`` instance; neither registers by itself. Registration happens when this
-    plugin is passed in ``plugins=[...]``.
+    Build each item with ``new_middleware`` from ``genkit.middleware`` or
+    the same API on your :class:`Genkit` instance — neither registers by
+    itself. Registration happens when this plugin is passed in
+    ``plugins=[...]``.
 
     Args:
         descs: Non-empty sequence of middleware descriptors.
-        namespace: If set, becomes the plugin name and each descriptor is registered as
-            namespace + underscore + descriptor name (e.g. acme + logging → acme_logging).
-            If omitted, the plugin name is ``extension-middleware`` and registry keys
-            stay the descriptors' own names. Same flat-segment rules as middleware
-            descriptor names (no ``/``, whitespace, ``:``, backslashes, or control
-            characters).
+        namespace: Optional plugin namespace.
+
+            * If set, it becomes the plugin name and each descriptor is
+              registered as ``{namespace}_{desc.name}`` (e.g. ``acme`` +
+              ``logging`` → ``acme_logging``).
+            * If omitted, the plugin name is ``extension-middleware`` and
+              registry keys stay the descriptors' own names.
+
+            Same flat-segment rules as middleware descriptor names: no
+            ``/``, whitespace, ``:``, backslashes, or control characters.
 
     Returns:
-        A plugin object whose ``list_middleware`` returns the descriptors (renamed when
-        namespace is set).
+        A plugin whose ``list_middleware`` returns the descriptors (renamed
+        when ``namespace`` is set).
     """
     built = list(descs)
     if not built:

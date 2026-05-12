@@ -742,32 +742,30 @@ class Genkit:
                 self.registry.register_value('middleware', desc.name, desc)
 
     def new_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
-        """Build a ``MiddlewareDesc`` from a class (same as ``genkit.middleware.new_middleware``).
-
-        Does not register on the registry. Pass the result to ``middleware_plugin([...])``
-        or return it from a custom ``Plugin.list_middleware`` so it is registered when the
-        app is constructed.
-
-        Returns:
-            The ``MiddlewareDesc`` instance.
-        """
+        """Build a ``MiddlewareDesc`` from a class."""
         return new_middleware(middleware_cls)
 
     def define_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
-        """Register a middleware class on this app and return the resulting descriptor.
+        """Register a middleware class on this app and return the descriptor.
 
-        Registering a class makes it visible to the **Dev UI** (via the reflection
-        API) and allows it to be referenced by name using ``MiddlewareRef``.
-        Equivalent to building the descriptor with ``new_middleware(cls)`` and wiring
-        it through ``middleware_plugin([...])`` at construction time, but usable after
-        ``Genkit`` has already been built. The factory instantiates
-        ``middleware_cls(**config)`` each time a request resolves the name via
-        ``MiddlewareRef``, so the same pydantic fields drive both the inline
-        (``use=[cls(...)]``) and registered (``use=[MiddlewareRef(name=cls.name)]``)
-        paths.
+        Registering a class:
+
+        * Makes it visible to the **Dev UI** through the reflection API.
+        * Allows it to be referenced by name via :class:`MiddlewareRef`.
+
+        Equivalent to building the descriptor with ``new_middleware(cls)``
+        and wiring it through ``middleware_plugin([...])`` at construction
+        time, but usable after ``Genkit`` has already been built.
+
+        The factory instantiates ``middleware_cls(**config)`` each time a
+        request resolves the name via :class:`MiddlewareRef`, so the same
+        pydantic fields drive both:
+
+        * the inline path: ``use=[cls(...)]``
+        * the registered path: ``use=[MiddlewareRef(name=cls.name)]``
 
         Returns:
-            The registered ``MiddlewareDesc``; also available via
+            The registered :class:`MiddlewareDesc`. Also available via
             ``registry.lookup_value('middleware', cls.name)``.
         """
         desc = new_middleware(middleware_cls)

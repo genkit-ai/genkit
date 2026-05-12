@@ -53,12 +53,16 @@ _FORBIDDEN_IN_MIDDLEWARE_KEY_SEGMENT = re.compile(r'[\x00-\x1f/\\:]|\s')
 
 
 def _validate_middleware_key_segment(name: str, *, label: str) -> None:
-    """Raise if ``name`` is not usable as a single middleware registry key (or namespace).
+    """Raise if ``name`` is not usable as a middleware registry key or namespace.
 
-    Middleware definitions are stored under ``register_value(kind='middleware', name=...)``.
-    Optional ``middleware_plugin(..., namespace='acme')`` builds keys like ``acme_logging``.
-    So the string must be one segment: no ``/`` (that shape is for models/actions), and no
-    whitespace, ``:``, backslashes, or control characters that would break keys or Dev UI.
+    Middleware definitions are stored under
+    ``register_value(kind='middleware', name=...)``. The optional
+    ``middleware_plugin(..., namespace='acme')`` builds keys of the form
+    ``acme_logging``. The string must therefore be one segment:
+
+    * no ``/`` (that shape is reserved for models and other actions);
+    * no whitespace, ``:``, backslashes, or control characters that
+      would break registry keys or the Dev UI.
 
     Args:
         name: Proposed name or namespace segment.
@@ -78,19 +82,21 @@ def _validate_middleware_key_segment(name: str, *, label: str) -> None:
 class MultipartToolResponse(BaseModel):
     """A tool result with optional rich content attachments.
 
-    Return from ``wrap_tool`` to send structured output alongside extra parts —
-    images, file contents, error details — that the model can reason about.
+    Return from ``wrap_tool`` to send structured output alongside extra
+    parts — images, file contents, error details — that the model can
+    reason about.
 
-    The engine serializes both fields into a single ``ToolResponsePart`` on the wire:
-    ``output`` becomes ``ToolResponse.output`` and ``content`` becomes
-    ``ToolResponse.content``. Packing them together preserves the LLM's
-    one-response-per-call contract while still letting middleware attach rich context.
+    The engine serializes both fields into a single ``ToolResponsePart`` on
+    the wire: ``output`` becomes ``ToolResponse.output`` and ``content``
+    becomes ``ToolResponse.content``. Packing them together preserves the
+    LLM's one-response-per-call contract while still letting middleware
+    attach rich context.
 
     Fields:
-        output: Structured result returned to the model. May be ``None`` when the
-            tool only produces rich content parts.
-        content: Extra ``Part`` objects (images, files, metadata) bundled alongside
-            ``output`` in the same ``ToolResponsePart``.
+        output: Structured result returned to the model. May be ``None``
+            when the tool only produces rich content parts.
+        content: Extra ``Part`` objects (images, files, metadata) bundled
+            alongside ``output`` in the same ``ToolResponsePart``.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
@@ -147,11 +153,15 @@ class ToolHookParams(BaseModel):
 class BaseMiddleware(BaseModel):
     """Pydantic-backed middleware: config fields + hook overrides in one class.
 
-    The config struct IS the middleware — there is no separate "factory args"
-    type.  Subclass with pydantic fields for config, override ``wrap_*`` hooks
-    for behavior, pass instances directly in ``use=[...]``, or register via
-    ``Genkit.define_middleware`` (or ``middleware_plugin`` /
-    ``Plugin.list_middleware``) and reference by name with ``MiddlewareRef``.
+    The config struct *is* the middleware — there is no separate
+    "factory args" type. To author one:
+
+    * Subclass and add pydantic fields for config.
+    * Override the ``wrap_generate`` / ``wrap_model`` / ``wrap_tool`` hooks.
+    * Either pass instances inline in ``use=[...]``, or register the class
+      with ``Genkit.define_middleware`` (or ``middleware_plugin`` /
+      ``Plugin.list_middleware``) and reference it by name with
+      :class:`MiddlewareRef`.
 
     Example:
         @middleware(name='logger')
@@ -164,16 +174,21 @@ class BaseMiddleware(BaseModel):
                 log(f'{self.prefix} {time.monotonic() - t:.3f}s')
                 return resp
 
-        # Local fast path:
+        # Inline (fast path, no registration):
         await ai.generate(prompt='...', use=[Logger(prefix='[span]')])
 
-        # Registered / JSON-dispatched via Dev UI:
+        # Registered (visible in the Dev UI, dispatched by name):
         ai.define_middleware(Logger)
-        await ai.generate(prompt='...', use=[MiddlewareRef(name='logger', config={'prefix': '[span]'})])
+        await ai.generate(
+            prompt='...',
+            use=[MiddlewareRef(name='logger', config={'prefix': '[span]'})],
+        )
 
-    Concurrency: instances may be reused across concurrent ``generate()`` calls. Put
-    per-call state in method locals; shared state on ``self`` is the author's
-    concurrency responsibility (matches Django / Starlette middleware conventions).
+    Concurrency:
+        Instances may be reused across concurrent ``generate()`` calls. Put
+        per-call state in method locals; shared state on ``self`` is the
+        author's concurrency responsibility (same convention as Django /
+        Starlette middleware).
     """
 
     # ``arbitrary_types_allowed`` lets subclasses keep non-pydantic fields like
@@ -191,18 +206,19 @@ class BaseMiddleware(BaseModel):
     def tools(self, enqueue_parts: Callable[[list[Part]], None] | None = None) -> list[Action]:
         """Return additional tools to expose to the model for this generate call.
 
-        Tools are registered on a call-scoped child registry, so they do not
-        pollute the root registry and are invisible to other concurrent
-        ``generate()`` calls.
+        Tools are registered on a call-scoped child registry, so they do
+        not pollute the root registry and are invisible to other
+        concurrent ``generate()`` calls.
+
+        Override to contribute tools dynamically. The default returns ``[]``.
 
         Args:
-            enqueue_parts: Call this with a list of ``Part`` objects to queue an
-                extra user message that will be injected into the conversation at
-                the start of the next generate iteration.  Tool closures can
-                capture this to report errors or rich context alongside the
-                normal ``ToolResponsePart`` (e.g. filesystem error details).
-
-        Override to contribute tools dynamically.  The default returns ``[]``.
+            enqueue_parts: Call this with a list of ``Part`` objects to
+                queue an extra user message that will be injected into the
+                conversation at the start of the next generate iteration.
+                Tool closures can capture this to report errors or rich
+                context alongside the normal ``ToolResponsePart`` (e.g.
+                filesystem error details).
         """
         return []
 
@@ -240,18 +256,20 @@ class BaseMiddleware(BaseModel):
 class MiddlewareDesc(MiddlewareDescData):
     """Registered middleware descriptor: wire shape + per-process factory closure.
 
-    Inherits the wire fields (``name``, ``description``, ``config_schema``, ``metadata``)
-    from the auto-generated :class:`genkit._core._typing.MiddlewareDescData` schema and
-    adds a ``PrivateAttr`` factory used to mint a fresh :class:`BaseMiddleware` per
-    ``generate()`` call. Because ``PrivateAttr`` is excluded from serialization,
-    ``model_dump(by_alias=True, exclude_none=True)`` produces the wire shape directly.
+    Inherits the wire fields (``name``, ``description``, ``config_schema``,
+    ``metadata``) from the auto-generated
+    :class:`genkit._core._typing.MiddlewareDescData` schema, and adds a
+    ``PrivateAttr`` factory used to mint a fresh :class:`BaseMiddleware` per
+    ``generate()`` call. ``PrivateAttr`` is excluded from serialization, so
+    ``model_dump(by_alias=True, exclude_none=True)`` produces the wire shape
+    directly.
 
-    Stored under ``register_value('middleware', name, desc)`` and resolved when
-    ``generate()`` runs with ``use=`` entries that reference by name.  Same
-    hand-authored runtime subclass convention as ``Message``/``MessageData``
-    and ``GenerateActionOptions``/``GenerateActionOptionsData`` — the runtime
-    class adds non-serializable behavior (here: the factory) on top of the
-    pure wire schema.
+    Stored under ``register_value('middleware', name, desc)`` and resolved
+    when ``generate()`` runs with a ``use=`` entry that references the
+    descriptor by name. This follows the same hand-authored runtime-subclass
+    convention as ``Message`` / ``MessageData`` and ``GenerateActionOptions`` /
+    ``GenerateActionOptionsData``: the runtime class adds non-serializable
+    behavior (here: the factory) on top of the pure wire schema.
     """
 
     # ``arbitrary_types_allowed`` lets the ``PrivateAttr`` carry an opaque ``Callable``;
@@ -305,11 +323,11 @@ def middleware(
 ) -> Callable[[_M], _M]:
     """Class decorator that sets registry metadata on a ``BaseMiddleware`` subclass.
 
-    Required when registering middleware via ``new_middleware``, ``define_middleware``,
-    or ``middleware_plugin``. Optional for inline-only use (``use=[MyClass()]``).
+    Required when registering middleware via ``new_middleware``,
+    ``define_middleware``, or ``middleware_plugin``. Optional for inline-only
+    use (``use=[MyClass()]``).
 
-    Example::
-
+    Example:
         @middleware(name='latency_logger', description='Logs model call latency')
         class LatencyLogger(BaseMiddleware):
             prefix: str = '[trace]'
@@ -317,9 +335,11 @@ def middleware(
             async def wrap_model(self, params, next_fn): ...
 
     Args:
-        name: Registry key — must be a single path-free token (no ``/``, whitespace, ``:``).
+        name: Registry key. Must be a single path-free token (no ``/``,
+            whitespace, ``:``, backslashes, or control characters).
         description: Human-readable description shown in the Dev UI.
-        config_schema: JSON Schema for the config. Inferred from Pydantic fields if omitted.
+        config_schema: JSON Schema for the config. Inferred from pydantic
+            fields when omitted.
         metadata: Arbitrary metadata passed through to the Dev UI wire format.
     """
     _validate_middleware_key_segment(name, label='middleware name')

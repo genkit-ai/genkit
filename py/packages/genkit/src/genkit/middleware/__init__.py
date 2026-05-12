@@ -17,9 +17,11 @@
 """Middleware for Genkit model calls.
 
 This module provides types and helpers to define custom middleware.
+
 Chain ordering: middleware is applied first-in, outermost.
 
-Define a middleware class with ``@middleware`` and pass instances inline via ``use=``:
+Define a middleware class with ``@middleware`` and pass instances inline
+via ``use=``:
 
     from genkit import Genkit
     from genkit.middleware import BaseMiddleware, middleware
@@ -40,8 +42,9 @@ Define a middleware class with ``@middleware`` and pass instances inline via ``u
         use=[LoggingMiddleware()],
     )
 
-To make middleware available to the **Dev UI** and referenceable by name, register it
-on the app via ``ai.define_middleware`` or declare it in a plugin:
+To make middleware available to the **Dev UI** and referenceable by name,
+register it on the app via ``ai.define_middleware`` or declare it in a
+plugin:
 
     ai.define_middleware(LoggingMiddleware)
 """
