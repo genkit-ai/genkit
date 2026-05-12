@@ -382,7 +382,7 @@ def define_tool(
 def tool(
     func: Callable[..., Any],
     *,
-    name: str,
+    name: str | None = None,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
@@ -396,12 +396,13 @@ def tool(
 
     Args:
         func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
-        name: Tool name for the model.
+        name: Tool name for the model. Defaults to ``func.__name__``.
         description: Sent to the model. Defaults to the function docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
         TypeError: If ``func`` is not a coroutine function.
+        ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
     """
     return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
