@@ -19,6 +19,7 @@ package googlegenai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"google.golang.org/genai"
 )
 
@@ -156,6 +158,23 @@ func TestLyriaPredictURL(t *testing.T) {
 				t.Errorf("lyriaPredictURL() =\n  %s\nwant\n  %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGenerateMusic_StreamingReturnsPublicError(t *testing.T) {
+	t.Parallel()
+
+	cb := func(context.Context, *ai.ModelResponseChunk) error { return nil }
+	_, err := generateMusic(context.Background(), nil, "lyria-002", &ai.ModelRequest{}, cb)
+	if err == nil {
+		t.Fatal("expected error for streaming callback, got nil")
+	}
+	var ufe *core.UserFacingError
+	if !errors.As(err, &ufe) {
+		t.Fatalf("error %T is not *core.UserFacingError: %v", err, err)
+	}
+	if ufe.Status != core.INVALID_ARGUMENT {
+		t.Errorf("status = %s, want INVALID_ARGUMENT", ufe.Status)
 	}
 }
 
