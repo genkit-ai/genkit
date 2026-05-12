@@ -380,7 +380,7 @@ def define_tool(
 def tool(
     func: Callable[..., Any],
     *,
-    name: str | None = None,
+    name: str,
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> Tool:
@@ -394,7 +394,7 @@ def tool(
 
     Args:
         func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
-        name: Tool name for the model. Defaults to ``func.__name__``.
+        name: Tool name for the model.
         description: Sent to the model. Defaults to the function docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
