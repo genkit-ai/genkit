@@ -448,6 +448,88 @@ async def test_define_middleware_registers_on_the_fly() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prompt_call_runs_middleware_declared_on_prompt() -> None:
+    """``ai.define_prompt(use=[...])`` actually runs those middleware on call."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    my_prompt = ai.define_prompt(
+        model='echoModel',
+        prompt='hi',
+        use=[PreMiddleware(), PostMiddleware()],
+    )
+
+    response = await my_prompt()
+
+    assert response.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_runs_per_call_middleware() -> None:
+    """``my_prompt(use=[...])`` per-call middleware run too."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    my_prompt = ai.define_prompt(model='echoModel', prompt='hi')
+
+    response = await my_prompt(use=[PreMiddleware(), PostMiddleware()])
+
+    assert response.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_use_interleaves_inline_and_refs() -> None:
+    """Prompts mix inline ``BaseMiddleware`` and ``MiddlewareRef`` like ``generate``."""
+    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware)])])
+    define_echo_model(ai)
+
+    my_prompt = ai.define_prompt(
+        model='echoModel',
+        prompt='hi',
+        use=[PreMiddleware(), MiddlewareRef(name='post_mw')],
+    )
+
+    response = await my_prompt()
+
+    assert response.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_prompt_per_call_use_overrides_prompt_use() -> None:
+    """Per-call ``use=`` replaces the prompt's declared ``use``, matching ``opts.tools`` semantics."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    my_prompt = ai.define_prompt(
+        model='echoModel',
+        prompt='hi',
+        use=[PreMiddleware()],
+    )
+
+    response = await my_prompt(use=[PostMiddleware()])
+
+    assert response.text == '[ECHO] user: "hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_runs_middleware() -> None:
+    """``.stream()`` shares the middleware path with ``__call__``."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    my_prompt = ai.define_prompt(
+        model='echoModel',
+        prompt='hi',
+        use=[PreMiddleware(), PostMiddleware()],
+    )
+
+    streamed = my_prompt.stream()
+    response = await streamed.response
+
+    assert response.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
 async def test_generate_applies_middleware() -> None:
     """When middleware is provided, apply it via MiddlewareRef resolution."""
     ai = Genkit(
