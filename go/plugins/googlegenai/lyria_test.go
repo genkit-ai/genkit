@@ -17,6 +17,12 @@
 package googlegenai
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -150,6 +156,61 @@ func TestLyriaPredictURL(t *testing.T) {
 				t.Errorf("lyriaPredictURL() =\n  %s\nwant\n  %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDoLyriaPredict_AttachesGenkitClientHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotHeader string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get(xGoogApiClientHeader)
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"predictions":[{"bytesBase64Encoded":"AAAA","mimeType":"audio/wav"}]}`)
+	}))
+	defer srv.Close()
+
+	req := lyriaPredictRequest{
+		Instances:  []lyriaInstance{{Prompt: "jazz"}},
+		Parameters: lyriaParameters{SampleCount: 1},
+	}
+	resp, err := doLyriaPredict(context.Background(), srv.Client(), srv.URL, req)
+	if err != nil {
+		t.Fatalf("doLyriaPredict() error = %v", err)
+	}
+	if len(resp.Predictions) != 1 {
+		t.Fatalf("expected 1 prediction, got %d", len(resp.Predictions))
+	}
+	if !strings.HasPrefix(gotHeader, "genkit-go/") {
+		t.Errorf("x-goog-api-client = %q, want prefix %q", gotHeader, "genkit-go/")
+	}
+
+	var sent lyriaPredictRequest
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("server got non-JSON body: %v", err)
+	}
+	if sent.Instances[0].Prompt != "jazz" {
+		t.Errorf("prompt forwarded = %q, want %q", sent.Instances[0].Prompt, "jazz")
+	}
+}
+
+func TestDoLyriaPredict_NonOKStatusReturnsError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"bad request"}`)
+	}))
+	defer srv.Close()
+
+	_, err := doLyriaPredict(context.Background(), srv.Client(), srv.URL, lyriaPredictRequest{})
+	if err == nil {
+		t.Fatal("expected error for 400 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("error = %v, want it to mention 400", err)
 	}
 }
 
