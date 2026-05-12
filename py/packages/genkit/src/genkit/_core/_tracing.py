@@ -51,7 +51,7 @@ class SpanMetadata(GenkitModel):
       - subtype              -> genkit:metadata:subtype
       - metadata[k]          -> genkit:metadata:<k> (auto-prefixed)
       - telemetry_labels[k]  -> <k> verbatim (caller-controlled keys)
- 
+
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
