@@ -111,7 +111,10 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 }
 
 // Result returns an [AgentResult] populated from the current session state:
-// the last message in the conversation history and all artifacts.
+// the last message in the conversation history and all artifacts. The
+// returned value is independent of the session; callers may mutate it
+// without affecting session state.
+//
 // It is a convenience for custom agents that don't need to construct the
 // result manually.
 func (s *SessionRunner[State]) Result() *AgentResult {
@@ -120,12 +123,10 @@ func (s *SessionRunner[State]) Result() *AgentResult {
 
 	result := &AgentResult{}
 	if msgs := s.state.Messages; len(msgs) > 0 {
-		result.Message = msgs[len(msgs)-1]
+		result.Message = jsonClone(msgs[len(msgs)-1])
 	}
 	if len(s.state.Artifacts) > 0 {
-		arts := make([]*Artifact, len(s.state.Artifacts))
-		copy(arts, s.state.Artifacts)
-		result.Artifacts = arts
+		result.Artifacts = cloneArtifacts(s.state.Artifacts)
 	}
 	return result
 }
@@ -574,8 +575,12 @@ func (rt *agentRuntime[Stream, State]) handleFnDone(
 
 	out := &AgentOutput[State]{SnapshotID: snapshotID}
 	if res.result != nil {
-		out.Message = res.result.Message
-		out.Artifacts = res.result.Artifacts
+		// Deep-copy at the framework boundary so the caller cannot
+		// mutate session contents through the returned output, even
+		// if a custom fn constructed AgentResult with raw session
+		// pointers rather than going through [SessionRunner.Result].
+		out.Message = jsonClone(res.result.Message)
+		out.Artifacts = cloneArtifacts(res.result.Artifacts)
 	}
 	if rt.cfg.store == nil {
 		out.State = applyTransform(ctx, rt.cfg.transform, rt.session.State())

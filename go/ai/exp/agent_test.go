@@ -3300,3 +3300,92 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 		t.Errorf("snapshot status = %q after abort-on-terminal, want succeeded", snap.Status)
 	}
 }
+
+func TestAgent_ResultAndOutput_IsolatedFromSession(t *testing.T) {
+	// Result() and AgentOutput must contain deep copies of session state so
+	// neither the fn (after calling Result) nor the caller (after receiving
+	// Output) can mutate session contents through them. Both layers
+	// deep-copy: Result for fn-side ergonomics, handleFnDone for defense
+	// in depth in case fn returns AgentResult built with raw session
+	// pointers instead of going through Result().
+	reg := newTestRegistry(t)
+	store := NewInMemorySessionStore[testState]()
+
+	var (
+		sessionMsgAfterMutation string
+		sessionArtAfterMutation string
+		fnReturnedMessage       *ai.Message
+		fnReturnedArtifact      *Artifact
+	)
+
+	af := DefineCustomAgent(reg, "isolation",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+				sess.AddMessages(ai.NewModelTextMessage("session-msg"))
+				sess.AddArtifacts(&Artifact{
+					Name:  "orig",
+					Parts: []*ai.Part{ai.NewTextPart("orig-part")},
+				})
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+
+			result := sess.Result()
+			// Mutate the returned result; must not touch session state.
+			result.Message.Content[0].Text = "fn-tainted-msg"
+			result.Artifacts[0].Name = "fn-tainted-art"
+
+			// Capture the session view AFTER mutation so the outer test
+			// can verify the mutation didn't bleed through.
+			msgs := sess.Messages()
+			sessionMsgAfterMutation = msgs[len(msgs)-1].Content[0].Text
+			arts := sess.Artifacts()
+			sessionArtAfterMutation = arts[0].Name
+
+			// Capture the pointers fn is returning so the outer test
+			// can verify handleFnDone copied them (i.e., out.Message
+			// is not the same pointer as what fn handed back).
+			fnReturnedMessage = result.Message
+			fnReturnedArtifact = result.Artifacts[0]
+			return result, nil
+		},
+		WithSessionStore(store),
+	)
+
+	out, err := af.RunText(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	// Result() must have given fn an isolated copy.
+	if sessionMsgAfterMutation != "session-msg" {
+		t.Errorf("session message tainted by fn mutation of Result(): got %q, want %q",
+			sessionMsgAfterMutation, "session-msg")
+	}
+	if sessionArtAfterMutation != "orig" {
+		t.Errorf("session artifact tainted by fn mutation of Result(): got %q, want %q",
+			sessionArtAfterMutation, "orig")
+	}
+
+	// handleFnDone must have copied fn's returned pointers at the framework
+	// boundary, so caller-side mutations cannot reach what fn handed back.
+	if out.Message == fnReturnedMessage {
+		t.Error("AgentOutput.Message shares pointer with fn's returned message; handleFnDone defensive copy missing")
+	}
+	if len(out.Artifacts) > 0 && out.Artifacts[0] == fnReturnedArtifact {
+		t.Error("AgentOutput.Artifacts[0] shares pointer with fn's returned artifact; handleFnDone defensive copy missing")
+	}
+
+	// The persisted snapshot must reflect the un-tainted session state.
+	snap, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got := snap.State.Messages[len(snap.State.Messages)-1].Content[0].Text; got != "session-msg" {
+		t.Errorf("snapshot message tainted: got %q, want %q", got, "session-msg")
+	}
+	if snap.State.Artifacts[0].Name != "orig" {
+		t.Errorf("snapshot artifact tainted: got %q, want %q", snap.State.Artifacts[0].Name, "orig")
+	}
+}

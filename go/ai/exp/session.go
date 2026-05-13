@@ -334,6 +334,37 @@ func copySnapshot[State any](snap *SessionSnapshot[State]) (*SessionSnapshot[Sta
 	return &copied, nil
 }
 
+// jsonClone deep-copies v via JSON marshal/unmarshal. Returns nil if v
+// is nil. Panics on marshal/unmarshal failure: callers use this for
+// types we control (messages, artifacts) where serialization failure
+// indicates a programmer error, not a runtime condition.
+func jsonClone[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(v)
+	if err != nil {
+		panic(fmt.Sprintf("agent: jsonClone marshal: %v", err))
+	}
+	var out T
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		panic(fmt.Sprintf("agent: jsonClone unmarshal: %v", err))
+	}
+	return &out
+}
+
+// cloneArtifacts returns a deep copy of arts. Returns nil if arts is empty.
+func cloneArtifacts(arts []*Artifact) []*Artifact {
+	if len(arts) == 0 {
+		return nil
+	}
+	out := make([]*Artifact, len(arts))
+	for i, a := range arts {
+		out[i] = jsonClone(a)
+	}
+	return out
+}
+
 // --- Snapshot companion actions ---
 
 // registerSnapshotActions registers the agent's companion actions when
