@@ -44,6 +44,7 @@ import pytest_asyncio
 from websockets.asyncio.server import serve
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._middleware import BaseMiddleware, MiddlewareDesc
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
@@ -244,6 +245,45 @@ async def test_reflection_server_v2_list_values(fake_manager: FakeReflectionMana
         values = result.get('values')
         assert isinstance(values, dict)
         assert values.get('defaultModel') == 'my-model'
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Registered middleware comes back as a JSON object, not pydantic's repr.
+
+    Without explicit serialization the response would fall through to
+    ``json.dumps(default=str)`` and the dev-ui would receive the string
+    ``"name='concise_reply_mw' description=None ..."`` instead of the
+    ``MiddlewareDesc`` wire shape.
+    """
+
+    class _NoOpMiddleware(BaseMiddleware):
+        pass
+
+    registry = Registry()
+    registry.register_value(
+        'middleware',
+        'concise_reply_mw',
+        MiddlewareDesc(factory=lambda _cfg: _NoOpMiddleware(), name='concise_reply_mw'),
+    )
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2b',
+        })
+        resp = await fake_manager.read_rpc()
+        assert resp.get('id') == '2b'
+        values = resp['result']['values']
+        assert values == {'concise_reply_mw': {'name': 'concise_reply_mw'}}
     finally:
         await _stop_client(client, task)
 

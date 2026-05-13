@@ -380,6 +380,11 @@ class ReflectionServerV2:
             to_json_fn = getattr(value, 'to_json', None) if value is not None else None
             if callable(to_json_fn):
                 mapped[name] = to_json_fn()
+            elif isinstance(value, BaseModel):
+                # Without this, ``json.dumps(default=str)`` in ``_send_message``
+                # would fall back to ``str(value)`` and the dev-ui would receive
+                # pydantic's ``__repr__`` text instead of an object.
+                mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             else:
                 mapped[name] = value
         await self._send_response(sid, {'values': mapped})
