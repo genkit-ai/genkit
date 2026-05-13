@@ -568,6 +568,8 @@ export const sentinelNoopStreamingCallback = () => null;
 /**
  * Executes provided function with streaming callback in async local storage which can be retrieved
  * using {@link getStreamingCallback}.
+ *
+ * @deprecated `getStreamingCallback` is no longer used internally
  */
 export function runWithStreamingCallback<S, O>(
   streamingCallback: StreamingCallback<S> | undefined,
