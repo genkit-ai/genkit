@@ -211,16 +211,25 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 // Responder is the output channel for an agent. Artifacts sent through
 // it are automatically added to the session before being forwarded to the
 // client.
-type Responder[Stream any] chan<- *AgentStreamChunk[Stream]
+//
+// All Send methods are ctx-aware: if the agent's work context is
+// cancelled (typically client disconnect, abort during detach, or fn
+// completion), Send returns promptly with the chunk dropped. Send itself
+// remains fire-and-forget and returns no error; the user fn is expected
+// to observe cancellation through its own ctx check and stop producing.
+type Responder[Stream any] struct {
+	in  chan<- *AgentStreamChunk[Stream]
+	ctx context.Context
+}
 
 // SendModelChunk sends a generation chunk (token-level streaming).
 func (r Responder[Stream]) SendModelChunk(chunk *ai.ModelResponseChunk) {
-	r <- &AgentStreamChunk[Stream]{ModelChunk: chunk}
+	r.send(&AgentStreamChunk[Stream]{ModelChunk: chunk})
 }
 
 // SendStatus sends a user-defined status update.
 func (r Responder[Stream]) SendStatus(status Stream) {
-	r <- &AgentStreamChunk[Stream]{Status: status}
+	r.send(&AgentStreamChunk[Stream]{Status: status})
 }
 
 // SendArtifact sends an artifact to the stream and adds it to the session.
@@ -229,7 +238,19 @@ func (r Responder[Stream]) SendStatus(status Stream) {
 // has landed; only the wire forward to the client is suppressed
 // post-detach, when there is no longer a client to receive it.
 func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
-	r <- &AgentStreamChunk[Stream]{Artifact: artifact}
+	r.send(&AgentStreamChunk[Stream]{Artifact: artifact})
+}
+
+// send delivers chunk to the router, returning promptly if r.ctx is
+// cancelled. Dropping on cancel decouples fn liveness from the runtime's
+// shutdown choreography: a Send issued after workCtx cancellation
+// completes immediately rather than blocking on a router that has not
+// yet been put into drain mode by a terminal path.
+func (r Responder[Stream]) send(chunk *AgentStreamChunk[Stream]) {
+	select {
+	case r.in <- chunk:
+	case <-r.ctx.Done():
+	}
 }
 
 // --- Agent ---
@@ -411,9 +432,9 @@ func newAgentRuntime[Stream, State any](
 // chunk through the router so clients see it on the output stream.
 func (rt *agentRuntime[Stream, State]) emitTurnEnd(ctx context.Context) {
 	snapshotID := rt.sess.maybeSnapshot(ctx, SnapshotEventTurnEnd)
-	rt.router.send() <- &AgentStreamChunk[Stream]{TurnEnd: &TurnEnd{
+	rt.router.sendChunk(ctx, &AgentStreamChunk[Stream]{TurnEnd: &TurnEnd{
 		SnapshotID: snapshotID,
-	}}
+	}})
 }
 
 // run drives the user fn to completion and returns the agent output.
@@ -456,7 +477,7 @@ func (rt *agentRuntime[Stream, State]) run(
 					fnErr = core.NewError(core.INTERNAL, "agent fn panicked: %v", r)
 				}
 			}()
-			result, fnErr = fn(workCtx, rt.router.responder(), rt.sess)
+			result, fnErr = fn(workCtx, rt.router.responder(workCtx), rt.sess)
 		}()
 		rt.fnDone <- fnDoneResult[State]{result: result, err: fnErr}
 	}()
@@ -519,6 +540,15 @@ func (rt *agentRuntime[Stream, State]) drainAndWait(cancelWork context.CancelFun
 // handleFnDone is the synchronous-completion path: fn returned before any
 // detach signal. Capture an invocation-end snapshot if state advanced past
 // the last turn-end snapshot, then assemble the output.
+//
+// When fn returns with an error, the Responder's ctx-aware send may have
+// dropped a chunk while the router was still pinned on a downstream send
+// to a slow/gone consumer. router.close blocks on the router's forward
+// goroutine exiting, which can't happen while it's stuck on that send;
+// stopAndWait closes stopWriting first so the router breaks out and
+// enters drain mode. The natural-completion path leaves the router idle
+// (every Send was accepted before fn returned), so close alone is
+// sufficient there and avoids trashing a last in-flight chunk.
 func (rt *agentRuntime[Stream, State]) handleFnDone(
 	ctx context.Context,
 	cancelWork context.CancelFunc,
@@ -526,6 +556,9 @@ func (rt *agentRuntime[Stream, State]) handleFnDone(
 ) (*AgentOutput[State], error) {
 	cancelWork()
 	rt.intake.stopAndWait()
+	if res.err != nil {
+		rt.router.stopAndWait()
+	}
 	rt.router.close()
 
 	if res.err != nil {
@@ -819,15 +852,21 @@ func (r *chunkRouter[Stream, State]) forward() bool {
 	}
 }
 
-// responder returns a [Responder] that sends chunks into the router.
-func (r *chunkRouter[Stream, State]) responder() Responder[Stream] {
-	return Responder[Stream](r.in)
+// responder returns a [Responder] that sends chunks into the router. The
+// returned Responder's Send methods drop chunks (returning promptly)
+// when ctx is cancelled.
+func (r *chunkRouter[Stream, State]) responder(ctx context.Context) Responder[Stream] {
+	return Responder[Stream]{in: r.in, ctx: ctx}
 }
 
-// send returns the internal chunk channel for producers other than the user
-// agent function (e.g. the runtime's emitTurnEnd).
-func (r *chunkRouter[Stream, State]) send() chan<- *AgentStreamChunk[Stream] {
-	return r.in
+// sendChunk delivers chunk to the router for producers other than the
+// user agent function (e.g. the runtime's emitTurnEnd). Returns
+// promptly if ctx is cancelled, dropping the chunk.
+func (r *chunkRouter[Stream, State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk[Stream]) {
+	select {
+	case r.in <- chunk:
+	case <-ctx.Done():
+	}
 }
 
 // collectTurnChunks returns and resets accumulated turn chunks.
