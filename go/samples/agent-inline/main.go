@@ -41,7 +41,7 @@ func main() {
 
 	chatAgent := genkit.DefineAgent(g, "chat",
 		aix.FromInline(
-			ai.WithModel(googlegenai.ModelRef("googleai/gemini-3-flash-preview", &genai.GenerateContentConfig{
+			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](0),
 				},
