@@ -41,6 +41,8 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
+	genkit.DefineSchemaFor[ChatPromptInput](g)
+
 	chatAgent := genkit.DefineAgent(g, "chat",
 		aix.FromPrompt(ChatPromptInput{Personality: "a sarcastic pirate"}),
 		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
