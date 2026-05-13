@@ -53,8 +53,8 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				resp.SendStatus(testStatus{Phase: "generating"})
 				// Echo back the user's message.
-				if len(input.Messages) > 0 {
-					reply := ai.NewModelTextMessage("echo: " + input.Messages[0].Content[0].Text)
+				if input.Message != nil {
+					reply := ai.NewModelTextMessage("echo: " + input.Message.Content[0].Text)
 					sess.AddMessages(reply)
 				}
 				sess.UpdateCustom(func(s testState) testState {
@@ -127,7 +127,7 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	af := DefineCustomAgent(reg, "snapshotFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				if len(input.Messages) > 0 {
+				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
 				sess.UpdateCustom(func(s testState) testState {
@@ -197,7 +197,7 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	af := DefineCustomAgent(reg, "resumeFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				if len(input.Messages) > 0 {
+				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
 				sess.UpdateCustom(func(s testState) testState {
@@ -286,7 +286,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 	af := DefineCustomAgent(reg, "clientStateFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				if len(input.Messages) > 0 {
+				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
 				sess.UpdateCustom(func(s testState) testState {
@@ -471,11 +471,11 @@ func TestAgent_SnapshotCallback(t *testing.T) {
 	}
 }
 
-func TestAgent_SendMessages(t *testing.T) {
+func TestAgent_SendMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "sendMsgsFlow",
+	af := DefineCustomAgent(reg, "sendMsgFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				return nil
@@ -488,13 +488,10 @@ func TestAgent_SendMessages(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	// Send multiple messages at once.
-	err = conn.SendMessages(
-		ai.NewUserTextMessage("msg1"),
-		ai.NewUserTextMessage("msg2"),
-	)
+	// Send a message via SendMessage.
+	err = conn.SendMessage(ai.NewUserTextMessage("msg1"))
 	if err != nil {
-		t.Fatalf("SendMessages failed: %v", err)
+		t.Fatalf("SendMessage failed: %v", err)
 	}
 	for chunk, err := range conn.Receive() {
 		if err != nil {
@@ -511,9 +508,9 @@ func TestAgent_SendMessages(t *testing.T) {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	// Both messages should have been added.
-	if got := len(response.State.Messages); got != 2 {
-		t.Errorf("expected 2 messages, got %d", got)
+	// The message should have been added.
+	if got := len(response.State.Messages); got != 1 {
+		t.Errorf("expected 1 message, got %d", got)
 	}
 }
 
@@ -1336,8 +1333,8 @@ func TestAgent_RunText(t *testing.T) {
 	af := DefineCustomAgent(reg, "runTextFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				if len(input.Messages) > 0 {
-					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Messages[0].Content[0].Text))
+				if input.Message != nil {
+					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Message.Content[0].Text))
 				}
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1369,7 +1366,7 @@ func TestAgent_Run(t *testing.T) {
 	af := DefineCustomAgent(reg, "runFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				if len(input.Messages) > 0 {
+				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
 				return nil
@@ -1378,10 +1375,7 @@ func TestAgent_Run(t *testing.T) {
 	)
 
 	input := &AgentInput{
-		Messages: []*ai.Message{
-			ai.NewUserTextMessage("msg1"),
-			ai.NewUserTextMessage("msg2"),
-		},
+		Message: ai.NewUserTextMessage("msg1"),
 	}
 
 	response, err := af.Run(ctx, input)
@@ -1389,9 +1383,9 @@ func TestAgent_Run(t *testing.T) {
 		t.Fatalf("Run failed: %v", err)
 	}
 
-	// 2 user messages + 1 reply = 3.
-	if got := len(response.State.Messages); got != 3 {
-		t.Errorf("expected 3 messages, got %d", got)
+	// 1 user message + 1 reply = 2.
+	if got := len(response.State.Messages); got != 2 {
+		t.Errorf("expected 2 messages, got %d", got)
 	}
 }
 
@@ -1504,6 +1498,74 @@ func TestPromptAgent_RunText(t *testing.T) {
 		for i, m := range response.State.Messages {
 			t.Logf("  msg[%d]: role=%s text=%s", i, m.Role, m.Text())
 		}
+	}
+}
+
+func TestPromptAgent_RejectsNonUserRole(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	ai.DefinePrompt(reg, "rejectRolePrompt", ai.WithModelName("test/echo"))
+	af := DefineAgent[testState](reg, "rejectRolePrompt", FromPrompt())
+
+	_, err := af.Run(ctx, &AgentInput{
+		Message: &ai.Message{
+			Role:    ai.RoleModel,
+			Content: []*ai.Part{ai.NewTextPart("hi")},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for non-user role, got nil")
+	}
+	if !strings.Contains(err.Error(), "role") {
+		t.Errorf("expected role-related error, got %v", err)
+	}
+}
+
+func TestPromptAgent_RejectsToolRequestPart(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	ai.DefinePrompt(reg, "rejectToolReqPrompt", ai.WithModelName("test/echo"))
+	af := DefineAgent[testState](reg, "rejectToolReqPrompt", FromPrompt())
+
+	_, err := af.Run(ctx, &AgentInput{
+		Message: &ai.Message{
+			Role: ai.RoleUser,
+			Content: []*ai.Part{
+				ai.NewTextPart("hi"),
+				ai.NewToolRequestPart(&ai.ToolRequest{Name: "doThing", Ref: "1"}),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for tool request part, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool request") {
+		t.Errorf("expected tool-request error, got %v", err)
+	}
+}
+
+func TestPromptAgent_RejectsToolResponsePart(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	ai.DefinePrompt(reg, "rejectToolRespPrompt", ai.WithModelName("test/echo"))
+	af := DefineAgent[testState](reg, "rejectToolRespPrompt", FromPrompt())
+
+	_, err := af.Run(ctx, &AgentInput{
+		Message: &ai.Message{
+			Role: ai.RoleUser,
+			Content: []*ai.Part{
+				ai.NewToolResponsePart(&ai.ToolResponse{Name: "doThing", Ref: "1"}),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for tool response part, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool") {
+		t.Errorf("expected tool-related error, got %v", err)
 	}
 }
 
@@ -1868,7 +1930,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
 				entered <- struct{}{}
 				<-release
-				sess.AddMessages(ai.NewModelTextMessage("reply-" + input.Messages[0].Text()))
+				sess.AddMessages(ai.NewModelTextMessage("reply-" + input.Message.Text()))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s

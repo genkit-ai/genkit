@@ -89,7 +89,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		}
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
-				s.AddMessages(input.Messages...)
+				if input.Message != nil {
+					s.AddMessages(input.Message)
+				}
 				if err := fn(ctx, input); err != nil {
 					return nil, err
 				}
@@ -977,7 +979,7 @@ func (i *detachIntake) enqueue(input *AgentInput) {
 // rather than enqueued: it carries no payload to process, so it would
 // just trigger a no-op turn. Callers that want to ride a final input
 // on the detach signal can do so by calling
-// Send(&AgentInput{Detach: true, Messages: ...}) explicitly.
+// Send(&AgentInput{Detach: true, Message: ...}) explicitly.
 func (i *detachIntake) handleDetach(first *AgentInput) {
 	var drained []*AgentInput
 	if hasInputPayload(first) {
@@ -1016,7 +1018,7 @@ func hasInputPayload(in *AgentInput) bool {
 	if in == nil {
 		return false
 	}
-	if len(in.Messages) > 0 {
+	if in.Message != nil {
 		return true
 	}
 	if in.Resume != nil && (len(in.Resume.Respond) > 0 || len(in.Resume.Restart) > 0) {
@@ -1132,6 +1134,30 @@ func (i *detachIntake) stopAndWait() {
 // excluded from session history after generation.
 const promptMessageKey = "_genkit_prompt"
 
+// validateUserMessage rejects inputs the prompt-backed agent loop can't
+// safely consume: a non-user role would be appended to history under the
+// wrong speaker, and tool request / response parts belong on the
+// [AgentInput.Resume] payload, not on a turn message.
+func validateUserMessage(m *ai.Message) error {
+	if m == nil {
+		return nil
+	}
+	if m.Role != "" && m.Role != ai.RoleUser {
+		return core.NewError(core.INVALID_ARGUMENT,
+			"agent input message must have role %q, got %q", ai.RoleUser, m.Role)
+	}
+	for _, p := range m.Content {
+		if p == nil {
+			continue
+		}
+		if p.IsToolRequest() || p.IsToolResponse() {
+			return core.NewError(core.INVALID_ARGUMENT,
+				"agent input message must not contain tool request or response parts; use AgentInput.Resume instead")
+		}
+	}
+	return nil
+}
+
 // agentLoop returns the per-turn function for a prompt-backed agent. Each
 // turn renders the prompt, appends conversation history, calls the model
 // with streaming, and updates the session.
@@ -1142,6 +1168,10 @@ const promptMessageKey = "_genkit_prompt"
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
 	return func(ctx context.Context, resp Responder[any], sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			if err := validateUserMessage(input.Message); err != nil {
+				return err
+			}
+
 			actionOpts, err := prompt.Render(ctx, defaultInput)
 			if err != nil {
 				return fmt.Errorf("prompt render: %w", err)
@@ -1277,14 +1307,14 @@ func (a *Agent[Stream, State]) Run(
 
 // RunText is a convenience method that starts a single-turn agent invocation
 // with a user text message. It is equivalent to calling Run with an
-// AgentInput containing a single user text message.
+// AgentInput whose Message is a user text message.
 func (a *Agent[Stream, State]) RunText(
 	ctx context.Context,
 	text string,
 	opts ...InvocationOption[State],
 ) (*AgentOutput[State], error) {
 	return a.Run(ctx, &AgentInput{
-		Messages: []*ai.Message{ai.NewUserTextMessage(text)},
+		Message: ai.NewUserTextMessage(text),
 	}, opts...)
 }
 
@@ -1342,15 +1372,15 @@ func (c *AgentConnection[Stream, State]) Send(input *AgentInput) error {
 	return c.conn.Send(input)
 }
 
-// SendMessages sends messages to the agent.
-func (c *AgentConnection[Stream, State]) SendMessages(messages ...*ai.Message) error {
-	return c.conn.Send(&AgentInput{Messages: messages})
+// SendMessage sends a message to the agent for one turn.
+func (c *AgentConnection[Stream, State]) SendMessage(message *ai.Message) error {
+	return c.conn.Send(&AgentInput{Message: message})
 }
 
-// SendText sends a single user text message to the agent.
+// SendText sends a user text message to the agent.
 func (c *AgentConnection[Stream, State]) SendText(text string) error {
 	return c.conn.Send(&AgentInput{
-		Messages: []*ai.Message{ai.NewUserTextMessage(text)},
+		Message: ai.NewUserTextMessage(text),
 	})
 }
 
@@ -1375,7 +1405,7 @@ func (c *AgentConnection[Stream, State]) SendResume(resume *ToolResume) error {
 // session and end up in the final snapshot's state.
 //
 // To send a final input as part of the same wire message, use
-// Send(&AgentInput{Detach: true, Messages: ...}) directly.
+// Send(&AgentInput{Detach: true, Message: ...}) directly.
 func (c *AgentConnection[Stream, State]) Detach() error {
 	return c.conn.Send(&AgentInput{Detach: true})
 }
