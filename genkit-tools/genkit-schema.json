@@ -46,11 +46,8 @@
         "detach": {
           "type": "boolean"
         },
-        "messages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Message"
-          }
+        "message": {
+          "$ref": "#/$defs/Message"
         },
         "resume": {
           "type": "object",

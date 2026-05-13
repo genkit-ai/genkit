@@ -100,8 +100,8 @@ export const AgentInputSchema = z.object({
    * finalized (or the snapshot is aborted via `abortSnapshot`).
    */
   detach: z.boolean().optional(),
-  /** User's input messages for this turn. */
-  messages: z.array(MessageSchema).optional(),
+  /** User's input message for this turn. */
+  message: MessageSchema.optional(),
   /** Options for resuming an interrupted generation. */
   resume: z
     .object({
