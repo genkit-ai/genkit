@@ -131,7 +131,7 @@ class AgentInput(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     detach: bool | None = None
-    messages: list[MessageData] | None = None
+    message: MessageData | None = None
     resume: Resume | None = None
 
 
