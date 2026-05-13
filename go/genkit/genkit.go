@@ -470,7 +470,7 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 //			ai.WithModelName("googleai/gemini-3-flash-preview"),
 //			ai.WithSystem("You are a helpful assistant."),
 //		),
-//		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 //	)
 //
 // Example (existing prompt):
@@ -481,7 +481,7 @@ func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn
 //
 //	chatAgent := genkit.DefineAgent(g, "chat",
 //		aix.FromPrompt(ChatInput{Personality: "a sarcastic pirate"}),
-//		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 //	)
 func DefineAgent[State any](
 	g *Genkit,

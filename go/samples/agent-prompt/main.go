@@ -26,9 +26,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 )
@@ -38,20 +41,21 @@ type ChatPromptInput struct {
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 
 	genkit.DefineSchemaFor[ChatPromptInput](g)
 
 	chatAgent := genkit.DefineAgent(g, "chat",
 		aix.FromPrompt(ChatPromptInput{Personality: "a sarcastic pirate"}),
-		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
+		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
 		aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {
 			return sc.Event == aix.SnapshotEventInvocationEnd || sc.TurnIndex%5 == 0
 		}),
 	)
 
-	fmt.Println("Agent Chat (type 'quit' to exit)")
+	fmt.Println("Agent Chat (type 'quit' to exit, Ctrl+C to abort)")
 	fmt.Println()
 
 	conn, err := chatAgent.StreamBidi(ctx)
@@ -59,12 +63,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+	defer conn.Close()
 
-	reader := bufio.NewReader(os.Stdin)
+	inputCh := readLines(ctx)
+
+repl:
 	for {
 		fmt.Print("> ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+		var input string
+		select {
+		case <-ctx.Done():
+			fmt.Println()
+			break repl
+		case line, ok := <-inputCh:
+			if !ok {
+				fmt.Println()
+				break repl
+			}
+			input = strings.TrimSpace(line)
+		}
 
 		if input == "quit" || input == "exit" {
 			break
@@ -98,6 +115,31 @@ func main() {
 			}
 		}
 	}
+}
 
-	conn.Close()
+// readLines reads lines from stdin on a background goroutine and yields
+// them via the returned channel. The channel is closed on EOF, read error,
+// or ctx cancellation. The goroutine cannot interrupt a blocked stdin
+// read; on ctx cancellation it exits as soon as a line completes (or, in
+// practice, when the process terminates).
+func readLines(ctx context.Context) <-chan string {
+	ch := make(chan string)
+	go func() {
+		defer close(ch)
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			line, err := reader.ReadString('\n')
+			if line != "" {
+				select {
+				case ch <- line:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ch
 }
