@@ -575,7 +575,12 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Close() error {
 }
 
 // Receive returns an iterator for receiving streamed response chunks.
-// The iterator completes when the action finishes.
+// The iterator yields chunks until the action finishes, the context is
+// cancelled, or the caller breaks out of the loop. Breaking out does NOT
+// cancel the connection: bidi callers routinely break to switch to
+// sending, then call Receive again to consume the next batch. Use ctx
+// cancellation or [BidiConnection.Close] to terminate the connection
+// (matching gRPC and similar bidi streaming conventions).
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut, error] {
 	return func(yield func(StreamOut, error) bool) {
 		for {
@@ -585,7 +590,6 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut
 					return
 				}
 				if !yield(chunk, nil) {
-					c.cancel()
 					return
 				}
 			case <-c.ctx.Done():

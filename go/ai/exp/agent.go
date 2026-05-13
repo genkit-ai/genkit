@@ -1374,36 +1374,12 @@ func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*
 
 // --- AgentConnection ---
 
-// AgentConnection wraps BidiConnection with agent-specific functionality.
-// It provides a Receive() iterator that supports multi-turn patterns: breaking
-// out of the iterator between turns does not cancel the underlying connection.
+// AgentConnection wraps BidiConnection with agent-specific Send helpers
+// (SendMessage / SendText / SendResume / Detach) and an Output that
+// always waits for finalization (so detached invocations see the
+// pending snapshot ID rather than a context-cancellation error).
 type AgentConnection[Stream, State any] struct {
 	conn *core.BidiConnection[*AgentInput, *AgentStreamChunk[Stream], *AgentOutput[State]]
-
-	// chunks buffers stream chunks from the underlying connection so that
-	// breaking from Receive() between turns doesn't cancel the context.
-	chunks   chan *AgentStreamChunk[Stream]
-	chunkErr error
-	initOnce sync.Once
-}
-
-// initReceiver starts a goroutine that drains the underlying BidiConnection's
-// Receive into a channel. This goroutine never breaks from the underlying
-// iterator, preventing context cancellation.
-func (c *AgentConnection[Stream, State]) initReceiver() {
-	c.initOnce.Do(func() {
-		c.chunks = make(chan *AgentStreamChunk[Stream], 1)
-		go func() {
-			defer close(c.chunks)
-			for chunk, err := range c.conn.Receive() {
-				if err != nil {
-					c.chunkErr = err
-					return
-				}
-				c.chunks <- chunk
-			}
-		}()
-	})
 }
 
 // Send sends an AgentInput to the agent.
@@ -1454,22 +1430,13 @@ func (c *AgentConnection[Stream, State]) Close() error {
 	return c.conn.Close()
 }
 
-// Receive returns an iterator for receiving stream chunks.
-// Unlike the underlying BidiConnection.Receive, breaking out of this iterator
-// does not cancel the connection. This enables multi-turn patterns where the
-// caller breaks on TurnEnd, sends the next input, then calls Receive again.
+// Receive returns an iterator for receiving stream chunks. Breaking out
+// of the iterator does not cancel the connection; multi-turn callers
+// routinely break on [TurnEnd], send the next input, then call Receive
+// again to consume the next batch. Use ctx cancellation or [Close] to
+// terminate the connection.
 func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[Stream], error] {
-	c.initReceiver()
-	return func(yield func(*AgentStreamChunk[Stream], error) bool) {
-		for chunk := range c.chunks {
-			if !yield(chunk, nil) {
-				return
-			}
-		}
-		if err := c.chunkErr; err != nil {
-			yield(nil, err)
-		}
-	}
+	return c.conn.Receive()
 }
 
 // Output returns the final response after the agent completes.
