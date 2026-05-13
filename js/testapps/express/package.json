@@ -20,11 +20,11 @@
     "@genkit-ai/firebase": "workspace:*",
     "genkitx-ollama": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
-    "express": "^4.21.0"
+    "express": "^5.2.1"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "rimraf": "^6.0.1",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

@@ -17,12 +17,12 @@
   "dependencies": {
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/fetch": "workspace:*",
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.0.2",
     "genkit": "workspace:*",
-    "hono": "^4.6.0"
+    "hono": "^4.12.18"
   },
   "devDependencies": {
-    "tsx": "^4.20.3",
-    "typescript": "^5.9.3"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }

@@ -18,15 +18,15 @@
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
-    "@google/genai": "^1.30.0",
-    "express": "^4.20.0",
+    "@google/genai": "^2.2.0",
+    "express": "^5.2.1",
     "genkit": "workspace:*",
     "node-fetch": "3.3.2",
     "wav": "^1.0.2",
-    "zod-to-json-schema": "^3.24.5"
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/wav": "^1.0.4",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

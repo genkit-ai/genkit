@@ -30,18 +30,18 @@
     "@genkit-ai/vertexai": "workspace:*",
     "@genkit-ai/compat-oai": "workspace:*",
     "genkitx-cloud-sql-pg": "workspace:*",
-    "firebase-admin": ">=12.2",
+    "firebase-admin": ">=13.9",
     "genkit": "workspace:*",
     "genkitx-chromadb": "workspace:*",
     "genkitx-ollama": "workspace:*",
     "genkitx-pinecone": "workspace:*",
-    "google-auth-library": "^9.6.3"
+    "google-auth-library": "^10.6.2"
   },
   "devDependencies": {
     "@types/pdf-parse": "^1.1.4",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.1.0",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.1",
-    "typescript": "^5.9.3"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }

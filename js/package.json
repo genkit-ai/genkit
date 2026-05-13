@@ -21,13 +21,13 @@
   },
   "devDependencies": {
     "npm-run-all": "^4.1.5",
-    "only-allow": "^1.2.1",
-    "tsx": "^4.20.3",
-    "typedoc": "^0.28.17",
+    "only-allow": "^1.2.2",
+    "tsx": "^4.21.0",
+    "typedoc": "^0.28.19",
     "typedoc-github-theme": "^0.4.0",
-    "typedoc-plugin-markdown": "^4.10.0",
+    "typedoc-plugin-markdown": "^4.11.0",
     "typedoc-plugin-zod": "^1.4.3",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   },
   "pnpm": {
     "overrides": {

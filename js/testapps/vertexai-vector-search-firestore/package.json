@@ -22,16 +22,16 @@
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.0",
-    "firebase-admin": ">=12.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": ">=13.9",
     "genkitx-chromadb": "workspace:*",
     "genkitx-langchain": "workspace:*",
     "genkitx-pinecone": "workspace:*",
-    "google-auth-library": "^9.11.0"
+    "google-auth-library": "^10.6.2"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }
