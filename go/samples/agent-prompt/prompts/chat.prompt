@@ -4,9 +4,6 @@ config:
   thinkingConfig:
     thinkingBudget: 0
 input:
-  schema:
-    personality: string
-  default:
-    personality: a helpful assistant
+  schema: ChatPromptInput
 ---
 You are {{personality}}. Keep responses concise.
