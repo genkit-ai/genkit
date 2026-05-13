@@ -44,9 +44,11 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
+from genkit._core._typing import GenerationCommonConfig
 from genkit.plugin_api import to_json_schema
 from genkit.plugins.google_genai.models.gemini import (
     DEFAULT_SUPPORTS_MODEL,
+    GeminiConfigSchema,
     GeminiModel,
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
@@ -775,3 +777,65 @@ async def test_gemini_model__retrieve_cached_content(
     )
 
     assert isinstance(cache, genai_types.CachedContent)
+
+
+# ---------------------------------------------------------------------------
+# Config normalization
+#
+# Plugin-specific keys like ``code_execution`` carry a camelCase alias
+# (``codeExecution``) on the wire so that the Python and JS SDKs share the
+# same JSON. Callers can hand the plugin three different shapes for the same
+# logical config and we have to fold all of them onto the canonical
+# snake_case field name before downstream translation runs. These tests pin
+# that contract so a future refactor can't quietly let an alias-form key
+# leak through to the strict ``GenerateContentConfig``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ('label', 'config'),
+    [
+        ('snake_case dict', {'code_execution': True}),
+        ('camelCase dict', {'codeExecution': True}),
+        (
+            'GenerationCommonConfig with alias-form extra',
+            GenerationCommonConfig.model_validate({'codeExecution': True}),
+        ),
+        ('GeminiConfigSchema instance', GeminiConfigSchema(code_execution=True)),
+    ],
+)
+def test_gemini_model__normalize_config_canonicalizes_aliases(
+    gemini_model_instance: GeminiModel,
+    label: str,
+    config: object,
+) -> None:
+    """Every input shape collapses onto the canonical snake_case field."""
+    dumped = gemini_model_instance._normalize_config_to_dict(config)
+
+    assert dumped == {'code_execution': True}, label
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__camelcase_code_execution_translates_to_tool(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A camelCase convenience flag is translated into a tool, not leaked.
+
+    Reproduces the bug where ``ai.generate(config=GeminiConfigSchema(...).model_dump())``
+    produced an alias-form dict that fell through to the SDK's strict
+    ``GenerateContentConfig`` and raised ``extra_forbidden``.
+    """
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=GeminiConfigSchema.model_validate({'code_execution': True}).model_dump(),
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.tools is not None
+    code_exec_tools = [t for t in cfg.tools if isinstance(t, genai_types.Tool) and t.code_execution is not None]
+    assert len(code_exec_tools) == 1
+    # The flag should not survive as an unknown SDK field in any casing.
+    assert 'codeExecution' not in cfg.model_dump(exclude_none=True)
+    assert 'code_execution' not in cfg.model_dump(exclude_none=True)
