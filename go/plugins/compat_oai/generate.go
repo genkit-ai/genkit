@@ -324,11 +324,16 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	}
 
 	// Convert accumulated ChatCompletion to ai.ModelResponse
-	return convertChatCompletionToModelResponse(&acc.ChatCompletion, req)
+	resp, err := convertChatCompletionToModelResponse(&acc.ChatCompletion)
+	if err != nil {
+		return nil, err
+	}
+	resp.Request = req
+	return resp, nil
 }
 
 // convertChatCompletionToModelResponse converts openai.ChatCompletion to ai.ModelResponse
-func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, req *ai.ModelRequest) (*ai.ModelResponse, error) {
+func convertChatCompletionToModelResponse(completion *openai.ChatCompletion) (*ai.ModelResponse, error) {
 	if len(completion.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in completion")
 	}
@@ -375,9 +380,7 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, req
 	}
 
 	resp := &ai.ModelResponse{
-		// Request: &ai.ModelRequest{},
-		Request: req,
-		Usage:   usage,
+		Usage: usage,
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
 			Content: make([]*ai.Part, 0),
@@ -441,7 +444,7 @@ func (g *ModelGenerator) generateComplete(ctx context.Context, req *ai.ModelRequ
 		return nil, fmt.Errorf("failed to create completion: %w", err)
 	}
 
-	resp, err := convertChatCompletionToModelResponse(completion, req)
+	resp, err := convertChatCompletionToModelResponse(completion)
 	if err != nil {
 		return nil, err
 	}
