@@ -149,6 +149,9 @@ async function __flowRunEnvelope({
         payload = payload.substring(1);
       }
       const chunk = JSON.parse(payload);
+      if (!chunk || typeof chunk !== 'object') {
+        throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
+      }
       if (chunk.hasOwnProperty('message')) {
         sendChunk(chunk.message);
       } else if (chunk.hasOwnProperty('result')) {
