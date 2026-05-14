@@ -34,7 +34,7 @@ export { z }; // provide a consistent zod to use throughout genkit
 export type JSONSchema = JSONSchemaType<any> | any;
 
 const jsonSchemas = new WeakMap<z.ZodTypeAny, JSONSchema>();
-const validators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
+const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
 const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
 
 /**
@@ -94,7 +94,9 @@ export interface ValidationErrorDetail {
   message: string;
 }
 
-function toErrorDetail(error: ErrorObject): ValidationErrorDetail {
+function ajvErrorToValidationErrorDetail(
+  error: ErrorObject
+): ValidationErrorDetail {
   return {
     path: error.instancePath.substring(1).replace(/\//g, '.') || '(root)',
     message: error.message!,
@@ -118,8 +120,16 @@ function cfWorkerErrorToValidationErrorDetail(error: {
  * Validation response.
  */
 export type ValidationResponse =
-  | { valid: true; errors: never }
-  | { valid: false; errors: ErrorObject[] };
+  | {
+      valid: true;
+      errors?: undefined;
+      schema: JSONSchema;
+    }
+  | {
+      valid: false;
+      errors: ValidationErrorDetail[];
+      schema: JSONSchema;
+    };
 
 /**
  * Validates the provided data against the provided schema.
@@ -127,7 +137,7 @@ export type ValidationResponse =
 export function validateSchema(
   data: unknown,
   options: ProvidedSchema
-): { valid: boolean; errors?: any[]; schema: JSONSchema } {
+): ValidationResponse {
   const toValidate = toJsonSchema(options);
   if (!toValidate) {
     return { valid: true, schema: toValidate };
@@ -140,18 +150,38 @@ export function validateSchema(
       validator = new Validator(toValidate);
       cfWorkerValidators.set(toValidate, validator);
     }
+
     const result = validator.validate(sanitizeForJsonSchema(data));
+    if (!result.valid) {
+      return {
+        valid: false,
+        errors: result.errors.map(cfWorkerErrorToValidationErrorDetail),
+        schema: toValidate,
+      };
+    }
+
     return {
       valid: result.valid,
-      errors: result.errors?.map(cfWorkerErrorToValidationErrorDetail),
       schema: toValidate,
     };
   }
 
-  const validator = validators.get(toValidate) || ajv.compile(toValidate);
+  let validator = ajvValidators.get(toValidate);
+  if (!validator) {
+    validator = ajv.compile(toValidate);
+    ajvValidators.set(toValidate, validator);
+  }
+
   const valid = validator(data) as boolean;
-  const errors = validator.errors?.map((e) => e);
-  return { valid, errors: errors?.map(toErrorDetail), schema: toValidate };
+  if (!valid) {
+    return {
+      valid: false,
+      errors: (validator.errors ?? []).map(ajvErrorToValidationErrorDetail),
+      schema: toValidate,
+    };
+  }
+
+  return { valid, schema: toValidate };
 }
 
 /**
@@ -161,9 +191,13 @@ export function parseSchema<T = unknown>(
   data: unknown,
   options: ProvidedSchema
 ): T {
-  const { valid, errors, schema } = validateSchema(data, options);
-  if (!valid) {
-    throw new ValidationError({ data, errors: errors!, schema });
+  const result = validateSchema(data, options);
+  if (!result.valid) {
+    throw new ValidationError({
+      data,
+      errors: result.errors,
+      schema: result.schema,
+    });
   }
   return data as T;
 }

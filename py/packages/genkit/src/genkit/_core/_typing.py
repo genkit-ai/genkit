@@ -711,19 +711,6 @@ class SpanEndEvent(GenkitModel):
     type: str = Field(...)
 
 
-class SpanMetadata(GenkitModel):
-    """Model for spanmetadata data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    name: str = Field(...)
-    state: Literal['success', 'error'] | None = None
-    input: Any | None = Field(default=None)
-    output: Any | None = Field(default=None)
-    is_root: bool | None = None
-    metadata: Metadata | None = None
-    path: str | None = None
-
-
 class SpanStartEvent(GenkitModel):
     """Model for spanstartevent data."""
 

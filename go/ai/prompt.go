@@ -104,6 +104,11 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 
 	baseName, variant, _ := strings.Cut(name, ".")
 
+	use, err := configsToRefs(pOpts.commonGenOptions.Use)
+	if err != nil {
+		panic(fmt.Errorf("ai.DefinePrompt: error processing middleware: %w", err))
+	}
+
 	promptMetadata := map[string]any{
 		"name":         baseName,
 		"description":  p.Description,
@@ -113,7 +118,11 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		"output":       map[string]any{"schema": p.OutputSchema},
 		"defaultInput": p.DefaultInput,
 		"tools":        tools,
+		"toolChoice":   pOpts.ToolChoice,
 		"maxTurns":     p.MaxTurns,
+	}
+	if len(use) > 0 {
+		promptMetadata["use"] = use
 	}
 	if variant != "" {
 		promptMetadata["variant"] = variant
