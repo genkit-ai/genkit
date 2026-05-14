@@ -65,6 +65,28 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 	return copySnapshot(snap)
 }
 
+// LatestSnapshot returns the snapshot with the most recent
+// [SessionSnapshot.UpdatedAt] in the store, or nil if there are none.
+//
+// This is not part of the [exp.SessionStore] interface; it is an
+// InMemorySessionStore-specific convenience that mirrors
+// [FileSessionStore.LatestSnapshot] so callers that swap stores during
+// tests don't have to special-case the in-memory implementation.
+func (s *InMemorySessionStore[State]) LatestSnapshot(_ context.Context) (*exp.SessionSnapshot[State], error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var latest *exp.SessionSnapshot[State]
+	for _, snap := range s.snapshots {
+		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) {
+			latest = snap
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	return copySnapshot(latest)
+}
+
 // AbortSnapshot atomically flips a pending snapshot to aborted. If the
 // snapshot is already terminal the existing status is returned unchanged.
 // Returns an empty status if the snapshot is not found.

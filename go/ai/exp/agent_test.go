@@ -3260,3 +3260,14 @@ func TestAgent_ResultAndOutput_IsolatedFromSession(t *testing.T) {
 		t.Errorf("snapshot artifact tainted: got %q, want %q", snap.State.Artifacts[0].Name, "orig")
 	}
 }
+
+func TestAgent_Name(t *testing.T) {
+	reg := newTestRegistry(t)
+	a := DefineCustomAgent(reg, "name-accessor",
+		func(ctx context.Context, _ Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return sess.Result(), nil
+		})
+	if got := a.Name(); got != "name-accessor" {
+		t.Errorf("Name() = %q, want %q", got, "name-accessor")
+	}
+}

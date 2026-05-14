@@ -136,6 +136,70 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	return next, nil
 }
 
+// LatestSnapshot returns the snapshot whose backing file has the most
+// recent on-disk modification time, or nil if the directory has no
+// snapshots yet.
+//
+// Selecting by file mtime (rather than parsing every file to compare
+// [SessionSnapshot.UpdatedAt]) makes the operation O(N) stats plus a
+// single read of the winner in the common case, rather than O(N)
+// reads + JSON parses. For snapshots written by this package mtime
+// and UpdatedAt advance together (each save creates a fresh temp
+// file and renames it into place), so the result is identical to a
+// sort by UpdatedAt. If a snapshot file is touched externally, mtime
+// wins.
+//
+// Files that fail to stat (e.g. removed between the directory read
+// and the stat) or fail to parse are skipped silently and the scan
+// falls back to the next-newest candidate, so a single corrupted
+// file does not poison the result. The directory listing is not
+// atomic with respect to concurrent writes — a snapshot that appears
+// or disappears mid-scan may or may not be observed.
+//
+// This is not part of the [exp.SessionStore] interface; it is a
+// FileSessionStore-specific convenience for UIs and CLIs that need to
+// surface "where did I leave off" without indexing the directory
+// themselves.
+func (s *FileSessionStore[State]) LatestSnapshot(ctx context.Context) (*exp.SessionSnapshot[State], error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("FileSessionStore: list dir: %w", err)
+	}
+
+	type candidate struct {
+		name    string
+		modTime time.Time
+	}
+	var cands []candidate
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			// Entry vanished between ReadDir and Info; ignore and keep
+			// scanning. Any caller-visible inconsistency is bounded to
+			// "a snapshot disappeared mid-scan" which the doc allows.
+			continue
+		}
+		cands = append(cands, candidate{e.Name(), info.ModTime()})
+	}
+	slices.SortFunc(cands, func(a, b candidate) int {
+		return b.modTime.Compare(a.modTime) // newest first
+	})
+	for _, c := range cands {
+		snap, err := s.GetSnapshot(ctx, strings.TrimSuffix(c.name, ".json"))
+		if err != nil || snap == nil {
+			continue
+		}
+		return snap, nil
+	}
+	return nil, nil
+}
+
 // AbortSnapshot atomically flips a pending snapshot to aborted. If the
 // snapshot is already terminal the existing status is returned unchanged.
 // Returns an empty status if the snapshot is not found.
