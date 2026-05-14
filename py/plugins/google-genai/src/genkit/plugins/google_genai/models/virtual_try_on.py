@@ -38,10 +38,12 @@ else:
     from enum import StrEnum
 
 from google import genai
+from google.genai.errors import ClientError
 from pydantic import BaseModel, ConfigDict, Field
 
 from genkit import (
     FinishReason,
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -53,6 +55,7 @@ from genkit import (
     Supports,
 )
 from genkit.plugin_api import ActionRunContext, tracer
+from genkit.plugins.google_genai.models.utils import client_error_to_genkit_status
 
 
 class VirtualTryOnVersion(StrEnum):
@@ -253,7 +256,14 @@ class VirtualTryOnModel:
                 'genkit:input',
                 json.dumps({'model': self._version, 'body': payload}, default=str),
             )
-            http_response = await api_client.async_request('POST', path, payload)
+            try:
+                http_response = await api_client.async_request('POST', path, payload)
+            except ClientError as e:
+                raise GenkitError(
+                    status=client_error_to_genkit_status(e),
+                    message=e.message or 'Unknown error',
+                    cause=e,
+                ) from e
             body = http_response.body if hasattr(http_response, 'body') else http_response
             response = json.loads(body) if isinstance(body, (bytes, bytearray, str)) else body
             span.set_attribute('genkit:output', json.dumps(response, default=str))

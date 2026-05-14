@@ -19,11 +19,13 @@
 import base64
 
 import pytest
+from google.genai.errors import ClientError
 from pytest_mock import MockerFixture
 
 from genkit import (
     ActionRunContext,
     FinishReason,
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -156,6 +158,28 @@ async def test_generate_blocked_when_no_predictions(mocker: MockerFixture) -> No
     assert resp.finish_reason == FinishReason.BLOCKED
     assert resp.message is not None
     assert resp.message.content == []
+
+
+@pytest.mark.asyncio
+async def test_generate_maps_client_error_to_genkit_error(mocker: MockerFixture) -> None:
+    """HTTP errors from the direct predict call should use Genkit status names."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+    client._api_client.async_request = mocker.AsyncMock(
+        side_effect=ClientError(429, {'error': {'message': 'quota exceeded'}})
+    )
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
+    assert exc_info.value.original_message == 'quota exceeded'
 
 
 @pytest.mark.asyncio

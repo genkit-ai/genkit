@@ -51,6 +51,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from google import genai
+from google.genai.errors import ClientError
 
 from genkit import (
     CustomPart,
@@ -66,7 +67,22 @@ from genkit import (
     ToolResponse,
     ToolResponsePart,
 )
-from genkit.plugin_api import get_cached_client
+from genkit.plugin_api import StatusName, get_cached_client
+
+
+def client_error_to_genkit_status(error: ClientError) -> StatusName:
+    """Map Google GenAI HTTP errors to Genkit status names."""
+    if error.code == 400:
+        return 'INVALID_ARGUMENT'
+    if error.code == 401:
+        return 'UNAUTHENTICATED'
+    if error.code == 403:
+        return 'PERMISSION_DENIED'
+    if error.code == 404:
+        return 'NOT_FOUND'
+    if error.code == 429:
+        return 'RESOURCE_EXHAUSTED'
+    return 'INTERNAL'
 
 
 class PartConverter:
