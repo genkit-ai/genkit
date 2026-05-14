@@ -24,6 +24,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -70,7 +71,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
 
 	inputCh := readLines(ctx)
 
@@ -122,6 +122,16 @@ repl:
 			}
 		}
 	}
+
+	out, err := conn.Output()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if out != nil && out.SnapshotID != "" {
+		fmt.Printf("[snapshot: %s]\n", out.SnapshotID)
+	}
+	fmt.Println("You left the conversation. Goodbye!")
 }
 
 // readLines reads lines from stdin on a background goroutine and yields

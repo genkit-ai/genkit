@@ -1322,29 +1322,15 @@ func (a *Agent[Stream, State]) Run(
 		return nil, err
 	}
 	// If the bidi function fails fast (e.g. resuming from an errored
-	// snapshot rejects in newAgentRuntime), Send / Close / Receive
-	// see a closed connection and return generic "action has completed"
-	// errors. The real fn error is on Output(). Prefer it whenever it's
-	// non-nil so callers get the meaningful failure.
+	// snapshot rejects in newAgentRuntime), Send sees a closed connection
+	// and returns a generic "action has completed" error. The real fn
+	// error is on Output(). Prefer it whenever it's non-nil so callers
+	// get the meaningful failure.
 	if err := conn.Send(input); err != nil {
 		if _, outErr := conn.Output(); outErr != nil {
 			return nil, outErr
 		}
 		return nil, err
-	}
-	if err := conn.Close(); err != nil {
-		if _, outErr := conn.Output(); outErr != nil {
-			return nil, outErr
-		}
-		return nil, err
-	}
-	for _, err := range conn.Receive() {
-		if err != nil {
-			if _, outErr := conn.Output(); outErr != nil {
-				return nil, outErr
-			}
-			return nil, err
-		}
 	}
 	return conn.Output()
 }
@@ -1444,15 +1430,38 @@ func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[S
 	return c.conn.Receive()
 }
 
-// Output returns the final response after the agent completes.
+// Output finalizes the connection and returns the agent's result.
 //
-// Unlike the underlying BidiConnection, Output waits for the agent to
-// finalize before returning. This is important for detached invocations:
-// when the client sends Detach, the agent function returns promptly with a
-// pending snapshot ID, and callers need to observe that output rather than
-// the context cancellation error.
+// Output is the single "I'm done" call: it implicitly closes the input
+// side and drains any chunks the caller did not consume via Receive,
+// then blocks until the agent finalizes. The drain is required because
+// the underlying stream buffer is shallow; without it, a producing fn
+// would block on chunk sends and never reach completion. Calling Close
+// before Output is allowed but redundant; both are idempotent.
+//
+// Output is itself idempotent: subsequent calls return the same
+// (*AgentOutput, error) from cache. The returned pointer is shared
+// across calls; treat it as read-only.
+//
+// Detach: when the client sends Detach, the agent function returns
+// promptly with a pending snapshot ID. Output returns that output
+// rather than a context cancellation error.
+//
+// Do not call Output concurrently with a goroutine iterating Receive —
+// both consume from the same stream and chunks would be split between
+// them. Sequence the calls: finish Receive first, then call Output.
 func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
+	_ = c.conn.Close()
+
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for range c.conn.Receive() {
+		}
+	}()
+
 	<-c.conn.Done()
+	<-drainDone
 	return c.conn.Output()
 }
 
