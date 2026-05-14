@@ -22,7 +22,7 @@ from genkit import Genkit
 from genkit._core._action import ActionRunContext
 from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.5-flash')
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 USERS: dict[int, dict[str, str]] = {
     42: {'name': 'Arthur Dent', 'plan': 'premium'},
