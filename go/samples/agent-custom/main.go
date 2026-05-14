@@ -24,6 +24,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -42,6 +43,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+
+	store, err := localstore.NewFileSessionStore[any]("./sessions")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	chatAgent := genkit.DefineCustomAgent(g, "chat",
 		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
@@ -71,7 +78,7 @@ func main() {
 			}
 			return sess.Result(), nil
 		},
-		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+		aix.WithSessionStore(store),
 		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
 
@@ -83,7 +90,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
 
 	inputCh := readLines(ctx)
 
@@ -136,7 +142,15 @@ repl:
 		}
 	}
 
-	fmt.Println(conn.Output())
+	out, err := conn.Output()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if out != nil && out.SnapshotID != "" {
+		fmt.Printf("[snapshot: %s]\n", out.SnapshotID)
+	}
+	fmt.Println("You left the conversation. Goodbye!")
 }
 
 // readLines reads lines from stdin on a background goroutine and yields

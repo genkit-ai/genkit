@@ -24,6 +24,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -47,9 +48,15 @@ func main() {
 
 	genkit.DefineSchemaFor[ChatPromptInput](g)
 
+	store, err := localstore.NewFileSessionStore[any]("./sessions")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	chatAgent := genkit.DefineAgent(g, "chat",
 		aix.FromPrompt(ChatPromptInput{Personality: "a sarcastic pirate"}),
-		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+		aix.WithSessionStore(store),
 		aix.WithSnapshotCallback(func(ctx context.Context, sc *aix.SnapshotContext[any]) bool {
 			return sc.Event == aix.SnapshotEventInvocationEnd || sc.TurnIndex%5 == 0
 		}),
@@ -63,7 +70,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
 
 	inputCh := readLines(ctx)
 
@@ -115,6 +121,16 @@ repl:
 			}
 		}
 	}
+
+	out, err := conn.Output()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if out != nil && out.SnapshotID != "" {
+		fmt.Printf("[snapshot: %s]\n", out.SnapshotID)
+	}
+	fmt.Println("You left the conversation. Goodbye!")
 }
 
 // readLines reads lines from stdin on a background goroutine and yields
