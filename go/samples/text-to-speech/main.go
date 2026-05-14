@@ -75,7 +75,7 @@ func main() {
 			return "", err
 		}
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("googleai/gemini-2.5-flash"),
+			ai.WithModelName("googleai/gemini-flash-latest"),
 			ai.WithMessages(ai.NewUserMessage(
 				ai.NewTextPart("Can you transcribe the next audio?"),
 				ai.NewMediaPart("audio/wav", "data:audio/wav;base64,"+base64.StdEncoding.EncodeToString(audioBytes)))),
