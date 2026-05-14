@@ -30,8 +30,7 @@ from collections.abc import Awaitable, Callable
 from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
-from genkit._core._tracing import run_in_new_span
-from genkit._core._typing import SpanMetadata
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams, middleware
 
 
@@ -85,12 +84,7 @@ class ToolApproval(BaseMiddleware):
         # was created and immediately interrupted.
         tool_input = params.tool_request_part.tool_request.input
         with run_in_new_span(
-            SpanMetadata(name=tool_name, input=tool_input),
-            labels={
-                'genkit:type': 'action',
-                'genkit:metadata:subtype': 'tool',
-                'genkit:name': tool_name,
-            },
+            SpanMetadata(name=tool_name, type='action', subtype='tool', input=tool_input),
         ) as span:
             if tool_input is not None:
                 inp_json = tool_input.model_dump_json() if isinstance(tool_input, BaseModel) else json.dumps(tool_input)
