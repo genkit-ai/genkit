@@ -1000,7 +1000,7 @@ def is_tuned_gemini_name(name: str) -> bool:
     """
     if name.startswith('endpoints/'):
         return True
-    return name.startswith('projects/') and '/endpoints/' in name
+    return name.startswith('projects/') and '/locations/' in name and '/endpoints/' in name
 
 
 def resolve_vertex_model_name(client: genai.Client, name: str) -> str:

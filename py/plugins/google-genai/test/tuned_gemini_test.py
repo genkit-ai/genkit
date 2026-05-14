@@ -31,6 +31,7 @@ from genkit.plugins.google_genai.models.gemini import (
     [
         ('endpoints/1234567890', True),
         ('projects/p/locations/us-central1/endpoints/9', True),
+        ('projects/p/endpoints/9', False),
         ('gemini-2.5-flash', False),
         ('imagen-4.0-generate-001', False),
         ('projects/p/locations/us-central1/publishers/google/models/gemini-2.5-flash', False),
