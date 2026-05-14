@@ -267,6 +267,13 @@ type Agent[Stream, State any] struct {
 	action *core.Action[*AgentInit[State], *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInput]
 }
 
+// Name returns the agent's registered name. This is also the name under
+// which any inline-defined prompt and companion actions (getSnapshot,
+// abortSnapshot) are registered.
+func (a *Agent[Stream, State]) Name() string {
+	return a.action.Name()
+}
+
 // DefineAgent defines a prompt-backed agent and registers it. Each turn
 // renders the agent's prompt, appends conversation history, calls the
 // model with streaming, and updates session state.
