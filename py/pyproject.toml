@@ -151,6 +151,7 @@ dynamic-tools        = { workspace = true }
 evaluators           = { workspace = true }
 fastapi-bugbot       = { workspace = true }
 flask-hello          = { workspace = true }
+flow-sample1         = { workspace = true }
 gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
 google-genai-media   = { workspace = true }
