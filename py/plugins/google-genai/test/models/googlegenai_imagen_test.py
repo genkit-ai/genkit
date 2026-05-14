@@ -33,7 +33,13 @@ from genkit import (
     Role,
     TextPart,
 )
-from genkit.plugins.google_genai.models.imagen import ImagenModel, ImagenVersion
+from genkit.plugin_api import to_json_schema
+from genkit.plugins.google_genai.models.imagen import (
+    DEFAULT_NUMBER_OF_IMAGES,
+    ImagenConfigSchema,
+    ImagenModel,
+    ImagenVersion,
+)
 
 
 @pytest.mark.asyncio
@@ -72,8 +78,10 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     response = await imagen.generate(request, ctx)
 
     googleai_client_mock.assert_has_calls([
-        mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=None)
+        mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=mocker.ANY)
     ])
+    config = googleai_client_mock.aio.models.generate_images.call_args.kwargs['config']
+    assert config['number_of_images'] == DEFAULT_NUMBER_OF_IMAGES
     assert isinstance(response, ModelResponse)
     assert response.message is not None
     content = response.message.content[0]
@@ -87,3 +95,39 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     assert data_url.startswith(f'data:{response_mimetype};base64,')
     encoded_data = data_url.split(',', 1)[1]
     assert base64.b64decode(encoded_data) == response_byte_string
+
+
+def test_imagen_config_schema_exposes_supported_options() -> None:
+    """Test Imagen config options are visible in action metadata."""
+    schema = to_json_schema(ImagenConfigSchema)
+    properties = schema['properties']
+    number_of_images = properties['numberOfImages']
+
+    assert number_of_images['default'] == DEFAULT_NUMBER_OF_IMAGES
+    assert number_of_images['anyOf'][0]['maximum'] == 4
+    assert 'aspectRatio' in properties
+    assert 'personGeneration' in properties
+    assert 'safetyFilterLevel' in properties
+    assert 'includeSafetyAttributes' in properties
+    assert 'enhancePrompt' in properties
+
+
+def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) -> None:
+    """Test explicit image count is not overwritten by default."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={'number_of_images': 2},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config['number_of_images'] == 2

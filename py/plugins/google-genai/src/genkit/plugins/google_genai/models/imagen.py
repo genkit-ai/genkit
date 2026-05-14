@@ -17,6 +17,7 @@
 """Imagen model implementation for Google GenAI plugin."""
 
 import base64
+import json
 import sys
 
 if sys.version_info < (3, 11):
@@ -24,13 +25,12 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
-import json
 from functools import cached_property
 from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from genkit import (
     Media,
@@ -49,7 +49,7 @@ from genkit.plugin_api import ActionRunContext, tracer
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
     """Convert object to dict if it's a Pydantic model, otherwise return as-is."""
-    return obj.model_dump() if isinstance(obj, BaseModel) else obj
+    return obj.model_dump(mode='json') if isinstance(obj, BaseModel) else obj
 
 
 class ImagenVersion(StrEnum):
@@ -144,6 +144,31 @@ DEFAULT_IMAGE_SUPPORT = Supports(
     system_role=True,
     output=['media'],
 )
+DEFAULT_NUMBER_OF_IMAGES = 1
+
+
+class ImagenAspectRatio(StrEnum):
+    """Imagen output aspect ratios."""
+
+    RATIO_1_1 = '1:1'
+    RATIO_3_4 = '3:4'
+    RATIO_4_3 = '4:3'
+    RATIO_9_16 = '9:16'
+    RATIO_16_9 = '16:9'
+
+
+class ImagenImageSize(StrEnum):
+    """Imagen output image sizes."""
+
+    SIZE_1K = '1K'
+    SIZE_2K = '2K'
+
+
+class ImagenOutputMimeType(StrEnum):
+    """Imagen output MIME types."""
+
+    IMAGE_PNG = 'image/png'
+    IMAGE_JPEG = 'image/jpeg'
 
 
 def vertexai_image_model_info(
@@ -183,7 +208,97 @@ def googleai_image_model_info(
 class ImagenConfigSchema(BaseModel):
     """Imagen Config Schema."""
 
-    model_config = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
+
+    output_gcs_uri: str | None = Field(
+        None,
+        alias='outputGcsUri',
+        description='Cloud Storage URI used to store the generated images.',
+    )
+    negative_prompt: str | None = Field(
+        None,
+        alias='negativePrompt',
+        description='Description of what to discourage in the generated images.',
+    )
+    number_of_images: int | None = Field(
+        DEFAULT_NUMBER_OF_IMAGES,
+        alias='numberOfImages',
+        ge=1,
+        le=4,
+        description='Number of images to generate.',
+    )
+    aspect_ratio: ImagenAspectRatio | None = Field(
+        None,
+        alias='aspectRatio',
+        description='Aspect ratio of the generated images.',
+    )
+    guidance_scale: float | None = Field(
+        None,
+        alias='guidanceScale',
+        description=(
+            'Controls how much the model adheres to the text prompt. Large values '
+            'increase prompt alignment, but may compromise image quality.'
+        ),
+    )
+    seed: int | None = Field(
+        None,
+        description='Random seed for image generation. Not available when add_watermark is true.',
+    )
+    safety_filter_level: genai_types.SafetyFilterLevel | None = Field(
+        None,
+        alias='safetyFilterLevel',
+        description='Filter level for safety filtering.',
+    )
+    person_generation: genai_types.PersonGeneration | None = Field(
+        None,
+        alias='personGeneration',
+        description='Allows generation of people by the model.',
+    )
+    include_safety_attributes: bool | None = Field(
+        None,
+        alias='includeSafetyAttributes',
+        description='Whether to report safety scores of each generated image and the positive prompt.',
+    )
+    include_rai_reason: bool | None = Field(
+        None,
+        alias='includeRaiReason',
+        description='Whether to include the Responsible AI filter reason if an image is filtered.',
+    )
+    language: genai_types.ImagePromptLanguage | None = Field(
+        None,
+        description='Language of the text in the prompt.',
+    )
+    output_mime_type: ImagenOutputMimeType | None = Field(
+        None,
+        alias='outputMimeType',
+        description='MIME type of the generated image.',
+    )
+    output_compression_quality: int | None = Field(
+        None,
+        alias='outputCompressionQuality',
+        ge=0,
+        le=100,
+        description='Compression quality of the generated image, for image/jpeg only.',
+    )
+    add_watermark: bool | None = Field(
+        None,
+        alias='addWatermark',
+        description='Whether to add a watermark to the generated images.',
+    )
+    labels: dict[str, str] | None = Field(
+        None,
+        description='User-specified labels to track billing usage.',
+    )
+    image_size: ImagenImageSize | None = Field(
+        None,
+        alias='imageSize',
+        description='Largest dimension of the generated image. Not supported for Imagen 3 models.',
+    )
+    enhance_prompt: bool | None = Field(
+        None,
+        alias='enhancePrompt',
+        description='Whether to use prompt rewriting logic.',
+    )
 
 
 class ImagenModel:
@@ -254,19 +369,31 @@ class ImagenModel:
         )
 
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfigOrDict | None:
-        cfg = None
+        request_config = self._with_default_config(request.config)
+        ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
+        try:
+            return ta.validate_python(request_config)
+        except ValidationError as e:
+            raise ValueError(
+                'The configuration dictionary is invalid. Refer the documentation for available fields'
+            ) from e
 
-        if request.config:
-            request_config = request.config
-            ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
-            try:
-                cfg = ta.validate_python(request_config)
-            except ValidationError as e:
-                raise ValueError(
-                    'The configuration dictionary is invalid. Refer the documentation for available fields'
-                ) from e
+    def _with_default_config(self, config: object | None) -> dict[str, object]:
+        """Set SDK defaults Genkit needs to show stable one-image behavior."""
+        if isinstance(config, BaseModel):
+            request_config = config.model_dump(exclude_none=True)
+        elif isinstance(config, dict):
+            request_config = dict(config)
+        elif config is None:
+            request_config = {}
+        else:
+            validated_config = TypeAdapter(genai_types.GenerateImagesConfigOrDict).validate_python(config)
+            request_config = _to_dict(validated_config)
 
-        return cfg
+        if 'number_of_images' not in request_config and 'numberOfImages' not in request_config:
+            request_config['number_of_images'] = DEFAULT_NUMBER_OF_IMAGES
+
+        return request_config
 
     def _contents_from_response(self, response: genai_types.GenerateImagesResponse) -> list:
         """Retrieve contents from google-genai response.
