@@ -71,13 +71,13 @@ const (
 
 // ActionDesc is a descriptor of an action.
 type ActionDesc struct {
-	Type            ActionType     `json:"type"`                      // Type of the action.
-	Key             string         `json:"key"`                       // Key of the action.
-	Name            string         `json:"name"`                      // Name of the action.
-	Description     string         `json:"description"`               // Description of the action.
-	InputSchema     map[string]any `json:"inputSchema"`               // JSON schema to validate against the action's input.
-	OutputSchema    map[string]any `json:"outputSchema"`              // JSON schema to validate against the action's output.
-	StreamOutSchema map[string]any `json:"streamOutSchema,omitempty"` // JSON schema to validate against the action's outgoing streamed chunks.
-	StreamInSchema  map[string]any `json:"streamInSchema,omitempty"`  // JSON schema to validate against the action's incoming stream messages (bidi only).
-	Metadata        map[string]any `json:"metadata"`                  // Metadata for the action.
+	Type         ActionType     `json:"type"`                   // Type of the action.
+	Key          string         `json:"key"`                    // Key of the action.
+	Name         string         `json:"name"`                   // Name of the action.
+	Description  string         `json:"description"`            // Description of the action.
+	InputSchema  map[string]any `json:"inputschema"`            // JSON schema to validate against the action's input.
+	OutputSchema map[string]any `json:"outputschema"`           // JSON schema to validate against the action's output.
+	StreamSchema map[string]any `json:"streamschema,omitempty"` // JSON schema to validate against the action's outgoing streamed chunks.
+	InitSchema   map[string]any `json:"initschema,omitempty"`   // JSON schema to validate against the action's incoming stream messages (bidi only).
+	Metadata     map[string]any `json:"metadata"`               // Metadata for the action.
 }
