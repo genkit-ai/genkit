@@ -1715,14 +1715,19 @@ class GeminiModel:
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
 
-    @staticmethod
-    def _pick_plugin_schema(data: dict[str, Any]) -> GeminiConfigSchema:
-        """Validate ``data`` through whichever subclass matches its marker key."""
-        if 'image_config' in data or 'imageConfig' in data:
-            return GeminiImageConfigSchema.model_validate(data)
-        if 'speech_config' in data or 'speechConfig' in data:
-            return GeminiTtsConfigSchema.model_validate(data)
-        return GeminiConfigSchema.model_validate(data)
+    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
+        """Validate ``data`` through whichever subclass matches the model.
+
+        Routing is purely by model name so each family gets its own
+        validation rules -- most importantly Gemma, which intentionally
+        relaxes the standard Gemini temperature bounds and would otherwise
+        reject valid configs. The per-request ``version`` override (when
+        present) takes precedence over the version this instance is bound
+        to, mirroring how the actual model name is resolved at call time.
+        """
+        model_name = data.get('version') or self._version
+        schema_cls = get_model_config_schema(model_name)
+        return schema_cls.model_validate(data)
 
     def _extract_tools_from_config(
         self,
