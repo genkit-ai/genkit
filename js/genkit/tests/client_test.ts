@@ -50,6 +50,21 @@ describe('streamFlow SSE parser', () => {
     assert.strictEqual(await response.output, 'done');
   });
 
+  it('throws on null or primitive JSON payload', async () => {
+    const body = `data:null\n\n`;
+    globalThis.fetch = mockSseFetch(body) as typeof fetch;
+
+    const response = streamFlow({ url: 'http://example.com/flow' });
+    await assert.rejects(
+      async () => {
+        for await (const _ of response.stream) {
+          // drain
+        }
+      },
+      /unknown chunk format/
+    );
+  });
+
   it('parses events with the conventional "data: " prefix', async () => {
     const body =
       `data: ${JSON.stringify({ message: 'a' })}\n\n` +
