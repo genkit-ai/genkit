@@ -126,15 +126,15 @@ func NewBidiAction[In, Out, StreamOut, StreamIn any](
 		a.desc.OutputSchema = opts.OutputSchema
 	}
 	if opts.StreamOutSchema != nil {
-		a.desc.StreamOutSchema = opts.StreamOutSchema
+		a.desc.StreamSchema = opts.StreamOutSchema
 	}
 
 	if opts.StreamInSchema != nil {
-		a.desc.StreamInSchema = opts.StreamInSchema
+		a.desc.InitSchema = opts.StreamInSchema
 	} else {
 		var inStream StreamIn
 		if reflect.ValueOf(inStream).Kind() != reflect.Invalid {
-			a.desc.StreamInSchema = InferSchemaMap(inStream)
+			a.desc.InitSchema = InferSchemaMap(inStream)
 		}
 	}
 
@@ -236,14 +236,14 @@ func newAction[In, Out, StreamOut, StreamIn any](
 			return fn(ctx, input, cb)
 		},
 		desc: &api.ActionDesc{
-			Type:            atype,
-			Key:             api.KeyFromName(atype, name),
-			Name:            name,
-			Description:     description,
-			InputSchema:     inputSchema,
-			OutputSchema:    outputSchema,
-			StreamOutSchema: outStreamSchema,
-			Metadata:        metadata,
+			Type:         atype,
+			Key:          api.KeyFromName(atype, name),
+			Name:         name,
+			Description:  description,
+			InputSchema:  inputSchema,
+			OutputSchema: outputSchema,
+			StreamSchema: outStreamSchema,
+			Metadata:     metadata,
 		},
 	}
 }
