@@ -422,7 +422,7 @@ data: {"result":"hello-end"}
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
 
-		expected := `data: {"error":{"status":"INTERNAL_SERVER_ERROR","message":"stream flow error","details":"streaming error"}}
+		expected := `data: {"error":{"status":"INTERNAL","message":"stream flow error","details":"streaming error"}}
 
 `
 		if string(body) != expected {

@@ -18,6 +18,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -36,13 +37,69 @@ type ReflectionError struct {
 }
 
 // GenkitError is the base error type for Genkit errors.
+//
+// On the wire, GenkitError marshals to and from the canonical Genkit
+// error shape {status, message, details}, which mirrors the
+// `RuntimeError` definition in the JSON schema. Fields that exist for
+// in-process use (HTTPCode, Source, the wrapped error) are not
+// serialized.
 type GenkitError struct {
-	Message       string         `json:"message"` // Exclude from default JSON if embedded elsewhere
-	Status        StatusName     `json:"status"`
-	HTTPCode      int            `json:"-"`                // Exclude from default JSON
-	Details       map[string]any `json:"details"`          // Use map for arbitrary details
-	Source        *string        `json:"source,omitempty"` // Pointer for optional
-	originalError error          // The wrapped error, if any
+	Message       string         // Wire field "message".
+	Status        StatusName     // Wire field "status".
+	HTTPCode      int            // Derived from Status; not serialized.
+	Details       map[string]any // Wire field "details" (omitted when empty).
+	Source        *string        // In-process annotation; not serialized.
+	originalError error          // The wrapped error, if any.
+}
+
+// genkitErrorWire is the on-the-wire shape of a [GenkitError]; it
+// matches the `RuntimeError` definition in the JSON schema.
+type genkitErrorWire struct {
+	Status  StatusName     `json:"status"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// MarshalJSON encodes a GenkitError in the canonical Genkit error wire
+// format: {status, message, details}.
+func (e *GenkitError) MarshalJSON() ([]byte, error) {
+	return json.Marshal(genkitErrorWire{
+		Status:  e.Status,
+		Message: e.Message,
+		Details: e.Details,
+	})
+}
+
+// UnmarshalJSON decodes a GenkitError from the canonical wire format
+// and re-derives HTTPCode from Status.
+func (e *GenkitError) UnmarshalJSON(data []byte) error {
+	var w genkitErrorWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	e.Status = w.Status
+	e.Message = w.Message
+	e.Details = w.Details
+	e.HTTPCode = HTTPStatusCode(w.Status)
+	return nil
+}
+
+// AsGenkitError returns err as a *GenkitError, wrapping it in a fresh
+// one with status INTERNAL if it isn't one already. Returns nil for a
+// nil input.
+func AsGenkitError(err error) *GenkitError {
+	if err == nil {
+		return nil
+	}
+	var ge *GenkitError
+	if errors.As(err, &ge) {
+		return ge
+	}
+	return &GenkitError{
+		Status:   INTERNAL,
+		Message:  err.Error(),
+		HTTPCode: HTTPStatusCode(INTERNAL),
+	}
 }
 
 // UserFacingError is the base error type for user facing errors.

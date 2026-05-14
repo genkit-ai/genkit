@@ -30,6 +30,7 @@ import (
 	"syscall"
 
 	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
@@ -191,7 +192,7 @@ func WithPromptFS(fsys fs.FS) GenkitOption {
 //		// Assumes a prompt file at ./prompts/jokePrompt.prompt
 //		g := genkit.Init(ctx,
 //			genkit.WithPlugins(&googlegenai.GoogleAI{}),
-//			genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+//			genkit.WithDefaultModel("googleai/gemini-3-flash-preview"),
 //			genkit.WithPromptDir("./prompts"),
 //		)
 //
@@ -427,6 +428,130 @@ func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.St
 //	fmt.Println(output) // Output: "processed 2 messages"
 func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn core.BidiFunc[In, Out, StreamOut, StreamIn]) *core.Flow[In, Out, StreamOut, StreamIn] {
 	return core.DefineBidiFlow(g.reg, name, fn)
+}
+
+// DefineAgent defines a prompt-backed agent and registers it as an
+// action on the registry. Returns an [aix.Agent].
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+//
+// An Agent is a stateful, multi-turn conversational flow. It builds on
+// bidirectional streaming to enable ongoing conversations where each turn's
+// input and output are streamed between client and server. The framework
+// handles session state, conversation history, and optional snapshot
+// persistence automatically.
+//
+// source selects how the prompt is backed:
+//
+//   - [aix.FromInline] defines the prompt inline from a set of
+//     [ai.PromptOption] values; the prompt is registered under name.
+//   - [aix.FromPrompt] references an existing prompt registered with
+//     the registry under name (e.g. one defined via [DefinePrompt] or
+//     loaded from a .prompt file).
+//
+// The State type parameter is inferred from the typed agent options
+// (e.g. [aix.WithSessionStore], [aix.WithSnapshotOn]); pass an explicit
+// [State] only when no typed option is provided.
+//
+// For full control over the per-turn loop, use [DefineCustomAgent].
+//
+// # Options
+//
+//   - [aix.WithSessionStore]: Enable snapshot persistence
+//   - [aix.WithSnapshotCallback]: Control when snapshots are created
+//   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
+//   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
+//
+// Example (inline prompt):
+//
+//	chatAgent := genkit.DefineAgent(g, "chat",
+//		aix.FromInline(
+//			ai.WithModelName("googleai/gemini-3-flash-preview"),
+//			ai.WithSystem("You are a helpful assistant."),
+//		),
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+//	)
+//
+// Example (existing prompt):
+//
+//	type ChatInput struct {
+//		Personality string `json:"personality"`
+//	}
+//
+//	chatAgent := genkit.DefineAgent(g, "chat",
+//		aix.FromPrompt(ChatInput{Personality: "a sarcastic pirate"}),
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+//	)
+func DefineAgent[State any](
+	g *Genkit,
+	name string,
+	source aix.AgentSource,
+	opts ...aix.AgentOption[State],
+) *aix.Agent[any, State] {
+	return aix.DefineAgent(g.reg, name, source, opts...)
+}
+
+// DefineCustomAgent defines an agent with full control over the conversation
+// loop, registers it as a [core.Action] of type Flow, and returns an
+// [aix.Agent].
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+//
+// The provided function fn receives a [aix.Responder] for streaming output
+// to the client and an [aix.SessionRunner] for accessing conversation state.
+// Call [aix.SessionRunner.Run] to enter the turn loop, which blocks until the
+// client sends the next message.
+//
+// For agents backed by a prompt, use [DefineAgent] with [aix.FromInline]
+// (inline prompt) or [aix.FromPrompt] (existing prompt) instead.
+//
+// # Options
+//
+//   - [aix.WithSessionStore]: Enable snapshot persistence with a [aix.SessionStore]
+//   - [aix.WithSnapshotCallback]: Control when snapshots are created
+//   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
+//
+// Type parameters:
+//   - Stream: Type for custom status updates sent via [aix.Responder.SendStatus]
+//   - State: Type for user-defined state persisted in snapshots
+//
+// Example:
+//
+//	chatAgent := genkit.DefineCustomAgent(g, "chat",
+//		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+//			var lastMessage *ai.Message
+//			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) error {
+//				for result, err := range genkit.GenerateStream(ctx, g,
+//					ai.WithModelName("googleai/gemini-3-flash-preview"),
+//					ai.WithMessages(sess.Messages()...),
+//				) {
+//					if err != nil {
+//						return err
+//					}
+//					if result.Done {
+//						lastMessage = result.Response.Message
+//						sess.AddMessages(lastMessage)
+//					} else {
+//						resp.SendModelChunk(result.Chunk)
+//					}
+//				}
+//				return nil
+//			})
+//			if err != nil {
+//				return nil, err
+//			}
+//			return &aix.AgentResult{Message: lastMessage}, nil
+//		},
+//	)
+func DefineCustomAgent[Stream, State any](
+	g *Genkit,
+	name string,
+	fn aix.AgentFunc[Stream, State],
+	opts ...aix.AgentOption[State],
+) *aix.Agent[Stream, State] {
+	return aix.DefineCustomAgent(g.reg, name, fn, opts...)
 }
 
 // Run executes the given function `fn` within the context of the current flow run,
@@ -871,7 +996,7 @@ func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
 //	// Define the prompt
 //	capitalPrompt := genkit.DefinePrompt(g, "findCapital",
 //		ai.WithDescription("Finds the capital of a country."),
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //		ai.WithInputType(GeoInput{Country: "USA"}),
@@ -980,7 +1105,7 @@ func DefineSchemaFor[T any](g *Genkit) {
 //	}
 //
 //	capitalPrompt := genkit.DefineDataPrompt[GeoInput, GeoOutput](g, "findCapital",
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithSystem("You are a helpful geography assistant."),
 //		ai.WithPrompt("What is the capital of {{country}}?"),
 //	)
@@ -1037,7 +1162,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 // Model and Configuration:
 //   - [ai.WithModel]: Specify the model (accepts [ai.Model] or [ai.ModelRef])
-//   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-2.5-flash")
+//   - [ai.WithModelName]: Specify model by name string (e.g., "googleai/gemini-3-flash-preview")
 //   - [ai.WithConfig]: Set generation parameters (temperature, max tokens, etc.)
 //
 // Prompting:
@@ -1075,7 +1200,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 // Example:
 //
 //	resp, err := genkit.Generate(ctx, g,
-//		ai.WithModelName("googleai/gemini-2.5-flash"),
+//		ai.WithModelName("googleai/gemini-3-flash-preview"),
 //		ai.WithPrompt("Write a short poem about clouds."),
 //	)
 //	if err != nil {
@@ -1562,7 +1687,7 @@ func LoadPrompt(g *Genkit, path, namespace string) ai.Prompt {
 // Example:
 //
 //	promptSource := `---
-//	model: googleai/gemini-2.5-flash
+//	model: googleai/gemini-3-flash-preview
 //	input:
 //	  schema:
 //	    name: string

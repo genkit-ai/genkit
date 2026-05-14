@@ -1183,6 +1183,17 @@ func (c *ModelResponseChunk) Reasoning() string {
 	return sb.String()
 }
 
+// Interrupts returns the interrupted tool request parts from the chunk.
+func (c *ModelResponseChunk) Interrupts() []*Part {
+	var parts []*Part
+	for _, p := range c.Content {
+		if p.IsInterrupt() {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
 // Output parses the chunk using the format handler and unmarshals the result into v.
 // Returns an error if the format handler is not set or does not support parsing chunks.
 func (c *ModelResponseChunk) Output(v any) error {
@@ -1264,6 +1275,17 @@ func (m *Message) Text() string {
 		}
 	}
 	return sb.String()
+}
+
+// NewResume constructs a [GenerateActionResume] from Part slices.
+// This is useful when building [GenerateActionOptions] directly (e.g., from a
+// rendered prompt) and need to set the Resume field from [*Part] values
+// produced by [ToolDef.RestartWith] or [ToolDef.RespondWith].
+func NewResume(restarts, responds []*Part) *GenerateActionResume {
+	return &GenerateActionResume{
+		Restart: restarts,
+		Respond: responds,
+	}
 }
 
 // NewModelRef creates a new ModelRef with the given name and configuration.

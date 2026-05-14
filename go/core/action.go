@@ -408,13 +408,13 @@ func (a *Action[In, Out, StreamOut, StreamIn]) Register(r api.Registry) {
 // StreamBidi starts a bidirectional streaming connection.
 // Returns an error if the action is not a bidi action.
 // A trace span is created that remains open for the lifetime of the connection.
-func (a *Action[In, Out, StreamOut, StreamIn]) StreamBidi(ctx context.Context, in In) (*BidiConnection[StreamIn, Out, StreamOut], error) {
+func (a *Action[In, Out, StreamOut, StreamIn]) StreamBidi(ctx context.Context, in In) (*BidiConnection[StreamIn, StreamOut, Out], error) {
 	if a.bidiFn == nil {
 		return nil, NewError(FAILED_PRECONDITION, "StreamBidi called on non-bidi action %q", a.desc.Name)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	conn := &BidiConnection[StreamIn, Out, StreamOut]{
+	conn := &BidiConnection[StreamIn, StreamOut, Out]{
 		inputCh:  make(chan StreamIn, 1),
 		streamCh: make(chan StreamOut, 1),
 		doneCh:   make(chan struct{}),
@@ -526,7 +526,7 @@ func wrapBidiAsStreaming[In, Out, StreamOut, StreamIn any](fn BidiFunc[In, Out, 
 }
 
 // BidiConnection represents an active bidirectional streaming session.
-type BidiConnection[StreamIn, Out, StreamOut any] struct {
+type BidiConnection[StreamIn, StreamOut, Out any] struct {
 	inputCh  chan StreamIn
 	streamCh chan StreamOut
 	doneCh   chan struct{}
@@ -540,7 +540,12 @@ type BidiConnection[StreamIn, Out, StreamOut any] struct {
 
 // Send sends an input message to the bidi action.
 // Returns an error if the connection is closed or the context is cancelled.
-func (c *BidiConnection[StreamIn, Out, StreamOut]) Send(input StreamIn) (err error) {
+func (c *BidiConnection[StreamIn, StreamOut, Out]) Send(input StreamIn) (err error) {
+	// Recover from "send on closed channel" panic. A check-then-send under the
+	// mutex would race with Close, and holding the mutex across the send would
+	// deadlock against Close when the buffer is full. Closing inputCh (rather
+	// than a separate signal channel) is required so receivers can use the
+	// canonical `for ... range inputCh` idiom.
 	defer func() {
 		if r := recover(); r != nil {
 			err = NewError(FAILED_PRECONDITION, "connection is closed")
@@ -558,7 +563,7 @@ func (c *BidiConnection[StreamIn, Out, StreamOut]) Send(input StreamIn) (err err
 }
 
 // Close signals that no more inputs will be sent.
-func (c *BidiConnection[StreamIn, Out, StreamOut]) Close() error {
+func (c *BidiConnection[StreamIn, StreamOut, Out]) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -570,8 +575,13 @@ func (c *BidiConnection[StreamIn, Out, StreamOut]) Close() error {
 }
 
 // Receive returns an iterator for receiving streamed response chunks.
-// The iterator completes when the action finishes.
-func (c *BidiConnection[StreamIn, Out, StreamOut]) Receive() iter.Seq2[StreamOut, error] {
+// The iterator yields chunks until the action finishes, the context is
+// cancelled, or the caller breaks out of the loop. Breaking out does NOT
+// cancel the connection: bidi callers routinely break to switch to
+// sending, then call Receive again to consume the next batch. Use ctx
+// cancellation or [BidiConnection.Close] to terminate the connection
+// (matching gRPC and similar bidi streaming conventions).
+func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut, error] {
 	return func(yield func(StreamOut, error) bool) {
 		for {
 			select {
@@ -580,7 +590,6 @@ func (c *BidiConnection[StreamIn, Out, StreamOut]) Receive() iter.Seq2[StreamOut
 					return
 				}
 				if !yield(chunk, nil) {
-					c.cancel()
 					return
 				}
 			case <-c.ctx.Done():
@@ -593,8 +602,21 @@ func (c *BidiConnection[StreamIn, Out, StreamOut]) Receive() iter.Seq2[StreamOut
 }
 
 // Output returns the final output after the action completes.
-// Blocks until done or context cancelled.
-func (c *BidiConnection[StreamIn, Out, StreamOut]) Output() (Out, error) {
+// Blocks until done or context cancelled. If the action has finished, its
+// actual output is returned even when the context was cancelled concurrently.
+func (c *BidiConnection[StreamIn, StreamOut, Out]) Output() (Out, error) {
+	// Fast path: if the action has already finished, return its output
+	// rather than racing with ctx.Done. This matters for callers that
+	// observe a completed action just after cancelling ctx (e.g., session
+	// flows backgrounded on client disconnect).
+	select {
+	case <-c.doneCh:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.output, c.err
+	default:
+	}
+
 	select {
 	case <-c.doneCh:
 		c.mu.Lock()
@@ -607,6 +629,6 @@ func (c *BidiConnection[StreamIn, Out, StreamOut]) Output() (Out, error) {
 }
 
 // Done returns a channel that is closed when the connection completes.
-func (c *BidiConnection[StreamIn, Out, StreamOut]) Done() <-chan struct{} {
+func (c *BidiConnection[StreamIn, StreamOut, Out]) Done() <-chan struct{} {
 	return c.doneCh
 }

@@ -62,8 +62,11 @@ const (
 	ActionTypeToolV2           ActionType = "tool.v2"
 	ActionTypeUtil             ActionType = "util"
 	ActionTypeCustom           ActionType = "custom"
+	ActionTypeAgentSnapshot    ActionType = "agent-snapshot"
+	ActionTypeAgentAbort       ActionType = "agent-abort"
 	ActionTypeCheckOperation   ActionType = "check-operation"
 	ActionTypeCancelOperation  ActionType = "cancel-operation"
+	ActionTypeAgent            ActionType = "agent"
 )
 
 // ActionDesc is a descriptor of an action.
