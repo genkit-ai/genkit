@@ -257,6 +257,38 @@ func TestAnthropicLive(t *testing.T) {
 			t.Fatalf("empty usage stats: %#v", *final.Usage)
 		}
 	})
+
+	t.Run("claude 4.6 / 4.7 smoke", func(t *testing.T) {
+		for _, id := range []string{
+			"claude-sonnet-4-6",
+			"claude-opus-4-6",
+			"claude-opus-4-7",
+		} {
+			t.Run(id, func(t *testing.T) {
+				m := modelgarden.AnthropicModel(g, id)
+				if m == nil {
+					t.Fatalf("model %s not registered", id)
+				}
+				resp, err := genkit.Generate(ctx, g,
+					ai.WithConfig(&anthropic.MessageNewParams{
+						Temperature: anthropic.Float(1),
+						MaxTokens:   64,
+					}),
+					ai.WithModel(m),
+					ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Reply with the single word: pong"))),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resp.Text() == "" {
+					t.Fatalf("empty response from %s", id)
+				}
+				if resp.Usage.InputTokens == 0 || resp.Usage.OutputTokens == 0 {
+					t.Fatalf("empty usage stats from %s: %#v", id, *resp.Usage)
+				}
+			})
+		}
+	})
 }
 
 func fetchImgAsBase64() (string, error) {
