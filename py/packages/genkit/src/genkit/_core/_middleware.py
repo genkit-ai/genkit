@@ -33,7 +33,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, create_model
 
 from genkit._core._action import Action
 from genkit._core._model import (
@@ -382,6 +382,53 @@ def middleware(
     return decorator
 
 
+def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
+    """Build a JSON Schema describing a middleware's user-facing config fields.
+
+    The Dev UI renders a config form for each registered middleware from this
+    schema. Without it the form has nothing to draw and falls back to a free-text
+    JSON box, so every middleware should expose one even when it has no knobs.
+
+    Pydantic's full ``cls.model_json_schema()`` would also include the
+    framework-injected ``registry`` and ``enqueue_parts`` attributes — those
+    aren't config the user sets, and their types (a registry protocol, a
+    callable) aren't always representable in JSON Schema. Build the schema from
+    a stripped pydantic model containing only the subclass-added fields so the
+    Dev UI sees just the knobs the author meant to expose.
+    """
+    base_fields = set(BaseMiddleware.model_fields)
+    new_fields: dict[str, Any] = {
+        field_name: (info.annotation, info)
+        for field_name, info in cls.model_fields.items()
+        if field_name not in base_fields
+    }
+    if not new_fields:
+        # Empty object schema still tells the Dev UI "this middleware exists
+        # and has no knobs", which renders as a no-input form rather than a
+        # raw JSON editor.
+        return {
+            'type': 'object',
+            'properties': {},
+            'additionalProperties': True,
+        }
+    try:
+        stripped = create_model(  # type: ignore[call-overload]
+            f'{cls.__name__}Config',
+            __config__=ConfigDict(arbitrary_types_allowed=True),
+            **new_fields,
+        )
+        return stripped.model_json_schema()
+    except Exception:
+        # If a config field carries a type pydantic can't translate, prefer a
+        # permissive empty schema over crashing the whole registration —
+        # the middleware itself still works, just without form generation.
+        return {
+            'type': 'object',
+            'properties': {},
+            'additionalProperties': True,
+        }
+
+
 def new_middleware(middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
     """Create a ``MiddlewareDesc`` from a ``BaseMiddleware`` subclass.
 
@@ -390,6 +437,10 @@ def new_middleware(middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
     with ``**(config or {})`` when a request resolves the descriptor, so the same
     pydantic fields on the class drive both the inline (``use=[Cls(...)]``) and the
     registered (``MiddlewareRef(name=..., config=...)``) paths.
+
+    When ``middleware_config_schema`` is not set explicitly, a JSON Schema is
+    derived from the subclass's pydantic fields so the Dev UI can render a
+    config form without the author having to hand-write one.
 
     Does not register; pass the result to ``middleware_plugin([...])`` or return from
     a custom ``Plugin.list_middleware``.
@@ -410,10 +461,14 @@ def new_middleware(middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
         # ``use=[middleware_cls(**config)]``; empty/None config uses class defaults.
         return middleware_cls(**(config or {}))
 
+    config_schema = middleware_cls.middleware_config_schema
+    if config_schema is None:
+        config_schema = _derive_config_schema(middleware_cls)
+
     return MiddlewareDesc(
         name=reg_name,
         factory=_factory,
         description=middleware_cls.description,
-        config_schema=middleware_cls.middleware_config_schema,
+        config_schema=config_schema,
         metadata=middleware_cls.middleware_metadata,
     )

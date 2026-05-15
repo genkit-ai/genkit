@@ -44,8 +44,10 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from pydantic import Field
 
 from genkit._core._action import ActionKind
+from genkit._core._middleware import BaseMiddleware, middleware, new_middleware
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata
@@ -309,3 +311,112 @@ async def test_run_action_streaming_primitive_types(
 
     final_result = json.loads(lines[-1])
     assert final_result['result'] == {'final': 'result'}
+
+
+# Real-registry tests for the /api/values?type=middleware endpoint. The other
+# endpoint tests above use a MagicMock registry, but here we want to exercise
+# the actual MiddlewareDesc serialization path the Dev UI consumes — mocking
+# would defeat the point.
+
+
+async def _registry_asgi_client(registry: Registry) -> AsyncClient:
+    """Build an ASGI client wired to a real Registry instance."""
+    app = create_reflection_asgi_app(registry)
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url='http://test')
+
+
+@pytest.mark.asyncio
+async def test_values_middleware_includes_derived_config_schema() -> None:
+    """The Dev UI's /api/values?type=middleware response carries each middleware's configSchema.
+
+    Without this the Dev UI has nothing to render a config form from and falls
+    back to a free-text JSON box. The schema is derived from the middleware
+    class's pydantic fields by ``new_middleware``.
+    """
+
+    @middleware(name='fallback', description='Falls back to alternative models on failure')
+    class _Fallback(BaseMiddleware):
+        models: list[str] = Field(default_factory=list)
+        statuses: list[str] = Field(default_factory=list)
+        isolate_config: bool = False
+
+    registry = Registry()
+    registry.register_value('middleware', 'fallback', new_middleware(_Fallback))
+
+    client = await _registry_asgi_client(registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        body = response.json()
+        entry = body['fallback']
+        assert entry['name'] == 'fallback'
+        assert entry['description'] == 'Falls back to alternative models on failure'
+        config_schema = entry['configSchema']
+        assert config_schema['type'] == 'object'
+        # Author-defined fields show up; framework-injected ones (registry,
+        # enqueue_parts) must not leak into the form.
+        assert set(config_schema['properties'].keys()) == {'models', 'statuses', 'isolate_config'}
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_values_middleware_empty_config_schema_for_no_op() -> None:
+    """A middleware with no config knobs still gets an (empty) object schema.
+
+    The Dev UI renders an empty config form, signalling "registered, nothing to
+    configure" rather than dropping the user into a raw JSON editor.
+    """
+
+    @middleware(name='no_op')
+    class _NoOp(BaseMiddleware):
+        pass
+
+    registry = Registry()
+    registry.register_value('middleware', 'no_op', new_middleware(_NoOp))
+
+    client = await _registry_asgi_client(registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        entry = response.json()['no_op']
+        assert entry['configSchema'] == {
+            'type': 'object',
+            'properties': {},
+            'additionalProperties': True,
+        }
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_values_middleware_explicit_config_schema_wins() -> None:
+    """Explicit ``@middleware(config_schema=...)`` overrides the derived schema.
+
+    Authors who hand-wrote a schema (often to add titles, descriptions, or
+    enum constraints the Dev UI uses for nicer form widgets) should keep it.
+    """
+    explicit = {
+        'type': 'object',
+        'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},
+        'required': ['mode'],
+    }
+
+    @middleware(name='explicit_schema', config_schema=explicit)
+    class _Explicit(BaseMiddleware):
+        # Field exists on the class but the explicit schema wins; the Dev UI
+        # only sees what the author chose to expose.
+        ignored_field: int = 0
+
+    registry = Registry()
+    registry.register_value('middleware', 'explicit_schema', new_middleware(_Explicit))
+
+    client = await _registry_asgi_client(registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        entry = response.json()['explicit_schema']
+        assert entry['configSchema'] == explicit
+    finally:
+        await client.aclose()

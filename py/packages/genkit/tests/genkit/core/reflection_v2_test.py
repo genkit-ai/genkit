@@ -41,10 +41,11 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from pydantic import Field
 from websockets.asyncio.server import serve
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._middleware import BaseMiddleware, MiddlewareDesc
+from genkit._core._middleware import BaseMiddleware, MiddlewareDesc, middleware, new_middleware
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
@@ -284,6 +285,130 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
         assert resp.get('id') == '2b'
         values = resp['result']['values']
         assert values == {'concise_reply_mw': {'name': 'concise_reply_mw'}}
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_includes_derived_config_schema(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Middleware registered via ``new_middleware`` exposes a derived configSchema.
+
+    The Dev UI uses this schema to render a config form for each registered
+    middleware. Without it the form has nothing to draw and the user is dumped
+    into a free-text JSON editor.
+    """
+
+    @middleware(name='fallback', description='Falls back to alternative models on failure')
+    class _Fallback(BaseMiddleware):
+        models: list[str] = Field(default_factory=list)
+        statuses: list[str] = Field(default_factory=list)
+        isolate_config: bool = False
+
+    registry = Registry()
+    registry.register_value('middleware', 'fallback', new_middleware(_Fallback))
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2c',
+        })
+        resp = await fake_manager.read_rpc()
+        assert resp.get('id') == '2c'
+        entry = resp['result']['values']['fallback']
+        assert entry['name'] == 'fallback'
+        assert entry['description'] == 'Falls back to alternative models on failure'
+        config_schema = entry['configSchema']
+        assert config_schema['type'] == 'object'
+        # Author-defined fields show up; framework-injected ones (registry,
+        # enqueue_parts) must not leak into the form.
+        props = config_schema['properties']
+        assert set(props.keys()) == {'models', 'statuses', 'isolate_config'}
+        assert props['models']['type'] == 'array'
+        assert props['statuses']['type'] == 'array'
+        assert props['isolate_config']['type'] == 'boolean'
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """A middleware with no config knobs still gets an (empty) object schema.
+
+    The Dev UI renders an empty config form, signalling "registered, nothing to
+    configure" rather than dropping the user into a raw JSON editor.
+    """
+
+    @middleware(name='no_op')
+    class _NoOp(BaseMiddleware):
+        pass
+
+    registry = Registry()
+    registry.register_value('middleware', 'no_op', new_middleware(_NoOp))
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2d',
+        })
+        resp = await fake_manager.read_rpc()
+        entry = resp['result']['values']['no_op']
+        assert entry['configSchema'] == {
+            'type': 'object',
+            'properties': {},
+            'additionalProperties': True,
+        }
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_explicit_config_schema_wins(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Explicit ``middleware_config_schema`` on the class overrides the derived one.
+
+    Authors who hand-wrote a schema (often to add titles, descriptions, or
+    enum constraints the dev UI uses for nicer form widgets) should keep it.
+    """
+    explicit = {
+        'type': 'object',
+        'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},
+        'required': ['mode'],
+    }
+
+    @middleware(name='explicit_schema', config_schema=explicit)
+    class _Explicit(BaseMiddleware):
+        # Field exists on the class but the explicit schema wins; the Dev UI
+        # only sees what the author chose to expose.
+        ignored_field: int = 0
+
+    registry = Registry()
+    registry.register_value('middleware', 'explicit_schema', new_middleware(_Explicit))
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2e',
+        })
+        resp = await fake_manager.read_rpc()
+        entry = resp['result']['values']['explicit_schema']
+        assert entry['configSchema'] == explicit
     finally:
         await _stop_client(client, task)
 
