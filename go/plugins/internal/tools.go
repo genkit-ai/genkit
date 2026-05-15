@@ -29,24 +29,23 @@ import (
 // across turns, which is a precondition for provider-side prompt caching
 // (e.g. Anthropic's cache_control) to match.
 //
-// Nil entries are sorted to the end so callers can keep their existing
-// nil-handling logic without an index panic.
+// Nil entries are filtered out so callers can iterate the result without
+// guarding against a nil-pointer dereference on field access.
 func SortToolDefinitions(tools []*ai.ToolDefinition) []*ai.ToolDefinition {
-	if len(tools) == 0 {
+	if len(tools) <= 1 {
+		if len(tools) == 1 && tools[0] == nil {
+			return tools[:0]
+		}
 		return tools
 	}
-	sorted := make([]*ai.ToolDefinition, len(tools))
-	copy(sorted, tools)
-	slices.SortStableFunc(sorted, func(a, b *ai.ToolDefinition) int {
-		if a == nil || b == nil {
-			if a == b {
-				return 0
-			}
-			if a == nil {
-				return 1
-			}
-			return -1
+	sorted := make([]*ai.ToolDefinition, 0, len(tools))
+	for _, t := range tools {
+		if t == nil {
+			continue
 		}
+		sorted = append(sorted, t)
+	}
+	slices.SortStableFunc(sorted, func(a, b *ai.ToolDefinition) int {
 		return strings.Compare(a.Name, b.Name)
 	})
 	return sorted
