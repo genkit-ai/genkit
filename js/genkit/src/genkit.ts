@@ -782,14 +782,24 @@ export function genkit(options: GenkitOptions): Genkit {
   return new Genkit(options);
 }
 
-const shutdown = async () => {
-  logger.debug('Shutting down all Genkit servers...');
-  await ReflectionServer.stopAll();
-  process.exit(0);
-};
+// In development, we want to ensure that pressing Ctrl+C shuts down all reflection servers
+// and exits immediately. In production, we do not register signal handlers to avoid
+// overriding default Node.js behavior and breaking the host application's graceful shutdown.
+if (isDevEnv()) {
+  const shutdown = async () => {
+    logger.debug('Shutting down all Genkit servers...');
+    try {
+      await ReflectionServer.stopAll();
+    } catch (e) {
+      logger.error('Error during Genkit shutdown: ' + e);
+    } finally {
+      process.exit(0);
+    }
+  };
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}
 
 let disableReflectionApi = false;
 
