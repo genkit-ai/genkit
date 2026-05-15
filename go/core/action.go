@@ -270,7 +270,7 @@ func (a *ActionDef[In, Out, Stream]) RunJSON(ctx context.Context, input json.Raw
 func (a *ActionDef[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
 	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
 	if err != nil {
-		return nil, NewError(INVALID_ARGUMENT, err.Error())
+		return nil, NewSchemaValidationError(a.desc.Key, err)
 	}
 
 	var scb StreamCallback[Stream]
