@@ -299,6 +299,28 @@ describe('toGenerateRequest', () => {
       throws: 'FAILED_PRECONDITION',
     },
     {
+      should: 'throw INVALID_ARGUMENT when both prompt and resume are set',
+      prompt: {
+        messages: [
+          { role: 'user', content: [{ text: 'hi' }] },
+          {
+            role: 'model',
+            content: [
+              { text: 'there' },
+              { toolRequest: { name: 'test', input: { x: 1 } } },
+            ],
+          },
+        ],
+        prompt: 'count to 10',
+        resume: {
+          respond: {
+            toolResponse: { name: 'test', output: { done: true } },
+          },
+        },
+      },
+      throws: 'INVALID_ARGUMENT',
+    },
+    {
       should: 'passes through output options',
       prompt: {
         model: 'vertexai/gemini-1.0-pro',
