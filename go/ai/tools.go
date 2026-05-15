@@ -115,6 +115,13 @@ func NewToolInterruptError(metadata map[string]any) error {
 	return &toolInterruptError{Metadata: metadata}
 }
 
+// IsSchemaValidationError determines whether the error is an input schema
+// validation failure from tool execution.
+func IsSchemaValidationError(err error) bool {
+	var gerr *core.GenkitError
+	return errors.As(err, &gerr) && gerr.Status == core.INVALID_ARGUMENT
+}
+
 // InterruptOptions provides configuration for tool interruption.
 type InterruptOptions struct {
 	Metadata map[string]any
