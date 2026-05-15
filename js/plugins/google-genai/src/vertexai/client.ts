@@ -64,7 +64,7 @@ async function maybeTraceRequest<T>(
 ): Promise<T> {
   const call = async () => {
     const response = await makeRequest(url, fetchOptions);
-    let processedResponse: unknown;
+    let processedResponse: Promise<T>;
     if (traceOptions.processFn) {
       // This is for streaming etc.
       processedResponse = traceOptions.processFn(response);
@@ -72,7 +72,7 @@ async function maybeTraceRequest<T>(
       // default processing is just get the json response
       processedResponse = await response.json();
     }
-    return processedResponse as Promise<T>;
+    return processedResponse;
   };
 
   if (traceOptions.clientOptions?.experimental_debugTraces) {
