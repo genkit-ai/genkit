@@ -235,7 +235,7 @@ func (a *ActionDef[In, Out, Stream]) runWithTelemetry(ctx context.Context, input
 			}
 
 			if err = base.ValidateValue(input, inputSchema); err != nil {
-				return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid input to action %q: %v", a.desc.Key, err)
+				return base.Zero[Out](), NewSchemaValidationError(a.desc.Key, err)
 			}
 
 			output, err = a.fn(ctx, input, cb)
