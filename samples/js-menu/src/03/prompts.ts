@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Flash } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { ai } from '../genkit.js';
 import { DataMenuQuestionInputSchema } from '../types';
 
@@ -24,7 +24,7 @@ import { DataMenuQuestionInputSchema } from '../types';
 export const s03_chatPreamblePrompt = ai.definePrompt(
   {
     name: 's03_chatPreamble',
-    model: gemini15Flash,
+    model: googleAI.model('gemini-flash-latest'),
     input: { schema: DataMenuQuestionInputSchema },
     output: { format: 'text' },
     config: { temperature: 0.3 },
@@ -32,12 +32,12 @@ export const s03_chatPreamblePrompt = ai.definePrompt(
   `
   {{ role "user" }}
   Hi. What's on the menu today?
-  
+
   {{ role "model" }}
   I am Walt, a helpful AI assistant here at the restaurant.
   I can answer questions about the food on the menu or any other questions
   you have about food in general. I probably can't help you with anything else.
-  Here is today's menu: 
+  Here is today's menu:
   {{#each menuData~}}
   - {{this.title}} \${{this.price}}
     {{this.description}}

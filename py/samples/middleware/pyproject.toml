@@ -1,0 +1,18 @@
+[project]
+name = "middleware"
+version = "0.2.0"
+requires-python = ">=3.10"
+dependencies = [
+  "genkit",
+  "genkit-plugin-google-genai",
+  "pydantic>=2.0.0",
+  "structlog>=24.0.0",
+  "uvloop>=0.21.0",
+]
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

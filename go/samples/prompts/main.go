@@ -50,6 +50,7 @@ func main() {
 	PromptWithFunctions(ctx, g)
 	PromptWithOutputTypeDotprompt(ctx, g)
 	PromptWithMediaType(ctx, g)
+	PromptWithOutputSchemaName(ctx, g)
 
 	mux := http.NewServeMux()
 	for _, a := range genkit.ListFlows(g) {
@@ -208,7 +209,10 @@ func PromptWithMultiMessage(ctx context.Context, g *genkit.Genkit) {
 	}
 	resp, err := prompt.Execute(ctx,
 		ai.WithModelName("googleai/gemini-2.5-pro"),
-		ai.WithInput(map[string]any{"videoUrl": "https://www.youtube.com/watch?v=K-hY0E6cGfo video/mp4"}),
+		ai.WithInput(map[string]any{
+			"videoUrl":    "https://www.youtube.com/watch?v=K-hY0E6cGfo",
+			"contentType": "video/mp4",
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -343,9 +347,51 @@ func PromptWithMediaType(ctx context.Context, g *genkit.Genkit) {
 	fmt.Println(resp.Text())
 }
 
+func PromptWithOutputSchemaName(ctx context.Context, g *genkit.Genkit) {
+	prompt := genkit.LoadPrompt(g, "./prompts/recipe.prompt", "recipes")
+	if prompt == nil {
+		log.Fatal("empty prompt")
+	}
+
+	// prompt schemas can be referenced at any time
+	genkit.DefineSchema(g, "Recipe", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title": map[string]any{"type": "string", "description": "Recipe name"},
+			"ingredients": map[string]any{
+				"type":        "array",
+				"description": "Recipe ingredients",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":     map[string]any{"type": "string", "description": "ingredient name"},
+						"quantity": map[string]any{"type": "string", "description": "ingredient quantity"},
+					},
+					"required": []string{"name", "quantity"},
+				},
+			},
+			"steps": map[string]any{
+				"type":        "array",
+				"description": "Recipe steps",
+				"items":       map[string]any{"type": "string"},
+			},
+		},
+		"required": []string{"title", "ingredients", "steps"},
+	})
+
+	resp, err := prompt.Execute(ctx,
+		ai.WithModelName("googleai/gemini-2.5-pro"),
+		ai.WithInput(map[string]any{"food": "tacos", "ingredients": []string{"octopus", "shrimp"}}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resp.Text())
+}
+
 func fetchImgAsBase64() (string, error) {
-	imgUrl := "https://pd.w.org/2025/07/58268765f177911d4.13750400-2048x1365.jpg"
-	resp, err := http.Get(imgUrl)
+	imgURL := "https://pd.w.org/2025/07/58268765f177911d4.13750400-2048x1365.jpg"
+	resp, err := http.Get(imgURL)
 	if err != nil {
 		return "", err
 	}

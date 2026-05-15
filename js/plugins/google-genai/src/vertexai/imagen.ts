@@ -23,10 +23,16 @@ import {
   modelRef,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import { fromImagenResponse, toImagenPredictRequest } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
-import { checkModelName, extractVersion, modelName } from './utils.js';
+import {
+  calculateRequestOptions,
+  checkModelName,
+  extractVersion,
+  modelName,
+} from './utils.js';
 
 /**
  * See https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api.
@@ -165,8 +171,50 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
 export type ImagenConfigSchemaType = typeof ImagenConfigSchema;
 export type ImagenConfig = z.infer<ImagenConfigSchemaType>;
 
-// for commonRef
-type ConfigSchemaType = ImagenConfigSchemaType;
+export const ImagenTryOnConfigSchema = z
+  .object({
+    sampleCount: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('Number of images to generate.'),
+    seed: z
+      .number()
+      .int()
+      .optional()
+      .describe('Random seed for the image generation.'),
+    baseSteps: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe('Number of denoising steps.'),
+    personGeneration: z
+      .enum(['dont_allow', 'allow_adult', 'allow_all'])
+      .optional(),
+    safetySetting: z
+      .enum(['block_most', 'block_some', 'block_few', 'block_fewest'])
+      .optional(),
+    storageUri: z
+      .string()
+      .optional()
+      .describe('Cloud Storage URI to store the generated images.'),
+    outputOptions: z
+      .object({
+        mimeType: z.string().optional(),
+        compressionQuality: z.number().int().optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+export type ImagenTryOnConfigSchemaType = typeof ImagenTryOnConfigSchema;
+export type ImagenTryOnConfig = z.infer<ImagenTryOnConfigSchemaType>;
+
+export type ConfigSchemaType =
+  | ImagenConfigSchemaType
+  | ImagenTryOnConfigSchemaType;
 
 function commonRef(
   name: string,
@@ -189,43 +237,61 @@ function commonRef(
   });
 }
 
-// Allow all the capabilities for unknown future models
+// There are no more future imagen models, set these to the commonRef values.
 const GENERIC_MODEL = commonRef('imagen', {
   supports: {
     media: true,
-    multiturn: true,
-    tools: true,
-    systemRole: true,
+    multiturn: false,
+    tools: false,
+    toolChoice: false,
+    systemRole: false,
     output: ['media'],
   },
 });
 
+// The 'regular' imagen models are deprecated, but not shutdown yet.
+// Shutdown is June 30, 2026 - until then, we need to keep the same
+// logic as before in the definitions so we are backwards compatible.
 export const KNOWN_MODELS = {
-  'imagen-3.0-generate-002': commonRef('imagen-3.0-generate-002'),
-  'imagen-3.0-generate-001': commonRef('imagen-3.0-generate-001'),
-  'imagen-3.0-capability-001': commonRef('imagen-3.0-capability-001'),
-  'imagen-3.0-fast-generate-001': commonRef('imagen-3.0-fast-generate-001'),
-  'imagen-4.0-generate-preview-06-06': commonRef(
-    'imagen-4.0-generate-preview-06-06'
-  ),
-  'imagen-4.0-ultra-generate-preview-06-06': commonRef(
-    'imagen-4.0-ultra-generate-preview-06-06'
+  'virtual-try-on-001': commonRef(
+    'virtual-try-on-001',
+    {
+      supports: {
+        media: true,
+        multiturn: false,
+        tools: false,
+        systemRole: true,
+        output: ['media'],
+      },
+    },
+    ImagenTryOnConfigSchema
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS;
-export type ImagenModelName = `imagen=${string}`;
+
+export type ImagenModelName =
+  | KnownModels
+  | `imagen-${string}`
+  | `virtual-try-on-${string}`;
 export function isImagenModelName(value?: string): value is ImagenModelName {
-  return !!value?.startsWith('imagen-');
+  return (
+    !!value &&
+    (value.startsWith('imagen-') ||
+      value.startsWith('virtual-try-on-') ||
+      value in KNOWN_MODELS)
+  );
 }
 
 export function model(
   version: string,
   config: ImagenConfig = {}
-): ModelReference<typeof ImagenConfigSchema> {
+): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
-  if (KNOWN_MODELS[name]) {
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
     return KNOWN_MODELS[name].withConfig(config);
   }
+
   return modelRef({
     name: `vertexai/${name}`,
     config,
@@ -272,7 +338,11 @@ export function defineModel(
       configSchema: ref.configSchema,
     },
     async (request, { abortSignal }) => {
-      const clientOpt = { ...clientOptions, signal: abortSignal };
+      const clientOpt = calculateRequestOptions(
+        { ...clientOptions, signal: abortSignal },
+        request.config
+      );
+
       const imagenPredictRequest = toImagenPredictRequest(request);
 
       const response = await imagenPredict(

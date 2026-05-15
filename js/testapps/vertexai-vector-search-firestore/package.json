@@ -1,5 +1,5 @@
 {
-  "name": "vertex-vector-search",
+  "name": "vertex-vector-search-firestore",
   "version": "1.0.0",
   "description": "",
   "main": "lib/index.js",
@@ -20,7 +20,7 @@
     "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
     "@genkit-ai/firebase": "workspace:*",
-    "@genkit-ai/googleai": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
@@ -32,6 +32,6 @@
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
-    "typescript": "^5.5.2"
+    "typescript": "^5.9.3"
   }
 }

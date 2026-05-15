@@ -14,24 +14,37 @@
  * limitations under the License.
  */
 
-import { RuntimeManager } from '@genkit-ai/tools-common/manager';
+import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import z from 'zod';
 import { McpRunToolEvent } from './analytics.js';
+import {
+  McpToolOptions,
+  getCommonSchema,
+  resolveProjectRoot,
+} from './utils.js';
 
-export function defineFlowTools(server: McpServer, manager: RuntimeManager) {
+export function defineFlowTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
     'list_flows',
     {
       title: 'List Genkit Flows',
       description:
         'Use this to discover available Genkit flows or inspect the input schema of Genkit flows to know how to successfully call them.',
+      inputSchema: getCommonSchema(options.explicitProjectRoot),
     },
-    async () => {
+    async (opts) => {
       await record(new McpRunToolEvent('list_flows'));
+      const rootOrError = resolveProjectRoot(
+        options.explicitProjectRoot,
+        opts,
+        options.projectRoot
+      );
+      if (typeof rootOrError !== 'string') return rootOrError;
 
-      const actions = await manager.listActions();
+      const runtimeManager = await options.manager.getManager(rootOrError);
+      const actions = await runtimeManager.listActions();
 
       let flows = '';
       for (const key of Object.keys(actions)) {
@@ -56,21 +69,29 @@ export function defineFlowTools(server: McpServer, manager: RuntimeManager) {
     {
       title: 'Run Flow',
       description: 'Runs the flow with the provided input',
-      inputSchema: {
-        flowName: z.string().describe('name of the flow'),
+      inputSchema: getCommonSchema(options.explicitProjectRoot, {
+        flowName: z.string().describe('name of the flow; type: string'),
         input: z
           .string()
           .describe(
-            'Flow input as JSON object encoded as string (it will be passed through `JSON.parse`). Must conform to the schema.'
+            'Flow input as JSON object encoded as string (it will be passed through `JSON.parse`). Must conform to the schema; type: string.'
           )
           .optional(),
-      },
+      }),
     },
-    async ({ flowName, input }) => {
+    async (opts) => {
       await record(new McpRunToolEvent('run_flow'));
+      const rootOrError = resolveProjectRoot(
+        options.explicitProjectRoot,
+        opts,
+        options.projectRoot
+      );
+      if (typeof rootOrError !== 'string') return rootOrError;
+      const { flowName, input } = opts;
 
       try {
-        const response = await manager.runAction({
+        const runtimeManager = await options.manager.getManager(rootOrError);
+        const response = await runtimeManager.runAction({
           key: `/flow/${flowName}`,
           input: input !== undefined ? JSON.parse(input) : undefined,
         });
@@ -80,8 +101,16 @@ export function defineFlowTools(server: McpServer, manager: RuntimeManager) {
           ],
         };
       } catch (e) {
+        const errStr =
+          e instanceof GenkitToolsError ? e.formatError() : JSON.stringify(e);
         return {
-          content: [{ type: 'text', text: `Error: ${e}` }],
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${errStr}`,
+            },
+          ],
         };
       }
     }

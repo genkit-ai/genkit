@@ -272,3 +272,85 @@ func TestMultipleDynamicResourcesInGeneration(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+func TestLookupResource(t *testing.T) {
+	t.Run("finds registered resource", func(t *testing.T) {
+		r := registry.New()
+		DefineResource(r, "test/lookup", &ResourceOptions{
+			URI: "lookup://test",
+		}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
+			return &ResourceOutput{
+				Content: []*Part{NewTextPart("found")},
+			}, nil
+		})
+
+		found := LookupResource(r, "test/lookup")
+		if found == nil {
+			t.Fatal("LookupResource returned nil")
+		}
+		if found.Name() != "test/lookup" {
+			t.Errorf("Name() = %q, want %q", found.Name(), "test/lookup")
+		}
+	})
+
+	t.Run("returns nil for non-existent resource", func(t *testing.T) {
+		r := registry.New()
+
+		found := LookupResource(r, "test/nonexistent")
+		if found != nil {
+			t.Errorf("LookupResource returned %v, want nil", found)
+		}
+	})
+
+	t.Run("resource can be executed after lookup", func(t *testing.T) {
+		r := registry.New()
+		DefineResource(r, "test/executable", &ResourceOptions{
+			URI: "exec://test",
+		}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
+			return &ResourceOutput{
+				Content: []*Part{NewTextPart("executed: " + input.URI)},
+			}, nil
+		})
+
+		found := LookupResource(r, "test/executable")
+		if found == nil {
+			t.Fatal("LookupResource returned nil")
+		}
+
+		output, err := found.Execute(context.Background(), &ResourceInput{URI: "exec://test", Variables: map[string]string{}})
+		if err != nil {
+			t.Fatalf("Execute error: %v", err)
+		}
+		if len(output.Content) != 1 || output.Content[0].Text != "executed: exec://test" {
+			t.Errorf("unexpected output: %v", output.Content)
+		}
+	})
+
+	t.Run("resource matches and extracts variables after lookup", func(t *testing.T) {
+		r := registry.New()
+		DefineResource(r, "test/template", &ResourceOptions{
+			Template: "template://item/{id}",
+		}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
+			return &ResourceOutput{
+				Content: []*Part{NewTextPart("item " + input.Variables["id"])},
+			}, nil
+		})
+
+		found := LookupResource(r, "test/template")
+		if found == nil {
+			t.Fatal("LookupResource returned nil")
+		}
+
+		if !found.Matches("template://item/123") {
+			t.Error("Matches() = false, want true")
+		}
+
+		vars, err := found.ExtractVariables("template://item/456")
+		if err != nil {
+			t.Fatalf("ExtractVariables error: %v", err)
+		}
+		if vars["id"] != "456" {
+			t.Errorf("vars[id] = %q, want %q", vars["id"], "456")
+		}
+	})
+}

@@ -124,9 +124,20 @@ export class LocalFileTraceStore implements TraceStore {
     try {
       const existing = (await this.load(id)) || trace;
       if (existing) {
-        Object.keys(trace.spans).forEach(
-          (spanId) => (existing.spans[spanId] = trace.spans[spanId])
-        );
+        Object.keys(trace.spans).forEach((spanId) => {
+          // If the existing span is already completed (has endTime), and the incoming
+          // span is incomplete (no endTime), we assume the incoming span is a stale
+          // "start" event that arrived out of order. We ignore it to prevent overwriting
+          // the completed span with incomplete data.
+          if (
+            existing.spans[spanId] &&
+            existing.spans[spanId].endTime &&
+            !trace.spans[spanId].endTime
+          ) {
+            return;
+          }
+          existing.spans[spanId] = trace.spans[spanId];
+        });
         // If it's one of those weird roots (internal span that we filter) we try to fix
         // whoever was referencing it by making them root.
         if (possibleRoot) {
@@ -141,9 +152,17 @@ export class LocalFileTraceStore implements TraceStore {
             }
           });
         }
-        existing.displayName = trace.displayName;
-        existing.startTime = trace.startTime;
-        existing.endTime = trace.endTime;
+        // Only update metadata if new values are defined
+        // Prevents overwriting with undefined when batches arrive without root span
+        if (trace.displayName !== undefined) {
+          existing.displayName = trace.displayName;
+        }
+        if (trace.startTime !== undefined) {
+          existing.startTime = trace.startTime;
+        }
+        if (trace.endTime !== undefined) {
+          existing.endTime = trace.endTime;
+        }
         trace = existing;
       }
       fs.writeFileSync(
@@ -398,27 +417,7 @@ export class Index {
             return undefined;
           }
         })
-        .filter((d) => {
-          if (!d) return false;
-          if (!query?.filter) return true;
-          if (
-            query.filter.eq &&
-            Object.keys(query.filter.eq).find(
-              (k) => d[k] !== query.filter!.eq![k]
-            )
-          ) {
-            return false;
-          }
-          if (
-            query.filter.neq &&
-            Object.keys(query.filter.neq).find(
-              (k) => d[k] === query.filter!.neq![k]
-            )
-          ) {
-            return false;
-          }
-          return true;
-        })
+        .filter((d) => (!d ? false : isFilterMatch(d, query?.filter)))
         .reverse() as Record<string, string | number>[];
 
       fullData.push(...fileData);
@@ -428,17 +427,100 @@ export class Index {
       // different index files.
       .sort((a, b) => (b!['start'] as number) - (a!['start'] as number));
 
+    // Dedupe by trace ID, keeping the most recent entry (first seen after sorting)
+    // TODO: Real-time span events pollute the index with duplicates. This deduplication
+    // works but may degrade index performance over time. Revisit if we see issues.
+    const deduped = [] as Record<string, string | number>[];
+    const seenIds = new Set<string>();
+    for (const entry of fullData) {
+      const id = entry['id'] as string;
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        deduped.push(entry);
+      }
+    }
+
     const result = {
-      data: fullData.slice(startFromIndex, startFromIndex + query.limit),
+      data: deduped.slice(startFromIndex, startFromIndex + query.limit),
     } as IndexSearchResult;
 
     // if there are more results, populate stop index.
-    if (startFromIndex + query.limit < fullData.length) {
+    if (startFromIndex + query.limit < deduped.length) {
       result.pageLastIndex = startFromIndex + query.limit;
     }
 
     return result;
   }
+}
+
+function isFilterMatch(
+  d: Record<string, string | number>,
+  filter?: TraceQueryFilter
+): boolean {
+  if (!filter) return true;
+  const { eq, neq, gt, gte, lt, lte, contains } = filter;
+  if (eq) {
+    for (const k of Object.keys(eq)) {
+      const filterVal = eq[k];
+      const val = d[k];
+      if (
+        Array.isArray(filterVal)
+          ? !filterVal.includes(val as any)
+          : val !== filterVal
+      )
+        return false;
+    }
+  }
+  if (neq) {
+    for (const k of Object.keys(neq)) {
+      const filterVal = neq[k];
+      const val = d[k];
+      if (
+        Array.isArray(filterVal)
+          ? filterVal.includes(val as any)
+          : val === filterVal
+      )
+        return false;
+    }
+  }
+  if (gt) {
+    for (const k of Object.keys(gt)) {
+      const val = d[k];
+      if (typeof val !== 'number' || val <= gt[k]) return false;
+    }
+  }
+  if (gte) {
+    for (const k of Object.keys(gte)) {
+      const val = d[k];
+      if (typeof val !== 'number' || val < gte[k]) return false;
+    }
+  }
+  if (lt) {
+    for (const k of Object.keys(lt)) {
+      const val = d[k];
+      if (typeof val !== 'number' || val >= lt[k]) return false;
+    }
+  }
+  if (lte) {
+    for (const k of Object.keys(lte)) {
+      const val = d[k];
+      if (typeof val !== 'number' || val > lte[k]) return false;
+    }
+  }
+  if (contains) {
+    for (const k of Object.keys(contains)) {
+      const filterVal = contains[k];
+      const val = d[k];
+      if (typeof val !== 'string') return false;
+      const match = Array.isArray(filterVal)
+        ? filterVal.some((fv) =>
+            val.toLowerCase().includes(`${fv}`.toLowerCase())
+          )
+        : val.toLowerCase().includes(`${filterVal}`.toLowerCase());
+      if (!match) return false;
+    }
+  }
+  return true;
 }
 
 function lockFile(file: string) {

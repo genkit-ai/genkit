@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/vertexai/modelgarden"
@@ -37,8 +38,8 @@ func main() {
 
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModel(m),
-			ai.WithConfig(&ai.GenerationCommonConfig{
-				Temperature: 1.0,
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1.0),
 			}),
 			ai.WithPrompt(`Tell a short joke about %s`, input))
 		if err != nil {

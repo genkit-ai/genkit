@@ -15,15 +15,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "^1.0.0-rc.18",
-    "@genkit-ai/vertexai": "^1.0.4",
-    "@genkit-ai/express": "^1.0.4",
+    "genkit": "^1.22.0",
+    "@genkit-ai/vertexai": "^1.22.0",
+    "@genkit-ai/google-genai": "^1.22.0",
+    "@genkit-ai/express": "^1.22.0",
     "express": "^4.21.0",
     "partial-json": "^0.1.7",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "genkit-cli": "^1.0.4",
+    "genkit-cli": "^1.22.0",
     "typescript": "^5.4.5",
     "tsx": "^4.19.2"
   }

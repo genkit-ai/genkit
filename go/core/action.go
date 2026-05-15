@@ -19,7 +19,6 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"time"
 
@@ -46,9 +45,12 @@ type StreamCallback[Stream any] = func(context.Context, Stream) error
 // output which it validates against.
 //
 // Each time an ActionDef is run, it results in a new trace span.
+//
+// For internal use only.
 type ActionDef[In, Out, Stream any] struct {
-	fn   StreamingFunc[In, Out, Stream] // Function that is called during runtime. May not actually support streaming.
-	desc *api.ActionDesc                // Descriptor of the action.
+	fn       StreamingFunc[In, Out, Stream] // Function that is called during runtime. May not actually support streaming.
+	desc     *api.ActionDesc                // Descriptor of the action.
+	registry api.Registry                   // Registry for schema resolution. Set when registered.
 }
 
 type noStream = func(context.Context, struct{}) error
@@ -119,9 +121,7 @@ func defineAction[In, Out, Stream any](
 	fn StreamingFunc[In, Out, Stream],
 ) *ActionDef[In, Out, Stream] {
 	a := newAction(name, atype, metadata, inputSchema, fn)
-	provider, id := api.ParseName(name)
-	key := api.NewKey(atype, provider, id)
-	r.RegisterAction(key, a)
+	a.Register(r)
 	return a
 }
 
@@ -159,7 +159,7 @@ func newAction[In, Out, Stream any](
 		},
 		desc: &api.ActionDesc{
 			Type:         atype,
-			Key:          fmt.Sprintf("/%s/%s", atype, name),
+			Key:          api.KeyFromName(atype, name),
 			Name:         name,
 			Description:  description,
 			InputSchema:  inputSchema,
@@ -183,65 +183,73 @@ func (a *ActionDef[In, Out, Stream]) Run(ctx context.Context, input In, cb Strea
 
 // Run executes the Action's function in a new trace span.
 func (a *ActionDef[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream]) (output api.ActionRunResult[Out], err error) {
-	inputBytes, _ := json.Marshal(input)
-	logger.FromContext(ctx).Debug("Action.Run",
-		"name", a.Name(),
-		"input", inputBytes)
+	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name())
 	defer func() {
-		outputBytes, _ := json.Marshal(output)
 		logger.FromContext(ctx).Debug("Action.Run",
 			"name", a.Name(),
-			"output", outputBytes,
 			"err", err)
 	}()
 
 	// Create span metadata and inject flow name if we're in a flow context
 	spanMetadata := &tracing.SpanMetadata{
-		Name:    a.desc.Name,
-		Type:    "action",
-		Subtype: string(a.desc.Type), // The actual action type becomes the subtype
+		Name:     a.desc.Name,
+		Type:     "action",
+		Subtype:  string(a.desc.Type), // The actual action type becomes the subtype
+		Metadata: make(map[string]string),
 		// IsRoot will be automatically determined in tracing.go based on parent span presence
 	}
 
 	// Auto-inject flow name if we're in a flow context
 	if flowName := FlowNameFromContext(ctx); flowName != "" {
-		if spanMetadata.Metadata == nil {
-			spanMetadata.Metadata = make(map[string]string)
-		}
 		spanMetadata.Metadata["flow:name"] = flowName
 	}
 
 	var traceID string
 	var spanID string
 	o, err := tracing.RunInNewSpan(ctx, spanMetadata, input,
-		func(ctx context.Context, input In) (Out, error) {
+		func(ctx context.Context, input In) (output Out, err error) {
 			traceInfo := tracing.SpanTraceInfo(ctx)
 			traceID = traceInfo.TraceID
 			spanID = traceInfo.SpanID
 
 			start := time.Now()
-			var err error
-			if err = base.ValidateValue(input, a.desc.InputSchema); err != nil {
-				err = fmt.Errorf("invalid input: %w", err)
-			}
-			var output Out
-			if err == nil {
-				output, err = a.fn(ctx, input, cb)
-				if err == nil {
-					if err = base.ValidateValue(output, a.desc.OutputSchema); err != nil {
-						err = fmt.Errorf("invalid output: %w", err)
-					}
+			defer func() {
+				latency := time.Since(start)
+				if err != nil {
+					metrics.WriteActionFailure(ctx, a.desc.Name, latency, err)
+				} else {
+					metrics.WriteActionSuccess(ctx, a.desc.Name, latency)
 				}
-			}
-			latency := time.Since(start)
-			if err != nil {
-				metrics.WriteActionFailure(ctx, a.desc.Name, latency, err)
-				return base.Zero[Out](), err
-			}
-			metrics.WriteActionSuccess(ctx, a.desc.Name, latency)
-			return output, nil
+			}()
 
-		})
+			var inputSchema map[string]any
+			inputSchema, err = ResolveSchema(a.registry, a.desc.InputSchema)
+			if err != nil {
+				return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid input schema for action %q: %v", a.desc.Key, err)
+			}
+
+			var outputSchema map[string]any
+			outputSchema, err = ResolveSchema(a.registry, a.desc.OutputSchema)
+			if err != nil {
+				return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid output schema for action %q: %v", a.desc.Key, err)
+			}
+
+			if err = base.ValidateValue(input, inputSchema); err != nil {
+				return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid input to action %q: %v", a.desc.Key, err)
+			}
+
+			output, err = a.fn(ctx, input, cb)
+			if err != nil {
+				return output, err
+			}
+			if err = base.ValidateValue(output, outputSchema); err != nil {
+				err = NewError(INTERNAL, "invalid output from action %q: %v", a.desc.Key, err)
+			}
+
+			return output, err
+		},
+	)
+
 	return api.ActionRunResult[Out]{
 		Result:  o,
 		TraceId: traceID,
@@ -258,7 +266,7 @@ func (a *ActionDef[In, Out, Stream]) RunJSON(ctx context.Context, input json.Raw
 	return r.Result, nil
 }
 
-// RunJSON runs the action with a JSON input, and returns a JSON result along with telemetry info.
+// RunJSONWithTelemetry runs the action with a JSON input, and returns a JSON result along with telemetry info.
 func (a *ActionDef[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
 	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
 	if err != nil {
@@ -296,13 +304,25 @@ func (a *ActionDef[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, i
 	}, nil
 }
 
-// Desc returns a descriptor of the action.
+// Desc returns a descriptor of the action with resolved schema references.
+// Schema references that cannot be resolved (e.g., the action is not yet registered,
+// or the referenced schema has not been defined) are returned as-is.
 func (a *ActionDef[In, Out, Stream]) Desc() api.ActionDesc {
-	return *a.desc
+	desc := *a.desc
+	if a.registry != nil {
+		if resolved, err := ResolveSchema(a.registry, desc.InputSchema); err == nil {
+			desc.InputSchema = resolved
+		}
+		if resolved, err := ResolveSchema(a.registry, desc.OutputSchema); err == nil {
+			desc.OutputSchema = resolved
+		}
+	}
+	return desc
 }
 
 // Register registers the action with the given registry.
 func (a *ActionDef[In, Out, Stream]) Register(r api.Registry) {
+	a.registry = r
 	r.RegisterAction(a.desc.Key, a)
 }
 

@@ -8,22 +8,25 @@
     "start": "node lib/index.js",
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "genkit:dev": "genkit start -- npx tsx --watch src/index-vertexai.ts"
+    "genkit:dev:googleai": "genkit start -- npx tsx --watch src/index.ts",
+    "genkit:dev:vertexai": "genkit start -- npx tsx --watch src/index-vertexai.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
+    "@google/genai": "^1.30.0",
     "express": "^4.20.0",
+    "genkit": "workspace:*",
     "node-fetch": "3.3.2",
-    "wav": "^1.0.2"
+    "wav": "^1.0.2",
+    "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
     "@types/wav": "^1.0.4",
-    "typescript": "^5.6.2"
+    "typescript": "^5.9.3"
   }
 }

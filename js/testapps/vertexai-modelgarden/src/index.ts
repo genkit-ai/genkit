@@ -15,11 +15,7 @@
  */
 
 import { vertexAI } from '@genkit-ai/google-genai';
-import {
-  mistralLarge,
-  vertexAIModelGarden,
-  vertexModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 // Import the Genkit core libraries and plugins.
 import { genkit, z } from 'genkit';
 
@@ -37,14 +33,10 @@ const ai = genkit({
     vertexModelGarden({
       location: 'us-central1',
     }),
-    vertexAIModelGarden({
-      location: 'us-central1',
-      models: [mistralLarge],
-    }),
   ],
 });
 
-export const anthropicModel = ai.defineFlow(
+export const anthropicSonnet4Model = ai.defineFlow(
   {
     name: 'claude-sonnet-4 - toolCallingFlow',
     inputSchema: z.string().default('Paris, France'),
@@ -70,13 +62,118 @@ export const anthropicModel = ai.defineFlow(
   }
 );
 
+export const anthropicSonnet45ThinkingModel = ai.defineFlow(
+  {
+    name: 'claude-sonnet-4-5 - thinking',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-4-5'),
+      config: {
+        location: 'us-east5',
+        thinking: {
+          enabled: true,
+          budgetTokens: 2000,
+        },
+      },
+      prompt: `You are a helpful assistant. Please think step-by-step and solve for x: 3x^2 - 14x + 8 = 0. Show all of your reasoning clearly.`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicSonnet46Model = ai.defineFlow(
+  {
+    name: 'claude-sonnet-4-6 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-4-6'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicOpus47Model = ai.defineFlow(
+  {
+    name: 'claude-opus-4-7 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-opus-4-7'),
+      config: {
+        location: 'global',
+        thinking: {
+          adaptive: true,
+          display: 'summarized',
+        },
+        output_config: {
+          effort: 'xhigh',
+        },
+      },
+      prompt: `You are a helpful assistant. Write a Sonnet about a sunny day`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicOpus46Model = ai.defineFlow(
+  {
+    name: 'claude-opus-4-6 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-opus-4-6'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
 export const llamaModel = ai.defineFlow(
   {
     name: 'llama4 - basicFlow',
     outputSchema: z.string(),
     streamSchema: z.any(),
   },
-  async (location, { sendChunk }) => {
+  async (_input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
       model: vertexModelGarden.model(
         'meta/llama-4-maverick-17b-128e-instruct-maas'
@@ -99,7 +196,7 @@ export const llamaModel = ai.defineFlow(
 // Mistral Large for detailed explanations
 export const mistralExplainConcept = ai.defineFlow(
   {
-    name: 'mistral-large - explainConcept',
+    name: 'mistral-medium - explainConcept',
     inputSchema: z.object({
       concept: z.string().default('concurrency'),
     }),
@@ -110,40 +207,9 @@ export const mistralExplainConcept = ai.defineFlow(
   },
   async ({ concept }) => {
     const explanation = await ai.generate({
-      model: vertexModelGarden.model('mistral-large-2411'),
+      model: vertexModelGarden.model('mistral-medium-3'),
       prompt: `Explain ${concept} in programming. Include practical examples.`,
       config: {
-        temperature: 0.7,
-      },
-      output: {
-        schema: z.object({
-          explanation: z.string(),
-          examples: z.array(z.string()),
-        }),
-      },
-    });
-
-    return explanation.output || { explanation: '', examples: [] };
-  }
-);
-
-export const legacyMistralExplainConcept = ai.defineFlow(
-  {
-    name: 'legacy-mistral-large - explainConcept',
-    inputSchema: z.object({
-      concept: z.string().default('concurrency'),
-    }),
-    outputSchema: z.object({
-      explanation: z.string(),
-      examples: z.array(z.string()),
-    }),
-  },
-  async ({ concept }) => {
-    const explanation = await ai.generate({
-      model: mistralLarge,
-      prompt: `Explain ${concept} in programming. Include practical examples.`,
-      config: {
-        version: 'mistral-large-2411',
         temperature: 0.7,
       },
       output: {
@@ -189,7 +255,7 @@ export const generateFunction = ai.defineFlow(
   },
   async ({ description }) => {
     const result = await ai.generate({
-      model: vertexModelGarden.model('codestral-2501'),
+      model: vertexModelGarden.model('codestral-2'),
       prompt: `Create a TypeScript function that ${description}. Include error handling and types.`,
     });
 

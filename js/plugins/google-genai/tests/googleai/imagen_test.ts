@@ -33,10 +33,7 @@ import {
   ImagenPredictResponse,
   ImagenPrediction,
 } from '../../src/googleai/types.js';
-import {
-  API_KEY_FALSE_ERROR,
-  MISSING_API_KEY_ERROR,
-} from '../../src/googleai/utils.js';
+import { MISSING_API_KEY_ERROR } from '../../src/googleai/utils.js';
 
 const { toImagenParameters, fromImagenPrediction } = TEST_ONLY;
 
@@ -49,7 +46,7 @@ describe('Google AI Imagen', () => {
 
   describe('model()', () => {
     it('should return a ModelReference for a known model', () => {
-      const modelName = 'imagen-3.0-generate-002';
+      const modelName = 'imagen-4.0-generate-001';
       const ref = model(modelName);
       assert.strictEqual(ref.name, `googleai/${modelName}`);
       assert.ok(ref.info?.supports?.media);
@@ -63,7 +60,7 @@ describe('Google AI Imagen', () => {
     });
 
     it('should apply config to a known model', () => {
-      const modelName = 'imagen-3.0-generate-002';
+      const modelName = 'imagen-4.0-generate-001';
       const config: ImagenConfig = { numberOfImages: 2 };
       const ref = model(modelName, config);
       assert.strictEqual(ref.name, `googleai/${modelName}`);
@@ -79,9 +76,9 @@ describe('Google AI Imagen', () => {
     });
 
     it('should handle model name with prefix', () => {
-      const modelName = 'models/imagen-3.0-generate-002';
+      const modelName = 'models/imagen-4.0-generate-001';
       const ref = model(modelName);
-      assert.strictEqual(ref.name, 'googleai/imagen-3.0-generate-002');
+      assert.strictEqual(ref.name, 'googleai/imagen-4.0-generate-001');
     });
   });
 
@@ -112,12 +109,28 @@ describe('Google AI Imagen', () => {
           personGeneration: 'allow_adult',
           apiKey: 'test-key', // This should be excluded from the result
           numberOfImages: 1,
+          addWatermark: false,
+          foo: 0, // New passthrough with a valid 0 value.
+          bar: undefined, // This should be excluded because its undefined
+          baz: null, // This should be excluded because its null
         },
       };
       const result = toImagenParameters(request);
       assert.strictEqual(result.sampleCount, 1);
       assert.strictEqual(result.aspectRatio, '16:9');
       assert.strictEqual(result.personGeneration, 'allow_adult');
+      assert.strictEqual(result.addWatermark, false);
+      assert.strictEqual(result['foo'], 0);
+      assert.strictEqual(
+        result.hasOwnProperty('bar'),
+        false,
+        'bar should not be in parameters'
+      );
+      assert.strictEqual(
+        result.hasOwnProperty('baz'),
+        false,
+        'baz should not be in parameters'
+      );
       assert.strictEqual(
         result.hasOwnProperty('apiKey'),
         false,
@@ -394,20 +407,22 @@ describe('Google AI Imagen', () => {
       assert.strictEqual(fetchArgs[1].headers['x-goog-api-key'], requestApiKey);
     });
 
-    it('apiKey false at init, missing in request - throws error', async () => {
+    it('works with apiKey false at init, missing in request', async () => {
+      mockFetchResponse({
+        predictions: [{ bytesBase64Encoded: 'jkl', mimeType: 'image/png' }],
+      });
       const modelRunner = captureModelRunner({ apiKey: false });
 
-      await assert.rejects(
-        modelRunner(
+      assert.ok(
+        await modelRunner(
           {
             messages: [{ role: 'user', content: [{ text: 'A car' }] }],
             config: {},
           },
           {}
-        ),
-        API_KEY_FALSE_ERROR
+        )
       );
-      sinon.assert.notCalled(fetchStub);
+      sinon.assert.calledOnce(fetchStub);
     });
 
     it('defineImagenModel throws if key not found in env or args', async () => {

@@ -17,7 +17,7 @@
   "license": "ISC",
   "dependencies": {
     "genkit": "^1.0.4",
-    "@genkit-ai/googleai": "^1.0.4",
+    "@genkit-ai/google-genai": "^1.0.4",
     "google-auth-library": "^9.6.3",
     "llm-chunk": "^0.0.1",
     "pdf-parse": "^1.1.1"

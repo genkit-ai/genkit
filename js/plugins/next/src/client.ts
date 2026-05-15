@@ -31,6 +31,7 @@ export interface RequestData<T> {
   url: string;
   headers?: Record<string, string>;
   input?: T;
+  streamId?: string;
   abortSignal?: AbortSignal;
 }
 
@@ -43,6 +44,7 @@ export function runFlow<A extends Action = Action>(
 export interface StreamResponse<A extends Action> {
   output: Promise<Output<A>>;
   stream: AsyncIterable<Stream<A>>;
+  streamId: Promise<string | null>;
 }
 
 export function streamFlow<A extends Action = Action>(
@@ -52,5 +54,6 @@ export function streamFlow<A extends Action = Action>(
   return {
     output: res.output,
     stream: res.stream,
+    streamId: res.streamId,
   };
 }

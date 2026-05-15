@@ -20,7 +20,7 @@ import express from 'express';
 
 const simpleFlow = ai.defineFlow('simpleFlow', async (input, { sendChunk }) => {
   const { text } = await ai.generate({
-    model: gemini15Flash,
+    model: googleAI.model('gemini-2.5-flash'),
     prompt: input,
     onChunk: (c) => sendChunk(c.text),
   });
@@ -57,6 +57,44 @@ app.post(
   authMiddleware,
   expressHandler(simpleFlow, { context })
 );
+```
+
+### Durable Streaming (Beta)
+
+You can configure flows to use a `StreamManager` to persist their state. This allows clients to disconnect and reconnect to a stream without losing its state.
+
+To enable durable streaming, provide a `streamManager` in the `expressHandler` options. The `InMemoryStreamManager` is useful for development and testing:
+
+```ts
+import { InMemoryStreamManager } from 'genkit/beta';
+
+// ...
+
+app.post(
+  '/myDurableFlow',
+  expressHandler(myFlow, {
+    streamManager: new InMemoryStreamManager(),
+  })
+);
+```
+
+For production environments, you should use a durable `StreamManager` implementation, such as `FirestoreStreamManager` or `RtdbStreamManager` from the `@genkit-ai/firebase` plugin, or a custom implementation.
+
+Clients can then connect and reconnect to the stream using the `streamId`:
+
+```ts
+// Start a new stream
+const result = streamFlow({
+  url: `http://localhost:8080/myDurableFlow`,
+  input: 'tell me a long story',
+});
+const streamId = await result.streamId; // Save this ID
+
+// ... later, reconnect if needed ...
+const reconnectedResult = streamFlow({
+  url: `http://localhost:8080/myDurableFlow`,
+  streamId: streamId,
+});
 ```
 
 Flows and actions exposed using the `expressHandler` function can be accessed using `genkit/beta/client` library:
@@ -129,7 +167,7 @@ startFlowServer({
 
 ## Contributing
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests against that repo.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
 Usage information and reference details can be found in [official Genkit documentation](https://genkit.dev/docs/get-started/).
 

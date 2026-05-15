@@ -33,21 +33,44 @@ func (t textFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 }
 
 type textHandler struct {
-	instructions string
-	config       ModelOutputConfig
+	instructions    string
+	config          ModelOutputConfig
+	accumulatedText string
+	currentIndex    int
 }
 
 // Config returns the output config for the formatter.
-func (t textHandler) Config() ModelOutputConfig {
+func (t *textHandler) Config() ModelOutputConfig {
 	return t.config
 }
 
 // Instructions returns the instructions for the formatter.
-func (t textHandler) Instructions() string {
+func (t *textHandler) Instructions() string {
 	return t.instructions
 }
 
+// ParseOutput parses the final message and returns the text content.
+func (t *textHandler) ParseOutput(m *Message) (any, error) {
+	return m.Text(), nil
+}
+
+// ParseChunk processes a streaming chunk and returns parsed output.
+func (t *textHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
+	if chunk.Index != t.currentIndex {
+		t.accumulatedText = ""
+		t.currentIndex = chunk.Index
+	}
+
+	for _, part := range chunk.Content {
+		if part.IsText() {
+			t.accumulatedText += part.Text
+		}
+	}
+
+	return t.accumulatedText, nil
+}
+
 // ParseMessage parses the message and returns the formatted message.
-func (t textHandler) ParseMessage(m *Message) (*Message, error) {
+func (t *textHandler) ParseMessage(m *Message) (*Message, error) {
 	return m, nil
 }

@@ -106,7 +106,7 @@ func main() {
 	}
 
 	simpleQaPrompt := genkit.DefinePrompt(g, "simpleQaPrompt",
-		ai.WithModelName("googleai/gemini-2.0-flash"),
+		ai.WithModelName("googleai/gemini-2.5-flash"),
 		ai.WithPrompt(simpleQaPromptTemplate),
 		ai.WithInputType(simpleQaPromptInput{}),
 		ai.WithOutputFormat(ai.OutputFormatText),

@@ -16,10 +16,10 @@ package ai
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/base"
 )
 
@@ -33,7 +33,7 @@ func (j jsonlFormatter) Name() string {
 // Handler returns a new formatter handler for the given schema.
 func (j jsonlFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 	if schema == nil || !base.ValidateIsJSONArray(schema) {
-		return nil, fmt.Errorf("schema is not valid JSONL")
+		return nil, core.NewError(core.INVALID_ARGUMENT, "schema must be an array of objects for JSONL format")
 	}
 
 	jsonBytes, err := json.Marshal(schema["items"])
@@ -56,60 +56,113 @@ func (j jsonlFormatter) Handler(schema map[string]any) (FormatHandler, error) {
 }
 
 type jsonlHandler struct {
-	instructions string
-	config       ModelOutputConfig
+	instructions    string
+	config          ModelOutputConfig
+	accumulatedText string
+	currentIndex    int
+	cursor          int
 }
 
 // Instructions returns the instructions for the formatter.
-func (j jsonlHandler) Instructions() string {
+func (j *jsonlHandler) Instructions() string {
 	return j.instructions
 }
 
 // Config returns the output config for the formatter.
-func (j jsonlHandler) Config() ModelOutputConfig {
+func (j *jsonlHandler) Config() ModelOutputConfig {
 	return j.config
 }
 
-// ParseMessage parses the message and returns the formatted message.
-func (j jsonlHandler) ParseMessage(m *Message) (*Message, error) {
-	if j.config.Format == OutputFormatJSONL {
-		if m == nil {
-			return nil, errors.New("message is empty")
+// ParseOutput parses the final message and returns the parsed array of objects.
+func (j *jsonlHandler) ParseOutput(m *Message) (any, error) {
+	var sb strings.Builder
+	for _, part := range m.Content {
+		if part.IsText() {
+			sb.WriteString(part.Text)
 		}
-		if len(m.Content) == 0 {
-			return nil, errors.New("message has no content")
-		}
-
-		var nonTextParts []*Part
-		accumulatedText := strings.Builder{}
-
-		for _, part := range m.Content {
-			if !part.IsText() {
-				nonTextParts = append(nonTextParts, part)
-			} else {
-				accumulatedText.WriteString(part.Text)
-			}
-		}
-
-		var newParts []*Part
-		lines := base.GetJSONObjectLines(accumulatedText.String())
-		for _, line := range lines {
-			if j.config.Schema != nil {
-				var schemaBytes []byte
-				schemaBytes, err := json.Marshal(j.config.Schema["items"])
-				if err != nil {
-					return nil, fmt.Errorf("expected schema is not valid: %w", err)
-				}
-				if err = base.ValidateRaw([]byte(line), schemaBytes); err != nil {
-					return nil, err
-				}
-			}
-
-			newParts = append(newParts, NewJSONPart(line))
-		}
-
-		m.Content = append(newParts, nonTextParts...)
 	}
 
+	result, _, err := j.parseJSONL(sb.String(), 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if j.config.Schema != nil {
+		if err := base.ValidateValue(result, j.config.Schema); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// ParseChunk processes a streaming chunk and returns parsed output.
+func (j *jsonlHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
+	if chunk.Index != j.currentIndex {
+		j.accumulatedText = ""
+		j.currentIndex = chunk.Index
+		j.cursor = 0
+	}
+
+	for _, part := range chunk.Content {
+		if part.IsText() {
+			j.accumulatedText += part.Text
+		}
+	}
+
+	items, newCursor, err := j.parseJSONL(j.accumulatedText, j.cursor, true)
+	if err != nil {
+		return nil, err
+	}
+	j.cursor = newCursor
+	return items, nil
+}
+
+// ParseMessage parses the message and returns the formatted message.
+func (j *jsonlHandler) ParseMessage(m *Message) (*Message, error) {
 	return m, nil
+}
+
+// parseJSONL parses JSONL starting from the cursor position.
+// Returns the parsed items, the new cursor position, and any error.
+func (j *jsonlHandler) parseJSONL(text string, cursor int, allowPartial bool) ([]any, int, error) {
+	if text == "" || cursor >= len(text) {
+		return nil, cursor, nil
+	}
+
+	results := []any{}
+	remaining := text[cursor:]
+	lines := strings.Split(remaining, "\n")
+	currentPos := cursor
+
+	for i, line := range lines {
+		isLastLine := i == len(lines)-1
+		lineLen := len(line)
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "{") {
+			var result any
+			err := json.Unmarshal([]byte(trimmed), &result)
+			if err != nil {
+				if allowPartial && isLastLine {
+					partialResult, partialErr := base.ParsePartialJSON(trimmed)
+					if partialErr == nil && partialResult != nil {
+						results = append(results, partialResult)
+					}
+					// Don't advance cursor for partial line.
+					break
+				}
+				return nil, cursor, fmt.Errorf("invalid JSON on line %d: %w", i+1, err)
+			}
+			if result != nil {
+				results = append(results, result)
+			}
+		}
+
+		if !isLastLine {
+			currentPos += lineLen + 1 // +1 for newline
+		}
+	}
+
+	return results, currentPos, nil
 }

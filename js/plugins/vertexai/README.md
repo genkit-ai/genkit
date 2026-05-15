@@ -10,11 +10,11 @@ npm i --save @genkit-ai/vertexai
 
 ```ts
 import { genkit } from 'genkit';
-import { vertexAI, gemini, gemini15Flash } from '@genkit-ai/vertexai';
+import { vertexAI } from '@genkit-ai/vertexai';
 
 const ai = genkit({
   plugins: [vertexAI()],
-  model: gemini15Flash,
+  model: vertexAI.model('gemini-2.5-flash'),
 });
 
 async () => {
@@ -23,7 +23,7 @@ async () => {
 };
 ```
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests against that repo.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
 Usage information and reference details can be found in [official Genkit documentation](https://genkit.dev/docs/get-started/).
 

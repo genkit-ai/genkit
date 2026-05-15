@@ -14,41 +14,59 @@ This document provides rules and examples for building with the Genkit API in No
 
 NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but you should follow the user's preference as mentioned above.
 
-## Core Setup
+## Project Setup
 
-1.  **Initialize Project**
+### Project Initialization
 
-    ```bash
-    mkdir my-genkit-app && cd my-genkit-app
-    npm init -y
-    npm install -D typescript tsx \@types/node
-    ```
+- If the directory is empty:
+  Initialize a new project:
+  ```bash
+  npm init -y
+  npm install -D typescript tsx @types/node
+  ```
+- If the directory is not empty (existing project):
+  - Adhere to the current project structure.
+  - Detect the package manager in use (npm, pnpm, yarn, bun) and use the corresponding commands.
+  - Detect if the project is ESM (`"type": "module"` in package.json) or CJS.
+    - For ESM: Use `import` syntax.
+    - For CJS: Use `require` syntax.
+  - IMPORTANT: Do NOT refactor the project (e.g., converting to TypeScript or ESM) solely for Genkit. Work with the existing setup.
 
-2.  **Install Dependencies**
+### Dependencies
 
-    ```bash
-    npm install genkit \@genkit-ai/google-genai data-urls node-fetch
-    ```
+Install core dependencies (adjust command for the user's package manager):
 
-3.  **Install Genkit CLI**
+```bash
+npm install genkit @genkit-ai/google-genai
+```
 
-    ```bash
-    npm install -g genkit-cli
-    ```
+(Add other plugins as requested)
 
-4.  **Configure Genkit**
+### Genkit CLI
 
-    All code should be in a single `src/index.ts` file.
+If the Genkit CLI is not already installed:
 
-    ```ts
-    // src/index.ts
-    import { genkit, z } from 'genkit';
-    import { googleAI } from '@genkit-ai/google-genai';
+```bash
+curl -sL cli.genkit.dev | bash
+# or,
+npm install -g genkit-cli
+```
 
-    export const ai = genkit({
-      plugins: [googleAI()],
-    });
-    ```
+### Configuration
+
+Create a single `src/index.ts` (or `src/index.js` for JS) file.
+
+```ts
+// src/index.ts
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+
+export const ai = genkit({
+  plugins: [googleAI()],
+});
+
+// Your flows and logic here
+```
 
 ## Best Practices
 
@@ -56,16 +74,18 @@ NOTE: For the sake of brevity, the snippets below use the Google AI plugin, but 
 
 2.  **Model Naming**: Always specify models using the model helper. Use string identifier if model helper is unavailable.
 
+> Note: Gemini 3.0 models are currently in preview. Use 2.5 models for GA use-cases.
+
     ```ts
     // PREFERRED: Using the model helper
     const response = await ai.generate({
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-3-flash-preview'),
       // ...
     });
 
     // LESS PREFERRED: Full string identifier
     const response = await ai.generate({
-      model: 'googleai/gemini-2.5-pro',
+      model: 'googleai/gemini-3-flash-preview',
       // ...
     });
     ```
@@ -87,7 +107,7 @@ export const basicInferenceFlow = ai.defineFlow(
   },
   async (topic) => {
     const response = await ai.generate({
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-3-flash-preview'),
       prompt: `Write a short, creative paragraph about ${topic}.`,
       config: { temperature: 0.8 },
     });
@@ -206,7 +226,7 @@ export const imageGenerationFlow = ai.defineFlow(
   },
   async (prompt) => {
     const response = await ai.generate({
-      model: googleAI.model('imagen-3.0-generate-002'),
+      model: googleAI.model('gemini-3-pro-image-preview'),
       prompt,
       output: { format: 'media' },
     });
@@ -239,7 +259,7 @@ export const videoGenerationFlow = ai.defineFlow(
   },
   async (prompt) => {
     let { operation } = await ai.generate({
-      model: googleAI.model('veo-3.0-generate-preview'),
+      model: googleAI.model('veo-3.1-generate-preview'),
       prompt,
     });
 
@@ -289,40 +309,38 @@ export const videoGenerationFlow = ai.defineFlow(
 
 ## Running and Inspecting Flows
 
-1.  **Start Genkit**: Run this command from your terminal to start the Genkit Developer UI.
+**Start Genkit**: Genkit can be started locally by using the `genkit start` command, along with the process startup command:
 
-    ```bash
-    genkit start --  <command to run your code>
-    ```
+```bash
+genkit start --  <command to run your code>
+```
 
-    The <command to run your code> will vary based on the project’s setup and
-    the file you want to execute. For e.g.:
+For e.g.:
 
-    ```bash
-    # Running a typical development server
-    genkit start -- npm run dev
+```bash
+genkit start -- npm run dev
+```
 
-    # Running a TypeScript file directly
-    genkit start -- npx tsx --watch src/index.ts
+You can can automate starting genkit using the following steps:
 
-    # Running a JavaScript file directly
-    genkit start -- node --watch src/index.js
-    ```
-
-    Analyze the users project and build tools to use the right command for the
-    project. The command should output a URL for the Genkit Dev UI. Direct the
-    user to visit this URL to run and inspect their Genkit app.
+1. Identify the command to start the user's project's (e.g., `npm run dev`)
+2. Use the `start_runtime` tool to start the runtime process. This is required for Genkit to discover flows.
+   - Example: If the project uses `npm run dev`, call `start_runtime` with `{ command: "npm", args: ["run", "dev"] }`.
+3. After starting the runtime, instruct the user to run `genkit start` in their terminal to launch the Developer UI.
 
 ## Suggested Models
 
 Here are suggested models to use for various task types. This is NOT an
 exhaustive list.
 
+> Note: Gemini 3.0 models are currently in preview.
+
 ### Advanced Text/Reasoning
 
 ```
 | Plugin                             | Recommended Model                  |
 |------------------------------------|------------------------------------|
+| @genkit-ai/google-genai            | gemini-3-pro-preview (Preview)     |
 | @genkit-ai/google-genai            | gemini-2.5-pro                     |
 | @genkit-ai/compat-oai/openai       | gpt-4o                             |
 | @genkit-ai/compat-oai/deepseek     | deepseek-reasoner                  |
@@ -334,6 +352,7 @@ exhaustive list.
 ```
 | Plugin                             | Recommended Model                  |
 |------------------------------------|------------------------------------|
+| @genkit-ai/google-genai            | gemini-3-flash-preview (Preview)   |
 | @genkit-ai/google-genai            | gemini-2.5-flash                   |
 | @genkit-ai/compat-oai/openai       | gpt-4o-mini                        |
 | @genkit-ai/compat-oai/deepseek     | deepseek-chat                      |
@@ -352,11 +371,12 @@ exhaustive list.
 ### Image Generation
 
 ```
-| Plugin                             | Recommended Model                  | Input Modalities  |
-|------------------------------------|------------------------------------|-------------------|
-| @genkit-ai/google-genai            | gemini-2.5-flash-image-preview     | Text, Image       |
-| @genkit-ai/google-genai            | imagen-4.0-generate-preview-06-06  | Text              |
-| @genkit-ai/compat-oai/openai       | gpt-image-1                        | Text              |
+| Plugin                             | Recommended Model                    | Input Modalities  |
+|------------------------------------|--------------------------------------|-------------------|
+| @genkit-ai/google-genai            | gemini-3-pro-image-preview (Preview) | Text, Image       |
+| @genkit-ai/google-genai            | gemini-2.5-flash-image               | Text, Image       |
+| @genkit-ai/google-genai            | imagen-4.0-generate-001              | Text              |
+| @genkit-ai/compat-oai/openai       | gpt-image-1                          | Text              |
 ```
 
 ### Video Generation
@@ -364,5 +384,5 @@ exhaustive list.
 ```
 | Plugin                             | Recommended Model                  |
 |------------------------------------|------------------------------------|
-| @genkit-ai/google-genai            | veo-3.0-generate-preview           |
+| @genkit-ai/google-genai            | veo-3.1-generate-preview (Preview) |
 ```

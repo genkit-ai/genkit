@@ -188,10 +188,15 @@ describe('Google AI Client', () => {
       const errorResponse = { error: { message: 'Internal Error' } };
       mockFetchResponse(errorResponse, false, 500, 'Internal Server Error');
 
-      await assert.rejects(
-        listModels(apiKey),
-        /Failed to fetch from .* Error fetching from .* \[500 Internal Server Error\] Internal Error/
-      );
+      await assert.rejects(listModels(apiKey), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'INTERNAL');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[500 Internal Server Error\] Internal Error/
+        );
+        return true;
+      });
     });
 
     it('should throw an error if fetch fails with non-JSON error', async () => {
@@ -203,19 +208,41 @@ describe('Google AI Client', () => {
         'text/html'
       );
 
-      await assert.rejects(
-        listModels(apiKey),
-        /Failed to fetch from .* Error fetching from .* \[500 Internal Server Error\] <html><body><h1>Server Error<\/h1><\/body><\/html>/
-      );
+      await assert.rejects(listModels(apiKey), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'INTERNAL');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[500 Internal Server Error\] <html><body><h1>Server Error<\/h1><\/body><\/html>/
+        );
+        return true;
+      });
     });
 
     it('should throw an error if fetch fails with empty response body', async () => {
       mockFetchResponse(null, false, 502, 'Bad Gateway');
 
-      await assert.rejects(
-        listModels(apiKey),
-        /Failed to fetch from .* Error fetching from .* \[502 Bad Gateway\] $/
-      );
+      await assert.rejects(listModels(apiKey), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'UNKNOWN');
+        assert.match(err.message, /Error fetching from .* \[502 Bad Gateway\]/);
+        return true;
+      });
+    });
+
+    it('should throw a resource exhausted error on 429', async () => {
+      const errorResponse = { error: { message: 'Too many requests' } };
+      mockFetchResponse(errorResponse, false, 429, 'Too Many Requests');
+
+      await assert.rejects(listModels(apiKey), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[429 Too Many Requests\] Too many requests/
+        );
+        return true;
+      });
     });
 
     it('should throw an error on network failure', async () => {
@@ -276,7 +303,15 @@ describe('Google AI Client', () => {
 
       await assert.rejects(
         generateContent(apiKey, model, request),
-        /Failed to fetch from .* Error fetching from .* \[400 Bad Request\] Invalid Request/
+        (err: any) => {
+          assert.strictEqual(err.name, 'GenkitError');
+          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+          assert.match(
+            err.message,
+            /Error fetching from .* \[400 Bad Request\] Invalid Request/
+          );
+          return true;
+        }
       );
     });
 
@@ -285,7 +320,15 @@ describe('Google AI Client', () => {
 
       await assert.rejects(
         generateContent(apiKey, model, request),
-        /Failed to fetch from .* Error fetching from .* \[400 Bad Request\] Bad Request/
+        (err: any) => {
+          assert.strictEqual(err.name, 'GenkitError');
+          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+          assert.match(
+            err.message,
+            /Error fetching from .* \[400 Bad Request\] Bad Request/
+          );
+          return true;
+        }
       );
     });
 
@@ -329,10 +372,15 @@ describe('Google AI Client', () => {
       const errorResponse = { error: { message: 'Embedding failed' } };
       mockFetchResponse(errorResponse, false, 500, 'Internal Server Error');
 
-      await assert.rejects(
-        embedContent(apiKey, model, request),
-        /Failed to fetch from .* Error fetching from .* \[500 Internal Server Error\] Embedding failed/
-      );
+      await assert.rejects(embedContent(apiKey, model, request), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'INTERNAL');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[500 Internal Server Error\] Embedding failed/
+        );
+        return true;
+      });
     });
 
     it('should throw on API error with non-JSON body', async () => {
@@ -344,10 +392,15 @@ describe('Google AI Client', () => {
         'text/plain'
       );
 
-      await assert.rejects(
-        embedContent(apiKey, model, request),
-        /Failed to fetch from .* Error fetching from .* \[500 Internal Server Error\] Internal Server Error/
-      );
+      await assert.rejects(embedContent(apiKey, model, request), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'INTERNAL');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[500 Internal Server Error\] Internal Server Error/
+        );
+        return true;
+      });
     });
 
     it('should throw on network failure', async () => {
@@ -677,7 +730,15 @@ describe('Google AI Client', () => {
 
       await assert.rejects(
         imagenPredict(apiKey, model, request),
-        /Failed to fetch from .* Error fetching from .* \[400 Bad Request\] Imagen failed/
+        (err: any) => {
+          assert.strictEqual(err.name, 'GenkitError');
+          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+          assert.match(
+            err.message,
+            /Error fetching from .* \[400 Bad Request\] Imagen failed/
+          );
+          return true;
+        }
       );
     });
 
@@ -723,10 +784,15 @@ describe('Google AI Client', () => {
       const errorResponse = { error: { message: 'Veo failed to start' } };
       mockFetchResponse(errorResponse, false, 500, 'Internal Server Error');
 
-      await assert.rejects(
-        veoPredict(apiKey, model, request),
-        /Failed to fetch from .* Error fetching from .* \[500 Internal Server Error\] Veo failed to start/
-      );
+      await assert.rejects(veoPredict(apiKey, model, request), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'INTERNAL');
+        assert.match(
+          err.message,
+          /Error fetching from .* \[500 Internal Server Error\] Veo failed to start/
+        );
+        return true;
+      });
     });
   });
 
@@ -765,7 +831,15 @@ describe('Google AI Client', () => {
 
       await assert.rejects(
         veoCheckOperation(apiKey, operationName),
-        /Failed to fetch from .* Error fetching from .* \[404 Not Found\] Operation not found/
+        (err: any) => {
+          assert.strictEqual(err.name, 'GenkitError');
+          assert.strictEqual(err.status, 'UNKNOWN');
+          assert.match(
+            err.message,
+            /Error fetching from .* \[404 Not Found\] Operation not found/
+          );
+          return true;
+        }
       );
     });
   });

@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
-import { textEmbedding004, vertexAI } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 
 // Initialize Genkit
 
 export const ai = genkit({
   plugins: [
-    vertexAI({ location: 'us-central1' }),
+    googleAI(),
     devLocalVectorstore([
       {
         indexName: 'menu-items',
-        embedder: textEmbedding004,
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),

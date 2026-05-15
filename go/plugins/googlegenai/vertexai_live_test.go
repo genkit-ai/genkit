@@ -44,11 +44,11 @@ func TestVertexAILive(t *testing.T) {
 
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("vertexai/gemini-2.0-flash"),
+		genkit.WithDefaultModel("vertexai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.VertexAI{ProjectID: projectID, Location: location}),
 	)
 
-	embedder := googlegenai.VertexAIEmbedder(g, "textembedding-gecko@003")
+	embedder := googlegenai.VertexAIEmbedder(g, "gemini-embedding-001")
 
 	gablorkenTool := genkit.DefineTool(g, "gablorken", "use this tool when the user asks to calculate a gablorken",
 		func(ctx *ai.ToolContext, input struct {
@@ -111,15 +111,15 @@ func TestVertexAILive(t *testing.T) {
 	})
 	t.Run("tool", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithPrompt("what is a gablorken of 2 over 3.5?"),
+			ai.WithPrompt("what is a gablorken of value 2 over 3.5?"),
 			ai.WithTools(gablorkenTool))
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		out := resp.Message.Content[0].Text
-		if !strings.Contains(out, "12.25") {
-			t.Errorf("got %s, expecting it to contain \"12.25\"", out)
+		if !strings.Contains(out, "11.31") {
+			t.Errorf("got %s, expecting it to contain \"11.31\"", out)
 		}
 	})
 	t.Run("embedder", func(t *testing.T) {
@@ -267,7 +267,7 @@ func TestVertexAILive(t *testing.T) {
 		if location != "global" {
 			t.Skipf("image generation in Vertex AI is only supported in region: global, got: %s", location)
 		}
-		m := googlegenai.VertexAIModel(g, "gemini-2.0-flash-preview-image-generation")
+		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash-image")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(genai.GenerateContentConfig{
 				ResponseModalities: []string{"IMAGE", "TEXT"},
@@ -332,7 +332,7 @@ func TestVertexAILive(t *testing.T) {
 			t.Skipf("thinking in Vertex AI is only supported in these regions: [global, us-central1], got: %q", location)
 		}
 
-		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash-preview-05-20")
+		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(
 				genai.GenerateContentConfig{
@@ -364,7 +364,7 @@ func TestVertexAILive(t *testing.T) {
 			t.Skipf("thinking in Vertex AI is only supported in these regions: [global, us-central1], got: %q", location)
 		}
 
-		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash-preview-05-20")
+		m := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(
 				genai.GenerateContentConfig{

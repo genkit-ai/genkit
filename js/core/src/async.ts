@@ -27,7 +27,7 @@ export interface Task<T> {
 }
 
 /** Utility for creating Tasks. */
-function createTask<T>(): Task<T> {
+export function createTask<T>(): Task<T> {
   let resolve: unknown, reject: unknown;
   const promise = new Promise<T>(
     (res, rej) => ([resolve, reject] = [res, rej])
@@ -125,4 +125,52 @@ export function lazy<T>(fn: () => T | PromiseLike<T>): PromiseLike<T> {
       reject(e);
     }
   });
+}
+
+/**
+ * Options for AsyncTaskQueue.
+ */
+export interface AsyncTaskQueueOptions {
+  /**
+   * If true, the queue will stop executing subsequent tasks if a task fails.
+   * If false (default), the queue will continue executing subsequent tasks even if a task fails.
+   */
+  stopOnError?: boolean;
+}
+
+/**
+ * A queue for asynchronous tasks. The queue ensures that only one task runs at a time in order.
+ */
+export class AsyncTaskQueue {
+  private last: Promise<any> = Promise.resolve();
+  private options: AsyncTaskQueueOptions;
+
+  constructor(options?: AsyncTaskQueueOptions) {
+    this.options = options || {};
+  }
+
+  /**
+   * Adds a task to the queue.
+   * The task will be executed when its turn comes up in the queue.
+   * @param task A function that returns a value or a PromiseLike.
+   */
+  enqueue(task: () => any | PromiseLike<any>) {
+    if (this.options.stopOnError) {
+      this.last = this.last.then(() => lazy(task)).then((res) => res);
+    } else {
+      this.last = this.last
+        .catch(() => {})
+        .then(() => lazy(task))
+        .then((res) => res);
+    }
+    // Prevent unhandled promise rejections.
+    this.last.catch(() => {});
+  }
+
+  /**
+   * Waits for all tasks currently in the queue to complete.
+   */
+  async merge() {
+    await this.last;
+  }
 }

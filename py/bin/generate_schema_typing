@@ -1,80 +1,47 @@
 #!/usr/bin/env bash
 # Copyright 2025 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 # SPDX-License-Identifier: Apache-2.0
 
-# The convention in Python used by several libraries for names of modules
-# containing type hints is `typing`. For example, the ASGI ref module from
-# Django called `asgiref` also uses this convention.
+# Generates py/packages/genkit/src/genkit/_core/_typing.py from the JSON schema
+# using our custom generator (py/tools/schema_to_typing/schema_to_typing.py).
+#
+# Usage: ./py/bin/generate_schema_typing [--ci]
+#   --ci  Fail if the generated file differs from the committed one.
 
 set -euo pipefail
 
-CI_ENABLED=false
+. "$(dirname "$0")/_common.sh"
 
+CI_ENABLED=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
-  --ci)
-    CI_ENABLED=true
-    shift
-    ;;
-  *)
-    echo "Unknown option: $1"
-    echo "Usage: $0 [--ci]"
-    exit 1
-    ;;
+    --ci) CI_ENABLED=true; shift ;;
+    *) echo "Unknown option: $1"; echo "Usage: $0 [--ci]"; exit 1 ;;
   esac
 done
 
 TOP_DIR=$(git rev-parse --show-toplevel)
-TYPING_FILE="${TOP_DIR}/py/packages/genkit/src/genkit/core/typing.py"
+SCHEMA_FILE="${TOP_DIR}/genkit-tools/genkit-schema.json"
+TYPING_FILE="${TOP_DIR}/py/packages/genkit/src/genkit/_core/_typing.py"
+GENERATOR="${TOP_DIR}/py/tools/schema_to_typing/schema_to_typing.py"
 
-# If in CI mode and the file exists, make a backup copy to compare later.
-BACKUP_FILE=""
 if [[ $CI_ENABLED == "true" ]] && [[ -f $TYPING_FILE ]]; then
   BACKUP_FILE="${TYPING_FILE}.backup"
   cp "$TYPING_FILE" "$BACKUP_FILE"
 fi
 
-# Generate types using configuration from pyproject.toml.
-uv run --directory "${TOP_DIR}/py" datamodel-codegen \
-  --formatters=ruff-check \
-  --formatters=ruff-format
+python3 "$GENERATOR" "$SCHEMA_FILE" "$TYPING_FILE"
 
-# Sanitize the generated schema.
-python3 "${TOP_DIR}/py/bin/sanitize_schema_typing.py" "${TYPING_FILE}"
+uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
+uv run --active --directory "${TOP_DIR}/py" ruff check --fix "$TYPING_FILE"
+uv run --active --directory "${TOP_DIR}/py" ruff format "$TYPING_FILE"
 
-# Checks and formatting.
-uv run --directory "${TOP_DIR}/py" \
-  ruff format "${TOP_DIR}"
-uv run --directory "${TOP_DIR}/py" \
-  ruff check --fix "${TYPING_FILE}"
-uv run --directory "${TOP_DIR}/py" \
-  ruff format "${TOP_DIR}"
-
-# We want to detect and raise an error when this file changes in our hooks or in
-# CI.
-if [[ $CI_ENABLED == "true" ]] && [[ -f $BACKUP_FILE ]]; then
+if [[ $CI_ENABLED == "true" ]] && [[ -f ${BACKUP_FILE:-} ]]; then
   if ! diff -q "$BACKUP_FILE" "$TYPING_FILE" >/dev/null; then
-    echo "Error: Generated schema typing file differs from the existing one."
-    echo "Please run './py/bin/generate_schema_typing' locally and commit the changes."
+    echo "Error: Generated _typing.py differs from committed version."
+    echo "Run './py/bin/generate_schema_typing' locally and commit the result."
     rm "$BACKUP_FILE"
     exit 1
   fi
-fi
-
-# Remove the backup file if it exists.
-if [[ -f $BACKUP_FILE ]]; then
   rm "$BACKUP_FILE"
 fi

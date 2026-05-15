@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '@genkit-ai/core';
+import { GenkitError, z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -30,13 +30,18 @@ import {
 } from '../../src/model.js';
 import {
   CONTEXT_PREFACE,
+  TEST_ONLY,
   augmentWithContext,
+  fallback,
+  retry,
   simulateConstrainedGeneration,
   simulateSystemPrompt,
   validateSupport,
   type AugmentWithContextOptions,
 } from '../../src/model/middleware.js';
 import { defineProgrammableModel } from '../helpers.js';
+
+const { setRetryTimeout } = TEST_ONLY;
 
 initNodeFeatures();
 
@@ -137,6 +142,481 @@ describe('validateSupport', () => {
       runner(examples.multiturn, noopNext),
       /does not support multiple messages/
     );
+  });
+});
+
+describe('retry', () => {
+  let registry: Registry;
+
+  beforeEach(() => {
+    registry = new Registry();
+    configureFormats(registry);
+  });
+
+  it('should not retry on success', async () => {
+    const pm = defineProgrammableModel(registry);
+    pm.handleResponse = async (req, sc) => {
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [retry()],
+    });
+
+    assert.strictEqual(pm.requestCount, 1);
+    assert.strictEqual(result.text, 'success');
+  });
+
+  it('should retry on a retryable GenkitError', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      if (requestCount < 3) {
+        throw new GenkitError({ status: 'UNAVAILABLE', message: 'test' });
+      }
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    setRetryTimeout((callback, ms) => {
+      callback();
+      return 0 as any;
+    });
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [retry({ maxRetries: 3 })],
+    });
+
+    assert.strictEqual(requestCount, 3);
+    assert.strictEqual(result.text, 'success');
+  });
+
+  it('should retry on a non-GenkitError', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      if (requestCount < 2) {
+        throw new Error('generic error');
+      }
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    setRetryTimeout((callback, ms) => {
+      callback();
+      return 0 as any;
+    });
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [retry({ maxRetries: 2 })],
+    });
+
+    assert.strictEqual(requestCount, 2);
+    assert.strictEqual(result.text, 'success');
+  });
+
+  it('should throw after exhausting retries', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      throw new GenkitError({ status: 'UNAVAILABLE', message: 'test' });
+    };
+
+    setRetryTimeout((callback, ms) => {
+      callback();
+      return 0 as any;
+    });
+
+    await assert.rejects(
+      generate(registry, {
+        model: 'programmableModel',
+        prompt: 'test',
+        use: [retry({ maxRetries: 2 })],
+      }),
+      /UNAVAILABLE: test/
+    );
+
+    assert.strictEqual(requestCount, 3);
+  });
+
+  it('should call onError callback', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      throw new Error('test error');
+    };
+
+    setRetryTimeout((callback, ms) => {
+      callback();
+      return 0 as any;
+    });
+
+    let errorCount = 0;
+    let lastError: Error | undefined;
+    await assert.rejects(
+      generate(registry, {
+        model: 'programmableModel',
+        prompt: 'test',
+        use: [
+          retry({
+            maxRetries: 2,
+            onError: (err, attempt) => {
+              errorCount++;
+              lastError = err;
+              assert.strictEqual(attempt, errorCount);
+            },
+          }),
+        ],
+      }),
+      /test error/
+    );
+
+    assert.strictEqual(requestCount, 3);
+    assert.strictEqual(errorCount, 2);
+    assert.ok(lastError);
+    assert.strictEqual(lastError!.message, 'test error');
+  });
+
+  it('should not retry on non-retryable status', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      throw new GenkitError({ status: 'INVALID_ARGUMENT', message: 'test' });
+    };
+
+    await assert.rejects(
+      generate(registry, {
+        model: 'programmableModel',
+        prompt: 'test',
+        use: [retry({ maxRetries: 2 })],
+      }),
+      /INVALID_ARGUMENT: test/
+    );
+
+    assert.strictEqual(requestCount, 1);
+  });
+
+  it('should respect initial delay', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      if (requestCount < 2) {
+        throw new Error('generic error');
+      }
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    let totalDelay = 0;
+    setRetryTimeout((callback, ms) => {
+      totalDelay += ms!;
+      callback();
+      return 0 as any;
+    });
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [retry({ maxRetries: 2, initialDelayMs: 50, noJitter: true })],
+    });
+
+    assert.strictEqual(requestCount, 2);
+    assert.strictEqual(result.text, 'success');
+    assert.strictEqual(totalDelay, 50);
+  });
+
+  it('should respect backoff factor', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      if (requestCount < 3) {
+        throw new Error('generic error');
+      }
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    let totalDelay = 0;
+    setRetryTimeout((callback, ms) => {
+      totalDelay += ms!;
+      callback();
+      return 0 as any;
+    });
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [
+        retry({
+          maxRetries: 3,
+          initialDelayMs: 20,
+          backoffFactor: 2,
+          noJitter: true,
+        }),
+      ],
+    });
+
+    assert.strictEqual(requestCount, 3);
+    assert.strictEqual(result.text, 'success');
+    assert.strictEqual(totalDelay, 20 + 40);
+  });
+
+  it('should apply jitter', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      if (requestCount < 2) {
+        throw new Error('generic error');
+      }
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    let totalDelay = 0;
+    setRetryTimeout((callback, ms) => {
+      totalDelay += ms!;
+      callback();
+      return 0 as any;
+    });
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [
+        retry({
+          maxRetries: 2,
+          initialDelayMs: 50,
+          noJitter: false, // do jitter
+        }),
+      ],
+    });
+
+    assert.strictEqual(requestCount, 2);
+    assert.strictEqual(result.text, 'success');
+    assert.ok(totalDelay >= 50);
+    assert.ok(totalDelay <= 1050);
+  });
+
+  it('should respect max delay', async () => {
+    const pm = defineProgrammableModel(registry);
+    let requestCount = 0;
+    pm.handleResponse = async (req, sc) => {
+      requestCount++;
+      if (requestCount < 3) {
+        throw new Error('generic error');
+      }
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    let totalDelay = 0;
+    setRetryTimeout((callback, ms) => {
+      totalDelay += ms!;
+      callback();
+      return 0 as any;
+    });
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [
+        retry({
+          maxRetries: 3,
+          initialDelayMs: 20,
+          backoffFactor: 2,
+          maxDelayMs: 30,
+          noJitter: true,
+        }),
+      ],
+    });
+
+    assert.strictEqual(requestCount, 3);
+    assert.strictEqual(result.text, 'success');
+    assert.strictEqual(totalDelay, 20 + 30);
+  });
+});
+
+describe('fallback', () => {
+  let registry: Registry;
+
+  beforeEach(() => {
+    registry = new Registry();
+    configureFormats(registry);
+  });
+
+  it('should not fallback on success', async () => {
+    const pm = defineProgrammableModel(registry, {}, 'programmableModel');
+    pm.handleResponse = async (req, sc) => {
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'success' }],
+        },
+      };
+    };
+
+    const fallbackPm = defineProgrammableModel(registry, {}, 'fallbackModel');
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [fallback({ registry }, { models: ['fallbackModel'] })],
+    });
+
+    assert.strictEqual(pm.requestCount, 1);
+    assert.strictEqual(fallbackPm.requestCount, 0);
+  });
+
+  it('should call onError callback', async () => {
+    const pm = defineProgrammableModel(registry, {}, 'programmableModel');
+    pm.handleResponse = async () => {
+      throw new GenkitError({ status: 'UNAVAILABLE', message: 'test' });
+    };
+
+    const fallbackPm = defineProgrammableModel(registry, {}, 'fallbackModel');
+    fallbackPm.handleResponse = async () => {
+      throw new GenkitError({ status: 'INTERNAL', message: 'fallback fail' });
+    };
+
+    let errorCount = 0;
+    let lastError: Error | undefined;
+    await assert.rejects(
+      generate(registry, {
+        model: 'programmableModel',
+        prompt: 'test',
+        use: [
+          fallback({ registry } as any, {
+            models: ['fallbackModel'],
+            onError: (err) => {
+              errorCount++;
+              lastError = err;
+            },
+          }),
+        ],
+      }),
+      /INTERNAL: fallback fail/
+    );
+
+    assert.strictEqual(pm.requestCount, 1);
+    assert.strictEqual(fallbackPm.requestCount, 1);
+    assert.strictEqual(errorCount, 2);
+    assert.ok(lastError);
+    assert.strictEqual(lastError!.message, 'INTERNAL: fallback fail');
+  });
+
+  it('should fallback on a fallbackable error', async () => {
+    const pm = defineProgrammableModel(registry, {}, 'programmableModel');
+    pm.handleResponse = async () => {
+      throw new GenkitError({ status: 'UNAVAILABLE', message: 'test' });
+    };
+
+    const fallbackPm = defineProgrammableModel(registry, {}, 'fallbackModel');
+    fallbackPm.handleResponse = async () => {
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: 'fallback success' }],
+        },
+      };
+    };
+
+    const result = await generate(registry, {
+      model: 'programmableModel',
+      prompt: 'test',
+      use: [fallback({ registry }, { models: ['fallbackModel'] })],
+    });
+
+    assert.strictEqual(pm.requestCount, 1);
+    assert.strictEqual(fallbackPm.requestCount, 1);
+    assert.strictEqual(result.text, 'fallback success');
+  });
+
+  it('should throw after all fallbacks fail', async () => {
+    const pm = defineProgrammableModel(registry, {}, 'programmableModel');
+    pm.handleResponse = async (req, sc) => {
+      throw new GenkitError({ status: 'UNAVAILABLE', message: 'test' });
+    };
+
+    const fallbackPm = defineProgrammableModel(registry, {}, 'fallbackModel');
+    fallbackPm.handleResponse = async (req, sc) => {
+      throw new GenkitError({ status: 'INTERNAL', message: 'fallback fail' });
+    };
+
+    await assert.rejects(
+      generate(registry, {
+        model: 'programmableModel',
+        prompt: 'test',
+        use: [fallback({ registry }, { models: ['fallbackModel'] })],
+      }),
+      /INTERNAL: fallback fail/
+    );
+
+    assert.strictEqual(pm.requestCount, 1);
+    assert.strictEqual(fallbackPm.requestCount, 1);
+  });
+
+  it('should not fallback on non-fallbackable error', async () => {
+    const pm = defineProgrammableModel(registry, {}, 'programmableModel');
+    pm.handleResponse = async (req, sc) => {
+      throw new GenkitError({ status: 'INVALID_ARGUMENT', message: 'test' });
+    };
+
+    const fallbackPm = defineProgrammableModel(registry, {}, 'fallbackModel');
+
+    await assert.rejects(
+      generate(registry, {
+        model: 'programmableModel',
+        prompt: 'test',
+        use: [fallback({ registry }, { models: ['fallbackModel'] })],
+      }),
+      /INVALID_ARGUMENT: test/
+    );
+
+    assert.strictEqual(pm.requestCount, 1);
+    assert.strictEqual(fallbackPm.requestCount, 0);
   });
 });
 

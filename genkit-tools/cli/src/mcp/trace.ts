@@ -14,31 +14,44 @@
  * limitations under the License.
  */
 
-import { RuntimeManager } from '@genkit-ai/tools-common/manager';
+import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import z from 'zod';
 import { McpRunToolEvent } from './analytics.js';
+import {
+  McpToolOptions,
+  getCommonSchema,
+  resolveProjectRoot,
+} from './utils.js';
 
-export function defineTraceTools(server: McpServer, manager: RuntimeManager) {
+export function defineTraceTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
     'get_trace',
     {
       title: 'Get Genkit Trace',
-      description: 'Returns the trace details',
-      inputSchema: {
+      description: 'Returns the trace details.',
+      inputSchema: getCommonSchema(options.explicitProjectRoot, {
         traceId: z
           .string()
           .describe(
-            'trace id (typically returned after running a flow or other actions)'
+            'trace id (typically returned after running a flow or other actions); type: string'
           ),
-      },
+      }),
     },
-    async ({ traceId }) => {
+    async (opts) => {
       await record(new McpRunToolEvent('get_trace'));
+      const rootOrError = resolveProjectRoot(
+        options.explicitProjectRoot,
+        opts,
+        options.projectRoot
+      );
+      if (typeof rootOrError !== 'string') return rootOrError;
+      const { traceId } = opts;
 
       try {
-        const response = await manager.getTrace({ traceId });
+        const runtimeManager = await options.manager.getManager(rootOrError);
+        const response = await runtimeManager.getTrace({ traceId });
         return {
           content: [
             // TODO: render the trace insetad of of dumping it as is.
@@ -46,8 +59,16 @@ export function defineTraceTools(server: McpServer, manager: RuntimeManager) {
           ],
         };
       } catch (e) {
+        const errStr =
+          e instanceof GenkitToolsError ? e.formatError() : JSON.stringify(e);
         return {
-          content: [{ type: 'text', text: `Error: ${e}` }],
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${errStr}`,
+            },
+          ],
         };
       }
     }

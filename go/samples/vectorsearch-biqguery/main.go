@@ -84,7 +84,7 @@ func main() {
 			Location:  vectorsearchPlugin.Location,
 		}, vectorsearchPlugin))
 
-	model := googlegenai.VertexAIModel(g, "gemini-2.0-flash")
+	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 
 	// Create a BigQuery client.
 	bqClient, err := bigquery.NewClient(ctx, vectorsearchPlugin.ProjectID)

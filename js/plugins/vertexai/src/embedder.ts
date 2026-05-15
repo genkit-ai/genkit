@@ -24,6 +24,7 @@ import type { GoogleAuth } from 'google-auth-library';
 import type { PluginOptions } from './common/types.js';
 import { predictModel, type PredictClient } from './predict.js';
 
+/** @deprecated */
 export const TaskTypeSchema = z.enum([
   'RETRIEVAL_DOCUMENT',
   'RETRIEVAL_QUERY',
@@ -32,8 +33,10 @@ export const TaskTypeSchema = z.enum([
   'CLUSTERING',
 ]);
 
+/** @deprecated */
 export type TaskType = z.infer<typeof TaskTypeSchema>;
 
+/** @deprecated */
 export const VertexEmbeddingConfigSchema = z.object({
   /**
    * The `task_type` parameter is defined as the intended downstream application
@@ -46,13 +49,14 @@ export const VertexEmbeddingConfigSchema = z.object({
   /**
    * The `outputDimensionality` parameter allows you to specify the dimensionality of the embedding output.
    * By default, the model generates embeddings with 768 dimensions. Models such as
-   * `text-embedding-004`, `text-embedding-005`, and `text-multilingual-embedding-002`
+   * `gemini-embedding-001`, `text-embedding-005`, and `text-multilingual-embedding-002`
    * allow the output dimensionality to be adjusted between 1 and 768.
    * By selecting a smaller output dimensionality, users can save memory and storage space, leading to more efficient computations.
    **/
   outputDimensionality: z.number().min(1).max(768).optional(),
 });
 
+/** @deprecated */
 export type VertexEmbeddingConfig = z.infer<typeof VertexEmbeddingConfigSchema>;
 
 type InputType = 'text' | 'image' | 'video';
@@ -74,20 +78,33 @@ function commonRef(
   });
 }
 
+/** @deprecated */
 export const textEmbeddingGecko003 = commonRef('textembedding-gecko@003');
+
+/** @deprecated */
 export const textEmbedding004 = commonRef('text-embedding-004');
+
+/** @deprecated */
 export const textEmbedding005 = commonRef('text-embedding-005');
+
+/** @deprecated */
 export const textEmbeddingGeckoMultilingual001 = commonRef(
   'textembedding-gecko-multilingual@001'
 );
+
+/** @deprecated */
 export const textMultilingualEmbedding002 = commonRef(
   'text-multilingual-embedding-002'
 );
+
+/** @deprecated */
 export const multimodalEmbedding001 = commonRef('multimodalembedding@001', [
   'text',
   'image',
   'video',
 ]);
+
+/** @deprecated */
 export const geminiEmbedding001 = embedderRef({
   name: 'vertexai/gemini-embedding-001',
   configSchema: VertexEmbeddingConfigSchema,
@@ -100,6 +117,7 @@ export const geminiEmbedding001 = embedderRef({
   },
 });
 
+/** @deprecated */
 export const SUPPORTED_EMBEDDER_MODELS: Record<string, EmbedderReference> = {
   'textembedding-gecko@003': textEmbeddingGecko003,
   'text-embedding-004': textEmbedding004,
@@ -253,6 +271,7 @@ type EmbeddingResult = {
   metadata?: Record<string, unknown>;
 };
 
+/** @deprecated */
 export function defineVertexAIEmbedder(
   ai: Genkit,
   name: string,

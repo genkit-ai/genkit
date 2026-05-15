@@ -1,5 +1,5 @@
 ---
-model: googleai/gemini-2.0-flash
+model: googleai/gemini-2.5-flash
 config:
   temperature: 0.4
   safetySettings:

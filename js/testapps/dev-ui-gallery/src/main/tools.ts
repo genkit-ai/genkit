@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Flash } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { WeatherSchema } from '../common/types';
 import { ai } from '../genkit.js';
@@ -93,7 +93,7 @@ const template = `
 
 export const weatherPrompt = ai.definePrompt({
   name: 'weatherPrompt',
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   input: {
     schema: WeatherSchema,
   },

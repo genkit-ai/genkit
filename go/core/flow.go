@@ -45,13 +45,36 @@ type flowContext struct {
 	flowName string
 }
 
-// DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
-func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	return (*Flow[In, Out, struct{}])(DefineAction(r, name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
-		fc := &flowContext{}
+// NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
+func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
+	return (*Flow[In, Out, struct{}])(NewAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
+		fc := &flowContext{
+			flowName: name,
+		}
 		ctx = flowContextKey.NewContext(ctx, fc)
 		return fn(ctx, input)
 	}))
+}
+
+// NewStreamingFlow creates a streaming Flow that runs fn without registering it.
+func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
+	return (*Flow[In, Out, Stream])(NewStreamingAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
+		fc := &flowContext{
+			flowName: name,
+		}
+		ctx = flowContextKey.NewContext(ctx, fc)
+		if cb == nil {
+			cb = func(context.Context, Stream) error { return nil }
+		}
+		return fn(ctx, input, cb)
+	}))
+}
+
+// DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
+func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
+	f := NewFlow(name, fn)
+	f.Register(r)
+	return f
 }
 
 // DefineStreamingFlow creates a streaming Flow that runs fn, and registers it as an action.
@@ -64,11 +87,9 @@ func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flo
 // with a final return value that includes all the streamed data.
 // Otherwise, it should ignore the callback and just return a result.
 func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	return (*Flow[In, Out, Stream])(DefineStreamingAction(r, name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
-		fc := &flowContext{}
-		ctx = flowContextKey.NewContext(ctx, fc)
-		return fn(ctx, input, cb)
-	}))
+	f := NewStreamingFlow(name, fn)
+	f.Register(r)
+	return f
 }
 
 // Run runs the function f in the context of the current flow
@@ -108,7 +129,7 @@ func (f *Flow[In, Out, Stream]) RunJSON(ctx context.Context, input json.RawMessa
 	return (*ActionDef[In, Out, Stream])(f).RunJSON(ctx, input, cb)
 }
 
-// RunJSON runs the flow with JSON input and streaming callback and returns the output as JSON.
+// RunJSONWithTelemetry runs the flow with JSON input and streaming callback and returns the output as JSON along with telemetry info.
 func (f *Flow[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
 	return (*ActionDef[In, Out, Stream])(f).RunJSONWithTelemetry(ctx, input, cb)
 }
@@ -147,6 +168,10 @@ func (f *Flow[In, Out, Stream]) Stream(ctx context.Context, input In) func(func(
 			return nil
 		}
 		output, err := (*ActionDef[In, Out, Stream])(f).Run(ctx, input, cb)
+		if errors.Is(err, errStop) {
+			// Consumer broke out of the loop; don't yield again.
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 		} else {

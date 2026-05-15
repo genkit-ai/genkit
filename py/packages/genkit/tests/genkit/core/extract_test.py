@@ -14,16 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
+"""Tests for JSON extraction utilities."""
+
 from typing import Any
 
 import pytest
 
-from genkit.core.extract import extract_items, extract_json, parse_partial_json
+from genkit._core._extract_json import extract_json, extract_json_array_from_text, parse_partial_json
 
-# TODO: consider extracting these tests into shared yaml spec. They are already
+# TODO(#4356): consider extracting these tests into shared yaml spec. They are already
 # duplicated in js/ai/tests/extract_test.ts
 
-test_cases_extract_items = [
+test_cases_extract_json_array_from_text = [
     (
         'handles simple array in chunks',
         [
@@ -82,16 +85,16 @@ test_cases_extract_items = [
 
 @pytest.mark.parametrize(
     'name, steps',
-    test_cases_extract_items,
-    ids=[tc[0] for tc in test_cases_extract_items],
+    test_cases_extract_json_array_from_text,
+    ids=[tc[0] for tc in test_cases_extract_json_array_from_text],
 )
-def test_extract_items(name: str, steps: list[dict[str, Any]]) -> None:
-    """Test extraction of incomplete json that can be fixed"""
+def test_extract_json_array_from_text(name: str, steps: list[dict[str, Any]]) -> None:
+    """Test extraction of incomplete json that can be fixed."""
     text = ''
     cursor = 0
     for step in steps:
         text += step['chunk']
-        result = extract_items(text, cursor)
+        result = extract_json_array_from_text(text, cursor)
         assert result.items == step['want']
         cursor = result.cursor
 
@@ -141,9 +144,9 @@ test_cases_extract_json = [
     ids=[tc[0] for tc in test_cases_extract_json],
 )
 def test_extract_json(name: str, input_data: dict[str, Any], expected_data: dict[str, Any]) -> None:
-    """Test if input is unfixable raise the correct exception or return the proper error response"""
+    """Test if input is unfixable raise the correct exception or return the proper error response."""
     if expected_data.get('throws'):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             extract_json(input_data['text'], throw_on_bad_json=True)
     else:
         result = extract_json(
@@ -186,6 +189,6 @@ test_cases_parse_partial_json = [
     ids=[tc[0] for tc in test_cases_parse_partial_json],
 )
 def test_parse_partial_json(name: str, input_str: str, expected_data: dict[str, Any]) -> None:
-    """Test if it fixes simple malformed json string"""
+    """Test if it fixes simple malformed json string."""
     result = parse_partial_json(input_str)
     assert result == expected_data['expected']

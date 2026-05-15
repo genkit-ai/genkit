@@ -21,48 +21,52 @@ import (
 	"github.com/firebase/genkit/go/plugins/internal"
 )
 
-const provider = "vertexai"
-
-// supported anthropic models
-var anthropicModels = map[string]ai.ModelOptions{
-	"claude-3-5-sonnet-v2": {
-		Label:    "Vertex AI Model Garden - Claude 3.5 Sonnet",
+// AnthropicModels is a list of models supported in VertexAI
+// Keep this list updated since models cannot be dynamically listed
+// if we are authenticating with Google Credentials
+var AnthropicModels = map[string]ai.ModelOptions{
+	"claude-3-5-sonnet-v2@20241022": {
+		Label:    "Claude 3.5 Sonnet",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-3-5-sonnet-v2@20241022"},
 	},
-	"claude-3-5-sonnet": {
-		Label:    "Vertex AI Model Garden - Claude 3.5 Sonnet",
+	"claude-3-5-sonnet@20240620": {
+		Label:    "Claude 3.5 Sonnet",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-3-5-sonnet@20240620"},
 	},
-	"claude-3-sonnet": {
-		Label:    "Vertex AI Model Garden - Claude 3 Sonnet",
+	"claude-3-sonnet@20240229": {
+		Label:    "Claude 3 Sonnet",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-3-sonnet@20240229"},
 	},
-	"claude-3-haiku": {
-		Label:    "Vertex AI Model Garden - Claude 3 Haiku",
+	"claude-3-haiku@20240307": {
+		Label:    "Claude 3 Haiku",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-3-haiku@20240307"},
 	},
-	"claude-3-opus": {
-		Label:    "Vertex AI Model Garden - Claude 3 Opus",
+	"claude-3-opus@20240229": {
+		Label:    "Claude 3 Opus",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-3-opus@20240229"},
 	},
-	"claude-3-7-sonnet": {
-		Label:    "Vertex AI Model Garden - Claude 3.7 Sonnet",
+	"claude-3-7-sonnet@20250219": {
+		Label:    "Claude 3.7 Sonnet",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-3-7-sonnet@20250219"},
 	},
-	"claude-opus-4": {
-		Label:    "Vertex AI Model Garden - Claude Opus 4",
+	"claude-opus-4@20250514": {
+		Label:    "Claude Opus 4",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-opus-4@20250514"},
 	},
-	"claude-sonnet-4": {
-		Label:    "Vertex AI Model Garden - Claude Sonnet 4",
+	"claude-sonnet-4@20250514": {
+		Label:    "Claude Sonnet 4",
 		Supports: &internal.Multimodal,
-		Versions: []string{"claude-sonnet-4@20250514"},
+	},
+	"claude-opus-4-1-20250805": {
+		Label:    "Claude 4.1 Opus",
+		Supports: &internal.Multimodal,
+	},
+	"claude-sonnet-4-5-20250929": {
+		Label:    "Claude 4.5 Sonnet",
+		Supports: &internal.Multimodal,
+	},
+	"claude-haiku-4-5-20251001": {
+		Label:    "Claude 4.5 Haiku",
+		Supports: &internal.Multimodal,
 	},
 }

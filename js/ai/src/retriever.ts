@@ -20,14 +20,8 @@ import { toJsonSchema } from '@genkit-ai/core/schema';
 import { Document, DocumentDataSchema, type DocumentData } from './document.js';
 import type { EmbedderInfo } from './embedder.js';
 
-export {
-  Document,
-  DocumentDataSchema,
-  type DocumentData,
-  type MediaPart,
-  type Part,
-  type TextPart,
-} from './document.js';
+export { Document, DocumentDataSchema, type DocumentData } from './document.js';
+export { type MediaPart, type Part, type TextPart } from './parts.js';
 
 /**
  * Retriever implementation function signature.

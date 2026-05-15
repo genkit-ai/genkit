@@ -1,7 +1,15 @@
 ## Basic Example
 
 ```ts
-import { ai, z } from "@/ai/genkit"; // or wherever genkit is initialized
+import { genkit, z } from "genkit";
+// this example uses Gemini, but Genkit supports other provider plugins
+import { googleAI } from "@genkit-ai/google-genai";
+
+const ai = genkit({
+  plugins: [googleAI()],
+  // optional: assign a default model
+  model: googleAI.model('gemini-2.5-flash'),
+});
 
 const myTool = ai.defineTool({name, description, inputSchema: z.object(...)}, (input) => {...});
 
@@ -24,7 +32,7 @@ const {output} = await ai.generate({
 
 ## Important API Clarifications
 
-**IMPORTANT:** This app uses Genkit v1.19 which has changed significantly from pre-1.0 versions. Important changes include:
+**IMPORTANT:** This app uses Genkit v1.x which has changed significantly from pre-1.0 versions. Important changes include:
 
 ```ts
 const response = await ai.generate(...);
@@ -42,6 +50,12 @@ await response; // CORRECT 1.x syntax
 await response(); // INCORRECT pre-1.0 syntax
 await ai.generate({..., model: googleAI.model('gemini-2.5-flash')}); // CORRECT 1.x syntax
 await ai.generate({..., model: gemini15Pro}); // INCORRECT pre-1.0 syntax
+
+const ai = genkit({...}); // CORRECT 1.x syntax
+configureGenkit({...}); // INCORRECT pre-1.0 syntax
+
+ai.defineFlow({...}, (input) => {...}); // CORRECT 1.x syntax
+import { defineFlow } from "..."; // INCORRECT pre-1.0 syntax
 ```
 
 - Use `import {z} from "genkit"` when you need Zod to get an implementation consistent with Genkit.

@@ -143,14 +143,52 @@ export declare interface GoogleSearchRetrievalTool {
   /** Optional. {@link GoogleSearchRetrieval}. */
   googleSearchRetrieval?: GoogleSearchRetrieval;
   googleSearch?: GoogleSearchRetrieval;
+  google_search?: {
+    searchTypes?: {
+      webSearch?: {};
+      imageSearch?: {};
+    };
+  };
 }
 export function isGoogleSearchRetrievalTool(
   tool: Tool
 ): tool is GoogleSearchRetrievalTool {
   return (
     (tool as GoogleSearchRetrievalTool).googleSearchRetrieval !== undefined ||
-    (tool as GoogleSearchRetrievalTool).googleSearch !== undefined
+    (tool as GoogleSearchRetrievalTool).googleSearch !== undefined ||
+    (tool as GoogleSearchRetrievalTool).google_search !== undefined
   );
+}
+
+export declare interface UrlContextTool {
+  urlContext?: {};
+}
+
+/**
+ * The FileSearch tool that retrieves knowledge from Semantic Retrieval corpora.
+ * Files are imported to Semantic Retrieval corpora using the ImportFile API
+ */
+export declare interface FileSearchTool {
+  fileSearch: FileSearch;
+}
+
+export declare interface FileSearch {
+  /**
+   * The names of the fileSearchStores to retrieve from.
+   * Example: fileSearchStores/my-file-search-store-123
+   */
+  fileSearchStoreNames: string[];
+  /**
+   * Metadata filter to apply to the semantic retrieval documents and chunks.
+   */
+  metadataFilter?: string;
+  /**
+   * The number of semantic retrieval chunks to retrieve.
+   */
+  topK?: number;
+}
+export function isFileSearchTool(tool: Tool): tool is FileSearchTool {
+  return (tool as FileSearchTool).fileSearch !== undefined;
 }
 
 /**
@@ -269,22 +307,83 @@ export declare interface GenerativeContentBlob {
  * values.
  */
 export declare interface FunctionCall {
+  /**
+   * The unique id of the function call. If populated, the client to execute the
+   * `function_call` and return the response with the matching `id`.
+   */
+  id?: string;
   /** The name of the function specified in FunctionDeclaration.name. */
-  name: string;
+  name?: string;
   /** The arguments to pass to the function. */
-  args: object;
+  args?: object;
+  /** Optional. The partial argument value of the function call. If provided, represents the arguments/fields that are streamed incrementally. */
+  partialArgs?: PartialArg[];
+  /** Optional. Whether this is the last part of the FunctionCall. If true, another partial message for the current FunctionCall is expected to follow. */
+  willContinue?: boolean;
 }
 
+/** Partial argument value of the function call. This data type is not supported in Gemini API. */
+export declare interface PartialArg {
+  /** Optional. Represents a null value. */
+  nullValue?: 'NULL_VALUE';
+  /** Optional. Represents a double value. */
+  numberValue?: number;
+  /** Optional. Represents a string value. */
+  stringValue?: string;
+  /** Optional. Represents a boolean value. */
+  boolValue?: boolean;
+  /** Required. A JSON Path (RFC 9535) to the argument being streamed. https://datatracker.ietf.org/doc/html/rfc9535. e.g. "$.foo.bar[0].data". */
+  jsonPath?: string;
+  /** Optional. Whether this is not the last part of the same json_path. If true, another PartialArg message for the current json_path is expected to follow. */
+  willContinue?: boolean;
+}
 /**
  * The result output of a FunctionCall that contains a string representing
  * the FunctionDeclaration.name and a structured JSON object containing any
  * output from the function call. It is used as context to the model.
  */
 export declare interface FunctionResponse {
+  /** Optional. The id of the function call this response is for. Populated by the client to match the corresponding function call `id`. */
+  id?: string;
   /** The name of the function specified in FunctionDeclaration.name. */
   name: string;
   /** The expected response from the model. */
   response: object;
+  /** List of parts that constitute a function response. Each part may
+      have a different IANA MIME type. */
+  parts?: FunctionResponsePart[];
+}
+
+/**
+ * A datatype containing media that is part of a `FunctionResponse` message.
+ *
+ * A `FunctionResponsePart` consists of data which has an associated datatype. A
+ * `FunctionResponsePart` can only contain one of the accepted types in
+ * `FunctionResponsePart.data`.
+ *
+ * A `FunctionResponsePart` must have a fixed IANA MIME type identifying the
+ * type and subtype of the media if the `inline_data` field is filled with raw
+ * bytes.
+ */
+export class FunctionResponsePart {
+  /** Optional. Inline media bytes. */
+  inlineData?: FunctionResponseBlob;
+}
+
+/**
+ * Raw media bytes for function response.
+ *
+ * Text should not be sent as raw bytes, use the FunctionResponse.response field.
+ */
+export class FunctionResponseBlob {
+  /** Required. The IANA standard MIME type of the source data. */
+  mimeType?: string;
+  /** Required. Inline media bytes.
+   * @remarks Encoded as base64 string. */
+  data?: string;
+  /** Optional. Display name of the blob.
+      Used to provide a label or filename to distinguish blobs. */
+  displayName?: string;
 }
 
 /**
@@ -384,6 +483,8 @@ export declare interface UsageMetadata {
   cachedContentTokenCount?: number;
   /** Optional. Number of tokens present in thoughts output. */
   thoughtsTokenCount?: number;
+  /** Optional. The traffic type for the request (e.g. ON_DEMAND_FLEX or ON_DEMAND_PRIORITY). */
+  trafficType?: string;
 }
 
 export const TaskTypeSchema = z.enum([
@@ -392,6 +493,9 @@ export const TaskTypeSchema = z.enum([
   'SEMANTIC_SIMILARITY',
   'CLASSIFICATION',
   'CLUSTERING',
+  'CODE_RETRIEVAL_QUERY',
+  'QUESTION_ANSWERING',
+  'FACT_VERIFICATION',
 ]);
 
 export type TaskType = z.infer<typeof TaskTypeSchema>;
@@ -421,6 +525,8 @@ export enum FinishReason {
   SPII = 'SPII',
   // The function call generated by the model is invalid.
   MALFORMED_FUNCTION_CALL = 'MALFORMED_FUNCTION_CALL',
+  // At least one thought signature from a previous call is missing.
+  MISSING_THOUGHT_SIGNATURE = 'MISSING_THOUGHT_SIGNATURE',
   // Unknown reason.
   OTHER = 'OTHER',
 }
@@ -658,6 +764,28 @@ export declare interface VideoMetadata {
   fps?: number;
 }
 
+export declare interface ToolCall {
+  id: string;
+  toolType: string;
+  args?: Record<string, unknown>;
+}
+
+export declare interface ToolResponse {
+  id: string;
+  toolType: string;
+  response?: Record<string, unknown>;
+}
+
+export enum MediaResolutionLevel {
+  MEDIA_RESOUTION_LOW = 'MEDIA_RESOUTION_LOW',
+  MEDIA_RESOLUTION_MEDIUM = 'MEDIA_RESOLUTION_MEDIUM',
+  MEDIA_RESOLUTION_HIGH = 'MEDIA_RESOLUTION_HIGH',
+}
+
+export declare interface MediaResolution {
+  level?: MediaResolutionLevel;
+}
+
 /**
  * This is a Gemini Part. (Users never see this
  * structure, it is just built by the converters.)
@@ -672,9 +800,35 @@ export declare interface Part {
   thoughtSignature?: string;
   executableCode?: ExecutableCode;
   codeExecutionResult?: CodeExecutionResult;
+  toolCall?: ToolCall;
+  toolResponse?: ToolResponse;
   videoMetadata?: VideoMetadata;
+  mediaResolution?: MediaResolution;
+  partMetadata?: Record<string, unknown>;
 }
 
+// A utility type that ensures an array contains all keys of T
+type KeysOf<T> = Array<keyof T>;
+
+// This will throw an error if you add a new field to 'Part'
+// but forget to add it to this list.
+// We use this to keep the aggregator/converter in sync.
+export const PART_KEYS: KeysOf<Required<Part>> = [
+  'text',
+  'inlineData',
+  'functionCall',
+  'functionResponse',
+  'fileData',
+  'thought',
+  'thoughtSignature',
+  'executableCode',
+  'codeExecutionResult',
+  'toolCall',
+  'toolResponse',
+  'videoMetadata',
+  'mediaResolution',
+  'partMetadata',
+] as const;
 /**
  * The base structured datatype containing multi-part content of a message.
  */
@@ -905,6 +1059,8 @@ export declare type Tool =
   | RetrievalTool // Vertex AI Only
   | GoogleMapsTool // Vertex AI Only
   | CodeExecutionTool // Google AI Only
+  | FileSearchTool // Google AI Only
+  | UrlContextTool // Google AI Only
   | GoogleSearchRetrievalTool;
 
 /**
@@ -933,7 +1089,6 @@ export declare interface GenerationConfig {
   /**
    * Optional. Positive values penalize tokens that repeatedly appear in the generated text, decreasing the probability of repeating content.
    * This maximum value for frequencyPenalty is up to, but not including, 2.0. Its minimum value is -2.0.
-   * Supported by gemini-1.5-pro and gemini-1.5-flash only. */
   frequencyPenalty?: number;
   /**
    * Google AI Only. If True, export the logprobs results in response.
@@ -944,6 +1099,18 @@ export declare interface GenerationConfig {
    * logprobs to return at each decoding step in the logprobsResult.
    */
   logprobs?: number;
+  /** Optional. The requested modalities of the response (TEXT, IMAGE, AUDIO). */
+  responseModalities?: string[];
+  /** Optional. Seed used in decoding for reproducibility. */
+  seed?: number;
+  /** Optional. Speech generation config. */
+  speechConfig?: Record<string, unknown>;
+  /** Optional. Thinking config. */
+  thinkingConfig?: Record<string, unknown>;
+  /** Optional. Image generation config. */
+  imageConfig?: Record<string, unknown>;
+  /** Optional. Media resolution config. */
+  mediaResolution?: string;
   /**
    * Optional. Output response mimetype of the generated candidate text.
    * Supported mimetype:
@@ -961,6 +1128,46 @@ export declare interface GenerationConfig {
    * If set, a compatible responseMimeType must also be set.
    */
   responseSchema?: Schema;
+
+  /**
+   * Optional. Output schema of the generated response. This is an alternative to
+   * `response_schema` that accepts [JSON Schema](https://json-schema.org/).
+   *
+   * If set, `response_schema` must be omitted, but `response_mime_type` is
+   * required.
+   *
+   * While the full JSON Schema may be sent, not all features are supported.
+   * Specifically, only the following properties are supported:
+   *
+   * - `$id`
+   * - `$defs`
+   * - `$ref`
+   * - `$anchor`
+   * - `type`
+   * - `format`
+   * - `title`
+   * - `description`
+   * - `enum` (for strings and numbers)
+   * - `items`
+   * - `prefixItems`
+   * - `minItems`
+   * - `maxItems`
+   * - `minimum`
+   * - `maximum`
+   * - `anyOf`
+   * - `oneOf` (interpreted the same as `anyOf`)
+   * - `properties`
+   * - `additionalProperties`
+   * - `required`
+   *
+   * The non-standard `propertyOrdering` property may also be set.
+   *
+   * Cyclic references are unrolled to a limited degree and, as such, may only
+   * be used within non-required properties. (Nullable properties are not
+   * sufficient.) If `$ref` is set on a sub-schema, no other properties, except
+   * for than those starting as a `$`, may be set.
+   */
+  responseJsonSchema?: Record<string, any>;
 }
 
 /**
@@ -982,6 +1189,13 @@ export declare interface FunctionCallingConfig {
    * will predict a function call from the set of function names provided.
    */
   allowedFunctionNames?: string[];
+
+  /**
+   * When set to true, arguments of a single function call will be streamed out
+   * in multiple parts/contents/responses. Partial parameter results will be
+   * returned in the [FunctionCall.partial_args] field.
+   */
+  streamFunctionCallArguments?: boolean;
 }
 
 export declare interface LatLng {
@@ -1000,6 +1214,8 @@ export declare interface ToolConfig {
   functionCallingConfig?: FunctionCallingConfig;
   /** Retrieval config */
   retrievalConfig?: RetrievalConfig;
+
+  includeServerSideToolInvocations?: boolean;
 }
 
 export declare interface GenerateContentRequest {
@@ -1028,6 +1244,8 @@ export declare interface GenerateContentRequest {
   tools?: Tool[];
   /** Optional. This config is shared for all tools provided in the request. */
   toolConfig?: ToolConfig;
+  /** Optional. Service tier (e.g. 'standard', 'flex', or 'priority'). */
+  serviceTier?: string;
 }
 
 /**
@@ -1050,6 +1268,12 @@ export declare interface ImagenParameters {
   safetySetting?: string; // Vertex only
   addWatermark?: boolean; // Vertex only
   storageUri?: string; // Vertex only
+  baseSteps?: number; // Vertex Try On only
+  outputOptions?: {
+    // Vertex Try On only
+    mimeType?: string;
+    compressionQuality?: number;
+  };
 }
 
 export declare interface ImagenPredictRequest {
@@ -1067,7 +1291,15 @@ export declare interface ImagenPrediction {
 }
 
 export declare interface ImagenInstance {
-  prompt: string;
+  prompt?: string;
   image?: { bytesBase64Encoded: string };
   mask?: { image?: { bytesBase64Encoded: string } };
+  personImage?: {
+    // Vertex Try On Only
+    image: { bytesBase64Encoded?: string; gcsUri?: string };
+  };
+  productImages?: {
+    // Vertex Try On Only
+    image: { bytesBase64Encoded?: string; gcsUri?: string };
+  }[];
 }

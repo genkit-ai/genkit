@@ -75,28 +75,108 @@ func ReadJSONFile(filename string, pvalue any) error {
 	return json.NewDecoder(f).Decode(pvalue)
 }
 
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+
 // InferJSONSchema infers a JSON schema from a Go value.
-func InferJSONSchema(x any) (s *jsonschema.Schema) {
-	r := jsonschema.Reflector{
-		DoNotReference: true,
-		Mapper: func(t reflect.Type) *jsonschema.Schema {
-			// []any generates `{ type: "array", items: true }` which is not valid JSON schema.
-			if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Interface {
-				return &jsonschema.Schema{
-					Type: "array",
-					Items: &jsonschema.Schema{
-						// This field is not necessary but it's the most benign way for the object to not be empty.
-						AdditionalProperties: jsonschema.TrueSchema,
-					},
-				}
+//
+// Recursion is detected by stack: while a struct type T is being reflected, T
+// is marked in-progress. Any nested encounter of T (a self-reference) returns
+// an "any" schema; T is unmarked when its reflection completes. Each top-level
+// occurrence of T (siblings, repeats) gets its own full reflection — so a
+// struct used in multiple fields produces the correct schema each time.
+//
+// We can't observe reflection completion through the library's Mapper hook
+// alone, so each struct type is reflected via a sub-Reflector. The Mapper's
+// defer fires when the sub-Reflector returns, which is the exit point.
+func InferJSONSchema(x any) *jsonschema.Schema {
+	inProgress := make(map[reflect.Type]bool)
+	var mapper func(reflect.Type) *jsonschema.Schema
+	mapper = func(t reflect.Type) *jsonschema.Schema {
+		// []any reflects to `{ type: "array", items: true }` which is not valid JSON schema.
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Interface {
+			return &jsonschema.Schema{
+				Type:  "array",
+				Items: &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema},
 			}
-			return nil // Return nil to use default schema generation for other types
-		},
+		}
+		baseType := t
+		if t.Kind() == reflect.Ptr {
+			baseType = t.Elem()
+		}
+		if baseType.Kind() != reflect.Struct {
+			return nil
+		}
+		if inProgress[baseType] {
+			return anyStructSchema(baseType)
+		}
+
+		inProgress[baseType] = true
+		defer delete(inProgress, baseType)
+
+		// The sub-Reflector's first Mapper call is for baseType itself: return
+		// nil so the library reflects it. All nested calls (fields, including
+		// recursive self-references) delegate back to the outer mapper, where
+		// inProgress[baseType] is set and recursion is broken.
+		firstCall := true
+		sub := jsonschema.Reflector{
+			DoNotReference: true,
+			Anonymous:      true, // suppress $id on this nested schema
+			Mapper: func(st reflect.Type) *jsonschema.Schema {
+				if firstCall && st == baseType {
+					firstCall = false
+					return nil
+				}
+				return mapper(st)
+			},
+		}
+		s := sub.ReflectFromType(baseType)
+		s.Version = "" // suppress $schema on this nested schema
+		return s
 	}
-	s = r.Reflect(x)
+
+	r := jsonschema.Reflector{DoNotReference: true, Anonymous: true, Mapper: mapper}
+	s := r.Reflect(x)
 	s.Version = ""
-	s.ID = ""
 	return s
+}
+
+// anyStructSchema returns the "any" schema used to break recursion. Types
+// that implement json.Marshaler may serialize to a non-object, so we omit
+// `type: object` for them.
+func anyStructSchema(t reflect.Type) *jsonschema.Schema {
+	if t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
+		return &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema}
+	}
+	return &jsonschema.Schema{
+		Type:                 "object",
+		AdditionalProperties: jsonschema.TrueSchema,
+	}
+}
+
+// MapToStruct converts a map[string]any to a struct of type T via JSON round-trip.
+func MapToStruct[T any](m map[string]any) (T, error) {
+	var result T
+	data, err := json.Marshal(m)
+	if err != nil {
+		return result, err
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// StructToMap converts a struct to map[string]any via JSON round-trip.
+func StructToMap[T any](v T) (map[string]any, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // SchemaAsMap converts json schema struct to a map (JSON representation).
@@ -119,18 +199,38 @@ func SchemaAsMap(s *jsonschema.Schema) map[string]any {
 	return m
 }
 
-// jsonMarkdownRegex specifically looks for "json" language identifier
-var jsonMarkdownRegex = regexp.MustCompile("(?s)```json(.*?)```")
+// jsonMarkdownRegex matches fenced code blocks with "json" language identifier (case-insensitive).
+var jsonMarkdownRegex = regexp.MustCompile("(?si)```\\s*json\\s*(.*?)```")
+
+// plainMarkdownRegex matches fenced code blocks without any language identifier.
+var plainMarkdownRegex = regexp.MustCompile("(?s)```\\s*\\n(.*?)```")
+
+// implicitJSONRegex matches fenced code blocks with no language identifier that start with { or [
+var implicitJSONRegex = regexp.MustCompile("(?si)```\\s*([{\\[].*?)```")
 
 // ExtractJSONFromMarkdown returns the contents of the first fenced code block in
-// the markdown text md. If there is none, it returns md.
+// the markdown text md. It matches code blocks with "json" identifier (case-insensitive)
+// or code blocks without any language identifier. If there is no matching block, it returns md.
 func ExtractJSONFromMarkdown(md string) string {
+	// First try to match explicit json code blocks
 	matches := jsonMarkdownRegex.FindStringSubmatch(md)
-	if len(matches) < 2 {
-		return md
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
 	}
-	// capture group 1 matches the actual fenced JSON block
-	return strings.TrimSpace(matches[1])
+
+	// Fall back to plain code blocks (no language identifier)
+	matches = plainMarkdownRegex.FindStringSubmatch(md)
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	// Fall back to implicit JSON blocks (no language identifier, starts with { or [)
+	matches = implicitJSONRegex.FindStringSubmatch(md)
+	if len(matches) >= 2 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	return md
 }
 
 // GetJSONObjectLines splits a string by newlines, trims whitespace from each line,

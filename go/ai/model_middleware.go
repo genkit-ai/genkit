@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/logger"
@@ -45,6 +46,131 @@ const contextPreface = "\n\nUse the following information to complete your task:
 type DownloadMediaOptions struct {
 	MaxBytes int64                 // Maximum number of bytes to download.
 	Filter   func(part *Part) bool // Filter to apply to parts that are media URLs.
+}
+
+func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
+	if resp.Usage == nil {
+		resp.Usage = &GenerationUsage{}
+	}
+	if resp.Usage.InputCharacters == 0 {
+		resp.Usage.InputCharacters = countInputCharacters(req)
+	}
+	if resp.Usage.OutputCharacters == 0 {
+		resp.Usage.OutputCharacters = countOutputCharacters(resp)
+	}
+	if resp.Usage.InputImages == 0 {
+		resp.Usage.InputImages = countInputParts(req, func(part *Part) bool { return part.IsImage() })
+	}
+	if resp.Usage.OutputImages == 0 {
+		resp.Usage.OutputImages = countOutputParts(resp, func(part *Part) bool { return part.IsImage() })
+	}
+	if resp.Usage.InputVideos == 0 {
+		resp.Usage.InputVideos = countInputParts(req, func(part *Part) bool { return part.IsVideo() })
+	}
+	if resp.Usage.OutputVideos == 0 {
+		resp.Usage.OutputVideos = countOutputParts(resp, func(part *Part) bool { return part.IsVideo() })
+	}
+	if resp.Usage.InputAudioFiles == 0 {
+		resp.Usage.InputAudioFiles = countInputParts(req, func(part *Part) bool { return part.IsAudio() })
+	}
+	if resp.Usage.OutputAudioFiles == 0 {
+		resp.Usage.OutputAudioFiles = countOutputParts(resp, func(part *Part) bool { return part.IsAudio() })
+	}
+}
+
+// addAutomaticTelemetry creates middleware that automatically measures latency and calculates character and media counts.
+func addAutomaticTelemetry() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			startTime := time.Now()
+
+			// Call the underlying model function
+			resp, err := fn(ctx, req, cb)
+			if err != nil {
+				return nil, err
+			}
+
+			// Calculate latency
+			latencyMs := float64(time.Since(startTime).Nanoseconds()) / 1e6
+			if resp.LatencyMs == 0 {
+				resp.LatencyMs = latencyMs
+			}
+
+			CalculateInputOutputUsage(req, resp)
+
+			return resp, nil
+		}
+	}
+}
+
+// countInputParts counts parts in the input request that match the given predicate.
+func countInputParts(req *ModelRequest, predicate func(*Part) bool) int {
+	if req == nil {
+		return 0
+	}
+
+	count := 0
+	for _, msg := range req.Messages {
+		if msg == nil {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part != nil && predicate(part) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// countInputCharacters counts the total characters in the input request.
+func countInputCharacters(req *ModelRequest) int {
+	if req == nil {
+		return 0
+	}
+
+	total := 0
+	for _, msg := range req.Messages {
+		if msg == nil {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part != nil && part.Text != "" {
+				total += len(part.Text)
+			}
+		}
+	}
+	return total
+}
+
+// countOutputParts counts parts in the output response that match the given predicate.
+func countOutputParts(resp *ModelResponse, predicate func(*Part) bool) int {
+	if resp == nil || resp.Message == nil {
+		return 0
+	}
+
+	count := 0
+	for _, part := range resp.Message.Content {
+		if part != nil && predicate(part) {
+			count++
+		}
+	}
+	return count
+}
+
+// countOutputCharacters counts the total characters in the output response.
+func countOutputCharacters(resp *ModelResponse) int {
+	if resp == nil || resp.Message == nil {
+		return 0
+	}
+
+	total := 0
+	for _, part := range resp.Message.Content {
+		if part != nil && part.Text != "" {
+			total += len(part.Text)
+		}
+	}
+	return total
 }
 
 // simulateSystemPrompt provides a simulated system prompt for models that don't support it natively.

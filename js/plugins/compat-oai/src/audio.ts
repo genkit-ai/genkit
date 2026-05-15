@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 import type {
   GenerateRequest,
   GenerateResponseData,
@@ -22,13 +23,15 @@ import type {
 import { GenerationCommonConfigSchema, Message, modelRef, z } from 'genkit';
 import type { ModelAction, ModelInfo } from 'genkit/model';
 import { model } from 'genkit/plugin';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import { Response } from 'openai/core.mjs';
 import type {
   SpeechCreateParams,
   Transcription,
   TranscriptionCreateParams,
 } from 'openai/resources/audio/index.mjs';
+import { PluginOptions } from './index.js';
+import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 export type SpeechRequestBuilder = (
   req: GenerateRequest,
@@ -39,7 +42,7 @@ export type TranscriptionRequestBuilder = (
   params: TranscriptionCreateParams
 ) => void;
 
-export const TRANSCRIPTION_MODEL_INFO = {
+export const TRANSCRIPTION_MODEL_INFO: ModelInfo = {
   supports: {
     media: true,
     output: ['text', 'json'],
@@ -102,7 +105,7 @@ export const RESPONSE_FORMAT_MEDIA_TYPES = {
   pcm: 'audio/L16',
 };
 
-function toTTSRequest(
+export function toTTSRequest(
   modelName: string,
   request: GenerateRequest,
   requestBuilder?: SpeechRequestBuilder
@@ -139,7 +142,7 @@ function toTTSRequest(
   return options;
 }
 
-async function toGenerateResponse(
+export async function speechToGenerateResponse(
   response: Response,
   responseFormat: 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm' = 'mp3'
 ): Promise<GenerateResponseData> {
@@ -185,22 +188,35 @@ export function defineCompatOpenAISpeechModel<
   client: OpenAI;
   modelRef?: ModelReference<CustomOptions>;
   requestBuilder?: SpeechRequestBuilder;
+  pluginOptions: PluginOptions;
 }): ModelAction {
-  const { name, client, modelRef, requestBuilder } = params;
-  const modelName = name.substring(name.indexOf('/') + 1);
+  const {
+    name,
+    client: defaultClient,
+    pluginOptions,
+    modelRef,
+    requestBuilder,
+  } = params;
+  const modelName = toModelName(name, pluginOptions?.name);
+  const actionName = `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
 
   return model(
     {
-      name,
+      name: actionName,
       ...modelRef?.info,
       configSchema: modelRef?.configSchema,
     },
     async (request, { abortSignal }) => {
-      const ttsRequest = toTTSRequest(modelName!, request, requestBuilder);
+      const ttsRequest = toTTSRequest(modelName, request, requestBuilder);
+      const client = maybeCreateRequestScopedOpenAIClient(
+        pluginOptions,
+        request,
+        defaultClient
+      );
       const result = await client.audio.speech.create(ttsRequest, {
         signal: abortSignal,
       });
-      return await toGenerateResponse(result, ttsRequest.response_format);
+      return await speechToGenerateResponse(result, ttsRequest.response_format);
     }
   );
 }
@@ -232,7 +248,7 @@ export function compatOaiSpeechModelRef<
   });
 }
 
-function toSttRequest(
+export function toSttRequest(
   modelName: string,
   request: GenerateRequest,
   requestBuilder?: TranscriptionRequestBuilder
@@ -300,7 +316,7 @@ function toSttRequest(
   return options;
 }
 
-function transcriptionToGenerateResponse(
+export function transcriptionToGenerateResponse(
   result: Transcription | string
 ): GenerateResponseData {
   return {
@@ -338,21 +354,34 @@ export function defineCompatOpenAITranscriptionModel<
 >(params: {
   name: string;
   client: OpenAI;
+  pluginOptions?: PluginOptions;
   modelRef?: ModelReference<CustomOptions>;
   requestBuilder?: TranscriptionRequestBuilder;
 }): ModelAction {
-  const { name, client, modelRef, requestBuilder } = params;
+  const {
+    name,
+    pluginOptions,
+    client: defaultClient,
+    modelRef,
+    requestBuilder,
+  } = params;
+  const modelName = toModelName(name, pluginOptions?.name);
+  const actionName =
+    modelRef?.name ?? `${pluginOptions?.name ?? 'compat-oai'}/${modelName}`;
 
   return model(
     {
-      name,
+      name: actionName,
       ...modelRef?.info,
       configSchema: modelRef?.configSchema,
     },
     async (request, { abortSignal }) => {
-      const modelName = name.substring(name.indexOf('/') + 1);
-
-      const params = toSttRequest(modelName!, request, requestBuilder);
+      const params = toSttRequest(modelName, request, requestBuilder);
+      const client = maybeCreateRequestScopedOpenAIClient(
+        pluginOptions,
+        request,
+        defaultClient
+      );
       // Explicitly setting stream to false ensures we use the non-streaming overload
       const result = await client.audio.transcriptions.create(
         {

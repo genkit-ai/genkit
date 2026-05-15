@@ -14,19 +14,28 @@
  * limitations under the License.
  */
 
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { z } from 'zod';
-import { action, defineAction } from '../src/action.js';
+import { action, defineAction, defineActionAsync } from '../src/action.js';
 import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
+import { enableTelemetry } from '../src/tracing.js';
+import { TestSpanExporter } from './utils.js';
 
 initNodeFeatures();
+
+const spanExporter = new TestSpanExporter();
+enableTelemetry({
+  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+});
 
 describe('action', () => {
   var registry: Registry;
   beforeEach(() => {
     registry = new Registry();
+    spanExporter.exportedSpans = [];
   });
 
   it('applies middleware', async () => {
@@ -264,5 +273,43 @@ describe('action', () => {
     await act(undefined, { abortSignal: signal });
 
     assert.strictEqual(gotAbortSignal, signal);
+  });
+
+  it('includes genkit:key in telemetry', async () => {
+    const act = defineAction(
+      registry,
+      {
+        name: 'keyedAction',
+        actionType: 'custom',
+      },
+      async () => {
+        return 'success';
+      }
+    );
+
+    await act();
+
+    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(
+      spanExporter.exportedSpans[0].attributes['genkit:key'],
+      '/custom/keyedAction'
+    );
+  });
+
+  it('sets genkit:key on action metadata when using defineActionAsync', async () => {
+    const actPromise = defineActionAsync(
+      registry,
+      'custom',
+      'asyncKeyedAction',
+      Promise.resolve({
+        name: 'asyncKeyedAction',
+        actionType: 'custom',
+        fn: async () => 'success',
+      })
+    );
+
+    const act = await actPromise;
+
+    assert.strictEqual(act.__action.key, '/custom/asyncKeyedAction');
   });
 });

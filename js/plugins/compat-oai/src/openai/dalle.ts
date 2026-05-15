@@ -15,20 +15,30 @@
  * limitations under the License.
  */
 import { z } from 'genkit';
+import { ModelInfo } from 'genkit/model';
 import {
   ImageGenerationCommonConfigSchema,
   ImageRequestBuilder,
-  compatOaiImageModelRef as openAIImageModelRef,
+  compatOaiImageModelRef,
 } from '../image';
 
 /** OpenAI image generation ModelRef helper, same as the OpenAI-compatible spec.
  * */
-export { openAIImageModelRef };
+export function openAIImageModelRef<
+  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+>(params: {
+  name: string;
+  info?: ModelInfo;
+  configSchema?: CustomOptions;
+  config?: any;
+}) {
+  return compatOaiImageModelRef({ ...params, namespace: 'openai' });
+}
 
 export const SUPPORTED_IMAGE_MODELS = {
-  'dall-e-3': openAIImageModelRef({ name: 'openai/dall-e-3' }),
+  'dall-e-3': openAIImageModelRef({ name: 'dall-e-3' }),
   'gpt-image-1': openAIImageModelRef({
-    name: 'openai/gpt-image-1',
+    name: 'gpt-image-1',
     configSchema: ImageGenerationCommonConfigSchema.omit({
       response_format: true,
     }).extend({

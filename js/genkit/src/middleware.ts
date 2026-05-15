@@ -17,6 +17,8 @@
 export {
   augmentWithContext,
   downloadRequestMedia,
+  fallback,
+  retry,
   simulateSystemPrompt,
   validateSupport,
   type AugmentWithContextOptions,

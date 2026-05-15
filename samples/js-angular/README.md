@@ -27,7 +27,7 @@ npm run setup
    - Set the environment variable:
 
 ```bash
-export GOOGLE_GENAI_API_KEY=your_api_key_here
+export GEMINI_API_KEY=your_api_key_here
 ```
 
 ## Running the Application

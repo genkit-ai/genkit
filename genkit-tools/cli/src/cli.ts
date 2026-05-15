@@ -23,6 +23,8 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { Command, program } from 'commander';
 import { config } from './commands/config';
+import { devTestModel } from './commands/dev-test-model';
+import { docsList, docsRead, docsSearch } from './commands/docs';
 import { evalExtractData } from './commands/eval-extract-data';
 import { evalFlow } from './commands/eval-flow';
 import { evalRun } from './commands/eval-run';
@@ -36,6 +38,7 @@ import {
   serverHarness,
 } from './commands/server-harness';
 import { start } from './commands/start';
+import { startFlutter } from './commands/start-flutter';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
@@ -59,7 +62,12 @@ const commands: Command[] = [
   initAiTools,
   config,
   start,
+  startFlutter,
+  devTestModel,
   mcp,
+  docsList,
+  docsRead,
+  docsSearch,
 ];
 
 /** Main entry point for CLI. */

@@ -23,6 +23,7 @@ import {
   dynamicResource,
   findMatchingResource,
   isDynamicResourceAction,
+  resource,
 } from '../../src/resource.js';
 import { defineEchoModel } from '../helpers.js';
 
@@ -58,7 +59,7 @@ describe('resource', () => {
         uri: 'foo://bar',
       },
       type: 'resource',
-      dynamic: true,
+      dynamic: false,
     });
 
     assert.strictEqual(testResource.matches({ uri: 'foo://bar' }), true);
@@ -229,7 +230,7 @@ describe('resource', () => {
         uri: undefined,
       },
       type: 'resource',
-      dynamic: true,
+      dynamic: false,
     });
 
     const gotBaz = await findMatchingResource(registry, resList, {
@@ -285,5 +286,16 @@ describe('isDynamicResourceAction', () => {
       ),
       true
     );
+  });
+
+  it('should remain dynamic after registration', () => {
+    const dynamic = resource({ uri: 'bar://baz' }, () => ({
+      content: [{ text: `bar` }],
+    }));
+    assert.strictEqual(isDynamicResourceAction(dynamic), true);
+
+    registry.registerAction('resource', dynamic);
+
+    assert.strictEqual(isDynamicResourceAction(dynamic), true);
   });
 });

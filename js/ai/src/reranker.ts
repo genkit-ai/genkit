@@ -17,7 +17,7 @@
 import { action, z, type Action } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
-import { PartSchema, type Part } from './document.js';
+import { PartSchema, type Part } from './parts.js';
 import {
   Document,
   DocumentDataSchema,

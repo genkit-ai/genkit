@@ -138,6 +138,7 @@ export function defineResource(
 ): ResourceAction {
   const action = dynamicResource(opts, fn);
   action.matches = createMatcher(opts.uri, opts.template);
+  action.__action.metadata.dynamic = false;
   registry.registerAction('resource', action);
   return action;
 }
@@ -193,7 +194,7 @@ export async function findMatchingResource(
 
 /** Checks whether provided object is a dynamic resource. */
 export function isDynamicResourceAction(t: unknown): t is ResourceAction {
-  return isAction(t) && !t.__registry;
+  return isAction(t) && t.__action?.metadata?.dynamic === true;
 }
 
 /**

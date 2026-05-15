@@ -31,6 +31,7 @@ const reservationListTool = reservationTool;
 // Define a prompt that represents a specialist agent
 const reservationAgent = ai.definePrompt({
   name: 'reservationAgent',
+  model: 'googleai/gemini-2.5-flash',
   description: 'Reservation Agent can help manage guest reservations',
   tools: [reservationTool, reservationCancelationTool, reservationListTool],
   system: 'Help guests make and manage reservations',
@@ -43,6 +44,7 @@ const complaintAgent = ai.prompt('complaintAgent');
 // The triage agent is the agent that users interact with initially
 const triageAgent = ai.definePrompt({
   name: 'triageAgent',
+  model: 'googleai/gemini-2.5-flash-lite',
   description: 'Triage Agent',
   tools: [reservationAgent, menuInfoAgent, complaintAgent],
   system: `You are an AI customer service agent for Pavel's Cafe.

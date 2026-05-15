@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { gemini15Flash } from '@genkit-ai/vertexai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { ai } from '../genkit.js';
 import { MenuQuestionInputSchema } from '../types.js';
 import { menuTool } from './tools.js';
@@ -24,7 +24,7 @@ import { menuTool } from './tools.js';
 
 export const s02_dataMenuPrompt = ai.definePrompt({
   name: 's02_dataMenu',
-  model: gemini15Flash,
+  model: googleAI.model('gemini-flash-latest'),
   input: { schema: MenuQuestionInputSchema },
   output: { format: 'text' },
   tools: [menuTool],
@@ -32,8 +32,8 @@ export const s02_dataMenuPrompt = ai.definePrompt({
     temperature: 0.2,
   },
   messages: `
-You are acting as a helpful AI assistant named Walt that can answer 
-questions about the food available on the menu at Walt's Burgers. 
+You are acting as a helpful AI assistant named Walt that can answer
+questions about the food available on the menu at Walt's Burgers.
 
 Answer this customer's question, in a concise and helpful manner,
 as long as it is about food on the menu or something harmless like sports.

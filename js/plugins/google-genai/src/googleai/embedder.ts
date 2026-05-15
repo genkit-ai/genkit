@@ -24,8 +24,11 @@ import {
 } from 'genkit';
 import { embedderRef } from 'genkit/embedder';
 import { embedder as pluginEmbedder } from 'genkit/plugin';
+import { toGeminiMessage } from '../common/converters.js';
+import { isKnownKey } from '../common/utils.js';
 import { embedContent } from './client.js';
 import {
+  ClientOptions,
   EmbedContentRequest,
   GoogleAIPluginOptions,
   Model,
@@ -51,9 +54,8 @@ export const EmbeddingConfigSchema = z
     version: z.string().optional(),
     /**
      * The `outputDimensionality` parameter allows you to specify the dimensionality of the embedding output.
-     * By default, the model generates embeddings with 768 dimensions. Models such as
-     * `text-embedding-004`, `text-embedding-005`, and `text-multilingual-embedding-002`
-     * allow the output dimensionality to be adjusted between 1 and 768.
+     * By default, `gemini-embedding-2` and `gemini-embedding-2-preview` generate embeddings with 3072 dimensions,
+     * while `gemini-embedding-001` generates 768 dimensions.
      * By selecting a smaller output dimensionality, users can save memory and storage space, leading to more efficient computations.
      **/
     outputDimensionality: z.number().min(1).optional(),
@@ -85,23 +87,48 @@ function commonRef(
 const GENERIC_MODEL = commonRef('embedder');
 
 const KNOWN_MODELS = {
-  'text-embedding-004': commonRef('text-embedding-004'),
+  'gemini-embedding-2-preview': commonRef('gemini-embedding-2-preview', {
+    dimensions: 3072,
+    supports: {
+      input: ['text', 'image', 'video'],
+    },
+  }),
+  'gemini-embedding-2': commonRef('gemini-embedding-2', {
+    dimensions: 3072,
+    supports: {
+      input: ['text', 'image', 'video'],
+    },
+  }),
   'gemini-embedding-001': commonRef('gemini-embedding-001'),
-};
+} as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+export type EmbedderModelName = `gemini-embedding-${string}`;
+export function isEmbedderName(value: string): value is EmbedderModelName {
+  return value.startsWith('gemini-embedding-');
+}
 
 export function model(
   version: string,
   config: EmbeddingConfig = {}
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    const known = KNOWN_MODELS[name];
+    return embedderRef({
+      name: known.name,
+      info: known.info,
+      configSchema: known.configSchema,
+      config,
+    });
+  }
+
   return embedderRef({
     name: `googleai/${name}`,
-    config,
+    info: { ...GENERIC_MODEL.info },
     configSchema: GENERIC_MODEL.configSchema,
-    info: {
-      ...GENERIC_MODEL.info,
-    },
+    config,
   });
 }
 
@@ -132,6 +159,11 @@ export function defineEmbedder(
 ): EmbedderAction {
   checkApiKey(pluginOptions?.apiKey);
   const ref = model(name);
+  const clientOptions: ClientOptions = {
+    apiVersion: pluginOptions?.apiVersion,
+    baseUrl: pluginOptions?.baseUrl,
+    customHeaders: pluginOptions?.customHeaders,
+  };
 
   return pluginEmbedder(
     {
@@ -148,15 +180,17 @@ export function defineEmbedder(
 
       const embeddings = await Promise.all(
         request.input.map(async (doc) => {
-          const response = await embedContent(embedApiKey, embedVersion, {
-            taskType: request.options?.taskType,
-            title: request.options?.title,
-            content: {
-              role: '',
-              parts: [{ text: doc.text }],
-            },
-            outputDimensionality: request.options?.outputDimensionality,
-          } as EmbedContentRequest);
+          const response = await embedContent(
+            embedApiKey,
+            embedVersion,
+            {
+              taskType: request.options?.taskType,
+              title: request.options?.title,
+              content: toGeminiMessage({ role: 'user', content: doc.content }),
+              outputDimensionality: request.options?.outputDimensionality,
+            } as EmbedContentRequest,
+            clientOptions
+          );
           const values = response.embedding.values;
           return { embedding: values };
         })

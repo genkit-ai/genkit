@@ -137,7 +137,7 @@ func mcpSelfConnection() {
 	// Initialize Genkit with Google AI for the client
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-2.0-flash"),
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
 
 	// Server process is spawned automatically via stdio

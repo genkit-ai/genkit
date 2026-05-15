@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError } from 'genkit';
+import { GenkitError, z } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
 import type {
   ClientOptions,
@@ -45,6 +45,11 @@ function parseFirebaseProjectId(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function shouldUseLegacyEndpoint(model: string) {
+  // This only covers lyria models so far
+  return model === 'lyria-002';
 }
 
 let __mockDerivedOptions: ClientOptions | undefined = undefined;
@@ -224,6 +229,58 @@ async function getRegionalDerivedOptions(
   return clientOpt;
 }
 
+export type RequestClientOptions = ClientOptions & {
+  signal: AbortSignal;
+};
+
+/**
+ * If location or apiKey are present in reqConfig, they will
+ * override the values in the clientOptions. The newOptions will
+ * contain the clientOptions with those overrides.
+ * @param clientOptions The client options
+ * @param reqConfig The request config
+ */
+export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+  clientOptions: RequestClientOptions,
+  reqConfig?: z.infer<T>
+): RequestClientOptions;
+export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+  clientOptions: ClientOptions,
+  reqConfig?: z.infer<T>
+): ClientOptions;
+export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+  clientOptions: RequestClientOptions | ClientOptions,
+  reqConfig?: z.infer<T>
+): RequestClientOptions | ClientOptions {
+  let newOptions = { ...clientOptions };
+  if (
+    reqConfig?.location &&
+    typeof reqConfig.location == 'string' &&
+    newOptions.kind != 'express' &&
+    newOptions.location != reqConfig.location
+  ) {
+    // Override the location if it's specified in the request
+    if (reqConfig.location == 'global') {
+      newOptions.location = 'global';
+      newOptions.kind = 'global';
+    } else {
+      newOptions.kind = 'regional';
+      newOptions.location = reqConfig.location;
+    }
+  }
+  if (
+    clientOptions.kind == 'express' &&
+    reqConfig?.apiKey &&
+    typeof reqConfig.apiKey == 'string'
+  ) {
+    newOptions.apiKey = calculateApiKey(clientOptions.apiKey, reqConfig.apiKey);
+  } else if (reqConfig?.apiKey && typeof reqConfig.apiKey == 'string') {
+    // Regional or Global can still use APIKey for billing (not auth)
+    newOptions.apiKey = reqConfig.apiKey;
+  }
+  return newOptions;
+}
+
 /**
  * Retrieves an API key from environment variables.
  *
@@ -242,7 +299,7 @@ export const MISSING_API_KEY_ERROR = new GenkitError({
   status: 'FAILED_PRECONDITION',
   message:
     'Please pass in the API key or set the VERTEX_API_KEY or GOOGLE_API_KEY environment variable.\n' +
-    'For more details see https://firebase.google.com/docs/genkit/plugins/google-genai',
+    'For more details see https://genkit.dev/docs/integrations/google-genai',
 });
 
 export const API_KEY_FALSE_ERROR = new GenkitError({

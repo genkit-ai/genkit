@@ -28,8 +28,10 @@ import {
 import {
   ImagenConfig,
   ImagenConfigSchema,
+  ImagenTryOnConfigSchema,
   TEST_ONLY,
   defineModel,
+  isImagenModelName,
   model,
 } from '../../src/vertexai/imagen.js';
 import {
@@ -86,6 +88,13 @@ describe('Vertex AI Imagen', () => {
       const modelName = 'tunedModels/my-tuned-model';
       const ref = model(modelName);
       assert.strictEqual(ref.name, 'vertexai/tunedModels/my-tuned-model');
+    });
+
+    it('should return a ModelReference with TryOn schema', () => {
+      const modelName = 'virtual-try-on-001';
+      const ref = model(modelName);
+      assert.strictEqual(ref.name, `vertexai/${modelName}`);
+      assert.strictEqual(ref.configSchema, ImagenTryOnConfigSchema);
     });
   });
 
@@ -162,6 +171,28 @@ describe('Vertex AI Imagen', () => {
         clientOptions,
       });
 
+      it(`should handle location override for ${clientOptions.kind}`, async () => {
+        if (clientOptions.kind === 'express') {
+          return; // Not applicable
+        }
+        const request: GenerateRequest<typeof ImagenConfigSchema> = {
+          messages: [{ role: 'user', content: [{ text: 'A cat' }] }],
+          config: { location: 'europe-west4' },
+        };
+        const mockPrediction: ImagenPrediction = {
+          bytesBase64Encoded: 'abc',
+          mimeType: 'image/png',
+        };
+        mockFetchResponse({ predictions: [mockPrediction] });
+        const modelRunner = captureModelRunner(clientOptions);
+        await modelRunner(request, {});
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const actualUrl = fetchArgs[0];
+        assert.ok(actualUrl.includes('europe-west4'));
+      });
+
       it(`should define a model and call fetch successfully for ${clientOptions.kind}`, async () => {
         const request: GenerateRequest<typeof ImagenConfigSchema> = {
           messages: [{ role: 'user', content: [{ text: 'A cat' }] }],
@@ -231,12 +262,11 @@ describe('Vertex AI Imagen', () => {
         fetchStub.rejects(error);
 
         const modelRunner = captureModelRunner(clientOptions);
-        await assert.rejects(
-          modelRunner(request, {}),
-          new RegExp(
-            `^Error: Failed to fetch from ${escapeRegExp(expectedUrl)}: Network Error`
-          )
-        );
+        await assert.rejects(modelRunner(request, {}), (err: any) => {
+          assert.strictEqual(err.name, 'Error');
+          assert.match(err.message, /Network Error/);
+          return true;
+        });
       });
 
       it(`should handle API error response for ${clientOptions.kind}`, async () => {
@@ -248,13 +278,35 @@ describe('Vertex AI Imagen', () => {
         mockFetchResponse(errorBody, 400);
 
         const modelRunner = captureModelRunner(clientOptions);
-        let expectedUrlRegex = escapeRegExp(expectedUrl);
-        await assert.rejects(
-          modelRunner(request, {}),
-          new RegExp(
-            `^Error: Failed to fetch from ${expectedUrlRegex}: Error fetching from ${expectedUrlRegex}: \\[400 Error\\] ${errorMsg}`
-          )
-        );
+        await assert.rejects(modelRunner(request, {}), (err: any) => {
+          assert.strictEqual(err.name, 'GenkitError');
+          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+          assert.match(
+            err.message,
+            /Error fetching from .* \[400 Error\] Invalid argument/
+          );
+          return true;
+        });
+      });
+
+      it(`should throw a resource exhausted error on 429 for ${clientOptions.kind}`, async () => {
+        const request: GenerateRequest = {
+          messages: [{ role: 'user', content: [{ text: 'A bird' }] }],
+        };
+        const errorMsg = 'Too many requests';
+        const errorBody = { error: { message: errorMsg, code: 429 } };
+        mockFetchResponse(errorBody, 429);
+
+        const modelRunner = captureModelRunner(clientOptions);
+        await assert.rejects(modelRunner(request, {}), (err: any) => {
+          assert.strictEqual(err.name, 'GenkitError');
+          assert.strictEqual(err.status, 'RESOURCE_EXHAUSTED');
+          assert.match(
+            err.message,
+            /Error fetching from .* \[429 Error\] Too many requests/
+          );
+          return true;
+        });
       });
     }
 
@@ -268,5 +320,34 @@ describe('Vertex AI Imagen', () => {
 
     // ExpressClientOptions does not support Imagen
     // We have 'does not support' tests elsewhere
+  });
+
+  describe('ImagenTryOnConfigSchema', () => {
+    it('should validate valid config', () => {
+      const validConfig = {
+        sampleCount: 1,
+        storageUri: 'gs://bucket',
+      };
+      const result = ImagenTryOnConfigSchema.safeParse(validConfig);
+      assert.ok(result.success);
+    });
+  });
+
+  describe('isImagenModelName', () => {
+    it('should return true for known models', () => {
+      assert.ok(isImagenModelName('imagen-3.0-generate-002'));
+    });
+
+    it('should return true for imagen-* models', () => {
+      assert.ok(isImagenModelName('imagen-future-model'));
+    });
+
+    it('should return true for virtual-try-on-* models', () => {
+      assert.ok(isImagenModelName('virtual-try-on-future-model'));
+    });
+
+    it('should return false for other models', () => {
+      assert.ok(!isImagenModelName('not-imagen-model'));
+    });
   });
 });

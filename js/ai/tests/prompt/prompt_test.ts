@@ -59,7 +59,7 @@ describe('prompt', () => {
       },
       async (request, opts) => {
         // Store the abortSignal for verification
-        (defineModel as any).__test__lastAbortSignal = request.abortSignal;
+        (defineModel as any).__test__lastAbortSignal = opts.abortSignal;
         return {
           message: {
             role: 'model',
@@ -814,6 +814,23 @@ describe('prompt', () => {
       );
     });
   }
+
+  it('metadata is correctly populated', async () => {
+    definePrompt(registry, {
+      name: 'metadataTest',
+      model: 'echoModel',
+      tools: ['toolA'],
+      toolChoice: 'auto',
+      use: ['myMiddleware'],
+      prompt: 'hello',
+    });
+
+    const action = await registry.lookupAction('/prompt/metadataTest');
+    const metadata = (action as any).__action.metadata.prompt;
+    assert.deepStrictEqual(metadata.tools, ['toolA']);
+    assert.strictEqual(metadata.toolChoice, 'auto');
+    assert.deepStrictEqual(metadata.use, [{ name: 'myMiddleware' }]);
+  });
 
   it('respects output schema in the definition', async () => {
     const schema1 = z.object({

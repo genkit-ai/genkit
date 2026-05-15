@@ -14,9 +14,17 @@
  * limitations under the License.
  */
 
-import type { Action, ActionMetadata, BackgroundAction } from '@genkit-ai/core';
+import type { GenerateMiddleware } from '@genkit-ai/ai';
+import { type GenkitPluginV2 } from '@genkit-ai/ai';
+import { type ModelAction } from '@genkit-ai/ai/model';
+import {
+  GenkitError,
+  type ActionMetadata,
+  type ResolvableAction,
+} from '@genkit-ai/core';
 import type { Genkit } from './genkit.js';
 import type { ActionType } from './registry.js';
+
 export { embedder, embedderActionMetadata } from '@genkit-ai/ai/embedder';
 export { evaluator } from '@genkit-ai/ai/evaluator';
 export {
@@ -26,25 +34,13 @@ export {
 } from '@genkit-ai/ai/model';
 export { reranker } from '@genkit-ai/ai/reranker';
 export { indexer, retriever } from '@genkit-ai/ai/retriever';
+export { type GenerateMiddleware, type GenkitPluginV2, type ResolvableAction };
 
 export interface PluginProvider {
   name: string;
   initializer: () => void | Promise<void>;
   resolver?: (action: ActionType, target: string) => Promise<void>;
   listActions?: () => Promise<ActionMetadata[]>;
-}
-
-export type ResolvableAction = Action | BackgroundAction;
-
-export interface GenkitPluginV2 {
-  version: 'v2';
-  name: string;
-  init?: () => ResolvableAction[] | Promise<ResolvableAction[]>;
-  resolve?: (
-    actionType: ActionType,
-    name: string
-  ) => ResolvableAction | undefined | Promise<ResolvableAction | undefined>;
-  list?: () => ActionMetadata[] | Promise<ActionMetadata[]>;
 }
 
 export type GenkitPlugin = (genkit: Genkit) => PluginProvider;
@@ -85,10 +81,64 @@ export function genkitPlugin<T extends PluginInit>(
   });
 }
 
+export class GenkitPluginV2Instance implements Required<GenkitPluginV2> {
+  readonly version = 'v2';
+  readonly name: string;
+
+  private plugin: Omit<GenkitPluginV2, 'version' | 'model'>;
+
+  constructor(plugin: Omit<GenkitPluginV2, 'version' | 'model'>) {
+    this.name = plugin.name;
+    this.plugin = plugin;
+  }
+
+  init(): ResolvableAction[] | Promise<ResolvableAction[]> {
+    if (!this.plugin.init) {
+      return [];
+    }
+    return this.plugin.init();
+  }
+
+  list(): ActionMetadata[] | Promise<ActionMetadata[]> {
+    if (!this.plugin.list) {
+      return [];
+    }
+    return this.plugin.list();
+  }
+
+  middleware(): GenerateMiddleware<any, any>[] {
+    if (!this.plugin.middleware) {
+      return [];
+    }
+    return this.plugin.middleware();
+  }
+
+  resolve(
+    actionType: ActionType,
+    name: string
+  ): ResolvableAction | undefined | Promise<ResolvableAction | undefined> {
+    if (!this.plugin.resolve) {
+      return undefined;
+    }
+    return this.plugin.resolve(actionType, name);
+  }
+
+  async model(name: string): Promise<ModelAction> {
+    const model = await this.resolve('model', name);
+    if (!model) {
+      throw new GenkitError({
+        message: `Failed to resolve model ${name} for plugin ${this.name}`,
+        status: 'NOT_FOUND',
+      });
+    }
+    return model as ModelAction;
+  }
+}
+
 export function genkitPluginV2(
-  options: Omit<GenkitPluginV2, 'version'>
-): GenkitPluginV2 {
-  return { ...options, version: 'v2' };
+  options: Omit<GenkitPluginV2, 'version' | 'model'>
+): GenkitPluginV2Instance {
+  return new GenkitPluginV2Instance(options);
 }
 
 export function isPluginV2(plugin: unknown): plugin is GenkitPluginV2 {

@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"errors"
-
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
@@ -37,7 +36,7 @@ type duneQuestionInput struct {
 func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash-preview-04-17"),
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
 

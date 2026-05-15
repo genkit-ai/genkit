@@ -14,16 +14,25 @@
  * limitations under the License.
  */
 
-import { RuntimeManager } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { defineDocsTool } from '../mcp/docs';
 import { defineFlowTools } from './flows';
+import { defineInitPrompt } from './prompts/init';
+import { defineRuntimeTools } from './runtime';
 import { defineTraceTools } from './trace';
 import { defineUsageGuideTool } from './usage';
+import { McpRuntimeManager, McpToolOptions } from './utils';
 
-export async function startMcpServer(manager: RuntimeManager) {
+export async function startMcpServer(params: {
+  projectRoot: string;
+  explicitProjectRoot: boolean;
+  timeout?: number;
+}) {
+  const { projectRoot, explicitProjectRoot, timeout } = params;
+  logger.info(`Starting MCP server in: ${projectRoot}`);
+
   const server = new McpServer({
     name: 'Genkit MCP',
     version: '0.0.2',
@@ -31,14 +40,42 @@ export async function startMcpServer(manager: RuntimeManager) {
 
   await defineDocsTool(server);
   await defineUsageGuideTool(server);
-  defineFlowTools(server, manager);
-  defineTraceTools(server, manager);
+  defineInitPrompt(server);
+
+  const manager = new McpRuntimeManager();
+  const options: McpToolOptions = {
+    projectRoot,
+    explicitProjectRoot,
+    timeout,
+    manager,
+  };
+
+  defineFlowTools(server, options);
+  defineTraceTools(server, options);
+  defineRuntimeTools(server, options);
 
   return new Promise(async (resolve) => {
     const transport = new StdioServerTransport();
-    transport.onclose = () => {
+    const cleanup = async () => {
+      try {
+        await manager.kill();
+      } catch (e) {
+        // ignore
+      }
       resolve(undefined);
+      process.exit(0);
     };
+    transport.onclose = async () => {
+      try {
+        await manager.kill();
+      } catch (e) {
+        // ignore
+      }
+      resolve(undefined);
+      process.exit(0);
+    };
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
     await server.connect(transport);
     logger.info('Genkit MCP Server running on stdio');
   });

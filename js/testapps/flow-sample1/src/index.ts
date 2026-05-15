@@ -18,19 +18,112 @@ import { genkit, z } from 'genkit';
 
 const ai = genkit({});
 
+// TEST FLOW: Long-running flow for broadcast testing (2-3 minutes)
+export const testLongBroadcast = ai.defineFlow(
+  {
+    name: 'test-long-broadcast',
+    inputSchema: z.object({
+      steps: z.number().default(10).describe('Number of steps to execute'),
+      stepDelay: z
+        .number()
+        .default(15000)
+        .describe('Delay in ms between steps (default 15s)'),
+    }),
+    outputSchema: z.object({
+      totalDuration: z.number(),
+      stepsCompleted: z.number(),
+      timeline: z.array(
+        z.object({
+          step: z.number(),
+          timestamp: z.string(),
+          elapsed: z.number(),
+        })
+      ),
+    }),
+  },
+  async ({ steps = 10, stepDelay = 15000 }) => {
+    const startTime = Date.now();
+    const timeline: Array<{
+      step: number;
+      timestamp: string;
+      elapsed: number;
+    }> = [];
+
+    console.log(
+      `🚀 Starting long broadcast test: ${steps} steps × ${stepDelay / 1000}s = ~${(steps * stepDelay) / 60000} minutes`
+    );
+
+    for (let i = 1; i <= steps; i++) {
+      const stepStart = Date.now();
+
+      await ai.run(`step-${i}`, async () => {
+        console.log(
+          `[${new Date().toISOString()}] 🔄 Step ${i}/${steps} starting...`
+        );
+
+        // Simulate some work with nested spans
+        await ai.run(`step-${i}-fetch`, async () => {
+          await new Promise((resolve) => setTimeout(resolve, stepDelay / 3));
+          console.log(`  📡 Fetched data for step ${i}`);
+          return `fetch-${i}`;
+        });
+
+        await ai.run(`step-${i}-process`, async () => {
+          await new Promise((resolve) => setTimeout(resolve, stepDelay / 3));
+          console.log(`  ⚙️  Processed data for step ${i}`);
+          return `process-${i}`;
+        });
+
+        await ai.run(`step-${i}-save`, async () => {
+          await new Promise((resolve) => setTimeout(resolve, stepDelay / 3));
+          console.log(`  💾 Saved results for step ${i}`);
+          return `save-${i}`;
+        });
+
+        const elapsed = Date.now() - stepStart;
+        console.log(
+          `[${new Date().toISOString()}] ✅ Step ${i}/${steps} completed (${elapsed}ms)`
+        );
+
+        timeline.push({
+          step: i,
+          timestamp: new Date().toISOString(),
+          elapsed,
+        });
+
+        return `Step ${i} complete`;
+      });
+    }
+
+    const totalDuration = Date.now() - startTime;
+    console.log(
+      `🎉 Long broadcast test completed in ${totalDuration / 1000}s (${(totalDuration / 60000).toFixed(1)} minutes)`
+    );
+
+    return {
+      totalDuration,
+      stepsCompleted: steps,
+      timeline,
+    };
+  }
+);
+
 /**
  * To run this flow;
  *   genkit flow:run basic "\"hello\""
  */
-export const basic = ai.defineFlow('basic', async (subject) => {
-  const foo = await ai.run('call-llm', async () => {
-    return `subject: ${subject}`;
-  });
+export const basic = ai.defineFlow(
+  { name: 'basic', inputSchema: z.string() },
+  async (subject) => {
+    const foo = await ai.run('call-llm', async () => {
+      return `subject: ${subject}`;
+    });
 
-  return await ai.run('call-llm1', async () => {
-    return `foo: ${foo}`;
-  });
-});
+    return await ai.run('call-llm1', async () => {
+      return `foo: ${foo}`;
+    });
+  }
+);
 
 export const parent = ai.defineFlow(
   { name: 'parent', outputSchema: z.string() },
@@ -70,7 +163,7 @@ export const streamy = ai.defineFlow(
     outputSchema: z.string(),
     streamSchema: z.object({ count: z.number() }),
   },
-  async (count, { sendChunk }) => {
+  async (count: number, { sendChunk }: any) => {
     let i = 0;
     for (; i < count; i++) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -141,7 +234,7 @@ export const throwy2 = ai.defineFlow(
 
 export const flowMultiStepCaughtError = ai.defineFlow(
   { name: 'flowMultiStepCaughtError' },
-  async (input) => {
+  async (input: any) => {
     let i = 1;
 
     const result1 = await ai.run('step1', async () => {

@@ -15,7 +15,14 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import type {
   GenerateRequest,
   GenerateResponseData,
@@ -23,30 +30,36 @@ import type {
   Part,
   Role,
 } from 'genkit';
-import type OpenAI from 'openai';
+import OpenAI, { APIError } from 'openai';
 import type {
   ChatCompletion,
   ChatCompletionChunk,
   ChatCompletionMessageToolCall,
   ChatCompletionRole,
 } from 'openai/resources/index.mjs';
-
 import {
+  ModelRequestBuilder,
   fromOpenAIChoice,
   fromOpenAIChunkChoice,
   fromOpenAIToolCall,
-  ModelRequestBuilder,
   openAIModelRunner,
   toOpenAIMessages,
   toOpenAIRequestBody,
   toOpenAIRole,
   toOpenAITextAndMedia,
 } from '../src/model';
+import { FakeOpenAIServer } from './fake_openai_server';
 
-jest.mock('@genkit-ai/ai/model', () => ({
-  ...(jest.requireActual('@genkit-ai/ai/model') as Record<string, unknown>),
-  defineModel: jest.fn(),
-}));
+jest.mock('genkit/model', () => {
+  const originalModule =
+    jest.requireActual<typeof import('genkit/model')>('genkit/model');
+  return {
+    ...originalModule,
+    defineModel: jest.fn((_, runner) => {
+      return runner;
+    }),
+  };
+});
 
 describe('toOpenAIRole', () => {
   const testCases: {
@@ -92,7 +105,7 @@ describe('toOpenAiTextAndMedia', () => {
     expect(actualOutput).toStrictEqual({ type: 'text', text: 'hi' });
   });
 
-  it('should transform media content correctly', () => {
+  it('should transform image media content correctly', () => {
     const part: Part = {
       media: {
         contentType: 'image/jpeg',
@@ -109,6 +122,82 @@ describe('toOpenAiTextAndMedia', () => {
     });
   });
 
+  it('should transform PDF file content correctly with base64 data', () => {
+    const part: Part = {
+      media: {
+        contentType: 'application/pdf',
+        url: 'data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK',
+      },
+    };
+    const actualOutput = toOpenAITextAndMedia(part, 'low');
+    expect(actualOutput).toStrictEqual({
+      type: 'file',
+      file: {
+        filename: 'file.pdf',
+        file_data: 'data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK',
+      },
+    });
+  });
+
+  it('should transform PDF file without explicit contentType from data URL', () => {
+    const part: Part = {
+      media: {
+        url: 'data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK',
+      },
+    };
+    const actualOutput = toOpenAITextAndMedia(part, 'low');
+    expect(actualOutput).toStrictEqual({
+      type: 'file',
+      file: {
+        filename: 'file.pdf',
+        file_data: 'data:application/pdf;base64,JVBERi0xLjQKJeLjz9MK',
+      },
+    });
+  });
+
+  it('should transform image from data URL without explicit contentType', () => {
+    const part: Part = {
+      media: {
+        url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA',
+      },
+    };
+    const actualOutput = toOpenAITextAndMedia(part, 'high');
+    expect(actualOutput).toStrictEqual({
+      type: 'image_url',
+      image_url: {
+        url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA',
+        detail: 'high',
+      },
+    });
+  });
+
+  it('should transform image from signed URLs', () => {
+    const part: Part = {
+      media: {
+        url: 'https://storage.googleapis.com/bucket/image.png?X-Goog-Signature=fake',
+      },
+    };
+    expect(toOpenAITextAndMedia(part, 'low')).toStrictEqual({
+      type: 'image_url',
+      image_url: {
+        url: 'https://storage.googleapis.com/bucket/image.png?X-Goog-Signature=fake',
+        detail: 'low',
+      },
+    });
+  });
+
+  it('should throw error for file URLs (non-base64 PDFs)', () => {
+    const part: Part = {
+      media: {
+        contentType: 'application/pdf',
+        url: 'https://example.com/document.pdf',
+      },
+    };
+    expect(() => toOpenAITextAndMedia(part, 'low')).toThrowError(
+      'File URLs are not supported for chat completions'
+    );
+  });
+
   it('should throw an error for unknown parts', () => {
     const part: Part = { data: 'hi' };
     expect(() => toOpenAITextAndMedia(part, 'low')).toThrowError(
@@ -120,7 +209,7 @@ describe('toOpenAiTextAndMedia', () => {
 describe('toOpenAiMessages', () => {
   const testCases = [
     {
-      should: 'should transform tool request content correctly',
+      should: 'transform tool request content correctly',
       inputMessages: [
         {
           role: 'model',
@@ -152,7 +241,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform tool response text content correctly',
+      should: 'transform tool response text content correctly',
       inputMessages: [
         {
           role: 'tool',
@@ -176,7 +265,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform tool response json content correctly',
+      should: 'transform tool response json content correctly',
       inputMessages: [
         {
           role: 'tool',
@@ -200,7 +289,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform text content correctly',
+      should: 'transform text content correctly',
       inputMessages: [
         { role: 'user', content: [{ text: 'hi' }] },
         { role: 'model', content: [{ text: 'how can I help you?' }] },
@@ -213,7 +302,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform multi-modal (text + media) content correctly',
+      should: 'transform multi-modal (text + media) content correctly',
       inputMessages: [
         {
           role: 'user',
@@ -245,7 +334,7 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
-      should: 'should transform system messages correctly',
+      should: 'transform system messages correctly',
       inputMessages: [
         { role: 'system', content: [{ text: 'system message' }] },
       ],
@@ -334,7 +423,7 @@ describe('fromOpenAiChoice', () => {
     expectedOutput: GenerateResponseData;
   }[] = [
     {
-      should: 'should work with text',
+      should: 'work with text',
       choice: {
         index: 0,
         message: {
@@ -354,7 +443,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should work with json',
+      should: 'work with json',
       choice: {
         index: 0,
         message: {
@@ -375,7 +464,7 @@ describe('fromOpenAiChoice', () => {
       },
     },
     {
-      should: 'should work with tools',
+      should: 'work with tools',
       choice: {
         index: 0,
         message: {
@@ -412,6 +501,69 @@ describe('fromOpenAiChoice', () => {
         finishReason: 'stop',
       },
     },
+    {
+      should: 'work with reasoning_content',
+      choice: {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          reasoning_content: 'Let me think about this step by step...',
+          refusal: null,
+        } as any,
+        finish_reason: 'stop',
+        logprobs: null,
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [{ reasoning: 'Let me think about this step by step...' }],
+        },
+      },
+    },
+    {
+      should: 'work with both reasoning_content and content',
+      choice: {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: 'Final answer',
+          reasoning_content: 'Let me think...',
+          refusal: null,
+        } as any,
+        finish_reason: 'stop',
+        logprobs: null,
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [{ reasoning: 'Let me think...' }, { text: 'Final answer' }],
+        },
+      },
+    },
+    {
+      should: 'not ignore content when tool_calls is an empty array',
+      choice: {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: 'I have the answer.',
+          tool_calls: [],
+          refusal: null,
+        },
+        finish_reason: 'stop',
+        logprobs: null,
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [{ text: 'I have the answer.' }],
+        },
+      },
+    },
   ];
 
   for (const test of testCases) {
@@ -430,7 +582,7 @@ describe('fromOpenAiChunkChoice', () => {
     expectedOutput: GenerateResponseData;
   }[] = [
     {
-      should: 'should work with text',
+      should: 'work with text',
       chunkChoice: {
         index: 0,
         delta: {
@@ -448,7 +600,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'should work with json',
+      should: 'work with json',
       chunkChoice: {
         index: 0,
         delta: {
@@ -468,7 +620,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'should work with tools',
+      should: 'work with tools',
       chunkChoice: {
         index: 0,
         delta: {
@@ -501,6 +653,43 @@ describe('fromOpenAiChunkChoice', () => {
           ],
         },
         finishReason: 'stop',
+      },
+    },
+    {
+      should: 'work with reasoning_content',
+      chunkChoice: {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          reasoning_content: 'Let me think about this step by step...',
+        } as any,
+        finish_reason: null,
+      },
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: {
+          role: 'model',
+          content: [{ reasoning: 'Let me think about this step by step...' }],
+        },
+      },
+    },
+    {
+      should: 'work with both reasoning_content and content',
+      chunkChoice: {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          reasoning_content: 'Let me think...',
+          content: 'Final answer',
+        } as any,
+        finish_reason: 'stop',
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [{ reasoning: 'Let me think...' }, { text: 'Final answer' }],
+        },
       },
     },
   ];
@@ -1284,6 +1473,33 @@ describe('toOpenAiRequestBody', () => {
       },
     });
   });
+  it('sets json_schema response_format when an output schema is provided', () => {
+    const schema = {
+      type: 'object',
+      properties: { foo: { type: 'string' } },
+      required: ['foo'],
+      additionalProperties: false,
+    };
+    const request = {
+      messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      output: { format: 'json', schema },
+    } as unknown as GenerateRequest;
+
+    const actualOutput = toOpenAIRequestBody('gpt-4o', request) as unknown as {
+      response_format?: {
+        type: string;
+        json_schema?: { name: string; schema: unknown };
+      };
+    };
+
+    expect(actualOutput.response_format).toStrictEqual({
+      type: 'json_schema',
+      json_schema: {
+        name: 'output',
+        schema,
+      },
+    });
+  });
 });
 
 describe('openAIModelRunner', () => {
@@ -1398,5 +1614,229 @@ describe('openAIModelRunner', () => {
       },
       { signal: undefined }
     );
+  });
+
+  describe('request scoping with fake server', () => {
+    let server: FakeOpenAIServer;
+
+    beforeEach(async () => {
+      server = new FakeOpenAIServer('scoped-key');
+      await server.start();
+    });
+
+    afterEach(() => {
+      server.stop();
+    });
+
+    it('should use request scoped client when apiKey is provided', async () => {
+      server.setNextResponse({
+        body: {
+          choices: [
+            {
+              message: { role: 'assistant', content: 'scoped response' },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      });
+
+      const defaultClient = new OpenAI({ apiKey: 'default-key' });
+      const runner = openAIModelRunner('gpt-4o', defaultClient, undefined, {
+        name: 'openai',
+        baseURL: server.baseUrl,
+      });
+
+      const result = await runner({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { apiKey: 'scoped-key' },
+      });
+
+      expect(result.message?.content[0].text).toBe('scoped response');
+      // Verify server received correct key
+      expect(server.requests.length).toBe(1);
+      expect(server.requests[0].headers['authorization']).toBe(
+        'Bearer scoped-key'
+      );
+    });
+
+    it('should handle streaming response with scoped client', async () => {
+      server.setNextResponse({
+        stream: true,
+        chunks: [
+          {
+            id: '1',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: 'chunk1' },
+                finish_reason: null,
+              },
+            ],
+          },
+          {
+            id: '2',
+            choices: [
+              { index: 0, delta: { content: 'chunk2' }, finish_reason: null },
+            ],
+          },
+          {
+            id: '3',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          },
+        ],
+      });
+
+      const defaultClient = new OpenAI({ apiKey: 'default-key' });
+      const runner = openAIModelRunner('gpt-4o', defaultClient, undefined, {
+        name: 'openai',
+        baseURL: server.baseUrl,
+      });
+
+      let streamedContent = '';
+      const result = await runner(
+        {
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+          config: { apiKey: 'scoped-key' },
+        },
+        {
+          streamingRequested: true,
+          sendChunk: (chunk) => {
+            if (chunk.content.length > 0) {
+              streamedContent += chunk.content[0].text;
+            }
+          },
+        }
+      );
+
+      expect(streamedContent).toBe('chunk1chunk2');
+      expect(result.message?.content[0].text).toBe('chunk1chunk2');
+    });
+
+    it('should fail when invalid apiKey is provided in request', async () => {
+      const defaultClient = new OpenAI({ apiKey: 'default-key' });
+      const runner = openAIModelRunner('gpt-4o', defaultClient, undefined, {
+        name: 'openai',
+        baseURL: server.baseUrl,
+      });
+
+      await expect(
+        runner({
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+          config: { apiKey: 'wrong-key' },
+        })
+      ).rejects.toThrow(
+        expect.objectContaining({
+          status: 'PERMISSION_DENIED',
+          message: expect.stringContaining('Incorrect API key provided'),
+        })
+      );
+    });
+
+    it('should fail when invalid apiKey is provided in plugin options', async () => {
+      const defaultClient = new OpenAI({ apiKey: 'default-key' });
+      const runner = openAIModelRunner('gpt-4o', defaultClient, undefined, {
+        name: 'openai',
+        baseURL: server.baseUrl,
+      });
+
+      await expect(
+        runner({
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        })
+      ).rejects.toThrow(
+        expect.objectContaining({
+          status: 'PERMISSION_DENIED',
+          message: expect.stringContaining('Incorrect API key provided'),
+        })
+      );
+    });
+  });
+
+  describe('error handling', () => {
+    const testCases = [
+      {
+        name: '429',
+        error: new APIError(
+          429,
+          { error: { message: 'Rate limit exceeded' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'RESOURCE_EXHAUSTED',
+      },
+      {
+        name: '400',
+        error: new APIError(
+          400,
+          { error: { message: 'Invalid request' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'INVALID_ARGUMENT',
+      },
+      {
+        name: '500',
+        error: new APIError(
+          500,
+          { error: { message: 'Internal server error' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'INTERNAL',
+      },
+      {
+        name: '503',
+        error: new APIError(
+          503,
+          { error: { message: 'Service unavailable' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'UNAVAILABLE',
+      },
+    ];
+
+    for (const tc of testCases) {
+      it(`should convert ${tc.name} error to GenkitError`, async () => {
+        const openaiClient = {
+          chat: {
+            completions: {
+              create: jest.fn(async () => {
+                throw tc.error;
+              }),
+            },
+          },
+        };
+        const runner = openAIModelRunner(
+          'gpt-4o',
+          openaiClient as unknown as OpenAI
+        );
+        await expect(runner({ messages: [] })).rejects.toThrow(
+          expect.objectContaining({
+            status: tc.expectedStatus,
+          })
+        );
+      });
+    }
+
+    it('should re-throw non-APIError', async () => {
+      const error = new Error('Some other error');
+      const openaiClient = {
+        chat: {
+          completions: {
+            create: jest.fn(async () => {
+              throw error;
+            }),
+          },
+        },
+      };
+      const runner = openAIModelRunner(
+        'gpt-4o',
+        openaiClient as unknown as OpenAI
+      );
+      await expect(runner({ messages: [] })).rejects.toThrow(
+        'Some other error'
+      );
+    });
   });
 });

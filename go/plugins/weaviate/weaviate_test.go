@@ -26,7 +26,6 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/fakeembedder"
-	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -80,7 +79,9 @@ func TestGenkit(t *testing.T) {
 	}
 
 	actions := w.Init(ctx)
-	assert.Empty(t, actions)
+	if len(actions) != 0 {
+		t.Errorf("actions = %v, want empty", actions)
+	}
 
 	// Delete our test class so that earlier runs don't mess us up.
 	if err := w.client.Schema().ClassDeleter().WithClassName(*testClass).Do(ctx); err != nil {

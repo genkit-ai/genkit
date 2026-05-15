@@ -43,6 +43,12 @@ export {
   type Operation,
 } from './background-action.js';
 export {
+  getGenkitRuntimeConfig,
+  resetGenkitRuntimeConfig,
+  setGenkitRuntimeConfig,
+  type GenkitRuntimeConfig,
+} from './config.js';
+export {
   apiKey,
   getContext,
   runWithContext,

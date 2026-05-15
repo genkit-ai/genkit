@@ -57,6 +57,6 @@ export function deepSeekModelRef(params: {
 }
 
 export const SUPPORTED_DEEPSEEK_MODELS = {
-  'deepseek-reasoner': deepSeekModelRef({ name: 'deepseek/deepseek-reasoner' }),
-  'deepseek-chat': deepSeekModelRef({ name: 'deepseek/deepseek-chat' }),
+  'deepseek-reasoner': deepSeekModelRef({ name: 'deepseek-reasoner' }),
+  'deepseek-chat': deepSeekModelRef({ name: 'deepseek-chat' }),
 };

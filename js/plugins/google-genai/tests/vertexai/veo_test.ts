@@ -258,6 +258,29 @@ describe('Vertex AI Veo', () => {
           /Error fetching from .*fetchPredictOperation.* Not found/
         );
       });
+
+      it('should use clientOptions from operation metadata if available', async () => {
+        const opClientOptions: ClientOptions = {
+          kind: 'regional',
+          projectId: 'op-project',
+          location: 'europe-west1',
+          authClient: authMock as any,
+        };
+        const opWithClientOptions: Operation = {
+          ...pendingOp,
+          metadata: { clientOptions: opClientOptions },
+        };
+        mockFetchResponse({ name: operationId, done: true });
+
+        const { check } = captureModelRunner(defaultRegionalClientOptions);
+        await check(opWithClientOptions);
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const url = fetchArgs[0];
+        assert.ok(url.includes('europe-west1'));
+        assert.ok(url.includes('op-project'));
+      });
     });
   });
 });

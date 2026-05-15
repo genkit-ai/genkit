@@ -20,9 +20,11 @@ export function span(
   traceId: string,
   id: string,
   inputLength: number | undefined,
-  outputLength: number | undefined
+  outputLength: number | undefined,
+  startTime?: number,
+  endTime?: number
 ): SpanData {
-  const attributes = {
+  const attributes: Record<string, any> = {
     'genkit:type': 'flow',
   };
   if (inputLength) {
@@ -35,8 +37,8 @@ export function span(
     traceId: traceId,
     spanId: id,
     displayName: `Span ${id}`,
-    startTime: 1,
-    endTime: 2,
+    startTime: startTime || 1,
+    endTime: endTime || 2,
     instrumentationLibrary: { name: 'genkit' },
     spanKind: 'INTERNAL',
     attributes,
@@ -52,6 +54,6 @@ function generateString(length: number) {
   return str.substring(0, length);
 }
 
-export async function sleep(ms) {
+export async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }

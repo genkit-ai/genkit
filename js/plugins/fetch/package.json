@@ -1,0 +1,59 @@
+{
+  "name": "@genkit-ai/fetch",
+  "description": "Genkit AI framework plugin for Web Fetch API Request/Response handlers",
+  "keywords": [
+    "genkit",
+    "genkit-plugin",
+    "langchain",
+    "ai",
+    "genai",
+    "generative-ai",
+    "web",
+    "web-api",
+    "fetch",
+    "hono",
+    "cloudflare",
+    "bun",
+    "deno"
+  ],
+  "version": "0.1.0",
+  "type": "commonjs",
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "node --import tsx --test tests/*_test.ts",
+    "test:watch": "node --import tsx --watch --test tests/*_test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/web"
+  },
+  "author": "genkit",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "genkit": "workspace:^"
+  },
+  "devDependencies": {
+    "get-port": "^5.1.0",
+    "@types/node": "^20.11.16",
+    "genkit": "workspace:*",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  },
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.mjs",
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  }
+}

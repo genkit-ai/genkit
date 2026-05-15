@@ -22,6 +22,8 @@ import (
 
 // Registry holds all registered actions and associated types,
 // and provides methods to register, query, and look up actions.
+//
+// For internal use only. API may change without notice.
 type Registry interface {
 	// NewChild creates a new child registry that inherits from this registry.
 	// Child registries are cheap to create and will fall back to the parent
@@ -44,6 +46,10 @@ type Registry interface {
 	// It panics if a value with the same name is already registered.
 	RegisterValue(name string, value any)
 
+	// RegisterSchema records a JSON schema in the registry.
+	// It panics if a value with the same name is already registered.
+	RegisterSchema(name string, schema map[string]any)
+
 	// LookupPlugin returns the plugin for the given name.
 	// It first checks the current registry, then falls back to the parent if not found.
 	// Returns nil if the plugin is not found in the registry hierarchy.
@@ -57,6 +63,11 @@ type Registry interface {
 	// It first checks the current registry, then falls back to the parent if not found.
 	// Returns nil if the value is not found in the registry hierarchy.
 	LookupValue(name string) any
+
+	// LookupSchema returns a JSON schema for the given name.
+	// It first checks the current registry, then falls back to the parent if not found.
+	// Returns nil if the value is not found in the registry hierachy.
+	LookupSchema(name string) map[string]any
 
 	// ResolveAction looks up an action by key. If the action is not found, it attempts dynamic resolution.
 	// Returns the action if found, or nil if not found.

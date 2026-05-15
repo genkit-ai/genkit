@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
+import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { getDatasetStore, getEvalStore } from '.';
-import type { RuntimeManager } from '../manager/manager';
+import type { BaseRuntimeManager } from '../manager/manager';
 import {
-  DatasetSchema,
   GenerateActionOptions,
-  GenerateActionOptionsSchema,
-  GenerateResponseSchema,
+  GenerateResponseData,
   type Action,
   type CandidateData,
   type Dataset,
@@ -36,7 +35,6 @@ import {
 import {
   evaluatorName,
   generateTestCaseId,
-  getAction,
   getEvalExtractors,
   getModelInput,
   hasAction,
@@ -67,11 +65,13 @@ interface FullInferenceSample {
 
 const SUPPORTED_ACTION_TYPES = ['flow', 'model', 'executable-prompt'] as const;
 type SupportedActionType = (typeof SUPPORTED_ACTION_TYPES)[number];
+const GENERATE_ACTION_UTIL = '/util/generate';
+
 /**
  * Starts a new evaluation run. Intended to be used via the reflection API.
  */
 export async function runNewEvaluation(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   request: RunNewEvaluationRequest
 ): Promise<EvalRunKey> {
   const { dataSource, actionRef, evaluators } = request;
@@ -90,12 +90,12 @@ export async function runNewEvaluation(
 
   if (datasetId) {
     const datasetStore = await getDatasetStore();
-    logger.info(`Fetching dataset ${datasetId}...`);
+    logger.debug(`Fetching dataset ${datasetId}...`);
     const dataset = await datasetStore.getDataset(datasetId);
     if (dataset.length === 0) {
       throw new Error(`Dataset ${datasetId} is empty`);
     }
-    inferenceDataset = DatasetSchema.parse(dataset);
+    inferenceDataset = dataset as Dataset;
 
     const datasetMetadatas = await datasetStore.listDatasets();
     const targetDatasetMetadata = datasetMetadatas.find(
@@ -108,10 +108,10 @@ export async function runNewEvaluation(
       ...sample,
       testCaseId: sample.testCaseId ?? generateTestCaseId(),
     }));
-    inferenceDataset = DatasetSchema.parse(rawData);
+    inferenceDataset = rawData as Dataset;
   }
 
-  logger.info('Running inference...');
+  logger.debug('Running inference...');
   const evalDataset = await runInference({
     manager,
     actionRef,
@@ -140,7 +140,7 @@ export async function runNewEvaluation(
 
 /** Handles the Inference part of Inference-Evaluation cycle */
 export async function runInference(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   inferenceDataset: Dataset;
   context?: string;
@@ -164,7 +164,7 @@ export async function runInference(params: {
 
 /** Handles the Evaluation part of Inference-Evaluation cycle */
 export async function runEvaluation(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   evaluatorActions: Action[];
   evalDataset: EvalInput[];
   augments?: EvalKeyAugments;
@@ -177,7 +177,7 @@ export async function runEvaluation(params: {
   }
   const evalRunId = randomUUID();
   const scores: Record<string, any> = {};
-  logger.info('Running evaluation...');
+  logger.debug('Running evaluation...');
 
   const runtime = manager.getMostRecentRuntime();
   const isNodeRuntime = runtime?.genkitVersion?.startsWith('nodejs') ?? false;
@@ -193,9 +193,8 @@ export async function runEvaluation(params: {
       },
     });
     scores[name] = response.result;
-    logger.info(
-      `Finished evaluator '${action.name}'. Trace ID: ${response.telemetry?.traceId}`
-    );
+    logger.debug(`Finished evaluator '${action.name}'`);
+    logger.info(`${clc.cyan('Trace ID:')} ${response.telemetry?.traceId}`);
   }
 
   const scoredResults = enrichResultsWithScoring(scores, evalDataset);
@@ -207,20 +206,20 @@ export async function runEvaluation(params: {
       evalRunId,
       createdAt: new Date().toISOString(),
       metricSummaries,
+      metricsMetadata: metadata,
       ...augments,
     },
     results: scoredResults,
-    metricsMetadata: metadata,
   };
 
-  logger.info('Finished evaluation, writing key...');
+  logger.debug('Finished evaluation, writing key...');
   const evalStore = await getEvalStore();
   await evalStore.save(evalRun);
   return evalRun;
 }
 
 export async function getAllEvaluatorActions(
-  manager: RuntimeManager
+  manager: BaseRuntimeManager
 ): Promise<Action[]> {
   const allActions = await manager.listActions();
   const allEvaluatorActions = [];
@@ -233,7 +232,7 @@ export async function getAllEvaluatorActions(
 }
 
 export async function getMatchingEvaluatorActions(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   evaluators?: string[]
 ): Promise<Action[]> {
   if (!evaluators) {
@@ -252,7 +251,7 @@ export async function getMatchingEvaluatorActions(
 }
 
 async function bulkRunAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   inferenceDataset: Dataset;
   context?: string;
@@ -273,7 +272,7 @@ async function bulkRunAction(params: {
   const states: InferenceRunState[] = [];
   const evalInputs: EvalInput[] = [];
   for (const sample of fullInferenceDataset) {
-    logger.info(`Running inference '${actionRef}' ...`);
+    logger.debug(`Running inference '${actionRef}' ...`);
     if (actionType === 'model') {
       states.push(
         await runModelAction({
@@ -306,7 +305,7 @@ async function bulkRunAction(params: {
     }
   }
 
-  logger.info(`Gathering evalInputs...`);
+  logger.debug(`Gathering evalInputs...`);
   for (const state of states) {
     evalInputs.push(await gatherEvalInput({ manager, actionRef, state }));
   }
@@ -314,7 +313,7 @@ async function bulkRunAction(params: {
 }
 
 async function runFlowAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   sample: FullInferenceSample;
   context?: any;
@@ -346,7 +345,7 @@ async function runFlowAction(params: {
 }
 
 async function runModelAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   sample: FullInferenceSample;
   modelConfig?: any;
@@ -378,20 +377,22 @@ async function runModelAction(params: {
 }
 
 async function runPromptAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   sample: FullInferenceSample;
   context?: any;
   promptConfig?: any;
 }): Promise<InferenceRunState> {
   const { manager, actionRef, sample, context, promptConfig } = { ...params };
-
-  const { model: modelFromConfig, ...restOfConfig } = promptConfig ?? {};
-  const model = await resolveModel({ manager, actionRef, modelFromConfig });
-  if (!model) {
+  const { model: modelFromConfig, ...restOfConfig } = promptConfig;
+  if (!modelFromConfig) {
     throw new Error(
-      'Could not resolve model. Please specify model and try again'
+      'Missing model: Please specific model for prompt evaluation'
     );
+  }
+  const model = modelFromConfig.split('/model/').pop();
+  if (!model) {
+    throw new Error(`Improper model provided: ${modelFromConfig}`);
   }
   let state: InferenceRunState;
   let renderedPrompt: {
@@ -408,7 +409,7 @@ async function runPromptAction(params: {
 
     renderedPrompt = {
       traceId: runActionResponse.telemetry?.traceId!,
-      result: GenerateActionOptionsSchema.parse(runActionResponse.result),
+      result: runActionResponse.result as GenerateActionOptions,
     };
   } catch (e: any) {
     if (e instanceof z.ZodError) {
@@ -430,11 +431,14 @@ async function runPromptAction(params: {
   // Step 2. Run rendered prompt on the model
   try {
     let modelInput = renderedPrompt.result;
-    if (restOfConfig) {
-      modelInput = { ...modelInput, config: restOfConfig };
+    // Override with runtime specific config
+    if (Object.keys(restOfConfig ?? {}).length > 0) {
+      modelInput = { ...modelInput, model, config: restOfConfig };
+    } else {
+      modelInput = { ...modelInput, model };
     }
     const runActionResponse = await manager.runAction({
-      key: model,
+      key: GENERATE_ACTION_UTIL,
       input: modelInput,
     });
     const traceIds = runActionResponse.telemetry?.traceId
@@ -460,7 +464,7 @@ async function runPromptAction(params: {
 }
 
 async function gatherEvalInput(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
   state: InferenceRunState;
 }): Promise<EvalInput> {
@@ -485,6 +489,8 @@ async function gatherEvalInput(params: {
 
   // Only the last collected trace to be used for evaluation.
   const traceId = traceIds.at(-1)!;
+  // Sleep to let traces persist.
+  await new Promise((resolve) => setTimeout(resolve, 2000));
   const trace = await manager.getTrace({
     traceId,
   });
@@ -541,23 +547,6 @@ async function gatherEvalInput(params: {
   };
 }
 
-async function resolveModel(params: {
-  manager: RuntimeManager;
-  actionRef: string;
-  modelFromConfig?: string;
-}) {
-  const { manager, actionRef, modelFromConfig } = { ...params };
-
-  // Prefer to use modelFromConfig
-  if (modelFromConfig) {
-    return modelFromConfig;
-  }
-
-  const actionData = await getAction({ manager, actionRef });
-  const promptMetadata = actionData?.metadata?.prompt as any;
-  return promptMetadata?.model ? `/model/${promptMetadata?.model}` : undefined;
-}
-
 function getSpanErrorMessage(span: SpanData): string | undefined {
   if (span && span.status?.code === 2 /* SpanStatusCode.ERROR */) {
     // It's possible for a trace to have multiple exception events,
@@ -572,7 +561,7 @@ function getSpanErrorMessage(span: SpanData): string | undefined {
 }
 
 function getErrorFromModelResponse(obj: any): string | undefined {
-  const response = GenerateResponseSchema.parse(obj);
+  const response = obj as GenerateResponseData;
 
   // Legacy response is present
   const hasLegacyResponse =

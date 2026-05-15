@@ -21,6 +21,7 @@ import type { Server } from 'http';
 import path from 'path';
 import * as z from 'zod';
 import { StatusCodes, type Status } from './action.js';
+import { getGenkitRuntimeConfig } from './config.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
 import type { Registry } from './registry.js';
@@ -51,6 +52,18 @@ export interface ReflectionServerOptions {
 }
 
 /**
+ * Checks if an error is an AbortError (from AbortController.abort()).
+ */
+function isAbortError(err: any): boolean {
+  return (
+    err?.name === 'AbortError' ||
+    (typeof DOMException !== 'undefined' &&
+      err instanceof DOMException &&
+      err.name === 'AbortError')
+  );
+}
+
+/**
  * Reflection server exposes an API for inspecting and interacting with Genkit in development.
  *
  * This is for use in development environments.
@@ -71,6 +84,15 @@ export class ReflectionServer {
   private server: Server | null = null;
   /** Path to the runtime file. Null if server is not running. */
   private runtimeFilePath: string | null = null;
+  /** Map of active actions indexed by trace ID for cancellation support. */
+  private activeActions = new Map<
+    string,
+    {
+      abortController: AbortController;
+      startTime: Date;
+    }
+  >();
+  private v2Server: any | null = null;
 
   constructor(registry: Registry, options?: ReflectionServerOptions) {
     this.registry = registry;
@@ -80,6 +102,10 @@ export class ReflectionServer {
       configuredEnvs: ['dev'],
       ...options,
     };
+  }
+
+  get runtimeId() {
+    return `${process.pid}${this.port !== null ? `-${this.port}` : ''}`;
   }
 
   /**
@@ -104,6 +130,24 @@ export class ReflectionServer {
    * The server will be registered to be shut down on process exit.
    */
   async start() {
+    if (getGenkitRuntimeConfig().sandboxedRuntime) {
+      logger.debug(
+        'Skipping ReflectionServer start: not supported in sandboxed runtime.'
+      );
+      return;
+    }
+    if (process.env.GENKIT_REFLECTION_V2_SERVER) {
+      const { ReflectionServerV2 } = await import('./reflection-v2.js');
+      this.v2Server = new ReflectionServerV2(this.registry, {
+        configuredEnvs: this.options.configuredEnvs,
+        name: this.options.name,
+        url: process.env.GENKIT_REFLECTION_V2_SERVER,
+      });
+      await this.v2Server.start();
+      ReflectionServer.RUNNING_SERVERS.push(this);
+      return;
+    }
+
     const server = express();
 
     server.use(express.json({ limit: this.options.bodyLimit }));
@@ -112,7 +156,11 @@ export class ReflectionServer {
       next();
     });
 
-    server.get('/api/__health', async (_, response) => {
+    server.get('/api/__health', async (req, response) => {
+      if (req.query['id'] && req.query['id'] !== this.runtimeId) {
+        response.status(503).send('Invalid runtime ID');
+        return;
+      }
       await this.registry.listActions();
       response.status(200).send('OK');
     });
@@ -121,6 +169,39 @@ export class ReflectionServer {
       logger.debug('Received quitquitquit');
       response.status(200).send('OK');
       await this.stop();
+    });
+
+    server.get('/api/values', async (req, response, next) => {
+      logger.debug('Fetching values.');
+      try {
+        const type = req.query.type;
+        if (!type) {
+          response.status(400).send('Query parameter "type" is required.');
+          return;
+        }
+        if (type !== 'defaultModel' && type !== 'middleware') {
+          response
+            .status(400)
+            .send(
+              `'type' ${type} is not supported. Only 'defaultModel' and 'middleware' are supported`
+            );
+          return;
+        }
+        const values = await this.registry.listValues(type as string);
+        const mappedValues: Record<string, any> = {};
+        for (const [key, value] of Object.entries(values)) {
+          mappedValues[key] =
+            value &&
+            (value as any).toJson &&
+            typeof (value as any).toJson === 'function'
+              ? (value as any).toJson()
+              : value;
+        }
+        response.send(mappedValues);
+      } catch (err) {
+        const { message, stack } = err as Error;
+        next({ message, stack });
+      }
     });
 
     server.get('/api/actions', async (_, response, next) => {
@@ -160,21 +241,54 @@ export class ReflectionServer {
       const { key, input, context, telemetryLabels } = request.body;
       const { stream } = request.query;
       logger.debug(`Running action \`${key}\` with stream=${stream}...`);
+      const abortController = new AbortController();
+      let traceId: string | undefined;
       try {
         const action = await this.registry.lookupAction(key);
         if (!action) {
           response.status(404).send(`action ${key} not found`);
           return;
         }
+        // Set up onTraceStart callback to send trace ID in headers early.
+        // This fires once for the root action span, before any streaming chunks
+        // or final result are returned.
+        const onTraceStartCallback = ({
+          traceId: tid,
+          spanId,
+        }: {
+          traceId: string;
+          spanId: string;
+        }) => {
+          traceId = tid; // Update traceId for cleanup later
+          this.activeActions.set(tid, {
+            abortController,
+            startTime: new Date(),
+          });
+          response.setHeader('X-Genkit-Trace-Id', tid);
+          response.setHeader('X-Genkit-Span-Id', spanId);
+          response.setHeader('X-Genkit-Version', GENKIT_VERSION);
+          if (stream === 'true') {
+            response.setHeader('Content-Type', 'text/plain');
+            response.setHeader('Transfer-Encoding', 'chunked');
+          } else {
+            response.setHeader('Content-Type', 'application/json');
+            // Force chunked encoding so we can flush headers early
+            response.setHeader('Transfer-Encoding', 'chunked');
+          }
+          response.statusCode = 200;
+          response.flushHeaders();
+        };
         if (stream === 'true') {
           try {
             const callback = (chunk) => {
               response.write(JSON.stringify(chunk) + '\n');
             };
             const result = await action.run(input, {
-              context,
+              context: context || {},
               onChunk: callback,
               telemetryLabels,
+              onTraceStart: onTraceStartCallback,
+              abortSignal: abortController.signal,
             });
             await flushTracing();
             response.write(
@@ -190,8 +304,10 @@ export class ReflectionServer {
             const { message, stack } = err as Error;
             // since we're streaming, we must do special error handling here -- the headers are already sent.
             const errorResponse: Status = {
-              code: StatusCodes.INTERNAL,
-              message,
+              code: isAbortError(err)
+                ? StatusCodes.CANCELLED
+                : StatusCodes.INTERNAL,
+              message: isAbortError(err) ? 'Action was cancelled' : message,
               details: {
                 stack,
               },
@@ -207,18 +323,66 @@ export class ReflectionServer {
             response.end();
           }
         } else {
-          const result = await action.run(input, { context, telemetryLabels });
+          // Non-streaming: send JSON response
+          const result = await action.run(input, {
+            context: context || {},
+            telemetryLabels,
+            onTraceStart: onTraceStartCallback,
+            abortSignal: abortController.signal,
+          });
           await flushTracing();
-          response.send({
-            result: result.result,
-            telemetry: {
-              traceId: result.telemetry.traceId,
-            },
-          } as RunActionResponse);
+          response.end(
+            JSON.stringify({
+              result: result.result,
+              telemetry: {
+                traceId: result.telemetry.traceId,
+              },
+            } as RunActionResponse)
+          );
         }
       } catch (err) {
-        const { message, stack, traceId } = err as any;
-        next({ message, stack, traceId });
+        const { message, stack } = err as Error;
+        const errorResponse: Status = {
+          code: isAbortError(err)
+            ? StatusCodes.CANCELLED
+            : StatusCodes.INTERNAL,
+          message: isAbortError(err) ? 'Action was cancelled' : message,
+          details: { stack, traceId: (err as any).traceId || traceId },
+        };
+        if (response.headersSent) {
+          // Headers already sent via onTraceStart, must send error in response body
+          response.end(
+            JSON.stringify({ error: errorResponse } as RunActionResponse)
+          );
+        } else {
+          // Headers not sent yet, use standard error handling
+          next({ message, stack });
+        }
+      } finally {
+        if (traceId) {
+          this.activeActions.delete(traceId);
+        }
+      }
+    });
+
+    server.post('/api/cancelAction', async (request, response) => {
+      const { traceId } = request.body;
+
+      if (!traceId || typeof traceId !== 'string') {
+        response.status(400).json({ error: 'traceId is required' });
+        return;
+      }
+
+      const activeAction = this.activeActions.get(traceId);
+
+      if (activeAction) {
+        activeAction.abortController.abort();
+        this.activeActions.delete(traceId);
+        response.status(200).json({ message: 'Action cancelled' });
+      } else {
+        response.status(404).json({
+          message: 'Action not found or already completed',
+        });
       }
     });
 
@@ -266,10 +430,9 @@ export class ReflectionServer {
           stack,
         },
       };
-      if (err.traceId) {
-        errorResponse.details.traceId = err.traceId;
-      }
-      res.status(500).json(errorResponse);
+
+      // Headers may have been sent already (via onTraceStart), so check before setting status
+      res.status(200).end(JSON.stringify({ error: errorResponse }));
     });
 
     this.port = await this.findPort();
@@ -278,7 +441,18 @@ export class ReflectionServer {
         `Reflection server (${process.pid}) running on http://localhost:${this.port}`
       );
       ReflectionServer.RUNNING_SERVERS.push(this);
-      await this.writeRuntimeFile();
+
+      try {
+        await this.registry.listActions();
+        await this.writeRuntimeFile();
+      } catch (e) {
+        logger.error(`Error initializing plugins: ${e}`);
+        try {
+          await this.stop();
+        } catch (err) {
+          logger.error(`Failed to stop server gracefully: ${err}`);
+        }
+      }
     });
   }
 
@@ -286,6 +460,15 @@ export class ReflectionServer {
    * Stops the server and removes it from the list of running servers to clean up on exit.
    */
   async stop(): Promise<void> {
+    if (this.v2Server) {
+      await this.v2Server.stop();
+      const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
+      if (index > -1) {
+        ReflectionServer.RUNNING_SERVERS.splice(index, 1);
+      }
+      return;
+    }
+
     if (!this.server) {
       return;
     }
@@ -322,16 +505,13 @@ export class ReflectionServer {
       const date = new Date();
       const time = date.getTime();
       const timestamp = date.toISOString();
-      const runtimeId = `${process.pid}${
-        this.port !== null ? `-${this.port}` : ''
-      }`;
       this.runtimeFilePath = path.join(
         runtimesDir,
-        `${runtimeId}-${time}.json`
+        `${this.runtimeId}-${time}.json`
       );
       const fileContent = JSON.stringify(
         {
-          id: process.env.GENKIT_RUNTIME_ID || runtimeId,
+          id: process.env.GENKIT_RUNTIME_ID || this.runtimeId,
           pid: process.pid,
           name: this.options.name,
           reflectionServerUrl: `http://localhost:${this.port}`,

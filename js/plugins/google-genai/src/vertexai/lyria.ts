@@ -16,6 +16,7 @@
 
 import {
   ActionMetadata,
+  GenerateRequest,
   modelActionMetadata,
   modelRef,
   ModelReference,
@@ -23,10 +24,25 @@ import {
 } from 'genkit';
 import { ModelAction, ModelInfo } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
-import { lyriaPredict } from './client.js';
+import { isKnownKey } from '../common/utils.js';
+import { createInteraction, lyriaPredict } from './client.js';
 import { fromLyriaResponse, toLyriaPredictRequest } from './converters.js';
+import {
+  ensureToolIds,
+  fromInteractionSync,
+  toInteractionTurn,
+} from './interaction-converters.js';
+import {
+  CreateInteractionRequest,
+  ResponseModality,
+} from './interaction-types.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
-import { checkModelName, extractVersion } from './utils.js';
+import {
+  calculateRequestOptions,
+  checkModelName,
+  extractVersion,
+  shouldUseLegacyEndpoint,
+} from './utils.js';
 
 export const LyriaConfigSchema = z
   .object({
@@ -48,17 +64,57 @@ export const LyriaConfigSchema = z
       .describe(
         'Optional. The number of audio samples to generate. Default is 1 if not specified and seed is not used. Cannot be used with seed in the same request.'
       ),
+    location: z
+      .string()
+      .describe(
+        'Lyria is only available in global. If you initialize your plugin with a different region, you must set this to global.'
+      )
+      .optional(),
   })
   .passthrough();
 export type LyriaConfigSchemaType = typeof LyriaConfigSchema;
 export type LyriaConfig = z.infer<LyriaConfigSchemaType>;
 
-type ConfigSchemaType = LyriaConfigSchemaType;
+export const Lyria3ConfigSchema = z
+  .object({
+    location: z
+      .string()
+      .describe(
+        'Lyria is only available in global. If you initialize your plugin with a different region, you must set this to global.'
+      )
+      .optional(),
+    responseModalities: z
+      .array(z.enum(['TEXT', 'IMAGE', 'AUDIO']))
+      .describe(
+        'The modalities to be used in response. Defaults to AUDIO and TEXT for Lyria.'
+      )
+      .optional(),
+  })
+  .passthrough();
+export type Lyria3ConfigSchemaType = typeof Lyria3ConfigSchema;
+export type Lyria3Config = z.infer<Lyria3ConfigSchemaType>;
+
+type ConfigSchemaType = LyriaConfigSchemaType | Lyria3ConfigSchemaType;
+type ConfigSchema = z.infer<ConfigSchemaType>;
+
+function isLegacyLyriaRequest(
+  request: GenerateRequest<ConfigSchemaType>,
+  name: string
+): request is GenerateRequest<LyriaConfigSchemaType> {
+  return shouldUseLegacyEndpoint(name);
+}
+
+function isLyria3Request(
+  request: GenerateRequest<ConfigSchemaType>,
+  name: string
+): request is GenerateRequest<Lyria3ConfigSchemaType> {
+  return !shouldUseLegacyEndpoint(name);
+}
 
 function commonRef(
   name: string,
   info?: ModelInfo,
-  configSchema: ConfigSchemaType = LyriaConfigSchema
+  configSchema: ConfigSchemaType = Lyria3ConfigSchema
 ): ModelReference<ConfigSchemaType> {
   return modelRef({
     name: `vertexai/${name}`,
@@ -69,18 +125,50 @@ function commonRef(
         multiturn: false,
         tools: false,
         systemRole: false,
-        output: ['media'],
+        output: ['text', 'media'],
       },
     },
   });
 }
 
 const GENERIC_MODEL = commonRef('lyria');
+const GENERIC_LEGACY_MODEL = commonRef(
+  'lyria-002',
+  {
+    supports: {
+      media: true,
+      multiturn: false,
+      tools: false,
+      systemRole: false,
+      output: ['media'],
+    },
+  },
+  LyriaConfigSchema
+);
+
+const KNOWN_LYRIA_LEGACY_MODELS = {
+  'lyria-002': commonRef(
+    'lyria-002',
+    { ...GENERIC_LEGACY_MODEL.info },
+    LyriaConfigSchema
+  ),
+} as const;
+export type KnownLyriaLegacyModels = keyof typeof KNOWN_LYRIA_LEGACY_MODELS; // For autocorrect
+export type LyriaLegacyModelName = `lyria-002`;
+
+const KNOWN_LYRIA_INTERACTIONS_MODELS = {
+  'lyria-3-clip-preview': commonRef('lyria-3-clip-preview'),
+  'lyria-3-pro-preview': commonRef('lyria-3-pro-preview'),
+} as const;
+export type KnownLyriaInteractionsModels =
+  keyof typeof KNOWN_LYRIA_INTERACTIONS_MODELS;
 
 const KNOWN_MODELS = {
-  'lyria-002': commonRef('lyria-002'),
-} as const;
-export type KnownModels = keyof typeof KNOWN_MODELS; // For autocorrect
+  ...KNOWN_LYRIA_LEGACY_MODELS,
+  ...KNOWN_LYRIA_INTERACTIONS_MODELS,
+};
+export type KnownModels = keyof typeof KNOWN_MODELS;
+
 export type LyriaModelName = `lyria-${string}`;
 export function isLyriaModelName(value?: string): value is LyriaModelName {
   return !!value?.startsWith('lyria-');
@@ -88,13 +176,18 @@ export function isLyriaModelName(value?: string): value is LyriaModelName {
 
 export function model(
   version: string,
-  config: LyriaConfig = {}
+  config: ConfigSchema = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
+
   return modelRef({
     name: `vertexai/${name}`,
     config,
-    configSchema: LyriaConfigSchema,
+    configSchema: Lyria3ConfigSchema,
     info: { ...GENERIC_MODEL.info },
   });
 }
@@ -125,7 +218,7 @@ export function defineModel(
   name: string,
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
-): ModelAction {
+): ModelAction<ConfigSchemaType> {
   const ref = model(name);
 
   return pluginModel(
@@ -135,22 +228,49 @@ export function defineModel(
       configSchema: ref.configSchema,
     },
     async (request, { abortSignal }) => {
-      const clientOpt = { ...clientOptions, signal: abortSignal };
-      const lyriaPredictRequest = toLyriaPredictRequest(request);
-
-      const response = await lyriaPredict(
-        extractVersion(ref),
-        lyriaPredictRequest,
-        clientOpt
+      const clientOpt = calculateRequestOptions(
+        { ...clientOptions, signal: abortSignal },
+        request.config
       );
+      if (isLegacyLyriaRequest(request, name)) {
+        const lyriaPredictRequest = toLyriaPredictRequest(request);
 
-      if (!response.predictions || response.predictions.length == 0) {
-        throw new Error(
-          'Model returned no predictions. Possibly due to content filters.'
+        const response = await lyriaPredict(
+          extractVersion(ref),
+          lyriaPredictRequest,
+          clientOpt
         );
-      }
 
-      return fromLyriaResponse(response, request);
+        if (!response.predictions || response.predictions.length == 0) {
+          throw new Error(
+            'Model returned no predictions. Possibly due to content filters.'
+          );
+        }
+
+        return fromLyriaResponse(response, request);
+      } else if (isLyria3Request(request, name)) {
+        const messages = [...request.messages];
+        if (messages.length === 0) throw new Error('No messages provided');
+
+        let responseModalitiesConverted: ResponseModality[] = ['audio', 'text'];
+        if (request.config?.responseModalities) {
+          responseModalitiesConverted = request.config.responseModalities.map(
+            (m) => m.toLowerCase() as ResponseModality
+          );
+        }
+
+        const req: CreateInteractionRequest = {
+          model: extractVersion(ref),
+          input: ensureToolIds(messages).map(toInteractionTurn),
+          response_modalities: responseModalitiesConverted,
+        };
+
+        const response = await createInteraction(req, clientOpt);
+
+        return fromInteractionSync(response);
+      } else {
+        throw new Error(`Unsupported model config schema for ${name}`);
+      }
     }
   );
 }
@@ -158,4 +278,6 @@ export function defineModel(
 export const TEST_ONLY = {
   GENERIC_MODEL,
   KNOWN_MODELS,
+  KNOWN_LYRIA_LEGACY_MODELS,
+  KNOWN_LYRIA_INTERACTIONS_MODELS,
 };

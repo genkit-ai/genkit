@@ -68,19 +68,19 @@ export const grokRequestBuilder: ModelRequestBuilder = (req, params) => {
 
 export const SUPPORTED_LANGUAGE_MODELS = {
   'grok-3': xaiModelRef({
-    name: 'xai/grok-3',
+    name: 'grok-3',
   }),
   'grok-3-fast': xaiModelRef({
-    name: 'xai/grok-3-fast',
+    name: 'grok-3-fast',
   }),
   'grok-3-mini': xaiModelRef({
-    name: 'xai/grok-3-mini',
+    name: 'grok-3-mini',
   }),
   'grok-3-mini-fast': xaiModelRef({
-    name: 'xai/grok-3-mini-fast',
+    name: 'grok-3-mini-fast',
   }),
   'grok-2-vision-1212': xaiModelRef({
-    name: 'xai/grok-2-vision-1212',
+    name: 'grok-2-vision-1212',
     info: {
       supports: {
         multiturn: false,

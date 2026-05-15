@@ -30,6 +30,7 @@ import {
   MISSING_API_KEY_ERROR,
   NOT_SUPPORTED_IN_EXPRESS_ERROR,
   calculateApiKey,
+  calculateRequestOptions,
   checkApiKey,
   checkSupportedResourceMethod,
   getApiKeyFromEnvVar,
@@ -564,6 +565,60 @@ describe('Vertex AI Utils', () => {
           });
         }, `Regional should support ${method}`);
       });
+    });
+  });
+  describe('calculateRequestOptions', () => {
+    const regionalClientOptions: RegionalClientOptions = {
+      kind: 'regional',
+      location: 'us-central1',
+      projectId: 'testProject',
+      authClient: {} as any,
+    };
+    const globalClientOptions: GlobalClientOptions = {
+      kind: 'global',
+      location: 'global',
+      projectId: 'testProject',
+      authClient: {} as any,
+    };
+    const expressClientOptions: ExpressClientOptions = {
+      kind: 'express',
+      apiKey: 'testKey',
+    };
+    it('should do nothing if no overrides', () => {
+      const newOptions = calculateRequestOptions(regionalClientOptions, {});
+      assert.deepStrictEqual(newOptions, regionalClientOptions);
+    });
+    it('should override location to regional', () => {
+      const newOptions = calculateRequestOptions(globalClientOptions, {
+        location: 'us-west1',
+      });
+      assert.strictEqual(newOptions.kind, 'regional');
+      assert.strictEqual(newOptions.location, 'us-west1');
+    });
+    it('should override location to global', () => {
+      const newOptions = calculateRequestOptions(regionalClientOptions, {
+        location: 'global',
+      });
+      assert.strictEqual(newOptions.kind, 'global');
+      assert.strictEqual(newOptions.location, 'global');
+    });
+    it('should override apiKey for express', () => {
+      const newOptions = calculateRequestOptions(expressClientOptions, {
+        apiKey: 'newKey',
+      });
+      assert.strictEqual(newOptions.apiKey, 'newKey');
+    });
+    it('should override apiKey for regional', () => {
+      const newOptions = calculateRequestOptions(regionalClientOptions, {
+        apiKey: 'newKey',
+      });
+      assert.strictEqual(newOptions.apiKey, 'newKey');
+    });
+    it('should override apiKey for global', () => {
+      const newOptions = calculateRequestOptions(globalClientOptions, {
+        apiKey: 'newKey',
+      });
+      assert.strictEqual(newOptions.apiKey, 'newKey');
     });
   });
 });

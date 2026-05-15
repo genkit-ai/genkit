@@ -32,6 +32,36 @@ const (
 
 // Supported models: https://docs.anthropic.com/en/docs/about-claude/models/all-models
 var supportedModels = map[string]ai.ModelOptions{
+	"claude-opus-4-1-20250805": {
+		Label: "Claude 4.1 Opus",
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      false, // NOTE: Anthropic supports tool use, but it's not compatible with the OpenAI API
+			SystemRole: true,
+			Media:      true,
+		},
+		Versions: []string{"claude-opus-4-1-latest", "claude-opus-4-1-20250805"},
+	},
+	"claude-sonnet-4-5-20250929": {
+		Label: "Claude 4.5 Sonnet",
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      false, // NOTE: Anthropic supports tool use, but it's not compatible with the OpenAI API
+			SystemRole: true,
+			Media:      true,
+		},
+		Versions: []string{"claude-sonnet-4-5-latest", "claude-sonnet-4-5-20250929"},
+	},
+	"claude-haiku-4-5-20251001": {
+		Label: "Claude 4.5 Haiku",
+		Supports: &ai.ModelSupports{
+			Multiturn:  true,
+			Tools:      false, // NOTE: Anthropic supports tool use, but it's not compatible with the OpenAI API
+			SystemRole: true,
+			Media:      true,
+		},
+		Versions: []string{"claude-haiku-4-5-latest", "claude-haiku-4-5-20251001"},
+	},
 	"claude-3-7-sonnet-20250219": {
 		Label: "Claude 3.7 Sonnet",
 		Supports: &ai.ModelSupports{

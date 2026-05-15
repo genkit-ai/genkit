@@ -21,6 +21,8 @@ import {
   EvalRunKeySchema,
   InferenceDatasetSchema,
 } from './eval';
+import { LogRecordSchema } from './log';
+import { MiddlewareRefSchema } from './middleware';
 import {
   GenerationCommonConfigSchema,
   MessageSchema,
@@ -33,9 +35,17 @@ import { TraceDataSchema } from './trace';
  * It's used directly in the generation of the Reflection API OpenAPI spec.
  */
 
+const PrimitiveSchema = z.union([z.string(), z.number()]);
+const FilterValueSchema = z.union([PrimitiveSchema, z.array(PrimitiveSchema)]);
+
 export const TraceQueryFilterSchema = z.object({
-  eq: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
-  neq: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  eq: z.record(z.string(), FilterValueSchema).optional(),
+  neq: z.record(z.string(), FilterValueSchema).optional(),
+  gt: z.record(z.string(), z.number()).optional(),
+  gte: z.record(z.string(), z.number()).optional(),
+  lt: z.record(z.string(), z.number()).optional(),
+  lte: z.record(z.string(), z.number()).optional(),
+  contains: z.record(z.string(), FilterValueSchema).optional(),
 });
 
 export type TraceQueryFilter = z.infer<typeof TraceQueryFilterSchema>;
@@ -55,11 +65,39 @@ export const ListTracesResponseSchema = z.object({
 
 export type ListTracesResponse = z.infer<typeof ListTracesResponseSchema>;
 
+export const LogQueryFilterSchema = z.object({
+  traceId: z.string().optional(),
+  spanId: z.string().optional(),
+});
+
+export type LogQueryFilter = z.infer<typeof LogQueryFilterSchema>;
+
+export const ListLogsRequestSchema = z.object({
+  limit: z.number().optional(),
+  continuationToken: z.string().optional(),
+  filter: LogQueryFilterSchema.optional(),
+});
+
+export type ListLogsRequest = z.infer<typeof ListLogsRequestSchema>;
+
+export const ListLogsResponseSchema = z.object({
+  logs: z.array(LogRecordSchema),
+  continuationToken: z.string().optional(),
+});
+
+export type ListLogsResponse = z.infer<typeof ListLogsResponseSchema>;
+
 export const GetTraceRequestSchema = z.object({
   traceId: z.string().describe('ID of the trace.'),
 });
 
 export type GetTraceRequest = z.infer<typeof GetTraceRequestSchema>;
+
+export const StreamTraceRequestSchema = z.object({
+  traceId: z.string().describe('ID of the trace to stream.'),
+});
+
+export type StreamTraceRequest = z.infer<typeof StreamTraceRequestSchema>;
 
 export const ListActionsRequestSchema = z
   .object({
@@ -73,6 +111,22 @@ export const ListActionsRequestSchema = z
   .optional();
 
 export type ListActionsRequest = z.infer<typeof ListActionsRequestSchema>;
+
+export const ListValuesRequestSchema = z.object({
+  runtimeId: z
+    .string()
+    .optional()
+    .describe(
+      'ID of the Genkit runtime to run the action on. Typically $pid-$port.'
+    ),
+  type: z
+    .string()
+    .describe(
+      "The type of values to fetch. Currently only supports 'defaultModel'"
+    ),
+});
+
+export type ListValuesRequest = z.infer<typeof ListValuesRequestSchema>;
 
 export const RunActionRequestSchema = z.object({
   runtimeId: z
@@ -100,11 +154,24 @@ export const RunActionRequestSchema = z.object({
 
 export type RunActionRequest = z.infer<typeof RunActionRequestSchema>;
 
+export const CancelActionRequestSchema = z.object({
+  traceId: z
+    .string()
+    .describe('ID of the trace associated with the action to cancel.'),
+  runtimeId: z
+    .string()
+    .optional()
+    .describe('ID of the Genkit runtime where the action is running.'),
+});
+
+export type CancelActionRequest = z.infer<typeof CancelActionRequestSchema>;
+
 export const CreatePromptRequestSchema = z.object({
   model: z.string(),
   messages: z.array(MessageSchema),
   config: GenerationCommonConfigSchema.passthrough().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
+  use: z.array(MiddlewareRefSchema).optional(),
 });
 
 export type CreatePromptRequest = z.infer<typeof CreatePromptRequestSchema>;

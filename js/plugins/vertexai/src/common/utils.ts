@@ -51,13 +51,13 @@ export function modelName(name?: string): string | undefined {
 
   // Remove any of these prefixes:
   const escapedPrefixes = [
-    'background-model\/',
-    'model\/',
-    'models\/',
-    'embedders\/',
-    'vertex-model-garden\/',
-    'vertex-rerankers\/',
-    'vertexai\/',
+    'background-model/',
+    'model/',
+    'models/',
+    'embedders/',
+    'vertex-model-garden/',
+    'vertex-rerankers/',
+    'vertexai/',
   ];
   const prefixesToRemove = new RegExp(escapedPrefixes.join('|'), 'g');
   return name.replace(prefixesToRemove, '');

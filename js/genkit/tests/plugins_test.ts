@@ -78,6 +78,9 @@ const v2Plugin = genkitPluginV2({
   resolve(actionType, name) {
     switch (actionType) {
       case 'model':
+        if (name === 'not-found') {
+          return undefined;
+        }
         return model({ name }, async () => {
           return {};
         });
@@ -240,5 +243,17 @@ describe('session', () => {
         '/cancel-operation/myV2Plugin/bg-model/cancel',
       ])
     );
+  });
+
+  it('resolves model using model resolve helper', async () => {
+    const act = await v2Plugin.model('foo-model');
+    assert.ok(act);
+    assert.strictEqual(act.__action.name, 'foo-model');
+    assert.strictEqual(act.__action.actionType, 'model');
+
+    await assert.rejects(v2Plugin.model('not-found'), {
+      name: 'GenkitError',
+      status: 'NOT_FOUND',
+    });
   });
 });

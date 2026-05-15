@@ -24,8 +24,8 @@ import {
   ModelReference,
   z,
 } from 'genkit';
-import { GenkitPluginV2, ResolvableAction } from 'genkit/plugin';
-import { ActionType } from 'genkit/registry';
+import { type GenkitPluginV2, type ResolvableAction } from 'genkit/plugin';
+import { type ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import {
   defineCompatOpenAISpeechModel,
@@ -54,61 +54,75 @@ import {
   openAIModelRef,
   SUPPORTED_GPT_MODELS,
 } from './gpt.js';
+import { openAITranscriptionModelRef, SUPPORTED_STT_MODELS } from './stt.js';
 import { openAISpeechModelRef, SUPPORTED_TTS_MODELS } from './tts.js';
 import {
-  openAITranscriptionModelRef,
-  SUPPORTED_STT_MODELS,
+  defineOpenAIWhisperModel,
+  openAIWhisperModelRef,
+  SUPPORTED_WHISPER_MODELS,
+  WhisperConfigSchema,
 } from './whisper.js';
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
 const UNSUPPORTED_MODEL_MATCHERS = ['babbage', 'davinci', 'codex'];
 
-const resolver = async (
-  client: OpenAI,
-  actionType: ActionType,
-  actionName: string
-) => {
-  if (actionType === 'embedder') {
-    return defineCompatOpenAIEmbedder({ name: actionName, client });
-  } else if (
-    actionName.includes('gpt-image-1') ||
-    actionName.includes('dall-e')
-  ) {
-    const modelRef = openAIImageModelRef({ name: actionName });
-    return defineCompatOpenAIImageModel({
-      name: modelRef.name,
-      client,
-      modelRef,
-    });
-  } else if (actionName.includes('tts')) {
-    const modelRef = openAISpeechModelRef({ name: actionName });
-    return defineCompatOpenAISpeechModel({
-      name: modelRef.name,
-      client,
-      modelRef,
-    });
-  } else if (
-    actionName.includes('whisper') ||
-    actionName.includes('transcribe')
-  ) {
-    const modelRef = openAITranscriptionModelRef({
-      name: actionName,
-    });
-    return defineCompatOpenAITranscriptionModel({
-      name: modelRef.name,
-      client,
-      modelRef,
-    });
-  } else {
-    const modelRef = openAIModelRef({ name: actionName });
-    return defineCompatOpenAIModel({
-      name: modelRef.name,
-      client,
-      modelRef,
-    });
-  }
-};
+function createResolver(pluginOptions: PluginOptions) {
+  return async (client: OpenAI, actionType: ActionType, actionName: string) => {
+    if (actionType === 'embedder') {
+      return defineCompatOpenAIEmbedder({
+        name: actionName,
+        client,
+        pluginOptions,
+      });
+    } else if (
+      actionName.includes('gpt-image-1') ||
+      actionName.includes('dall-e')
+    ) {
+      const modelRef = openAIImageModelRef({ name: actionName });
+      return defineCompatOpenAIImageModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    } else if (actionName.includes('tts')) {
+      const modelRef = openAISpeechModelRef({ name: actionName });
+      return defineCompatOpenAISpeechModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    } else if (actionName.includes('whisper')) {
+      const modelRef = openAIWhisperModelRef({ name: actionName });
+      return defineOpenAIWhisperModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    } else if (actionName.includes('transcribe')) {
+      const modelRef = openAITranscriptionModelRef({
+        name: actionName,
+      });
+      return defineCompatOpenAITranscriptionModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    } else {
+      const modelRef = openAIModelRef({ name: actionName });
+      return defineCompatOpenAIModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    }
+  };
+}
 
 function filterOpenAiModels(model: OpenAI.Model): boolean {
   return !UNSUPPORTED_MODEL_MATCHERS.some((m) => model.id.includes(m));
@@ -144,10 +158,16 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           info: modelRef.info,
           configSchema: modelRef.configSchema,
         });
-      } else if (
-        model.id.includes('whisper') ||
-        model.id.includes('transcribe')
-      ) {
+      } else if (model.id.includes('whisper')) {
+        const modelRef =
+          SUPPORTED_WHISPER_MODELS[model.id] ??
+          openAIWhisperModelRef({ name: model.id });
+        return modelActionMetadata({
+          name: modelRef.name,
+          info: modelRef.info,
+          configSchema: modelRef.configSchema,
+        });
+      } else if (model.id.includes('transcribe')) {
         const modelRef =
           SUPPORTED_STT_MODELS[model.id] ??
           openAITranscriptionModelRef({ name: model.id });
@@ -170,6 +190,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
 };
 
 export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
+  const pluginOptions = { name: 'openai', ...options };
   return openAICompatible({
     name: 'openai',
     ...options,
@@ -177,7 +198,12 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
       const models = [] as ResolvableAction[];
       models.push(
         ...Object.values(SUPPORTED_GPT_MODELS).map((modelRef) =>
-          defineCompatOpenAIModel({ name: modelRef.name, client, modelRef })
+          defineCompatOpenAIModel({
+            name: modelRef.name,
+            client,
+            pluginOptions,
+            modelRef,
+          })
         )
       );
       models.push(
@@ -185,6 +211,7 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
           defineCompatOpenAIEmbedder({
             name: embedderRef.name,
             client,
+            pluginOptions,
             embedderRef,
           })
         )
@@ -194,6 +221,17 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
           defineCompatOpenAISpeechModel({
             name: modelRef.name,
             client,
+            pluginOptions,
+            modelRef,
+          })
+        )
+      );
+      models.push(
+        ...Object.values(SUPPORTED_WHISPER_MODELS).map((modelRef) =>
+          defineOpenAIWhisperModel({
+            name: modelRef.name,
+            client,
+            pluginOptions,
             modelRef,
           })
         )
@@ -203,6 +241,7 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
           defineCompatOpenAITranscriptionModel({
             name: modelRef.name,
             client,
+            pluginOptions,
             modelRef,
           })
         )
@@ -212,6 +251,7 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
           defineCompatOpenAIImageModel({
             name: modelRef.name,
             client,
+            pluginOptions,
             modelRef,
             requestBuilder: modelRef.name.includes('gpt-image-1')
               ? gptImage1RequestBuilder
@@ -221,20 +261,13 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
       );
       return models;
     },
-    resolver,
+    resolver: createResolver(pluginOptions),
     listActions,
   });
 }
 
 export type OpenAIPlugin = {
   (params?: OpenAIPluginOptions): GenkitPluginV2;
-  model(
-    name:
-      | keyof typeof SUPPORTED_GPT_MODELS
-      | (`gpt-${string}` & {})
-      | (`o${number}` & {}),
-    config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
-  ): ModelReference<typeof OpenAIChatCompletionConfigSchema>;
   model(
     name:
       | keyof typeof SUPPORTED_IMAGE_MODELS
@@ -250,12 +283,20 @@ export type OpenAIPlugin = {
     config?: z.infer<typeof SpeechConfigSchema>
   ): ModelReference<typeof SpeechConfigSchema>;
   model(
-    name:
-      | keyof typeof SUPPORTED_STT_MODELS
-      | (`whisper-${string}` & {})
-      | (`${string}-transcribe` & {}),
+    name: keyof typeof SUPPORTED_WHISPER_MODELS | (`whisper-${string}` & {}),
+    config?: z.infer<typeof WhisperConfigSchema>
+  ): ModelReference<typeof WhisperConfigSchema>;
+  model(
+    name: keyof typeof SUPPORTED_STT_MODELS | (`${string}-transcribe` & {}),
     config?: z.infer<typeof TranscriptionConfigSchema>
   ): ModelReference<typeof TranscriptionConfigSchema>;
+  model(
+    name:
+      | keyof typeof SUPPORTED_GPT_MODELS
+      | (`gpt-${string}` & {})
+      | (`o${number}` & {}),
+    config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
+  ): ModelReference<typeof OpenAIChatCompletionConfigSchema>;
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
   embedder(
     name:
@@ -271,21 +312,24 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
     return openAIImageModelRef({
       name,
       config,
-      namespace: 'openai',
     });
   }
   if (name.includes('tts')) {
     return openAISpeechModelRef({
       name,
       config,
-      namespace: 'openai',
     });
   }
-  if (name.includes('whisper') || name.includes('transcribe')) {
+  if (name.includes('whisper')) {
+    return openAIWhisperModelRef({
+      name,
+      config,
+    });
+  }
+  if (name.includes('transcribe')) {
     return openAITranscriptionModelRef({
       name,
       config,
-      namespace: 'openai',
     });
   }
   return openAIModelRef({

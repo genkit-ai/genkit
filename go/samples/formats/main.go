@@ -37,8 +37,8 @@ type StoryCharacter struct {
 func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.VertexAI{}),
-		genkit.WithDefaultModel("vertexai/gemini-2.5-pro"),
+		genkit.WithPlugins(&googlegenai.GoogleAI{}),
+		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
 	)
 
 	var callback func(context.Context, *ai.ModelResponseChunk) error
@@ -72,12 +72,15 @@ func main() {
 				return cb(ctx, c.Text())
 			}
 		}
-		resp, err := defaultPrompt.Execute(ctx, ai.WithInput(StoryCharacter{Name: "Willy the Pig"}), ai.WithStreaming(callback))
+		resp, err := defaultPrompt.Execute(ctx,
+			ai.WithInput(StoryCharacter{Name: "Willy the Pig"}),
+			ai.WithStreaming(callback),
+		)
 		if err != nil {
 			return nil, err
 		}
 
-		var defaultCharacter StoryCharacter
+		var defaultCharacter []*StoryCharacter
 		if err := resp.Output(&defaultCharacter); err != nil {
 			return nil, err
 		}
@@ -87,12 +90,12 @@ func main() {
 			return nil, err
 		}
 
-		var customCharacter StoryCharacter
+		var customCharacter []*StoryCharacter
 		if err := resp.Output(&customCharacter); err != nil {
 			return nil, err
 		}
 
-		return []*StoryCharacter{&defaultCharacter, &customCharacter}, nil
+		return append(defaultCharacter, customCharacter...), nil
 	})
 
 	mux := http.NewServeMux()

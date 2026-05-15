@@ -1,0 +1,151 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# ══════════════════════════════════════════════════════════════════════
+# Python Samples: Build + Smoke Test
+#
+# Verifies that Python samples install and import cleanly.  Samples
+# that require Ollama get a local Ollama server with cached models.
+#
+# Ollama samples are tested on a single Python version to keep CI
+# costs reasonable (model downloads are ~2-4 GB each).
+# ══════════════════════════════════════════════════════════════════════
+
+name: Python Samples
+
+# Disabled for now — enable when ready for regular CI runs.
+# To run manually: Actions → Python Samples → Run workflow.
+on:
+  workflow_dispatch: {}
+  # pull_request:
+  #   paths:
+  #     - "py/samples/**"
+  #     - "py/packages/**"
+  #     - "py/plugins/**"
+  #     - ".github/workflows/python-samples.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Samples that do NOT need Ollama — just verify they install + import
+  # ═══════════════════════════════════════════════════════════════════
+  build-samples:
+    name: Build (${{ matrix.sample }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sample:
+          - provider-google-genai-hello
+          - provider-google-genai-code-execution
+          - provider-google-genai-context-caching
+          - provider-google-genai-media-models-demo
+          - provider-google-genai-vertexai-hello
+          - provider-google-genai-vertexai-image
+          - provider-anthropic-hello
+          - provider-compat-oai-hello
+          - provider-vertex-ai-model-garden
+          - framework-prompt-demo
+          - framework-format-demo
+          - framework-context-demo
+          - framework-middleware-demo
+          - framework-dynamic-tools-demo
+          - framework-tool-interrupts
+          - framework-restaurant-demo
+          - web-fastapi-bugbot
+          - web-flask-hello
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv and setup Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install sample dependencies
+        run: |
+          cd py
+          uv sync --package ${{ matrix.sample }}
+
+      - name: Verify sample imports
+        run: |
+          cd py/samples/${{ matrix.sample }}
+          # Attempt to import the sample's main module.
+          uv run python -c "
+          import importlib, pathlib, sys
+          src = pathlib.Path('src')
+          if src.is_dir():
+              for pkg in src.iterdir():
+                  if pkg.is_dir() and (pkg / '__init__.py').exists():
+                      mod = pkg.name
+                      print(f'Importing {mod}...')
+                      importlib.import_module(mod)
+                      print(f'  OK')
+          else:
+              print('No src/ directory, skipping import check')
+          "
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Ollama samples — need a running Ollama server with cached models
+  # ═══════════════════════════════════════════════════════════════════
+  ollama-samples:
+    name: Ollama (${{ matrix.sample }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sample: provider-ollama-hello
+            models: "gemma3:1b"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv and setup Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Setup Ollama with model caching
+        uses: ./.github/actions/setup-ollama
+        with:
+          models: ${{ matrix.models }}
+
+      - name: Install sample dependencies
+        run: |
+          cd py
+          uv sync --package ${{ matrix.sample }}
+
+      - name: Verify sample imports
+        run: |
+          cd py/samples/${{ matrix.sample }}
+          uv run python -c "
+          import importlib, pathlib
+          src = pathlib.Path('src')
+          if src.is_dir():
+              for pkg in src.iterdir():
+                  if pkg.is_dir() and (pkg / '__init__.py').exists():
+                      mod = pkg.name
+                      print(f'Importing {mod}...')
+                      importlib.import_module(mod)
+                      print(f'  OK')
+          else:
+              print('No src/ directory, skipping import check')
+          "

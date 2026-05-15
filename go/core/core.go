@@ -27,8 +27,62 @@
 package core
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
+
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
 )
+
+// DefineSchema defines a named JSON schema and registers it in the registry.
+// The `schema` argument must be a JSON schema definition represented as a map.
+// It panics if a schema with the same name is already registered.
+func DefineSchema(r api.Registry, name string, schema map[string]any) {
+	r.RegisterSchema(name, schema)
+}
+
+// DefineSchemaFor defines a named JSON schema derived from a Go type
+// and registers it in the registry using the type's name.
+func DefineSchemaFor[T any](r api.Registry) {
+	var v T
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	name := t.Name()
+	r.RegisterSchema(name, InferSchemaMap(v))
+}
+
+// SchemaRef returns a JSON schema reference map for the given name.
+func SchemaRef(name string) map[string]any {
+	return map[string]any{
+		"$ref": fmt.Sprintf("genkit:%s", name),
+	}
+}
+
+// ResolveSchema resolves a schema that may contain a $ref to a registered schema.
+// If the schema contains a $ref with the "genkit:" prefix, it looks up the schema by name.
+// Returns the original schema if no $ref is present, or the resolved schema if found.
+// Returns an error if the schema reference cannot be resolved.
+func ResolveSchema(r api.Registry, schema map[string]any) (map[string]any, error) {
+	if schema == nil {
+		return nil, nil
+	}
+	ref, ok := schema["$ref"].(string)
+	if !ok {
+		return schema, nil
+	}
+	schemaName, found := strings.CutPrefix(ref, "genkit:")
+	if !found {
+		return schema, nil
+	}
+	resolved := r.LookupSchema(schemaName)
+	if resolved == nil {
+		return nil, fmt.Errorf("schema %q not found", schemaName)
+	}
+	return resolved, nil
+}
 
 // InferSchemaMap infers a JSON schema from a Go value and converts it to a map.
 func InferSchemaMap(value any) map[string]any {

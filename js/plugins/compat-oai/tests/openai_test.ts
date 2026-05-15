@@ -18,7 +18,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { modelRef, type GenerateRequest } from 'genkit/model';
 import type OpenAI from 'openai';
-
 import {
   ChatCompletionCommonConfigSchema,
   defineCompatOpenAIModel,

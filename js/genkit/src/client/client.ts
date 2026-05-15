@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { Channel } from '@genkit-ai/core/async';
+import { Channel, createTask } from '@genkit-ai/core/async';
 
 const __flowStreamDelimiter = '\n\n';
 
@@ -39,6 +39,7 @@ const __flowStreamDelimiter = '\n\n';
 export function streamFlow<O = any, S = any>({
   url,
   input,
+  streamId,
   headers,
   abortSignal,
 }: {
@@ -46,6 +47,8 @@ export function streamFlow<O = any, S = any>({
   url: string;
   /** Flow input. */
   input?: any;
+  /** Stream ID to connect to. */
+  streamId?: string;
   /** A map of HTTP headers to be added to the HTTP call. */
   headers?: Record<string, string>;
   /** Abort signal to abort the request. */
@@ -53,15 +56,22 @@ export function streamFlow<O = any, S = any>({
 }): {
   readonly output: Promise<O>;
   readonly stream: AsyncIterable<S>;
+  readonly streamId: Promise<string | null>;
 } {
   const channel = new Channel<S>();
+  const streamIdTask = createTask<string | null>();
 
   const operationPromise = __flowRunEnvelope({
     url,
     input,
     sendChunk: (c) => channel.send(c),
-    headers,
+    headers: streamId
+      ? { ...headers, 'x-genkit-stream-id': streamId }
+      : headers,
     abortSignal,
+    responseCallback: (response) => {
+      streamIdTask.resolve(response.headers.get('x-genkit-stream-id'));
+    },
   });
   operationPromise.then(
     () => channel.close(),
@@ -71,6 +81,7 @@ export function streamFlow<O = any, S = any>({
   return {
     output: operationPromise,
     stream: channel,
+    streamId: streamIdTask.promise,
   };
 }
 
@@ -80,12 +91,14 @@ async function __flowRunEnvelope({
   sendChunk,
   headers,
   abortSignal,
+  responseCallback,
 }: {
   url: string;
   input: any;
   sendChunk: (chunk: any) => void;
   headers?: Record<string, string>;
   abortSignal?: AbortSignal;
+  responseCallback?: (response: Response) => void;
 }) {
   const response = await fetch(url, {
     method: 'POST',
@@ -99,6 +112,12 @@ async function __flowRunEnvelope({
     },
     signal: abortSignal,
   });
+  if (responseCallback) {
+    responseCallback(response);
+  }
+  if (response.status === 204) {
+    throw new Error('NOT_FOUND: Stream not found.');
+  }
   if (response.status !== 200) {
     throw new Error(
       `Server returned: ${response.status}: ${await response.text()}`

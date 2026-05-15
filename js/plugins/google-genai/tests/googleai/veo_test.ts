@@ -56,7 +56,7 @@ describe('Google AI Veo', () => {
 
   describe('model()', () => {
     it('should return a ModelReference for a known model', () => {
-      const modelName = 'veo-2.0-generate-001';
+      const modelName = 'veo-3.1-generate-preview';
       const ref = model(modelName);
       assert.strictEqual(ref.name, `googleai/${modelName}`);
       assert.ok(ref.info?.supports?.media);
@@ -72,7 +72,7 @@ describe('Google AI Veo', () => {
     });
 
     it('should apply config to a known model', () => {
-      const modelName = 'veo-2.0-generate-001';
+      const modelName = 'veo-3.1-generate-preview';
       const config: VeoConfig = { aspectRatio: '16:9' };
       const ref = model(modelName, config);
       assert.strictEqual(ref.name, `googleai/${modelName}`);
@@ -88,9 +88,9 @@ describe('Google AI Veo', () => {
     });
 
     it('should handle model name with prefix', () => {
-      const modelName = 'models/veo-2.0-generate-001';
+      const modelName = 'models/veo-3.1-generate-preview';
       const ref = model(modelName);
-      assert.strictEqual(ref.name, 'googleai/veo-2.0-generate-001');
+      assert.strictEqual(ref.name, 'googleai/veo-3.1-generate-preview');
     });
   });
 
@@ -106,12 +106,16 @@ describe('Google AI Veo', () => {
           aspectRatio: '16:9',
           personGeneration: 'allow_adult',
           durationSeconds: 7,
+          resolution: '4k',
+          seed: 42,
         },
       };
       const result = toVeoParameters(request);
       assert.strictEqual(result.aspectRatio, '16:9');
       assert.strictEqual(result.personGeneration, 'allow_adult');
       assert.strictEqual(result.durationSeconds, 7);
+      assert.strictEqual(result.resolution, '4k');
+      assert.strictEqual(result.seed, 42);
     });
 
     it('should omit null but keep false config parameters', () => {
@@ -247,6 +251,8 @@ describe('Google AI Veo', () => {
         messages: [{ role: 'user', content: [{ text: prompt }] }],
         config: {
           aspectRatio: '16:9',
+          resolution: '4k',
+          seed: 123,
         },
       };
 
@@ -279,7 +285,7 @@ describe('Google AI Veo', () => {
         assert.strictEqual(fetchArgs[1].method, 'POST');
 
         const expectedVeoPredictRequest: VeoPredictRequest = {
-          instances: [{ prompt: prompt }], // NOTE: image key is omitted
+          instances: [{ prompt: prompt }],
           parameters: toVeoParameters(request),
         };
         assert.deepStrictEqual(
@@ -291,6 +297,41 @@ describe('Google AI Veo', () => {
         assert.strictEqual(result.id, expectedOp.id);
         assert.strictEqual(result.done, expectedOp.done);
         assert.ok(result.action);
+      });
+
+      it('should handle video input', async () => {
+        const videoUrl = 'gs://test-bucket/test-video.mp4';
+        const requestWithVideo: GenerateRequest<typeof VeoConfigSchema> = {
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { text: prompt },
+                { media: { url: videoUrl, contentType: 'video/mp4' } },
+              ],
+            },
+          ],
+        };
+        const mockOp: VeoOperation = {
+          name: 'operations/start-video-123',
+          done: false,
+        };
+        mockFetchResponse(mockOp);
+
+        const { start } = captureModelRunner({ apiKey: defaultApiKey });
+        await start(requestWithVideo);
+
+        sinon.assert.calledOnce(fetchStub);
+        const fetchArgs = fetchStub.lastCall.args;
+        const body = JSON.parse(fetchArgs[1].body);
+
+        const expectedInstance = {
+          prompt: prompt,
+          video: {
+            uri: videoUrl,
+          },
+        };
+        assert.deepStrictEqual(body.instances[0], expectedInstance);
       });
 
       it('should handle custom apiVersion and baseUrl', async () => {

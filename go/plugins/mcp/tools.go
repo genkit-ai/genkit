@@ -86,11 +86,11 @@ func (c *GenkitMCPClient) createTool(mcpTool mcp.Tool) (ai.Tool, error) {
 	}
 	var tool ai.Tool
 	if len(inputSchema) > 0 {
-		tool = ai.NewToolWithInputSchema(
+		tool = ai.NewTool(
 			namespacedToolName,
 			mcpTool.Description,
-			inputSchema,
 			toolFunc,
+			ai.WithInputSchema(inputSchema),
 		)
 	} else {
 		tool = ai.NewTool(

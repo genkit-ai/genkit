@@ -53,6 +53,7 @@ const ACTION_TYPES = [
   'reranker',
   'retriever',
   'tool',
+  'tool.v2',
   'util',
   'resource',
 ] as const;
@@ -88,7 +89,7 @@ interface ParsedRegistryKey {
 /**
  * Parses the registry key into key parts as per the key format convention. Ex:
  *  - mcp-host:tool/my-tool
- *  - /model/googleai/gemini-2.0-flash
+ *  - /model/googleai/gemini-2.5-flash
  *  - /prompt/my-plugin/folder/my-prompt
  *  - /util/generate
  */
@@ -124,7 +125,7 @@ export function parseRegistryKey(
     // Invalid key format
     return undefined;
   }
-  // ex: /model/googleai/gemini-2.0-flash or /prompt/my-plugin/folder/my-prompt
+  // ex: /model/googleai/gemini-2.5-flash or /prompt/my-plugin/folder/my-prompt
   if (tokens.length >= 4) {
     return {
       actionType: tokens[1] as ActionType,
@@ -196,7 +197,7 @@ export class Registry {
     const parsedKey = parseRegistryKey(key);
     if (parsedKey?.dynamicActionHost) {
       const hostId = `/dynamic-action-provider/${parsedKey.dynamicActionHost}`;
-      const dap = await this.actionsById[hostId];
+      const dap = await this.lookupAction(hostId);
       if (!dap || !isDynamicActionProvider(dap)) {
         return [];
       }
@@ -287,13 +288,13 @@ export class Registry {
       !action.__action.name.startsWith(`${opts.namespace}/`)
     ) {
       action.__action.name = `${opts.namespace}/${action.__action.name}`;
+      action.__action.key = `/${type}/${action.__action.name}`;
     }
     const key = `/${type}/${action.__action.name}`;
     logger.debug(`registering ${key}`);
     if (this.actionsById.hasOwnProperty(key)) {
-      // TODO: Make this an error!
-      logger.warn(
-        `WARNING: ${key} already has an entry in the registry. Overwriting.`
+      logger.error(
+        `ERROR: ${key} already has an entry in the registry. Overwriting.`
       );
     }
     this.actionsById[key] = action;
@@ -318,9 +319,8 @@ export class Registry {
     const key = `/${type}/${name}`;
     logger.debug(`registering ${key} (async)`);
     if (this.actionsById.hasOwnProperty(key)) {
-      // TODO: Make this an error!
-      logger.warn(
-        `WARNING: ${key} already has an entry in the registry. Overwriting.`
+      logger.error(
+        `ERROR: ${key} already has an entry in the registry. Overwriting.`
       );
     }
     this.actionsById[key] = action;
@@ -336,6 +336,7 @@ export class Registry {
     await Promise.all(
       Object.entries(this.actionsById).map(async ([key, action]) => {
         actions[key] = await action;
+        actions[key].__action.key = key; // For async actions with namespace
       })
     );
     return {
@@ -354,7 +355,7 @@ export class Registry {
    * @returns All resolvable action metadata as a map of <key, action metadata>.
    */
   async listResolvableActions(): Promise<ActionMetadataRecord> {
-    const resolvableActions = {} as ActionMetadataRecord;
+    let resolvableActions = {} as ActionMetadataRecord;
     // We listActions for all plugins in parallel.
     await Promise.all(
       Object.entries(this.pluginsByName).map(async ([pluginName, plugin]) => {
@@ -381,9 +382,22 @@ export class Registry {
         }
       })
     );
-    // Also add actions that are already registered.
+    // Also add actions that are already registered, and expand DAP actions
     for (const [key, action] of Object.entries(await this.listActions())) {
       resolvableActions[key] = action.__action;
+      if (isDynamicActionProvider(action)) {
+        try {
+          // Include the dynamic actions
+          const dapPrefix = `/${action.__action.actionType}/${action.__action.name}`;
+          const dapMetadataRecord =
+            await action.getActionMetadataRecord(dapPrefix);
+          resolvableActions = { ...resolvableActions, ...dapMetadataRecord };
+        } catch (e) {
+          logger.error(
+            `Error listing actions for Dynamic Action Provider ${action.__action.name}`
+          );
+        }
+      }
     }
     return {
       ...(await this.parent?.listResolvableActions()),

@@ -84,7 +84,7 @@ func main() {
 			Location:  vectorsearchPlugin.Location,
 		}, vectorsearchPlugin))
 
-	model := googlegenai.VertexAIModel(g, "gemini-2.0-flash")
+	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 
 	databaseId := "${FIRESTORE_DATABASE_ID}"         // Replace with your Firestore database ID
 	collectionName := "${FIRESTORE_COLLECTION_NAME}" // Replace with your Firestore collection name

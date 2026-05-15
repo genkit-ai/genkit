@@ -71,21 +71,9 @@ export const KNOWN_MODELS = {
   'meta/llama-3.3-70b-instruct-maas': commonRef(
     'meta/llama-3.3-70b-instruct-maas'
   ),
-  'meta/llama-3.2-90b-vision-instruct-maas': commonRef(
-    'meta/llama-3.2-90b-vision-instruct-maas'
-  ),
-  'meta/llama-3.1-405b-instruct-maas': commonRef(
-    'meta/llama-3.1-405b-instruct-maas'
-  ),
-  'meta/llama-3.1-70b-instruct-maas': commonRef(
-    'meta/llama-3.1-70b-instruct-maas'
-  ),
-  'meta/llama-3.1-8b-instruct-maas': commonRef(
-    'meta/llama-3.1-8b-instruct-maas'
-  ),
 };
 export type KnownModels = keyof typeof KNOWN_MODELS;
-export type LlamaModelName = `claude-${string}`;
+export type LlamaModelName = `meta/llama-${string}`;
 export function isLlamaModelName(value?: string): value is LlamaModelName {
   return !!value?.startsWith('meta/llama-');
 }

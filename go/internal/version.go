@@ -18,6 +18,6 @@ package internal
 
 // Version is the current tagged release of this module.
 // That is, it should match the value of the latest `go/v*` git tag.
-const Version = "1.1.0"
+const Version = "1.4.0"
 
 const GENKIT_REFLECTION_API_SPEC_VERSION = 1

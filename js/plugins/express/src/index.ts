@@ -16,8 +16,18 @@
 
 import bodyParser from 'body-parser';
 import cors, { type CorsOptions } from 'cors';
+import { randomUUID } from 'crypto';
 import express from 'express';
-import { type Action, type ActionContext, type Flow, type z } from 'genkit';
+import {
+  Action,
+  ActionStreamInput,
+  AsyncTaskQueue,
+  Flow,
+  StreamNotFoundError,
+  type ActionContext,
+  type StreamManager,
+  type z,
+} from 'genkit/beta';
 import {
   getCallableJSON,
   getHttpStatus,
@@ -41,6 +51,7 @@ export function expressHandler<
   action: Action<I, O, S>,
   opts?: {
     contextProvider?: ContextProvider<C, I>;
+    streamManager?: StreamManager;
   }
 ): express.RequestHandler {
   return async (
@@ -48,6 +59,11 @@ export function expressHandler<
     response: express.Response
   ): Promise<void> => {
     const { stream } = request.query;
+    const streamIdHeader = request.headers['x-genkit-stream-id'];
+    const streamId = Array.isArray(streamIdHeader)
+      ? streamIdHeader[0]
+      : streamIdHeader;
+
     if (!request.body) {
       const errMsg =
         `Error: request.body is undefined. ` +
@@ -94,34 +110,29 @@ export function expressHandler<
     });
 
     if (request.get('Accept') === 'text/event-stream' || stream === 'true') {
-      response.writeHead(200, {
+      const streamManager = opts?.streamManager;
+      if (streamManager && streamId) {
+        await subscribeToStream(streamManager, streamId, response);
+        return;
+      }
+      const streamIdToUse = randomUUID();
+      const headers = {
         'Content-Type': 'text/plain',
         'Transfer-Encoding': 'chunked',
-      });
-      try {
-        const onChunk = (chunk: z.infer<S>) => {
-          response.write(
-            'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
-          );
-        };
-        const result = await action.run(input, {
-          onChunk,
-          context,
-          abortSignal: abortController.signal,
-        });
-        response.write(
-          'data: ' + JSON.stringify({ result: result.result }) + streamDelimiter
-        );
-        response.end();
-      } catch (e) {
-        logger.error(
-          `Streaming request failed with error: ${(e as Error).message}\n${(e as Error).stack}`
-        );
-        response.write(
-          `error: ${JSON.stringify({ error: getCallableJSON(e) })}${streamDelimiter}`
-        );
-        response.end();
+      };
+      if (streamManager) {
+        headers['x-genkit-stream-id'] = streamIdToUse;
       }
+      response.writeHead(200, headers);
+      runActionWithDurableStreaming(
+        action,
+        streamManager,
+        streamIdToUse,
+        input,
+        context,
+        response,
+        abortController.signal
+      );
     } else {
       try {
         const result = await action.run(input, {
@@ -148,8 +159,123 @@ export function expressHandler<
   };
 }
 
+async function runActionWithDurableStreaming<
+  I extends z.ZodTypeAny,
+  O extends z.ZodTypeAny,
+  S extends z.ZodTypeAny,
+>(
+  action: Action<I, O, S>,
+  streamManager: StreamManager | undefined,
+  streamId: string,
+  input: z.infer<I>,
+  context: ActionContext,
+  response: express.Response,
+  abortSignal: AbortSignal
+) {
+  let taskQueue: AsyncTaskQueue | undefined;
+  let durableStream: ActionStreamInput<any, any> | undefined;
+  if (streamManager) {
+    taskQueue = new AsyncTaskQueue();
+    durableStream = await streamManager.open(streamId);
+  }
+  try {
+    let onChunk = (chunk: z.infer<S>) => {
+      response.write(
+        'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
+      );
+    };
+    if (streamManager) {
+      const originalOnChunk = onChunk;
+      onChunk = (chunk: z.infer<S>) => {
+        originalOnChunk(chunk);
+        taskQueue!.enqueue(() => durableStream!.write(chunk));
+      };
+    }
+    const result = await action.run(input, {
+      onChunk,
+      context,
+      abortSignal,
+    });
+    if (streamManager) {
+      taskQueue!.enqueue(() => durableStream!.done(result.result));
+      await taskQueue!.merge();
+    }
+    response.write(
+      'data: ' + JSON.stringify({ result: result.result }) + streamDelimiter
+    );
+    response.end();
+  } catch (e) {
+    if (durableStream) {
+      taskQueue!.enqueue(() => durableStream!.error(e));
+      await taskQueue!.merge();
+    }
+    logger.error(
+      `Streaming request failed with error: ${(e as Error).message}\n${
+        (e as Error).stack
+      }`
+    );
+    response.write(
+      `error: ${JSON.stringify({
+        error: getCallableJSON(e),
+      })}${streamDelimiter}`
+    );
+    response.end();
+  }
+}
+
+async function subscribeToStream(
+  streamManager: StreamManager,
+  streamId: string,
+  response: express.Response
+): Promise<void> {
+  try {
+    await streamManager.subscribe(streamId, {
+      onChunk: (chunk) => {
+        response.write(
+          'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
+        );
+      },
+      onDone: (output) => {
+        response.write(
+          'data: ' + JSON.stringify({ result: output }) + streamDelimiter
+        );
+        response.end();
+      },
+      onError: (err) => {
+        logger.error(
+          `Streaming request failed with error: ${(err as Error).message}\n${
+            (err as Error).stack
+          }`
+        );
+        response.write(
+          `error: ${JSON.stringify({
+            error: getCallableJSON(err),
+          })}${streamDelimiter}`
+        );
+        response.end();
+      },
+    });
+  } catch (e: any) {
+    if (e instanceof StreamNotFoundError) {
+      response.status(204).end();
+      return;
+    }
+    if (e.status === 'DEADLINE_EXCEEDED') {
+      response.write(
+        `error: ${JSON.stringify({
+          error: getCallableJSON(e),
+        })}${streamDelimiter}`
+      );
+      response.end();
+      return;
+    }
+    throw e;
+  }
+}
+
 /**
  * A wrapper object containing a flow with its associated auth policy.
+ * @deprecated Use `withFlowOptions` instead.
  */
 export type FlowWithContextProvider<
   C extends ActionContext = ActionContext,
@@ -162,7 +288,24 @@ export type FlowWithContextProvider<
 };
 
 /**
+ * A wrapper object containing a flow with its associated options.
+ */
+export type FlowWithOptions<
+  I extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodTypeAny = z.ZodTypeAny,
+  S extends z.ZodTypeAny = z.ZodTypeAny,
+> = {
+  flow: Flow<I, O, S>;
+  options: {
+    contextProvider?: ContextProvider<any, I>;
+    streamManager?: StreamManager;
+    path?: string;
+  };
+};
+
+/**
  * Adds an auth policy to the flow.
+ * @deprecated Use `withFlowOptions` instead.
  */
 export function withContextProvider<
   C extends ActionContext = ActionContext,
@@ -180,11 +323,36 @@ export function withContextProvider<
 }
 
 /**
+ * Adds an auth policy to the flow.
+ */
+export function withFlowOptions<
+  I extends z.ZodTypeAny,
+  O extends z.ZodTypeAny,
+  S extends z.ZodTypeAny,
+>(
+  flow: Flow<I, O, S>,
+  options: {
+    contextProvider?: ContextProvider<any, I>;
+    streamManager?: StreamManager;
+    path?: string;
+  }
+): FlowWithOptions<I, O, S> {
+  return {
+    flow,
+    options,
+  };
+}
+
+/**
  * Options to configure the flow server.
  */
 export interface FlowServerOptions {
   /** List of flows to expose via the flow server. */
-  flows: (Flow<any, any, any> | FlowWithContextProvider<any, any, any>)[];
+  flows: (
+    | Flow<any, any, any>
+    | FlowWithContextProvider<any, any, any>
+    | FlowWithOptions<any, any, any>
+  )[];
   /** Port to run the server on. Defaults to env.PORT or 3400. */
   port?: number;
   /** CORS options for the server. */
@@ -240,13 +408,14 @@ export class FlowServer {
     logger.debug('Running flow server with flow paths:');
     const pathPrefix = this.options.pathPrefix ?? '';
     this.options.flows?.forEach((flow) => {
-      if ('context' in flow) {
-        const flowPath = `/${pathPrefix}${flow.flow.__action.name}`;
+      if ('flow' in flow) {
+        const flowPath = `/${pathPrefix}${
+          ('options' in flow && flow.options.path) || flow.flow.__action.name
+        }`;
         logger.debug(` - ${flowPath}`);
-        server.post(
-          flowPath,
-          expressHandler(flow.flow, { contextProvider: flow.context })
-        );
+        const options =
+          'options' in flow ? flow.options : { contextProvider: flow.context };
+        server.post(flowPath, expressHandler(flow.flow, options));
       } else {
         const flowPath = `/${pathPrefix}${flow.__action.name}`;
         logger.debug(` - ${flowPath}`);

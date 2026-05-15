@@ -1,5 +1,5 @@
 ---
 modelProvider: google-vertex
-modelName: gemini-pro
+modelName: gemini-2.5-pro
 ---
 Tell a joke about {subject}

@@ -23,15 +23,21 @@ import {
 } from 'genkit';
 import { BackgroundModelAction, ModelInfo } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
 import { veoCheckOperation, veoPredict } from './client.js';
 import {
   fromVeoOperation,
+  toVeoClientOptions,
   toVeoModel,
   toVeoOperationRequest,
   toVeoPredictRequest,
 } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
-import { checkModelName, extractVersion } from './utils.js';
+import {
+  calculateRequestOptions,
+  checkModelName,
+  extractVersion,
+} from './utils.js';
 
 export const VeoConfigSchema = z
   .object({
@@ -97,6 +103,17 @@ export const VeoConfigSchema = z
       .default('optimized')
       .optional()
       .describe('Compression quality of the generated video'),
+    resizeMode: z
+      .enum(['pad', 'crop'])
+      .default('pad')
+      .optional()
+      .describe(
+        'Veo 3 only. The resize mode that the model uses to resize the video'
+      ),
+    location: z
+      .string()
+      .describe('Google Cloud region e.g. us-central1. or global')
+      .optional(),
   })
   .passthrough();
 export type VeoConfigSchemaType = typeof VeoConfigSchema;
@@ -131,13 +148,12 @@ function commonRef(
 const GENERIC_MODEL = commonRef('veo');
 
 const KNOWN_MODELS = {
-  'veo-2.0-generate-001': commonRef('veo-2.0-generate-001'),
-  'veo-3.0-generate-001': commonRef('veo-3.0-generate-001'),
-  'veo-3.0-fast-generate-001': commonRef('veo-3.0-fast-generate-001'),
-  'veo-3.0-generate-preview': commonRef('veo-3.0-generate-preview'),
-  'veo-3.0-fast-generate-preview': commonRef('veo-3.0-fast-generate-preview'),
+  'veo-3.1-lite-generate-001': commonRef('veo-3.1-lite-generate-001'),
+  'veo-3.1-fast-generate-001': commonRef('veo-3.1-fast-generate-001'),
+  'veo-3.1-generate-001': commonRef('veo-3.1-generate-001'),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
 export type VeoModelName = `veo-${string}`;
 export function isVeoModelName(value?: string): value is VeoModelName {
   return !!value?.startsWith('veo-');
@@ -148,6 +164,17 @@ export function model(
   config: VeoConfig = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    const known = KNOWN_MODELS[name];
+    return modelRef({
+      name: known.name,
+      info: known.info,
+      configSchema: known.configSchema,
+      config,
+    });
+  }
+
   return modelRef({
     name: `vertexai/${name}`,
     config,
@@ -192,12 +219,13 @@ export function defineModel(
     ...ref.info,
     configSchema: ref.configSchema,
     async start(request) {
+      const clientOpt = calculateRequestOptions(clientOptions, request.config);
       const veoPredictRequest = toVeoPredictRequest(request);
 
       const response = await veoPredict(
         extractVersion(ref),
         veoPredictRequest,
-        clientOptions
+        clientOpt
       );
 
       return fromVeoOperation(response);
@@ -206,7 +234,7 @@ export function defineModel(
       const response = await veoCheckOperation(
         toVeoModel(operation),
         toVeoOperationRequest(operation),
-        clientOptions
+        toVeoClientOptions(operation, clientOptions)
       );
       return fromVeoOperation(response);
     },

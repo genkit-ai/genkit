@@ -16,6 +16,7 @@
 
 import { ActionMetadata, GenkitError, modelActionMetadata, z } from 'genkit';
 import {
+  CandidateData,
   GenerationCommonConfigDescriptions,
   GenerationCommonConfigSchema,
   ModelAction,
@@ -35,6 +36,7 @@ import {
   toGeminiSystemInstruction,
   toGeminiTool,
 } from '../common/converters.js';
+import { isKnownKey } from '../common/utils.js';
 import {
   generateContent,
   generateContentStream,
@@ -52,14 +54,19 @@ import {
   SafetySetting,
   Tool,
   ToolConfig,
+  UrlContextTool,
 } from './types.js';
 import {
   calculateApiKey,
+  calculateRequestOptions,
   checkApiKey,
   checkModelName,
   cleanSchema,
   extractVersion,
+  removeClientOptionOverrides,
 } from './utils.js';
+
+const MAX_INLINE_MEDIA_BYTES = 1024 * 1024 * 100; // 100 MB
 
 /**
  * See https://ai.google.dev/gemini-api/docs/safety-settings#safety-filters.
@@ -140,6 +147,18 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .string()
     .describe('Overrides the plugin-configured API key, if specified.')
     .optional(),
+  baseUrl: z
+    .string()
+    .describe(
+      'Overrides the plugin-configured or default baseUrl, if specified.'
+    )
+    .optional(),
+  apiVersion: z
+    .string()
+    .describe(
+      'Overrides the plugin-configured or default apiVersion, if specified.'
+    )
+    .optional(),
   safetySettings: z
     .array(SafetySettingsSchema)
     .describe(
@@ -175,16 +194,57 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
   responseModalities: z
     .array(z.enum(['TEXT', 'IMAGE', 'AUDIO']))
-    .describe(
-      'The modalities to be used in response. Only supported for ' +
-        "'gemini-2.0-flash-exp' model at present."
-    )
+    .describe('The modalities to be used in response.')
     .optional(),
-  googleSearchRetrieval: z
+  googleSearchRetrieval: z // some models use this, some use just googleSearch
     .union([z.boolean(), z.object({}).passthrough()])
     .describe(
       'Retrieve public web data for grounding, powered by Google Search.'
     )
+    .optional(),
+  googleSearch: z
+    .union([z.boolean(), z.object({}).passthrough()])
+    .describe(
+      'Retrieve public web data for grounding, powered by Google Search.'
+    )
+    .optional(),
+  fileSearch: z
+    .object({
+      fileSearchStoreNames: z
+        .array(z.string())
+        .describe(
+          'The names of the fileSearchStores to retrieve from. ' +
+            'Example: fileSearchStores/my-file-search-store-123'
+        ),
+      metadataFilter: z
+        .string()
+        .optional()
+        .describe(
+          'Metadata filter to apply to the semantic retrieval documents and chunks.'
+        ),
+      topK: z
+        .number()
+        .optional()
+        .describe('The number of semantic retrieval chunks to retrieve.'),
+    })
+    .passthrough()
+    .optional(),
+  urlContext: z
+    .union([z.boolean(), z.object({}).passthrough()])
+    .describe('Return grounding metadata from links included in the query')
+    .optional(),
+  retrievalConfig: z
+    .object({
+      latLng: z
+        .object({
+          latitude: z.number().optional(),
+          longitude: z.number().optional(),
+        })
+        .optional(),
+      languageCode: z.string().optional(),
+    })
+    .passthrough()
+    .describe('Configuration for retrieval tools.')
     .optional(),
   temperature: z
     .number()
@@ -203,6 +263,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
       GenerationCommonConfigDescriptions.topP + ' The default value is 0.95.'
     )
     .optional(),
+  serviceTier: z
+    .union([z.enum(['standard', 'flex', 'priority']), z.string()])
+    .describe('Service tier for the Gemini API.')
+    .optional(),
   thinkingConfig: z
     .object({
       includeThoughts: z
@@ -218,13 +282,21 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
         .min(0)
         .max(24576)
         .describe(
-          'Indicates the thinking budget in tokens. 0 is DISABLED. ' +
+          'For Gemini 2.5 - Indicates the thinking budget in tokens. 0 is DISABLED. ' +
             '-1 is AUTOMATIC. The default values and allowed ranges are model ' +
             'dependent. The thinking budget parameter gives the model guidance ' +
             'on the number of thinking tokens it can use when generating a ' +
             'response. A greater number of tokens is typically associated with ' +
             'more detailed thinking, which is needed for solving more complex ' +
             'tasks. '
+        )
+        .optional(),
+      thinkingLevel: z
+        .enum(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'])
+        .describe(
+          'For Gemini 3.0 - Indicates the thinking level. A higher level ' +
+            'is associated with more detailed thinking, which is needed for solving ' +
+            'more complex tasks.'
         )
         .optional(),
     })
@@ -265,6 +337,61 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
 export type GeminiTtsConfig = z.infer<GeminiTtsConfigSchemaType>;
 
+export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
+  imageConfig: z
+    .object({
+      aspectRatio: z
+        .enum([
+          '1:1',
+          '1:4',
+          '1:8',
+          '2:3',
+          '3:2',
+          '3:4',
+          '4:1',
+          '4:3',
+          '4:5',
+          '5:4',
+          '8:1',
+          '9:16',
+          '16:9',
+          '21:9',
+        ])
+        .optional(),
+      imageSize: z
+        .enum([
+          '256',
+          '256P',
+          '256PX',
+          '512',
+          '512P',
+          '512PX',
+          '1K',
+          '2K',
+          '4K',
+        ])
+        .optional(),
+    })
+    .passthrough()
+    .optional(),
+  google_search: z
+    .object({
+      searchTypes: z
+        .object({
+          webSearch: z.object({}).optional(),
+          imageSearch: z.object({}).optional(),
+        })
+        .optional(),
+    })
+    .describe(
+      'Retrieve public web data for grounding, powered by Google Search.'
+    )
+    .passthrough()
+    .optional(),
+}).passthrough();
+export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
+export type GeminiImageConfig = z.infer<GeminiImageConfigSchemaType>;
+
 export const GemmaConfigSchema = GeminiConfigSchema.extend({
   temperature: z
     .number()
@@ -283,7 +410,9 @@ export type GemmaConfig = z.infer<GemmaConfigSchemaType>;
 type ConfigSchemaType =
   | GeminiConfigSchemaType
   | GeminiTtsConfigSchemaType
+  | GeminiImageConfigSchemaType
   | GemmaConfigSchemaType;
+type ConfigSchema = z.infer<ConfigSchemaType>;
 
 function commonRef(
   name: string,
@@ -322,27 +451,55 @@ const GENERIC_TTS_MODEL = commonRef(
   },
   GeminiTtsConfigSchema
 );
+const GENERIC_IMAGE_MODEL = commonRef(
+  'gemini-image',
+  {
+    supports: {
+      multiturn: true,
+      media: true,
+      tools: true,
+      toolChoice: true,
+      systemRole: true,
+      constrained: 'no-tools',
+    },
+  },
+  GeminiImageConfigSchema
+);
 const GENERIC_GEMMA_MODEL = commonRef(
   'gemma-generic',
   undefined,
   GemmaConfigSchema
 );
+const GEMMA_3_INFO = {
+  supports: {
+    ...GENERIC_GEMMA_MODEL.info!.supports!,
+    systemRole: false,
+  },
+};
 
 const KNOWN_GEMINI_MODELS = {
+  'gemini-pro-latest': commonRef('gemini-pro-latest'),
+  'gemini-flash-latest': commonRef('gemini-flash-latest'),
+  'gemini-flash-lite-latest': commonRef('gemini-flash-lite-latest'),
+  'gemini-3.1-flash-lite': commonRef('gemini-3.1-flash-lite'),
+  'gemini-3.1-flash-lite-preview': commonRef('gemini-3.1-flash-lite-preview'),
+  'gemini-3.1-pro-preview-customtools': commonRef(
+    'gemini-3.1-pro-preview-customtools'
+  ),
+  'gemini-3.1-pro-preview': commonRef('gemini-3.1-pro-preview'),
+  'gemini-3-flash-preview': commonRef('gemini-3-flash-preview'),
   'gemini-2.5-pro': commonRef('gemini-2.5-pro'),
   'gemini-2.5-flash': commonRef('gemini-2.5-flash'),
   'gemini-2.5-flash-lite': commonRef('gemini-2.5-flash-lite'),
-  'gemini-2.5-flash-image-preview': commonRef('gemini-2.5-flash-image-preview'),
-  'gemini-2.0-flash': commonRef('gemini-2.0-flash'),
-  'gemini-2.0-flash-preview-image-generation': commonRef(
-    'gemini-2.0-flash-preview-image-generation'
-  ),
-  'gemini-2.0-flash-lite': commonRef('gemini-2.0-flash-lite'),
 };
 export type KnownGeminiModels = keyof typeof KNOWN_GEMINI_MODELS;
 export type GeminiModelName = `gemini-${string}`;
 export function isGeminiModelName(value: string): value is GeminiModelName {
-  return value.startsWith('gemini-') && !value.endsWith('-tts');
+  return (
+    value.startsWith('gemini-') &&
+    !isTTSModelName(value) &&
+    !isImageModelName(value)
+  );
 }
 
 const KNOWN_TTS_MODELS = {
@@ -356,19 +513,65 @@ const KNOWN_TTS_MODELS = {
     { ...GENERIC_TTS_MODEL.info },
     GeminiTtsConfigSchema
   ),
+  'gemini-3.1-flash-tts-preview': commonRef(
+    'gemini-3.1-flash-tts-preview',
+    { ...GENERIC_TTS_MODEL.info },
+    GeminiTtsConfigSchema
+  ),
 };
 export type KnownTtsModels = keyof typeof KNOWN_TTS_MODELS;
-export type TTSModelName = `gemini-${string}-tts`;
+export type TTSModelName = `gemini-${string}-tts${string}`;
 export function isTTSModelName(value: string): value is TTSModelName {
-  return value.startsWith('gemini-') && value.endsWith('-tts');
+  return value.startsWith('gemini-') && value.includes('-tts');
+}
+
+const KNOWN_IMAGE_MODELS = {
+  'gemini-3.1-flash-image-preview': commonRef(
+    'gemini-3.1-flash-image-preview',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
+  'gemini-3-pro-image-preview': commonRef(
+    'gemini-3-pro-image-preview',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
+  'gemini-2.5-flash-image': commonRef(
+    'gemini-2.5-flash-image',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
+} as const;
+export type KnownImageModels = keyof typeof KNOWN_IMAGE_MODELS;
+export type ImageModelName = `gemini-${string}-image${string}`;
+export function isImageModelName(value: string): value is ImageModelName {
+  return value.startsWith('gemini-') && value.includes('-image');
 }
 
 const KNOWN_GEMMA_MODELS = {
-  'gemma-3-12b-it': commonRef('gemma-3-12b-it', undefined, GemmaConfigSchema),
-  'gemma-3-1b-it': commonRef('gemma-3-1b-it', undefined, GemmaConfigSchema),
-  'gemma-3-27b-it': commonRef('gemma-3-27b-it', undefined, GemmaConfigSchema),
-  'gemma-3-4b-it': commonRef('gemma-3-4b-it', undefined, GemmaConfigSchema),
-  'gemma-3n-e4b-it': commonRef('gemma-3n-e4b-it', undefined, GemmaConfigSchema),
+  'gemma-4-26b-a4b-it': commonRef(
+    'gemma-4-26b-a4b-it',
+    undefined,
+    GemmaConfigSchema
+  ),
+  'gemma-4-31b-it': commonRef('gemma-4-31b-it', undefined, GemmaConfigSchema),
+  'gemma-3-12b-it': commonRef(
+    'gemma-3-12b-it',
+    GEMMA_3_INFO,
+    GemmaConfigSchema
+  ),
+  'gemma-3-1b-it': commonRef('gemma-3-1b-it', GEMMA_3_INFO, GemmaConfigSchema),
+  'gemma-3-27b-it': commonRef(
+    'gemma-3-27b-it',
+    GEMMA_3_INFO,
+    GemmaConfigSchema
+  ),
+  'gemma-3-4b-it': commonRef('gemma-3-4b-it', GEMMA_3_INFO, GemmaConfigSchema),
+  'gemma-3n-e4b-it': commonRef(
+    'gemma-3n-e4b-it',
+    GEMMA_3_INFO,
+    GemmaConfigSchema
+  ),
 } as const;
 export type KnownGemmaModels = keyof typeof KNOWN_GEMMA_MODELS;
 export type GemmaModelName = `gemma-${string}`;
@@ -379,14 +582,19 @@ export function isGemmaModelName(value: string): value is GemmaModelName {
 const KNOWN_MODELS = {
   ...KNOWN_GEMINI_MODELS,
   ...KNOWN_TTS_MODELS,
+  ...KNOWN_IMAGE_MODELS,
   ...KNOWN_GEMMA_MODELS,
 };
 
 export function model(
   version: string,
-  config: GeminiConfig | GeminiTtsConfig | GemmaConfig = {}
+  config: ConfigSchema = {}
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
 
   if (isTTSModelName(name)) {
     return modelRef({
@@ -394,6 +602,15 @@ export function model(
       config,
       configSchema: GeminiTtsConfigSchema,
       info: { ...GENERIC_TTS_MODEL.info },
+    });
+  }
+
+  if (isImageModelName(name)) {
+    return modelRef({
+      name: `googleai/${name}`,
+      config,
+      configSchema: GeminiImageConfigSchema,
+      info: { ...GENERIC_IMAGE_MODEL.info },
     });
   }
 
@@ -451,15 +668,20 @@ export function defineModel(
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
+    customHeaders: pluginOptions?.customHeaders,
   };
 
   const middleware: ModelMiddleware[] = [];
   if (ref.info?.supports?.media) {
-    // the gemini api doesn't support downloading media from http(s)
+    // For Gemini 2.0, external URLs are not supported, so we must download.
+    // For newer models, we can pass the URL directly.
+    const supportsExternalUrls = !name.startsWith('gemini-2.0');
+
     middleware.push(
       downloadRequestMedia({
-        maxBytes: 1024 * 1024 * 10,
-        // don't downlaod files that have been uploaded using the Files API
+        maxBytes: MAX_INLINE_MEDIA_BYTES,
+        // don't download files that have been uploaded using the Files API
+        // or external URLs supported by the model
         filter: (part) => {
           try {
             const url = new URL(part.media.url);
@@ -473,6 +695,14 @@ export function defineModel(
               ].includes(url.hostname)
             )
               return false;
+
+            // If model supports external URLs, allow http/https URLs to pass through
+            if (
+              supportsExternalUrls &&
+              (url.protocol === 'https:' || url.protocol === 'http:')
+            ) {
+              return false;
+            }
           } catch {}
           return true;
         },
@@ -488,11 +718,26 @@ export function defineModel(
       use: middleware,
     },
     async (request, { streamingRequested, sendChunk, abortSignal }) => {
-      const clientOpt = { ...clientOptions, signal: abortSignal };
+      const clientOpt = calculateRequestOptions(
+        { ...clientOptions, signal: abortSignal },
+        request.config
+      );
+
+      const modelVersion = request.config?.version || extractVersion(ref);
+      const isGemma = isGemmaModelName(modelVersion);
 
       // Make a copy so that modifying the request will not produce side-effects
-      const messages = [...request.messages];
+      const messages = request.messages.map((m) => ({ ...m }));
       if (messages.length === 0) throw new Error('No messages provided.');
+
+      if (isGemma) {
+        // Gemma does not allow previous thoughts
+        messages.forEach((m) => {
+          m.content = m.content.filter(
+            (p) => !p.reasoning && !p.metadata?.thoughtSignature
+          );
+        });
+      }
 
       // Gemini does not support messages with role system and instead expects
       // systemInstructions to be provided as a separate input. The first
@@ -511,17 +756,25 @@ export function defineModel(
         });
       }
 
-      const requestOptions: z.infer<ConfigSchemaType> = {
+      const requestOptions: ConfigSchema = {
         ...request.config,
       };
+
       const {
         apiKey: apiKeyFromConfig,
         safetySettings: safetySettingsFromConfig,
         codeExecution: codeExecutionFromConfig,
         version: versionFromConfig,
+        toolConfig: toolConfigConfig,
         functionCallingConfig,
         googleSearchRetrieval,
+        google_search,
+        googleSearch,
+        fileSearch,
+        urlContext,
         tools: toolsFromConfig,
+        retrievalConfig,
+        serviceTier,
         ...restOfConfigOptions
       } = requestOptions;
 
@@ -543,6 +796,24 @@ export function defineModel(
         } as GoogleSearchRetrievalTool);
       }
 
+      if (googleSearch || google_search) {
+        tools.push({
+          google_search: google_search || googleSearch,
+        }) as GoogleSearchRetrievalTool;
+      }
+
+      if (fileSearch) {
+        tools.push({
+          fileSearch,
+        });
+      }
+
+      if (urlContext) {
+        tools.push({
+          urlContext: urlContext === true ? {} : urlContext,
+        } as UrlContextTool);
+      }
+
       let toolConfig: ToolConfig | undefined;
       if (functionCallingConfig) {
         toolConfig = {
@@ -559,6 +830,31 @@ export function defineModel(
         };
       }
 
+      if (toolConfigConfig) {
+        // We need it in snake case or it doesn't work
+        if (
+          Object.hasOwnProperty.call(
+            toolConfigConfig,
+            'includeServerSideToolInvocations'
+          )
+        ) {
+          toolConfigConfig['include_server_side_tool_invocations'] =
+            toolConfigConfig['includeServerSideToolInvocations'];
+          delete toolConfigConfig['includeServerSideToolInvocations'];
+        }
+        toolConfig = {
+          ...toolConfig,
+          ...toolConfigConfig,
+        };
+      }
+
+      if (retrievalConfig) {
+        toolConfig = {
+          ...toolConfig,
+          retrievalConfig,
+        };
+      }
+
       // Cannot use tools with JSON mode
       const jsonMode =
         request.output?.format === 'json' ||
@@ -566,13 +862,27 @@ export function defineModel(
           tools.length === 0);
 
       const generationConfig: GenerationConfig = {
-        ...restOfConfigOptions,
+        ...removeClientOptionOverrides(restOfConfigOptions),
         candidateCount: request.candidates || undefined,
         responseMimeType: jsonMode ? 'application/json' : undefined,
       };
 
+      if (isTTSModelName(modelVersion)) {
+        if (!generationConfig.responseModalities) {
+          generationConfig.responseModalities = ['AUDIO'];
+        }
+      } else if (isImageModelName(modelVersion)) {
+        if (!generationConfig.responseModalities) {
+          generationConfig.responseModalities = ['TEXT', 'IMAGE'];
+        }
+      }
+
       if (request.output?.constrained && jsonMode) {
-        generationConfig.responseSchema = cleanSchema(request.output.schema);
+        if (pluginOptions?.legacyResponseSchema) {
+          generationConfig.responseSchema = cleanSchema(request.output.schema);
+        } else {
+          generationConfig.responseJsonSchema = request.output.schema;
+        }
       }
 
       const msg = toGeminiMessage(messages[messages.length - 1], ref);
@@ -586,9 +896,8 @@ export function defineModel(
           (setting) => setting.category !== 'HARM_CATEGORY_UNSPECIFIED'
         ) as SafetySetting[],
         contents: messages.map((message) => toGeminiMessage(message, ref)),
+        serviceTier,
       };
-
-      const modelVersion = versionFromConfig || extractVersion(ref);
 
       const generateApiKey = calculateApiKey(
         pluginOptions?.apiKey,
@@ -605,10 +914,11 @@ export function defineModel(
             generateContentRequest,
             clientOpt
           );
-
+          const chunks: CandidateData[] = [];
           for await (const item of result.stream) {
             item.candidates?.forEach((candidate) => {
-              const c = fromGeminiCandidate(candidate);
+              const c = fromGeminiCandidate(candidate, chunks);
+              chunks.push(c);
               sendChunk({
                 index: c.index,
                 content: c.message.content,
@@ -636,7 +946,8 @@ export function defineModel(
           });
         }
 
-        const candidateData = candidates.map(fromGeminiCandidate) || [];
+        const candidateData =
+          candidates.map((c) => fromGeminiCandidate(c)) || [];
 
         return {
           candidates: candidateData,

@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 
-import type * as z from 'zod';
-import { Action, ActionMetadata, defineAction } from './action.js';
-import { ActionType, Registry } from './registry.js';
+import * as z from 'zod';
+import {
+  Action,
+  ActionMetadata,
+  ActionMetadataSchema,
+  defineAction,
+} from './action.js';
+import { GenkitError } from './error.js';
+import { ActionMetadataRecord, ActionType, Registry } from './registry.js';
 
 type DapValue = {
   [K in ActionType]?: Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny>[];
@@ -26,23 +32,40 @@ class SimpleCache {
   private value: DapValue | undefined;
   private expiresAt: number | undefined;
   private ttlMillis: number;
-  private dap: DynamicActionProviderAction;
+  private dap: DynamicActionProviderAction | undefined;
   private dapFn: DapFn;
   private fetchPromise: Promise<DapValue> | null = null;
 
-  constructor(
-    dap: DynamicActionProviderAction,
-    config: DapConfig,
-    dapFn: DapFn
-  ) {
-    this.dap = dap;
+  constructor(config: DapConfig, dapFn: DapFn) {
     this.dapFn = dapFn;
     this.ttlMillis = !config.cacheConfig?.ttlMillis
       ? 3 * 1000
       : config.cacheConfig?.ttlMillis;
   }
 
-  async getOrFetch(): Promise<DapValue> {
+  setDap(dap: DynamicActionProviderAction) {
+    this.dap = dap;
+  }
+
+  setValue(value: DapValue) {
+    const dapId = this.dap?.__action?.name;
+    if (dapId) {
+      Object.values(value).forEach((actionList) => {
+        actionList?.forEach((action) => {
+          action.__action.key = `/dynamic-action-provider/${dapId}:${action.__action.actionType}/${action.__action.name}`;
+        });
+      });
+    }
+    this.value = value;
+    this.expiresAt = Date.now() + this.ttlMillis;
+  }
+
+  /**
+   * Gets or fetches the DAP data.
+   * @param skipTrace Don't run the action. i.e. don't create a trace log.
+   * @returns The DAP data
+   */
+  async getOrFetch(params?: { skipTrace?: boolean }): Promise<DapValue> {
     const isStale =
       !this.value ||
       !this.expiresAt ||
@@ -55,13 +78,14 @@ class SimpleCache {
     if (!this.fetchPromise) {
       this.fetchPromise = (async () => {
         try {
-          // Get a new value
-          this.value = await this.dapFn(); // this returns the actual actions
-          this.expiresAt = Date.now() + this.ttlMillis;
-
-          // Also run the action
-          this.dap.run(this.value); // This returns metadata and shows up in dev UI
-
+          if (this.dap && !params?.skipTrace) {
+            await this.dap.run(); // calls setValue
+          } else {
+            this.setValue(await this.dapFn());
+          }
+          if (!this.value) {
+            throw new Error('value is undefined');
+          }
           return this.value;
         } catch (error) {
           console.error('Error fetching Dynamic Action Provider value:', error);
@@ -92,11 +116,12 @@ export interface DynamicRegistry {
     actionType: string,
     actionName: string
   ): Promise<ActionMetadata[]>;
+  getActionMetadataRecord(dapPrefix: string): Promise<ActionMetadataRecord>;
 }
 
 export type DynamicActionProviderAction = Action<
-  z.ZodTypeAny,
-  z.ZodTypeAny,
+  z.ZodVoid,
+  z.ZodArray<typeof ActionMetadataSchema>,
   z.ZodTypeAny
 > &
   DynamicRegistry & {
@@ -130,14 +155,10 @@ export type DapMetadata = {
   [K in ActionType]?: ActionMetadata[];
 };
 
-function transformDapValue(value: DapValue): DapMetadata {
-  const metadata: DapMetadata = {};
-  for (const key of Object.keys(value)) {
-    metadata[key] = value[key].map((a) => {
-      return a.__action;
-    });
-  }
-  return metadata;
+function transformDapValue(value: DapValue): ActionMetadata[] {
+  return Object.values(value).flatMap(
+    (actions) => actions?.map((a) => a.__action) || []
+  );
 }
 
 export function defineDynamicActionProvider(
@@ -151,32 +172,29 @@ export function defineDynamicActionProvider(
   } else {
     cfg = { ...config };
   }
+  const cache = new SimpleCache(cfg, fn);
   const a = defineAction(
     registry,
     {
       ...cfg,
+      inputSchema: z.void(),
+      outputSchema: z.array(ActionMetadataSchema),
       actionType: 'dynamic-action-provider',
       metadata: { ...(cfg.metadata || {}), type: 'dynamic-action-provider' },
     },
-    async (i, _options) => {
-      // The actions are retrieved and saved in a cache and then passed in here.
-      // We run this action to return the metadata for the actions only.
-      // We pass the actions in here to prevent duplicate calls to the mcp
-      // and also so we are guaranteed the same actions since there is only a
-      // single call to mcp client/host.
-      return transformDapValue(i);
+    async (_options) => {
+      const dapValue = await fn();
+      cache.setValue(dapValue);
+      return transformDapValue(dapValue);
     }
   );
-  implementDap(a as DynamicActionProviderAction, cfg, fn);
+  implementDap(a as DynamicActionProviderAction, cache);
   return a as DynamicActionProviderAction;
 }
 
-function implementDap(
-  dap: DynamicActionProviderAction,
-  config: DapConfig,
-  dapFn: DapFn
-) {
-  dap.__cache = new SimpleCache(dap, config, dapFn);
+function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
+  cache.setDap(dap);
+  dap.__cache = cache;
   dap.invalidateCache = () => {
     dap.__cache.invalidate();
   };
@@ -209,5 +227,29 @@ function implementDap(
 
     // Single match or empty array
     return metadata.filter((m) => m.name == actionName);
+  };
+
+  // This is called by listResolvableActions which is used by the
+  // reflection API.
+  dap.getActionMetadataRecord = async (dapPrefix: string) => {
+    const dapActions = {} as ActionMetadataRecord;
+    // We want to skip traces so we don't get a new action trace
+    // every time the DevUI requests the list of actions.
+    // This is ok, because the DevUI will show the actions, so
+    // not having them in the trace is fine.
+    const result = await dap.__cache.getOrFetch({ skipTrace: true });
+    for (const actions of Object.values(result)) {
+      const metadataList = actions.map((a) => a.__action);
+      for (const metadata of metadataList) {
+        if (!metadata.name || !metadata.key) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: `Invalid metadata when listing dynamic actions from ${dapPrefix} - name required`,
+          });
+        }
+        dapActions[metadata.key] = metadata;
+      }
+    }
+    return dapActions;
   };
 }

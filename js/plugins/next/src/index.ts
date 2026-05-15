@@ -14,7 +14,16 @@
  * limitations under the License.
  */
 
-import { z, type Action, type ActionContext } from 'genkit';
+import { randomUUID } from 'crypto';
+import {
+  Action,
+  AsyncTaskQueue,
+  StreamNotFoundError,
+  type ActionContext,
+  type ActionStreamInput,
+  type StreamManager,
+  type z,
+} from 'genkit/beta';
 import {
   getCallableJSON,
   getHttpStatus,
@@ -25,6 +34,90 @@ import { NextRequest, NextResponse } from 'next/server.js';
 export { NextRequest, NextResponse, z, type Action, type ActionContext };
 
 const delimiter = '\n\n';
+
+async function subscribeToStream<S, O>(
+  streamManager: StreamManager,
+  streamId: string
+): Promise<NextResponse | null> {
+  try {
+    const encoder = new TextEncoder();
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    await streamManager.subscribe(streamId, {
+      onChunk: (chunk) => {
+        writer.write(
+          encoder.encode(
+            'data: ' + JSON.stringify({ message: chunk }) + delimiter
+          )
+        );
+      },
+      onDone: (output) => {
+        writer.write(
+          encoder.encode(
+            'data: ' + JSON.stringify({ result: output }) + delimiter
+          )
+        );
+        writer.write(encoder.encode('END'));
+        writer.close();
+      },
+      onError: (err) => {
+        console.error(
+          `Streaming request failed with error: ${(err as Error).message}\n${
+            (err as Error).stack
+          }`
+        );
+        writer.write(
+          encoder.encode(
+            `error: ${JSON.stringify({
+              error: getCallableJSON(err),
+            })}${delimiter}`
+          )
+        );
+        writer.write(encoder.encode('END'));
+        writer.close();
+      },
+    });
+    return new NextResponse(readable, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'Transfer-Encoding': 'chunked',
+        'x-genkit-stream-id': streamId,
+      },
+    });
+  } catch (e: any) {
+    if (e instanceof StreamNotFoundError) {
+      return new NextResponse(null, { status: 204 });
+    }
+    if (e.status === 'DEADLINE_EXCEEDED') {
+      const encoder = new TextEncoder();
+      const { readable, writable } = new TransformStream();
+      const writer = writable.getWriter();
+      writer.write(
+        encoder.encode(
+          `error: ${JSON.stringify({
+            error: getCallableJSON(e),
+          })}${delimiter}`
+        )
+      );
+      writer.write(encoder.encode('END'));
+      writer.close();
+      return new NextResponse(readable, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          'Transfer-Encoding': 'chunked',
+        },
+      });
+    }
+    throw e;
+  }
+}
+
 async function getContext<C extends ActionContext, T>(
   request: NextRequest,
   input: T,
@@ -57,11 +150,13 @@ function appRoute<
   action: Action<I, O, S>,
   opts?: {
     contextProvider?: ContextProvider<C, I>;
+    streamManager?: StreamManager;
   }
 ) {
   return async (req: NextRequest): Promise<NextResponse> => {
     let context: C = {} as C;
     const { data: input } = await req.json();
+    const streamId = req.headers.get('x-genkit-stream-id');
     if (req.headers.get('accept') !== 'text/event-stream') {
       try {
         context = await getContext(req, input, opts?.contextProvider);
@@ -77,7 +172,11 @@ function appRoute<
           context,
           abortSignal: req.signal,
         });
-        return NextResponse.json({ result: resp.result });
+        const response = NextResponse.json({ result: resp.result });
+        if (opts?.streamManager && streamId) {
+          response.headers.set('x-genkit-stream-id', streamId);
+        }
+        return response;
       } catch (e) {
         // For security reasons, log the error rather than responding with it.
         console.error('Error calling action:', e);
@@ -97,10 +196,15 @@ function appRoute<
         { status: getHttpStatus(e) }
       );
     }
-    const { output, stream } = action.stream(input, {
-      context,
-      abortSignal: req.signal,
-    });
+    const streamManager = opts?.streamManager;
+    if (streamManager && streamId) {
+      const response = await subscribeToStream(streamManager, streamId);
+      if (response) {
+        return response;
+      }
+    }
+
+    const streamIdToUse = randomUUID();
     const encoder = new TextEncoder();
     const { readable, writable } = new TransformStream();
 
@@ -110,41 +214,72 @@ function appRoute<
     // timeouts.
     (async (): Promise<void> => {
       const writer = writable.getWriter();
+      const taskQueue = new AsyncTaskQueue();
+      let durableStream: ActionStreamInput<S, O> | undefined = undefined;
+      if (streamManager) {
+        durableStream = await streamManager.open(streamIdToUse);
+      }
       try {
-        for await (const chunk of stream) {
-          await writer.write(
-            encoder.encode(
-              `data: ${JSON.stringify({ message: chunk })}${delimiter}`
-            )
-          );
+        const output = action.run(input, {
+          context,
+          abortSignal: req.signal,
+          onChunk: (chunk) => {
+            if (durableStream) {
+              taskQueue.enqueue(() => durableStream!.write(chunk));
+            }
+            taskQueue.enqueue(() =>
+              writer.write(
+                encoder.encode(
+                  `data: ${JSON.stringify({ message: chunk })}${delimiter}`
+                )
+              )
+            );
+          },
+        });
+        const finalOutput = await output;
+        if (durableStream) {
+          taskQueue.enqueue(() => durableStream!.done(finalOutput.result));
         }
-        await writer.write(
-          encoder.encode(
-            `data: ${JSON.stringify({ result: await output })}${delimiter}`
+        taskQueue.enqueue(() =>
+          writer.write(
+            encoder.encode(
+              `data: ${JSON.stringify({ result: finalOutput.result })}${delimiter}`
+            )
           )
         );
-        await writer.write(encoder.encode('END'));
+        taskQueue.enqueue(() => writer.write(encoder.encode('END')));
       } catch (err) {
+        if (durableStream) {
+          taskQueue.enqueue(() => durableStream!.error(err));
+        }
         console.error('Error streaming action:', err);
-        await writer.write(
-          encoder.encode(
-            `error: ${JSON.stringify(getCallableJSON(err))}` + '\n\n'
+        taskQueue.enqueue(() =>
+          writer.write(
+            encoder.encode(
+              `error: ${JSON.stringify(getCallableJSON(err))}` + '\n\n'
+            )
           )
         );
-        await writer.write(encoder.encode('END'));
+        taskQueue.enqueue(() => writer.write(encoder.encode('END')));
       } finally {
+        await taskQueue.merge();
         await writer.close();
       }
     })();
 
+    const headers = {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+    };
+    if (streamManager) {
+      headers['x-genkit-stream-id'] = streamIdToUse;
+    }
+
     return new NextResponse(readable, {
       status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'Transfer-Encoding': 'chunked',
-      },
+      headers,
     });
   };
 }

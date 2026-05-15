@@ -33,7 +33,7 @@ const CustomerNameSchema = z.object({
 const simpleGreetingPrompt = ai.definePrompt(
   {
     name: 'simpleGreeting',
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     input: { schema: CustomerNameSchema },
     output: {
       format: 'text',
@@ -68,7 +68,7 @@ const CustomerTimeAndHistorySchema = z.object({
 const greetingWithHistoryPrompt = ai.definePrompt(
   {
     name: 'greetingWithHistory',
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     input: { schema: CustomerTimeAndHistorySchema },
     output: {
       format: 'text',

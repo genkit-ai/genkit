@@ -33,10 +33,15 @@ import {
   ImagenPrediction,
   SafetySetting,
 } from '../common/types.js';
+import { extractMediaArray } from '../common/utils.js';
 import { SafetySettingsSchema } from './gemini.js';
-import { ImagenConfigSchemaType } from './imagen.js';
+import {
+  ImagenConfigSchemaType,
+  ImagenTryOnConfigSchemaType,
+} from './imagen.js';
 import { LyriaConfigSchemaType } from './lyria.js';
 import {
+  ClientOptions,
   LyriaInstance,
   LyriaParameters,
   LyriaPredictRequest,
@@ -90,12 +95,85 @@ export function toGeminiLabels(
   return newLabels;
 }
 
-export function toImagenPredictRequest(
-  request: GenerateRequest<ImagenConfigSchemaType>
+export function toImagenMedia(media: MediaPart['media']): {
+  bytesBase64Encoded?: string;
+  gcsUri?: string;
+} {
+  if (media.url.startsWith('data:')) {
+    return {
+      bytesBase64Encoded: media.url?.split(',')[1],
+    };
+  } else if (media.url.startsWith('gs://')) {
+    return {
+      gcsUri: media.url,
+    };
+  } else if (media.url.startsWith('http')) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        'Imagen does not support http(s) URIs. Please specify a Cloud Storage URI.',
+    });
+  } else {
+    // Assume it's a non-prefixed data url
+    return {
+      bytesBase64Encoded: media.url,
+    };
+  }
+}
+
+export function toImagenTryOnRequest(
+  request: GenerateRequest<ImagenTryOnConfigSchemaType>
 ): ImagenPredictRequest {
+  const { ...parameters } = request.config || {};
+
+  const instance: ImagenInstance = {};
+  const personImageMedia = extractMedia(request, {
+    metadataType: 'personImage',
+  });
+  if (personImageMedia) {
+    instance.personImage = {
+      image: toImagenMedia(personImageMedia),
+    };
+  }
+
+  const productImagesMedia = extractMediaArray(request, {
+    metadataType: 'productImage',
+  });
+  if (productImagesMedia) {
+    instance.productImages = productImagesMedia.map((media) => ({
+      image: toImagenMedia(media.media),
+    }));
+  }
+
   return {
-    instances: toImagenInstances(request),
-    parameters: toImagenParameters(request),
+    instances: [instance],
+    parameters,
+  };
+}
+
+export function toImagenPredictRequest(
+  request: GenerateRequest<ImagenConfigSchemaType | ImagenTryOnConfigSchemaType>
+): ImagenPredictRequest {
+  const hasTryOnMedia = request.messages.some((m) =>
+    m.content.some(
+      (p) =>
+        p.metadata &&
+        (p.metadata.type === 'personImage' ||
+          p.metadata.type === 'productImage')
+    )
+  );
+  if (hasTryOnMedia) {
+    return toImagenTryOnRequest(
+      request as GenerateRequest<ImagenTryOnConfigSchemaType>
+    );
+  }
+  return {
+    instances: toImagenInstances(
+      request as GenerateRequest<ImagenConfigSchemaType>
+    ),
+    parameters: toImagenParameters(
+      request as GenerateRequest<ImagenConfigSchemaType>
+    ),
   };
 }
 
@@ -139,7 +217,9 @@ function toImagenParameters(
   };
 
   for (const k in params) {
-    if (!params[k]) delete params[k];
+    if (params[k] === undefined || params[k] === null) {
+      delete params[k];
+    }
   }
 
   return params;
@@ -267,10 +347,23 @@ function toVeoInstances(
   let instance: VeoInstance = {
     prompt: extractText(request),
   };
-  const supportedImageTypes = ['image/jpeg', 'image/png'];
-  const supportedVideoTypes = ['video/mp4'];
 
-  const imageMedia = extractMedia(request, { metadataType: 'image' });
+  const supportedImageTypes = ['image/jpeg', 'image/png', 'image/webp'];
+  const supportedVideoTypes = [
+    'video/mov',
+    'video/mpeg',
+    'video/mp4',
+    'video/mpg',
+    'video/avi',
+    'video/wmv',
+    'video/mpegps',
+    'video/flv',
+  ];
+
+  const imageMedia = extractMedia(request, {
+    metadataType: 'image',
+    isDefault: true,
+  });
   if (imageMedia) {
     checkSupportedMimeType(imageMedia, supportedImageTypes);
     instance.image = toVeoMedia(imageMedia);
@@ -287,6 +380,17 @@ function toVeoInstances(
     checkSupportedMimeType(videoMedia, supportedVideoTypes);
     instance.video = toVeoMedia(videoMedia);
   }
+
+  const referenceImages = extractMediaArray(request, {
+    metadataType: 'referenceImages',
+  });
+  if (referenceImages) {
+    instance.referenceImages = referenceImages.map((refImage) => ({
+      image: toVeoMedia(refImage.media),
+      referenceType: refImage.metadata?.referenceType as string,
+    }));
+  }
+
   return [instance];
 }
 
@@ -336,6 +440,11 @@ export function fromVeoOperation(
   if (fromOp.error) {
     toOp.error = { message: fromOp.error.message };
   }
+  if (fromOp.clientOptions) {
+    toOp.metadata = {
+      clientOptions: fromOp.clientOptions,
+    };
+  }
 
   if (fromOp.response) {
     toOp.output = {
@@ -380,4 +489,11 @@ export function toVeoOperationRequest(
   return {
     operationName: op.id,
   };
+}
+
+export function toVeoClientOptions(
+  op: Operation<GenerateResponseData>,
+  clientOpt: ClientOptions
+): ClientOptions {
+  return op.metadata?.clientOptions ?? clientOpt;
 }

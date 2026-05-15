@@ -8,7 +8,7 @@ replace github.com/firebase/genkit/go => ../../../
 
 require (
 	github.com/firebase/genkit/go v0.0.0-00010101000000-000000000000
-	google.golang.org/genai v1.24.0
+	google.golang.org/genai v1.41.0
 )
 
 require (
@@ -43,7 +43,7 @@ require (
 	github.com/goccy/go-yaml v1.17.1 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/dotprompt/go v0.0.0-20250611200215-bb73406b05ca // indirect
+	github.com/google/dotprompt/go v0.0.0-20251014011017-8d056e027254 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect

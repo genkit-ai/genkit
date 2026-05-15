@@ -69,10 +69,6 @@ cd js/plugins/google-cloud
 pnpm publish --provenance=false --tag $RELEASE_TAG --publish-branch $RELEASE_BRANCH --registry https://wombat-dressing-room.appspot.com
 cd $CURRENT
 
-cd js/plugins/googleai
-pnpm publish --provenance=false --tag $RELEASE_TAG --publish-branch $RELEASE_BRANCH --registry https://wombat-dressing-room.appspot.com
-cd $CURRENT
-
 cd js/plugins/ollama
 pnpm publish --provenance=false --tag $RELEASE_TAG --publish-branch $RELEASE_BRANCH --registry https://wombat-dressing-room.appspot.com
 cd $CURRENT

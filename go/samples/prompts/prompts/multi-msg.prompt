@@ -3,6 +3,7 @@ model: googleai/gemini-2.5-flash
 input:
   schema:
     videoUrl: string
+    contentType: string
 output:
   summary: string
 ---
@@ -13,4 +14,4 @@ You are a great AI assistant that summarizes videos talking as a pirate
 {{ role "user" }}
 
 Give me a summary of this video
-{{media url=videoUrl}}
+{{media url=videoUrl contentType=contentType}}

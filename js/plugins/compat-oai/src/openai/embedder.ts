@@ -31,7 +31,7 @@ const COMMON_EMBEDDER_INFO: EmbedderInfo = {
   },
 };
 
-function commonRef(
+function openAIEmbedderRef(
   name: string,
   info?: EmbedderInfo
 ): EmbedderReference<typeof TextEmbeddingConfigSchema> {
@@ -47,9 +47,9 @@ function commonRef(
 }
 
 export const SUPPORTED_EMBEDDING_MODELS = {
-  'text-embedding-3-small': commonRef('openai/text-embedding-3-small'),
-  'text-embedding-3-large': commonRef('openai/text-embedding-3-large', {
+  'text-embedding-3-small': openAIEmbedderRef('text-embedding-3-small'),
+  'text-embedding-3-large': openAIEmbedderRef('text-embedding-3-large', {
     dimensions: 3072,
   }),
-  'text-embedding-ada-002': commonRef('openai/text-embedding-ada-002'),
+  'text-embedding-ada-002': openAIEmbedderRef('text-embedding-ada-002'),
 };

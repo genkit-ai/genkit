@@ -26,6 +26,7 @@ const MULTIMODAL_MODEL_INFO: ModelInfo = {
     media: true,
     systemRole: true,
     output: ['text', 'json'],
+    constrained: 'all',
   },
 };
 
@@ -50,25 +51,25 @@ export function openAIModelRef(params: {
 }
 
 const gpt45 = openAIModelRef({
-  name: 'openai/gpt-4.5',
+  name: 'gpt-4.5',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt45Preview = openAIModelRef({
-  name: 'openai/gpt-4.5-preview',
+  name: 'gpt-4.5-preview',
   info: MULTIMODAL_MODEL_INFO,
 });
 
 const gpt4o = openAIModelRef({
-  name: 'openai/gpt-4o',
+  name: 'gpt-4o',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt4o20240513 = openAIModelRef({
-  name: 'openai/gpt-4o-2024-05-13',
+  name: 'gpt-4o-2024-05-13',
   info: MULTIMODAL_MODEL_INFO,
 });
 
 const o1 = openAIModelRef({
-  name: 'openai/o1',
+  name: 'o1',
   info: {
     supports: {
       multiturn: true,
@@ -81,7 +82,7 @@ const o1 = openAIModelRef({
 });
 
 const o3 = openAIModelRef({
-  name: 'openai/o3',
+  name: 'o3',
   info: {
     supports: {
       multiturn: true,
@@ -94,7 +95,7 @@ const o3 = openAIModelRef({
 });
 
 const o3Mini = openAIModelRef({
-  name: 'openai/o3-mini',
+  name: 'o3-mini',
   info: {
     supports: {
       multiturn: true,
@@ -107,7 +108,7 @@ const o3Mini = openAIModelRef({
 });
 
 const o4Mini = openAIModelRef({
-  name: 'openai/o4-mini',
+  name: 'o4-mini',
   info: {
     supports: {
       multiturn: true,
@@ -120,32 +121,32 @@ const o4Mini = openAIModelRef({
 });
 
 const gpt4oMini = openAIModelRef({
-  name: 'openai/gpt-4o-mini',
+  name: 'gpt-4o-mini',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt4oMini20240718 = openAIModelRef({
-  name: 'openai/gpt-4o-mini-2024-07-18',
+  name: 'gpt-4o-mini-2024-07-18',
   info: MULTIMODAL_MODEL_INFO,
 });
 
 const gpt4Turbo = openAIModelRef({
-  name: 'openai/gpt-4-turbo',
+  name: 'gpt-4-turbo',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt4Turbo20240409 = openAIModelRef({
-  name: 'openai/gpt-4-turbo-2024-04-09',
+  name: 'gpt-4-turbo-2024-04-09',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt4TurboPreview = openAIModelRef({
-  name: 'openai/gpt-4-turbo-preview',
+  name: 'gpt-4-turbo-preview',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt40125Preview = openAIModelRef({
-  name: 'openai/gpt-4-0125-preview',
+  name: 'gpt-4-0125-preview',
   info: MULTIMODAL_MODEL_INFO,
 });
 const gpt41106Preview = openAIModelRef({
-  name: 'openai/gpt-4-1106-preview',
+  name: 'gpt-4-1106-preview',
   info: MULTIMODAL_MODEL_INFO,
 });
 
@@ -159,15 +160,15 @@ const GPT_4_VISION_MODEL_INFO: ModelInfo = {
   },
 };
 const gpt4Vision = openAIModelRef({
-  name: 'openai/gpt-4-vision',
+  name: 'gpt-4-vision',
   info: GPT_4_VISION_MODEL_INFO,
 });
 const gpt4VisionPreview = openAIModelRef({
-  name: 'openai/gpt-4-vision-preview',
+  name: 'gpt-4-vision-preview',
   info: GPT_4_VISION_MODEL_INFO,
 });
 const gpt41106VisionPreview = openAIModelRef({
-  name: 'openai/gpt-4-1106-vision-preview',
+  name: 'gpt-4-1106-vision-preview',
   info: GPT_4_VISION_MODEL_INFO,
 });
 
@@ -180,17 +181,17 @@ const GPT_4_MODEL_INFO: ModelInfo = {
     output: ['text'],
   },
 };
-const gpt4 = openAIModelRef({ name: 'openai/gpt-4', info: GPT_4_MODEL_INFO });
+const gpt4 = openAIModelRef({ name: 'gpt-4', info: GPT_4_MODEL_INFO });
 const gpt40613 = openAIModelRef({
-  name: 'openai/gpt-4-0613',
+  name: 'gpt-4-0613',
   info: GPT_4_MODEL_INFO,
 });
 const gpt432k = openAIModelRef({
-  name: 'openai/gpt-4-32k',
+  name: 'gpt-4-32k',
   info: GPT_4_MODEL_INFO,
 });
 const gpt432k0613 = openAIModelRef({
-  name: 'openai/gpt-4-32k-0613',
+  name: 'gpt-4-32k-0613',
   info: GPT_4_MODEL_INFO,
 });
 
@@ -204,15 +205,15 @@ const GPT_35_MODEL_INFO: ModelInfo = {
   },
 };
 const gpt35Turbo = openAIModelRef({
-  name: 'openai/gpt-3.5-turbo',
+  name: 'gpt-3.5-turbo',
   info: GPT_35_MODEL_INFO,
 });
 const gpt35Turbo0125 = openAIModelRef({
-  name: 'openai/gpt-3.5-turbo-0125',
+  name: 'gpt-3.5-turbo-0125',
   info: GPT_35_MODEL_INFO,
 });
 const gpt35Turbo1106 = openAIModelRef({
-  name: 'openai/gpt-3.5-turbo-1106',
+  name: 'gpt-3.5-turbo-1106',
   info: GPT_35_MODEL_INFO,
 });
 
@@ -226,19 +227,19 @@ const GPT_5_MODEL_INFO: ModelInfo = {
   },
 };
 const gpt5 = openAIModelRef({
-  name: 'openai/gpt-5',
+  name: 'gpt-5',
   info: GPT_5_MODEL_INFO,
 });
 const gpt5Mini = openAIModelRef({
-  name: 'openai/gpt-5-mini',
+  name: 'gpt-5-mini',
   info: GPT_5_MODEL_INFO,
 });
 const gpt5Nano = openAIModelRef({
-  name: 'openai/gpt-5-nano',
+  name: 'gpt-5-nano',
   info: GPT_5_MODEL_INFO,
 });
 const gpt5ChatLatest = openAIModelRef({
-  name: 'openai/gpt-5-chat-latest',
+  name: 'gpt-5-chat-latest',
   info: {
     supports: {
       ...GPT_5_MODEL_INFO.supports,
@@ -246,6 +247,10 @@ const gpt5ChatLatest = openAIModelRef({
       output: ['text'],
     },
   },
+});
+const gpt5_1 = openAIModelRef({
+  name: 'gpt-5.1',
+  info: GPT_5_MODEL_INFO,
 });
 
 export const SUPPORTED_GPT_MODELS = {
@@ -278,4 +283,5 @@ export const SUPPORTED_GPT_MODELS = {
   'gpt-5-mini': gpt5Mini,
   'gpt-5-nano': gpt5Nano,
   'gpt-5-chat-latest': gpt5ChatLatest,
+  'gpt-5.1': gpt5_1,
 } as const;

@@ -42,6 +42,19 @@ var (
 	outputDir  = flag.String("outdir", "", "directory to write to, or '-' for stdout")
 	noFormat   = flag.Bool("nofmt", false, "do not format output")
 	configFile = flag.String("config", "", "config filename")
+
+	// fieldOmitEmptyTag maps schemas (e.g., "ModelResponseChunk") to fields (e.g., "index")
+	// that should not receive the `omitempty` JSON tag.
+	fieldOmitEmptyTag = map[string]map[string]struct{}{
+		"ModelResponseChunk": {
+			"index": {}, // fields should be as defined in core/schemas.config
+		},
+		"Operation": {
+			"action": {},
+			"done":   {},
+			"id":     {},
+		},
+	}
 )
 
 func main() {
@@ -210,6 +223,11 @@ func adjustAdditionalProperties(x any) {
 					}
 				}
 			}
+			if k == "properties" {
+				if pm, ok := v.(map[string]any); ok && len(pm) == 0 {
+					delete(m, k)
+				}
+			}
 			// TODO: Fix this - causing schemagen issues
 			if k == "uniqueItems" {
 				delete(m, k)
@@ -241,7 +259,6 @@ func nameAnonymousTypes(schemas map[string]*Schema) {
 				nameFields(prefix+fname, fs.Properties)
 			}
 		}
-
 	}
 	for typeName, ts := range schemas {
 		nameFields(typeName, ts.Properties)
@@ -349,6 +366,19 @@ func (g *generator) generateType(name string) (err error) {
 
 	switch typ {
 	case "object": // a JSONSchema object corresponds to a Go struct
+		if s.Properties == nil && s.AdditionalProperties != nil {
+			typ, err := g.typeExpr(s)
+			if err != nil {
+				return err
+			}
+			g.generateDoc(s, tcfg)
+			goName := tcfg.name
+			if goName == "" {
+				goName = adjustIdentifier(name)
+			}
+			g.pr("type %s %s\n\n", goName, typ)
+			return nil
+		}
 		if err := g.generateStruct(name, s, tcfg); err != nil {
 			return err
 		}
@@ -407,11 +437,33 @@ func (g *generator) generateStruct(name string, s *Schema, tcfg *itemConfig) err
 			}
 		}
 		g.generateDoc(fs, fcfg)
+
 		jsonTag := fmt.Sprintf(`json:"%s,omitempty"`, field)
-		g.pr(fmt.Sprintf("  %s %s `%s`\n", adjustIdentifier(field), typeExpr, jsonTag))
+		if skipOmitEmpty(goName, field) {
+			jsonTag = fmt.Sprintf(`json:"%s"`, field)
+		}
+		fieldName := fcfg.name
+		if fieldName == "" {
+			fieldName = adjustIdentifier(field)
+		}
+		g.pr("  %s %s `%s`\n", fieldName, typeExpr, jsonTag)
+	}
+	for _, f := range tcfg.fields {
+		g.pr("  %s %s\n", f.name, f.typeExpr)
 	}
 	g.pr("}\n\n")
 	return nil
+}
+
+// skipOmitEmpty determines whether a schema field should include the
+// `omitempty` JSON tag
+func skipOmitEmpty(schema, field string) bool {
+	fields, ok := fieldOmitEmptyTag[schema]
+	if !ok {
+		return false
+	}
+	_, ok = fields[field]
+	return ok
 }
 
 func (g *generator) generateStringEnum(name string, s *Schema, tcfg *itemConfig) error {
@@ -454,14 +506,21 @@ func (g *generator) generateDoc(s *Schema, ic *itemConfig) {
 // typeExpr returns a Go type expression denoting the type represented by the schema.
 func (g *generator) typeExpr(s *Schema) (string, error) {
 	// A reference to another type refers to that type by name. Use the name.
+	if s == nil {
+		return "any", nil
+	}
 	if s.Ref != "" {
-		name, ok := strings.CutPrefix(s.Ref, refPrefix)
-		if !ok {
-			return "", fmt.Errorf("ref %q does not begin with prefix %q", s.Ref, refPrefix)
+		s2, name, err := g.resolveRef(s.Ref)
+		if err != nil {
+			return "", err
+		}
+		// Nested refs (e.g. "#/$defs/Foo/properties/bar") don't correspond to a
+		// generated Go type; inline the resolved sub-schema's type instead.
+		if strings.Count(s.Ref, "/") > 2 {
+			return g.typeExpr(s2)
 		}
 		ic := g.cfg.configFor(name)
-		s2, ok := g.schemas[name]
-		if !ok {
+		if s2 == nil {
 			// If there is no schema, perhaps there is a config value.
 			if ic != nil && ic.name != "" {
 				return ic.name, nil
@@ -469,7 +528,7 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 			return "", fmt.Errorf("unknown type in reference: %q", name)
 		}
 		// Apply a config that changes the name.
-		if ic := g.cfg.configFor(name); ic != nil && ic.name != "" {
+		if ic != nil && ic.name != "" {
 			name = ic.name
 		}
 		if s2.Enum != nil {
@@ -528,6 +587,42 @@ func (g *generator) typeExpr(s *Schema) (string, error) {
 	}
 }
 
+// resolveRef resolves a JSON schema reference.
+// It handles simple references like "#/$defs/Action" and nested ones like
+// "#/$defs/ActionMetadata/properties/inputJsonSchema".
+func (g *generator) resolveRef(ref string) (*Schema, string, error) {
+	name, ok := strings.CutPrefix(ref, refPrefix)
+	if !ok {
+		return nil, "", fmt.Errorf("ref %q does not begin with prefix %q", ref, refPrefix)
+	}
+	parts := strings.Split(name, "/")
+	s, ok := g.schemas[parts[0]]
+	if !ok {
+		return nil, "", fmt.Errorf("unknown type in reference: %q", parts[0])
+	}
+	for i := 1; i < len(parts); i++ {
+		switch parts[i] {
+		case "properties":
+			if i+1 >= len(parts) {
+				return nil, "", fmt.Errorf("invalid ref (ends in properties): %q", ref)
+			}
+			s = s.Properties[parts[i+1]]
+			i++
+		case "additionalProperties":
+			s = s.AdditionalProperties
+		case "items":
+			s = s.Items
+		default:
+			return nil, "", fmt.Errorf("cannot handle ref segment %q in %q", parts[i], ref)
+		}
+		if s == nil {
+			return nil, "", fmt.Errorf("ref path not found: %q", ref)
+		}
+	}
+	// The caller mostly cares about the direct name in $defs (parts[0]).
+	return s, parts[0], nil
+}
+
 // adjustIdentifier returns name with the first letter capitalized
 // so it is exported, and makes other idiomatic Go adjustments.
 func adjustIdentifier(name string) string {
@@ -580,6 +675,13 @@ type itemConfig struct {
 	pkgPath  string
 	typeExpr string
 	docLines []string
+	fields   []extraField
+}
+
+// extraField represents an additional unexported field to add to a struct.
+type extraField struct {
+	name     string
+	typeExpr string
 }
 
 // parseConfigFile parses the config file.
@@ -602,6 +704,8 @@ type itemConfig struct {
 //	    package path, relative to outdir (last component is package name)
 //	import
 //	    path of package to import (for packages only)
+//	field NAME TYPE
+//	    add an unexported field to the struct (for types only)
 func parseConfigFile(filename string) (config, error) {
 	c := config{
 		itemConfigs: map[string]*itemConfig{},
@@ -667,6 +771,11 @@ func parseConfigFile(filename string) (config, error) {
 				return errf("need NAME import PATH")
 			}
 			ic.pkgPath = words[2]
+		case "field":
+			if len(words) < 4 {
+				return errf("need NAME field FIELDNAME TYPE")
+			}
+			ic.fields = append(ic.fields, extraField{name: words[2], typeExpr: words[3]})
 		default:
 			return errf("unknown directive %q", words[1])
 		}

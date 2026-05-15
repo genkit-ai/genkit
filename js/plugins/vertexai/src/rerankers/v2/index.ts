@@ -24,8 +24,8 @@ import { ActionType } from 'genkit/registry';
 import { RerankerReference, z } from 'genkit';
 import { getDerivedOptions } from '../../common/utils.js';
 import * as reranker from './reranker.js';
-import { VertexRerankerPluginOptions } from './types.js';
-export { VertexRerankerPluginOptions };
+import { type VertexRerankerPluginOptions } from './types.js';
+export { type VertexRerankerPluginOptions };
 
 async function initializer(pluginOptions: VertexRerankerPluginOptions) {
   const clientOptions = await getDerivedOptions(

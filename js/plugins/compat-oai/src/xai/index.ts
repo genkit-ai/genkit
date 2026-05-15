@@ -22,7 +22,7 @@ import {
   z,
 } from 'genkit';
 import { logger } from 'genkit/logging';
-import { GenkitPluginV2, ResolvableAction } from 'genkit/plugin';
+import { ResolvableAction, type GenkitPluginV2 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import {
@@ -41,24 +41,23 @@ import {
 
 export type XAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-const resolver = async (
-  client: OpenAI,
-  actionType: ActionType,
-  actionName: string
-) => {
-  if (actionType === 'model') {
-    const modelRef = xaiModelRef({ name: actionName });
-    return defineCompatOpenAIModel({
-      name: modelRef.name,
-      client,
-      modelRef,
-      requestBuilder: grokRequestBuilder,
-    });
-  } else {
-    logger.warn('Only model actions are supported by the XAI plugin');
-  }
-  return undefined;
-};
+function createResolver(pluginOptions: PluginOptions) {
+  return async (client: OpenAI, actionType: ActionType, actionName: string) => {
+    if (actionType === 'model') {
+      const modelRef = xaiModelRef({ name: actionName });
+      return defineCompatOpenAIModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+        requestBuilder: grokRequestBuilder,
+      });
+    } else {
+      logger.warn('Only model actions are supported by the XAI plugin');
+    }
+    return undefined;
+  };
+}
 
 const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
   return await client.models.list().then((response) =>
@@ -97,6 +96,7 @@ export function xAIPlugin(options?: XAIPluginOptions): GenkitPluginV2 {
         'Please pass in the API key or set the XAI_API_KEY environment variable.',
     });
   }
+  const pluginOptions = { name: 'xai', ...options };
   return openAICompatible({
     name: 'xai',
     baseURL: 'https://api.x.ai/v1',
@@ -109,6 +109,7 @@ export function xAIPlugin(options?: XAIPluginOptions): GenkitPluginV2 {
           defineCompatOpenAIModel({
             name: modelRef.name,
             client,
+            pluginOptions,
             modelRef,
             requestBuilder: grokRequestBuilder,
           })
@@ -119,13 +120,14 @@ export function xAIPlugin(options?: XAIPluginOptions): GenkitPluginV2 {
           defineCompatOpenAIImageModel({
             name: modelRef.name,
             client,
+            pluginOptions,
             modelRef,
           })
         )
       );
       return models;
     },
-    resolver,
+    resolver: createResolver(pluginOptions),
     listActions,
   });
 }
@@ -148,7 +150,6 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
     return xaiImageModelRef({
       name,
       config,
-      namespace: 'xai',
     });
   }
   return xaiModelRef({
@@ -172,7 +173,7 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
  *
  * Usage: To use the models, initialize the xAI plugin inside
  * `configureGenkit` and pass the configuration options. If no API key is
- * provided in the options, the environment variable `OPENAI_API_KEY` must be
+ * provided in the options, the environment variable `XAI_API_KEY` must be
  * set.
  *
  * Example:

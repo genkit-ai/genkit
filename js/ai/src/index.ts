@@ -14,14 +14,9 @@
  * limitations under the License.
  */
 
+export { cancelOperation } from './cancel-operation.js';
 export { checkOperation } from './check-operation.js';
-export {
-  Document,
-  DocumentDataSchema,
-  type DocumentData,
-  type ToolRequest,
-  type ToolResponse,
-} from './document.js';
+export { Document, DocumentDataSchema, type DocumentData } from './document.js';
 export {
   embed,
   embedderActionMetadata,
@@ -61,11 +56,21 @@ export {
   type ResumeOptions,
   type ToolChoice,
 } from './generate.js';
+export {
+  MiddlewareDescSchema,
+  generateMiddleware,
+  type GenerateMiddleware,
+  type GenerateMiddlewareDef,
+  type MiddlewareDesc,
+} from './generate/middleware.js';
+export { GenkitAI } from './genkit-ai.js';
 export { Message } from './message.js';
 export {
   GenerateResponseChunkSchema,
   GenerationCommonConfigSchema,
   MessageSchema,
+  MiddlewareRefSchema,
+  ModelReferenceSchema,
   ModelRequestSchema,
   ModelResponseSchema,
   PartSchema,
@@ -79,6 +84,7 @@ export {
   type GenerationUsage,
   type MediaPart,
   type MessageData,
+  type MiddlewareRef,
   type ModelArgument,
   type ModelReference,
   type ModelRequest,
@@ -88,6 +94,8 @@ export {
   type ToolRequestPart,
   type ToolResponsePart,
 } from './model.js';
+export { type ToolRequest, type ToolResponse } from './parts.js';
+export { type GenkitPluginV2 } from './plugin.js';
 export {
   defineHelper,
   definePartial,
@@ -146,7 +154,10 @@ export {
   defineInterrupt,
   defineTool,
   interrupt,
+  respondTool,
+  restartTool,
   type InterruptConfig,
+  type MultipartToolAction,
   type ToolAction,
   type ToolArgument,
   type ToolConfig,

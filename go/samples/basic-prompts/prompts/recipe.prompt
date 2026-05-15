@@ -1,0 +1,20 @@
+---
+model: googleai/gemini-2.5-flash
+config:
+  thinkingConfig:
+    thinkingBudget: 0
+input:
+  schema: RecipeRequest
+output:
+  format: json
+  schema: Recipe
+---
+{{role "system"}}
+You are an experienced chef. Come up with easy, creative recipes.
+
+{{role "user"}}
+Create a {{cuisine}} {{dish}} recipe for {{servingSize}} people that takes under {{maxPrepMinutes}} minutes to prepare.
+{{#if dietaryRestrictions}}
+Dietary restrictions: {{#each dietaryRestrictions}}{{this}}{{#unless @last}}, {{/unless}}{{/each}}.
+{{/if}}
+

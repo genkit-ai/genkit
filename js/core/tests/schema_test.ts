@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+import Ajv from 'ajv';
 import * as assert from 'assert';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it, mock } from 'node:test';
 
+import { setGenkitRuntimeConfig } from '../src/config.js';
 import {
   ValidationError,
   parseSchema,
@@ -160,5 +162,102 @@ describe('toJsonSchema', () => {
         type: 'object',
       }
     );
+  });
+});
+
+describe('disableSchemaCodeGeneration()', () => {
+  let compileMock: any;
+
+  function disableSchemaCodeGeneration() {
+    setGenkitRuntimeConfig({
+      jsonSchemaMode: 'interpret',
+    });
+  }
+
+  afterEach(() => {
+    setGenkitRuntimeConfig({
+      jsonSchemaMode: undefined,
+    });
+    if (compileMock) {
+      compileMock.mock.restore();
+      compileMock = undefined;
+    }
+  });
+
+  it('should validate using cfworker validator', () => {
+    compileMock = mock.method(Ajv.prototype, 'compile');
+
+    disableSchemaCodeGeneration();
+    const result = validateSchema(
+      { foo: 123 },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: { foo: { type: 'boolean' } },
+        },
+      }
+    );
+
+    assert.strictEqual(result.valid, false);
+    const errorAtFoo = result.errors?.find((e) => e.path === 'foo');
+    assert.ok(errorAtFoo, 'Should have error at foo');
+    assert.strictEqual(compileMock.mock.callCount(), 0);
+  });
+
+  it('should strip undefined values before validating', () => {
+    disableSchemaCodeGeneration();
+    const result = validateSchema(
+      { foo: 'hello', bar: undefined },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: { foo: { type: 'string' }, bar: { type: 'string' } },
+          required: ['foo'],
+        },
+      }
+    );
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('should strip undefined values recursively', () => {
+    disableSchemaCodeGeneration();
+    const result = validateSchema(
+      { wrapper: { inner: 'hello', ignored: undefined } },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: {
+            wrapper: {
+              type: 'object',
+              properties: { inner: { type: 'string' } },
+            },
+          },
+        },
+      }
+    );
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('should strip undefined values in objects inside arrays', () => {
+    disableSchemaCodeGeneration();
+    const result = validateSchema(
+      { items: [{ name: 'item1', desc: undefined }, { name: 'item2' }] },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+                required: ['name'],
+              },
+            },
+          },
+        },
+      }
+    );
+    assert.strictEqual(result.valid, true);
   });
 });

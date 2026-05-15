@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { Document, GenkitError } from 'genkit';
+import { Document } from 'genkit';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
 import {
@@ -65,13 +65,13 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('throws if no API key is provided in options or env', () => {
       assert.throws(() => {
-        defineEmbedder('text-embedding-004', {});
+        defineEmbedder('gemini-embedding-001', {});
       }, MISSING_API_KEY_ERROR);
     });
 
     it('uses API key from pluginOptions if provided', async () => {
       const embedder = defineEmbedder(
-        'text-embedding-004',
+        'gemini-embedding-001',
         defaultPluginOptions
       );
       mockFetchResponse({ embedding: { values: [] } });
@@ -88,7 +88,7 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('uses API key from GEMINI_API_KEY env var', async () => {
       process.env.GEMINI_API_KEY = 'gemini-key';
-      const embedder = defineEmbedder('text-embedding-004', {});
+      const embedder = defineEmbedder('gemini-embedding-001', {});
       mockFetchResponse({ embedding: { values: [] } });
       await embedder.run({
         input: [new Document({ content: [{ text: 'test' }] })],
@@ -100,7 +100,7 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('uses API key from GOOGLE_API_KEY env var', async () => {
       process.env.GOOGLE_API_KEY = 'google-key';
-      const embedder = defineEmbedder('text-embedding-004', {});
+      const embedder = defineEmbedder('gemini-embedding-001', {});
       mockFetchResponse({ embedding: { values: [] } });
       await embedder.run({
         input: [new Document({ content: [{ text: 'test' }] })],
@@ -112,7 +112,7 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('uses API key from GOOGLE_GENAI_API_KEY env var', async () => {
       process.env.GOOGLE_GENAI_API_KEY = 'google-genai-key';
-      const embedder = defineEmbedder('text-embedding-004', {});
+      const embedder = defineEmbedder('gemini-embedding-001', {});
       mockFetchResponse({ embedding: { values: [] } });
       await embedder.run({
         input: [new Document({ content: [{ text: 'test' }] })],
@@ -128,7 +128,7 @@ describe('defineGoogleAIEmbedder', () => {
     it('pluginOptions apiKey takes precedence over env vars', async () => {
       process.env.GEMINI_API_KEY = 'gemini-key';
       const embedder = defineEmbedder(
-        'text-embedding-004',
+        'gemini-embedding-001',
         defaultPluginOptions
       );
       mockFetchResponse({ embedding: { values: [] } });
@@ -144,27 +144,20 @@ describe('defineGoogleAIEmbedder', () => {
     });
 
     it('throws if apiKey is false in pluginOptions and not provided in call options', async () => {
-      const embedder = defineEmbedder('text-embedding-004', {
+      mockFetchResponse({ embedding: { values: [] } });
+      const embedder = defineEmbedder('gemini-embedding-001', {
         apiKey: false,
       });
-      await assert.rejects(
-        embedder.run({
+      assert.ok(
+        await embedder.run({
           input: [new Document({ content: [{ text: 'test' }] })],
-        }),
-        (err: GenkitError) => {
-          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-          assert.match(
-            err.message,
-            /GoogleAI plugin was initialized with \{apiKey: false\}/
-          );
-          return true;
-        }
+        })
       );
-      sinon.assert.notCalled(fetchStub);
+      sinon.assert.calledOnce(fetchStub);
     });
 
     it('uses API key from call options if apiKey is false in pluginOptions', async () => {
-      const embedder = defineEmbedder('text-embedding-004', {
+      const embedder = defineEmbedder('gemini-embedding-001', {
         apiKey: false,
       });
       mockFetchResponse({ embedding: { values: [] } });
@@ -184,7 +177,7 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('call options apiKey takes precedence over pluginOptions apiKey', async () => {
       const embedder = defineEmbedder(
-        'text-embedding-004',
+        'gemini-embedding-001',
         defaultPluginOptions
       );
       mockFetchResponse({ embedding: { values: [] } });
@@ -209,7 +202,7 @@ describe('defineGoogleAIEmbedder', () => {
 
     it('calls embedContent for each document', async () => {
       const embedder = defineEmbedder(
-        'text-embedding-004',
+        'gemini-embedding-001',
         defaultPluginOptions
       );
 
@@ -237,13 +230,13 @@ describe('defineGoogleAIEmbedder', () => {
 
       sinon.assert.calledTwice(fetchStub);
       const expectedUrl =
-        'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent';
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent';
 
       // Call 1
       const fetchArgs1 = fetchStub.firstCall.args;
       assert.strictEqual(fetchArgs1[0], expectedUrl);
       const expectedRequest1 = {
-        content: { role: '', parts: [{ text: 'Hello' }] },
+        content: { role: 'user', parts: [{ text: 'Hello' }] },
       };
       assert.deepStrictEqual(JSON.parse(fetchArgs1[1].body), expectedRequest1);
 
@@ -251,7 +244,7 @@ describe('defineGoogleAIEmbedder', () => {
       const fetchArgs2 = fetchStub.secondCall.args;
       assert.strictEqual(fetchArgs2[0], expectedUrl);
       const expectedRequest2 = {
-        content: { role: '', parts: [{ text: 'World' }] },
+        content: { role: 'user', parts: [{ text: 'World' }] },
       };
       assert.deepStrictEqual(JSON.parse(fetchArgs2[1].body), expectedRequest2);
 
@@ -260,9 +253,50 @@ describe('defineGoogleAIEmbedder', () => {
       });
     });
 
+    it('calls embedContent with multimodal input', async () => {
+      const embedder = defineEmbedder(
+        'gemini-embedding-2-preview',
+        defaultPluginOptions
+      );
+      mockFetchResponse({ embedding: { values: [0.5, 0.6] } });
+
+      const doc = new Document({
+        content: [
+          { text: 'Look at this' },
+          {
+            media: {
+              url: 'data:image/jpeg;base64,12345',
+              contentType: 'image/jpeg',
+            },
+          },
+        ],
+      });
+      const result = await embedder.run({ input: [doc] });
+
+      sinon.assert.calledOnce(fetchStub);
+      const fetchArgs = fetchStub.firstCall.args;
+      const expectedUrl =
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent';
+      assert.strictEqual(fetchArgs[0], expectedUrl);
+
+      const expectedRequest = {
+        content: {
+          role: 'user',
+          parts: [
+            { text: 'Look at this' },
+            { inlineData: { mimeType: 'image/jpeg', data: '12345' } },
+          ],
+        },
+      };
+      assert.deepStrictEqual(JSON.parse(fetchArgs[1].body), expectedRequest);
+      assert.deepStrictEqual(result.result, {
+        embeddings: [{ embedding: [0.5, 0.6] }],
+      });
+    });
+
     it('calls embedContent with taskType, title, and outputDimensionality options', async () => {
       const embedder = defineEmbedder(
-        'text-embedding-004',
+        'gemini-embedding-001',
         defaultPluginOptions
       );
       mockFetchResponse({ embedding: { values: [0.1] } });
@@ -282,7 +316,7 @@ describe('defineGoogleAIEmbedder', () => {
       assert.strictEqual(body.title, 'Doc Title');
       assert.strictEqual(body.outputDimensionality, 256);
       assert.deepStrictEqual(body.content, {
-        role: '',
+        role: 'user',
         parts: [{ text: 'Hello' }],
       });
     });

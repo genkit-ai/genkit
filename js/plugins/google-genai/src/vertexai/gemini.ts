@@ -16,6 +16,7 @@
 
 import { ActionMetadata, GenkitError, modelActionMetadata, z } from 'genkit';
 import {
+  CandidateData,
   GenerationCommonConfigDescriptions,
   GenerationCommonConfigSchema,
   ModelAction,
@@ -35,6 +36,7 @@ import {
   toGeminiSystemInstruction,
   toGeminiTool,
 } from '../common/converters.js';
+import { isKnownKey } from '../common/utils.js';
 import {
   generateContent,
   generateContentStream,
@@ -54,7 +56,7 @@ import {
   VertexPluginOptions,
 } from './types.js';
 import {
-  calculateApiKey,
+  calculateRequestOptions,
   checkModelName,
   cleanSchema,
   extractVersion,
@@ -252,6 +254,12 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .object({
       mode: z.enum(['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE']).optional(),
       allowedFunctionNames: z.array(z.string()).optional(),
+      /**
+       * When set to true, arguments of a single function call will be streamed out in
+       * multiple parts/contents/responses. Partial parameter results will be returned in the
+       * [FunctionCall.partial_args] field. This field is not supported in Gemini API.
+       */
+      streamFunctionCallArguments: z.boolean().optional(),
     })
     .describe(
       'Controls how the model uses the provided tools (function declarations). ' +
@@ -286,6 +294,14 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     })
     .passthrough()
     .optional(),
+  payGo: z
+    .enum(['priority', 'priority-only', 'flex', 'flex-only'])
+    .describe(
+      'PayGo consumption options. Priority provides more consistent performance than Standard PayGo. ' +
+        'Flex is a cost-effective option for non-critical workloads. ' +
+        'The "-only" options use only PayGo and no Provisioned Throughput.'
+    )
+    .optional(),
   thinkingConfig: z
     .object({
       includeThoughts: z
@@ -301,13 +317,21 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
         .min(0)
         .max(24576)
         .describe(
-          'Indicates the thinking budget in tokens. 0 is DISABLED. ' +
+          'For Gemini 2.5 - Indicates the thinking budget in tokens. 0 is DISABLED. ' +
             '-1 is AUTOMATIC. The default values and allowed ranges are model ' +
             'dependent. The thinking budget parameter gives the model guidance ' +
             'on the number of thinking tokens it can use when generating a ' +
             'response. A greater number of tokens is typically associated with ' +
             'more detailed thinking, which is needed for solving more complex ' +
             'tasks. '
+        )
+        .optional(),
+      thinkingLevel: z
+        .enum(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'])
+        .describe(
+          'For Gemini 3.0 - Indicates the thinking level. A higher level ' +
+            'is associated with more detailed thinking, which is needed for solving ' +
+            'more complex tasks.'
         )
         .optional(),
     })
@@ -349,8 +373,34 @@ export type GeminiConfigSchemaType = typeof GeminiConfigSchema;
  */
 export type GeminiConfig = z.infer<GeminiConfigSchemaType>;
 
+export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
+  imageConfig: z
+    .object({
+      aspectRatio: z
+        .enum([
+          '1:1',
+          '2:3',
+          '3:2',
+          '3:4',
+          '4:3',
+          '4:5',
+          '5:4',
+          '9:16',
+          '16:9',
+          '21:9',
+        ])
+        .optional(),
+      imageSize: z.enum(['512', '1K', '2K', '4K']).optional(),
+    })
+    .passthrough()
+    .optional(),
+}).passthrough();
+export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
+export type GeminiImageConfig = z.infer<GeminiImageConfigSchemaType>;
+
 // This contains all the Gemini config schema types
-type ConfigSchemaType = GeminiConfigSchemaType;
+type ConfigSchemaType = GeminiConfigSchemaType | GeminiImageConfigSchemaType;
+type ConfigSchema = z.infer<ConfigSchemaType>;
 
 function commonRef(
   name: string,
@@ -373,32 +423,82 @@ function commonRef(
   });
 }
 
-export const GENERIC_MODEL = commonRef('gemini');
+const GENERIC_MODEL = commonRef('gemini');
+const GENERIC_IMAGE_MODEL = commonRef(
+  'gemini-image',
+  undefined,
+  GeminiImageConfigSchema
+);
 
-export const KNOWN_MODELS = {
+export const KNOWN_GEMINI_MODELS = {
+  'gemini-3.1-flash-lite-preview': commonRef('gemini-3.1-flash-lite-preview'),
+  'gemini-3.1-pro-preview': commonRef('gemini-3.1-pro-preview'),
+  'gemini-3-flash-preview': commonRef('gemini-3-flash-preview'),
   'gemini-2.5-flash-lite': commonRef('gemini-2.5-flash-lite'),
   'gemini-2.5-pro': commonRef('gemini-2.5-pro'),
   'gemini-2.5-flash': commonRef('gemini-2.5-flash'),
-  'gemini-2.0-flash-001': commonRef('gemini-2.0-flash-001'),
-  'gemini-2.0-flash': commonRef('gemini-2.0-flash'),
-  'gemini-2.0-flash-lite': commonRef('gemini-2.0-flash-lite'),
-  'gemini-2.0-flash-lite-001': commonRef('gemini-2.0-flash-lite-001'),
 } as const;
-export type KnownModels = keyof typeof KNOWN_MODELS;
+export type KnownGeminiModels = keyof typeof KNOWN_GEMINI_MODELS;
 export type GeminiModelName = `gemini-${string}`;
 export function isGeminiModelName(value?: string): value is GeminiModelName {
-  return !!value?.startsWith('gemini-') && !value.includes('embedding');
+  return !!(
+    value?.startsWith('gemini-') &&
+    !value.includes('embedding') &&
+    !value.includes('-image')
+  );
 }
+
+export const KNOWN_IMAGE_MODELS = {
+  'gemini-3.1-flash-image-preview': commonRef(
+    'gemini-3.1-flash-image-preview',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
+  'gemini-3-pro-image-preview': commonRef(
+    'gemini-3-pro-image-preview',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
+  'gemini-2.5-flash-image': commonRef(
+    'gemini-2.5-flash-image',
+    undefined,
+    GeminiImageConfigSchema
+  ),
+} as const;
+export type KnownImageModels = keyof typeof KNOWN_IMAGE_MODELS;
+export type ImageModelName = `gemini-${string}-image${string}`;
+export function isImageModelName(value?: string): value is ImageModelName {
+  return !!(value?.startsWith('gemini-') && value.includes('-image'));
+}
+
+const KNOWN_MODELS = {
+  ...KNOWN_GEMINI_MODELS,
+  ...KNOWN_IMAGE_MODELS,
+};
+export type KnownModels = keyof typeof KNOWN_MODELS;
 
 export function model(
   version: string,
-  options: GeminiConfig = {}
-): ModelReference<typeof GeminiConfigSchema> {
+  config: ConfigSchema = {}
+): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    return KNOWN_MODELS[name].withConfig(config);
+  }
+
+  if (isImageModelName(name)) {
+    return modelRef({
+      name: `vertexai/${name}`,
+      config,
+      configSchema: GeminiImageConfigSchema,
+      info: { ...GENERIC_IMAGE_MODEL.info },
+    });
+  }
 
   return modelRef({
     name: `vertexai/${name}`,
-    config: options,
+    config,
     configSchema: GeminiConfigSchema,
     info: {
       ...GENERIC_MODEL.info,
@@ -417,7 +517,8 @@ export function listActions(models: Model[]): ActionMetadata[] {
   return models
     .filter(
       (m) =>
-        isGeminiModelName(modelName(m.name)) &&
+        (isGeminiModelName(modelName(m.name)) ||
+          isImageModelName(modelName(m.name))) &&
         !KNOWN_DECOMISSIONED_MODELS.includes(modelName(m.name) || '')
     )
     .map((m) => {
@@ -493,7 +594,7 @@ export function defineModel(
         systemInstruction = toGeminiSystemInstruction(systemMessage);
       }
 
-      const requestConfig = { ...request.config };
+      const requestConfig: ConfigSchema = { ...request.config };
 
       const {
         apiKey: apiKeyFromConfig,
@@ -506,43 +607,32 @@ export function defineModel(
         location,
         safetySettings,
         labels: labelsFromConfig,
+        payGo,
         ...restOfConfig
       } = requestConfig;
 
-      if (
-        location &&
-        clientOptions.kind != 'express' &&
-        clientOptions.location != location
-      ) {
-        // Override the location if it's specified in the request
-        if (location == 'global') {
-          clientOpt = {
-            kind: 'global',
-            location: 'global',
-            projectId: clientOptions.projectId,
-            authClient: clientOptions.authClient,
-            apiKey: clientOptions.apiKey,
-            signal: abortSignal,
-          };
-        } else {
-          clientOpt = {
-            kind: 'regional',
-            location,
-            projectId: clientOptions.projectId,
-            authClient: clientOptions.authClient,
-            apiKey: clientOptions.apiKey,
-            signal: abortSignal,
-          };
+      clientOpt = calculateRequestOptions(clientOpt, {
+        location,
+        apiKey: apiKeyFromConfig,
+      });
+
+      if (payGo) {
+        const payGoHeaders: Record<string, string> = {};
+        if (payGo === 'priority') {
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'priority';
+        } else if (payGo === 'priority-only') {
+          payGoHeaders['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'priority';
+        } else if (payGo === 'flex') {
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
+        } else if (payGo === 'flex-only') {
+          payGoHeaders['X-Vertex-AI-LLM-Request-Type'] = 'shared';
+          payGoHeaders['X-Vertex-AI-LLM-Shared-Request-Type'] = 'flex';
         }
-      }
-      if (clientOptions.kind == 'express') {
-        clientOpt.apiKey = calculateApiKey(
-          clientOptions.apiKey,
-          apiKeyFromConfig
-        );
-      } else if (apiKeyFromConfig) {
-        // Regional or Global can still use APIKey for billing (not auth)
-        clientOpt.apiKey = apiKeyFromConfig;
+        clientOpt.customHeaders = {
+          ...clientOpt.customHeaders,
+          ...payGoHeaders,
+        };
       }
 
       const labels = toGeminiLabels(labelsFromConfig);
@@ -558,6 +648,7 @@ export function defineModel(
       if (functionCallingConfig) {
         toolConfig = {
           functionCallingConfig: {
+            ...functionCallingConfig,
             allowedFunctionNames: functionCallingConfig.allowedFunctionNames,
             mode: toGeminiFunctionModeEnum(functionCallingConfig.mode),
           },
@@ -646,10 +737,24 @@ export function defineModel(
 
       const modelVersion = versionFromConfig || extractVersion(ref);
 
+      if (isImageModelName(modelVersion)) {
+        if (!generateContentRequest.generationConfig!.responseModalities) {
+          generateContentRequest.generationConfig!.responseModalities = [
+            'TEXT',
+            'IMAGE',
+          ];
+        }
+      }
+
       if (jsonMode && request.output?.constrained) {
-        generateContentRequest.generationConfig!.responseSchema = cleanSchema(
-          request.output.schema
-        );
+        if (pluginOptions?.legacyResponseSchema) {
+          generateContentRequest.generationConfig!.responseSchema = cleanSchema(
+            request.output.schema
+          );
+        } else {
+          generateContentRequest.generationConfig!.responseJsonSchema =
+            request.output.schema;
+        }
       }
 
       const callGemini = async () => {
@@ -663,10 +768,12 @@ export function defineModel(
             clientOpt
           );
 
+          const chunks: CandidateData[] = [];
           for await (const item of result.stream) {
             (item as GenerateContentResponse).candidates?.forEach(
               (candidate) => {
-                const c = fromGeminiCandidate(candidate);
+                const c = fromGeminiCandidate(candidate, chunks);
+                chunks.push(c);
                 sendChunk({
                   index: c.index,
                   content: c.message.content,
@@ -742,4 +849,8 @@ export function defineModel(
   );
 }
 
-export const TEST_ONLY = { KNOWN_MODELS };
+export const TEST_ONLY = {
+  KNOWN_GEMINI_MODELS,
+  KNOWN_IMAGE_MODELS,
+  KNOWN_MODELS,
+};

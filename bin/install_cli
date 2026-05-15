@@ -11,33 +11,40 @@
 :   Introduction
 : ==========================================
 
-# This script allows you to install the latest version of the
-# "genkit" command by running:
+# This script allows you to install the latest version of the "genkit" command by running:
 #
 :   curl -sL cli.genkit.dev | bash
 #
-# If you do not want to use this script, you can manually
-# download the latest "genkit" binary.
+# If you do not want to use this script, you can manually download the latest "genkit" binary.
+#
+# Linux:
 #
 :   curl -Lo ./genkit_bin https://storage.googleapis.com/genkit-assets-cli/prod/linux-x64/latest
 #
+# macOS:
+#
+:   curl -Lo ./genkit_bin https://storage.googleapis.com/genkit-assets-cli/prod/darwin-arm64/latest
+#
+# Windows:
+#
+:   curl -Lo ./genkit_bin.exe https://storage.googleapis.com/genkit-assets-cli/prod/win32-x64/latest.exe
+#
 # Alternatively, you can download a specific version.
 #
-:   curl -Lo ./genkit_bin https://storage.googleapis.com/genkit-assets-cli/prod/linux-x64/v1.15.5/genkit
+:   curl -Lo ./genkit_bin https://storage.googleapis.com/genkit-assets-cli/prod/darwin-arm64/v1.15.5/genkit
 #
 # For Windows append ".exe" to the URL.
 #
-:   curl -Lo ./genkit_bin https://storage.googleapis.com/genkit-assets-cli/prod/win32-x64/v1.15.5/genkit.exe
+:   curl -Lo ./genkit_bin.exe https://storage.googleapis.com/genkit-assets-cli/prod/win32-x64/v1.15.5/genkit.exe
 #
-# Note: On Mac, replace "linux" with "darwin" in the URL.
 # Supported architectures: darwin-x64, darwin-arm64, linux-x64, linux-arm64, win32-x64
 #
 # For full details about installation options for the Genkit CLI
 # please see our documentation.
-#   https://genkit.dev
+#   https://genkit.dev/docs/devtools
 #
 # Please report bugs / issues with this script on GitHub.
-#   https://github.com/firebase/genkit
+#   https://github.com/genkit-ai/genkit
 #
 
 : ==========================================
@@ -116,6 +123,11 @@
 
 # Options: prod, next
 channel="${channel:-prod}"
+
+# Environment variable defaults (these can be overridden when piping the script)
+analytics="${analytics:-true}"    # Set to "false" to disable analytics
+uninstall="${uninstall:-false}"   # Set to "true" to uninstall
+upgrade="${upgrade:-false}"       # Set to "true" to upgrade existing install
 
 # This script contains a large amount of comments so you can understand
 # how it interacts with your system. If you're not interested in the
@@ -296,7 +308,7 @@ esac
 # and close.
 if [[ -z "$MACHINE" ]]; then
     echo "Your operating system is not supported, if you think it should be please file a bug."
-    echo "https://github.com/firebase/genkit/"
+    echo "https://github.com/genkit-ai/genkit/"
     echo "-- All done!"
 
     send_analytics_event "missing_platform_${UNAME}_${ARCH}"
@@ -309,11 +321,10 @@ echo "-- Downloading binary from $DOWNLOAD_URL"
 
 # We use "curl" to download the binary with a flag set to follow redirects
 # (GitHub download URLs redirect to CDNs) and a flag to show a progress bar.
-curl -o "/tmp/genkit_standalone.tmp" --fail -L --progress-bar "$DOWNLOAD_URL"
-if [ $? -ne 0 ]; then
+if ! curl -o "/tmp/genkit_standalone.tmp" --fail -L --progress-bar "$DOWNLOAD_URL"; then
     echo "Something went wrong. Failed to download binary from $DOWNLOAD_URL"
     echo "Please file a bug with your system information on GitHub."
-    echo "https://github.com/firebase/genkit/"
+    echo "https://github.com/genkit-ai/genkit/"
 
     send_analytics_event download_failure
 
@@ -368,7 +379,7 @@ VERSION=$("$GENKIT_BINARY" --version 2>"$VERBOSE_STDERR")
 if [[ -z "$VERSION" ]]; then
     echo "Something went wrong, genkit has not been installed."
     echo "Please file a bug with your system information on GitHub."
-    echo "https://github.com/firebase/genkit/"
+    echo "https://github.com/genkit-ai/genkit/"
     echo "-- All done!"
 
     send_analytics_event binary_check_failure

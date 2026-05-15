@@ -31,43 +31,26 @@ export interface DevToolsInfo {
  * Finds the project root by looking for a `package.json` file.
  */
 export async function findProjectRoot(): Promise<string> {
+  const projectMarkers = [
+    'package.json',
+    'go.mod',
+    'pyproject.toml',
+    'requirements.txt',
+    'pom.xml',
+    'build.gradle',
+  ];
+
   let currentDir = process.cwd();
   while (currentDir !== path.parse(currentDir).root) {
-    const packageJsonPath = path.join(currentDir, 'package.json');
-    const goModPath = path.join(currentDir, 'go.mod');
-    const pyprojectPath = path.join(currentDir, 'pyproject.toml');
-    const pyproject2Path = path.join(currentDir, 'requirements.txt');
-
     try {
-      const [
-        packageJsonExists,
-        goModExists,
-        pyprojectExists,
-        pyproject2Exists,
-      ] = await Promise.all([
+      const checks = projectMarkers.map((file) =>
         fs
-          .access(packageJsonPath)
+          .access(path.join(currentDir, file))
           .then(() => true)
-          .catch(() => false),
-        fs
-          .access(goModPath)
-          .then(() => true)
-          .catch(() => false),
-        fs
-          .access(pyprojectPath)
-          .then(() => true)
-          .catch(() => false),
-        fs
-          .access(pyproject2Path)
-          .then(() => true)
-          .catch(() => false),
-      ]);
-      if (
-        packageJsonExists ||
-        goModExists ||
-        pyprojectExists ||
-        pyproject2Exists
-      ) {
+          .catch(() => false)
+      );
+      const results = await Promise.all(checks);
+      if (results.some((found) => found)) {
         return currentDir;
       }
     } catch {
@@ -102,7 +85,7 @@ export async function findServersDir(projectRoot: string): Promise<string> {
  * @returns project name
  */
 export function projectNameFromGenkitFilePath(filePath: string): string {
-  const parts = filePath.split('/');
+  const parts = filePath.split(path.sep);
   const basePath = parts
     .slice(
       0,
@@ -139,9 +122,12 @@ export async function detectRuntime(directory: string): Promise<Runtime> {
 /**
  * Checks the health of a server with a /api/__health endpoint.
  */
-export async function checkServerHealth(url: string): Promise<boolean> {
+export async function checkServerHealth(
+  url: string,
+  id?: string
+): Promise<boolean> {
   try {
-    const response = await fetch(`${url}/api/__health`);
+    const response = await fetch(`${url}/api/__health${id ? `?id=${id}` : ''}`);
     return response.status === 200;
   } catch (error) {
     if (isConnectionRefusedError(error)) {

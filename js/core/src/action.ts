@@ -15,12 +15,17 @@
  */
 
 import type { JSONSchema7 } from 'json-schema';
-import type * as z from 'zod';
+import * as z from 'zod';
 import { getAsyncContext } from './async-context.js';
 import { lazy } from './async.js';
 import { getContext, runWithContext, type ActionContext } from './context.js';
 import type { ActionType, Registry } from './registry.js';
 import { parseSchema } from './schema.js';
+import {
+  type ActionStreamInput,
+  type ActionStreamSubscriber,
+  type StreamManager,
+} from './streaming.js';
 import {
   SPAN_TYPE_ATTR,
   runInNewSpan,
@@ -28,7 +33,13 @@ import {
 } from './tracing.js';
 
 export { StatusCodes, StatusSchema, type Status } from './statusTypes.js';
-export type { JSONSchema7 };
+export { InMemoryStreamManager, StreamNotFoundError } from './streaming.js';
+export type {
+  ActionStreamInput,
+  ActionStreamSubscriber,
+  JSONSchema7,
+  StreamManager,
+};
 
 const makeNoopAbortSignal = () => new AbortController().signal;
 
@@ -41,6 +52,7 @@ export interface ActionMetadata<
   S extends z.ZodTypeAny = z.ZodTypeAny,
 > {
   actionType?: ActionType;
+  key?: string;
   name: string;
   description?: string;
   inputSchema?: I;
@@ -50,6 +62,19 @@ export interface ActionMetadata<
   streamSchema?: S;
   metadata?: Record<string, any>;
 }
+
+export const ActionMetadataSchema = z.object({
+  key: z.string().optional(),
+  actionType: z.string().optional(),
+  name: z.string(),
+  description: z.string().optional(),
+  inputSchema: z.unknown().optional(),
+  inputJsonSchema: z.object({}).optional(),
+  outputSchema: z.unknown().optional(),
+  outputJsonSchema: z.object({}).optional(),
+  streamSchema: z.unknown().optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
+});
 
 /**
  * Results of an action run. Includes telemetry.
@@ -85,6 +110,14 @@ export interface ActionRunOptions<S> {
    * Abort signal for the action request.
    */
   abortSignal?: AbortSignal;
+
+  /**
+   * Callback that fires immediately when the root span is created for the action,
+   * providing early access to telemetry data (trace ID, span ID).
+   * This is useful for scenarios where telemetry needs to be available before the action completes.
+   * Note: This only fires once for the root action span, not for nested spans.
+   */
+  onTraceStart?: (traceInfo: { traceId: string; spanId: string }) => void;
 }
 
 /**
@@ -142,19 +175,18 @@ export type Action<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
-  RunOptions extends ActionRunOptions<S> = ActionRunOptions<S>,
+  RunOptions extends ActionRunOptions<z.infer<S>> = ActionRunOptions<
+    z.infer<S>
+  >,
 > = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
   __action: ActionMetadata<I, O, S>;
   __registry?: Registry;
   run(
     input?: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>>
+    options?: RunOptions
   ): Promise<ActionResult<z.infer<O>>>;
 
-  stream(
-    input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>>
-  ): StreamingResponse<O, S>;
+  stream(input?: z.infer<I>, opts?: RunOptions): StreamingResponse<O, S>;
 };
 
 /**
@@ -289,6 +321,7 @@ export function action<
       ? config.name
       : `${config.name.pluginId}/${config.name.actionId}`;
   const actionMetadata = {
+    key: `/${config.actionType}/${actionName}`,
     name: actionName,
     description: config.description,
     inputSchema: config.inputSchema,
@@ -318,6 +351,7 @@ export function action<
     });
     let traceId;
     let spanId;
+    const genkitKey = actionFn.__action.key;
     let output = await runInNewSpan(
       {
         metadata: {
@@ -326,6 +360,7 @@ export function action<
         labels: {
           [SPAN_TYPE_ATTR]: 'action',
           'genkit:metadata:subtype': config.actionType,
+          ...(genkitKey ? { 'genkit:key': genkitKey } : {}),
           ...options?.telemetryLabels,
         },
       },
@@ -341,6 +376,9 @@ export function action<
 
         traceId = span.spanContext().traceId;
         spanId = span.spanContext().spanId;
+        if (options?.onTraceStart) {
+          options.onTraceStart({ traceId, spanId });
+        }
         metadata.name = actionName;
         metadata.input = input;
 
@@ -467,7 +505,7 @@ export function defineAction<
   if (isInRuntimeContext()) {
     throw new Error(
       'Cannot define new actions at runtime.\n' +
-        'See: https://github.com/firebase/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
+        'See: https://github.com/genkit-ai/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
     );
   }
   const act = action(config, async (i: I, options): Promise<z.infer<O>> => {
@@ -512,6 +550,7 @@ export function defineActionAsync<
         }
       );
       act.__action.actionType = actionType;
+      act.__action.key = `/${actionType}/${actionName}`;
       onInit?.(act);
       return act;
     })

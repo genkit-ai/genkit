@@ -22,7 +22,7 @@ import {
   z,
 } from 'genkit';
 import { logger } from 'genkit/logging';
-import { GenkitPluginV2 } from 'genkit/plugin';
+import { type GenkitPluginV2 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import { openAICompatible, PluginOptions } from '../index.js';
@@ -36,26 +36,25 @@ import {
 
 export type DeepSeekPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-const resolver = async (
-  client: OpenAI,
-  actionType: ActionType,
-  actionName: string
-) => {
-  if (actionType === 'model') {
-    const modelRef = deepSeekModelRef({
-      name: actionName,
-    });
-    return defineCompatOpenAIModel({
-      name: modelRef.name,
-      client,
-      modelRef,
-      requestBuilder: deepSeekRequestBuilder,
-    });
-  } else {
-    logger.warn('Only model actions are supported by the DeepSeek plugin');
-    return undefined;
-  }
-};
+function createResolver(pluginOptions: PluginOptions) {
+  return async (client: OpenAI, actionType: ActionType, actionName: string) => {
+    if (actionType === 'model') {
+      const modelRef = deepSeekModelRef({
+        name: actionName,
+      });
+      return defineCompatOpenAIModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+        requestBuilder: deepSeekRequestBuilder,
+      });
+    } else {
+      logger.warn('Only model actions are supported by the DeepSeek plugin');
+      return undefined;
+    }
+  };
+}
 
 const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
   return await client.models.list().then((response) =>
@@ -87,6 +86,7 @@ export function deepSeekPlugin(
         'Please pass in the API key or set the DEEPSEEK_API_KEY environment variable.',
     });
   }
+  const pluginOptions = { name: 'deepseek', ...options };
   return openAICompatible({
     name: 'deepseek',
     baseURL: 'https://api.deepseek.com',
@@ -97,12 +97,13 @@ export function deepSeekPlugin(
         defineCompatOpenAIModel({
           name: modelRef.name,
           client,
+          pluginOptions,
           modelRef,
           requestBuilder: deepSeekRequestBuilder,
         })
       );
     },
-    resolver,
+    resolver: createResolver(pluginOptions),
     listActions,
   });
 }
@@ -138,7 +139,7 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
  *
  * Usage: To use the models, initialize the deepseek plugin inside
  * `configureGenkit` and pass the configuration options. If no API key is
- * provided in the options, the environment variable `OPENAI_API_KEY` must be
+ * provided in the options, the environment variable `DEEPSEEK_API_KEY` must be
  * set.
  *
  * Example:

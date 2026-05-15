@@ -183,6 +183,15 @@ export const EvalRunKeySchema = z.object({
   createdAt: z.string(),
   actionConfig: z.any().optional(),
   metricSummaries: z.array(z.record(z.string(), z.any())).optional(),
+  metricsMetadata: z
+    .record(
+      z.string(),
+      z.object({
+        displayName: z.string(),
+        definition: z.string(),
+      })
+    )
+    .optional(),
 });
 export type EvalRunKey = z.infer<typeof EvalRunKeySchema>;
 export const EvalKeyAugmentsSchema = EvalRunKeySchema.pick({
@@ -199,6 +208,7 @@ export type EvalKeyAugments = z.infer<typeof EvalKeyAugmentsSchema>;
 export const EvalRunSchema = z.object({
   key: EvalRunKeySchema,
   results: z.array(EvalResultSchema),
+  /* deprecated, use key.metricsMetadata */
   metricsMetadata: z
     .record(
       z.string(),

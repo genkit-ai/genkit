@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { defineMcpHost } from '@genkit-ai/mcp';
 import { genkit, z } from 'genkit';
 import { logger } from 'genkit/logging';
@@ -45,7 +45,7 @@ export const PERMISSIVE_SAFETY_SETTINGS: any = {
 
 export const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });
 
 logger.setLogLevel('debug'); // Set the logging level to debug for detailed output

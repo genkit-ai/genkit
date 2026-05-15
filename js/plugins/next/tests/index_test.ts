@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from '@jest/globals';
 import { UserFacingError, genkit, z } from 'genkit';
+import { InMemoryStreamManager } from 'genkit/beta';
 import { apiKey, type ApiKeyContext } from 'genkit/context';
 import { NextRequest } from 'next/server.js';
 import { appRoute } from '../src/index.js';
@@ -27,19 +28,22 @@ function chunks(
   | { type: 'comment' | 'invalid'; content: string }
   | { type: 'end' }
 > {
-  return text.split('\n\n').map((part) => {
-    if (part === 'END') {
-      return { type: 'end' };
-    }
-    const [command, ...rest] = part.split(':');
-    // Restore any additional :
-    const data = rest.join(':');
-    if (command === 'data' || command === 'error') {
-      // The split : also took out : from JSON
-      return { type: command, content: JSON.parse(data.trim()) };
-    }
-    return { type: command === '' ? 'comment' : 'invalid', content: data };
-  });
+  return text
+    .split('\n\n')
+    .filter((part) => part)
+    .map((part) => {
+      if (part === 'END') {
+        return { type: 'end' };
+      }
+      const [command, ...rest] = part.split(':');
+      // Restore any additional :
+      const data = rest.join(':');
+      if (command === 'data' || command === 'error') {
+        // The split : also took out : from JSON
+        return { type: command, content: JSON.parse(data.trim()) };
+      }
+      return { type: command === '' ? 'comment' : 'invalid', content: data };
+    });
 }
 
 describe('appRoute', () => {
@@ -286,5 +290,76 @@ describe('appRoute', () => {
         type: 'end',
       },
     ]);
+  });
+
+  describe('durable streaming', () => {
+    const streamingFlow = ai.defineFlow(
+      {
+        name: 'streamingFlow',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+      },
+      async (input, { sendChunk }) => {
+        for (let i = 0; i < 10; i++) {
+          await new Promise((r) => {
+            sendChunk(i);
+            r(i);
+          });
+        }
+        return input;
+      }
+    );
+
+    it('supports durable streaming', async () => {
+      const route = appRoute(streamingFlow, {
+        streamManager: new InMemoryStreamManager(),
+      });
+      const request = new NextRequest('http://localhost/api/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ data: 'Hello, world!' }),
+      });
+      const response = await route(request);
+      const streamId = response.headers.get('x-genkit-stream-id');
+      expect(streamId).not.toBeNull();
+      await response.text();
+      const subRequest = new NextRequest('http://localhost/api/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accept: 'text/event-stream',
+          'x-genkit-stream-id': streamId!,
+        },
+        body: JSON.stringify({ data: 'Hello, world!' }),
+      });
+      const subResponse = await route(subRequest);
+      const subChunks = chunks(await subResponse.text());
+      expect(subChunks.length).toEqual(12);
+      expect(subChunks[10]).toEqual({
+        type: 'data',
+        content: { result: 'Hello, world!' },
+      });
+      expect(subChunks[11]).toEqual({ type: 'end' });
+    });
+
+    it('returns 204 for unknown streamId', async () => {
+      const route = appRoute(streamingFlow, {
+        streamManager: new InMemoryStreamManager(),
+      });
+      const request = new NextRequest('http://localhost/api/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          accept: 'text/event-stream',
+          'x-genkit-stream-id': 'banana',
+        },
+        body: JSON.stringify({ data: 'Hello, world!' }),
+      });
+      const response = await route(request);
+      expect(response.status).toEqual(204);
+    });
   });
 });

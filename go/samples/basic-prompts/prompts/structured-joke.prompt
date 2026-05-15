@@ -1,0 +1,13 @@
+---
+model: googleai/gemini-2.5-flash
+config:
+  thinkingConfig:
+    thinkingBudget: 0
+input:
+  schema: JokeRequest
+output:
+  format: json
+  schema: Joke
+---
+Share a long joke about {{topic}}.
+

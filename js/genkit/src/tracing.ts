@@ -25,6 +25,7 @@ export {
   TraceMetadataSchema,
   TraceServerExporter,
   appendSpan,
+  disableGenkitOTelInitialization,
   disableOTelRootSpanDetection,
   enableTelemetry,
   flushTracing,

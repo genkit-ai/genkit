@@ -62,7 +62,7 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.VertexAI{}))
 
-	model := googlegenai.VertexAIModel(g, "gemini-2.0-flash")
+	model := googlegenai.VertexAIModel(g, "gemini-2.5-flash")
 	embedder := googlegenai.VertexAIEmbedder(g, "text-embedding-004")
 
 	if err := setup01(g, model); err != nil {

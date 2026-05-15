@@ -22,11 +22,11 @@
 
 import { EmbedderReference, ModelReference, z } from 'genkit';
 import {
-  GenkitPluginV2,
-  ResolvableAction,
   genkitPluginV2,
+  type GenkitPluginV2,
+  type ResolvableAction,
 } from 'genkit/plugin';
-import { ActionType } from 'genkit/registry';
+import { type ActionType } from 'genkit/registry';
 import { listModels } from './client.js';
 
 import * as embedder from './embedder.js';
@@ -124,13 +124,17 @@ function vertexAIPlugin(options?: VertexPluginOptions): GenkitPluginV2 {
 export type VertexAIPlugin = {
   (pluginOptions?: VertexPluginOptions): GenkitPluginV2;
   model(
-    name: gemini.KnownModels | (gemini.GeminiModelName & {}),
+    name: gemini.KnownImageModels | (gemini.ImageModelName & {}),
+    config?: gemini.GeminiImageConfig
+  ): ModelReference<gemini.GeminiImageConfigSchemaType>;
+  model(
+    name: gemini.KnownGeminiModels | (gemini.GeminiModelName & {}),
     config?: gemini.GeminiConfig
   ): ModelReference<gemini.GeminiConfigSchemaType>;
   model(
     name: imagen.KnownModels | (imagen.ImagenModelName & {}),
     config?: imagen.ImagenConfig
-  ): ModelReference<imagen.ImagenConfigSchemaType>;
+  ): ModelReference<imagen.ConfigSchemaType>;
   model(
     name: lyria.KnownModels | (lyria.LyriaModelName & {}),
     config: lyria.LyriaConfig
@@ -142,7 +146,7 @@ export type VertexAIPlugin = {
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
 
   embedder(
-    name: string,
+    name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
     config?: embedder.EmbeddingConfig
   ): EmbedderReference<embedder.EmbeddingConfigSchemaType>;
 };
@@ -166,7 +170,7 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
   if (veo.isVeoModelName(name)) {
     return veo.model(name, config);
   }
-  // gemini and unknown model families
+  // gemini, image and unknown model families
   return gemini.model(name, config);
 };
 vertexAI.embedder = (

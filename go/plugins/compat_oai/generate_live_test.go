@@ -26,7 +26,6 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
-	"github.com/stretchr/testify/assert"
 )
 
 const defaultModel = "gpt-4o-mini"
@@ -244,18 +243,134 @@ func TestWithConfig(t *testing.T) {
 			result, err := generator.WithMessages(messages).WithConfig(tt.config).Generate(context.Background(), req, nil)
 
 			if tt.err != nil {
-				assert.Error(t, err)
-				assert.Equal(t, tt.err.Error(), err.Error())
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if got, want := err.Error(), tt.err.Error(); got != want {
+					t.Errorf("error message = %q, want %q", got, want)
+				}
 				return
 			}
 
-			// validate that the response was successful
-			assert.NoError(t, err)
-			assert.NotNil(t, result)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result == nil {
+				t.Fatal("expected result, got nil")
+			}
 
 			// validate the input request was transformed correctly
 			if tt.validate != nil {
 				tt.validate(t, generator.GetRequest())
+			}
+		})
+	}
+}
+
+func TestResponseFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   *ai.ModelOutputConfig
+		prompt   string
+		validate func(*testing.T, *openai.ChatCompletionNewParams)
+	}{
+		{
+			name: "json_schema",
+			output: &ai.ModelOutputConfig{
+				Format: "json",
+				Schema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"joke": map[string]any{
+							"type":        "string",
+							"description": "A funny joke",
+						},
+					},
+					"required":             []string{"joke"},
+					"additionalProperties": false,
+				},
+			},
+			prompt: "Tell me a joke",
+			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
+				if request.ResponseFormat.OfJSONSchema == nil {
+					t.Error("Expected ResponseFormat.OfJSONSchema to be set")
+				}
+				if request.ResponseFormat.OfJSONObject != nil {
+					t.Error("Expected ResponseFormat.OfJSONObject to be nil for json_schema mode")
+				}
+				if request.ResponseFormat.OfText != nil {
+					t.Error("Expected ResponseFormat.OfText to be nil for json_schema mode")
+				}
+			},
+		},
+		{
+			name: "json_object",
+			output: &ai.ModelOutputConfig{
+				Format: "json",
+			},
+			prompt: "Generate a JSON object with a joke",
+			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
+				if request.ResponseFormat.OfJSONObject == nil {
+					t.Error("Expected ResponseFormat.OfJSONObject to be set")
+				}
+				if request.ResponseFormat.OfJSONSchema != nil {
+					t.Error("Expected ResponseFormat.OfJSONSchema to be nil for json_object mode")
+				}
+				if request.ResponseFormat.OfText != nil {
+					t.Error("Expected ResponseFormat.OfText to be nil for json_object mode")
+				}
+			},
+		},
+		{
+			name: "text",
+			output: &ai.ModelOutputConfig{
+				Format: "text",
+			},
+			prompt: "Tell me a joke",
+			validate: func(t *testing.T, request *openai.ChatCompletionNewParams) {
+				if request.ResponseFormat.OfText == nil {
+					t.Error("Expected ResponseFormat.OfText to be set")
+				}
+				if request.ResponseFormat.OfJSONObject != nil {
+					t.Error("Expected ResponseFormat.OfJSONObject to be nil for text mode")
+				}
+				if request.ResponseFormat.OfJSONSchema != nil {
+					t.Error("Expected ResponseFormat.OfJSONSchema to be nil for text mode")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := setupTestClient(t)
+
+			messages := []*ai.Message{
+				{
+					Role: ai.RoleUser,
+					Content: []*ai.Part{
+						ai.NewTextPart(tt.prompt),
+					},
+				},
+			}
+
+			req := &ai.ModelRequest{
+				Messages: messages,
+				Output:   tt.output,
+			}
+
+			resp, err := g.WithMessages(messages).Generate(context.Background(), req, nil)
+			if err != nil {
+				t.Fatalf("Generate failed: %v", err)
+			}
+
+			if len(resp.Message.Content) == 0 {
+				t.Fatal("Expected response content, got empty")
+			}
+
+			// Validate the request output was configured correctly
+			if tt.validate != nil {
+				tt.validate(t, g.GetRequest())
 			}
 		})
 	}

@@ -1,32 +1,18 @@
 [project]
-authors = [{ name = "Google" }]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Environment :: Console",
-  "Environment :: Web Environment",
-  "Intended Audience :: Developers",
-  "Operating System :: OS Independent",
-  "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-  "Topic :: Software Development :: Libraries",
-]
-dependencies = ["genkit", "genkit-plugin-google-genai", "pydantic>=2.10.5"]
-description = "Tool interrupts sample"
-license = { text = "Apache-2.0" }
 name = "tool-interrupts"
-readme = "README.md"
+version = "0.2.0"
 requires-python = ">=3.10"
-version = "0.1.0"
+dependencies = [
+  "genkit",
+  "genkit-plugin-google-genai",
+  "pydantic>=2.10.5",
+  "structlog>=25.2.0",
+  "uvloop>=0.21.0",
+]
 
 [build-system]
 build-backend = "hatchling.build"
-requires      = ["hatchling"]
+requires = ["hatchling"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tool_interrupts"]
+packages = ["src"]
