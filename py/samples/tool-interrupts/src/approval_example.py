@@ -92,7 +92,7 @@ def _print_unexpected_tool(name: str) -> None:
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-3-flash-preview',
+    model='googleai/gemini-flash-latest',
     prompt_dir=_PROMPTS_DIR,
 )
 
