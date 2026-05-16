@@ -107,12 +107,19 @@ const (
 
 	gemini25Pro = "gemini-2.5-pro"
 
+	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
+	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
+
 	imagen3Generate001     = "imagen-3.0-generate-001"
 	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
 
-	veo20Generate001     = "veo-2.0-generate-001"
-	veo30Generate001     = "veo-3.0-generate-001"
-	veo30FastGenerate001 = "veo-3.0-fast-generate-001"
+	veo20Generate001         = "veo-2.0-generate-001"
+	veo30Generate001         = "veo-3.0-generate-001"
+	veo30FastGenerate001     = "veo-3.0-fast-generate-001"
+	veo31Generate001         = "veo-3.1-generate-001"
+	veo31FastGenerate001     = "veo-3.1-fast-generate-001"
+	veo31GeneratePreview     = "veo-3.1-generate-preview"
+	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 
 	virtualTryOn001 = "virtual-try-on-001"
 
@@ -134,6 +141,8 @@ var (
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
+		gemini31FlashLitePreview,
+		gemini31FlashImagePreview,
 
 		imagen3Generate001,
 		imagen3FastGenerate001,
@@ -141,8 +150,10 @@ var (
 		veo20Generate001,
 		veo30Generate001,
 		veo30FastGenerate001,
-
-		virtualTryOn001,
+		veo31Generate001,
+		veo31FastGenerate001,
+    
+    virtualTryOn001,
 	}
 
 	googleAIModels = []string{
@@ -151,10 +162,14 @@ var (
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
+		gemini31FlashLitePreview,
+		gemini31FlashImagePreview,
 
 		veo20Generate001,
 		veo30Generate001,
 		veo30FastGenerate001,
+		veo31GeneratePreview,
+		veo31FastGeneratePreview,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
@@ -192,6 +207,18 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
+		gemini31FlashLitePreview: {
+			Label:    "Gemini 3.1 Flash Lite Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini31FlashImagePreview: {
+			Label:    "Gemini 3.1 Flash Image Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageUnstable,
+		},
 	}
 
 	supportedImagenModels = map[string]ai.ModelOptions{
@@ -227,6 +254,30 @@ var (
 			Versions: []string{},
 			Supports: &VeoSupports,
 			Stage:    ai.ModelStageStable,
+		},
+		veo31Generate001: {
+			Label:    "Veo 3.1 Generate 001",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		veo31FastGenerate001: {
+			Label:    "Veo 3.1 Fast Generate 001",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		veo31GeneratePreview: {
+			Label:    "Veo 3.1 Generate Preview",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		veo31FastGeneratePreview: {
+			Label:    "Veo 3.1 Fast Generate Preview",
+			Versions: []string{},
+			Supports: &VeoSupports,
+			Stage:    ai.ModelStageUnstable,
 		},
 	}
 

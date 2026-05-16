@@ -15,10 +15,6 @@
  */
 
 import {
-  CreateInteractionRequest,
-  GeminiInteraction,
-} from '../common/interaction-types.js';
-import {
   Content,
   FinishReason,
   GenerateContentCandidate,
@@ -42,6 +38,10 @@ import {
   ToolConfig,
   UrlContextTool,
 } from '../common/types.js';
+import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from './interaction-types.js';
 
 // This makes it easier to import all types from one place.
 export {

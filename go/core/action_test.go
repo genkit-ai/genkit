@@ -281,6 +281,64 @@ func TestActionDesc(t *testing.T) {
 			t.Error("OutputSchema is nil")
 		}
 	})
+
+	t.Run("resolves genkit schema references", func(t *testing.T) {
+		r := registry.New()
+
+		inputSchema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+			},
+		}
+		outputSchema := map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"answer": map[string]any{"type": "string"},
+			},
+		}
+		DefineSchema(r, "AgentRequest", inputSchema)
+		DefineSchema(r, "AgentResponse", outputSchema)
+
+		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
+		a := NewAction("test/refs", api.ActionTypeCustom, nil, SchemaRef("AgentRequest"), fn)
+		// Override the inferred output schema with a $ref so we can test resolution
+		// of OutputSchema as well.
+		a.desc.OutputSchema = SchemaRef("AgentResponse")
+		a.Register(r)
+
+		desc := a.Desc()
+
+		if _, ok := desc.InputSchema["$ref"]; ok {
+			t.Errorf("InputSchema still contains $ref: %v", desc.InputSchema)
+		}
+		if got, want := desc.InputSchema["type"], "object"; got != want {
+			t.Errorf("InputSchema type = %v, want %v", got, want)
+		}
+		if _, ok := desc.OutputSchema["$ref"]; ok {
+			t.Errorf("OutputSchema still contains $ref: %v", desc.OutputSchema)
+		}
+		if got, want := desc.OutputSchema["type"], "object"; got != want {
+			t.Errorf("OutputSchema type = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("preserves $ref when schema is unregistered", func(t *testing.T) {
+		r := registry.New()
+
+		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
+		a := DefineAction(r, "test/unresolved", api.ActionTypeCustom, nil, SchemaRef("Missing"), fn)
+
+		desc := a.Desc()
+
+		ref, ok := desc.InputSchema["$ref"].(string)
+		if !ok {
+			t.Fatalf("expected InputSchema to retain $ref, got: %v", desc.InputSchema)
+		}
+		if want := "genkit:Missing"; ref != want {
+			t.Errorf("InputSchema $ref = %q, want %q", ref, want)
+		}
+	})
 }
 
 func TestActionRegister(t *testing.T) {

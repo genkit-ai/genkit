@@ -1,0 +1,21 @@
+---
+model: googleai/gemini-3-flash-preview
+config:
+  maxOutputTokens: 2048
+  temperature: 1.0
+  topK: 16
+  topP: 0.95
+tools:
+  - getWeather
+  - getTime
+use:
+  - name: retry
+    config: 
+      maxRetries: 3
+  - name: filesystem
+    config:
+      rootDirectory: ./
+---
+
+{{role "system"}}
+You are a helpful AI assistant.

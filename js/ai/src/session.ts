@@ -91,16 +91,22 @@ export class Session<S = any> {
   }
 
   /**
-   * Update session state data.
+   * Update session state data by patching the existing state.
+   * @param data Partial state update that will be merged with existing state
    */
-  async updateState(data: S): Promise<void> {
+  async updateState(data: Partial<S>): Promise<void> {
     let sessionData = this.sessionData;
     if (!sessionData) {
       sessionData = {} as SessionData<S>;
     }
-    sessionData.state = data;
-    this.sessionData = sessionData;
 
+    // Merge the new data with existing state
+    sessionData.state = {
+      ...sessionData.state,
+      ...data,
+    } as S;
+
+    this.sessionData = sessionData;
     await this.store.save(this.id, sessionData);
   }
 

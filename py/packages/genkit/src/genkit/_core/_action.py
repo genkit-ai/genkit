@@ -18,15 +18,12 @@
 
 import asyncio
 import inspect
-import json
+import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
-from typing import Any, ClassVar, Generic, cast, get_type_hints
+from typing import Any, ClassVar, Generic, NamedTuple, cast, get_type_hints
 
-from opentelemetry import trace as trace_api
-from opentelemetry.trace import Span
 from opentelemetry.util import types as otel_types
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
@@ -35,9 +32,9 @@ from typing_extensions import Never, TypeVar
 from genkit._core._channel import Channel
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError
-from genkit._core._trace._path import build_path
+from genkit._core._schema import to_json_schema
 from genkit._core._trace._suppress import suppress_telemetry
-from genkit._core._tracing import tracer
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -46,59 +43,18 @@ from genkit._core._tracing import tracer
 # Type alias for span attribute values
 SpanAttributeValue = otel_types.AttributeValue
 
-# Context variable to track parent path across nested spans
-_parent_path_context: ContextVar[str] = ContextVar('genkit_parent_path', default='')
 
-
-@contextmanager
-def _save_parent_path() -> Generator[None, None, None]:
-    """Context manager to save and restore parent path."""
-    saved = _parent_path_context.get()
-    try:
-        yield
-    finally:
-        _parent_path_context.set(saved)
-
-
-def _record_input_metadata(
-    span: Span,
-    kind: str,
-    name: str,
-    span_metadata: dict[str, SpanAttributeValue] | None,
-    input: object | None,
-) -> None:
-    """Records input metadata onto an OpenTelemetry span for a Genkit action."""
-    span.set_attribute('genkit:type', 'action')
-    span.set_attribute('genkit:metadata:subtype', kind)
-    span.set_attribute('genkit:name', name)
-    if input is not None:
-        input_json = input.model_dump_json() if isinstance(input, BaseModel) else json.dumps(input)
-        span.set_attribute('genkit:input', input_json)
-
-    # Build and set path attributes (qualified path with full annotations)
-    parent_path = _parent_path_context.get()
-    qualified_path = build_path(name, parent_path, 'action', kind)
-
-    span.set_attribute('genkit:path', qualified_path)
-    span.set_attribute('genkit:qualifiedPath', qualified_path)
-
-    # Update context for nested spans
-    _parent_path_context.set(qualified_path)
-
-    if span_metadata is not None:
-        for meta_key in span_metadata:
-            span.set_attribute(meta_key, span_metadata[meta_key])
-
-
-def _record_output_metadata(span: Span, output: object) -> None:
-    """Records output metadata onto an OpenTelemetry span for a Genkit action."""
-    span.set_attribute('genkit:state', 'success')
-    try:
-        output_json = output.model_dump_json() if isinstance(output, BaseModel) else json.dumps(output)
-        span.set_attribute('genkit:output', output_json)
-    except Exception:
-        # Fallback for non-serializable output
-        span.set_attribute('genkit:output', str(output))
+def _record_latency(output: object, start_time: float) -> object:
+    """Stamp ``latency_ms`` on the output if it has one (in place, or via ``model_copy`` for frozen models)."""
+    latency_ms = (time.perf_counter() - start_time) * 1000
+    if hasattr(output, 'latency_ms'):
+        try:
+            cast(Any, output).latency_ms = latency_ms
+        except (TypeError, ValidationError, AttributeError):
+            # Frozen Pydantic models reject in-place assignment; fall back to model_copy.
+            if hasattr(output, 'model_copy'):
+                output = cast(Any, output).model_copy(update={'latency_ms': latency_ms})
+    return output
 
 
 # =============================================================================
@@ -228,6 +184,45 @@ def extract_action_args_and_types(
 # =============================================================================
 
 
+# Attribute name used to attach a ``DynamicActionProvider`` (cache + helpers)
+# onto the placeholder ``Action`` registered for a DAP. The registry only
+# stores the ``Action``; the provider rides along on it as a Python attribute.
+# Code holding the ``Action`` recovers the provider via
+# ``getattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, None)``.
+GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR = '_genkit_dynamic_action_provider'
+
+
+class DapQualifiedName(NamedTuple):
+    """Segments of a DAP-qualified name ``provider:innerKind/innerName``."""
+
+    provider: str
+    inner_kind: str
+    inner_name: str
+
+
+def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
+    """Parse DAP-qualified segment ``provider:innerKind/innerName``.
+
+    Used when the action key kind is ``dynamic-action-provider`` and the name
+    references a nested action exposed by a provider (e.g. MCP tools).
+
+    Pattern: ``[provider]:[inner_kind]/[inner_name]`` — no slashes in the
+    provider segment (``plugin/foo`` is not a valid provider host).
+
+    Returns:
+        A :class:`DapQualifiedName` if the string matches; otherwise ``None`` so
+        callers can treat the name as a plain dynamic-action-provider id.
+    """
+    # Pattern: [provider]:[inner_kind]/[inner_name]; no '/' or ':' in provider.
+    match = re.match(r'^([^/:]+):([^/:]+)/(.+)$', name)
+    if not match:
+        return None
+    provider, inner_kind, inner_name = match.groups()
+    if not provider or not inner_kind or not inner_name:
+        return None
+    return DapQualifiedName(provider, inner_kind, inner_name)
+
+
 def parse_action_key(key: str) -> tuple[ActionKind, str]:
     """Parse '/<kind>/<name>' key into (ActionKind, name)."""
     tokens = key.split('/')
@@ -246,7 +241,7 @@ def parse_action_key(key: str) -> tuple[ActionKind, str]:
     return kind, name
 
 
-def create_action_key(kind: ActionKind, name: str) -> str:
+def create_action_key(kind: ActionKind | str, name: str) -> str:
     """Create '/<kind>/<name>' key."""
     return f'/{kind}/{name}'
 
@@ -316,8 +311,6 @@ class ActionRunContext:
 class Action(Generic[InputT, OutputT, ChunkT]):
     """A named, traced, remotely callable function."""
 
-    _input_type: TypeAdapter[InputT] | None
-
     def __init__(
         self,
         kind: ActionKind,
@@ -332,6 +325,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         self._name: str = name
         self._metadata: dict[str, object] = metadata if metadata else {}
         self._description: str | None = description
+        self._span_metadata: dict[str, SpanAttributeValue] = span_metadata or {}
         # Optional matcher function for resource actions
         self.matches: Callable[[object], bool] | None = None
 
@@ -345,8 +339,9 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         except (NameError, TypeError, AttributeError):
             resolved_annotations = input_spec.annotations
         action_args, arg_types = extract_action_args_and_types(input_spec, resolved_annotations)
-        n_action_args = len(action_args)
-        self._fn = _make_tracing_wrapper(name, kind, span_metadata or {}, n_action_args, fn)
+        # Raw user fn; tracing/dispatch handled by _run_with_telemetry / _invoke.
+        self._fn: Callable[..., Awaitable[OutputT]] = fn
+        self._n_action_args: int = len(action_args)
         self._initialize_io_schemas(action_args, arg_types, resolved_annotations, input_spec)
 
     @property
@@ -387,18 +382,17 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         self._output_schema = value
         self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
 
-    def override_input_schema(self, schema: type[BaseModel] | dict[str, object]) -> None:
+    def _override_input_schema(
+        self,
+        input_schema: type[BaseModel] | dict[str, object],
+    ) -> None:
         """Replace inferred input JSON Schema and validation type (e.g. tool schema overrides)."""
-        if isinstance(schema, type) and issubclass(schema, BaseModel):
-            type_adapter: TypeAdapter[Any] = TypeAdapter(schema)
-            self._input_schema = type_adapter.json_schema()
-            self._input_type = cast(TypeAdapter[InputT], type_adapter)
-        elif isinstance(schema, dict):
-            self._input_schema = schema
+        in_js = to_json_schema(input_schema)
+        self.input_schema = in_js
+        if isinstance(input_schema, dict):
             self._input_type = None
         else:
-            raise TypeError(f'input_schema must be a Pydantic model type or dict, got {type(schema)}')
-        self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
+            self._input_type = cast(TypeAdapter[InputT], TypeAdapter(input_schema))
 
     async def __call__(self, input: InputT | None = None) -> OutputT:
         """Call the action directly, returning just the response value."""
@@ -409,7 +403,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         input: InputT | None = None,
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, object] | None = None,
-        on_trace_start: Callable[[str, str], None] | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> ActionResponse[OutputT]:
         """Execute the action with optional input validation.
@@ -451,13 +445,12 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
 
-        return await self._fn(
+        return await self._run_with_telemetry(
             input,
             ActionRunContext(
                 context=_action_context.get(None),
                 streaming_callback=streaming_cb,
             ),
-            streaming_cb,
             on_trace_start,
             telemetry_labels,
         )
@@ -517,113 +510,66 @@ class Action(Generic[InputT, OutputT, ChunkT]):
             self._output_schema = TypeAdapter(object).json_schema()
             self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
-
-class ActionMetadata(BaseModel):
-    """Action metadata for registry and reflection."""
-
-    kind: ActionKind
-    name: str
-    description: str | None = None
-    input_schema: object | None = None
-    input_json_schema: dict[str, object] | None = None
-    output_schema: object | None = None
-    output_json_schema: dict[str, object] | None = None
-    stream_schema: object | None = None
-    metadata: dict[str, object] | None = None
-
-
-def _make_tracing_wrapper(
-    name: str,
-    kind: ActionKind,
-    span_metadata: dict[str, SpanAttributeValue],
-    n_action_args: int,
-    fn: Callable[..., Awaitable[Any]],
-) -> Callable[
-    [
-        object | None,
-        ActionRunContext,
-        StreamingCallback | None,
-        Callable[[str, str], None] | None,
-        dict[str, object] | None,
-    ],
-    Awaitable[ActionResponse[Any]],
-]:
-    """Create a tracing wrapper for an async action function."""
-
-    def _record_latency(output: object, start_time: float) -> object:
-        latency_ms = (time.perf_counter() - start_time) * 1000
-        if hasattr(output, 'latency_ms'):
-            try:
-                cast(Any, output).latency_ms = latency_ms
-            except (TypeError, ValidationError, AttributeError):
-                # If immutable (e.g. Pydantic model with frozen=True), try model_copy
-                if hasattr(output, 'model_copy'):
-                    output = cast(Any, output).model_copy(update={'latency_ms': latency_ms})
-        return output
-
-    async def tracing_wrapper(
+    async def _run_with_telemetry(
+        self,
         input: object | None,
         ctx: ActionRunContext,
-        on_chunk: StreamingCallback | None,
-        on_trace_start: Callable[[str, str], None] | None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None,
         telemetry_labels: dict[str, object] | None,
-    ) -> ActionResponse[Any]:
+    ) -> ActionResponse[OutputT]:
+        """Open the action span via ``run_in_new_span``, dispatch ``self._fn``, wrap errors in ``GenkitError``."""
         start_time = time.perf_counter()
-
         suppress = str((telemetry_labels or {}).get('genkitx:ignore-trace', '')).lower() == 'true'
         suppress_token = suppress_telemetry.set(True) if suppress else None
+
+        # ``type``/``subtype`` set canonical genkit:type / genkit:metadata:subtype attrs.
+        # ``self._span_metadata`` uses short keys; run_in_new_span auto-prefixes them with
+        # ``genkit:metadata:``. ``telemetry_labels`` are caller-controlled passthrough attrs.
+        span_meta = SpanMetadata(
+            name=self._name,
+            type='action',
+            subtype=str(self._kind),
+            input=input,
+            metadata={k: str(v) for k, v in self._span_metadata.items()} or None,
+            telemetry_labels={k: str(v) for k, v in (telemetry_labels or {}).items()} or None,
+        )
+
+        trace_id = ''
         try:
-            with _save_parent_path():
-                with tracer.start_as_current_span(name) as span:
-                    # Format trace_id and span_id as hex strings (OpenTelemetry standard format)
-                    trace_id = format(span.get_span_context().trace_id, '032x')
-                    span_id = format(span.get_span_context().span_id, '016x')
-                    if on_trace_start:
-                        on_trace_start(trace_id, span_id)
+            with run_in_new_span(span_meta) as span:
+                # OpenTelemetry standard hex format.
+                trace_id = format(span.get_span_context().trace_id, '032x')
+                span_id = format(span.get_span_context().span_id, '016x')
+                if on_trace_start:
+                    await on_trace_start(trace_id, span_id)
 
-                    # Set telemetry labels as direct span attributes (matches JS/Go behavior)
-                    if telemetry_labels:
-                        for key, value in telemetry_labels.items():
-                            span.set_attribute(key, str(value))
-
-                    _record_input_metadata(
-                        span=span,
-                        kind=kind,
-                        name=name,
-                        span_metadata=span_metadata,
-                        input=input,
-                    )
-
-                    try:
-                        match n_action_args:
-                            case 0:
-                                output = await fn()
-                            case 1:
-                                output = await fn(input)
-                            case 2:
-                                output = await fn(input, ctx)
-                            case _:
-                                raise ValueError('action fn must have 0-2 args')
-                    except Exception as e:
-                        span.set_attribute('genkit:state', 'error')
-                        # Bundled Dev UI reads timeEvents.exception.attributes only; stash text for export synthesis.
-                        span.set_status(trace_api.StatusCode.ERROR, description=str(e))
-                        span.record_exception(e)
-                        if isinstance(e, GenkitError):
-                            span.set_attribute('genkit:error', e.original_message)
-                            raise
-                        span.set_attribute('genkit:error', str(e))
-                        raise GenkitError(
-                            cause=e,
-                            message=f'Error while running action {name}',
-                            trace_id=trace_id,
-                        ) from e
-
-                    output = _record_latency(output, start_time)
-                    _record_output_metadata(span, output=output)
-                    return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
+                output = await self._invoke(input, ctx)
+                output = cast(OutputT, _record_latency(output, start_time))
+                # Picked up by run_in_new_span's success branch and written as ``genkit:output``.
+                span_meta.output = output
+                return ActionResponse(response=output, trace_id=trace_id, span_id=span_id)
+        except GenkitError:
+            raise
+        except Exception as e:
+            # Wrap outside the with-block so we don't clobber ``genkit:error`` (which
+            # ``run_in_new_span`` already set to ``str(original_e)``).
+            raise GenkitError(
+                cause=e,
+                message=f'Error while running action {self._name}',
+                trace_id=trace_id,
+            ) from e
         finally:
             if suppress_token is not None:
                 suppress_telemetry.reset(suppress_token)
 
-    return tracing_wrapper
+    async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
+        """Dispatch ``self._fn`` based on its declared arity (0/1/2 args)."""
+        match self._n_action_args:
+            case 0:
+                return await self._fn()
+            case 1:
+                return await self._fn(input)
+            case 2:
+                return await self._fn(input, ctx)
+            case _:
+                raise ValueError('action fn must have 0-2 args')

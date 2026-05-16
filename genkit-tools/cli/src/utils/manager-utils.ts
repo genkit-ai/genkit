@@ -15,6 +15,7 @@
  */
 
 import {
+  LocalFileLogStore,
   LocalFileTraceStore,
   startTelemetryServer,
 } from '@genkit-ai/telemetry-server';
@@ -45,6 +46,10 @@ export async function resolveTelemetryServer(options: {
     await startTelemetryServer({
       port: telemetryPort,
       traceStore: new LocalFileTraceStore({
+        storeRoot: options.projectRoot,
+        indexRoot: options.projectRoot,
+      }),
+      logStore: new LocalFileLogStore({
         storeRoot: options.projectRoot,
         indexRoot: options.projectRoot,
       }),

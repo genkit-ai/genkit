@@ -110,6 +110,10 @@ export const filesystem: GenerateMiddleware<typeof FilesystemOptionsSchema> =
           try {
             return await next(req, ctx);
           } catch (e: any) {
+            // Don't catch ToolInterruptError — let it propagate for interrupt handling
+            // (e.g. from toolApproval middleware further down the chain).
+            if (e.name === 'ToolInterruptError') throw e;
+
             if (filesystemToolNames.includes(req.toolRequest.name)) {
               const errorPart = {
                 text: `Tool '${req.toolRequest.name}' failed: ${

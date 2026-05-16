@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+import {
+  BatchLogRecordProcessor,
+  SimpleLogRecordProcessor,
+  type LogRecordProcessor,
+} from '@opentelemetry/sdk-logs';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import {
   BatchSpanProcessor,
@@ -24,7 +29,11 @@ import { logger } from '../logging.js';
 import type { TelemetryConfig } from '../telemetryTypes.js';
 import { setTelemetryProvider } from '../tracing.js';
 import { isDevEnv } from '../utils.js';
-import { TraceServerExporter, setTelemetryServerUrl } from './exporter.js';
+import {
+  LogServerExporter,
+  TraceServerExporter,
+  setTelemetryServerUrl,
+} from './exporter.js';
 import { RealtimeSpanProcessor } from './realtime-span-processor.js';
 
 let telemetrySDK: NodeSDK | null = null;
@@ -66,6 +75,19 @@ async function enableTelemetry(
     delete nodeOtelConfig.spanProcessor;
   }
   nodeOtelConfig.spanProcessors = processors;
+
+  // Add LogRecordProcessors
+  if (process.env.GENKIT_OTEL_ENABLE_LOGS === 'true') {
+    const enableRealTimeTelemetry =
+      process.env.GENKIT_ENABLE_REALTIME_TELEMETRY === 'true';
+    const logExporter = new LogServerExporter();
+    const logProcessor: LogRecordProcessor =
+      isDevEnv() || enableRealTimeTelemetry
+        ? new SimpleLogRecordProcessor(logExporter)
+        : new BatchLogRecordProcessor(logExporter);
+    nodeOtelConfig.logRecordProcessor = logProcessor;
+  }
+
   telemetrySDK = new NodeSDK(nodeOtelConfig);
   telemetrySDK.start();
   process.on('SIGTERM', async () => await cleanUpTracing());
@@ -110,10 +132,15 @@ function maybeFlushMetrics(): Promise<void> {
 }
 
 /**
- * Flushes all configured span processors.
+ * Flushes all configured span and log processors.
  */
 async function flushTracing() {
+  const promises: Promise<void>[] = [];
   if (nodeOtelConfig?.spanProcessors) {
-    await Promise.all(nodeOtelConfig.spanProcessors.map((p) => p.forceFlush()));
+    promises.push(...nodeOtelConfig.spanProcessors.map((p) => p.forceFlush()));
   }
+  if (nodeOtelConfig?.logRecordProcessor) {
+    promises.push(nodeOtelConfig.logRecordProcessor.forceFlush());
+  }
+  await Promise.all(promises);
 }

@@ -27,7 +27,8 @@ else:
 from google import genai
 from google.genai import types as genai_types
 
-from genkit import Embedding, EmbedRequest, EmbedResponse
+from genkit import DocumentPart, Embedding, EmbedRequest, EmbedResponse
+from genkit._core._typing import DocumentData
 from genkit.plugins.google_genai.models.utils import PartConverter
 
 
@@ -101,6 +102,12 @@ class Embedder:
         Returns:
             EmbedResponse
         """
+        request = EmbedRequest.model_validate(request)
+        if not request.input:
+            raise ValueError(
+                'Embed request input is empty: provide at least one document with content '
+                '(for example input: [{"content": [{"text": "your text here"}]}]).'
+            )
         contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(request)
         response = await self._client.aio.models.embed_content(
@@ -123,9 +130,12 @@ class Embedder:
         """
         request_contents: list[genai.types.Content] = []
         for doc in request.input:
+            if not isinstance(doc, DocumentData):
+                doc = DocumentData.model_validate(doc)
             content_parts: list[genai.types.Part] = []
             for p in doc.content:
-                converted = await PartConverter.to_gemini(p)
+                part = p if isinstance(p, DocumentPart) else DocumentPart.model_validate(p)
+                converted = await PartConverter.to_gemini(part)
                 if isinstance(converted, list):
                     content_parts.extend(converted)
                 else:

@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as os from 'os';
 import * as path from 'path';
 import { filesystem } from '../src/filesystem.js';
+import { toolApproval } from '../src/tool-approval.js';
 
 describe('filesystem middleware', () => {
   let tempDir: string;
@@ -617,6 +618,58 @@ D
         toolMsg,
         undefined,
         'Tool message should not be present'
+      );
+    });
+
+    it('should let ToolInterruptError propagate when toolApproval is after filesystem', async () => {
+      const ai = genkit({});
+      // Model requests write_file which is a filesystem tool but NOT in the approved list
+      const pm = createToolModel(ai, 'write_file', {
+        filePath: 'test.txt',
+        content: 'hello',
+      });
+
+      const result = (await ai.generate({
+        model: pm,
+        prompt: 'write a file',
+        use: [
+          // filesystem is FIRST — its tool hook wraps toolApproval's tool hook.
+          // Without the fix, filesystem's catch block would swallow the ToolInterruptError.
+          filesystem({ rootDirectory: tempDir, allowWriteAccess: true }),
+          toolApproval({ approved: ['read_file', 'list_files'] }),
+        ],
+      })) as any;
+
+      // The ToolInterruptError should propagate through filesystem's error handler
+      // and result in an interrupted finish reason, NOT a swallowed error message.
+      assert.strictEqual(
+        result.finishReason,
+        'interrupted',
+        'Should be interrupted, not swallowed by filesystem error handler'
+      );
+
+      // Verify there's no user message with a swallowed error
+      const swallowedErrorMsg = result.messages.find(
+        (m: any) =>
+          m.role === 'user' &&
+          m.content.some(
+            (c: any) => c.text && c.text.includes("Tool 'write_file' failed")
+          )
+      );
+      assert.strictEqual(
+        swallowedErrorMsg,
+        undefined,
+        'ToolInterruptError should not be swallowed into a user error message'
+      );
+
+      // Verify the interrupt metadata is present
+      const interruptPart = result.message?.content.find(
+        (p: any) => p.metadata?.interrupt
+      );
+      assert.ok(interruptPart, 'Should have interrupt metadata');
+      assert.match(
+        interruptPart.metadata.interrupt.message,
+        /Tool not in approved list/
       );
     });
   });

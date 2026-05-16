@@ -75,5 +75,5 @@ def define_flow(
         kind=ActionKind.FLOW,
         fn=func,
         description=get_func_description(func, description),
-        span_metadata={'genkit:metadata:flow:name': flow_name},
+        span_metadata={'flow:name': flow_name},
     )

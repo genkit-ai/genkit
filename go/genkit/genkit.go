@@ -32,8 +32,20 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 )
+
+// genkitCtxKey is the context key for the Genkit instance.
+var genkitCtxKey = base.NewContextKey[*Genkit]()
+
+// FromContext returns the [*Genkit] instance stored in the context.
+// This is set automatically by [Generate] and related functions.
+// Middleware implementations can use this to access the Genkit instance
+// during generation.
+func FromContext(ctx context.Context) *Genkit {
+	return genkitCtxKey.FromContext(ctx)
+}
 
 // Genkit encapsulates a Genkit instance, providing access to its registry,
 // configuration, and core functionalities. It serves as the central hub for
@@ -1035,7 +1047,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 //	fmt.Println(resp.Text())
 func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
-	return ai.Generate(ctx, g.reg, opts...)
+	return ai.Generate(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateStream generates a model response and streams the output.
@@ -1067,7 +1079,7 @@ func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.Mo
 //		}
 //	}
 func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.ModelStreamValue, error] {
-	return ai.GenerateStream(ctx, g.reg, opts...)
+	return ai.GenerateStream(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateOperation performs a model generation request using a flexible set of options
@@ -1104,7 +1116,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 //	// Get the result of the operation
 //	fmt.Println(op.Output.Text())
 func GenerateOperation(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelOperation, error) {
-	return ai.GenerateOperation(ctx, g.reg, opts...)
+	return ai.GenerateOperation(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // CheckModelOperation checks the status of a background model operation by looking up the model and calling its Check method.
@@ -1129,7 +1141,7 @@ func CheckModelOperation(ctx context.Context, g *Genkit, op *ai.ModelOperation) 
 //	}
 //	fmt.Println(joke)
 func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (string, error) {
-	return ai.GenerateText(ctx, g.reg, opts...)
+	return ai.GenerateText(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateData performs a model generation request, expecting structured output
@@ -1158,7 +1170,7 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 //
 //	log.Printf("Book: %+v\n", book) // Output: Book: {Title:The Hitchhiker's Guide to the Galaxy Author:Douglas Adams Year:1979}
 func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*Out, *ai.ModelResponse, error) {
-	return ai.GenerateData[Out](ctx, g.reg, opts...)
+	return ai.GenerateData[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateDataStream generates a model response with streaming and returns strongly-typed output.
@@ -1197,7 +1209,7 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 //		}
 //	}
 func GenerateDataStream[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.StreamValue[Out, Out], error] {
-	return ai.GenerateDataStream[Out](ctx, g.reg, opts...)
+	return ai.GenerateDataStream[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // Retrieve performs a document retrieval request using a flexible set of options
