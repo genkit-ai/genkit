@@ -41,9 +41,6 @@ type LyriaConfig struct {
 	Seed *int `json:"seed,omitempty"`
 	// SampleCount is the number of audio clips to generate. Defaults to 1.
 	SampleCount int `json:"sampleCount,omitempty"`
-	// Location overrides the plugin-level Vertex AI location for this request.
-	// Lyria is typically only available in specific regions (e.g. "global").
-	Location string `json:"location,omitempty"`
 }
 
 type lyriaInstance struct {
@@ -204,18 +201,14 @@ func generateMusic(
 		req.Parameters.SampleCount = 1
 	}
 
-	location := cc.Location
-	if cfg.Location != "" {
-		location = cfg.Location
-	}
-	if location == "" {
+	if cc.Location == "" {
 		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "lyria requires a Vertex AI location", nil)
 	}
 	if cc.Project == "" {
 		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "lyria requires a Vertex AI project id", nil)
 	}
 
-	url := lyriaPredictURL(location, cc.Project, model)
+	url := lyriaPredictURL(cc.Location, cc.Project, model)
 	lp, err := doLyriaPredict(ctx, cc.HTTPClient, url, req)
 	if err != nil {
 		return nil, err
