@@ -91,6 +91,33 @@ class VirtualTryOnOutputOptions(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra='allow')
 
 
+def _inline_virtual_try_on_config_schema(schema: dict[str, Any], _: type[Any]) -> None:
+    """Inline nested outputOptions so the model config UI can render it."""
+    properties = schema.get('properties')
+    if not isinstance(properties, dict):
+        return
+
+    properties['outputOptions'] = {
+        'additionalProperties': True,
+        'default': None,
+        'description': 'Output image format controls.',
+        'properties': {
+            'mimeType': {
+                'anyOf': [{'type': 'string'}, {'type': 'null'}],
+                'default': None,
+                'title': 'Mime type',
+            },
+            'compressionQuality': {
+                'anyOf': [{'type': 'integer'}, {'type': 'null'}],
+                'default': None,
+                'title': 'Compression quality',
+            },
+        },
+        'title': 'Output options',
+        'type': 'object',
+    }
+
+
 class VirtualTryOnConfig(BaseModel):
     """Configuration for a virtual-try-on request.
 
@@ -99,15 +126,20 @@ class VirtualTryOnConfig(BaseModel):
     """
 
     sample_count: int | None = Field(default=None, ge=1, alias='sampleCount')
+    storage_uri: str | None = Field(default=None, alias='storageUri')
     seed: int | None = Field(default=None)
     base_steps: int | None = Field(default=None, ge=1, le=100, alias='baseSteps')
-    person_generation: str | None = Field(default=None, alias='personGeneration')
     safety_setting: str | None = Field(default=None, alias='safetySetting')
-    storage_uri: str | None = Field(default=None, alias='storageUri')
+    person_generation: str | None = Field(default=None, alias='personGeneration')
+    add_watermark: bool | None = Field(default=None, alias='addWatermark')
+    enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt')
     output_options: VirtualTryOnOutputOptions | None = Field(default=None, alias='outputOptions')
-    location: str | None = Field(default=None)
 
-    model_config = ConfigDict(populate_by_name=True, extra='allow')
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra='allow',
+        json_schema_extra=_inline_virtual_try_on_config_schema,
+    )
 
 
 VIRTUAL_TRY_ON_SUPPORTS = Supports(
@@ -185,8 +217,8 @@ def _to_virtual_try_on_request(request: ModelRequest, config: VirtualTryOnConfig
 
     parameters: dict[str, Any] = {}
     if isinstance(config, VirtualTryOnConfig):
-        # The ``location`` field is a plugin-level override; it is not a Vertex
-        # request parameter, so exclude it from the wire payload.
+        # Drop legacy location overrides if callers still pass them as extra
+        # config; location is not a Vertex predict request parameter.
         parameters = config.model_dump(by_alias=True, exclude_none=True, exclude={'location'})
     elif isinstance(config, dict):
         parameters = {k: v for k, v in config.items() if k not in ('location', 'Location') and v is not None}

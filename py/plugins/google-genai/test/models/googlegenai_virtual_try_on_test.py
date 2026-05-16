@@ -38,6 +38,7 @@ from genkit.plugins.google_genai.models.virtual_try_on import (
     PART_METADATA_TYPE_PRODUCT_IMAGE,
     VirtualTryOnConfig,
     VirtualTryOnModel,
+    VirtualTryOnOutputOptions,
     VirtualTryOnVersion,
     _extract_media_by_type,
     _to_virtual_try_on_request,
@@ -119,7 +120,17 @@ def test_to_virtual_try_on_request_shape() -> None:
         _product_part('gs://b/shirt.png'),
         _product_part('gs://b/hat.png'),
     ])
-    cfg = VirtualTryOnConfig(sample_count=2, person_generation='allow_adult')
+    cfg = VirtualTryOnConfig(
+        sample_count=2,
+        storage_uri='gs://b/out/',
+        seed=123,
+        base_steps=32,
+        safety_setting='block_few',
+        person_generation='allow_adult',
+        add_watermark=False,
+        enhance_prompt=True,
+        output_options=VirtualTryOnOutputOptions(mime_type='image/jpeg', compression_quality=80),
+    )
     body = _to_virtual_try_on_request(req, cfg)
     assert body == {
         'instances': [
@@ -133,9 +144,32 @@ def test_to_virtual_try_on_request_shape() -> None:
         ],
         'parameters': {
             'sampleCount': 2,
+            'storageUri': 'gs://b/out/',
+            'seed': 123,
+            'baseSteps': 32,
+            'safetySetting': 'block_few',
             'personGeneration': 'allow_adult',
+            'addWatermark': False,
+            'enhancePrompt': True,
+            'outputOptions': {
+                'mimeType': 'image/jpeg',
+                'compressionQuality': 80,
+            },
         },
     }
+
+
+def test_virtual_try_on_config_schema_excludes_location() -> None:
+    """location should not appear as a UI-configurable model parameter."""
+    assert 'location' not in VirtualTryOnConfig.model_json_schema()['properties']
+
+
+def test_virtual_try_on_config_schema_inlines_output_options() -> None:
+    """outputOptions should expose child fields directly for model config UI."""
+    output_options = VirtualTryOnConfig.model_json_schema()['properties']['outputOptions']
+    assert output_options['type'] == 'object'
+    assert output_options['properties']['mimeType']['title'] == 'Mime type'
+    assert output_options['properties']['compressionQuality']['title'] == 'Compression quality'
 
 
 @pytest.mark.asyncio
