@@ -43,7 +43,6 @@ func TestLyriaConfigFromRequest(t *testing.T) {
 		expectSeed     *int
 		expectCount    int
 		expectNegative string
-		expectLocation string
 	}{
 		{
 			name: "valid config struct value",
@@ -56,10 +55,9 @@ func TestLyriaConfigFromRequest(t *testing.T) {
 		{
 			name: "valid config struct pointer",
 			request: &ai.ModelRequest{
-				Config: &LyriaConfig{Seed: &seed, Location: "global"},
+				Config: &LyriaConfig{Seed: &seed},
 			},
-			expectSeed:     &seed,
-			expectLocation: "global",
+			expectSeed: &seed,
 		},
 		{
 			name: "nil config pointer",
@@ -112,9 +110,6 @@ func TestLyriaConfigFromRequest(t *testing.T) {
 			}
 			if got.NegativePrompt != tt.expectNegative {
 				t.Errorf("NegativePrompt = %q, want %q", got.NegativePrompt, tt.expectNegative)
-			}
-			if got.Location != tt.expectLocation {
-				t.Errorf("Location = %q, want %q", got.Location, tt.expectLocation)
 			}
 			if (got.Seed == nil) != (tt.expectSeed == nil) {
 				t.Errorf("Seed nil mismatch: got %v want %v", got.Seed, tt.expectSeed)
