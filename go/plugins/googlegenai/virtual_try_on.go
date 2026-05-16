@@ -42,8 +42,9 @@ type VirtualTryOnConfig struct {
 	PersonGeneration string                  `json:"personGeneration,omitempty"`
 	SafetySetting    string                  `json:"safetySetting,omitempty"`
 	StorageURI       string                  `json:"storageUri,omitempty"`
+	AddWatermark     *bool                   `json:"addWatermark,omitempty"`
+	EnhancePrompt    *bool                   `json:"enhancePrompt,omitempty"`
 	OutputOptions    *VirtualTryOnOutputOpts `json:"outputOptions,omitempty"`
-	Location         string                  `json:"location,omitempty"`
 }
 
 // VirtualTryOnOutputOpts controls the output format of generated try-on images.
@@ -219,21 +220,13 @@ func generateVirtualTryOn(
 		return nil, err
 	}
 
-	// Location and project come from the client unless explicitly overridden.
 	location := cc.Location
-	if cfg.Location != "" {
-		location = cfg.Location
-	}
 	if location == "" {
 		return nil, fmt.Errorf("virtual try-on requires a Vertex AI location")
 	}
 	if cc.Project == "" {
 		return nil, fmt.Errorf("virtual try-on requires a Vertex AI project id")
 	}
-
-	// The config's Location field is a plugin-level override; it is not a
-	// request parameter, so scrub it before sending.
-	payload.Parameters.Location = ""
 
 	body, err := json.Marshal(payload)
 	if err != nil {
