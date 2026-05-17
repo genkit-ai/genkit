@@ -48,7 +48,7 @@ echo -e "${BLUE}=== Version Consistency Check ===${NC}"
 echo ""
 
 # Get core package version (source of truth)
-CORE_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+CORE_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
 echo -e "Core genkit version: ${GREEN}${CORE_VERSION}${NC}"
 echo ""
 
@@ -81,13 +81,13 @@ check_version() {
 
 # Check core package
 echo -e "${YELLOW}Core package:${NC}"
-check_version "packages/genkit/pyproject.toml" "$CORE_VERSION" "core"
+check_version "pyproject.toml" "$CORE_VERSION" "core"
 
 # Check all plugins
 echo ""
 echo -e "${YELLOW}Plugins (should match core version):${NC}"
 PLUGIN_COUNT=0
-for f in plugins/*/pyproject.toml; do
+for f in src/genkit/plugins/*/pyproject.toml; do
     if [ -f "$f" ]; then
         check_version "$f" "$CORE_VERSION" "plugin"
         PLUGIN_COUNT=$((PLUGIN_COUNT + 1))

@@ -51,16 +51,16 @@ jobs:
           set -uo pipefail
 
           PACKAGES=(
-            py/packages/genkit
-            py/plugins/anthropic
-            py/plugins/compat-oai
-            py/plugins/google-cloud
-            py/plugins/google-genai
-            py/plugins/ollama
-            py/plugins/fastapi
-            py/plugins/flask
-            py/plugins/vertex-ai
-            py/plugins/evaluators
+            py
+            py/src/genkit/plugins/anthropic
+            py/src/genkit/plugins/compat_oai
+            py/src/genkit/plugins/google_cloud
+            py/src/genkit/plugins/google_genai
+            py/src/genkit/plugins/ollama
+            py/src/genkit/plugins/fastapi
+            py/src/genkit/plugins/flask
+            py/src/genkit/plugins/vertex_ai
+            py/src/genkit/plugins/evaluators
           )
 
           FAILED=()

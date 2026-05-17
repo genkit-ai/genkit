@@ -35,7 +35,7 @@ PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PY_DIR"
 
 # Get current version
-CURRENT_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+CURRENT_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
 
 usage() {
   echo "Usage: $0 [OPTIONS] <new_version>"
@@ -162,11 +162,11 @@ update_version() {
 
 # Update core package
 echo -e "${CYAN}Updating core package...${NC}"
-update_version "packages/genkit/pyproject.toml"
+update_version "pyproject.toml"
 
 # Update all plugins
 echo -e "\n${CYAN}Updating plugins...${NC}"
-for f in plugins/*/pyproject.toml; do
+for f in src/genkit/plugins/*/pyproject.toml; do
   if [ -f "$f" ]; then
     update_version "$f"
   fi

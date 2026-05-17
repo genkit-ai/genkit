@@ -44,7 +44,7 @@ lint:
     uv run --directory "{{ py_dir }}" ruff format --preview .
     uv run --directory "{{ py_dir }}" ty check .
     uv run --directory "{{ py_dir }}" pyrefly check .
-    uv run --directory "{{ py_dir }}" pyright packages/
+    uv run --directory "{{ py_dir }}" pyright src/
 
 # Format Python code with ruff.
 fmt:

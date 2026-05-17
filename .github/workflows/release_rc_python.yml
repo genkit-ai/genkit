@@ -63,11 +63,11 @@ jobs:
           BRANCH="release/py/${NEW}"
           echo "new=${NEW}" >> $GITHUB_OUTPUT
           # Read current version from genkit; bump all packages that match
-          CUR=$(grep '^version = ' py/packages/genkit/pyproject.toml | cut -d'"' -f2)
+          CUR=$(grep '^version = ' py/pyproject.toml | cut -d'"' -f2)
           git config user.email "genkit-releaser@google.com" && git config user.name "genkit-releaser"
           git checkout -b "${BRANCH}"
           cd py
-          for f in packages/genkit/pyproject.toml plugins/*/pyproject.toml; do
+          for f in pyproject.toml src/genkit/plugins/*/pyproject.toml; do
             [ -f "$f" ] && grep -q "version = \"$CUR\"" "$f" && sed -i "s/version = \"$CUR\"/version = \"$NEW\"/" "$f"
           done
           uv lock && cd ..

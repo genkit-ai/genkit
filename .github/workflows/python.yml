@@ -103,7 +103,7 @@ jobs:
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: cd py && uv run pyright packages/
+        run: cd py && uv run pyright src/
 
   # =============================================================================
   # Security and compliance checks
@@ -136,7 +136,7 @@ jobs:
           cd py
           # Check for common API key patterns
           if grep -rE "(sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35}|AKIA[0-9A-Z]{16})" \
-              packages/ plugins/ --include="*.py" | grep -vE "test|mock|fake|example|#"; then
+              src/ --include="*.py" | grep -vE "test|mock|fake|example|#"; then
             echo "Error: Potential hardcoded secrets found"
             exit 1
           fi

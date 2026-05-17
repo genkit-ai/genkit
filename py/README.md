@@ -302,29 +302,22 @@ and deciding whether to allow or reject it:
 
 ```
 py/
-├── packages/genkit/          # Core Genkit framework package
-├── plugins/                  # Official plugins
-│   ├── anthropic/            # Claude models
-│   ├── azure/                # Azure AI telemetry (community)
-│   ├── cloudflare-workers-ai/# Cloudflare Workers AI + OTLP telemetry (community)
-│   ├── checks/               # Safety guardrails
-│   ├── cohere/               # Cohere models (community)
-│   ├── compat-oai/           # OpenAI-compatible APIs
-│   ├── deepseek/             # DeepSeek models
-│   ├── dev-local-vectorstore/# Local development vector store
-│   ├── evaluators/           # RAGAS and custom evaluators
-│   ├── firebase/             # Firebase integration + telemetry
-│   ├── flask/                # Flask HTTP endpoints
-│   ├── google-cloud/         # GCP telemetry (Cloud Trace, Logging)
-│   ├── google-genai/         # Gemini, Imagen, Veo, Lyria, TTS
-│   ├── huggingface/          # HuggingFace Inference API
-│   ├── mcp/                  # Model Context Protocol
-│   ├── microsoft-foundry/    # Azure AI Foundry (11,000+ models) (community)
-│   ├── mistral/              # Mistral models
-│   ├── observability/        # 3rd party telemetry (Sentry, Datadog, etc.)
-│   ├── ollama/               # Local Ollama models
-│   ├── vertex-ai/            # Model Garden + Vector Search
-│   └── xai/                  # Grok models
+├── pyproject.toml            # Core Genkit wheel manifest + workspace config
+├── src/
+│   └── genkit/               # Core Genkit framework package
+│       ├── _ai/              # Generate, prompts, tools, formats
+│       ├── _core/            # Action, registry, tracing, reflection
+│       └── plugins/          # Official plugins (each ships its own wheel)
+│           ├── anthropic/
+│           ├── compat_oai/
+│           ├── evaluators/
+│           ├── fastapi/
+│           ├── flask/
+│           ├── google_cloud/
+│           ├── google_genai/
+│           ├── ollama/
+│           └── vertex_ai/
+├── tests/                    # Core + plugin tests
 ├── samples/                  # Sample applications
 └── testapps/                 # Test applications
 ```
