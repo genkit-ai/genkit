@@ -398,14 +398,14 @@ def _redact_data_uris(obj: Any) -> Any:  # noqa: ANN401
 
 
 def define_generate_action(registry: Registry) -> None:
-    """Registers generate action in the provided registry."""
+    """Register ``/util/generate`` so reflection callers (e.g. the Dev UI) hit the same engine as ``ai.generate``."""
 
     async def generate_action_fn(
         input: GenerateActionOptions,
         ctx: ActionRunContext,
     ) -> ModelResponse:
         on_chunk = cast(Callable[[ModelResponseChunk], None], ctx.streaming_callback) if ctx.is_streaming else None
-        return await _generate_action(
+        return await generate_with_request(
             registry=registry,
             raw_request=input,
             on_chunk=on_chunk,
@@ -427,76 +427,106 @@ async def generate_action(
     current_turn: int = 0,
     context: dict[str, Any] | None = None,
 ) -> ModelResponse:
-    """Execute a generation request with tool calling and middleware support, wrapped in a util ``generate`` span.
+    """Open the user-facing ``generate`` span and delegate to the engine.
 
-    The registered ``/util/generate`` action calls :func:`_generate_action` directly,
-    so reflection runs do not stack another util span on the action span.
+    Thin wrapper so in-process callers get a trace span named ``generate``
+    around the whole call.  The registered ``/util/generate`` action skips
+    this wrapper because the action runtime already opens its own span.
     """
     span_name = 'generate'
     with run_in_new_span(SpanMetadata(name=span_name, type='util', input=raw_request)) as span:
-        call_registry = registry if registry.is_child else registry.new_child()
-        refs = registry_with_inline_middleware(call_registry, raw_request.use)
-        if refs:
-            raw_request = raw_request.model_copy(update={'use': refs})
-        middleware = resolve_middleware_from_use(call_registry, refs)
-        _queue: list[Message] = []
-
-        def _enqueue_parts(parts: list[Part]) -> None:
-            if _queue and _queue[-1].role == Role.USER:
-                _queue[-1] = Message(role=Role.USER, content=list(_queue[-1].content) + list(parts))
-            else:
-                _queue.append(Message(role=Role.USER, content=list(parts)))
-
-        # Bind per-call framework attrs onto each middleware before any hook or
-        # tools() runs.  After this, hooks can read ``self.registry`` and
-        # ``self.enqueue_parts`` directly without the engine threading them
-        # through every params object.
-        if middleware:
-            middleware = _bind_call_state(
-                middleware,
-                registry=call_registry,
-                enqueue_parts=_enqueue_parts,
-            )
-            mw_tools: list[Action[Any, Any, Never]] = []
-            for mw in middleware:
-                contributed = mw.tools()
-                mw_tools.extend(contributed)
-
-            if mw_tools:
-                mw_tool_names: list[str] = []
-                for t in mw_tools:
-                    call_registry.register_action_from_instance(t)
-                    mw_tool_names.append(t.name)
-                existing = list(raw_request.tools) if raw_request.tools else []
-                raw_request = raw_request.model_copy(update={'tools': existing + mw_tool_names})
-        result = await _generate_action(
-            registry=call_registry,
+        result = await generate_with_request(
+            registry=registry,
             raw_request=raw_request,
             on_chunk=on_chunk,
             message_index=message_index,
             current_turn=current_turn,
-            middleware=middleware,
             context=context,
-            _enqueue_parts=_enqueue_parts,
-            _queue=_queue,
         )
         with contextlib.suppress(Exception):
             span.set_attribute('genkit:output', result.model_dump_json(by_alias=True, exclude_none=True))
         return result
 
 
-async def _generate_action(
+async def generate_with_request(
     registry: Registry,
     raw_request: GenerateActionOptions,
     on_chunk: Callable[[ModelResponseChunk], None] | None = None,
     message_index: int = 0,
     current_turn: int = 0,
-    middleware: list[BaseMiddleware] | None = None,
     context: dict[str, Any] | None = None,
-    _enqueue_parts: Callable[[list[Part]], None] | None = None,
-    _queue: list[Message] | None = None,
 ) -> ModelResponse:
-    """Execute a generation request with tool calling and middleware support."""
+    """Resolve ``raw_request.use`` and run the generation.
+    
+    Core generate business logic. `ai.generate` veneer and the registered
+    `/util/generate` action funnel through here."""
+    # Shallow-copy the wire-shape struct so per-field updates below (and any
+    # future mutations) don't leak back to the caller's ``raw_request``.
+    raw_request = raw_request.model_copy()
+    registry = registry if registry.is_child else registry.new_child()
+    refs = registry_with_inline_middleware(registry, raw_request.use)
+    if refs:
+        raw_request = raw_request.model_copy(update={'use': refs})
+    middleware = resolve_middleware_from_use(registry, refs)
+    queue: list[Message] = []
+
+    def enqueue_parts(parts: list[Part]) -> None:
+        if queue and queue[-1].role == Role.USER:
+            queue[-1] = Message(role=Role.USER, content=list(queue[-1].content) + list(parts))
+        else:
+            queue.append(Message(role=Role.USER, content=list(parts)))
+
+    if middleware:
+        middleware = _bind_call_state(
+            middleware,
+            registry=registry,
+            enqueue_parts=enqueue_parts,
+        )
+        mw_tools: list[Action[Any, Any, Never]] = []
+        for mw in middleware:
+            contributed = mw.tools()
+            mw_tools.extend(contributed)
+
+        if mw_tools:
+            mw_tool_names: list[str] = []
+            for t in mw_tools:
+                registry.register_action_from_instance(t)
+                mw_tool_names.append(t.name)
+            existing = list(raw_request.tools) if raw_request.tools else []
+            raw_request = raw_request.model_copy(update={'tools': existing + mw_tool_names})
+
+    return await _generate_action_turn(
+        registry=registry,
+        raw_request=raw_request,
+        middleware=middleware,
+        on_chunk=on_chunk,
+        message_index=message_index,
+        current_turn=current_turn,
+        context=context,
+        enqueue_parts=enqueue_parts,
+        queue=queue,
+    )
+
+
+async def _generate_action_turn(
+    registry: Registry,
+    raw_request: GenerateActionOptions,
+    middleware: list[BaseMiddleware],
+    on_chunk: Callable[[ModelResponseChunk], None] | None,
+    message_index: int,
+    current_turn: int,
+    context: dict[str, Any] | None,
+    enqueue_parts: Callable[[list[Part]], None],
+    queue: list[Message],
+) -> ModelResponse:
+    """Run one model call plus tool resolution, then recurse for the next turn.
+
+    Engine setup is already done by :func:`generate_with_request`, so this
+    function is free to recurse on itself per tool-loop iteration without
+    re-resolving middleware, re-binding state, or re-registering
+    middleware-contributed tools.  Each recursion just appends the model
+    message + tool response to ``messages`` and goes around again.
+    """
     tools_in = raw_request.tools
     if tools_in:
         raw_request = raw_request.model_copy()
@@ -575,14 +605,9 @@ async def _generate_action(
 
         return wrapper
 
-    if not middleware:
-        middleware = []
-
     # Inject ``request.docs`` as a context part on the last user message.
     if request.docs:
         request = _augment_with_context(request)
-
-    normalized_mw: list[BaseMiddleware] = list(middleware)
 
     async def dispatch_generate(
         params: GenerateHookParams,
@@ -590,7 +615,7 @@ async def _generate_action(
     ) -> ModelResponse:
         """Chain wrap_generate middleware and call next_fn."""
         runner: Callable[[GenerateHookParams], Awaitable[ModelResponse]] = next_fn
-        for mw in reversed(normalized_mw):
+        for mw in reversed(middleware):
             _mw = mw
             _inner = runner
 
@@ -619,7 +644,7 @@ async def _generate_action(
             ).response
 
         runner: Callable[[ModelHookParams], Awaitable[ModelResponse]] = run_model
-        for mw in reversed(normalized_mw):
+        for mw in reversed(middleware):
             _mw = mw
             _inner = runner
 
@@ -662,9 +687,9 @@ async def _generate_action(
         # runs.  This is how a tool-side middleware (e.g. Filesystem read_file)
         # can make extra context — file contents, error notes, etc. — visible
         # to the model on the very next turn without forging a tool response.
-        if _queue:
-            queued = list(_queue)
-            _queue.clear()
+        if queue:
+            queued = list(queue)
+            queue.clear()
             if on_chunk:
                 # Emit each queued message at the current index and advance once
                 # per message.  We bypass `make_chunk` here because its role
@@ -759,7 +784,7 @@ async def _generate_action(
             registry,
             raw_request,
             generated_msg,
-            middleware=normalized_mw,
+            middleware=middleware,
         )
 
         # if an interrupt message is returned, stop the tool loop and return a
@@ -792,8 +817,7 @@ async def _generate_action(
         if transfer_preamble:
             next_request = apply_transfer_preamble(next_request, transfer_preamble)
 
-        # then recursively call for another loop.
-        return await _generate_action(
+        return await _generate_action_turn(
             registry=registry,
             raw_request=next_request,
             middleware=middleware,
@@ -801,8 +825,8 @@ async def _generate_action(
             message_index=message_index + 1,
             on_chunk=on_chunk,
             context=context,
-            _enqueue_parts=_enqueue_parts,
-            _queue=_queue,
+            enqueue_parts=enqueue_parts,
+            queue=queue,
         )
 
     generate_params = GenerateHookParams(

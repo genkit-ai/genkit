@@ -448,6 +448,34 @@ async def test_define_middleware_registers_on_the_fly() -> None:
 
 
 @pytest.mark.asyncio
+async def test_util_generate_action_runs_use_middleware() -> None:
+    """The Dev UI hits ``/util/generate`` directly with ``use=[MiddlewareRef(...)]``.
+
+    That entry point skips the in-process ``generate_action`` veneer, so
+    middleware resolution has to live in ``generate_with_request``, not in
+    the veneer. Without that, a hook the user configured in the UI silently
+    drops on the floor — exactly the bug this test pins down.
+    """
+    ai = Genkit()
+    define_echo_model(ai)
+    ai.define_middleware(ConfiguredPrefixMiddleware)
+
+    action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
+    assert action is not None
+
+    action_response = await action.run(
+        GenerateActionOptions(
+            model='echoModel',
+            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+            use=[MiddlewareRef(name='configured_prefix_mw', config={'prefix': '[DEV-UI]'})],
+        ),
+    )
+    response = cast(ModelResponse, action_response.response)
+
+    assert response.text == '[ECHO] user: "[DEV-UI] hi"'
+
+
+@pytest.mark.asyncio
 async def test_prompt_call_runs_middleware_declared_on_prompt() -> None:
     """``ai.define_prompt(use=[...])`` actually runs those middleware on call."""
     ai = Genkit()
@@ -750,7 +778,7 @@ async def test_wrap_generate_called_per_turn() -> None:
     """wrap_generate is invoked for each turn of the generate loop.
 
     This is the two-turn regression test: verifies middleware runs on *every*
-    recursive _generate_action call (turn 0 + turn 1 after tool response).
+    recursive _generate_action_turn call (turn 0 + turn 1 after tool response).
     """
     track_mw = TrackGenerateMiddleware()
     track_mw2 = TrackGenerateMiddleware()
