@@ -342,8 +342,7 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
 ) -> None:
     """A middleware with no config knobs still gets an (empty) object schema.
 
-    The Dev UI renders an empty config form, signalling "registered, nothing to
-    configure" rather than dropping the user into a raw JSON editor.
+    The Dev UI renders an empty config form, signalling "registered.
     """
 
     @middleware(name='no_op')
