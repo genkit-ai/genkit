@@ -14,18 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Core middleware abstractions for the Genkit generate pipeline.
-
-Defines :class:`BaseMiddleware` (the class authors subclass to add config fields
-and hook overrides), :class:`MiddlewareDesc` (the registry descriptor used for
-Dev UI name-based dispatch), plus the :func:`middleware` decorator and
-:func:`new_middleware` factory for registration.
-
-Also contains the hook parameter types (:class:`GenerateHookParams`,
-:class:`ModelHookParams`, :class:`ToolHookParams`, :class:`MultipartToolResponse`)
-that are passed into each hook by the engine. These live here rather than in
-``_model.py`` because middleware is a concept built on top of the model layer.
-"""
+"""Core middleware abstractions for the Genkit generate pipeline."""
 
 from __future__ import annotations
 
@@ -403,9 +392,6 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
         if field_name not in base_fields
     }
     if not new_fields:
-        # Empty object schema still tells the Dev UI "this middleware exists
-        # and has no knobs", which renders as a no-input form rather than a
-        # raw JSON editor.
         return {
             'type': 'object',
             'properties': {},
