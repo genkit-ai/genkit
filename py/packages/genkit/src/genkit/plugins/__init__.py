@@ -14,14 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Namespace package for Genkit plugins.
+"""Container for Genkit plugins.
 
-This is a namespace package that allows plugins to be discovered from
-multiple installed packages. Each plugin can be imported as:
+Each plugin (``genkit.plugins.<name>``) ships in its own wheel
+(``genkit-plugin-<name>``) but lives in this directory in source, so it
+imports and resolves like any regular subpackage:
 
-    from genkit.plugins.<plugin_name> import <PluginClass>
-
-For example:
-    from genkit.plugins.google_genai import GoogleGenai
+    from genkit.plugins.google_genai import GoogleAI
     from genkit.plugins.anthropic import Anthropic
 """

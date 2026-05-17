@@ -167,11 +167,8 @@ def package_name() -> str:
     return 'genkit.plugins.ollama'
 
 
-# String literals (not `Cls.__name__`) so type checkers like pyright can see
-# what's public — otherwise every plugin import lights up as an unexported
-# private symbol in the user's IDE.
 __all__ = [
-    'Ollama',
-    'ollama_name',
-    'package_name',
+    package_name.__name__,
+    Ollama.__name__,
+    ollama_name.__name__,
 ]

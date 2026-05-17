@@ -50,7 +50,7 @@ async def my_context_provider(request: RequestData[dict[str, object]]) -> dict[s
     return {'username': auth_header}
 
 
-@app.post('/chat')
+@app.post('/chat')  # pyright: ignore[reportArgumentType]  # pyrefly: ignore[bad-specialization]
 @genkit_flask_handler(ai, context_provider=my_context_provider)
 @ai.flow()
 async def say_hi(

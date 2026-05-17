@@ -15,7 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [project]
-authors = [{ name = "Google" }]
+authors = [
+  { name = "Google" },
+  { name = "Yesudeep Mangalapilly", email = "yesudeep@google.com" },
+  { name = "Elisa Shen", email = "mengqin@google.com" },
+  { name = "Niraj Nepal", email = "nnepal@google.com" },
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -38,30 +43,13 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "opentelemetry-api>=1.29.0",
-  "opentelemetry-sdk>=1.29.0",
-  "pydantic>=2.10.5",
-  "partial-json-parser>=0.2.1.1.post5",
-  "json5>=0.10.0",
+  "genkit",
+  "google-genai>=1.7.0",
+  "google-cloud-aiplatform>=1.77.0",
   "structlog>=25.2.0",
-  "rich>=13.0.0",
-  "asgiref>=3.8.1",
-  "httpx>=0.28.1",
-  "psutil>=7.0.0",
-  "starlette>=0.46.1",
-  "python-multipart>=0.0.22",
-  "sse-starlette>=2.2.1",
-  "pillow>=12.1.1",
-  "typing_extensions>=4.0",
   "strenum>=0.4.15; python_version < '3.11'",
-
-  "dotpromptz>=0.1.5",
-  "uvicorn>=0.34.0",
-  "uvloop>=0.21.0; sys_platform != 'win32'",
-  "anyio>=4.9.0",
-  "opentelemetry-instrumentation-logging>=0.60b1",
 ]
-description = "Genkit AI Framework"
+description = "Genkit Google GenAI Plugin"
 keywords = [
   "genkit",
   "ai",
@@ -69,26 +57,20 @@ keywords = [
   "machine-learning",
   "artificial-intelligence",
   "generative-ai",
-  "framework",
-  "sdk",
+  "google",
+  "gemini",
+  "vertex-ai",
+  "imagen",
 ]
 license = "Apache-2.0"
-name = "genkit"
+name = "genkit-plugin-google-genai"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.5.2"
 
-[project.optional-dependencies]
-flask                 = ["genkit-plugin-flask"]
-google-cloud          = ["genkit-plugin-google-cloud"]
-google-genai          = ["genkit-plugin-google-genai"]
-ollama                = ["genkit-plugin-ollama"]
-openai                = ["genkit-plugin-compat-oai"]
-vertex-ai             = ["genkit-plugin-vertex-ai"]
-
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
-"Changelog"     = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit/CHANGELOG.md"
+Changelog       = "https://github.com/genkit-ai/genkit/blob/main/py/packages/genkit/src/genkit/plugins/google_genai/CHANGELOG.md"
 "Documentation" = "https://firebase.google.com/docs/genkit"
 "Homepage"      = "https://github.com/genkit-ai/genkit"
 "Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
@@ -97,19 +79,14 @@ vertex-ai             = ["genkit-plugin-vertex-ai"]
 build-backend = "hatchling.build"
 requires      = ["hatchling"]
 
-# Plugin subpackages (genkit.plugins.<name>) ship in their own wheels. The core
-# wheel only ships the namespace marker (`genkit/plugins/__init__.py`) so users
-# who don't install a plugin still get an importable, empty `genkit.plugins`.
+# Plugin source lives in the same directory as this pyproject.toml so static
+# analyzers resolve `genkit.plugins.google_genai` natively from the core genkit
+# source tree. Tests live under packages/genkit/tests/ so they don't end up in
+# the wheel. README + LICENSE + pyproject ride along (cheap, harmless).
 [tool.hatch.build.targets.wheel]
-packages = ["src/genkit"]
-exclude  = ["src/genkit/plugins/*/**"]
-
-[tool.pytest.ini_options]
-pythonpath = [".", "src", "tests", "packages/genkit/src"]
-testpaths  = ["tests"]
-
-[tool.uv.sources]
-genkit-plugin-compat-oai            = { workspace = true }
-genkit-plugin-flask                 = { workspace = true }
-genkit-plugin-google-genai          = { workspace = true }
-genkit-plugin-ollama                = { workspace = true }
+packages      = []
+force-include = { "." = "genkit/plugins/google_genai" }
+exclude       = [
+  "**/__pycache__",
+  "**/*.pyc",
+]

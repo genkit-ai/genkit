@@ -232,24 +232,21 @@ def package_name() -> str:
     return 'genkit.plugins.google_genai'
 
 
-# String literals (not `Cls.__name__`) so type checkers like pyright can see
-# what's public — otherwise every plugin import lights up as an unexported
-# private symbol in the user's IDE.
 __all__ = [
-    'EmbeddingTaskType',
-    'GeminiConfigSchema',
-    'GeminiEmbeddingModels',
-    'GeminiImageConfigSchema',
-    'GeminiTtsConfigSchema',
-    'GoogleAI',
-    'GoogleAIGeminiVersion',
-    'ImagenVersion',
-    'LyriaConfig',
-    'LyriaVersion',
-    'VeoConfig',
-    'VeoVersion',
-    'VertexAI',
-    'VertexAIGeminiVersion',
-    'VertexEmbeddingModels',
-    'package_name',
+    package_name.__name__,
+    GoogleAI.__name__,
+    VertexAI.__name__,
+    GeminiEmbeddingModels.__name__,
+    VertexEmbeddingModels.__name__,
+    GoogleAIGeminiVersion.__name__,
+    VertexAIGeminiVersion.__name__,
+    EmbeddingTaskType.__name__,
+    GeminiConfigSchema.__name__,
+    GeminiImageConfigSchema.__name__,
+    GeminiTtsConfigSchema.__name__,
+    ImagenVersion.__name__,
+    VeoVersion.__name__,
+    VeoConfig.__name__,
+    LyriaVersion.__name__,
+    LyriaConfig.__name__,
 ]

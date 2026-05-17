@@ -486,12 +486,12 @@ if ! grep -q "^__all__" packages/genkit/src/genkit/__init__.py 2>/dev/null; then
 fi
 
 # Check plugin __init__.py files
-# Use nullglob to handle case where no files match
 shopt -s nullglob
-plugin_init_files=(plugins/*/src/genkit/plugins/*/__init__.py)
+plugin_init_files=(packages/genkit/src/genkit/plugins/*/__init__.py)
 shopt -u nullglob
 
-for f in "${plugin_init_files[@]}"; do
+# `set -u` would trip on expanding an empty array, so guard with `+`.
+for f in "${plugin_init_files[@]+"${plugin_init_files[@]}"}"; do
   if [ -f "$f" ]; then
     # Skip empty or minimal __init__.py files (less than 5 lines of actual code)
     code_lines=$(grep -cv "^#\|^$\|^\"\"\"" "$f" 2>/dev/null || echo "0")

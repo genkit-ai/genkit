@@ -175,7 +175,16 @@ genkit-plugin-evaluators            = { workspace = true }
 genkit-plugin-vertex-ai             = { workspace = true }
 [tool.uv.workspace]
 exclude = ["*/shared", "testapps/*"]
-members = ["packages/*", "plugins/*", "samples/*"]
+# Plugins live inside the core genkit source tree (see packages/genkit/src/
+# genkit/plugins/<name>/) so static analyzers resolve `genkit.plugins.<name>`
+# from a single directory. Each plugin is still its own wheel with its own
+# pyproject.toml; only the on-disk layout changed.
+members = [
+  "packages/*",
+  "packages/genkit/src/genkit/plugins/*",
+  "plugins/*",
+  "samples/*",
+]
 
 
 # Ruff checks and formatting.
@@ -381,16 +390,8 @@ exclude = [
 
 [tool.ty.environment]
 root = [
-  # Core package
+  # Core package (plugins live under packages/genkit/src/genkit/plugins/<name>/)
   "packages/genkit/src",
-  # Plugins
-  "plugins/anthropic/src",
-  "plugins/compat-oai/src",
-  "plugins/flask/src",
-  "plugins/google-cloud/src",
-  "plugins/google-genai/src",
-  "plugins/ollama/src",
-  "plugins/vertex-ai/src",
   ".",  # For samples.shared and other root-level imports
 ]
 
@@ -407,17 +408,10 @@ exclude = [
   "build",
   "dist",
 ]
-extraPaths = [
-  "packages/genkit/src",
-  "plugins/anthropic/src",
-  "plugins/compat-oai/src",
-  "plugins/fastapi/src",
-  "plugins/flask/src",
-  "plugins/google-cloud/src",
-  "plugins/google-genai/src",
-  "plugins/ollama/src",
-  "plugins/vertex-ai/src",
-]
+# A single entry covers everything: plugin sources live under
+# packages/genkit/src/genkit/plugins/<name>/ alongside the rest of the
+# genkit package, so static analyzers walk one tree.
+extraPaths = ["packages/genkit/src"]
 pythonVersion = "3.10"
 reportMissingImports = true
 reportMissingTypeStubs = false
@@ -427,15 +421,9 @@ venvPath = "."
 
 # Pyrefly type checking configuration (Meta's new type checker).
 #
-# Import Resolution Note:
-# Pyrefly doesn't fully support PEP 420 namespace packages. The genkit plugins use
-# namespace packages (genkit.plugins.*) where intermediate directories (genkit/ and
-# genkit/plugins/) don't have __init__.py files. This is intentional for allowing
-# multiple packages to contribute to the same namespace, but pyrefly can't resolve
-# these imports statically. We use ignore-missing-imports for "genkit.plugins.*" to
-# suppress false positive import errors while still catching real type errors.
-# At runtime, these imports work correctly because Python's import system handles
-# PEP 420 namespace packages natively.
+# Plugins live in the core genkit source tree (packages/genkit/src/genkit/
+# plugins/<name>/) as regular subpackages, so static analyzers resolve them
+# from a single tree without any namespace-package gymnastics.
 [tool.pyrefly]
 project_excludes = [
   "**/__pycache__",
@@ -449,38 +437,23 @@ project_excludes = [
   "build",
   "dist",
   "testapps",
-  "testapps",
 ]
 project_includes = [
-  # Core package (source and tests)
   "packages/genkit/src/**/*.py",
   "packages/genkit/tests/**/*.py",
-  # Plugins (source and tests)
-  "plugins/*/src/**/*.py",
-  "plugins/*/tests/**/*.py",
-  # Samples
   "samples/*/src/**/*.py",
   "samples/*/tests/**/*.py",
 ]
 
-# Search path for first-party code import resolution.
-search-path = ["."]
-# Ignore missing imports for namespace packages - pyrefly can't resolve PEP 420
-# namespace packages but these imports work at runtime.
-# model_performance_test is local to sample-test (excluded from workspace).
-ignore-missing-imports = ["genkit.plugins.*"]
-python_version         = "3.10"
+search-path    = ["."]
+python_version = "3.10"
 
 # Treat warnings as errors.
 [tool.pyrefly.errors]
 deprecated     = "error"
 redundant-cast = "error"
 
-# Ty analysis: suppress unresolved-import for plugins (PEP 420 namespace packages).
-[tool.ty.analysis]
-allowed-unresolved-imports = ["genkit.plugins.**"]
-
-# Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
+# Downgrade unused-type-ignore to avoid noise from comments pyright needs but ty doesn't.
 [tool.ty.rules]
 unused-type-ignore-comment = "ignore"
 
