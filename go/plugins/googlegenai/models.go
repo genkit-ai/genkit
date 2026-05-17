@@ -152,8 +152,8 @@ var (
 		veo30FastGenerate001,
 		veo31Generate001,
 		veo31FastGenerate001,
-    
-    virtualTryOn001,
+
+		virtualTryOn001,
 	}
 
 	googleAIModels = []string{
