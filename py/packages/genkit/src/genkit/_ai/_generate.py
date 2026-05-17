@@ -457,9 +457,10 @@ async def generate_with_request(
     context: dict[str, Any] | None = None,
 ) -> ModelResponse:
     """Resolve ``raw_request.use`` and run the generation.
-    
+
     Core generate business logic. `ai.generate` veneer and the registered
-    `/util/generate` action funnel through here."""
+    `/util/generate` action funnel through here.
+    """
     # Shallow-copy the wire-shape struct so per-field updates below (and any
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
