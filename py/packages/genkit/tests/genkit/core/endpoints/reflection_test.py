@@ -365,7 +365,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
 async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     """A middleware with no config knobs still gets an (empty) object schema.
 
-    The Dev UI renders an empty config form, signalling "registered.
+    The Dev UI renders an empty config form, signalling registered.
     """
 
     @middleware(name='no_op')
@@ -391,11 +391,7 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
 
 @pytest.mark.asyncio
 async def test_values_middleware_explicit_config_schema_wins() -> None:
-    """Explicit ``@middleware(config_schema=...)`` overrides the derived schema.
-
-    Authors who hand-wrote a schema (often to add titles, descriptions, or
-    enum constraints the Dev UI uses for nicer form widgets) should keep it.
-    """
+    """Explicit ``@middleware(config_schema=...)`` overrides the derived schema."""
     explicit = {
         'type': 'object',
         'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},

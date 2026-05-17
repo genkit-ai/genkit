@@ -296,8 +296,7 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
     """Middleware registered via ``new_middleware`` exposes a derived configSchema.
 
     The Dev UI uses this schema to render a config form for each registered
-    middleware. Without it the form has nothing to draw and the user is dumped
-    into a free-text JSON editor.
+    middleware.
     """
 
     @middleware(name='fallback', description='Falls back to alternative models on failure')
@@ -342,7 +341,7 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
 ) -> None:
     """A middleware with no config knobs still gets an (empty) object schema.
 
-    The Dev UI renders an empty config form, signalling "registered.
+    The Dev UI renders an empty config form, signalling registered.
     """
 
     @middleware(name='no_op')
@@ -376,11 +375,7 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
 async def test_reflection_server_v2_list_values_explicit_config_schema_wins(
     fake_manager: FakeReflectionManager,
 ) -> None:
-    """Explicit ``middleware_config_schema`` on the class overrides the derived one.
-
-    Authors who hand-wrote a schema (often to add titles, descriptions, or
-    enum constraints the dev UI uses for nicer form widgets) should keep it.
-    """
+    """Explicit ``middleware_config_schema`` on the class overrides the derived one."""
     explicit = {
         'type': 'object',
         'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},
@@ -600,7 +595,7 @@ async def test_reflection_server_v2_input_stream_not_implemented_js_style(
     fake_manager: FakeReflectionManager,
     stream_method: str,
 ) -> None:
-    """Unimplemented input-stream methods return -32000 + data.stack when id is set (JS parity)."""
+    """Unimplemented input-stream methods return -32000 + data.stack when id is set."""
     registry = Registry()
     client, task = await _run_client_lifecycle(registry, fake_manager)
     try:
