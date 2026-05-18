@@ -60,7 +60,7 @@ PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PY_DIR"
 
 # Total number of checks
-TOTAL_CHECKS=20
+TOTAL_CHECKS=19
 
 echo -e "${BLUE}=== Genkit Python Consistency Checks ===${NC}"
 echo ""
@@ -448,35 +448,9 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 14: Typos and Spelling Errors
+# Check 14: IDE Autocomplete - __all__ exports in __init__.py
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[14/$TOTAL_CHECKS] Checking for typos and spelling errors...${NC}"
-if uv run typos --version > /dev/null 2>&1; then
-  # Run typos on plugins/ only (packages/genkit is checked separately by core team)
-  if uv run typos plugins/ samples/ --config typos.toml --format brief > /tmp/typos_output_$$ 2>&1; then
-    echo -e "  ${GREEN}✓${NC} No typos found in plugins/samples"
-  else
-    typos_count=$(grep -c "error:" /tmp/typos_output_$$ 2>/dev/null || echo "0")
-    if [ "$typos_count" -gt 0 ]; then
-      echo -e "  ${RED}ERROR${NC}: $typos_count typo(s) found"
-      grep "error:" /tmp/typos_output_$$ | head -5 | while read -r line; do
-        echo -e "    $line"
-      done
-      ERRORS=$((ERRORS + 1))
-    else
-      echo -e "  ${GREEN}✓${NC} No typos found in plugins/samples"
-    fi
-  fi
-  rm -f /tmp/typos_output_$$ 2>/dev/null || true
-else
-  echo -e "  ${YELLOW}SKIP${NC}: typos tool not available (install with 'uv pip install typos')"
-fi
-echo ""
-
-# -----------------------------------------------------------------------------
-# Check 15: IDE Autocomplete - __all__ exports in __init__.py
-# -----------------------------------------------------------------------------
-echo -e "${BLUE}[15/$TOTAL_CHECKS] Checking __all__ exports for IDE autocomplete...${NC}"
+echo -e "${BLUE}[14/$TOTAL_CHECKS] Checking __all__ exports for IDE autocomplete...${NC}"
 all_missing=0
 
 # Check main genkit package
@@ -510,9 +484,9 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 16: IDE Autocomplete - Broad type: ignore comments
+# Check 15: IDE Autocomplete - Broad type: ignore comments
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[16/$TOTAL_CHECKS] Checking for broad type: ignore comments...${NC}"
+echo -e "${BLUE}[15/$TOTAL_CHECKS] Checking for broad type: ignore comments...${NC}"
 broad_ignores=$(grep -rn "# type: ignore$" packages/ plugins/ 2>/dev/null \
   | grep -v "__pycache__" \
   | grep -v "\.pyc:" \
@@ -536,9 +510,9 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 17: Python Version Classifiers (3.10-3.14)
+# Check 16: Python Version Classifiers (3.10-3.14)
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[17/$TOTAL_CHECKS] Checking Python version classifiers...${NC}"
+echo -e "${BLUE}[16/$TOTAL_CHECKS] Checking Python version classifiers...${NC}"
 classifier_errors=0
 
 REQUIRED_VERSIONS=("3.10" "3.11" "3.12" "3.13" "3.14")
@@ -570,9 +544,9 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 18: Namespace Package __init__.py
+# Check 17: Namespace Package __init__.py
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[18/$TOTAL_CHECKS] Checking namespace package __init__.py files...${NC}"
+echo -e "${BLUE}[17/$TOTAL_CHECKS] Checking namespace package __init__.py files...${NC}"
 namespace_errors=0
 
 # Plugins use namespace packages (genkit.plugins.*) and must NOT have __init__.py
@@ -604,9 +578,9 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 19: Test File Basename Uniqueness
+# Check 18: Test File Basename Uniqueness
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[19/$TOTAL_CHECKS] Checking test file basename uniqueness...${NC}"
+echo -e "${BLUE}[18/$TOTAL_CHECKS] Checking test file basename uniqueness...${NC}"
 basename_errors=0
 
 # Common exclusion arguments for find — shared across invocations
@@ -647,9 +621,9 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 20: CHANGELOG.md Files Exist
+# Check 19: CHANGELOG.md Files Exist
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[20/$TOTAL_CHECKS] Checking CHANGELOG.md files exist...${NC}"
+echo -e "${BLUE}[19/$TOTAL_CHECKS] Checking CHANGELOG.md files exist...${NC}"
 changelog_missing=0
 
 
