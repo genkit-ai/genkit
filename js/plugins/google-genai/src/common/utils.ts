@@ -34,7 +34,6 @@ import {
   Part,
   isObject,
 } from './types.js';
-
 /**
  * Safely extracts the error message from the error.
  * @param e The error
@@ -395,12 +394,16 @@ async function* generateResponseSequence(
   stream: ReadableStream<GenerateContentResponse>
 ): AsyncGenerator<GenerateContentResponse> {
   const reader = stream.getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      yield value;
     }
-    yield value;
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -409,12 +412,23 @@ async function getResponsePromise(
 ): Promise<GenerateContentResponse> {
   const allResponses: GenerateContentResponse[] = [];
   const reader = stream.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return aggregateResponses(allResponses);
+      }
+      allResponses.push(value);
+    }
+  } catch (error) {
+    if (allResponses.length) {
+      console.error('Stream processing failed. Returning partial response. Error:', error);
       return aggregateResponses(allResponses);
     }
-    allResponses.push(value);
+
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
 }
 
