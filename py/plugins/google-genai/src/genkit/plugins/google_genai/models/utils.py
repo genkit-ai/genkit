@@ -143,11 +143,6 @@ class PartConverter:
             tool_response = part.root.tool_response
             tool_output = tool_response.output
 
-            # Gemini's FunctionResponse.response is dict-shaped on the wire,
-            # so a tool that returns a scalar or list has to be boxed under
-            # a key or the model call gets rejected.
-            output = tool_output if isinstance(tool_output, dict) else {'result': tool_output}
-
             # A tool can hand back media (text/image/audio parts) next to its
             # structured output by populating tool_response.content. Surface
             # each item as its own Gemini Part so the model sees both the
@@ -187,13 +182,13 @@ class PartConverter:
                                     genai.types.Part(inline_data=genai.types.Blob(mime_type=content_type, data=data))
                                 )
                     if extra_parts:
-                        output = clean_output
+                        tool_output = clean_output
 
             fn_part = genai.types.Part(
                 function_response=genai.types.FunctionResponse(
                     id=tool_response.ref,
                     name=tool_response.name.replace('/', '__'),
-                    response=output,
+                    response=tool_output,
                 )
             )
             if extra_parts:
