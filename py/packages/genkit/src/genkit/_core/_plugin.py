@@ -22,7 +22,7 @@ import abc
 from collections.abc import Sequence
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._middleware import MiddlewareDesc, _validate_middleware_key_segment
+from genkit._core._middleware import MiddlewareDesc
 from genkit._core._typing import ActionMetadata
 
 
@@ -96,18 +96,7 @@ class _MiddlewareDescsPlugin(Plugin):
         return list(self._descs)
 
 
-def _middleware_registry_name(namespace: str | None, desc_name: str) -> str:
-    """Registry key for a descriptor under an optional namespace prefix."""
-    if not namespace:
-        return desc_name
-    return f'{namespace}/{desc_name}'
-
-
-def middleware_plugin(
-    descs: Sequence[MiddlewareDesc],
-    *,
-    namespace: str | None = None,
-) -> Plugin:
+def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
     """Wrap a list of middleware descriptors as a single plugin (for ``plugins=[...]``).
 
     Pass all descriptors for this plugin in one list so one plugin can
@@ -115,20 +104,17 @@ def middleware_plugin(
 
     Example:
         Genkit(plugins=[
-            middleware_plugin(
-                [
-                    MiddlewareDesc(
-                        cls=PrefixPromptMiddleware,
-                        name='prefix_prompt',
-                        description='Prepends a fixed prompt',
-                    ),
-                    MiddlewareDesc(
-                        cls=OtherMiddleware,
-                        name='other',
-                    ),
-                ],
-                namespace='myapp',
-            ),
+            middleware_plugin([
+                MiddlewareDesc(
+                    cls=PrefixPromptMiddleware,
+                    name='prefix_prompt',
+                    description='Prepends a fixed prompt',
+                ),
+                MiddlewareDesc(
+                    cls=OtherMiddleware,
+                    name='other',
+                ),
+            ]),
         ])
 
     Construct each descriptor with ``MiddlewareDesc(cls=..., name=...)``;
@@ -136,20 +122,9 @@ def middleware_plugin(
 
     Args:
         descs: Non-empty sequence of middleware descriptors.
-        namespace: Optional plugin namespace.
-
-            * If set, it becomes the plugin name and each descriptor is
-              registered as ``{namespace}_{desc.name}`` (e.g. ``acme`` +
-              ``logging`` → ``acme_logging``).
-            * If omitted, the plugin name is ``extension-middleware`` and
-              registry keys stay the descriptors' own names.
-
-            Same flat-segment rules as middleware descriptor names: no
-            ``/``, whitespace, ``:``, backslashes, or control characters.
 
     Returns:
-        A plugin whose ``list_middleware`` returns the descriptors (renamed
-        when ``namespace`` is set).
+        A plugin whose ``list_middleware`` returns the descriptors as-is.
     """
     built = list(descs)
     if not built:
@@ -157,18 +132,4 @@ def middleware_plugin(
             'middleware_plugin() needs a non-empty list of MiddlewareDesc instances. '
             + 'Construct each with MiddlewareDesc(cls=YourMiddleware, name=..., description=...).'
         )
-    if not namespace:
-        ns = None
-    else:
-        ns = namespace.strip() or None
-    if ns is not None:
-        _validate_middleware_key_segment(ns, label='middleware_plugin namespace')
-
-    if ns is None:
-        registered = built
-    else:
-        registered = [d.with_name(_middleware_registry_name(ns, d.name)) for d in built]
-
-    plugin_name = ns if ns is not None else 'extension-middleware'
-
-    return _MiddlewareDescsPlugin(plugin_name, registered)
+    return _MiddlewareDescsPlugin('extension-middleware', built)

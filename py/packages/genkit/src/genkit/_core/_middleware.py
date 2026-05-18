@@ -34,25 +34,21 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
 
-# Disallowed in middleware definition names and in ``middleware_plugin(..., namespace=...)``.
-# Model/action keys use ``provider/name``; middleware stays one path-free token for the registry.
 _FORBIDDEN_IN_MIDDLEWARE_KEY_SEGMENT = re.compile(r'[\x00-\x1f/\\:]|\s')
 
 
 def _validate_middleware_key_segment(name: str, *, label: str) -> None:
-    """Raise if ``name`` is not usable as a middleware registry key or namespace.
+    """Raise if ``name`` is not usable as a middleware registry key.
 
     Middleware definitions are stored under
-    ``register_value(kind='middleware', name=...)``. The optional
-    ``middleware_plugin(..., namespace='acme')`` builds keys of the form
-    ``acme_logging``. The string must therefore be one segment:
+    ``register_value(kind='middleware', name=...)``.
 
     * no ``/`` (that shape is reserved for models and other actions);
     * no whitespace, ``:``, backslashes, or control characters that
       would break registry keys or the Dev UI.
 
     Args:
-        name: Proposed name or namespace segment.
+        name: Proposed name.
         label: Field name for error messages (e.g. ``MiddlewareDesc name``).
     """
     if not name or not name.strip():
