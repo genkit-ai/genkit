@@ -117,17 +117,22 @@ def middleware_plugin(
         Genkit(plugins=[
             middleware_plugin(
                 [
-                    new_middleware(PrefixPromptMiddleware),
-                    new_middleware(OtherMiddleware),
+                    MiddlewareDesc(
+                        cls=PrefixPromptMiddleware,
+                        name='prefix_prompt',
+                        description='Prepends a fixed prompt',
+                    ),
+                    MiddlewareDesc(
+                        cls=OtherMiddleware,
+                        name='other',
+                    ),
                 ],
                 namespace='myapp',
             ),
         ])
 
-    Build each item with ``new_middleware`` from ``genkit.middleware`` or
-    the same API on your :class:`Genkit` instance — neither registers by
-    itself. Registration happens when this plugin is passed in
-    ``plugins=[...]``.
+    Construct each descriptor with ``MiddlewareDesc(cls=..., name=...)``;
+    registration happens when the plugin is passed in ``plugins=[...]``.
 
     Args:
         descs: Non-empty sequence of middleware descriptors.
@@ -150,7 +155,7 @@ def middleware_plugin(
     if not built:
         raise ValueError(
             'middleware_plugin() needs a non-empty list of MiddlewareDesc instances. '
-            + 'Build each with new_middleware(...) from genkit.middleware or ai.new_middleware(...).'
+            + 'Construct each with MiddlewareDesc(cls=YourMiddleware, name=..., description=...).'
         )
     if not namespace:
         ns = None

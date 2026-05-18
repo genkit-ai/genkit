@@ -32,12 +32,12 @@ from dotpromptz.typing import (
     PromptMetadata,
 )
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import Unpack
+from typing_extensions import Never, Unpack
 
 from genkit._ai._generate import (
     generate_action,
-    registry_with_inline_middleware,
-    registry_with_inline_tools,
+    register_middleware,
+    register_tools,
     resolve_tool,
     to_tool_definition,
     tools_to_action_names,
@@ -342,22 +342,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         opts: PromptGenerateOptions,
     ) -> ModelResponse[OutputT]:
         """Execute the prompt with resolved opts. Used by __call__ and stream."""
-        await self._ensure_resolved()
+        call_registry, gen_options = await _prepare(self, input, opts)
         on_chunk = opts.get('on_chunk')
         context = opts.get('context')
-
-        prompt_config = self._prompt_config_for_call(opts)
-        # `exec_registry` carries inline `use=[Logger()]` middleware under
-        # synthetic ref names so the generate action can resolve them; pass it
-        # (not `render_registry`) into `generate_action` for that reason.
-        render_registry, exec_registry, prompt_config = await prepare_prompt_call_registry(
-            self._registry, prompt_config
-        )
-        gen_options = await executable_prompt_call_to_generate_options(
-            self, render_registry, prompt_config, input, opts
-        )
         result = await generate_action(
-            exec_registry,
+            call_registry,
             gen_options,
             on_chunk=on_chunk,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
@@ -443,12 +432,53 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
         call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]  # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        await self._ensure_resolved()
-        prompt_config = self._prompt_config_for_call(call_opts)
-        render_registry, _exec_registry, prompt_config = await prepare_prompt_call_registry(
-            self._registry, prompt_config
-        )
-        return await executable_prompt_call_to_generate_options(self, render_registry, prompt_config, input, call_opts)
+        _call_registry, gen_options = await _prepare(self, input, call_opts)
+        return gen_options
+
+
+def _register_prompt_action_pair(
+    registry: Registry,
+    action_name: str,
+    ep_factory: Callable[[], Awaitable[ExecutablePrompt[Any, Any]]],
+    metadata: dict[str, object],
+) -> tuple[Action[Any, Any, Never], Action[Any, Any, Never]]:
+    """Register the ``(PROMPT, EXECUTABLE_PROMPT)`` action pair for a prompt.
+
+    Args:
+        registry: Registry to register the actions on.
+        action_name: Wire name (already passed through ``registry_definition_key``).
+        ep_factory: Returns the ``ExecutablePrompt``. Either a closure over an
+            already-built instance, or a lazy factory that loads from disk.
+        metadata: Wire metadata to attach to both actions (typically differs
+            only in ``source``/``lazy`` between the two registration paths).
+
+    Returns:
+        ``(prompt_action, executable_prompt_action)`` so callers can attach
+        extra attrs (e.g. ``_async_factory`` for hot-reload on file prompts).
+    """
+
+    async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
+        ep = await ep_factory()
+        call_registry, gen_options = await _prepare(ep, input, {})
+        return await to_generate_request(call_registry, gen_options)
+
+    async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
+        ep = await ep_factory()
+        return await ep.render(input)
+
+    prompt_action = registry.register_action(
+        kind=ActionKind.PROMPT,
+        name=action_name,
+        fn=prompt_action_fn,
+        metadata=metadata,
+    )
+    executable_prompt_action = registry.register_action(
+        kind=ActionKind.EXECUTABLE_PROMPT,
+        name=action_name,
+        fn=executable_prompt_action_fn,
+        metadata=metadata,
+    )
+    return prompt_action, executable_prompt_action
 
 
 def register_prompt_actions(
@@ -462,52 +492,20 @@ def register_prompt_actions(
     This links the executable prompt to actions in the registry, enabling
     lookup and DevUI integration.
     """
-    action_metadata: dict[str, object] = {
+    metadata: dict[str, object] = {
         'type': 'prompt',
         'source': 'programmatic',
-        'prompt': {
-            'name': name,
-            'variant': variant or '',
-        },
+        'prompt': {'name': name, 'variant': variant or ''},
     }
 
-    async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
+    async def _ep_factory() -> ExecutablePrompt[Any, Any]:
+        # Programmatic prompts hand us the already-built instance; just make
+        # sure resolution finished before the action body inspects it.
         await executable_prompt._ensure_resolved()
-        call_opts: PromptGenerateOptions = {}
-        prompt_config = executable_prompt._prompt_config_for_call(call_opts)
-        render_registry, _exec_registry, prompt_config = await prepare_prompt_call_registry(
-            executable_prompt._registry, prompt_config
-        )
-        gen_options = await executable_prompt_call_to_generate_options(
-            executable_prompt, render_registry, prompt_config, input, call_opts
-        )
-        return await to_generate_request(render_registry, gen_options)
-
-    async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
-        await executable_prompt._ensure_resolved()
-        call_opts: PromptGenerateOptions = {}
-        prompt_config = executable_prompt._prompt_config_for_call(call_opts)
-        render_registry, _exec_registry, prompt_config = await prepare_prompt_call_registry(
-            executable_prompt._registry, prompt_config
-        )
-        return await executable_prompt_call_to_generate_options(
-            executable_prompt, render_registry, prompt_config, input, call_opts
-        )
+        return executable_prompt
 
     action_name = registry_definition_key(name, variant)
-    prompt_action = registry.register_action(
-        kind=ActionKind.PROMPT,
-        name=action_name,
-        fn=prompt_action_fn,
-        metadata=action_metadata,
-    )
-
-    executable_prompt_action = registry.register_action(
-        kind=ActionKind.EXECUTABLE_PROMPT,
-        name=action_name,
-        fn=executable_prompt_action_fn,
-        metadata=action_metadata,
-    )
+    prompt_action, executable_prompt_action = _register_prompt_action_pair(registry, action_name, _ep_factory, metadata)
 
     # Link them
     executable_prompt._prompt_action = prompt_action  # pyright: ignore[reportPrivateUsage]
@@ -553,37 +551,36 @@ def _resolve_output_schema(
         output.json_schema = to_json_schema(output_schema)
 
 
-async def prepare_prompt_call_registry(
-    base_registry: Registry,
-    prompt_config: PromptConfig,
-) -> tuple[Registry, Registry, PromptConfig]:
-    """Build per-call registries for a prompt and finalize ``use`` to refs.
+async def _prepare(
+    ep: ExecutablePrompt[Any, Any],
+    input: Any,  # noqa: ANN401
+    call_opts: PromptGenerateOptions,
+) -> tuple[Registry, GenerateActionOptions]:
+    """Render an ``ExecutablePrompt`` into resolved generate options + a per-call registry.
 
-    Returns ``(render_registry, exec_registry, prompt_config)``:
-
-    * ``render_registry`` is what template/schema/tool resolution should run
-      against (it has any inline ``Tool`` instances registered on a child of
-      ``base_registry`` if there were any, otherwise it's ``base_registry``
-      itself).
-    * ``exec_registry`` is the child registry where inline ``BaseMiddleware``
-      instances from ``prompt_config.use`` were registered, and is what
-      :func:`generate_action` should be called with so those middleware
-      resolve by name during execution.
-    * ``prompt_config`` is returned with ``use`` rewritten to a list of
-      ``MiddlewareRef`` (the wire shape that flows into
-      :class:`GenerateActionOptions`). Inline instances now live on
-      ``exec_registry`` under stable synthetic names so the refs resolve at
-      call time.
-
-    Mirrors the pattern in :meth:`Genkit.generate` so prompt execution sees
-    the same middleware semantics as direct ``ai.generate`` calls.
+    Returns:
+        * ``call_registry`` — fresh child of ``ep._registry`` holding any
+          inline tools and ``use=[Logger()]`` middleware for this call. Pass
+          it to whatever consumes ``gen_options`` (the generate action,
+          ``to_generate_request``, etc.) so name-based lookups resolve those
+          inline entries.
+        * ``gen_options`` — the resolved request the engine consumes.
     """
-    render_registry = await registry_with_inline_tools(base_registry, prompt_config.tools)
-    exec_registry = render_registry if render_registry.is_child else render_registry.new_child()
-    refs = registry_with_inline_middleware(exec_registry, prompt_config.use) or None
-    if refs is not None or prompt_config.use is not None:
+    await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
+    prompt_config = ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
+
+    call_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
+    await register_tools(call_registry, prompt_config.tools)
+    refs = register_middleware(call_registry, prompt_config.use)
+    if prompt_config.use is not None:
+        # `use` may have contained inline BaseMiddleware instances that
+        # register_middleware swapped for refs; rewrite so downstream sees
+        # the registry-resolvable shape. (Skip the copy when `use` is None
+        # — the common path — since refs is None too.)
         prompt_config = prompt_config.model_copy(update={'use': refs})
-    return render_registry, exec_registry, prompt_config
+
+    gen_options = await executable_prompt_call_to_generate_options(ep, call_registry, prompt_config, input, call_opts)
+    return call_registry, gen_options
 
 
 async def to_generate_action_options(
@@ -1179,44 +1176,20 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
         _cached_prompt = executable_prompt
         return executable_prompt
 
-    action_metadata: dict[str, object] = {
+    metadata: dict[str, object] = {
         'type': 'prompt',
         'lazy': True,
         'source': 'file',
         'prompt': {'name': name, 'variant': variant or ''},
     }
 
-    async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
-        prompt = await create_prompt_from_file()
-        call_opts: PromptGenerateOptions = {}
-        prompt_config = prompt._prompt_config_for_call(call_opts)
-        render_registry, _exec_registry, prompt_config = await prepare_prompt_call_registry(
-            prompt._registry, prompt_config
-        )
-        gen_options = await executable_prompt_call_to_generate_options(
-            prompt, render_registry, prompt_config, input, call_opts
-        )
-        return await to_generate_request(render_registry, gen_options)
-
-    async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
-        prompt = await create_prompt_from_file()
-        call_opts: PromptGenerateOptions = {}
-        prompt_config = prompt._prompt_config_for_call(call_opts)
-        render_registry, _exec_registry, prompt_config = await prepare_prompt_call_registry(
-            prompt._registry, prompt_config
-        )
-        return await executable_prompt_call_to_generate_options(
-            prompt, render_registry, prompt_config, input, call_opts
-        )
-
     action_name = registry_definition_key(name, variant, ns)
-    prompt_action = registry.register_action(
-        kind=ActionKind.PROMPT, name=action_name, fn=prompt_action_fn, metadata=action_metadata
-    )
-    executable_prompt_action = registry.register_action(
-        kind=ActionKind.EXECUTABLE_PROMPT, name=action_name, fn=executable_prompt_action_fn, metadata=action_metadata
+    prompt_action, executable_prompt_action = _register_prompt_action_pair(
+        registry, action_name, create_prompt_from_file, metadata
     )
 
+    # File-loaded prompts expose their async factory so the tooling can
+    # rebuild them on hot-reload without going back through the loader.
     setattr(prompt_action, '_async_factory', create_prompt_from_file)  # noqa: B010
     setattr(executable_prompt_action, '_async_factory', create_prompt_from_file)  # noqa: B010
 

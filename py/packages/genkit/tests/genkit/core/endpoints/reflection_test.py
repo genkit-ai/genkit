@@ -46,11 +46,17 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import Field
 
+from genkit import Genkit
 from genkit._core._action import ActionKind
-from genkit._core._middleware import BaseMiddleware, middleware, new_middleware
+from genkit._core._middleware import BaseMiddleware, MiddlewareDesc
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata
+
+# Module-level Genkit so `@ai.middleware(...)` can stamp the test classes
+# below. The tests build their own `Registry()` per case and ignore
+# `ai.registry`; this instance only exists for the decorator hook.
+ai = Genkit()
 
 
 @pytest.fixture
@@ -332,17 +338,17 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
 
     Without this the Dev UI has nothing to render a config form from and falls
     back to a free-text JSON box. The schema is derived from the middleware
-    class's pydantic fields by ``new_middleware``.
+    class's pydantic fields by ``MiddlewareDesc(cls=...)``.
     """
 
-    @middleware(name='fallback', description='Falls back to alternative models on failure')
+    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
     class _Fallback(BaseMiddleware):
         models: list[str] = Field(default_factory=list)
         statuses: list[str] = Field(default_factory=list)
         isolate_config: bool = False
 
     registry = Registry()
-    registry.register_value('middleware', 'fallback', new_middleware(_Fallback))
+    registry.register_value('middleware', 'fallback', MiddlewareDesc(cls=_Fallback, name='fallback'))
 
     client = await _registry_asgi_client(registry)
     try:
@@ -368,12 +374,12 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     The Dev UI renders an empty config form, signalling registered.
     """
 
-    @middleware(name='no_op')
+    @ai.middleware(name='no_op')
     class _NoOp(BaseMiddleware):
         pass
 
     registry = Registry()
-    registry.register_value('middleware', 'no_op', new_middleware(_NoOp))
+    registry.register_value('middleware', 'no_op', MiddlewareDesc(cls=_NoOp, name='no_op'))
 
     client = await _registry_asgi_client(registry)
     try:
@@ -391,21 +397,21 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
 
 @pytest.mark.asyncio
 async def test_values_middleware_explicit_config_schema_wins() -> None:
-    """Explicit ``@middleware(config_schema=...)`` overrides the derived schema."""
+    """Explicit ``@ai.middleware(config_schema=...)`` overrides the derived schema."""
     explicit = {
         'type': 'object',
         'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},
         'required': ['mode'],
     }
 
-    @middleware(name='explicit_schema', config_schema=explicit)
+    @ai.middleware(name='explicit_schema', config_schema=explicit)
     class _Explicit(BaseMiddleware):
         # Field exists on the class but the explicit schema wins; the Dev UI
         # only sees what the author chose to expose.
         ignored_field: int = 0
 
     registry = Registry()
-    registry.register_value('middleware', 'explicit_schema', new_middleware(_Explicit))
+    registry.register_value('middleware', 'explicit_schema', MiddlewareDesc(cls=_Explicit, name='explicit_schema'))
 
     client = await _registry_asgi_client(registry)
     try:

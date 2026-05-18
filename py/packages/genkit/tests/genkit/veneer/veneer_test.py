@@ -53,8 +53,8 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
-from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
-from genkit.plugin_api import middleware_plugin, new_middleware
+from genkit.middleware import BaseMiddleware, MiddlewareDesc, ModelHookParams
+from genkit.plugin_api import middleware_plugin
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -1003,7 +1003,13 @@ async def test_generate_json_format_unconstrained(
     assert (await stream_result.response).request == want
 
 
-@middleware(name='pre_mw')
+# Module-level Genkit so `@ai.middleware(...)` can stamp the classes below
+# at import time. Tests build their own `ai = Genkit(model=..., plugins=[...])`
+# locally and re-register the same middleware on their own registries.
+ai = Genkit()
+
+
+@ai.middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -1020,7 +1026,7 @@ class PreMiddleware(BaseMiddleware):
         )
 
 
-@middleware(name='post_mw')
+@ai.middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
@@ -1039,8 +1045,8 @@ async def test_generate_with_middleware() -> None:
         model='echoModel',
         plugins=[
             middleware_plugin([
-                new_middleware(PreMiddleware),
-                new_middleware(PostMiddleware),
+                MiddlewareDesc(cls=PreMiddleware, name='pre_mw'),
+                MiddlewareDesc(cls=PostMiddleware, name='post_mw'),
             ])
         ],
     )
@@ -1066,7 +1072,7 @@ async def test_generate_with_middleware() -> None:
     assert (await stream_result.response).text == want
 
 
-@middleware(name='inject_ctx')
+@ai.middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -1091,7 +1097,7 @@ async def test_generate_passes_through_current_action_context() -> None:
     """Test that generate uses current action context by default."""
     ai = Genkit(
         model='echoModel',
-        plugins=[middleware_plugin([new_middleware(InjectContextMiddleware)])],
+        plugins=[middleware_plugin([MiddlewareDesc(cls=InjectContextMiddleware, name='inject_ctx')])],
     )
     define_programmable_model(ai)
     define_echo_model(ai)
@@ -1114,7 +1120,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
     """Generate uses specific context instead of current action context."""
     ai = Genkit(
         model='echoModel',
-        plugins=[middleware_plugin([new_middleware(InjectContextMiddleware)])],
+        plugins=[middleware_plugin([MiddlewareDesc(cls=InjectContextMiddleware, name='inject_ctx')])],
     )
     define_programmable_model(ai)
     define_echo_model(ai)

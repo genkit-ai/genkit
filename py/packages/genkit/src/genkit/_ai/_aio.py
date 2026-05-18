@@ -47,8 +47,8 @@ from genkit._ai._formats._types import FormatDef
 from genkit._ai._generate import (
     define_generate_action,
     generate_action,
-    registry_with_inline_middleware,
-    registry_with_inline_tools,
+    register_middleware,
+    register_tools,
 )
 from genkit._ai._model import (
     Message,
@@ -94,7 +94,11 @@ from genkit._core._dap import (
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._middleware import BaseMiddleware, MiddlewareDesc, new_middleware
+from genkit._core._middleware import (
+    BaseMiddleware,
+    MiddlewareDesc,
+    _validate_middleware_key_segment,
+)
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
@@ -275,6 +279,51 @@ class Genkit:
             return define_tool(self.registry, func, name, description)
 
         return wrapper
+
+    def middleware(
+        self,
+        name: str,
+        *,
+        description: str | None = None,
+        config_schema: dict[str, Any] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Callable[[type[BaseMiddleware]], type[BaseMiddleware]]:
+        """Decorator that registers a ``BaseMiddleware`` subclass on this app.
+
+        Same shape as ``@ai.flow`` and ``@ai.tool``: one decorator stamps
+        the registry metadata onto the class and adds it to ``self.registry``
+        so the Dev UI lists it and ``use=[MiddlewareRef(name=...)]`` can
+        resolve it by name. Inline use (``use=[MyClass()]``) keeps working.
+
+        Example:
+            @ai.middleware(name='latency_logger', description='Logs latency')
+            class LatencyLogger(BaseMiddleware):
+                prefix: str = '[trace]'
+
+                async def wrap_model(self, params, next_fn): ...
+
+        Args:
+            name: Registry key. Flat segment — no ``/``, whitespace, ``:``,
+                backslashes, or control characters.
+            description: Shown in the Dev UI.
+            config_schema: JSON Schema for the config. Inferred from
+                pydantic fields when omitted.
+            metadata: Passed through to the Dev UI wire format.
+        """
+        _validate_middleware_key_segment(name, label='middleware name')
+
+        def decorator(cls: type[BaseMiddleware]) -> type[BaseMiddleware]:
+            cls.name = name
+            cls.description = description
+            cls.middleware_config_schema = config_schema
+            cls.middleware_metadata = metadata
+            # Description / metadata fall through from the class attrs we just
+            # stamped, so the descriptor stays a one-liner.
+            desc = MiddlewareDesc(cls=cls, name=name)
+            self.registry.register_value('middleware', name, desc)
+            return cls
+
+        return decorator
 
     def define_interrupt(
         self,
@@ -740,37 +789,6 @@ class Genkit:
             for desc in plugin.list_middleware():
                 self.registry.register_value('middleware', desc.name, desc)
 
-    def new_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
-        """Build a ``MiddlewareDesc`` from a class."""
-        return new_middleware(middleware_cls)
-
-    def define_middleware(self, middleware_cls: type[BaseMiddleware]) -> MiddlewareDesc:
-        """Register a middleware class on this app and return the descriptor.
-
-        Registering a class:
-
-        * Makes it visible to the **Dev UI** through the reflection API.
-        * Allows it to be referenced by name via :class:`MiddlewareRef`.
-
-        Equivalent to building the descriptor with ``new_middleware(cls)``
-        and wiring it through ``middleware_plugin([...])`` at construction
-        time, but usable after ``Genkit`` has already been built.
-
-        The factory instantiates ``middleware_cls(**config)`` each time a
-        request resolves the name via :class:`MiddlewareRef`, so the same
-        pydantic fields drive both:
-
-        * the inline path: ``use=[cls(...)]``
-        * the registered path: ``use=[MiddlewareRef(name=cls.name)]``
-
-        Returns:
-            The registered :class:`MiddlewareDesc`. Also available via
-            ``registry.lookup_value('middleware', cls.name)``.
-        """
-        desc = new_middleware(middleware_cls)
-        self.registry.register_value('middleware', desc.name, desc)
-        return desc
-
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
         """Run the user's main coroutine, blocking in dev mode for the reflection server."""
         if not is_dev_environment():
@@ -906,9 +924,11 @@ class Genkit:
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
         """
-        registry = await registry_with_inline_tools(self.registry, tools)
-        child_registry = registry if registry.is_child else registry.new_child()
-        refs = registry_with_inline_middleware(child_registry, use) or None
+        # One call-scoped registry layer holds anything inline (tools +
+        # middleware) so it dies with the call and stays out of self.registry.
+        call_registry = self.registry.new_child()
+        await register_tools(call_registry, tools)
+        refs = register_middleware(call_registry, use)
         prompt_config = PromptConfig(
             model=model,
             prompt=prompt,
@@ -930,9 +950,9 @@ class Genkit:
             docs=docs,
             use=refs,
         )
-        gen_options = await to_generate_action_options(registry, prompt_config)
+        gen_options = await to_generate_action_options(call_registry, prompt_config)
         return await generate_action(
-            child_registry,
+            call_registry,
             gen_options,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
@@ -1022,9 +1042,11 @@ class Genkit:
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
 
         async def _run_generate() -> ModelResponse[Any]:
-            registry = await registry_with_inline_tools(self.registry, tools)
-            child_registry = registry if registry.is_child else registry.new_child()
-            refs = registry_with_inline_middleware(child_registry, use) or None
+            # One call-scoped registry layer holds anything inline (tools +
+            # middleware) so it dies with the call and stays out of self.registry.
+            call_registry = self.registry.new_child()
+            await register_tools(call_registry, tools)
+            refs = register_middleware(call_registry, use)
             prompt_config = PromptConfig(
                 model=model,
                 prompt=prompt,
@@ -1046,9 +1068,9 @@ class Genkit:
                 docs=docs,
                 use=refs,
             )
-            gen_options = await to_generate_action_options(registry, prompt_config)
+            gen_options = await to_generate_action_options(call_registry, prompt_config)
             return await generate_action(
-                child_registry,
+                call_registry,
                 gen_options,
                 on_chunk=lambda c: channel.send(c),
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]

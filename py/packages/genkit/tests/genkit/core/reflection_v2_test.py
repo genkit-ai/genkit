@@ -44,8 +44,9 @@ import pytest_asyncio
 from pydantic import Field
 from websockets.asyncio.server import serve
 
+from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._middleware import BaseMiddleware, MiddlewareDesc, middleware, new_middleware
+from genkit._core._middleware import BaseMiddleware, MiddlewareDesc
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
@@ -53,6 +54,11 @@ from genkit._core._reflection_v2 import (
     ReflectionServerV2,
 )
 from genkit._core._registry import Registry
+
+# Module-level Genkit so `@ai.middleware(...)` can stamp the test classes
+# below. The tests build their own `Registry()` per case and ignore
+# `ai.registry`; this instance only exists for the decorator hook.
+ai = Genkit()
 
 
 class FakeReflectionManager:
@@ -269,7 +275,7 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
     registry.register_value(
         'middleware',
         'concise_reply_mw',
-        MiddlewareDesc(factory=lambda _cfg: _NoOpMiddleware(), name='concise_reply_mw'),
+        MiddlewareDesc(cls=_NoOpMiddleware, name='concise_reply_mw'),
     )
 
     client, task = await _run_client_lifecycle(registry, fake_manager)
@@ -284,7 +290,16 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
         resp = await fake_manager.read_rpc()
         assert resp.get('id') == '2b'
         values = resp['result']['values']
-        assert values == {'concise_reply_mw': {'name': 'concise_reply_mw'}}
+        assert values == {
+            'concise_reply_mw': {
+                'name': 'concise_reply_mw',
+                'configSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'additionalProperties': True,
+                },
+            }
+        }
     finally:
         await _stop_client(client, task)
 
@@ -293,20 +308,20 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
 async def test_reflection_server_v2_list_values_includes_derived_config_schema(
     fake_manager: FakeReflectionManager,
 ) -> None:
-    """Middleware registered via ``new_middleware`` exposes a derived configSchema.
+    """Middleware registered via ``MiddlewareDesc(cls=...)`` exposes a derived configSchema.
 
     The Dev UI uses this schema to render a config form for each registered
     middleware.
     """
 
-    @middleware(name='fallback', description='Falls back to alternative models on failure')
+    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
     class _Fallback(BaseMiddleware):
         models: list[str] = Field(default_factory=list)
         statuses: list[str] = Field(default_factory=list)
         isolate_config: bool = False
 
     registry = Registry()
-    registry.register_value('middleware', 'fallback', new_middleware(_Fallback))
+    registry.register_value('middleware', 'fallback', MiddlewareDesc(cls=_Fallback, name='fallback'))
 
     client, task = await _run_client_lifecycle(registry, fake_manager)
     try:
@@ -344,12 +359,12 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
     The Dev UI renders an empty config form, signalling registered.
     """
 
-    @middleware(name='no_op')
+    @ai.middleware(name='no_op')
     class _NoOp(BaseMiddleware):
         pass
 
     registry = Registry()
-    registry.register_value('middleware', 'no_op', new_middleware(_NoOp))
+    registry.register_value('middleware', 'no_op', MiddlewareDesc(cls=_NoOp, name='no_op'))
 
     client, task = await _run_client_lifecycle(registry, fake_manager)
     try:
@@ -382,14 +397,14 @@ async def test_reflection_server_v2_list_values_explicit_config_schema_wins(
         'required': ['mode'],
     }
 
-    @middleware(name='explicit_schema', config_schema=explicit)
+    @ai.middleware(name='explicit_schema', config_schema=explicit)
     class _Explicit(BaseMiddleware):
         # Field exists on the class but the explicit schema wins; the Dev UI
         # only sees what the author chose to expose.
         ignored_field: int = 0
 
     registry = Registry()
-    registry.register_value('middleware', 'explicit_schema', new_middleware(_Explicit))
+    registry.register_value('middleware', 'explicit_schema', MiddlewareDesc(cls=_Explicit, name='explicit_schema'))
 
     client, task = await _run_client_lifecycle(registry, fake_manager)
     try:

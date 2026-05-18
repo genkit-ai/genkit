@@ -143,12 +143,16 @@ class PartConverter:
             tool_response = part.root.tool_response
             tool_output = tool_response.output
 
-            # FunctionResponse.response must be a dict, not a raw value.
+            # Gemini's FunctionResponse.response is dict-shaped on the wire,
+            # so a tool that returns a scalar or list has to be boxed under
+            # a key or the model call gets rejected.
             output = tool_output if isinstance(tool_output, dict) else {'result': tool_output}
 
-            # --- Primary path: ToolResponse.content (set by MultipartToolResponse.content) ---
-            # Mirrors JS: functionResponse.parts = content.map(toGeminiPart)
-            # Mirrors Go: genai.NewPartFromFunctionResponseWithParts(name, output, parts)
+            # A tool can hand back media (text/image/audio parts) next to its
+            # structured output by populating tool_response.content. Surface
+            # each item as its own Gemini Part so the model sees both the
+            # dict (for tool bookkeeping) and the media (as context for the
+            # next reasoning step) in the same turn.
             extra_parts: list[genai.types.Part] = []
             if tool_response.content:
                 for item in tool_response.content:
@@ -162,8 +166,11 @@ class PartConverter:
                     except Exception as exc:
                         logger.debug('Skipping unrecognised tool-response content part: %s', exc)
 
-            # --- Legacy fallback: tools that embed media inside output['content'] ---
-            # Kept for backward compat; new middleware should use MultipartToolResponse.content.
+            # Older tools that don't fill in tool_response.content stash media
+            # as data URLs inside output['content'] instead. Only runs when
+            # the primary path came up empty: lift the data URLs into inline
+            # Blob parts and strip 'content' from the dict so the model
+            # doesn't see the same media twice.
             if not extra_parts and isinstance(tool_output, dict) and 'content' in tool_output:
                 content_list = tool_output['content']
                 if isinstance(content_list, list):

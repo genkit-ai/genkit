@@ -78,31 +78,34 @@ DEFAULT_MAX_TURNS = 5
 logger = get_logger(__name__)
 
 
-def registry_with_inline_middleware(
+def register_middleware(
     registry: Registry,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None,
-) -> list[MiddlewareRef]:
-    """Normalize a ``use=[...]`` list into registry-backed ``MiddlewareRef``s.
+) -> list[MiddlewareRef] | None:
+    """Register inline middleware instances on ``registry`` and return refs for ``use=``.
 
-    Inline ``BaseMiddleware`` instances are registered into the (child) registry
-    under their class name — or an auto-generated ``__inline_{i}__`` name when
-    the class has no registered name — so that everything in ``use=`` can be
-    resolved uniformly via the registry.
+    Mutates ``registry`` in place: every inline ``BaseMiddleware`` in ``use``
+    is stored as a registry value under its class name (or an auto-generated
+    name when the class has none), so the dispatch path can later resolve
+    everything in ``use=`` uniformly by name. Existing ``MiddlewareRef``
+    entries pass through unchanged.
 
-    The returned list of refs has the same ordering as the input and can be
-    stored on ``GenerateActionOptions.use`` for consistent tracing / Dev UI
-    representation.
+    Pass a call-scoped child registry so the inline instances die with the
+    call rather than leaking into the app registry.
 
     Args:
-        registry: Per-call child registry.  Inline instances are registered
-            here so they are automatically scoped to this generate() call.
-        use: Mixed list of inline instances and/or ``MiddlewareRef`` entries.
+        registry: Call-scoped registry to register inline instances on
+            (mutated). Typically a fresh ``parent.new_child()``.
+        use: Mixed list of inline instances and/or ``MiddlewareRef`` entries,
+            or ``None`` if the caller didn't specify middleware at all.
 
     Returns:
-        A list of ``MiddlewareRef`` covering every entry in ``use``.
+        Refs covering every entry in ``use`` (order preserved), or ``None``
+        when ``use`` was ``None``. Safe to store on
+        ``GenerateActionOptions.use``.
     """
-    if not use:
-        return []
+    if use is None:
+        return None
     refs: list[MiddlewareRef] = []
     # Track how many times each name appears so duplicates get unique suffixes.
     name_counts: dict[str, int] = {}
@@ -113,20 +116,13 @@ def registry_with_inline_middleware(
             count = name_counts.get(base_name, 0)
             name_counts[base_name] = count + 1
             reg_name = base_name if count == 0 else f'{base_name}__{count}'
-
-            def _make_factory(
-                _i: BaseMiddleware = entry,  # capture for the closure; mypy needs a non-lambda factory
-            ) -> Callable[[dict[str, Any] | None], BaseMiddleware]:
-                def _factory(_cfg: dict[str, Any] | None) -> BaseMiddleware:
-                    return _i
-
-                return _factory
-
-            desc = MiddlewareDesc(
-                name=reg_name,
-                factory=_make_factory(),
-            )
-            registry.register_value('middleware', reg_name, desc)
+            # Unlike register_tools, we never short-circuit when a middleware
+            # with this name is already resolvable on the parent chain. The
+            # parent entry is a MiddlewareDesc that builds the class with
+            # defaults; the user's inline Cls(field=...) instance carries
+            # their config and must win, so we always register it on the
+            # child to shadow the descriptor for this call.
+            registry.register_value('middleware', reg_name, entry)
             refs.append(MiddlewareRef(name=reg_name))
         else:
             refs.append(entry)
@@ -140,7 +136,7 @@ def resolve_middleware_from_use(
     """Resolve a list of ``MiddlewareRef``s to concrete ``BaseMiddleware`` instances.
 
     All entries must already be in the registry (inline instances were registered
-    there by :func:`registry_with_inline_middleware`).  Order is preserved.
+    there by :func:`register_middleware`).  Order is preserved.
     """
     if not use:
         return []
@@ -151,13 +147,18 @@ def resolve_middleware_from_use(
             cfg = entry.config if isinstance(entry.config, dict) else None
             out.append(defn(cfg))
             continue
+        if isinstance(defn, BaseMiddleware):
+            # Inline instance registered by register_middleware; the user's
+            # own config is already baked in, so ignore entry.config.
+            out.append(defn)
+            continue
         raise GenkitError(
             status='NOT_FOUND',
             message=(
-                f'No middleware named "{entry.name}" is registered on this app. '
-                'Register descriptors with middleware_plugin([...]), Plugin.list_middleware(), '
-                'or ai.define_middleware(MyMiddleware); or pass the middleware instance directly '
-                'in use=[MyMiddleware(...)].'
+                f'A middleware with the name "{entry.name}" cannot be found. '
+                'Please make sure the middleware is registered correctly via the '
+                '@ai.middleware(...) decorator if you defined one inline, or pass '
+                'a middleware instance directly.'
             ),
             source='genkit.generate',
         )
@@ -278,27 +279,26 @@ def tools_to_action_names(
     return names
 
 
-async def registry_with_inline_tools(registry: Registry, tools: Sequence[str | Tool] | None) -> Registry:
-    """Creates a child registry and ensures that all tools are registered.
+async def register_tools(registry: Registry, tools: Sequence[str | Tool] | None) -> None:
+    """Register inline ``Tool`` instances on ``registry`` for the duration of a call.
 
-    Supports dynamically defined tools that are only passed in at call time
-    and never actually registered.
+    Mutates ``registry`` in place: each inline ``Tool`` whose action isn't
+    already resolvable from the parent chain is registered under its own
+    name. String entries are pass-through (they refer to actions registered
+    elsewhere). Pass a call-scoped child registry so inline tools die with
+    the call rather than leaking into the app registry.
     """
     if not tools:
-        return registry
-
-    child: Registry | None = None
+        return
     for t in tools:
         if not isinstance(t, Tool):
             continue
+        # If the same action is already reachable through the parent chain,
+        # skip — re-registering would either no-op or trigger a duplicate.
         resolved = await registry.resolve_action(ActionKind.TOOL, t.name)
         if resolved is t.action():
             continue
-        if child is None:
-            child = registry.new_child()
-        child.register_action_from_instance(t.action())
-
-    return child if child is not None else registry
+        registry.register_action_from_instance(t.action())
 
 
 _CONTEXT_PREFACE = '\n\nUse the following information to complete your task:\n\n'
@@ -465,10 +465,11 @@ async def generate_with_request(
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
     registry = registry if registry.is_child else registry.new_child()
-    refs = registry_with_inline_middleware(registry, raw_request.use)
-    if refs:
-        raw_request = raw_request.model_copy(update={'use': refs})
-    middleware = resolve_middleware_from_use(registry, refs)
+    # By contract `raw_request.use` is already `list[MiddlewareRef]` — the
+    # veneer and prompt paths normalize inline instances into refs before
+    # building `GenerateActionOptions`, and the wire schema rejects anything
+    # else. We just resolve the refs back into instances here.
+    middleware = resolve_middleware_from_use(registry, raw_request.use)
     queue: list[Message] = []
 
     def enqueue_parts(parts: list[Part]) -> None:

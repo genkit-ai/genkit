@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from genkit import ActionKind, Document, Genkit, Message, MiddlewareRef, ModelResponse, ModelResponseChunk
 from genkit._ai._generate import _augment_with_context, generate_action
@@ -42,10 +42,8 @@ from genkit.middleware import (
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
-    middleware,
     middleware_plugin,
 )
-from genkit.plugin_api import new_middleware
 
 
 def _to_dict(obj: object) -> object:
@@ -321,7 +319,14 @@ def test_augment_with_context_with_purpose_part() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@middleware(name='pre_mw')
+# Module-level Genkit so `@ai.middleware(...)` can stamp + register the
+# classes below at import time. Tests that need a fresh registry construct
+# their own `ai = Genkit(...)` locally.
+ai = Genkit()
+define_echo_model(ai)
+
+
+@ai.middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -338,7 +343,7 @@ class PreMiddleware(BaseMiddleware):
         )
 
 
-@middleware(name='post_mw')
+@ai.middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
@@ -368,7 +373,7 @@ async def test_generate_accepts_inline_base_middleware_instance() -> None:
 @pytest.mark.asyncio
 async def test_generate_interleaves_inline_instances_and_middleware_refs() -> None:
     """Inline instances and ``MiddlewareRef`` entries preserve ``use=`` ordering together."""
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware)])])
+    ai = Genkit(plugins=[middleware_plugin([MiddlewareDesc(cls=PostMiddleware, name='post_mw')])])
     define_echo_model(ai)
 
     response = await ai.generate(
@@ -380,7 +385,7 @@ async def test_generate_interleaves_inline_instances_and_middleware_refs() -> No
     assert response.text == '[ECHO] user: "PRE hi" POST'
 
 
-@middleware(name='configured_prefix_mw')
+@ai.middleware(name='configured_prefix_mw')
 class ConfiguredPrefixMiddleware(BaseMiddleware):
     """Inline middleware driven purely by a pydantic config field."""
 
@@ -419,7 +424,9 @@ async def test_generate_inline_instance_uses_pydantic_fields() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_ref_config_instantiates_class() -> None:
     """``MiddlewareRef(config=...)`` feeds ``**config`` into the class constructor."""
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(ConfiguredPrefixMiddleware)])])
+    ai = Genkit(
+        plugins=[middleware_plugin([MiddlewareDesc(cls=ConfiguredPrefixMiddleware, name='configured_prefix_mw')])]
+    )
     define_echo_model(ai)
 
     response = await ai.generate(
@@ -432,16 +439,33 @@ async def test_generate_middleware_ref_config_instantiates_class() -> None:
 
 
 @pytest.mark.asyncio
-async def test_define_middleware_registers_on_the_fly() -> None:
-    """``ai.define_middleware(cls)`` makes the definition resolvable by name."""
-    ai = Genkit()
-    define_echo_model(ai)
-    ai.define_middleware(ConfiguredPrefixMiddleware)
+async def test_ai_middleware_decorator_registers_on_the_app() -> None:
+    """``@ai.middleware`` registers the class so it's resolvable by name."""
+    local_ai = Genkit()
+    define_echo_model(local_ai)
 
-    response = await ai.generate(
+    @local_ai.middleware(name='live_prefix_mw')
+    class LivePrefixMiddleware(BaseMiddleware):
+        prefix: str = 'DEFAULT'
+
+        async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+            txt = ''.join(text_from_message(m) for m in params.request.messages)
+            return await next_fn(
+                ModelHookParams(
+                    request=ModelRequest(
+                        messages=[
+                            Message(role=Role.USER, content=[Part(TextPart(text=f'{self.prefix} {txt}'))]),
+                        ],
+                    ),
+                    on_chunk=params.on_chunk,
+                    context=params.context,
+                )
+            )
+
+    response = await local_ai.generate(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='configured_prefix_mw', config={'prefix': '[LIVE]'})],
+        use=[MiddlewareRef(name='live_prefix_mw', config={'prefix': '[LIVE]'})],
     )
 
     assert response.text == '[ECHO] user: "[LIVE] hi"'
@@ -456,10 +480,6 @@ async def test_util_generate_action_runs_use_middleware() -> None:
     the veneer. Without that, a hook the user configured in the UI silently
     drops on the floor — exactly the bug this test pins down.
     """
-    ai = Genkit()
-    define_echo_model(ai)
-    ai.define_middleware(ConfiguredPrefixMiddleware)
-
     action = await ai.registry.resolve_action(kind=ActionKind.UTIL, name='generate')
     assert action is not None
 
@@ -508,7 +528,7 @@ async def test_prompt_call_runs_per_call_middleware() -> None:
 @pytest.mark.asyncio
 async def test_prompt_call_use_interleaves_inline_and_refs() -> None:
     """Prompts mix inline ``BaseMiddleware`` and ``MiddlewareRef`` like ``generate``."""
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware)])])
+    ai = Genkit(plugins=[middleware_plugin([MiddlewareDesc(cls=PostMiddleware, name='post_mw')])])
     define_echo_model(ai)
 
     my_prompt = ai.define_prompt(
@@ -563,8 +583,8 @@ async def test_generate_applies_middleware() -> None:
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                new_middleware(PreMiddleware),
-                new_middleware(PostMiddleware),
+                MiddlewareDesc(cls=PreMiddleware, name='pre_mw'),
+                MiddlewareDesc(cls=PostMiddleware, name='post_mw'),
             ])
         ],
     )
@@ -590,7 +610,7 @@ async def test_generate_applies_middleware() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_next_fn_args_optional() -> None:
     """Can call next function without modifying params (pass params through)."""
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware)])])
+    ai = Genkit(plugins=[middleware_plugin([MiddlewareDesc(cls=PostMiddleware, name='post_mw')])])
     define_echo_model(ai)
 
     response = await generate_action(
@@ -610,7 +630,7 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
     assert response.text == '[ECHO] user: "hi" POST'
 
 
-@middleware(name='add_ctx')
+@ai.middleware(name='add_ctx')
 class AddContextMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         return await next_fn(
@@ -622,7 +642,7 @@ class AddContextMiddleware(BaseMiddleware):
         )
 
 
-@middleware(name='inject_ctx')
+@ai.middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -648,8 +668,8 @@ async def test_generate_middleware_can_modify_context() -> None:
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                new_middleware(AddContextMiddleware),
-                new_middleware(InjectContextMiddleware),
+                MiddlewareDesc(cls=AddContextMiddleware, name='add_ctx'),
+                MiddlewareDesc(cls=InjectContextMiddleware, name='inject_ctx'),
             ])
         ],
     )
@@ -676,8 +696,9 @@ async def test_generate_middleware_can_modify_context() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_can_modify_stream() -> None:
     """Test that middleware can intercept and modify streaming chunks."""
+    ai = Genkit()
 
-    @middleware(name='mod_stream_mw')
+    @ai.middleware(name='mod_stream_mw')
     class ModifyStreamMiddleware(BaseMiddleware):
         async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
             if params.on_chunk:
@@ -712,7 +733,6 @@ async def test_generate_middleware_can_modify_stream() -> None:
                 )
             return resp
 
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(ModifyStreamMiddleware)])])
     pm, _ = define_programmable_model(ai)
 
     pm.responses.append(
@@ -759,20 +779,6 @@ async def test_generate_middleware_can_modify_stream() -> None:
     ]
 
 
-class TrackGenerateMiddleware(BaseMiddleware):
-    """Middleware that records wrap_generate calls per turn."""
-
-    iterations: list[int] = Field(default_factory=list)
-
-    async def wrap_generate(
-        self,
-        params: GenerateHookParams,
-        next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
-        self.iterations.append(params.iteration)
-        return await next_fn(params)
-
-
 @pytest.mark.asyncio
 async def test_wrap_generate_called_per_turn() -> None:
     """wrap_generate is invoked for each turn of the generate loop.
@@ -780,21 +786,35 @@ async def test_wrap_generate_called_per_turn() -> None:
     This is the two-turn regression test: verifies middleware runs on *every*
     recursive _generate_action_turn call (turn 0 + turn 1 after tool response).
     """
-    track_mw = TrackGenerateMiddleware()
-    track_mw2 = TrackGenerateMiddleware()
+    # Each test-local class closes over its own list so the test can inspect
+    # what wrap_generate saw across the (potentially many) fresh instances the
+    # registry mints per call.
+    iters_a: list[int] = []
+    iters_b: list[int] = []
+
+    class TrackerA(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            iters_a.append(params.iteration)
+            return await next_fn(params)
+
+    class TrackerB(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            iters_b.append(params.iteration)
+            return await next_fn(params)
+
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(
-                    name='track_gen',
-                    description='track generate',
-                    factory=lambda _opts: track_mw,
-                ),
-                MiddlewareDesc(
-                    name='track_gen2',
-                    description='track generate 2',
-                    factory=lambda _opts: track_mw2,
-                ),
+                MiddlewareDesc(cls=TrackerA, name='track_gen', description='track generate'),
+                MiddlewareDesc(cls=TrackerB, name='track_gen2', description='track generate 2'),
             ])
         ],
     )
@@ -820,7 +840,7 @@ async def test_wrap_generate_called_per_turn() -> None:
         ),
     )
     assert response.text == 'done'
-    assert track_mw.iterations == [0]
+    assert iters_a == [0]
 
     # With tools: two turns (model→tool→model) → wrap_generate called for each
     pm.responses.append(
@@ -847,35 +867,27 @@ async def test_wrap_generate_called_per_turn() -> None:
         ),
     )
     assert response2.text == 'final'
-    assert track_mw2.iterations == [0, 1]
-
-
-class TrackToolMiddleware(BaseMiddleware):
-    """Middleware that records wrap_tool calls."""
-
-    tool_names: list[str] = Field(default_factory=list)
-
-    async def wrap_tool(
-        self,
-        params: ToolHookParams,
-        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
-    ) -> MultipartToolResponse:
-        self.tool_names.append(params.tool_request_part.tool_request.name)
-        return await next_fn(params)
+    assert iters_b == [0, 1]
 
 
 @pytest.mark.asyncio
 async def test_wrap_tool_called_on_tool_execution() -> None:
     """wrap_tool is invoked for each tool execution."""
-    track_mw = TrackToolMiddleware()
+    tool_names: list[str] = []
+
+    class Tracker(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            tool_names.append(params.tool_request_part.tool_request.name)
+            return await next_fn(params)
+
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(
-                    name='track_tool',
-                    description='track tool',
-                    factory=lambda _opts: track_mw,
-                ),
+                MiddlewareDesc(cls=Tracker, name='track_tool', description='track tool'),
             ])
         ],
     )
@@ -910,7 +922,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
         ),
     )
     assert response.text == 'done'
-    assert track_mw.tool_names == ['myTool']
+    assert tool_names == ['myTool']
 
 
 @pytest.mark.asyncio
@@ -923,7 +935,9 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
     """
     from genkit._ai._tools import Interrupt
 
-    @middleware(name='interrupt_all')
+    ai = Genkit()
+
+    @ai.middleware(name='interrupt_all', description='interrupt all tools')
     class InterruptingMiddleware(BaseMiddleware):
         async def wrap_tool(
             self,
@@ -932,17 +946,6 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
         ) -> MultipartToolResponse:
             raise Interrupt({'blocked': True})
 
-    ai = Genkit(
-        plugins=[
-            middleware_plugin([
-                MiddlewareDesc(
-                    name='interrupt_all',
-                    description='interrupt all tools',
-                    factory=lambda _opts: InterruptingMiddleware(),
-                ),
-            ])
-        ],
-    )
     pm, _ = define_programmable_model(ai)
 
     @ai.tool(name='blockedTool')
@@ -987,7 +990,9 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     appear in the root registry afterward — mirroring Go's Hooks.Tools + NewChild.
     """
 
-    @middleware(name='tool_provider_mw')
+    ai = Genkit()
+
+    @ai.middleware(name='tool_provider_mw')
     class ToolProviderMiddleware(BaseMiddleware):
         """Middleware that contributes a tool dynamically per generate() call."""
 
@@ -1003,7 +1008,6 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
             t = define_tool(scratch, provided_tool, name='middleware_tool')
             return [t.action()]
 
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(ToolProviderMiddleware)])])
     pm, _ = define_programmable_model(ai)
 
     # Turn 1: model calls the middleware-contributed tool
@@ -1054,8 +1058,9 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
       root registry or across concurrent generate() calls).
     """
     seen_by_b: list[str] = []
+    ai = Genkit()
 
-    @middleware(name='provider_mw')
+    @ai.middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
         def tools(self) -> list:
             scratch = Registry()
@@ -1066,7 +1071,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
 
             return [define_tool(scratch, shared_tool, name='shared_tool').action()]
 
-    @middleware(name='looker_mw')
+    @ai.middleware(name='looker_mw')
     class LookerMW(BaseMiddleware):
         async def wrap_generate(
             self,
@@ -1090,14 +1095,6 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
             self.registry.register_action_from_instance(leak)
             return await next_fn(params)
 
-    ai = Genkit(
-        plugins=[
-            middleware_plugin([
-                new_middleware(ProviderMW),
-                new_middleware(LookerMW),
-            ])
-        ],
-    )
     pm, _ = define_programmable_model(ai)
     pm.responses.append(
         ModelResponse(
@@ -1135,7 +1132,9 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
     The fix emits queued chunks directly and increments once per message.
     """
 
-    @middleware(name='enqueuing_mw')
+    ai = Genkit()
+
+    @ai.middleware(name='enqueuing_mw')
     class EnqueuingMW(BaseMiddleware):
         """After each tool call, enqueue an extra USER part for the next turn."""
 
@@ -1148,7 +1147,6 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
             self.enqueue_parts([Part(TextPart(text='extra-context'))])
             return result
 
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(EnqueuingMW)])])
     pm, _ = define_programmable_model(ai)
 
     @ai.tool(name='trigger')
@@ -1201,8 +1199,9 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
     silently bypassed ToolApproval / Filesystem / etc. on every restart.
     """
     invocations: list[str] = []
+    ai = Genkit()
 
-    @middleware(name='recording_mw')
+    @ai.middleware(name='recording_mw')
     class RecordingMW(BaseMiddleware):
         async def wrap_tool(
             self,
@@ -1212,7 +1211,6 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
             invocations.append(params.tool.name)
             return await next_fn(params)
 
-    ai = Genkit(plugins=[middleware_plugin([new_middleware(RecordingMW)])])
     pm, _ = define_programmable_model(ai)
 
     @ai.tool(name='approveMe')

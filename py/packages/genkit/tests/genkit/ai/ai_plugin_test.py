@@ -27,8 +27,7 @@ from genkit._core._action import Action, ActionRunContext
 from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
 from genkit._core._typing import ActionMetadata, FinishReason
-from genkit.middleware import BaseMiddleware, MiddlewareDesc, middleware
-from genkit.plugin_api import new_middleware
+from genkit.middleware import BaseMiddleware, MiddlewareDesc
 
 
 class AsyncResolveOnlyPlugin(Plugin):
@@ -109,7 +108,6 @@ class AsyncInitPlugin(Plugin):
         ]
 
 
-@middleware(name='ai_plugin_test_mw')
 class _RegistryMw(BaseMiddleware):
     pass
 
@@ -129,7 +127,7 @@ class MiddlewareListingPlugin(Plugin):
         return []
 
     def list_middleware(self) -> list[MiddlewareDesc]:
-        return [new_middleware(_RegistryMw)]
+        return [MiddlewareDesc(cls=_RegistryMw, name='ai_plugin_test_mw')]
 
 
 @pytest.mark.asyncio

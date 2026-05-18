@@ -16,17 +16,15 @@
 
 """Middleware for Genkit model calls.
 
-This module provides types and helpers to define custom middleware.
-
-Chain ordering: middleware is applied first-in, outermost.
-
-Define a middleware class with ``@middleware`` and pass instances inline
-via ``use=``:
+Define a subclass of ``BaseMiddleware`` and register it on your app
+with ``@ai.middleware``:
 
     from genkit import Genkit
-    from genkit.middleware import BaseMiddleware, middleware
+    from genkit.middleware import BaseMiddleware
 
-    @middleware(name='logging')
+    ai = Genkit()
+
+    @ai.middleware(name='logging')
     class LoggingMiddleware(BaseMiddleware):
         async def wrap_generate(self, params, next_fn):
             print('before')
@@ -34,19 +32,16 @@ via ``use=``:
             print('after')
             return result
 
-    ai = Genkit()
-
     response = await ai.generate(
         model='your-model-here',
         prompt='Hello',
         use=[LoggingMiddleware()],
     )
 
-To make middleware available to the **Dev UI** and referenceable by name,
-register it on the app via ``ai.define_middleware`` or declare it in a
-plugin:
+Once registered, the middleware is visible in the Dev UI and can be
+referenced by name via ``use=[MiddlewareRef(name='logging')]``.
 
-    ai.define_middleware(LoggingMiddleware)
+Chain ordering: middleware in ``use=[...]`` runs first-in, outermost.
 """
 
 from genkit._core._middleware import (
@@ -56,7 +51,6 @@ from genkit._core._middleware import (
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
-    middleware,
 )
 from genkit._core._plugin import middleware_plugin
 
@@ -67,6 +61,5 @@ __all__ = [
     'ModelHookParams',
     'MultipartToolResponse',
     'ToolHookParams',
-    'middleware',
     'middleware_plugin',
 ]
