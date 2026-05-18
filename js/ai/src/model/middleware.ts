@@ -24,6 +24,7 @@ import type {
   MessageData,
   ModelInfo,
   ModelMiddleware,
+  ModelMiddlewareWithOptions,
   Part,
 } from '../model.js';
 import { resolveModel } from '../model.js';
@@ -334,7 +335,9 @@ const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
  * });
  * ```
  */
-export function retry(options: RetryOptions = {}): ModelMiddleware {
+export function retry(
+  options: RetryOptions = {}
+): ModelMiddlewareWithOptions {
   const {
     maxRetries = 3,
     statuses = DEFAULT_RETRY_STATUSES,
@@ -345,18 +348,24 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
     onError,
   } = options;
 
-  return async (req, next) => {
+  return async (req, opts, next) => {
+    const abortSignal = opts?.abortSignal;
     let lastError: any;
     let currentDelay = initialDelayMs;
     for (let i = 0; i <= maxRetries; i++) {
+      if (abortSignal?.aborted) {
+        throw abortSignal.reason ?? new Error('Aborted');
+      }
       try {
-        return await next(req);
+        return await next(req, opts);
       } catch (e) {
         lastError = e;
         const error = e as Error;
         if (i < maxRetries) {
           let shouldRetry = false;
-          if (error instanceof GenkitError) {
+          if (isAbortError(error) || abortSignal?.aborted) {
+            shouldRetry = false;
+          } else if (error instanceof GenkitError) {
             if (statuses.includes(error.status)) {
               shouldRetry = true;
             }
@@ -370,7 +379,7 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
             if (!noJitter) {
               delay = delay + 1000 * Math.pow(2, i) * Math.random();
             }
-            await new Promise((resolve) => __setTimeout(resolve, delay));
+            await abortableDelay(delay, abortSignal);
             currentDelay = Math.min(currentDelay * backoffFactor, maxDelayMs);
             continue;
           }
@@ -380,6 +389,37 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
     }
     throw lastError;
   };
+}
+
+function isAbortError(error: Error): boolean {
+  return (
+    error?.name === 'AbortError' ||
+    (error as { code?: string })?.code === 'ABORT_ERR'
+  );
+}
+
+function abortableDelay(
+  ms: number,
+  signal?: AbortSignal
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = __setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new Error('Aborted'));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer);
+        reject(signal.reason ?? new Error('Aborted'));
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
 }
 
 /**
