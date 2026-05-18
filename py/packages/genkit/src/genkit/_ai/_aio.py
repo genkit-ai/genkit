@@ -285,8 +285,6 @@ class Genkit:
         name: str,
         *,
         description: str | None = None,
-        config_schema: dict[str, Any] | None = None,
-        metadata: dict[str, object] | None = None,
     ) -> Callable[[type[BaseMiddleware]], type[BaseMiddleware]]:
         """Decorator that registers a ``BaseMiddleware`` subclass on this app.
 
@@ -306,19 +304,14 @@ class Genkit:
             name: Registry key. Flat segment — no ``/``, whitespace, ``:``,
                 backslashes, or control characters.
             description: Shown in the Dev UI.
-            config_schema: JSON Schema for the config. Inferred from
-                pydantic fields when omitted.
-            metadata: Passed through to the Dev UI wire format.
         """
         _validate_middleware_key_segment(name, label='middleware name')
 
         def decorator(cls: type[BaseMiddleware]) -> type[BaseMiddleware]:
             cls.name = name
             cls.description = description
-            cls.middleware_config_schema = config_schema
-            cls.middleware_metadata = metadata
-            # Description / metadata fall through from the class attrs we just
-            # stamped, so the descriptor stays a one-liner.
+            # Description falls through from the class attr we just stamped,
+            # so the descriptor stays a one-liner.
             desc = MiddlewareDesc(cls=cls, name=name)
             self.registry.register_value('middleware', name, desc)
             return cls

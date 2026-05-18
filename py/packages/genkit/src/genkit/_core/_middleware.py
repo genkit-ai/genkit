@@ -186,14 +186,12 @@ class BaseMiddleware(BaseModel):
     # ``Callable`` or opaque resources without opting in per-subclass.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # Class-level metadata stamped by ``@ai.middleware(...)``; the Dev UI and
-    # registry-time bookkeeping read these.
-    # These are ClassVars, not fields, so they do not appear in ``model_dump()`` or
-    # ``config`` dicts passed to factories.
+    # Class-level metadata stamped by ``@ai.middleware(...)``; the descriptor
+    # and the Dev UI's reflection endpoint read these.
+    # These are ClassVars, not fields, so they do not appear in ``model_dump()``
+    # or ``config`` dicts passed to ``cls(**config)``.
     name: ClassVar[str] = ''
     description: ClassVar[str | None] = None
-    middleware_config_schema: ClassVar[dict[str, Any] | None] = None
-    middleware_metadata: ClassVar[dict[str, object] | None] = None
 
     # Framework-injected at the start of each generate() call (see the class
     # docstring). They are public fields, not PrivateAttrs, so a middleware
@@ -296,22 +294,18 @@ class MiddlewareDesc(MiddlewareDescData):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         _validate_middleware_key_segment(name, label='MiddlewareDesc name')
-        # Class-level overrides win; otherwise derive from the pydantic fields
-        # so the Dev UI always has a schema to render a config form from.
-        config_schema = cls.middleware_config_schema
-        if config_schema is None:
-            config_schema = _derive_config_schema(cls)
-        # Fall back to whatever metadata the class already carries (typically
-        # stamped by `@ai.middleware`) so the descriptor stays consistent with
-        # the class without forcing callers to repeat themselves.
+        # The pydantic class IS the config contract: ``MiddlewareDesc.__call__``
+        # does ``cls(**config)``, so the schema the Dev UI renders has to match
+        # the fields the constructor accepts. Derive it from the class every
+        # time — no override hatch, no way for the form to drift from reality.
+        # Description defaults to whatever ``@ai.middleware`` already stamped
+        # on the class so plugin authors don't have to repeat themselves.
         if description is None:
             description = cls.description
-        if metadata is None:
-            metadata = cls.middleware_metadata
         super().__init__(
             name=name,
             description=description,
-            config_schema=config_schema,
+            config_schema=_derive_config_schema(cls),
             metadata=metadata,
         )
         self._cls = cls

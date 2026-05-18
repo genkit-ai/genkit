@@ -393,31 +393,3 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
         }
     finally:
         await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_values_middleware_explicit_config_schema_wins() -> None:
-    """Explicit ``@ai.middleware(config_schema=...)`` overrides the derived schema."""
-    explicit = {
-        'type': 'object',
-        'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},
-        'required': ['mode'],
-    }
-
-    @ai.middleware(name='explicit_schema', config_schema=explicit)
-    class _Explicit(BaseMiddleware):
-        # Field exists on the class but the explicit schema wins; the Dev UI
-        # only sees what the author chose to expose.
-        ignored_field: int = 0
-
-    registry = Registry()
-    registry.register_value('middleware', 'explicit_schema', MiddlewareDesc(cls=_Explicit, name='explicit_schema'))
-
-    client = await _registry_asgi_client(registry)
-    try:
-        response = await client.get('/api/values?type=middleware')
-        assert response.status_code == 200
-        entry = response.json()['explicit_schema']
-        assert entry['configSchema'] == explicit
-    finally:
-        await client.aclose()

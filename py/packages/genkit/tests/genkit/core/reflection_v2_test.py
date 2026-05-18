@@ -387,42 +387,6 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
 
 
 @pytest.mark.asyncio
-async def test_reflection_server_v2_list_values_explicit_config_schema_wins(
-    fake_manager: FakeReflectionManager,
-) -> None:
-    """Explicit ``middleware_config_schema`` on the class overrides the derived one."""
-    explicit = {
-        'type': 'object',
-        'properties': {'mode': {'type': 'string', 'enum': ['fast', 'careful']}},
-        'required': ['mode'],
-    }
-
-    @ai.middleware(name='explicit_schema', config_schema=explicit)
-    class _Explicit(BaseMiddleware):
-        # Field exists on the class but the explicit schema wins; the Dev UI
-        # only sees what the author chose to expose.
-        ignored_field: int = 0
-
-    registry = Registry()
-    registry.register_value('middleware', 'explicit_schema', MiddlewareDesc(cls=_Explicit, name='explicit_schema'))
-
-    client, task = await _run_client_lifecycle(registry, fake_manager)
-    try:
-        await ack_register(fake_manager)
-        await fake_manager.write_rpc({
-            'jsonrpc': '2.0',
-            'method': 'listValues',
-            'params': {'type': 'middleware'},
-            'id': '2e',
-        })
-        resp = await fake_manager.read_rpc()
-        entry = resp['result']['values']['explicit_schema']
-        assert entry['configSchema'] == explicit
-    finally:
-        await _stop_client(client, task)
-
-
-@pytest.mark.asyncio
 async def test_reflection_server_v2_list_values_rejects_unsupported_type(
     fake_manager: FakeReflectionManager,
 ) -> None:
