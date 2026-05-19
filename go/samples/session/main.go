@@ -109,7 +109,7 @@ func main() {
 		ctx = session.NewContext(ctx, sess)
 
 		return genkit.GenerateText(ctx, g,
-			ai.WithModel(googlegenai.ModelRef("gemini-2.5-flash", &genai.GenerateContentConfig{
+			ai.WithModel(googlegenai.ModelRef("gemini-flash-latest", &genai.GenerateContentConfig{
 				ThinkingConfig: &genai.ThinkingConfig{
 					ThinkingBudget: genai.Ptr[int32](0),
 				},

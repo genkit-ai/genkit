@@ -38,7 +38,7 @@ func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 	)
 
 	var callback func(context.Context, *ai.ModelResponseChunk) error

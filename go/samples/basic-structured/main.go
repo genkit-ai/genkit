@@ -114,7 +114,7 @@ func DefineSimpleJoke(g *genkit.Genkit) {
 	genkit.DefineStreamingFlow(g, "simpleJokesFlow",
 		func(ctx context.Context, input string, sendChunk core.StreamCallback[string]) (string, error) {
 			stream := genkit.GenerateStream(ctx, g,
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
 						ThinkingBudget: genai.Ptr[int32](0),
 					},
@@ -143,7 +143,7 @@ func DefineStructuredJoke(g *genkit.Genkit) {
 	genkit.DefineStreamingFlow(g, "structuredJokesFlow",
 		func(ctx context.Context, input JokeRequest, sendChunk core.StreamCallback[*Joke]) (*Joke, error) {
 			stream := genkit.GenerateDataStream[*Joke](ctx, g,
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
 						ThinkingBudget: genai.Ptr[int32](0),
 					},
@@ -171,7 +171,7 @@ func DefineRecipe(g *genkit.Genkit) {
 	genkit.DefineStreamingFlow(g, "recipeFlow",
 		func(ctx context.Context, input RecipeRequest, sendChunk core.StreamCallback[[]*Ingredient]) (*Recipe, error) {
 			stream := genkit.GenerateDataStream[*Recipe](ctx, g,
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 					ThinkingConfig: &genai.ThinkingConfig{
 						ThinkingBudget: genai.Ptr[int32](0),
 					},

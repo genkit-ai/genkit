@@ -99,11 +99,11 @@ type testAllCoffeeFlowsOutput struct {
 func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 	)
 
-	m := googlegenai.GoogleAIModel(g, "gemini-2.5-flash")
+	m := googlegenai.GoogleAIModel(g, "gemini-flash-latest")
 	simpleGreetingPrompt := genkit.DefinePrompt(g, "simpleGreeting2",
 		ai.WithPrompt(simpleGreetingPromptTemplate),
 		ai.WithModel(m),
