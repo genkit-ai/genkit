@@ -151,9 +151,9 @@ class BaseMiddleware(BaseModel):
     in your local Dev UI.
 
     To use a middleware, you can either:
-    1. Construct a Middleware instance directly and pass into the ``use`` argument of 
-    `ai.generate(...)`.
-    2. Reference it by name with :class:`MiddlewareRef`.
+    1. Construct a Middleware instance directly and pass into the ``use`` argument of
+    `ai.generate(...)`. Preferred in almost all app developer-facing use cases.
+    2. Reference it by name with :class:`MiddlewareRef`. Used mainly by Dev UI.
 
     Example:
         @ai.middleware(name='logger')
@@ -168,7 +168,7 @@ class BaseMiddleware(BaseModel):
 
         await ai.generate(
             prompt='...',
-            use=[MiddlewareRef(name='logger', config={'prefix': '[span]'})],
+            use=[Logger(prefix='[span]')],
         )
 
     Inside any hook, two framework-injected attributes are guaranteed to be set:
