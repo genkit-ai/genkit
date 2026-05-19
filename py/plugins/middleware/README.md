@@ -23,7 +23,7 @@ from genkit.plugins.middleware import Retry, Fallback, Middleware
 ai = Genkit(plugins=[Middleware()])
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='Hello!',
     use=[
         Retry(max_retries=5),
@@ -109,14 +109,14 @@ tool by restarting it with ``resumed_metadata`` that includes ``toolApproved``
 
 ```python
 first = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='Delete the database',
     tools=[delete_database_tool],
     use=[approval],
 )
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='Delete the database',
     messages=list(first.messages),
     tools=[delete_database_tool],
@@ -141,7 +141,7 @@ skills = Skills(
 )
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='Help me with Python',
     use=[skills],
 )
@@ -172,7 +172,7 @@ fs = Filesystem(
 )
 
 response = await ai.generate(
-    model='googleai/gemini-2.5-flash',
+    model='googleai/gemini-flash-latest',
     prompt='List files in the current directory',
     use=[fs],
 )
