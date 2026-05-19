@@ -31,19 +31,19 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@genkit-ai/ai": "workspace:^",
-    "@googleapis/checks": "^4.0.2",
-    "google-auth-library": "^9.6.3"
+    "@googleapis/checks": "^9.0.1",
+    "google-auth-library": "^10.6.2"
   },
   "peerDependencies": {
     "genkit": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^25.9.1",
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "tsup": "^8.0.2",
-    "tsx": "^4.7.0",
-    "typescript": "^5.9.3"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {

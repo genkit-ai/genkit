@@ -29,17 +29,17 @@
     "genkit": "workspace:^"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0"
+    "@anthropic-ai/sdk": "^0.97.1"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^25.9.1",
     "check-node-version": "^4.2.1",
     "genkit": "workspace:*",
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {

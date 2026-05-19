@@ -17,11 +17,11 @@
     "@genkit-ai/vertexai": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@mistralai/mistralai-gcp": "^1.3.4",
-    "express": "^4.21.0",
+    "express": "^5.2.1",
     "genkit": "workspace:*",
-    "zod": "3.22.4"
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^6.0.3"
   }
 }

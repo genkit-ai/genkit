@@ -23,21 +23,21 @@
     "@genkit-ai/mcp": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "express": "^5.1.0",
+    "express": "^5.2.1",
     "genkit": "workspace:*",
     "genkitx-langchain": "workspace:*",
     "llm-chunk": "^0.0.1",
-    "pdf-parse": "^1.1.1",
-    "pdfjs-dist": "^4.0.379",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
     "pdfjs-dist-legacy": "^1.0.1"
   },
   "devDependencies": {
-    "@modelcontextprotocol/server-everything": "^2025.5.12",
-    "@modelcontextprotocol/server-filesystem": "^2025.3.28",
-    "@types/express": "^4.17.21",
-    "cross-env": "^7.0.3",
+    "@modelcontextprotocol/server-everything": "^2026.1.26",
+    "@modelcontextprotocol/server-filesystem": "^2026.1.14",
+    "@types/express": "^5.0.6",
+    "cross-env": "^10.1.0",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }
