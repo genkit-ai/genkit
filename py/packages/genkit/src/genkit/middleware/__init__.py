@@ -38,10 +38,29 @@ with ``@ai.middleware``:
         use=[LoggingMiddleware()],
     )
 
-Once registered, the middleware is visible in the Dev UI and can be
-referenced by name via ``use=[MiddlewareRef(name='logging')]``.
+Once registered, the middleware is visible in the Dev UI.  You can play
+with the Model Runner and mix-and-match your choice of middleware to see
+its impact on generating the next response.
 
-Chain ordering: middleware in ``use=[...]`` runs first-in, outermost.
+Order of middleware in ``use=[...]`` determines the order in which they are
+called. The first middleware in the list is called first, and the last
+middleware in the list is called last.
+
+For example, given this call:
+
+```python
+use=[A(), B()]
+```
+
+The execution sequence is:
+
+``` 
+A_before()
+    B_before()
+        model_call()
+    B_after()
+A_after()
+```
 """
 
 from genkit._core._middleware import (

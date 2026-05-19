@@ -336,9 +336,9 @@ async def _registry_asgi_client(registry: Registry) -> AsyncClient:
 async def test_values_middleware_includes_derived_config_schema() -> None:
     """The Dev UI's /api/values?type=middleware response carries each middleware's configSchema.
 
-    Without this the Dev UI has nothing to render a config form from and falls
-    back to a free-text JSON box. The schema is derived from the middleware
-    class's pydantic fields by ``MiddlewareDesc(cls=...)``.
+    Without this the Dev UI has nothing to render a config form.
+
+    The schema is derived from the middleware class's pydantic fields by ``MiddlewareDesc(cls=...)``.
     """
 
     @ai.middleware(name='fallback', description='Falls back to alternative models on failure')

@@ -33,6 +33,9 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
+from genkit._core._logger import get_logger
+
+logger = get_logger(__name__)
 
 class MiddlewareValidationResult(NamedTuple):
     errored: bool
@@ -140,29 +143,15 @@ class ToolHookParams(BaseModel):
 class BaseMiddleware(BaseModel):
     """Pydantic-backed middleware: config fields + hook overrides in one class.
 
-    The config struct *is* the middleware — there is no separate
-    "factory args" type. To author one:
+    To author a middleware, 
+    1. Subclass `BaseMiddleware` and add pydantic fields for config.
+    2. Override the ``wrap_generate`` / ``wrap_model`` / ``wrap_tool`` hooks.
+    3. Wrap your subclass with the `@ai.middleware` decorator to make it available
+    in your local Dev UI.
 
-    * Subclass and add pydantic fields for config.
-    * Override the ``wrap_generate`` / ``wrap_model`` / ``wrap_tool`` hooks.
-    * Either pass instances inline in ``use=[...]``, or register the class
-      with ``@ai.middleware`` (or, for plugins, ``middleware_plugin`` /
-      ``Plugin.list_middleware``) and reference it by name with
-      :class:`MiddlewareRef`.
-
-    Inside any hook, two framework-injected attributes are guaranteed to be set:
-
-    * ``self.registry`` — the per-call child registry. Use it to resolve actions
-      and to inspect what else is in scope for this call. Anything you register
-      through it is automatically scoped to the call and torn down at the end.
-    * ``self.enqueue_parts(parts)`` — queue an extra user message to be injected
-      into the conversation at the start of the next generate iteration. Use it
-      from a tool closure or from ``wrap_tool`` to surface error details, file
-      contents, or other rich context to the model without forging a tool
-      response.
-
-    Outside a ``generate()`` call these attributes are ``None`` — they only
-    become valid once the engine binds the instance to a specific call.
+    To use a middleware, you can either:
+    1. Pass the Middleware directly into the ``use`` argument of ``ai.generate``.
+    2. Reference it by name with :class:`MiddlewareRef`.
 
     Example:
         @ai.middleware(name='logger')
@@ -175,25 +164,28 @@ class BaseMiddleware(BaseModel):
                 log(f'{self.prefix} {time.monotonic() - t:.3f}s')
                 return resp
 
-        # Inline (fast path, no registration):
-        await ai.generate(prompt='...', use=[Logger(prefix='[span]')])
-
-        # Registered by the decorator above (visible in the Dev UI,
-        # dispatched by name):
         await ai.generate(
             prompt='...',
             use=[MiddlewareRef(name='logger', config={'prefix': '[span]'})],
         )
 
-    Concurrency:
-        Each ``generate()`` call works on its own shallow copy of the
-        middleware instance with a freshly bound ``self.registry`` and
-        ``self.enqueue_parts``, so those framework attributes are safe
-        even when the same instance is reused across concurrent calls.
-        Author-added state on ``self`` is *not* deep-copied — keep
-        per-call state in method locals, or override ``model_copy`` if
-        you need stronger isolation (same convention as Django /
-        Starlette middleware).
+    Inside any hook, two framework-injected attributes are guaranteed to be set:
+
+    1. `self.registry` — the per-call registry. Use it to resolve actions
+      and to inspect what else is in scope for this call. Anything you register
+      through it is automatically scoped to the call and torn down at the end.
+    2. `self.enqueue_parts(parts)` — queue an extra user message to be injected
+      into the conversation at the start of the next generate iteration. Use it
+      from a tool closure or from ``wrap_tool`` to surface error details, file
+      contents, or other rich context to the model without forging a tool
+      response.
+
+    Outside a `generate()` call these attributes are `None` — they only
+    become valid once the engine binds the instance to a specific call.
+
+    Avoid storing additional mutable state on ``self`` inside your hooks.
+    Each `generate()` call works on its own shallow copy of the middleware
+    instance.
     """
 
     # ``arbitrary_types_allowed`` lets subclasses keep non-pydantic fields like
@@ -282,7 +274,7 @@ class MiddlewareDesc(MiddlewareDescData):
 
     Inherits the wire fields (``name``, ``description``, ``config_schema``,
     ``metadata``) from the auto-generated
-    :class:`genkit._core._typing.MiddlewareDescData` schema. Holds the
+    `genkit._core._typing.MiddlewareDescData` schema. Holds the
     ``BaseMiddleware`` subclass in a ``PrivateAttr`` so the registry can
     mint a fresh instance per ``generate()`` call via ``cls(**(cfg or {}))``.
     ``PrivateAttr`` is excluded from serialization, so
@@ -310,12 +302,6 @@ class MiddlewareDesc(MiddlewareDescData):
         res = _validate_middleware_key_segment(name)
         if res.errored:
             raise ValueError(f'MiddlewareDesc name {res.error_message}')
-        # The pydantic class IS the config contract: ``MiddlewareDesc.__call__``
-        # does ``cls(**config)``, so the schema the Dev UI renders has to match
-        # the fields the constructor accepts. Derive it from the class every
-        # time — no override hatch, no way for the form to drift from reality.
-        # Description defaults to whatever ``@ai.middleware`` already stamped
-        # on the class so plugin authors don't have to repeat themselves.
         if description is None:
             description = cls.description
         super().__init__(
@@ -372,10 +358,15 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
             **new_fields,
         )
         return stripped.model_json_schema()
-    except Exception:
+    except Exception as e:
         # If a config field carries a type pydantic can't translate, prefer a
         # permissive empty schema over crashing the whole registration —
         # the middleware itself still works, just without form generation.
+        logger.warning(
+            f'Failed to derive config schema for middleware {cls.__name__}: {e}. '
+            'Form generation in the Dev UI will be disabled for this middleware.',
+            exc_info=True,
+        )
         return {
             'type': 'object',
             'properties': {},

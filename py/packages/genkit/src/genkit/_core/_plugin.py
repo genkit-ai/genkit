@@ -97,10 +97,16 @@ class _MiddlewareDescsPlugin(Plugin):
 
 
 def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
-    """Wrap a list of middleware descriptors as a single plugin (for ``plugins=[...]``).
+    """Wrap a list of middleware descriptors as a single plugin. 
 
-    Pass all descriptors for this plugin in one list so one plugin can
-    register several middlewares together.
+    Used by Genkit-provided middleware plugins. To build and release your own
+    middleware, use this helper function to expose them via the plugin interface.
+
+    Args:
+        descs: Non-empty sequence of middleware descriptors.
+
+    Returns:
+        A plugin whose ``list_middleware`` returns the descriptors.
 
     Example:
         Genkit(plugins=[
@@ -116,15 +122,6 @@ def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
                 ),
             ]),
         ])
-
-    Construct each descriptor with ``MiddlewareDesc(cls=..., name=...)``;
-    registration happens when the plugin is passed in ``plugins=[...]``.
-
-    Args:
-        descs: Non-empty sequence of middleware descriptors.
-
-    Returns:
-        A plugin whose ``list_middleware`` returns the descriptors as-is.
     """
     built = list(descs)
     if not built:
