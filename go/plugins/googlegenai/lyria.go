@@ -34,6 +34,8 @@ import (
 
 // LyriaConfig controls a Vertex AI Lyria music generation request. It mirrors
 // the JS LyriaConfigSchema used for the lyria-002 legacy endpoint.
+//
+// Vertex AI backend only.
 type LyriaConfig struct {
 	// NegativePrompt optionally describes what to exclude from the generated audio.
 	NegativePrompt string `json:"negativePrompt,omitempty"`
