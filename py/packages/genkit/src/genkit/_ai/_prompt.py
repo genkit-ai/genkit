@@ -48,7 +48,7 @@ from genkit._ai._model import (
     ModelResponseChunk,
 )
 from genkit._ai._tools import Tool
-from genkit._core._action import Action, ActionKind, ActionRunContext, StreamingCallback, create_action_key
+from genkit._core._action import Action, ActionKind, ActionRunContext, StreamingCallback, create_action_key, get_current_context
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
@@ -349,7 +349,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             child_registry,
             gen_options,
             on_chunk=on_chunk,
-            context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
+            context=context if context else get_current_context(),
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -568,7 +568,6 @@ async def _prepare(
     """
     await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
     prompt_config = ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
-
     child_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
     await register_tools(child_registry, prompt_config.tools)
     refs = register_middleware(child_registry, prompt_config.use)
@@ -1160,7 +1159,6 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
         exec_prompt_action = await registry.resolve_action_by_key(
             create_action_key(ActionKind.EXECUTABLE_PROMPT, definition_key)
         )
-
         if prompt_action and prompt_action.kind == ActionKind.PROMPT:
             executable_prompt._prompt_action = prompt_action  # pyright: ignore[reportPrivateUsage]
             setattr(prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010

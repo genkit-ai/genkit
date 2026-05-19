@@ -75,7 +75,7 @@ from genkit._ai._resource import (
     define_resource,
 )
 from genkit._ai._tools import Tool, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
@@ -930,7 +930,7 @@ class Genkit:
         return await generate_action(
             child_registry,
             gen_options,
-            context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
+            context=context if context else get_current_context(),
         )
 
     # Overload: output_schema=type[T] -> ModelStreamResponse[T]
@@ -1049,7 +1049,7 @@ class Genkit:
                 child_registry,
                 gen_options,
                 on_chunk=lambda c: channel.send(c),
-                context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
+                context=context if context else get_current_context(),
             )
 
         response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
@@ -1168,7 +1168,7 @@ class Genkit:
     @staticmethod
     def current_context() -> dict[str, Any] | None:
         """Get the current execution context, or None if not in an action."""
-        return ActionRunContext._current_context()  # pyright: ignore[reportPrivateUsage]
+        return get_current_context()
 
     async def run(
         self,
