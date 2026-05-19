@@ -138,11 +138,20 @@ async function __flowRunEnvelope({
     }
     // If buffer includes the delimiter that means we are still receiving chunks.
     while (buffer.includes(__flowStreamDelimiter)) {
-      const chunk = JSON.parse(
-        buffer
-          .substring(0, buffer.indexOf(__flowStreamDelimiter))
-          .substring('data: '.length)
-      );
+      const event = buffer.substring(0, buffer.indexOf(__flowStreamDelimiter));
+      // Per the SSE spec, the space after `data:` is optional, so strip the
+      // prefix and then at most one leading space.
+      // https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation
+      let payload = event.startsWith('data:')
+        ? event.substring('data:'.length)
+        : event;
+      if (payload.startsWith(' ')) {
+        payload = payload.substring(1);
+      }
+      const chunk = JSON.parse(payload);
+      if (!chunk || typeof chunk !== 'object') {
+        throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
+      }
       if (chunk.hasOwnProperty('message')) {
         sendChunk(chunk.message);
       } else if (chunk.hasOwnProperty('result')) {
