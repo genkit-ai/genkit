@@ -16,12 +16,14 @@
 
 import WebSocket from 'ws';
 import { StatusCodes, type Status } from './action.js';
+import { getAssetUrl } from './asset-server.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
 import {
   ReflectionCancelActionParamsSchema,
   ReflectionConfigureParamsSchema,
   ReflectionListActionsResponse,
+  ReflectionListDevUiHooksResponseSchema,
   ReflectionListValuesParamsSchema,
   ReflectionListValuesResponseSchema,
   ReflectionRegisterParams,
@@ -29,6 +31,7 @@ import {
   ReflectionRunActionStateParamsSchema,
   ReflectionStreamChunkParamsSchema,
 } from './reflection-types.js';
+import { findProjectRoot } from './reflection.js';
 import type { Registry } from './registry.js';
 import { toJsonSchema } from './schema.js';
 import { flushTracing, setTelemetryServerUrl } from './tracing.js';
@@ -59,6 +62,7 @@ export interface ReflectionServerV2Options {
   configuredEnvs?: string[];
   name?: string;
   url: string;
+  assetServerUrl?: string;
 }
 
 export class ReflectionServerV2 {
@@ -87,6 +91,7 @@ export class ReflectionServerV2 {
     }
   >();
   private requestIdCounter = 0;
+  private projectRoot: string | null = null;
 
   constructor(registry: Registry, options: ReflectionServerV2Options) {
     this.registry = registry;
@@ -101,7 +106,15 @@ export class ReflectionServerV2 {
   async start() {
     this.isStopped = false;
     this.reconnectCount = 0;
+    this.projectRoot = await findProjectRoot().catch(() => process.cwd());
     await this.connect();
+  }
+
+  /**
+   * Translates a module URL into an accessible URL if it's a local file path.
+   */
+  private getAssetUrl(moduleUrl: string): string {
+    return getAssetUrl(moduleUrl, this.projectRoot);
   }
 
   private async connect() {
@@ -235,6 +248,7 @@ export class ReflectionServerV2 {
       genkitVersion: GENKIT_VERSION,
       reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
       envs: this.options.configuredEnvs,
+      assetServerUrl: this.options.assetServerUrl,
     };
     try {
       const response = await this.sendRequest('register', params);
@@ -277,6 +291,9 @@ export class ReflectionServerV2 {
           break;
         case 'listValues':
           await this.handleListValues(request);
+          break;
+        case 'listDevUiHooks':
+          await this.handleListDevUiHooks(request);
           break;
         case 'runAction':
           await this.handleRunAction(request);
@@ -368,6 +385,23 @@ export class ReflectionServerV2 {
     this.sendResponse(
       request.id,
       ReflectionListValuesResponseSchema.parse({ values: mappedValues })
+    );
+  }
+
+  private async handleListDevUiHooks(request: JsonRpcRequest) {
+    if (!request.id) return;
+    const hooks = await this.registry.listDevUiHooks();
+    const mappedHooks = hooks.map((hook) => {
+      return {
+        ...hook,
+        moduleUrl: hook.moduleUrl
+          ? this.getAssetUrl(hook.moduleUrl)
+          : undefined,
+      };
+    });
+    this.sendResponse(
+      request.id,
+      ReflectionListDevUiHooksResponseSchema.parse({ hooks: mappedHooks })
     );
   }
 

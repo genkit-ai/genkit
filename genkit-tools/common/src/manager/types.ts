@@ -54,6 +54,8 @@ export interface RuntimeInfo {
   pid: number;
   /** URL of the reflection server. */
   reflectionServerUrl: string;
+  /** URL of the asset server. */
+  assetServerUrl?: string;
   /** Timestamp when the runtime was started. */
   timestamp: string;
   /** Project name, typically basename of the root folder */

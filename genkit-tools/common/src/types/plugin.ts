@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,21 +14,20 @@
  * limitations under the License.
  */
 
-export { RuntimeEvent, RuntimeInfo } from '../manager/types';
-export { GenkitError } from '../types/error';
-export * from './action';
-export * from './analytics';
-export * from './apis';
-export * from './document';
-export * from './env';
-export * from './eval';
-export * from './evaluator';
-export * from './log';
-export * from './middleware';
-export * from './model';
-export * from './plugin';
-export * from './prompt';
-export * from './reflection';
-export * from './retriever';
-export * from './status';
-export * from './trace';
+import { z } from 'zod';
+
+export const DEV_UI_EXTENSION_TYPES = [
+  'config-form-control',
+  'trace-render-io',
+  'trace-decorator',
+] as const;
+
+export type DevUiExtensionType = (typeof DEV_UI_EXTENSION_TYPES)[number];
+
+export const DevUiHookSchema = z.object({
+  slot: z.enum(DEV_UI_EXTENSION_TYPES),
+  component: z.string().optional(),
+  moduleUrl: z.string().optional(),
+  actionId: z.string().optional(),
+});
+export type DevUiHook = z.infer<typeof DevUiHookSchema>;

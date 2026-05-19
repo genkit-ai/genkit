@@ -148,7 +148,9 @@ export {
   resetGenkitRuntimeConfig,
   runWithStreamingCallback,
   setGenkitRuntimeConfig,
+  toJsonSchema,
   z,
+  action,
   type Action,
   type ActionContext,
   type ActionMetadata,
@@ -170,6 +172,14 @@ export {
   type StreamingResponse,
   type TelemetryConfig,
 } from '@genkit-ai/core';
+export {
+  genkitPlugin,
+  genkitPluginV2,
+  type GenkitPlugin,
+  type GenkitPluginV2,
+  type PluginInit,
+  type DevUiHook,
+} from './plugin.js';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 
 initNodeFeatures();

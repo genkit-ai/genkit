@@ -1585,6 +1585,44 @@
       ],
       "additionalProperties": false
     },
+    "ReflectionListDevUiHooksResponse": {
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "slot": {
+                "type": "string",
+                "enum": [
+                  "config-form-control",
+                  "trace-render-io",
+                  "trace-decorator"
+                ]
+              },
+              "component": {
+                "type": "string"
+              },
+              "moduleUrl": {
+                "type": "string"
+              },
+              "actionId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "slot"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "hooks"
+      ],
+      "additionalProperties": false
+    },
     "ReflectionListValuesParams": {
       "type": "object",
       "properties": {
@@ -1633,6 +1671,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "assetServerUrl": {
+          "type": "string"
         }
       },
       "required": [

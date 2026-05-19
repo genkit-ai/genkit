@@ -14,10 +14,32 @@
  * limitations under the License.
  */
 
-import type { z } from 'zod';
+import * as z from 'zod';
 import type { Action, ActionMetadata } from './action.js';
 import type { BackgroundAction } from './background-action.js';
 import type { ActionType } from './registry.js';
+
+export const DEV_UI_EXTENSION_TYPES = [
+  'config-form-control',
+  'trace-render-io',
+  'trace-decorator',
+] as const;
+
+export type DevUiExtensionType = (typeof DEV_UI_EXTENSION_TYPES)[number];
+
+export interface DevUiHook {
+  slot: DevUiExtensionType;
+  component?: string;
+  moduleUrl?: string;
+  actionId?: string;
+}
+
+export const DevUiHookSchema = z.object({
+  slot: z.enum(DEV_UI_EXTENSION_TYPES),
+  component: z.string().optional(),
+  moduleUrl: z.string().optional(),
+  actionId: z.string().optional(),
+});
 
 export interface Provider<T> {
   id: string;
@@ -32,6 +54,7 @@ export interface PluginProvider {
     | Promise<InitializedPlugin | void>;
   resolver?: (action: ActionType, target: string) => Promise<void>;
   listActions?: () => Promise<ActionMetadata[]>;
+  listDevUiHooks?: () => Promise<DevUiHook[]>;
 }
 
 export interface InitializedPlugin {

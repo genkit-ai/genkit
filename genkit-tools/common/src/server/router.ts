@@ -141,6 +141,13 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
         return manager.listValues(input);
       }),
 
+    /** Retrieves all UI hooks. */
+    listDevUiHooks: loggedProcedure
+      .input(apis.ListDevUiHooksRequestSchema)
+      .query(async ({ input }): Promise<{ hooks: any[] }> => {
+        return manager.listDevUiHooks(input);
+      }),
+
     /** Generate a .prompt file from messages and model config. */
     createPrompt: loggedProcedure
       .input(apis.CreatePromptRequestSchema)

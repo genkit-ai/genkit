@@ -129,6 +129,7 @@ import {
   type GenkitPlugin,
   type GenkitPluginV2,
   type ResolvableAction,
+  type DevUiHook,
 } from './plugin.js';
 import { Registry, type ActionType } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
@@ -280,6 +281,13 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   defineJsonSchema(name: string, jsonSchema: JSONSchema) {
     return defineJsonSchema(this.registry, name, jsonSchema);
+  }
+
+  /**
+   * Defines and registers a UI hook.
+   */
+  defineDevUiHook(hook: DevUiHook) {
+    this.registry.registerDevUiHook(hook);
   }
 
   /**
@@ -708,6 +716,12 @@ export class Genkit extends GenkitAI implements HasRegistry {
             }
             return [];
           },
+          async listDevUiHooks() {
+            if (typeof (plugin as any).devUiHooks === 'function') {
+              return await (plugin as any).devUiHooks();
+            }
+            return [];
+          },
         });
       } else {
         const loadedPlugin = (plugin as GenkitPlugin)(this);
@@ -726,6 +740,12 @@ export class Genkit extends GenkitAI implements HasRegistry {
           async listActions() {
             if (loadedPlugin.listActions) {
               return await loadedPlugin.listActions();
+            }
+            return [];
+          },
+          async listDevUiHooks() {
+            if (loadedPlugin.listDevUiHooks) {
+              return await loadedPlugin.listDevUiHooks();
             }
             return [];
           },

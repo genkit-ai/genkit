@@ -190,6 +190,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       genkitVersion: params.genkitVersion,
       reflectionApiSpecVersion: params.reflectionApiSpecVersion,
       reflectionServerUrl: `ws://localhost:${this.port}`, // Virtual URL for compatibility
+      assetServerUrl: params.assetServerUrl,
       timestamp: new Date().toISOString(),
       projectName: path.basename(this.projectRoot), // Or derive from other means if needed
     };
@@ -415,6 +416,17 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       result[key] = action as Action;
     }
     return result;
+  }
+
+  async listDevUiHooks(input?: {
+    runtimeId?: string;
+  }): Promise<{ hooks: any[] }> {
+    const runtimeId = input?.runtimeId || this.getMostRecentRuntime()?.id;
+    if (!runtimeId) {
+      return { hooks: [] };
+    }
+    const response = await this.sendRequest(runtimeId, 'listDevUiHooks');
+    return response;
   }
 
   async listValues(
