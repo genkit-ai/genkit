@@ -16,7 +16,7 @@
 
 """Genkit — Build AI-powered applications."""
 
-from genkit._ai._aio import ActionKind, ActionRunContext, Genkit
+from genkit._ai._aio import ActionKind, Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
@@ -30,7 +30,7 @@ from genkit._ai._tools import (
     restart_tool,
     tool,
 )
-from genkit._core._action import Action, StreamResponse
+from genkit._core._action import Action, ActionRunContext, StreamResponse
 from genkit._core._error import GenkitError, PublicError
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin

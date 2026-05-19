@@ -591,4 +591,3 @@ def set_action_name(action: Action[Any, Any, Any], name: str) -> None:
     private name backing field without exposing a setter on the Action class.
     """
     action._name = name
-

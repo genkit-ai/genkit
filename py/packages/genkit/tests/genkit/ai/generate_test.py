@@ -478,11 +478,13 @@ def test_middleware_validation_raises_correct_errors() -> None:
 
     # 1. Test @ai.middleware decorator raising ValueError
     with pytest.raises(ValueError, match='middleware name must be one path-free token'):
+
         @local_ai.middleware(name='invalid/name')
         class InvalidDecoratorMw(BaseMiddleware):
             pass
 
     with pytest.raises(ValueError, match='middleware name must be a non-empty string'):
+
         @local_ai.middleware(name='  ')
         class InvalidDecoratorMwEmpty(BaseMiddleware):
             pass

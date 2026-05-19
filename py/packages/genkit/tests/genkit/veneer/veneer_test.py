@@ -53,8 +53,7 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
-from genkit.middleware import BaseMiddleware, MiddlewareDesc, ModelHookParams
-from genkit.plugin_api import middleware_plugin
+from genkit.middleware import BaseMiddleware, ModelHookParams
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]

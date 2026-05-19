@@ -48,7 +48,13 @@ from genkit._ai._model import (
     ModelResponseChunk,
 )
 from genkit._ai._tools import Tool
-from genkit._core._action import Action, ActionKind, ActionRunContext, StreamingCallback, create_action_key, get_current_context
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    StreamingCallback,
+    create_action_key,
+    get_current_context,
+)
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger

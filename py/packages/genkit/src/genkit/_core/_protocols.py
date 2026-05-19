@@ -40,7 +40,9 @@ from genkit._core._action import Action, ActionKind
 @runtime_checkable
 class RegistryLike(Protocol):
     """Structural interface for the subset of Registry used by middleware and the generate engine.
-    Add methods as needed. """
+
+    Add methods as needed.
+    """
 
     def new_child(self) -> RegistryLike:
         """Return a scoped child registry that delegates misses to this one."""

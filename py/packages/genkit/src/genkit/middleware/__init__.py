@@ -49,12 +49,12 @@ middleware in the list is called last.
 For example, given this call:
 
 ```python
-use=[A(), B()]
+use = [A(), B()]
 ```
 
 The execution sequence is:
 
-``` 
+```
 A_before()
     B_before()
         model_call()
@@ -80,4 +80,5 @@ __all__ = [
     'ModelHookParams',
     'MultipartToolResponse',
     'ToolHookParams',
+    'middleware_plugin',
 ]

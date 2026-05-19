@@ -97,7 +97,7 @@ class _MiddlewareDescsPlugin(Plugin):
 
 
 def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
-    """Wrap a list of middleware descriptors as a single plugin. 
+    """Wrap a list of middleware descriptors as a single plugin.
 
     Used by Genkit-provided middleware plugins. To build and release your own
     middleware, use this helper function to expose them via the plugin interface.

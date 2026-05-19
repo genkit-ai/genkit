@@ -48,7 +48,7 @@ from pydantic import Field
 
 from genkit import Genkit
 from genkit._core._action import ActionKind
-from genkit._core._middleware import BaseMiddleware, MiddlewareDesc
+from genkit._core._middleware import BaseMiddleware
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata

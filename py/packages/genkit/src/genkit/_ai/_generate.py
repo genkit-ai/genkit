@@ -483,8 +483,7 @@ async def _generate_action_turn(
     enqueue_parts: Callable[[list[Part]], None],
     queue: list[Message],
 ) -> ModelResponse:
-    """Run one model call plus tool resolution, then recurse for the next turn.
-    """
+    """Run one model call plus tool resolution, then recurse for the next turn."""
     tools_in = raw_request.tools
     if tools_in:
         raw_request = raw_request.model_copy()

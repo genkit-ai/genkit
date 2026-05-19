@@ -25,6 +25,7 @@ from typing import Any, ClassVar, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, create_model
 
 from genkit._core._action import Action
+from genkit._core._logger import get_logger
 from genkit._core._model import (
     GenerateActionOptions,
     ModelRequest,
@@ -33,9 +34,9 @@ from genkit._core._model import (
 )
 from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
-from genkit._core._logger import get_logger
 
 logger = get_logger(__name__)
+
 
 class MiddlewareValidationResult(NamedTuple):
     errored: bool
@@ -143,14 +144,15 @@ class ToolHookParams(BaseModel):
 class BaseMiddleware(BaseModel):
     """Pydantic-backed middleware: config fields + hook overrides in one class.
 
-    To author a middleware, 
+    To author a middleware,
     1. Subclass `BaseMiddleware` and add pydantic fields for config.
     2. Override the ``wrap_generate`` / ``wrap_model`` / ``wrap_tool`` hooks.
     3. Wrap your subclass with the `@ai.middleware` decorator to make it available
     in your local Dev UI.
 
     To use a middleware, you can either:
-    1. Pass the Middleware directly into the ``use`` argument of ``ai.generate``.
+    1. Construct a Middleware instance directly and pass into the ``use`` argument of 
+    `ai.generate(...)`.
     2. Reference it by name with :class:`MiddlewareRef`.
 
     Example:
