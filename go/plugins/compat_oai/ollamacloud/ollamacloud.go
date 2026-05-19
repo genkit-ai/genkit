@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -114,6 +115,9 @@ type OllamaCloud struct {
 	APIKey string
 	Opts   []option.RequestOption
 
+	mu      sync.Mutex
+	initted bool
+
 	openAICompatible *compat_oai.OpenAICompatible
 }
 
@@ -124,32 +128,39 @@ func (o *OllamaCloud) Name() string {
 
 // Init implements genkit.Plugin.
 func (o *OllamaCloud) Init(ctx context.Context) []api.Action {
-	apiKey := o.APIKey
-	if apiKey == "" {
-		apiKey = os.Getenv("OLLAMACLOUD_API_KEY")
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	var compatActions []api.Action
+	if !o.initted {
+		apiKey := o.APIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("OLLAMACLOUD_API_KEY")
+		}
+
+		if apiKey == "" {
+			panic("ollamacloud plugin initialization failed: API key is required")
+		}
+
+		if o.openAICompatible == nil {
+			o.openAICompatible = &compat_oai.OpenAICompatible{}
+		}
+
+		// Configure OpenAI-compatible client with Ollama Cloud settings
+		o.openAICompatible.Opts = []option.RequestOption{
+			option.WithAPIKey(apiKey),
+			option.WithBaseURL(fmt.Sprintf("%s/%s", apiBaseURL, apiVersion)),
+		}
+		if len(o.Opts) > 0 {
+			o.openAICompatible.Opts = append(o.openAICompatible.Opts, o.Opts...)
+		}
+
+		o.openAICompatible.Provider = provider
+		compatActions = o.openAICompatible.Init(ctx)
+		o.initted = true
 	}
 
-	if apiKey == "" {
-		panic("ollamacloud plugin initialization failed: API key is required")
-	}
-
-	if o.openAICompatible == nil {
-		o.openAICompatible = &compat_oai.OpenAICompatible{}
-	}
-
-	// Configure OpenAI-compatible client with Ollama Cloud settings
-	o.openAICompatible.Opts = []option.RequestOption{
-		option.WithAPIKey(apiKey),
-		option.WithBaseURL(fmt.Sprintf("%s/%s", apiBaseURL, apiVersion)),
-	}
-	if len(o.Opts) > 0 {
-		o.openAICompatible.Opts = append(o.openAICompatible.Opts, o.Opts...)
-	}
-
-	o.openAICompatible.Provider = provider
-	compatActions := o.openAICompatible.Init(ctx)
-
-	var actions []api.Action
+	actions := make([]api.Action, 0, len(supportedModels)+len(compatActions))
 	actions = append(actions, compatActions...)
 
 	// Define available models
