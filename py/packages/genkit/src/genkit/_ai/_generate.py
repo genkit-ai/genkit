@@ -457,7 +457,8 @@ async def generate_with_request(
                 registry.register_action_from_instance(t)
                 mw_tool_names.append(t.name)
             existing = list(raw_request.tools) if raw_request.tools else []
-            raw_request = raw_request.model_copy(update={'tools': existing + mw_tool_names})
+            raw_request = raw_request.model_copy()
+            raw_request.tools = existing + mw_tool_names
 
     return await _generate_action_turn(
         registry=registry,
@@ -635,9 +636,8 @@ async def _generate_action_turn(
     async def run_one_iteration(_params: GenerateHookParams) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         nonlocal request, message_index, chunk_role
-        # Sync from params so wrap_generate middleware can reshape the request
-        # by returning a model_copy(update={'request': ...}) to next_fn.
-        # Without this, a middleware-modified params.request would be silently ignored.
+        # Pick up whatever wrap_generate middleware put on params.request — replacement
+        # or in-place mutation. Without this re-sync, those changes get silently dropped.
         request = _params.request
         # Drain anything middleware queued during the previous turn's tool
         # calls and inject it as additional USER messages before the model
@@ -664,7 +664,8 @@ async def _generate_action_turn(
                     on_chunk(chunk)
                     message_index += 1
                     chunk_role = msg_role
-            request = request.model_copy(update={'messages': list(request.messages) + queued})
+            request = request.model_copy()
+            request.messages = [*request.messages, *queued]
 
         model_response = await dispatch_model(
             request,

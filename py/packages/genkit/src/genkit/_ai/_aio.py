@@ -281,22 +281,31 @@ class Genkit:
 
         return wrapper
 
+    def define_middleware(
+        self,
+        cls: type[BaseMiddleware],
+        *,
+        name: str,
+        description: str | None = None,
+    ) -> MiddlewareDesc:
+        """Register a middleware class on this app's registry under ``name``."""
+        res = _validate_middleware_key_segment(name)
+        if res.errored:
+            raise ValueError(f'middleware name {res.error_message}')
+        desc = MiddlewareDesc(cls=cls, name=name, description=description)
+        self.registry.register_value('middleware', name, desc)
+        return desc
+
     def middleware(
         self,
         name: str,
         *,
         description: str | None = None,
     ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]:
-        """Decorator to register a custom middleware."""
-        res = _validate_middleware_key_segment(name)
-        if res.errored:
-            raise ValueError(f'middleware name {res.error_message}')
+        """Decorator that registers a custom middleware on this app's registry."""
 
         def decorator(cls: type[MiddlewareT]) -> type[MiddlewareT]:
-            cls.name = name
-            cls.description = description
-            desc = MiddlewareDesc(cls=cls, name=name)
-            self.registry.register_value('middleware', name, desc)
+            self.define_middleware(cls, name=name, description=description)
             return cls
 
         return decorator

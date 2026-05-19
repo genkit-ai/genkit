@@ -582,7 +582,8 @@ async def _prepare(
         # register_middleware swapped for refs; rewrite so downstream sees
         # the registry-resolvable shape. (Skip the copy when `use` is None
         # — the common path — since refs is None too.)
-        prompt_config = prompt_config.model_copy(update={'use': refs})
+        prompt_config = prompt_config.model_copy()
+        prompt_config.use = refs
 
     gen_options = await executable_prompt_call_to_generate_options(ep, child_registry, prompt_config, input, call_opts)
     return child_registry, gen_options
