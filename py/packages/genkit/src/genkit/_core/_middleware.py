@@ -250,14 +250,6 @@ class BaseMiddleware(BaseModel):
         Return a `MultipartToolResponse` to forward (or substitute) the
         tool's result.  Raise `Interrupt(metadata)` to halt this tool call
         and surface an interrupt to the caller.
-
-        Example (tool approval gate):
-
-            class Approval(BaseMiddleware):
-                async def wrap_tool(self, params, next_fn):
-                    if params.tool.name == 'transfer_money' and not approved():
-                        raise Interrupt({'reason': 'requires_approval'})
-                    return await next_fn(params)
         """
         return await next_fn(params)
 
