@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import BaseModel as PydanticBaseModel, Field
 
 from genkit._ai._model import Message
 from genkit._ai._tools import define_tool
@@ -44,6 +44,17 @@ from genkit.middleware import BaseMiddleware, GenerateHookParams
 _SKILLS_MARKER = 'skills-instructions'
 
 _MISSING_DESCRIPTION = 'No description provided.'
+
+
+class _UseSkillInput(PydanticBaseModel):
+    """Input for the ``use_skill`` tool.
+
+    Model providers like Gemini publish tool inputs as JSON objects rather
+    than bare scalars, so we expose the single ``skill_name`` argument as a
+    one-field object schema instead of a raw string.
+    """
+
+    skill_name: str = Field(description='The name of the skill to load (as listed in the system prompt).')
 
 
 class Skills(BaseMiddleware):
@@ -180,15 +191,13 @@ class Skills(BaseMiddleware):
 
         scratch = Registry()
 
-        async def use_skill(skill_name: str) -> str:
+        async def use_skill(input: _UseSkillInput) -> str:
             """Load the full instructions for a named skill.
 
-            Args:
-                skill_name: The name of the skill to load (as listed in the system prompt).
-
-            Returns:
-                The full SKILL.md content for that skill.
+            Returns the full ``SKILL.md`` content on success, or a short
+            error string if the skill is unknown or unreadable.
             """
+            skill_name = input.skill_name
             skills = await asyncio.to_thread(self._scan_skills)
             info = skills.get(skill_name)
             if info is None:
