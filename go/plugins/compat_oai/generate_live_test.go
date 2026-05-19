@@ -101,7 +101,7 @@ func TestGenerator_Stream(t *testing.T) {
 		return nil
 	}
 
-	_, err := g.WithMessages(messages).Generate(context.Background(), req, handleChunk)
+	resp, err := g.WithMessages(messages).Generate(context.Background(), req, handleChunk)
 	if err != nil {
 		t.Error(err)
 	}
@@ -119,6 +119,18 @@ func TestGenerator_Stream(t *testing.T) {
 	}
 	if !strings.Contains(fullText, "3") {
 		t.Errorf("expecting chunk to contain: \"3\", got: %q", fullText)
+	}
+
+	// Regression test for #4683: streaming responses must preserve the
+	// originating request so that resp.History() returns the full conversation.
+	if resp.Request == nil {
+		t.Fatal("expected resp.Request to be set on streaming response, got nil")
+	}
+	if len(resp.Request.Messages) != len(messages) {
+		t.Errorf("expected resp.Request.Messages to have %d entries, got %d", len(messages), len(resp.Request.Messages))
+	}
+	if got := len(resp.History()); got != len(messages)+1 {
+		t.Errorf("expected resp.History() to have %d entries (input + model reply), got %d", len(messages)+1, got)
 	}
 }
 
