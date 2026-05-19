@@ -15,7 +15,7 @@ members = [
     "evaluators",
     "fastapi-bugbot",
     "flask-hello",
-    "flow-sample1",
+    "basic-flows",
     "gemini-code-execution",
     "gemini-context-caching",
     "genkit",

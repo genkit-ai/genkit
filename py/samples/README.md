@@ -24,12 +24,12 @@ Dev UI: http://localhost:4000. Most samples need `GEMINI_API_KEY`. See [plugins/
 
 | Sample | What it shows |
 |--------|----------------|
+| `basic-flows` | Framework fundamentals — traced steps, streaming, errors, long-running flows (no model) |
 | `context` | Pass context through `generate()`, flows, and tools |
 | `dynamic-tools` | Create a tool at runtime and trace plain functions |
 | `evaluators` | Run simple custom evaluators with `genkit eval:run` |
 | `fastapi-bugbot` | A small FastAPI app that reviews code |
 | `flask-hello` | Expose Genkit flows through Flask |
-| `flow-sample1` | Framework fundamentals — traced steps, streaming, errors, long-running flows (no model) |
 | `gemini-code-execution` | Ask Gemini to write and run code |
 | `gemini-context-caching` | Cache a large source document for follow-up prompts |
 | `google-genai-media` | Speech, image, and video generation |

@@ -1,4 +1,4 @@
-# Flow Fundamentals (`flow-sample1`)
+# Flow Fundamentals (`basic-flows`)
 
 Python port of [`js/testapps/flow-sample1`](../../../js/testapps/flow-sample1).
 No model is used; these flows exercise the framework itself — traced steps,

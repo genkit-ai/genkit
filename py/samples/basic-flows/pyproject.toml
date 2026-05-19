@@ -1,5 +1,5 @@
 [project]
-name = "flow-sample1"
+name = "basic-flows"
 version = "0.2.0"
 requires-python = ">=3.10"
 dependencies = ["genkit"]
