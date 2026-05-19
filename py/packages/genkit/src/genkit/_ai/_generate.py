@@ -82,28 +82,7 @@ def register_middleware(
     registry: Registry,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None,
 ) -> list[MiddlewareRef] | None:
-    """Register inline middleware instances on ``registry`` and return refs for ``use=``.
-
-    Mutates ``registry`` in place: every inline ``BaseMiddleware`` in ``use``
-    is stored as a registry value under its class name (or an auto-generated
-    name when the class has none), so the dispatch path can later resolve
-    everything in ``use=`` uniformly by name. Existing ``MiddlewareRef``
-    entries pass through unchanged.
-
-    Pass a call-scoped child registry so the inline instances die with the
-    call rather than leaking into the app registry.
-
-    Args:
-        registry: Call-scoped registry to register inline instances on
-            (mutated). Typically a fresh ``parent.new_child()``.
-        use: Mixed list of inline instances and/or ``MiddlewareRef`` entries,
-            or ``None`` if the caller didn't specify middleware at all.
-
-    Returns:
-        Refs covering every entry in ``use`` (order preserved), or ``None``
-        when ``use`` was ``None``. Safe to store on
-        ``GenerateActionOptions.use``.
-    """
+    """Register inline middleware instances on ``registry`` and return refs for ``use=``."""
     if use is None:
         return None
     refs: list[MiddlewareRef] = []
@@ -116,12 +95,6 @@ def register_middleware(
             count = name_counts.get(base_name, 0)
             name_counts[base_name] = count + 1
             reg_name = base_name if count == 0 else f'{base_name}__{count}'
-            # Unlike register_tools, we never short-circuit when a middleware
-            # with this name is already resolvable on the parent chain. The
-            # parent entry is a MiddlewareDesc that builds the class with
-            # defaults; the user's inline Cls(field=...) instance carries
-            # their config and must win, so we always register it on the
-            # child to shadow the descriptor for this call.
             registry.register_value('middleware', reg_name, entry)
             refs.append(MiddlewareRef(name=reg_name))
         else:
@@ -133,11 +106,7 @@ def resolve_middleware_from_use(
     registry: Registry,
     use: Sequence[MiddlewareRef] | None,
 ) -> list[BaseMiddleware]:
-    """Resolve a list of ``MiddlewareRef``s to concrete ``BaseMiddleware`` instances.
-
-    All entries must already be in the registry (inline instances were registered
-    there by :func:`register_middleware`).  Order is preserved.
-    """
+    """Resolve a list of ``MiddlewareRef``s to concrete ``BaseMiddleware`` instances."""
     if not use:
         return []
     out: list[BaseMiddleware] = []
@@ -174,10 +143,8 @@ def _bind_call_state(
     """Return per-call copies of each middleware with framework attrs bound.
 
     The same ``BaseMiddleware`` instance can show up in concurrent ``generate()``
-    calls (a user reusing ``Retry(max_retries=3)``, or a plugin descriptor whose
-    factory returns the same instance every time). Each call needs its own
-    ``self.registry`` and ``self.enqueue_parts`` — so we shallow-copy here and
-    set the attrs on the copy, leaving the caller's instance untouched.
+    calls. Each call needs its own ``self.registry`` and ``self.enqueue_parts`.
+    So we shallow-copy here and set the attrs on the copy to prevent side-effects.
     """
     bound: list[BaseMiddleware] = []
     for mw in middleware:
@@ -193,11 +160,7 @@ async def _chain_tool_middleware(
     params: ToolHookParams,
     next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
 ) -> MultipartToolResponse:
-    """Run the tool middleware chain and return the tool response.
-
-    Interrupts propagate as ``Interrupt`` exceptions (or ``GenkitError`` wrapping
-    one) for the caller to catch and convert to wire-shape ``ToolRequestPart``.
-    """
+    """Run the tool middleware chain and return the tool response."""
     runner: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = next_fn
     for mw in reversed(middleware):
         _mw = mw
@@ -280,13 +243,10 @@ def tools_to_action_names(
 
 
 async def register_tools(registry: Registry, tools: Sequence[str | Tool] | None) -> None:
-    """Register inline ``Tool`` instances on ``registry`` for the duration of a call.
+    """Creates a child registry and ensures that all tools are registered.
 
-    Mutates ``registry`` in place: each inline ``Tool`` whose action isn't
-    already resolvable from the parent chain is registered under its own
-    name. String entries are pass-through (they refer to actions registered
-    elsewhere). Pass a call-scoped child registry so inline tools die with
-    the call rather than leaking into the app registry.
+    Supports dynamically defined tools that are only passed in at call time
+    and never actually registered.
     """
     if not tools:
         return
@@ -340,36 +300,42 @@ def _augment_with_context(
     if user_message is None:
         return request
 
-    context_part_index = -1
+    # Find any existing context part in the last user message
+    context_idx = -1
     for i, part in enumerate(user_message.content):
-        part_metadata = part.root.metadata if hasattr(part.root, 'metadata') else None
-        if isinstance(part_metadata, dict) and part_metadata.get('purpose') == 'context':
-            context_part_index = i
+        metadata = getattr(part.root, 'metadata', None) or {}
+        if metadata.get('purpose') == 'context':
+            context_idx = i
             break
 
-    if context_part_index >= 0:
-        existing_meta = user_message.content[context_part_index].root.metadata
-        if not (isinstance(existing_meta, dict) and existing_meta.get('pending')):
+    # If context already exists, only proceed if it is a pending placeholder
+    if context_idx >= 0:
+        meta = getattr(user_message.content[context_idx].root, 'metadata', None) or {}
+        if not meta.get('pending'):
             return request
 
+    # Render all documents as a single formatted text string
     template = item_template or _context_item_template
-    out = preface or ''
+    rendered_docs = []
     for i, doc_data in enumerate(request.docs):
         doc = Document(content=doc_data.content, metadata=doc_data.metadata)
         if citation_key and doc.metadata:
             doc.metadata['ref'] = doc.metadata.get(citation_key, i)
-        out += template(doc, i)
-    out += '\n'
+        rendered_docs.append(template(doc, i))
 
-    text_part = Part(root=TextPart(text=out, metadata={'purpose': 'context'}))
+    text_content = (preface or '') + ''.join(rendered_docs) + '\n'
+    text_part = Part(root=TextPart(text=text_content, metadata={'purpose': 'context'}))
 
+    # Safe-mutation via deep copy
     new_req = copy.deepcopy(request)
     new_user = _last_user_message(new_req.messages)
-    assert new_user is not None  # mirrors the guard above; deepcopy preserves structure
-    if context_part_index >= 0:
-        new_user.content[context_part_index] = text_part
+    assert new_user is not None
+
+    if context_idx >= 0:
+        new_user.content[context_idx] = text_part
     else:
         new_user.content.append(text_part)
+
     return new_req
 
 
@@ -398,7 +364,7 @@ def _redact_data_uris(obj: Any) -> Any:  # noqa: ANN401
 
 
 def define_generate_action(registry: Registry) -> None:
-    """Register ``/util/generate`` so reflection callers (e.g. the Dev UI) hit the same engine as ``ai.generate``."""
+    """Register the generation action triggered by the Dev UI."""
 
     async def generate_action_fn(
         input: GenerateActionOptions,
@@ -518,12 +484,6 @@ async def _generate_action_turn(
     queue: list[Message],
 ) -> ModelResponse:
     """Run one model call plus tool resolution, then recurse for the next turn.
-
-    Engine setup is already done by :func:`generate_with_request`, so this
-    function is free to recurse on itself per tool-loop iteration without
-    re-resolving middleware, re-binding state, or re-registering
-    middleware-contributed tools.  Each recursion just appends the model
-    message + tool response to ``messages`` and goes around again.
     """
     tools_in = raw_request.tools
     if tools_in:
