@@ -303,7 +303,7 @@ func TestToOpenAIRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "with data input and tool response history",
+			name: "with data input and interleaved model history",
 			req: &ai.ModelRequest{
 				Messages: []*ai.Message{
 					{
@@ -315,11 +315,12 @@ func TestToOpenAIRequest(t *testing.T) {
 					{
 						Role: ai.RoleModel,
 						Content: []*ai.Part{
-							ai.NewTextPart("assistant text"),
+							ai.NewTextPart("before tool"),
 							ai.NewToolResponsePart(&ai.ToolResponse{
 								Ref:    "call_456",
 								Output: map[string]any{"ok": true},
 							}),
+							ai.NewTextPart("after tool"),
 							func() *ai.Part {
 								part := ai.NewReasoningPart("chain", nil)
 								part.Metadata["id"] = "rs_1"
@@ -332,8 +333,8 @@ func TestToOpenAIRequest(t *testing.T) {
 			},
 			check: func(t *testing.T, got *responses.ResponseNewParams) {
 				items := got.Input.OfInputItemList
-				if len(items) != 4 {
-					t.Fatalf("expected 4 input items, got %d", len(items))
+				if len(items) != 5 {
+					t.Fatalf("expected 5 input items, got %d", len(items))
 				}
 
 				userMsg := items[0].OfInputMessage
@@ -347,20 +348,55 @@ func TestToOpenAIRequest(t *testing.T) {
 				if items[1].OfOutputMessage == nil {
 					t.Fatal("expected output message history item")
 				}
+				if text := items[1].OfOutputMessage.Content[0].GetText(); text == nil || *text != "before tool" {
+					t.Fatalf("unexpected first output text: %v", text)
+				}
 				if items[2].OfFunctionCallOutput == nil {
 					t.Fatal("expected function_call_output history item")
 				}
 				if items[2].OfFunctionCallOutput.CallID != "call_456" {
 					t.Fatalf("unexpected tool response call id: %s", items[2].OfFunctionCallOutput.CallID)
 				}
-				if items[3].OfReasoning == nil {
+				if items[2].OfFunctionCallOutput.Status != "completed" {
+					t.Fatalf("unexpected tool response status: %s", items[2].OfFunctionCallOutput.Status)
+				}
+				if items[3].OfOutputMessage == nil {
+					t.Fatal("expected second output message history item")
+				}
+				if text := items[3].OfOutputMessage.Content[0].GetText(); text == nil || *text != "after tool" {
+					t.Fatalf("unexpected second output text: %v", text)
+				}
+				if items[4].OfReasoning == nil {
 					t.Fatal("expected reasoning history item")
 				}
-				if items[3].OfReasoning.ID != "rs_1" {
-					t.Fatalf("unexpected reasoning id: %s", items[3].OfReasoning.ID)
+				if items[4].OfReasoning.ID != "rs_1" {
+					t.Fatalf("unexpected reasoning id: %s", items[4].OfReasoning.ID)
 				}
-				if !items[3].OfReasoning.EncryptedContent.Valid() || items[3].OfReasoning.EncryptedContent.Value != "enc" {
-					t.Fatalf("unexpected encrypted content: %+v", items[3].OfReasoning.EncryptedContent)
+				if !items[4].OfReasoning.EncryptedContent.Valid() || items[4].OfReasoning.EncryptedContent.Value != "enc" {
+					t.Fatalf("unexpected encrypted content: %+v", items[4].OfReasoning.EncryptedContent)
+				}
+			},
+		},
+		{
+			name: "tool role response status is completed",
+			req: &ai.ModelRequest{
+				Messages: []*ai.Message{{
+					Role: ai.RoleTool,
+					Content: []*ai.Part{
+						ai.NewToolResponsePart(&ai.ToolResponse{
+							Ref:    "call_tool",
+							Output: "ok",
+						}),
+					},
+				}},
+			},
+			check: func(t *testing.T, got *responses.ResponseNewParams) {
+				items := got.Input.OfInputItemList
+				if len(items) != 1 || items[0].OfFunctionCallOutput == nil {
+					t.Fatalf("expected function_call_output, got %+v", items)
+				}
+				if items[0].OfFunctionCallOutput.Status != "completed" {
+					t.Fatalf("unexpected tool response status: %s", items[0].OfFunctionCallOutput.Status)
 				}
 			},
 		},

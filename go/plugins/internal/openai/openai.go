@@ -455,6 +455,7 @@ func toOpenAIInput(messages []*ai.Message) (responses.ResponseInputParam, error)
 					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
 						CallID: part.ToolResponse.Ref,
 						Output: string(output),
+						Status: "completed",
 					},
 				})
 			}
@@ -510,6 +511,18 @@ func toOpenAIMessageContent(parts []*ai.Part) (responses.ResponseInputMessageCon
 func toOpenAIModelHistoryItems(parts []*ai.Part) ([]responses.ResponseInputItemUnionParam, error) {
 	items := make([]responses.ResponseInputItemUnionParam, 0)
 	textContent := make([]responses.ResponseOutputMessageContentUnionParam, 0)
+	flushText := func() {
+		if len(textContent) == 0 {
+			return
+		}
+		items = append(items, responses.ResponseInputItemUnionParam{
+			OfOutputMessage: &responses.ResponseOutputMessageParam{
+				Status:  responses.ResponseOutputMessageStatusCompleted,
+				Content: textContent,
+			},
+		})
+		textContent = nil
+	}
 
 	for _, part := range parts {
 		switch {
@@ -526,13 +539,13 @@ func toOpenAIModelHistoryItems(parts []*ai.Part) ([]responses.ResponseInputItemU
 				},
 			})
 		case part.IsToolRequest():
+			flushText()
 			payload, err := json.Marshal(part.ToolRequest.Input)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to marshal tool request input for %s: %w", part.ToolRequest.Ref, err)
 			}
 			items = append(items, responses.ResponseInputItemUnionParam{
 				OfFunctionCall: &responses.ResponseFunctionToolCallParam{
-					ID:        oa.String(part.ToolRequest.Ref),
 					CallID:    part.ToolRequest.Ref,
 					Name:      part.ToolRequest.Name,
 					Arguments: string(payload),
@@ -540,9 +553,10 @@ func toOpenAIModelHistoryItems(parts []*ai.Part) ([]responses.ResponseInputItemU
 				},
 			})
 		case part.IsToolResponse():
+			flushText()
 			output, err := json.Marshal(part.ToolResponse.Output)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to marshal tool response output for %s: %w", part.ToolResponse.Ref, err)
 			}
 			items = append(items, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
@@ -552,8 +566,8 @@ func toOpenAIModelHistoryItems(parts []*ai.Part) ([]responses.ResponseInputItemU
 				},
 			})
 		case part.IsReasoning():
+			flushText()
 			reasoning := &responses.ResponseReasoningItemParam{
-				ID: "reasoning_item",
 				Summary: []responses.ResponseReasoningItemSummaryParam{{
 					Text: part.Text,
 				}},
@@ -573,16 +587,7 @@ func toOpenAIModelHistoryItems(parts []*ai.Part) ([]responses.ResponseInputItemU
 		}
 	}
 
-	if len(textContent) > 0 {
-		items = append([]responses.ResponseInputItemUnionParam{{
-			OfOutputMessage: &responses.ResponseOutputMessageParam{
-				ID:      "assistant_message",
-				Status:  responses.ResponseOutputMessageStatusCompleted,
-				Content: textContent,
-			},
-		}}, items...)
-	}
-
+	flushText()
 	return items, nil
 }
 
