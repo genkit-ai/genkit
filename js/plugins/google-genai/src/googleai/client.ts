@@ -16,7 +16,9 @@
 
 import { GenkitError, StatusName } from 'genkit';
 import { logger } from 'genkit/logging';
+import { runInNewSpan } from 'genkit/tracing';
 import {
+  buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
   processStream,
@@ -37,6 +39,8 @@ import {
   VeoOperation,
   VeoPredictRequest,
 } from './types.js';
+
+export const tracingHooks = { runInNewSpan };
 
 /**
  * Creates an interaction using the Google AI API.
@@ -64,10 +68,10 @@ export async function createInteraction(
     isInteraction: true,
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  const responseJson = await response.json();
-
-  return responseJson;
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    request: createInteractionRequest,
+    clientOptions,
+  });
 }
 
 /**
@@ -95,10 +99,9 @@ export async function getInteraction(
     isInteraction: true,
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  const responseJson = await response.json();
-
-  return responseJson;
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    clientOptions,
+  });
 }
 
 /**
@@ -201,10 +204,12 @@ export async function generateContent(
     clientOptions,
     body: JSON.stringify(generateContentRequest),
   });
-  const response = await makeRequest(url, fetchOptions);
 
-  const responseJson = (await response.json()) as GenerateContentResponse;
-  return responseJson;
+  return maybeTraceRequest<GenerateContentResponse>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    clientOptions,
+  });
 }
 
 /**
@@ -235,8 +240,15 @@ export async function generateContentStream(
     body: JSON.stringify(generateContentRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return processStream(response);
+  return maybeTraceRequest<GenerateContentStreamResult>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return processStream(response);
+    },
+  });
 }
 
 /**
@@ -267,8 +279,11 @@ export async function embedContent(
     body: JSON.stringify(embedContentRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json();
+  return maybeTraceRequest<EmbedContentResponse>(url, fetchOptions, {
+    model: model,
+    request: embedContentRequest,
+    clientOptions,
+  });
 }
 
 export async function imagenPredict(
@@ -290,8 +305,11 @@ export async function imagenPredict(
     body: JSON.stringify(imagenPredictRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json() as Promise<ImagenPredictResponse>;
+  return maybeTraceRequest<ImagenPredictResponse>(url, fetchOptions, {
+    model: model,
+    request: imagenPredictRequest,
+    clientOptions,
+  });
 }
 
 export async function veoPredict(
@@ -313,8 +331,11 @@ export async function veoPredict(
     body: JSON.stringify(veoPredictRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json() as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    model: model,
+    request: veoPredictRequest,
+    clientOptions,
+  });
 }
 
 export async function veoCheckOperation(
@@ -332,8 +353,9 @@ export async function veoCheckOperation(
     clientOptions,
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json() as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    clientOptions,
+  });
 }
 
 /**
@@ -452,6 +474,56 @@ function getHeaders(
   return headers;
 }
 
+interface TraceOptions<T> {
+  request?: unknown;
+  model?: string;
+  streaming?: boolean;
+  processFn?: (resp: Response) => Promise<T>;
+  clientOptions?: ClientOptions;
+}
+
+async function maybeTraceRequest<T>(
+  url: string,
+  fetchOptions: RequestInit,
+  traceOptions: TraceOptions<T>
+): Promise<T> {
+  const call = async () => {
+    const response = await makeRequest(url, fetchOptions);
+    let processedResponse: Promise<T>;
+    if (traceOptions.processFn) {
+      // This is for streaming etc.
+      processedResponse = traceOptions.processFn(response);
+    } else {
+      // default processing is just get the json response
+      processedResponse = await response.json();
+    }
+    return processedResponse;
+  };
+
+  if (traceOptions.clientOptions?.experimental_debugTraces) {
+    return tracingHooks.runInNewSpan(
+      { metadata: { name: 'httpRequest' } },
+      async (metadata) => {
+        metadata.input = buildTraceMetadataInput(
+          url,
+          fetchOptions,
+          traceOptions
+        );
+        const processedResponse = await call();
+
+        if (traceOptions.streaming) {
+          metadata.output = '[Streaming Response]';
+        } else {
+          metadata.output = processedResponse;
+        }
+
+        return processedResponse;
+      }
+    );
+  }
+  return call();
+}
+
 /**
  * Makes a request to the specified URL with the provided options.
  *
@@ -534,4 +606,5 @@ export const TEST_ONLY = {
   getAbortSignal,
   getHeaders,
   makeRequest,
+  tracingHooks,
 };

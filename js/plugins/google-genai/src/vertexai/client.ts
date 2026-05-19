@@ -16,8 +16,10 @@
 
 import { GenkitError, StatusName } from 'genkit';
 import { logger } from 'genkit/logging';
+import { runInNewSpan } from 'genkit/tracing';
 import { GoogleAuth } from 'google-auth-library';
 import {
+  buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
   processStream,
@@ -44,6 +46,58 @@ import {
   VeoPredictRequest,
 } from './types.js';
 import { calculateApiKey, checkSupportedResourceMethod } from './utils.js';
+
+export const tracingHooks = { runInNewSpan };
+
+interface TraceOptions<T> {
+  request?: unknown;
+  model?: string;
+  streaming?: boolean;
+  processFn?: (resp: Response) => Promise<T>;
+  clientOptions?: ClientOptions;
+}
+
+async function maybeTraceRequest<T>(
+  url: string,
+  fetchOptions: RequestInit,
+  traceOptions: TraceOptions<T>
+): Promise<T> {
+  const call = async () => {
+    const response = await makeRequest(url, fetchOptions);
+    let processedResponse: Promise<T>;
+    if (traceOptions.processFn) {
+      // This is for streaming etc.
+      processedResponse = traceOptions.processFn(response);
+    } else {
+      // default processing is just get the json response
+      processedResponse = await response.json();
+    }
+    return processedResponse;
+  };
+
+  if (traceOptions.clientOptions?.experimental_debugTraces) {
+    return tracingHooks.runInNewSpan(
+      { metadata: { name: 'httpRequest' } },
+      async (metadata) => {
+        metadata.input = buildTraceMetadataInput(
+          url,
+          fetchOptions,
+          traceOptions
+        );
+        const processedResponse = await call();
+
+        if (traceOptions.streaming) {
+          metadata.output = '[Streaming Response]';
+        } else {
+          metadata.output = processedResponse;
+        }
+
+        return processedResponse;
+      }
+    );
+  }
+  return call();
+}
 
 export async function listModels(
   clientOptions: ClientOptions
@@ -78,9 +132,10 @@ export async function createInteraction(
     body: JSON.stringify(createInteractionRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-
-  return await response.json();
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    request: createInteractionRequest,
+    clientOptions,
+  });
 }
 
 export async function generateContent(
@@ -110,10 +165,12 @@ export async function generateContent(
     clientOptions,
     body: JSON.stringify(generateContentRequest),
   });
-  const response = await makeRequest(url, fetchOptions);
 
-  const responseJson = (await response.json()) as GenerateContentResponse;
-  return responseJson;
+  return maybeTraceRequest<GenerateContentResponse>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    clientOptions,
+  });
 }
 
 export async function generateContentStream(
@@ -143,15 +200,23 @@ export async function generateContentStream(
     clientOptions,
     body: JSON.stringify(generateContentRequest),
   });
-  const response = await makeRequest(url, fetchOptions);
-  return processStream(response);
+
+  return maybeTraceRequest<GenerateContentStreamResult>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return processStream(response);
+    },
+  });
 }
 
-async function internalPredict(
+async function internalPredict<T>(
   model: string,
-  body: string,
+  requestPayload: unknown,
   clientOptions: ClientOptions
-): Promise<Response> {
+): Promise<T> {
   const url = getVertexAIUrl({
     includeProjectAndLocation: true,
     resourcePath: `publishers/google/models/${model}`,
@@ -162,10 +227,14 @@ async function internalPredict(
   const fetchOptions = await getFetchOptions({
     method: 'POST',
     clientOptions,
-    body,
+    body: JSON.stringify(requestPayload),
   });
 
-  return await makeRequest(url, fetchOptions);
+  return maybeTraceRequest<T>(url, fetchOptions, {
+    model: model,
+    request: requestPayload,
+    clientOptions,
+  });
 }
 
 export async function embedContent(
@@ -173,12 +242,11 @@ export async function embedContent(
   embedContentRequest: EmbedContentRequest,
   clientOptions: ClientOptions
 ): Promise<EmbedContentResponse> {
-  const response = await internalPredict(
+  return internalPredict<EmbedContentResponse>(
     model,
-    JSON.stringify(embedContentRequest),
+    embedContentRequest,
     clientOptions
   );
-  return response.json() as Promise<EmbedContentResponse>;
 }
 
 export async function imagenPredict(
@@ -186,12 +254,11 @@ export async function imagenPredict(
   imagenPredictRequest: ImagenPredictRequest,
   clientOptions: ClientOptions
 ): Promise<ImagenPredictResponse> {
-  const response = await internalPredict(
+  return internalPredict<ImagenPredictResponse>(
     model,
-    JSON.stringify(imagenPredictRequest),
+    imagenPredictRequest,
     clientOptions
   );
-  return response.json() as Promise<ImagenPredictResponse>;
 }
 
 export async function lyriaPredict(
@@ -199,12 +266,11 @@ export async function lyriaPredict(
   lyriaPredictRequest: LyriaPredictRequest,
   clientOptions: ClientOptions
 ): Promise<LyriaPredictResponse> {
-  const response = await internalPredict(
+  return internalPredict<LyriaPredictResponse>(
     model,
-    JSON.stringify(lyriaPredictRequest),
+    lyriaPredictRequest,
     clientOptions
   );
-  return response.json() as Promise<LyriaPredictResponse>;
 }
 
 export async function veoPredict(
@@ -225,10 +291,11 @@ export async function veoPredict(
     body: JSON.stringify(veoPredictRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  const operation = await response.json();
-  operation.clientOptions = clientOptions; // for the check
-  return operation as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    model: model,
+    request: veoPredictRequest,
+    clientOptions,
+  });
 }
 
 export async function veoCheckOperation(
@@ -248,10 +315,11 @@ export async function veoCheckOperation(
     body: JSON.stringify(veoOperationRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  const operation = await response.json();
-  operation.clientOptions = clientOptions; // for future checks
-  return operation as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    model: model,
+    request: veoOperationRequest,
+    clientOptions,
+  });
 }
 
 export function getVertexAIUrl(params: {
@@ -454,4 +522,5 @@ export const TEST_ONLY = {
   getAbortSignal,
   getHeaders,
   makeRequest,
+  tracingHooks,
 };

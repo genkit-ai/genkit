@@ -54,8 +54,10 @@ import {
  */
 export const VeoConfigSchema = z
   .object({
-    // NOTE: Documentation notes numberOfVideos parameter to pick the number of
-    // output videos, but this setting does not seem to work
+    apiKey: z
+      .string()
+      .describe('Override the API key provided at plugin initialization.')
+      .optional(),
     negativePrompt: z.string().optional(),
     aspectRatio: z
       .enum(['9:16', '16:9'])
@@ -194,6 +196,7 @@ export function defineModel(
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
     customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
   return pluginBackgroundModel({
@@ -201,7 +204,15 @@ export function defineModel(
     ...ref.info,
     configSchema: ref.configSchema,
     async start(request) {
-      const apiKey = calculateApiKey(pluginOptions?.apiKey, undefined);
+      const apiKey = calculateApiKey(
+        pluginOptions?.apiKey,
+        request.config?.apiKey
+      );
+      const newClientOptions: ClientOptions = {
+        ...clientOptions,
+        apiKey,
+      };
+
       const veoPredictRequest: VeoPredictRequest = {
         instances: [
           {
@@ -217,19 +228,30 @@ export function defineModel(
         apiKey,
         extractVersion(ref),
         veoPredictRequest,
-        clientOptions
+        newClientOptions
       );
 
-      return fromVeoOperation(response);
+      return fromVeoOperation(response, newClientOptions);
     },
     async check(operation) {
-      const apiKey = calculateApiKey(pluginOptions?.apiKey, undefined);
+      const storedOptions = operation.metadata?.clientOptions as
+        | ClientOptions
+        | undefined;
+      const apiKey =
+        storedOptions?.apiKey ||
+        calculateApiKey(pluginOptions?.apiKey, undefined);
+
+      const checkOptions: ClientOptions = {
+        ...clientOptions,
+        ...storedOptions,
+      };
+
       const response = await veoCheckOperation(
         apiKey,
         operation.id,
-        clientOptions
+        checkOptions
       );
-      return fromVeoOperation(response);
+      return fromVeoOperation(response, checkOptions);
     },
   });
 }
@@ -259,11 +281,15 @@ function toVeoParameters(
 }
 
 function fromVeoOperation(
-  apiOp: VeoOperation
+  apiOp: VeoOperation,
+  clientOpt?: ClientOptions
 ): Operation<GenerateResponseData> {
   const res = { id: apiOp.name } as Operation<GenerateResponseData>;
   if (apiOp.done !== undefined) {
     res.done = apiOp.done;
+  }
+  if (clientOpt) {
+    res.metadata = { clientOptions: clientOpt };
   }
 
   if (apiOp.error) {

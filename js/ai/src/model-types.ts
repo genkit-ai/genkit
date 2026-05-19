@@ -24,10 +24,12 @@ import {
 } from './parts.js';
 export { Part, PartSchema };
 
+/** Zod schema for a serializable reference to a registered generate middleware. */
 export const MiddlewareRefSchema: z.ZodTypeAny = z.object({
   name: z.string(),
   config: z.any().optional(),
 });
+/** A serializable reference to a registered generate middleware, identified by name and optional config. */
 export type MiddlewareRef = z.infer<typeof MiddlewareRefSchema>;
 
 //
@@ -357,11 +359,14 @@ export const ModelResponseChunkSchema = z.object({
 });
 export type ModelResponseChunkData = z.infer<typeof ModelResponseChunkSchema>;
 
+/** Zod schema for a streaming response chunk from a generate call. Alias for {@link ModelResponseChunkSchema}. */
 export const GenerateResponseChunkSchema = ModelResponseChunkSchema;
+/** Data for a streaming response chunk from a generate call. */
 export type GenerateResponseChunkData = z.infer<
   typeof GenerateResponseChunkSchema
 >;
 
+/** Zod schema for output configuration within a generate action request. */
 export const GenerateActionOutputConfig = z.object({
   format: z.string().optional(),
   contentType: z.string().optional(),
@@ -370,6 +375,7 @@ export const GenerateActionOutputConfig = z.object({
   constrained: z.boolean().optional(),
 });
 
+/** Zod schema for the options passed to the internal generate action. */
 export const GenerateActionOptionsSchema = z.object({
   /** A model name (e.g. `vertexai/gemini-1.0-pro`). */
   model: z.string().optional(),
@@ -404,4 +410,5 @@ export const GenerateActionOptionsSchema = z.object({
   /** Middleware to apply to this generation. */
   use: z.array(MiddlewareRefSchema).optional(),
 });
+/** Options passed to the internal generate action. */
 export type GenerateActionOptions = z.infer<typeof GenerateActionOptionsSchema>;

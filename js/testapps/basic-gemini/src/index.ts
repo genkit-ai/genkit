@@ -1344,15 +1344,6 @@ ai.defineFlow('lyria-foreign-language', async () => {
   return response;
 });
 
-// Gemma 3
-ai.defineFlow('gemma-3', async () => {
-  const { text } = await ai.generate({
-    model: googleAI.model('gemma-3-27b-it'),
-    prompt: 'Tell me a short joke about a programmer.',
-  });
-  return text;
-});
-
 // Gemma 4 with thinkingConfig
 ai.defineFlow('gemma-4', async (_, { sendChunk }) => {
   const { text, message } = await ai.generate({
