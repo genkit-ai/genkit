@@ -21,7 +21,6 @@ CONTEXT_CACHE_SUPPORTED_MODELS = [
     'gemini-2.0-flash',
     'gemini-2.0-flash-001',
     'gemini-3-flash-preview',
-    'gemini-3-pro-preview',
 ]
 
 INVALID_ARGUMENT_MESSAGES = {
