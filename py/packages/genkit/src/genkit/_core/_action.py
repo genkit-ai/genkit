@@ -192,7 +192,7 @@ def _first_action_arg_has_default(input_spec: inspect.FullArgSpec, n_action_args
     # FullArgSpec.defaults applies to the *trailing* positional args, so the
     # first positional has a default iff defaults covers every positional arg.
     defaults = input_spec.defaults or ()
-    return len(defaults) >= len(input_spec.args)
+    return len(defaults) >= n_action_args
 
 
 # =============================================================================
