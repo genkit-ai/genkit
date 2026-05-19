@@ -35,6 +35,45 @@ import {
   isObject,
 } from './types.js';
 
+export function buildTraceMetadataInput(
+  url: string,
+  fetchOptions: RequestInit,
+  traceOptions: {
+    request?: unknown;
+    model?: string;
+    clientOptions?: { timeout?: number };
+  }
+): Record<string, unknown> {
+  const safeHeaders = { ...(fetchOptions.headers as Record<string, string>) };
+
+  const redactString = (str: string | undefined): string | undefined => {
+    if (!str) return str;
+    return `<REDACTED> (${str.length} characters)`;
+  };
+
+  if (safeHeaders['x-goog-api-key']) {
+    safeHeaders['x-goog-api-key'] = redactString(
+      safeHeaders['x-goog-api-key']
+    )!;
+  }
+  if (safeHeaders['Authorization']) {
+    safeHeaders['Authorization'] = redactString(safeHeaders['Authorization'])!;
+  }
+
+  const safeOptions: any = {};
+  if (traceOptions.clientOptions?.timeout) {
+    safeOptions.timeout = traceOptions.clientOptions.timeout;
+  }
+
+  return {
+    apiEndpoint: url,
+    request: traceOptions.request,
+    headers: safeHeaders,
+    ...(Object.keys(safeOptions).length > 0 ? { options: safeOptions } : {}),
+    ...(traceOptions.model ? { model: traceOptions.model } : {}),
+  };
+}
+
 /**
  * Safely extracts the error message from the error.
  * @param e The error

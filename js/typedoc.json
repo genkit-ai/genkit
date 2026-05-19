@@ -1,19 +1,22 @@
 {
   "entryPoints": [
     "genkit",
-    "plugins/googleai",
+    "plugins/google-genai",
     "plugins/vertexai",
     "plugins/firebase",
     "plugins/google-cloud",
     "plugins/next",
-    "plugins/checks",
     "plugins/dev-local-vectorstore",
     "plugins/evaluators",
     "plugins/express",
+    "plugins/fetch",
+    "plugins/mcp",
+    "plugins/anthropic",
+    "plugins/compat-oai",
+    "plugins/middleware",
     "plugins/ollama",
     "plugins/chroma",
-    "plugins/pinecone",
-    "plugins/mcp"
+    "plugins/pinecone"
   ],
   "name": "Genkit JS API reference",
   "out": "api-refs-js",
@@ -22,7 +25,7 @@
   "sort": ["kind", "instance-first", "alphabetical"],
   "sortEntryPoints": true,
   "readme": "index.typedoc.md",
-  "plugin": ["typedoc-plugin-zod", "typedoc-github-theme", "./typedoc-ga.mjs"],
+  "plugin": ["typedoc-plugin-zod", "typedoc-rhineai-theme", "./typedoc-ga.mjs"],
   "navigation": {
     "includeCategories": false,
     "includeGroups": false,

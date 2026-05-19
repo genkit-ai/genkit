@@ -28,7 +28,6 @@ import {
 } from 'genkit/model';
 import { downloadRequestMedia } from 'genkit/model/middleware';
 import { model as pluginModel } from 'genkit/plugin';
-import { runInNewSpan } from 'genkit/tracing';
 import {
   fromGeminiCandidate,
   toGeminiFunctionModeEnum,
@@ -37,11 +36,7 @@ import {
   toGeminiTool,
 } from '../common/converters.js';
 import { isKnownKey } from '../common/utils.js';
-import {
-  generateContent,
-  generateContentStream,
-  getGoogleAIUrl,
-} from './client.js';
+import { generateContent, generateContentStream } from './client.js';
 import {
   ClientOptions,
   Content as GeminiMessage,
@@ -470,12 +465,6 @@ const GENERIC_GEMMA_MODEL = commonRef(
   undefined,
   GemmaConfigSchema
 );
-const GEMMA_3_INFO = {
-  supports: {
-    ...GENERIC_GEMMA_MODEL.info!.supports!,
-    systemRole: false,
-  },
-};
 
 const KNOWN_GEMINI_MODELS = {
   'gemini-pro-latest': commonRef('gemini-pro-latest'),
@@ -555,23 +544,6 @@ const KNOWN_GEMMA_MODELS = {
     GemmaConfigSchema
   ),
   'gemma-4-31b-it': commonRef('gemma-4-31b-it', undefined, GemmaConfigSchema),
-  'gemma-3-12b-it': commonRef(
-    'gemma-3-12b-it',
-    GEMMA_3_INFO,
-    GemmaConfigSchema
-  ),
-  'gemma-3-1b-it': commonRef('gemma-3-1b-it', GEMMA_3_INFO, GemmaConfigSchema),
-  'gemma-3-27b-it': commonRef(
-    'gemma-3-27b-it',
-    GEMMA_3_INFO,
-    GemmaConfigSchema
-  ),
-  'gemma-3-4b-it': commonRef('gemma-3-4b-it', GEMMA_3_INFO, GemmaConfigSchema),
-  'gemma-3n-e4b-it': commonRef(
-    'gemma-3n-e4b-it',
-    GEMMA_3_INFO,
-    GemmaConfigSchema
-  ),
 } as const;
 export type KnownGemmaModels = keyof typeof KNOWN_GEMMA_MODELS;
 export type GemmaModelName = `gemma-${string}`;
@@ -669,6 +641,7 @@ export function defineModel(
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
     customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
   const middleware: ModelMiddleware[] = [];
@@ -885,8 +858,6 @@ export function defineModel(
         }
       }
 
-      const msg = toGeminiMessage(messages[messages.length - 1], ref);
-
       let generateContentRequest: GenerateContentRequest = {
         systemInstruction,
         generationConfig,
@@ -904,93 +875,61 @@ export function defineModel(
         requestOptions.apiKey
       );
 
-      const callGemini = async () => {
-        let response: GenerateContentResponse;
+      let response: GenerateContentResponse;
 
-        if (streamingRequested) {
-          const result = await generateContentStream(
-            generateApiKey,
-            modelVersion,
-            generateContentRequest,
-            clientOpt
-          );
-          const chunks: CandidateData[] = [];
-          for await (const item of result.stream) {
-            item.candidates?.forEach((candidate) => {
-              const c = fromGeminiCandidate(candidate, chunks);
-              chunks.push(c);
-              sendChunk({
-                index: c.index,
-                content: c.message.content,
-              });
+      if (streamingRequested) {
+        const result = await generateContentStream(
+          generateApiKey,
+          modelVersion,
+          generateContentRequest,
+          clientOpt
+        );
+        const chunks: CandidateData[] = [];
+        for await (const item of result.stream) {
+          item.candidates?.forEach((candidate) => {
+            const c = fromGeminiCandidate(candidate, chunks);
+            chunks.push(c);
+            sendChunk({
+              index: c.index,
+              content: c.message.content,
             });
-          }
-          response = await result.response;
-        } else {
-          response = await generateContent(
-            generateApiKey,
-            modelVersion,
-            generateContentRequest,
-            clientOpt
-          );
-        }
-
-        const candidates = response.candidates || [];
-        if (response.candidates?.['undefined']) {
-          candidates.push(response.candidates['undefined']);
-        }
-        if (!candidates.length) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message: 'No valid candidates returned.',
           });
         }
+        response = await result.response;
+      } else {
+        response = await generateContent(
+          generateApiKey,
+          modelVersion,
+          generateContentRequest,
+          clientOpt
+        );
+      }
 
-        const candidateData =
-          candidates.map((c) => fromGeminiCandidate(c)) || [];
+      const candidates = response.candidates || [];
+      if (response.candidates?.['undefined']) {
+        candidates.push(response.candidates['undefined']);
+      }
+      if (!candidates.length) {
+        throw new GenkitError({
+          status: 'FAILED_PRECONDITION',
+          message: 'No valid candidates returned.',
+        });
+      }
 
-        return {
-          candidates: candidateData,
-          custom: response,
-          usage: {
-            ...getBasicUsageStats(request.messages, candidateData),
-            inputTokens: response.usageMetadata?.promptTokenCount,
-            outputTokens: response.usageMetadata?.candidatesTokenCount,
-            thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
-            totalTokens: response.usageMetadata?.totalTokenCount,
-            cachedContentTokens:
-              response.usageMetadata?.cachedContentTokenCount,
-          },
-        };
+      const candidateData = candidates.map((c) => fromGeminiCandidate(c)) || [];
+
+      return {
+        candidates: candidateData,
+        custom: response,
+        usage: {
+          ...getBasicUsageStats(request.messages, candidateData),
+          inputTokens: response.usageMetadata?.promptTokenCount,
+          outputTokens: response.usageMetadata?.candidatesTokenCount,
+          thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
+          totalTokens: response.usageMetadata?.totalTokenCount,
+          cachedContentTokens: response.usageMetadata?.cachedContentTokenCount,
+        },
       };
-
-      // If debugTraces is enabled, we wrap the actual model call with a span, add raw
-      // API params as for input.
-      return pluginOptions?.experimental_debugTraces
-        ? await runInNewSpan(
-            {
-              metadata: {
-                name: streamingRequested ? 'sendMessageStream' : 'sendMessage',
-              },
-            },
-            async (metadata) => {
-              metadata.input = {
-                apiEndpoint: getGoogleAIUrl({
-                  resourcePath: '',
-                  clientOptions: clientOpt,
-                }),
-                cache: {},
-                model: modelVersion,
-                generateContentOptions: generateContentRequest,
-                parts: msg.parts,
-                options: clientOpt,
-              };
-              const response = await callGemini();
-              metadata.output = response.custom;
-              return response;
-            }
-          )
-        : await callGemini();
     }
   );
 }
