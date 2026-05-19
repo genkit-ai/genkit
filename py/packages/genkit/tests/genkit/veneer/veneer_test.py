@@ -1136,6 +1136,45 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_inline_middleware_instance_with_context() -> None:
+    """Test that generate works with inline middleware instances directly (no registration needed)."""
+    ai = Genkit(model='echoModel')
+    define_programmable_model(ai)
+    define_echo_model(ai)
+
+    class InjectContextMiddleware(BaseMiddleware):
+        async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+            txt = ''.join(text_from_message(m) for m in params.request.messages)
+            return await next_fn(
+                ModelHookParams(
+                    request=ModelRequest(
+                        messages=[
+                            Message(
+                                role=Role.USER,
+                                content=[Part(root=TextPart(text=f'{txt} {params.context}'))],
+                            ),
+                        ],
+                    ),
+                    on_chunk=params.on_chunk,
+                    context=params.context,
+                )
+            )
+
+    async def action_fn() -> ModelResponse:
+        return await ai.generate(
+            model='echoModel',
+            prompt='hi',
+            use=[InjectContextMiddleware()],
+            context={'bar': 'baz'},
+        )
+
+    action = ai.registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
+    action_response = await action.run(context={'foo': 'bar'})
+
+    assert action_response.response.text == '''[ECHO] user: "hi {'bar': 'baz'}"'''
+
+
+@pytest.mark.asyncio
 async def test_generate_json_format_unconstrained_with_instructions(
     setup_test: SetupFixture,
 ) -> None:

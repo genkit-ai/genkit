@@ -109,15 +109,18 @@ def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
         A plugin whose ``list_middleware`` returns the descriptors.
 
     Example:
+        from genkit import Genkit
+        from genkit.plugin_api import middleware_plugin, new_middleware
+
         Genkit(plugins=[
             middleware_plugin([
-                MiddlewareDesc(
-                    cls=PrefixPromptMiddleware,
+                new_middleware(
+                    PrefixPromptMiddleware,
                     name='prefix_prompt',
                     description='Prepends a fixed prompt',
                 ),
-                MiddlewareDesc(
-                    cls=OtherMiddleware,
+                new_middleware(
+                    OtherMiddleware,
                     name='other',
                 ),
             ]),
@@ -127,6 +130,6 @@ def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
     if not built:
         raise ValueError(
             'middleware_plugin() needs a non-empty list of MiddlewareDesc instances. '
-            'Construct each with MiddlewareDesc(cls=YourMiddleware, name=..., description=...).'
+            'Construct each with new_middleware(YourMiddleware, name=..., description=...).'
         )
     return _MiddlewareDescsPlugin('extension-middleware', built)
