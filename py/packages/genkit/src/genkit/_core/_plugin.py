@@ -127,6 +127,6 @@ def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
     if not built:
         raise ValueError(
             'middleware_plugin() needs a non-empty list of MiddlewareDesc instances. '
-            + 'Construct each with MiddlewareDesc(cls=YourMiddleware, name=..., description=...).'
+            'Construct each with MiddlewareDesc(cls=YourMiddleware, name=..., description=...).'
         )
     return _MiddlewareDescsPlugin('extension-middleware', built)

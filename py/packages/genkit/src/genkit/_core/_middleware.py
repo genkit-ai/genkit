@@ -213,10 +213,7 @@ class BaseMiddleware(BaseModel):
         """Return additional tools to expose to the model for this generate call.
 
         Called once per ``generate()`` call after the engine has bound
-        ``self.registry`` and ``self.enqueue_parts``. Tool closures may
-        capture ``self.enqueue_parts`` to queue extra user messages
-        alongside the normal ``ToolResponsePart`` (e.g. filesystem
-        error details for the next turn).
+        ``self.registry``.
 
         Tools are registered on a call-scoped child registry, so they
         do not pollute the root registry and are invisible to other
@@ -250,15 +247,11 @@ class BaseMiddleware(BaseModel):
     ) -> MultipartToolResponse:
         """Wrap each tool execution.
 
-        Return a ``MultipartToolResponse`` to forward (or substitute) the
-        tool's result.  Raise ``Interrupt(metadata)`` to halt this tool call
-        and surface an interrupt to the caller — the engine attaches
-        ``metadata`` to the pending ``ToolRequestPart`` exactly like an
-        interrupt raised by the tool body itself.  Mirroring the tool-side
-        convention means authors learn one rule: **responses are return
-        values, interrupts are exceptions, everywhere**.
+        Return a `MultipartToolResponse` to forward (or substitute) the
+        tool's result.  Raise `Interrupt(metadata)` to halt this tool call
+        and surface an interrupt to the caller.
 
-        Example (tool approval gate)::
+        Example (tool approval gate):
 
             class Approval(BaseMiddleware):
                 async def wrap_tool(self, params, next_fn):
@@ -272,14 +265,8 @@ class BaseMiddleware(BaseModel):
 class MiddlewareDesc(MiddlewareDescData):
     """Registered middleware descriptor: wire shape + the class to instantiate.
 
-    Inherits the wire fields (``name``, ``description``, ``config_schema``,
-    ``metadata``) from the auto-generated
-    `genkit._core._typing.MiddlewareDescData` schema. Holds the
-    ``BaseMiddleware`` subclass in a ``PrivateAttr`` so the registry can
-    mint a fresh instance per ``generate()`` call via ``cls(**(cfg or {}))``.
-    ``PrivateAttr`` is excluded from serialization, so
-    ``model_dump(by_alias=True, exclude_none=True)`` produces the wire shape
-    directly.
+    Inherits wire fields from auto-generated class in _typing.py. Holds the
+    actually BaseMiddleware class in a private attribute ``_cls``.
     """
 
     # `arbitrary_types_allowed` lets the `PrivateAttr` carry an opaque class
@@ -315,15 +302,6 @@ class MiddlewareDesc(MiddlewareDescData):
     def __call__(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
         """Return a fresh BaseMiddleware instance for this generate() call."""
         return self._cls(**(config or {}))
-
-    def with_name(self, name: str) -> MiddlewareDesc:
-        """Return a copy with the same class and metadata but a different registry name."""
-        return MiddlewareDesc(
-            cls=self._cls,
-            name=name,
-            description=self.description,
-            metadata=self.metadata,
-        )
 
 
 def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:

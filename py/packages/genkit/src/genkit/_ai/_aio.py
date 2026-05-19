@@ -287,25 +287,7 @@ class Genkit:
         *,
         description: str | None = None,
     ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]:
-        """Decorator that registers a ``BaseMiddleware`` subclass on this app.
-
-        Same shape as ``@ai.flow`` and ``@ai.tool``: one decorator stamps
-        the registry metadata onto the class and adds it to ``self.registry``
-        so the Dev UI lists it and ``use=[MiddlewareRef(name=...)]`` can
-        resolve it by name. Inline use (``use=[MyClass()]``) keeps working.
-
-        Example:
-            @ai.middleware(name='latency_logger', description='Logs latency')
-            class LatencyLogger(BaseMiddleware):
-                prefix: str = '[trace]'
-
-                async def wrap_model(self, params, next_fn): ...
-
-        Args:
-            name: Registry key. Flat segment — no ``/``, whitespace, ``:``,
-                backslashes, or control characters.
-            description: Shown in the Dev UI.
-        """
+        """Decorator to register a custom middleware."""
         res = _validate_middleware_key_segment(name)
         if res.errored:
             raise ValueError(f'middleware name {res.error_message}')
@@ -313,8 +295,6 @@ class Genkit:
         def decorator(cls: type[MiddlewareT]) -> type[MiddlewareT]:
             cls.name = name
             cls.description = description
-            # Description falls through from the class attr we just stamped,
-            # so the descriptor stays a one-liner.
             desc = MiddlewareDesc(cls=cls, name=name)
             self.registry.register_value('middleware', name, desc)
             return cls

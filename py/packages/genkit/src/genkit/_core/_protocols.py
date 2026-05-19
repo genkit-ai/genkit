@@ -17,18 +17,17 @@
 """Leaf module of structural interfaces (Protocols) for core Genkit types.
 
 Keeping interfaces here instead of in their implementation modules breaks
-circular-import cycles.  The pattern is:
+circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Middleware cycle:
 
-    Module A needs B's type in annotations, but B depends on A → cycle.
-    Solution: extract B's interface here; A imports the interface, not B.
+    1. Registry (_registry.py) imports Plugin (_plugin.py) to manage plugins.
+    2. Plugin (_plugin.py) imports MiddlewareDesc (_middleware.py) to type-hint list_middleware.
+    3. BaseMiddleware/MiddlewareDesc (_middleware.py) need to annotate their request-scoped
+       registry attribute, which refers back to Registry.
 
-Currently defined:
+    If _middleware.py imported Registry from _registry.py directly, it would complete the
+    import cycle: _registry -> _plugin -> _middleware -> _registry.
 
-- ``RegistryLike`` — structural Protocol covering the registry methods that
-                   middleware and the generate engine actually call.  Use instead
-                   of the concrete ``Registry`` whenever a cycle would result.
-                   The real ``Registry`` satisfies it structurally; no
-                   ``register`` call or inheritance is needed.
+    Solution: BaseMiddleware type-hints with RegistryLike from this leaf module, breaking the cycle.
 """
 
 from __future__ import annotations
@@ -41,14 +40,7 @@ from genkit._core._action import Action, ActionKind
 @runtime_checkable
 class RegistryLike(Protocol):
     """Structural interface for the subset of Registry used by middleware and the generate engine.
-
-    Middleware plugins (e.g. ``Fallback``) and ``generate_action`` depend only
-    on this interface, not the full concrete ``Registry``.  This avoids pulling
-    in ``_registry.py`` from modules that ``_registry.py`` itself depends on.
-
-    The concrete ``Registry`` satisfies this protocol structurally — no
-    subclassing or registration is required.
-    """
+    Add methods as needed. """
 
     def new_child(self) -> RegistryLike:
         """Return a scoped child registry that delegates misses to this one."""
