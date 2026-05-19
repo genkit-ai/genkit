@@ -144,7 +144,6 @@ DEFAULT_IMAGE_SUPPORT = Supports(
     system_role=True,
     output=['media'],
 )
-DEFAULT_NUMBER_OF_IMAGES = 1
 
 
 class ImagenAspectRatio(StrEnum):
@@ -204,7 +203,7 @@ class ImagenConfigSchema(BaseModel):
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
     number_of_images: int | None = Field(
-        DEFAULT_NUMBER_OF_IMAGES,
+        None, # Don't silently change default behavior
         alias='numberOfImages',
         ge=1,
         le=4,
@@ -295,33 +294,33 @@ class ImagenModel:
         )
 
     def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfigOrDict | None:
-        request_config = self._with_default_config(request.config)
+        if request.config is None:
+            return None
+
+        request_config = self._normalize_config(request.config)
         ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
         try:
             request_config = ImagenConfigSchema.model_validate(request_config).model_dump(
                 mode='json',
                 exclude_none=True,
             )
+            if not request_config:
+                return None
             return ta.validate_python(request_config)
         except ValidationError as e:
             raise ValueError(
                 'The configuration dictionary is invalid. Refer the documentation for available fields'
             ) from e
 
-    def _with_default_config(self, config: object | None) -> dict[str, object]:
-        """Set SDK defaults Genkit needs to show stable one-image behavior."""
+    def _normalize_config(self, config: object) -> dict[str, object]:
+        """Normalize supported config inputs without adding SDK defaults."""
         if isinstance(config, BaseModel):
             request_config = config.model_dump(exclude_none=True)
         elif isinstance(config, dict):
             request_config = dict(config)
-        elif config is None:
-            request_config = {}
         else:
             validated_config = TypeAdapter(genai_types.GenerateImagesConfigOrDict).validate_python(config)
             request_config = _to_dict(validated_config)
-
-        if 'number_of_images' not in request_config and 'numberOfImages' not in request_config:
-            request_config['number_of_images'] = DEFAULT_NUMBER_OF_IMAGES
 
         return request_config
 

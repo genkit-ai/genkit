@@ -35,7 +35,6 @@ from genkit import (
 )
 from genkit.plugin_api import to_json_schema
 from genkit.plugins.google_genai.models.imagen import (
-    DEFAULT_NUMBER_OF_IMAGES,
     ImagenConfigSchema,
     ImagenModel,
     ImagenVersion,
@@ -81,7 +80,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
         mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=mocker.ANY)
     ])
     config = googleai_client_mock.aio.models.generate_images.call_args.kwargs['config']
-    assert config['number_of_images'] == DEFAULT_NUMBER_OF_IMAGES
+    assert config is None
     assert isinstance(response, ModelResponse)
     assert response.message is not None
     content = response.message.content[0]
@@ -109,8 +108,29 @@ def test_imagen_config_schema_exposes_supported_options() -> None:
         'aspectRatio',
         'personGeneration',
     }
-    assert number_of_images['default'] == DEFAULT_NUMBER_OF_IMAGES
+    assert number_of_images.get('default') is None
     assert number_of_images['anyOf'][0]['maximum'] == 4
+
+
+def test_imagen_config_does_not_set_image_count_when_omitted(mocker: MockerFixture) -> None:
+    """Test omitted image count lets the backend choose its default."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config is None
 
 
 def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) -> None:
