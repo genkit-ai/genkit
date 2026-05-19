@@ -203,7 +203,7 @@ class ImagenConfigSchema(BaseModel):
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
     number_of_images: int | None = Field(
-        None, # Don't silently change default behavior
+        None,  # Don't silently change default behavior
         alias='numberOfImages',
         ge=1,
         le=4,
