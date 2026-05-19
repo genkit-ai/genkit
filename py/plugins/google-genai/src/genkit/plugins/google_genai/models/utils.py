@@ -145,9 +145,8 @@ class PartConverter:
 
             # A tool can hand back media (text/image/audio parts) next to its
             # structured output by populating tool_response.content. Surface
-            # each item as its own Gemini Part so the model sees both the
-            # dict (for tool bookkeeping) and the media (as context for the
-            # next reasoning step) in the same turn.
+            # each item as its own Gemini Part so the model sees the
+            # tool output and the media in the same turn.
             extra_parts: list[genai.types.Part] = []
             if tool_response.content:
                 for item in tool_response.content:

@@ -922,9 +922,9 @@ class Genkit:
         """
         # One call-scoped registry layer holds anything inline (tools +
         # middleware) so it dies with the call and stays out of self.registry.
-        call_registry = self.registry.new_child()
-        await register_tools(call_registry, tools)
-        refs = register_middleware(call_registry, use)
+        child_registry = self.registry.new_child()
+        await register_tools(child_registry, tools)
+        refs = register_middleware(child_registry, use)
         prompt_config = PromptConfig(
             model=model,
             prompt=prompt,
@@ -946,9 +946,9 @@ class Genkit:
             docs=docs,
             use=refs,
         )
-        gen_options = await to_generate_action_options(call_registry, prompt_config)
+        gen_options = await to_generate_action_options(child_registry, prompt_config)
         return await generate_action(
-            call_registry,
+            child_registry,
             gen_options,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
@@ -1040,9 +1040,9 @@ class Genkit:
         async def _run_generate() -> ModelResponse[Any]:
             # One call-scoped registry layer holds anything inline (tools +
             # middleware) so it dies with the call and stays out of self.registry.
-            call_registry = self.registry.new_child()
-            await register_tools(call_registry, tools)
-            refs = register_middleware(call_registry, use)
+            child_registry = self.registry.new_child()
+            await register_tools(child_registry, tools)
+            refs = register_middleware(child_registry, use)
             prompt_config = PromptConfig(
                 model=model,
                 prompt=prompt,
@@ -1064,9 +1064,9 @@ class Genkit:
                 docs=docs,
                 use=refs,
             )
-            gen_options = await to_generate_action_options(call_registry, prompt_config)
+            gen_options = await to_generate_action_options(child_registry, prompt_config)
             return await generate_action(
-                call_registry,
+                child_registry,
                 gen_options,
                 on_chunk=lambda c: channel.send(c),
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]

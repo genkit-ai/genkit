@@ -465,10 +465,6 @@ async def generate_with_request(
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
     registry = registry if registry.is_child else registry.new_child()
-    # By contract `raw_request.use` is already `list[MiddlewareRef]` — the
-    # veneer and prompt paths normalize inline instances into refs before
-    # building `GenerateActionOptions`, and the wire schema rejects anything
-    # else. We just resolve the refs back into instances here.
     middleware = resolve_middleware_from_use(registry, raw_request.use)
     queue: list[Message] = []
 

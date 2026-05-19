@@ -342,11 +342,11 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         opts: PromptGenerateOptions,
     ) -> ModelResponse[OutputT]:
         """Execute the prompt with resolved opts. Used by __call__ and stream."""
-        call_registry, gen_options = await _prepare(self, input, opts)
+        child_registry, gen_options = await _prepare(self, input, opts)
         on_chunk = opts.get('on_chunk')
         context = opts.get('context')
         result = await generate_action(
-            call_registry,
+            child_registry,
             gen_options,
             on_chunk=on_chunk,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
@@ -432,7 +432,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
         call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]  # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
-        _call_registry, gen_options = await _prepare(self, input, call_opts)
+        _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
 
@@ -459,8 +459,8 @@ def _register_prompt_action_pair(
 
     async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
         ep = await ep_factory()
-        call_registry, gen_options = await _prepare(ep, input, {})
-        return await to_generate_request(call_registry, gen_options)
+        child_registry, gen_options = await _prepare(ep, input, {})
+        return await to_generate_request(child_registry, gen_options)
 
     async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
         ep = await ep_factory()
@@ -559,7 +559,7 @@ async def _prepare(
     """Render an ``ExecutablePrompt`` into resolved generate options + a per-call registry.
 
     Returns:
-        * ``call_registry`` — fresh child of ``ep._registry`` holding any
+        * ``child_registry`` — fresh child of ``ep._registry`` holding any
           inline tools and ``use=[Logger()]`` middleware for this call. Pass
           it to whatever consumes ``gen_options`` (the generate action,
           ``to_generate_request``, etc.) so name-based lookups resolve those
@@ -569,9 +569,9 @@ async def _prepare(
     await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
     prompt_config = ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
 
-    call_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
-    await register_tools(call_registry, prompt_config.tools)
-    refs = register_middleware(call_registry, prompt_config.use)
+    child_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
+    await register_tools(child_registry, prompt_config.tools)
+    refs = register_middleware(child_registry, prompt_config.use)
     if prompt_config.use is not None:
         # `use` may have contained inline BaseMiddleware instances that
         # register_middleware swapped for refs; rewrite so downstream sees
@@ -579,8 +579,8 @@ async def _prepare(
         # — the common path — since refs is None too.)
         prompt_config = prompt_config.model_copy(update={'use': refs})
 
-    gen_options = await executable_prompt_call_to_generate_options(ep, call_registry, prompt_config, input, call_opts)
-    return call_registry, gen_options
+    gen_options = await executable_prompt_call_to_generate_options(ep, child_registry, prompt_config, input, call_opts)
+    return child_registry, gen_options
 
 
 async def to_generate_action_options(
