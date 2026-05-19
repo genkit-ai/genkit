@@ -17,7 +17,7 @@
     "plugins/middleware",
     "plugins/ollama",
     "plugins/chroma",
-    "plugins/pinecone",
+    "plugins/pinecone"
   ],
   "name": "Genkit JS API reference",
   "out": "api-refs-js",
