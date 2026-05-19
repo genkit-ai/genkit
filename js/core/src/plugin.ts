@@ -32,6 +32,7 @@ export interface DevUiHook {
   component?: string;
   moduleUrl?: string;
   actionId?: string;
+  action?: ResolvableAction;
 }
 
 export const DevUiHookSchema = z.object({

@@ -17,12 +17,14 @@
 import { Dotprompt } from 'dotprompt';
 import type * as z from 'zod';
 import {
+  isAction,
   runOutsideActionRuntimeContext,
   type Action,
   type ActionMetadata,
 } from './action.js';
 import {
   BackgroundAction,
+  isBackgroundAction,
   lookupBackgroundAction,
 } from './background-action.js';
 import { ActionContext } from './context.js';
@@ -477,7 +479,16 @@ export class Registry {
         if (plugin.listDevUiHooks) {
           try {
             const hooks = await plugin.listDevUiHooks();
-            allHooks = allHooks.concat(hooks);
+            allHooks = allHooks.concat(
+              hooks.map((hook) => {
+                if (!hook.actionId && hook.action) {
+                  if (isAction(hook.action) || isBackgroundAction(hook.action)) {
+                    hook.actionId = (hook.action as any).__action.key;
+                  }
+                }
+                return hook;
+              })
+            );
           } catch (e) {
             logger.error(`Error listing UI hooks for ${pluginName}\n`, e);
           }

@@ -406,8 +406,9 @@ export class ReflectionServer {
       try {
         const hooks = await this.registry.listDevUiHooks();
         const mappedHooks = hooks.map((hook) => {
+          const { action, ...rest } = hook;
           return {
-            ...hook,
+            ...rest,
             moduleUrl: hook.moduleUrl
               ? this.getAssetUrl(hook.moduleUrl)
               : undefined,

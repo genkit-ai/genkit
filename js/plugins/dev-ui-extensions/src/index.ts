@@ -91,7 +91,7 @@ export const devUiExtensions: GenkitPluginV2 = genkitPluginV2({
     return [
       {
         slot: 'trace-decorator',
-        actionId: '/custom/dev-ui-extensions/trace-decorator',
+        action: traceDecorator,
       },
     ];
   },

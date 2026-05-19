@@ -392,11 +392,10 @@ export class ReflectionServerV2 {
     if (!request.id) return;
     const hooks = await this.registry.listDevUiHooks();
     const mappedHooks = hooks.map((hook) => {
+      const { action, ...rest } = hook;
       return {
-        ...hook,
-        moduleUrl: hook.moduleUrl
-          ? this.getAssetUrl(hook.moduleUrl)
-          : undefined,
+        ...rest,
+        moduleUrl: hook.moduleUrl ? this.getAssetUrl(hook.moduleUrl) : undefined,
       };
     });
     this.sendResponse(
