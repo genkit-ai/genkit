@@ -19,6 +19,7 @@ package ollamacloud
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"sync"
@@ -153,7 +154,8 @@ func (o *OllamaCloud) Init(ctx context.Context) []api.Action {
 	}
 
 	if apiKey == "" {
-		panic("ollamacloud plugin initialization failed: API key is required")
+		slog.Error("ollamacloud plugin initialization failed: API key is required", "provider", provider)
+		return nil
 	}
 
 	if o.openAICompatible == nil {

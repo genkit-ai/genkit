@@ -57,3 +57,14 @@ func TestInitReturnsModelsInSortedOrder(t *testing.T) {
 		t.Fatalf("Init returned unsorted action names: %v", names)
 	}
 }
+
+func TestInitWithoutAPIKey(t *testing.T) {
+	ctx := context.Background()
+	plugin := &OllamaCloud{}
+
+	actions := plugin.Init(ctx)
+	if actions != nil {
+		t.Fatalf("Init without API key returned actions, want nil")
+	}
+}
+
