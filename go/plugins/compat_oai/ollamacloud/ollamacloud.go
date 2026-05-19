@@ -36,60 +36,77 @@ const (
 
 // supportedModels defines a curated set of Ollama Cloud models.
 // Model IDs are aligned with https://ollama.com/v1/models.
-var supportedModels = map[string]ai.ModelOptions{
-	// Large Language Models (text-only)
-	"gpt-oss:20b": {
-		Label:    "GPT-OSS 20B",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"gpt-oss:20b"},
-	},
-	"gpt-oss:120b": {
-		Label:    "GPT-OSS 120B",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"gpt-oss:120b"},
-	},
-	"qwen3-coder:480b": {
-		Label:    "Qwen3 Coder 480B",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"qwen3-coder:480b"},
-	},
-	"deepseek-v3.1:671b": {
-		Label:    "DeepSeek v3.1 671B",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"deepseek-v3.1:671b"},
-	},
-	"glm-4.6": {
-		Label:    "GLM-4.6",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"glm-4.6"},
-	},
-	"minimax-m2": {
-		Label:    "MiniMax M2",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"minimax-m2"},
-	},
-	"kimi-k2:1t": {
-		Label:    "Kimi K2 1T",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"kimi-k2:1t"},
-	},
-	"kimi-k2-thinking": {
-		Label:    "Kimi K2 Thinking",
-		Supports: &compat_oai.BasicText,
-		Versions: []string{"kimi-k2-thinking"},
-	},
+var (
+	textOnly = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      false,
+		SystemRole: true,
+		Media:      false,
+	}
 
-	// Multimodal Models (Vision + Text)
-	"qwen3-vl:235b-instruct": {
-		Label:    "Qwen3 VL 235B Instruct",
-		Supports: &compat_oai.Multimodal,
-		Versions: []string{"qwen3-vl:235b-instruct"},
-	},
-	"qwen3-vl:235b": {
-		Label:    "Qwen3 VL 235B",
-		Supports: &compat_oai.Multimodal,
-		Versions: []string{"qwen3-vl:235b"},
-	},
+	visionOnly = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      false,
+		SystemRole: true,
+		Media:      true,
+	}
+)
+
+func modelOptions(label, version string, supports *ai.ModelSupports) ai.ModelOptions {
+	return ai.ModelOptions{
+		Label:    label,
+		Supports: supports,
+		Versions: []string{version},
+	}
+}
+
+var supportedModels = map[string]ai.ModelOptions{
+	// Text models without Ollama tool tags.
+	"cogito-2.1:671b": modelOptions("Cogito 2.1 671B", "cogito-2.1:671b", &textOnly),
+
+	// Text models with Ollama tool tags.
+	"deepseek-v3.1:671b":  modelOptions("DeepSeek V3.1 671B", "deepseek-v3.1:671b", &compat_oai.BasicText),
+	"deepseek-v3.2":       modelOptions("DeepSeek V3.2", "deepseek-v3.2", &compat_oai.BasicText),
+	"deepseek-v4-flash":   modelOptions("DeepSeek V4 Flash", "deepseek-v4-flash", &compat_oai.BasicText),
+	"deepseek-v4-pro":     modelOptions("DeepSeek V4 Pro", "deepseek-v4-pro", &compat_oai.BasicText),
+	"devstral-2:123b":     modelOptions("Devstral 2 123B", "devstral-2:123b", &compat_oai.BasicText),
+	"glm-4.6":             modelOptions("GLM-4.6", "glm-4.6", &compat_oai.BasicText),
+	"glm-4.7":             modelOptions("GLM-4.7", "glm-4.7", &compat_oai.BasicText),
+	"glm-5":               modelOptions("GLM-5", "glm-5", &compat_oai.BasicText),
+	"glm-5.1":             modelOptions("GLM-5.1", "glm-5.1", &compat_oai.BasicText),
+	"gpt-oss:20b":         modelOptions("GPT-OSS 20B", "gpt-oss:20b", &compat_oai.BasicText),
+	"gpt-oss:120b":        modelOptions("GPT-OSS 120B", "gpt-oss:120b", &compat_oai.BasicText),
+	"kimi-k2:1t":          modelOptions("Kimi K2 1T", "kimi-k2:1t", &compat_oai.BasicText),
+	"kimi-k2-thinking":    modelOptions("Kimi K2 Thinking", "kimi-k2-thinking", &compat_oai.BasicText),
+	"minimax-m2":          modelOptions("MiniMax M2", "minimax-m2", &compat_oai.BasicText),
+	"minimax-m2.1":        modelOptions("MiniMax M2.1", "minimax-m2.1", &compat_oai.BasicText),
+	"minimax-m2.5":        modelOptions("MiniMax M2.5", "minimax-m2.5", &compat_oai.BasicText),
+	"minimax-m2.7":        modelOptions("MiniMax M2.7", "minimax-m2.7", &compat_oai.BasicText),
+	"nemotron-3-nano:30b": modelOptions("Nemotron 3 Nano 30B", "nemotron-3-nano:30b", &compat_oai.BasicText),
+	"nemotron-3-super":    modelOptions("Nemotron 3 Super", "nemotron-3-super", &compat_oai.BasicText),
+	"qwen3-coder:480b":    modelOptions("Qwen3 Coder 480B", "qwen3-coder:480b", &compat_oai.BasicText),
+	"qwen3-coder-next":    modelOptions("Qwen3 Coder Next", "qwen3-coder-next", &compat_oai.BasicText),
+	"qwen3-next:80b":      modelOptions("Qwen3 Next 80B", "qwen3-next:80b", &compat_oai.BasicText),
+	"rnj-1:8b":            modelOptions("RNJ-1 8B", "rnj-1:8b", &compat_oai.BasicText),
+
+	// Vision models without Ollama tool tags.
+	"gemma3:4b":  modelOptions("Gemma 3 4B", "gemma3:4b", &visionOnly),
+	"gemma3:12b": modelOptions("Gemma 3 12B", "gemma3:12b", &visionOnly),
+	"gemma3:27b": modelOptions("Gemma 3 27B", "gemma3:27b", &visionOnly),
+
+	// Vision models with Ollama tool tags.
+	"devstral-small-2:24b":   modelOptions("Devstral Small 2 24B", "devstral-small-2:24b", &compat_oai.Multimodal),
+	"gemini-3-flash-preview": modelOptions("Gemini 3 Flash Preview", "gemini-3-flash-preview", &compat_oai.Multimodal),
+	"gemma4:31b":             modelOptions("Gemma 4 31B", "gemma4:31b", &compat_oai.Multimodal),
+	"kimi-k2.5":              modelOptions("Kimi K2.5", "kimi-k2.5", &compat_oai.Multimodal),
+	"kimi-k2.6":              modelOptions("Kimi K2.6", "kimi-k2.6", &compat_oai.Multimodal),
+	"ministral-3:3b":         modelOptions("Ministral 3 3B", "ministral-3:3b", &compat_oai.Multimodal),
+	"ministral-3:8b":         modelOptions("Ministral 3 8B", "ministral-3:8b", &compat_oai.Multimodal),
+	"ministral-3:14b":        modelOptions("Ministral 3 14B", "ministral-3:14b", &compat_oai.Multimodal),
+	"mistral-large-3:675b":   modelOptions("Mistral Large 3 675B", "mistral-large-3:675b", &compat_oai.Multimodal),
+	"qwen3-vl:235b":          modelOptions("Qwen3 VL 235B", "qwen3-vl:235b", &compat_oai.Multimodal),
+	"qwen3-vl:235b-instruct": modelOptions("Qwen3 VL 235B Instruct", "qwen3-vl:235b-instruct", &compat_oai.Multimodal),
+	"qwen3.5:397b":           modelOptions("Qwen3.5 397B", "qwen3.5:397b", &compat_oai.Multimodal),
 }
 
 // OllamaCloud represents the Ollama Cloud plugin
@@ -137,7 +154,7 @@ func (o *OllamaCloud) Init(ctx context.Context) []api.Action {
 
 	// Define available models
 	for model, opts := range supportedModels {
-		actions = append(actions, o.DefineModel(model, opts).(api.Action))
+		actions = append(actions, o.defineModelAction(model, opts))
 	}
 
 	return actions
@@ -151,6 +168,10 @@ func (o *OllamaCloud) Model(g *genkit.Genkit, name string) ai.Model {
 // DefineModel defines a model with the given ID and options.
 func (o *OllamaCloud) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 	return o.openAICompatible.DefineModel(provider, id, opts)
+}
+
+func (o *OllamaCloud) defineModelAction(id string, opts ai.ModelOptions) api.Action {
+	return o.DefineModel(id, opts).(api.Action)
 }
 
 // ListActions implements genkit.Plugin.
