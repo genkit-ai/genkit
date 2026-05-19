@@ -45,19 +45,19 @@
     }
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
-    "@types/jest": "^29.5.12",
-    "@types/node": "^20.11.16",
-    "firebase": "^11.5.0",
-    "firebase-tools": "^13.13.2",
+    "@jest/globals": "^30.4.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.9.1",
+    "firebase": "^12.13.0",
+    "firebase-tools": "^15.18.0",
     "genkit": "workspace:*",
-    "jest": "^29.7.0",
+    "jest": "^30.4.2",
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
-    "ts-jest": "^29.1.2",
+    "ts-jest": "^29.4.10",
     "tsup": "^8.3.5",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {

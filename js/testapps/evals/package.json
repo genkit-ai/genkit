@@ -23,14 +23,14 @@
     "genkit": "workspace:*",
     "genkitx-langchain": "workspace:*",
     "llm-chunk": "^0.0.1",
-    "pdf-parse": "^1.1.1",
-    "pdfjs-dist": "^4.0.379",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
     "pdfjs-dist-legacy": "^1.0.1"
   },
   "devDependencies": {
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.1.0",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }

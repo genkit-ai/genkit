@@ -26,21 +26,21 @@
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
-    "@langchain/community": "^0.0.53",
-    "@langchain/core": "^0.1.61",
-    "@opentelemetry/api": "^1.9.0"
+    "@langchain/community": "^1.1.28",
+    "@langchain/core": "^1.1.47",
+    "@opentelemetry/api": "^1.9.1"
   },
   "peerDependencies": {
     "genkit": "workspace:^",
     "langchain": "^0.1.36"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
+    "@types/node": "^25.9.1",
     "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "tsup": "^8.3.5",
-    "tsx": "^4.19.2",
-    "typescript": "^5.9.3"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   },
   "types": "./lib/index.d.ts",
   "exports": {
