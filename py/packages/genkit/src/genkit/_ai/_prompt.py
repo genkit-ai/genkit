@@ -1038,6 +1038,44 @@ def define_schema(registry: Registry, name: str, schema: type[BaseModel]) -> Non
     logger.debug(f'Registered schema "{name}"')
 
 
+def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN401
+    """Convert dotprompt frontmatter ``use`` into middleware refs.
+
+    Each entry may be a bare string (middleware name) or a map with ``name`` and
+    optional ``config``, matching the cross-SDK MiddlewareRef shape.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'dotprompt `use` must be a list, got {type(raw).__name__}',
+        )
+    refs: list[MiddlewareRef] = []
+    for i, entry in enumerate(raw):
+        if isinstance(entry, str):
+            if not entry:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'dotprompt `use[{i}]` is an empty string',
+                )
+            refs.append(MiddlewareRef(name=entry))
+        elif isinstance(entry, dict):
+            name = entry.get('name')
+            if not isinstance(name, str) or not name:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'dotprompt `use[{i}]` is missing required `name` field',
+                )
+            refs.append(MiddlewareRef(name=name, config=entry.get('config')))
+        else:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'dotprompt `use[{i}]` must be a string or map, got {type(entry).__name__}',
+            )
+    return refs
+
+
 def _transform_prompt_metadata(
     raw_metadata: Any,  # noqa: ANN401
     variant: str | None,
@@ -1073,15 +1111,25 @@ def _transform_prompt_metadata(
         if schema and isinstance(schema, dict) and schema.get('description') is None:
             schema.pop('description', None)
 
+    raw = md.get('raw')
+    raw_use = raw.get('use') if isinstance(raw, dict) else None
+    parsed_use = _parse_dotprompt_use(raw_use)
+
+    prompt_block: dict[str, Any] = {**md, 'template': template}
+    if parsed_use is not None:
+        prompt_block['use'] = [
+            ({'name': ref.name, 'config': ref.config} if ref.config is not None else {'name': ref.name})
+            for ref in parsed_use
+        ]
+
     # Build metadata structure
     metadata = {
         **md,
         **(md.get('metadata', {}) if isinstance(md.get('metadata'), dict) else {}),
         'type': 'prompt',
-        'prompt': {**md, 'template': template},
+        'prompt': prompt_block,
     }
 
-    raw = md.get('raw')
     if raw and isinstance(raw, dict) and raw.get('metadata'):
         metadata['metadata'] = {**raw['metadata']}
 
@@ -1103,6 +1151,7 @@ def _transform_prompt_metadata(
         'maxTurns': raw.get('maxTurns') if isinstance(raw, dict) else None,
         'toolChoice': raw.get('toolChoice') if isinstance(raw, dict) else None,
         'returnToolRequests': raw.get('returnToolRequests') if isinstance(raw, dict) else None,
+        'use': parsed_use,
         'messages': template,
     }
 
@@ -1156,6 +1205,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             return_tool_requests=metadata.get('returnToolRequests'),
             metadata=metadata.get('metadata'),
             tools=metadata.get('tools'),
+            use=metadata.get('use'),
             name=name,
             ns=ns,
         )
@@ -1170,13 +1220,15 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             executable_prompt._prompt_action = prompt_action  # pyright: ignore[reportPrivateUsage]
             setattr(prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010
 
-        # Update schemas on actions for Dev UI
+        # Update schemas and metadata on actions for Dev UI
         for action in [prompt_action, exec_prompt_action]:
             if action:
                 if metadata.get('input', {}).get('jsonSchema'):
                     action.input_schema = metadata['input']['jsonSchema']
                 if metadata.get('output', {}).get('jsonSchema'):
                     action.output_schema = metadata['output']['jsonSchema']
+                if metadata.get('metadata'):
+                    action._metadata.update(metadata['metadata'])
 
         _cached_prompt = executable_prompt
         return executable_prompt
