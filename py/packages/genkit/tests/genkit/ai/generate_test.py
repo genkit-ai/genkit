@@ -44,6 +44,7 @@ from genkit.middleware import (
     ToolHookParams,
     middleware_plugin,
 )
+from genkit.plugin_api import new_middleware
 
 
 def _to_dict(obj: object) -> object:
@@ -492,6 +493,15 @@ def test_middleware_validation_raises_correct_errors() -> None:
 
     with pytest.raises(ValueError, match='MiddlewareDesc name must be a non-empty string'):
         MiddlewareDesc(cls=PreMiddleware, name='')
+
+    # 3. Test new_middleware helper behavior
+    desc = new_middleware(cls=PreMiddleware, name='custom_mw', description='custom desc')
+    assert isinstance(desc, MiddlewareDesc)
+    assert desc.name == 'custom_mw'
+    assert desc.description == 'custom desc'
+
+    with pytest.raises(ValueError, match='MiddlewareDesc name must be one path-free token'):
+        new_middleware(cls=PreMiddleware, name='invalid/name')
 
 
 @pytest.mark.asyncio

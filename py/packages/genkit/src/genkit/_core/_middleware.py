@@ -350,3 +350,21 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
             'properties': {},
             'additionalProperties': True,
         }
+
+
+def new_middleware(
+    cls: type[BaseMiddleware],
+    name: str,
+    description: str | None = None,
+) -> MiddlewareDesc:
+    """Ergonomic helper to define a new MiddlewareDesc.
+
+    Args:
+        cls: The BaseMiddleware subclass.
+        name: The registry name.
+        description: Optional human-readable description.
+
+    Returns:
+        A new MiddlewareDesc instance.
+    """
+    return MiddlewareDesc(cls=cls, name=name, description=description)

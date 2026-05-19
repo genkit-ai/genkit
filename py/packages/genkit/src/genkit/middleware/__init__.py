@@ -80,5 +80,4 @@ __all__ = [
     'ModelHookParams',
     'MultipartToolResponse',
     'ToolHookParams',
-    'middleware_plugin',
 ]
