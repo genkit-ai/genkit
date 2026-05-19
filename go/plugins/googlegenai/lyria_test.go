@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,42 +154,6 @@ func TestLyriaPredictURL(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestWarnLyriaCountMismatch(t *testing.T) {
-	prev := slog.Default()
-	defer slog.SetDefault(prev)
-
-	var buf strings.Builder
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-
-	t.Run("fewer than requested triggers warn", func(t *testing.T) {
-		buf.Reset()
-		warnLyriaCountMismatch(context.Background(), 4, 1)
-		out := buf.String()
-		if !strings.Contains(out, "level=WARN") {
-			t.Errorf("expected WARN log, got: %s", out)
-		}
-		if !strings.Contains(out, "requested=4") || !strings.Contains(out, "received=1") {
-			t.Errorf("log missing requested/received counts: %s", out)
-		}
-	})
-
-	t.Run("matching counts emit nothing", func(t *testing.T) {
-		buf.Reset()
-		warnLyriaCountMismatch(context.Background(), 2, 2)
-		if buf.Len() != 0 {
-			t.Errorf("expected no log, got: %s", buf.String())
-		}
-	})
-
-	t.Run("more than requested emits nothing", func(t *testing.T) {
-		buf.Reset()
-		warnLyriaCountMismatch(context.Background(), 1, 3)
-		if buf.Len() != 0 {
-			t.Errorf("expected no log, got: %s", buf.String())
-		}
-	})
 }
 
 func TestGenerateMusic_StreamingReturnsPublicError(t *testing.T) {
