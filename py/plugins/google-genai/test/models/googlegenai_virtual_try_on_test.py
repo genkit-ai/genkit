@@ -160,12 +160,12 @@ def test_to_virtual_try_on_request_shape() -> None:
 
 
 def test_virtual_try_on_config_schema_excludes_location() -> None:
-    """location should not appear as a UI-configurable model parameter."""
+    """Location should not appear as a UI-configurable model parameter."""
     assert 'location' not in VirtualTryOnConfig.model_json_schema()['properties']
 
 
 def test_virtual_try_on_config_schema_inlines_output_options() -> None:
-    """outputOptions should expose child fields directly for model config UI."""
+    """OutputOptions should expose child fields directly for model config UI."""
     output_options = VirtualTryOnConfig.model_json_schema()['properties']['outputOptions']
     assert output_options['type'] == 'object'
     assert output_options['properties']['mimeType']['title'] == 'Mime type'
