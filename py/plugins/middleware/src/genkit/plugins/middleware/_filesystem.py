@@ -54,7 +54,6 @@ from genkit.middleware import (
     GenerateHookParams,
     MultipartToolResponse,
     ToolHookParams,
-    middleware,
 )
 
 # ---------------------------------------------------------------------------
@@ -122,7 +121,6 @@ class _FileState:
     limit: int  # 0 when the read covered the whole file
 
 
-@middleware(name='filesystem', description='Sandboxed filesystem operations')
 class Filesystem(BaseMiddleware):
     """Filesystem middleware with sandboxed file operations.
 

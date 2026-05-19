@@ -37,7 +37,7 @@ from genkit._ai._tools import define_tool
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, GenerateHookParams, middleware
+from genkit.middleware import BaseMiddleware, GenerateHookParams
 
 # Marker placed in TextPart.metadata so later iterations can find and replace
 # the skills block without duplicating it.
@@ -46,7 +46,6 @@ _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
 
 
-@middleware(name='skills', description='Provides access to skill library for specialized instructions')
 class Skills(BaseMiddleware):
     """Skills middleware that exposes ``SKILL.md`` files as loadable instructions.
 
@@ -159,7 +158,9 @@ class Skills(BaseMiddleware):
         else:
             messages.insert(0, Message(role=Role.SYSTEM, content=[new_part]))
 
-        return request.model_copy(update={'messages': messages})
+        new_request = request.model_copy()
+        new_request.messages = messages
+        return new_request
 
     # --- middleware hooks ---
 
@@ -212,6 +213,6 @@ class Skills(BaseMiddleware):
         if skills:
             prompt_text = self._build_skills_prompt(skills)
             if prompt_text:
-                new_req = self._inject_skills_prompt(params.request, prompt_text)
-                params = params.model_copy(update={'request': new_req})
+                params = params.model_copy()
+                params.request = self._inject_skills_prompt(params.request, prompt_text)
         return await next_fn(params)

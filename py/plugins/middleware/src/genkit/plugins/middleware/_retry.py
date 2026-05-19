@@ -33,7 +33,7 @@ from pydantic import Field
 
 from genkit import GenkitError
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
+from genkit.middleware import BaseMiddleware, ModelHookParams
 
 _DEFAULT_RETRY_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -44,7 +44,6 @@ _DEFAULT_RETRY_STATUSES: list[str] = [
 ]
 
 
-@middleware(name='retry', description='Retries model calls on transient failures with exponential backoff')
 class Retry(BaseMiddleware):
     """Retry middleware with exponential backoff for transient failures.
 

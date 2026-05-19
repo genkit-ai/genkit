@@ -16,13 +16,11 @@
 
 """Middleware - inspect or modify requests before they reach the model."""
 
-from collections.abc import Awaitable, Callable
-
 import structlog
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Message, MiddlewareRef, Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
+from genkit import Genkit, Message, Part, Role, TextPart
+from genkit.middleware import BaseMiddleware
 from genkit.plugins.google_genai import GoogleAI
 
 logger = structlog.get_logger(__name__)
@@ -37,55 +35,30 @@ class PromptInput(BaseModel):
     )
 
 
-@middleware(name='logging_mw')
 class LoggingMiddleware(BaseMiddleware):
     """Log request/response details without changing behavior."""
 
-    async def wrap_model(
-        self,
-        params: ModelHookParams,
-        next_fn: Callable[[ModelHookParams], Awaitable],
-    ):
+    async def wrap_model(self, params, next_fn):
         await logger.ainfo('middleware saw request', message_count=len(params.request.messages))
         response = await next_fn(params)
-        await logger.ainfo(
-            'middleware saw response',
-            finish_reason=response.finish_reason,
-        )
+        await logger.ainfo('middleware saw response', finish_reason=response.finish_reason)
         return response
 
 
-@middleware(name='concise_reply_mw')
 class ConciseReplyMiddleware(BaseMiddleware):
-    """Add a short system instruction before the model call.
+    """Prepend a short system instruction before the model call.
 
-    ``instruction`` is a pydantic field, so you can override it per call
-    in either of two ways:
-
-    * inline: ``ConciseReplyMiddleware(instruction=...)``
-    * by name: ``MiddlewareRef(name='concise_reply_mw',
-      config={'instruction': ...})``
+    Each call can supply its own value by constructing a fresh instance:
+    ``ConciseReplyMiddleware(instruction=...)``.
     """
 
     instruction: str = 'Answer in one short paragraph.'
 
-    async def wrap_model(
-        self,
-        params: ModelHookParams,
-        next_fn: Callable[[ModelHookParams], Awaitable],
-    ):
-        system_message = Message(
-            role=Role.SYSTEM,
-            content=[Part(root=TextPart(text=self.instruction))],
-        )
-        new_req = params.request.model_copy(update={'messages': [system_message, *params.request.messages]})
-        return await next_fn(
-            ModelHookParams(
-                request=new_req,
-                on_chunk=params.on_chunk,
-                context=params.context,
-            )
-        )
+    async def wrap_model(self, params, next_fn):
+        system_message = Message(role=Role.SYSTEM, content=[Part(root=TextPart(text=self.instruction))])
+        params.request = params.request.model_copy()
+        params.request.messages = [system_message, *params.request.messages]
+        return await next_fn(params)
 
 
 ai = Genkit(
@@ -93,9 +66,14 @@ ai = Genkit(
     model='googleai/gemini-2.5-flash',
 )
 
-# Register ``ConciseReplyMiddleware`` by name so it can be reached via ``MiddlewareRef``
-# (from the Dev UI or cross-process callers); ``LoggingMiddleware`` is used inline below.
-ai.define_middleware(ConciseReplyMiddleware)
+# Register ``ConciseReplyMiddleware`` by name so it shows up in the Dev UI's
+# Model Runner where you can pick it from a dropdown. In-process use does not
+# require registration — see ``logging_demo`` below.
+ai.define_middleware(
+    ConciseReplyMiddleware,
+    name='concise_reply_mw',
+    description='Adds a short system instruction before the model call.',
+)
 
 
 @ai.flow()
@@ -108,11 +86,11 @@ async def logging_demo(input: PromptInput) -> str:
 
 @ai.flow()
 async def request_modifier_demo(input: PromptInput) -> str:
-    """Resolve a registered middleware by name, with a per-call config override."""
+    """Pass a configured middleware instance with a per-call override of ``instruction``."""
 
     response = await ai.generate(
         prompt=input.prompt,
-        use=[MiddlewareRef(name='concise_reply_mw', config={'instruction': 'Answer in a single haiku.'})],
+        use=[ConciseReplyMiddleware(instruction='Answer in a single haiku.')],
     )
     return response.text
 

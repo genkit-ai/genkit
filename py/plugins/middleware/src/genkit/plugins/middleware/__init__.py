@@ -89,11 +89,31 @@ class Middleware(Plugin):
     def list_middleware(self) -> list[MiddlewareDesc]:
         """Return descriptors for all middleware exposed by this plugin."""
         return [
-            new_middleware(Retry),
-            new_middleware(Fallback),
-            new_middleware(ToolApproval),
-            new_middleware(Skills),
-            new_middleware(Filesystem),
+            new_middleware(
+                Retry,
+                name='retry',
+                description='Retries model calls on transient failures with exponential backoff',
+            ),
+            new_middleware(
+                Fallback,
+                name='fallback',
+                description='Falls back to alternative models on failure',
+            ),
+            new_middleware(
+                ToolApproval,
+                name='tool_approval',
+                description='Requires approval before executing tools',
+            ),
+            new_middleware(
+                Skills,
+                name='skills',
+                description='Provides access to skill library for specialized instructions',
+            ),
+            new_middleware(
+                Filesystem,
+                name='filesystem',
+                description='Sandboxed filesystem operations',
+            ),
         ]
 
 
