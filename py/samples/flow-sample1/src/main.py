@@ -115,7 +115,7 @@ async def parent() -> str:
 
     Demonstrates flow-from-flow: the inner trace nests under the outer one.
     """
-    return str(await basic('foo'))
+    return await basic('foo')
 
 
 @ai.flow(name='withInputSchema')
