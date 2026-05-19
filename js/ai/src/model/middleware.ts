@@ -173,6 +173,7 @@ export function simulateSystemPrompt(options?: {
   };
 }
 
+/** Options for the {@link augmentWithContext} middleware. */
 export interface AugmentWithContextOptions {
   /** Preceding text to place before the rendered context documents. */
   preface?: string | null;
@@ -182,6 +183,7 @@ export interface AugmentWithContextOptions {
   citationKey?: string | null;
 }
 
+/** Default preface text inserted before context documents in the prompt. */
 export const CONTEXT_PREFACE =
   '\n\nUse the following information to complete your task:\n\n';
 const CONTEXT_ITEM_TEMPLATE = (
@@ -199,6 +201,10 @@ const CONTEXT_ITEM_TEMPLATE = (
   return out;
 };
 
+/**
+ * Model middleware that appends retrieved context documents to the last user message
+ * so models without native document/context support can still use RAG-style augmentation.
+ */
 export function augmentWithContext(
   options?: AugmentWithContextOptions
 ): ModelMiddleware {
@@ -450,6 +456,7 @@ export function fallback(
   };
 }
 
+/** Options for the {@link simulateConstrainedGeneration} middleware. */
 export interface SimulatedConstrainedGenerationOptions {
   instructionsRenderer?: (schema: Record<string, any>) => string;
 }

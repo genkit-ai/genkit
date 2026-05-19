@@ -1,7 +1,7 @@
 {
   "entryPoints": [
     "genkit",
-    "plugins/googleai",
+    "plugins/google-genai",
     "plugins/vertexai",
     "plugins/firebase",
     "plugins/google-cloud",
@@ -10,10 +10,14 @@
     "plugins/dev-local-vectorstore",
     "plugins/evaluators",
     "plugins/express",
+    "plugins/fetch",
+    "plugins/mcp",
+    "plugins/anthropic",
+    "plugins/compat-oai",
+    "plugins/middleware",
     "plugins/ollama",
     "plugins/chroma",
     "plugins/pinecone",
-    "plugins/mcp"
   ],
   "name": "Genkit JS API reference",
   "out": "api-refs-js",

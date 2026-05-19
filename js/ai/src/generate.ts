@@ -84,6 +84,7 @@ export { GenerateResponse, GenerateResponseChunk };
 /** Specifies how tools should be called by the model. */
 export type ToolChoice = 'auto' | 'required' | 'none';
 
+/** Configuration for the desired output format and schema of a generate request. */
 export interface OutputOptions<O extends z.ZodTypeAny = z.ZodTypeAny> {
   format?: string;
   contentType?: string;
@@ -119,6 +120,9 @@ export interface ResumeOptions {
   metadata?: Record<string, any>;
 }
 
+/**
+ * Options for making a generation request using {@link Genkit.generate} or {@link Genkit.generateStream}.
+ */
 export interface GenerateOptions<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
@@ -275,6 +279,7 @@ export async function toGenerateRequest(
   return out;
 }
 
+/** An error that includes the partial {@link GenerateResponse} that triggered it. */
 export class GenerationResponseError extends GenkitError {
   detail: {
     response: GenerateResponse;
@@ -746,11 +751,13 @@ async function resolveFullResourceNames(
   throw new Error(`Unable to resolve resource: ${name}`);
 }
 
+/** Options for {@link Genkit.generateStream}. Same as {@link GenerateOptions} but without `streamingCallback`. */
 export type GenerateStreamOptions<
   O extends z.ZodTypeAny = z.ZodTypeAny,
   CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
 > = Omit<GenerateOptions<O, CustomOptions>, 'streamingCallback'>;
 
+/** The return type of {@link Genkit.generateStream}, providing both a stream of chunks and the final response. */
 export interface GenerateStreamResponse<O extends z.ZodTypeAny = z.ZodTypeAny> {
   get stream(): AsyncIterable<GenerateResponseChunk>;
   get response(): Promise<GenerateResponse<O>>;

@@ -1,4 +1,6 @@
-Genkit is a framework for building AI-powered applications. This is the API reference for the Genkit JS libraries. For tutorials and guides, visit [genkit.dev](https://genkit.dev/docs/js/).
+# Genkit
+
+Genkit is a framework for building AI-powered applications. It provides open source libraries for Node.js and Go, along with tools to help you debug and iterate quickly.
 
 ## Quick Start
 
@@ -32,48 +34,6 @@ const { text } = await ai.generate({
 
 console.log(text);
 ```
-
-## Packages
-
-This reference documents the following packages:
-
-| Package | Description |
-|---|---|
-| **[genkit](modules/genkit.html)** | Core framework — generation, flows, tools, prompts, streaming, and more. |
-| **[@genkit-ai/google-genai](modules/_genkit-ai_google-genai.html)** | Google AI (Gemini) model plugin. |
-| **[@genkit-ai/vertexai](modules/_genkit-ai_vertexai.html)** | Vertex AI model plugin. |
-| **[@genkit-ai/firebase](modules/_genkit-ai_firebase.html)** | Firebase integration (auth, Firestore, Cloud Functions). |
-| **[@genkit-ai/express](modules/_genkit-ai_express.html)** | Serve flows as Express endpoints. |
-| **[@genkit-ai/google-cloud](modules/_genkit-ai_google-cloud.html)** | Google Cloud monitoring and telemetry. |
-| **[@genkit-ai/next](modules/_genkit-ai_next.html)** | Next.js integration. |
-| **[@genkit-ai/checks](modules/_genkit-ai_checks.html)** | Google Checks safety evaluation plugin. |
-| **[@genkit-ai/dev-local-vectorstore](modules/_genkit-ai_dev-local-vectorstore.html)** | Local vector store for development. |
-| **[@genkit-ai/evaluators](modules/_genkit-ai_evaluator.html)** | Built-in evaluators for testing AI output quality. |
-| **[@genkit-ai/ollama](modules/genkitx-ollama.html)** | Ollama local model plugin. |
-| **[@genkit-ai/chroma](modules/genkitx-chromadb.html)** | ChromaDB vector store plugin. |
-| **[@genkit-ai/pinecone](modules/genkitx-pinecone.html)** | Pinecone vector store plugin. |
-| **[@genkit-ai/mcp](modules/_genkit-ai_mcp.html)** | Model Context Protocol (MCP) plugin. |
-| **[@genkit-ai/anthropic](modules/_genkit-ai_anthropic.html)** | Anthropic (Claude) model plugin. |
-| **[@genkit-ai/compat-oai](modules/_genkit-ai_compat-oai.html)** | OpenAI-compatible model plugin. |
-| **[@genkit-ai/fetch](modules/_genkit-ai_fetch.html)** | HTTP fetch utilities for plugins. |
-| **[@genkit-ai/middleware](modules/_genkit-ai_middleware.html)** | Model middleware plugin (retry, caching, etc.). |
-
-The `genkit` package also provides subpath imports for specific functionality:
-
-| Import | Purpose |
-|---|---|
-| `genkit` | Main entry — `Genkit` class, `generate`, `defineFlow`, `defineTool`, schemas, types |
-| `genkit/beta` | Beta features including interrupts (`defineInterrupt`) |
-| `genkit/beta/client` | Client-side helpers (`runFlow`, `streamFlow`) |
-| `genkit/model/middleware` | Model middleware (`retry`, `fallback`, `augmentWithContext`, etc.) |
-| `genkit/plugin` | Plugin authoring utilities (`model`, `embedder`, `retriever`, etc.) |
-| `genkit/model` | Model types and helpers |
-| `genkit/embedder` | Embedder types |
-| `genkit/retriever` | Retriever and indexer types |
-| `genkit/reranker` | Reranker types |
-| `genkit/evaluator` | Evaluator types |
-| `genkit/tool` | Tool types |
-| `genkit/schema` | Schema utilities |
 
 ## Key Features
 
@@ -225,6 +185,35 @@ if (response.interrupts.length) {
 }
 ```
 
+The `toolApproval` middleware from `@genkit-ai/middleware` automates this pattern, interrupting any tool not in an approved list:
+
+```ts
+import { toolApproval } from '@genkit-ai/middleware';
+import { restartTool } from 'genkit';
+
+let response = await ai.generate({
+  model: googleAI.model('gemini-flash-latest'),
+  prompt: 'Send a hello email to alice@example.com',
+  tools: [sendEmail, readInbox],
+  use: [toolApproval({ approved: ['readInbox'] })], // sendEmail not approved
+});
+
+// sendEmail was interrupted — get user approval, then restart
+if (response.interrupts.length) {
+  response = await ai.generate({
+    model: googleAI.model('gemini-flash-latest'),
+    messages: response.messages,
+    tools: [sendEmail, readInbox],
+    resume: {
+      restart: response.interrupts.map((i) =>
+        restartTool(i, { toolApproved: true })
+      ),
+    },
+    use: [toolApproval({ approved: ['readInbox'] })],
+  });
+}
+```
+
 ### Prompts (Dotprompt)
 
 Manage prompts as code with embedded schemas, model configuration, and Handlebars templating:
@@ -307,12 +296,22 @@ for await (const chunk of stream) {
 }
 ```
 
-### Middleware
+## Middleware
 
-Add common functionality to your AI requests with middleware (available in `genkit/model/middleware` and `@genkit-ai/middleware`):
+The [`@genkit-ai/middleware`](https://www.npmjs.com/package/@genkit-ai/middleware) package provides ready-made middleware to add common functionality to your AI requests:
+
+- **`retry`** — Automatically retry failed requests with exponential backoff.
+- **`fallback`** — Fall back to alternative models on specific error statuses.
+- **`toolApproval`** — Restrict tool execution to an approved list, interrupting unapproved calls for review.
+- **`filesystem`** — Give the model sandboxed read/write access to a directory on the filesystem.
+- **`skills`** — Scan for skill definitions and inject them as available tools.
+
+```posix-terminal
+npm install @genkit-ai/middleware
+```
 
 ```ts
-import { retry } from 'genkit/model/middleware';
+import { retry } from '@genkit-ai/middleware';
 
 const { text } = await ai.generate({
   model: googleAI.model('gemini-flash-latest'),
@@ -327,10 +326,43 @@ const { text } = await ai.generate({
 });
 ```
 
-## More Resources
+## Developer Tools
 
-- **Full documentation:** [genkit.dev](https://genkit.dev/docs/js/)
-- **Developer tools:** [CLI and Developer UI](https://genkit.dev/docs/js/devtools/)
-- **Browse plugins:** [npmjs.com/search?q=keywords:genkit-plugin](https://www.npmjs.com/search?q=keywords:genkit-plugin)
-- **Deployment:** [Express](https://genkit.dev/docs/js/deployment/any-platform/) · [Firebase](https://genkit.dev/docs/js/deployment/firebase/) · [Cloud Run](https://genkit.dev/docs/js/deployment/cloud-run/)
-- **Community:** [Discord](https://discord.gg/qXt5zzQKpc) · [GitHub Issues](https://github.com/genkit-ai/genkit/issues)
+Genkit comes with a powerful CLI and Developer UI for locally testing, debugging, and iterating on your AI features:
+
+```posix-terminal
+npx genkit start -- npx tsx src/index.ts
+```
+
+The Developer UI lets you visually test flows, inspect traces, and experiment with prompts — all in your browser.
+
+## Plugins
+
+Genkit supports a growing ecosystem of plugins for model providers, vector stores, and more:
+
+| Category | Plugins |
+|---|---|
+| **Models** | `@genkit-ai/google-genai`, `@genkit-ai/vertexai`, `@genkit-ai/compat-oai`, `genkitx-anthropic`, `genkitx-ollama` |
+| **Deployment** | `@genkit-ai/express`, `@genkit-ai/fetch`, `@genkit-ai/firebase`, `@genkit-ai/cloud-run` |
+| **Monitoring** | `@genkit-ai/google-cloud` |
+
+Browse all plugins: [npmjs.com/search?q=keywords:genkit-plugin](https://www.npmjs.com/search?q=keywords:genkit-plugin)
+
+## Deployment
+
+Genkit flows can be deployed anywhere Node.js runs:
+
+- **Express** — [Deploy to Node.js](https://genkit.dev/docs/js/deployment/any-platform/)
+- **Firebase** — [Deploy to Firebase](https://genkit.dev/docs/js/deployment/firebase/)
+- **Cloud Run** — [Deploy to Cloud Run](https://genkit.dev/docs/js/deployment/cloud-run/)
+
+## Next Steps
+
+- [Developer tools](https://genkit.dev/docs/js/devtools/): Set up and use Genkit's CLI and developer UI.
+- [Generating content](https://genkit.dev/docs/js/models/): Use Genkit's unified generation API.
+- [Creating flows](https://genkit.dev/docs/js/flows/): Build observable workflows with rich debugging.
+- [Managing prompts](https://genkit.dev/docs/js/dotprompt/): Manage prompts and configuration as code.
+
+Learn more at [genkit.dev](https://genkit.dev)
+
+License: Apache 2.0
