@@ -34,20 +34,18 @@ export interface EmbeddingModelDefinition {
   dimensions: number;
 }
 
-export const OllamaEmbeddingPredictionSchema = z.object({
-  embedding: z.array(z.number()),
-});
-
-export type OllamaEmbeddingPrediction = z.infer<
-  typeof OllamaEmbeddingPredictionSchema
->;
-
 export interface DefineOllamaEmbeddingParams {
   name: string;
   modelName: string;
   dimensions: number;
   options: OllamaPluginParams;
 }
+
+export const OllamaEmbedderConfigSchema = z.object({
+  serverAddress: z.string().optional(),
+});
+
+export type OllamaEmbedderConfig = z.infer<typeof OllamaEmbedderConfigSchema>;
 
 /**
  * Parameters for the Ollama plugin configuration.
@@ -179,4 +177,11 @@ export interface LocalModel {
 // Ollama list local models response
 export interface ListLocalModelsResponse {
   models: LocalModel[];
+}
+
+export interface ResolveActionOptions {
+  params: OllamaPluginParams;
+  actionType: string;
+  actionName: string;
+  serverAddress: string;
 }
