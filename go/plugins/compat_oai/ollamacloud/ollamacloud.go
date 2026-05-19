@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -59,6 +60,15 @@ func modelOptions(label, version string, supports *ai.ModelSupports) ai.ModelOpt
 		Supports: supports,
 		Versions: []string{version},
 	}
+}
+
+func sortedSupportedModelIDs() []string {
+	models := make([]string, 0, len(supportedModels))
+	for model := range supportedModels {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models
 }
 
 var supportedModels = map[string]ai.ModelOptions{
@@ -117,6 +127,7 @@ type OllamaCloud struct {
 
 	mu      sync.Mutex
 	initted bool
+	actions []api.Action
 
 	openAICompatible *compat_oai.OpenAICompatible
 }
@@ -131,44 +142,47 @@ func (o *OllamaCloud) Init(ctx context.Context) []api.Action {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	var compatActions []api.Action
-	if !o.initted {
-		apiKey := o.APIKey
-		if apiKey == "" {
-			apiKey = os.Getenv("OLLAMACLOUD_API_KEY")
-		}
-
-		if apiKey == "" {
-			panic("ollamacloud plugin initialization failed: API key is required")
-		}
-
-		if o.openAICompatible == nil {
-			o.openAICompatible = &compat_oai.OpenAICompatible{}
-		}
-
-		// Configure OpenAI-compatible client with Ollama Cloud settings
-		o.openAICompatible.Opts = []option.RequestOption{
-			option.WithAPIKey(apiKey),
-			option.WithBaseURL(fmt.Sprintf("%s/%s", apiBaseURL, apiVersion)),
-		}
-		if len(o.Opts) > 0 {
-			o.openAICompatible.Opts = append(o.openAICompatible.Opts, o.Opts...)
-		}
-
-		o.openAICompatible.Provider = provider
-		compatActions = o.openAICompatible.Init(ctx)
-		o.initted = true
+	if o.initted {
+		return append([]api.Action(nil), o.actions...)
 	}
+
+	var compatActions []api.Action
+	apiKey := o.APIKey
+	if apiKey == "" {
+		apiKey = os.Getenv("OLLAMACLOUD_API_KEY")
+	}
+
+	if apiKey == "" {
+		panic("ollamacloud plugin initialization failed: API key is required")
+	}
+
+	if o.openAICompatible == nil {
+		o.openAICompatible = &compat_oai.OpenAICompatible{}
+	}
+
+	// Configure OpenAI-compatible client with Ollama Cloud settings
+	o.openAICompatible.Opts = []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(fmt.Sprintf("%s/%s", apiBaseURL, apiVersion)),
+	}
+	if len(o.Opts) > 0 {
+		o.openAICompatible.Opts = append(o.openAICompatible.Opts, o.Opts...)
+	}
+
+	o.openAICompatible.Provider = provider
+	compatActions = o.openAICompatible.Init(ctx)
 
 	actions := make([]api.Action, 0, len(supportedModels)+len(compatActions))
 	actions = append(actions, compatActions...)
 
 	// Define available models
-	for model, opts := range supportedModels {
-		actions = append(actions, o.defineModelAction(model, opts))
+	for _, model := range sortedSupportedModelIDs() {
+		actions = append(actions, o.defineModelAction(model, supportedModels[model]))
 	}
 
-	return actions
+	o.actions = actions
+	o.initted = true
+	return append([]api.Action(nil), o.actions...)
 }
 
 // Model returns the ai.Model with the given name.
@@ -182,7 +196,11 @@ func (o *OllamaCloud) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 }
 
 func (o *OllamaCloud) defineModelAction(id string, opts ai.ModelOptions) api.Action {
-	return o.DefineModel(id, opts).(api.Action)
+	action, ok := o.DefineModel(id, opts).(api.Action)
+	if !ok {
+		panic(fmt.Sprintf("ollamacloud model %q does not implement api.Action", id))
+	}
+	return action
 }
 
 // ListActions implements genkit.Plugin.

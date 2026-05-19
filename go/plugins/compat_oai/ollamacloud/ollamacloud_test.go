@@ -18,6 +18,7 @@ package ollamacloud
 
 import (
 	"context"
+	"sort"
 	"testing"
 )
 
@@ -33,5 +34,26 @@ func TestInitCanBeCalledTwice(t *testing.T) {
 	secondActions := plugin.Init(ctx)
 	if got, want := len(secondActions), len(supportedModels); got != want {
 		t.Fatalf("second Init returned %d actions, want %d", got, want)
+	}
+
+	for i := range firstActions {
+		if firstActions[i] != secondActions[i] {
+			t.Fatalf("action %d was not cached between Init calls", i)
+		}
+	}
+}
+
+func TestInitReturnsModelsInSortedOrder(t *testing.T) {
+	ctx := context.Background()
+	plugin := &OllamaCloud{APIKey: "test-api-key"}
+
+	actions := plugin.Init(ctx)
+	names := make([]string, 0, len(actions))
+	for _, action := range actions {
+		names = append(names, action.Name())
+	}
+
+	if !sort.StringsAreSorted(names) {
+		t.Fatalf("Init returned unsorted action names: %v", names)
 	}
 }
