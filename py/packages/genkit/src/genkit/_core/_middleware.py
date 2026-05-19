@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, create_model
 
@@ -34,14 +34,16 @@ from genkit._core._model import (
 from genkit._core._protocols import RegistryLike
 from genkit._core._typing import MiddlewareDescData, Part, ToolRequestPart
 
+class MiddlewareValidationResult(NamedTuple):
+    errored: bool
+    error_message: str
+
+
 _FORBIDDEN_IN_MIDDLEWARE_KEY_SEGMENT = re.compile(r'[\x00-\x1f/\\:]|\s')
 
 
-def _validate_middleware_key_segment(name: str, *, label: str) -> None:
-    """Raise if ``name`` is not usable as a middleware registry key.
-
-    Middleware definitions are stored under
-    ``register_value(kind='middleware', name=...)``.
+def _validate_middleware_key_segment(name: str) -> MiddlewareValidationResult:
+    """Validate if ``name`` is usable as a middleware registry key.
 
     * no ``/`` (that shape is reserved for models and other actions);
     * no whitespace, ``:``, backslashes, or control characters that
@@ -49,17 +51,29 @@ def _validate_middleware_key_segment(name: str, *, label: str) -> None:
 
     Args:
         name: Proposed name.
-        label: Field name for error messages (e.g. ``MiddlewareDesc name``).
+
+    Returns:
+        A MiddlewareValidationResult.
     """
     if not name or not name.strip():
-        raise ValueError(f'{label} must be a non-empty string (not whitespace-only).')
-    if name != name.strip():
-        raise ValueError(f'{label} must not have leading or trailing whitespace.')
-    if _FORBIDDEN_IN_MIDDLEWARE_KEY_SEGMENT.search(name):
-        raise ValueError(
-            f'{label} must be one path-free token: no whitespace, "/", ":", '
-            r'backslashes, or control characters (for example "myorg_logging_mw").'
+        return MiddlewareValidationResult(
+            errored=True,
+            error_message='must be a non-empty string (not whitespace-only).',
         )
+    if name != name.strip():
+        return MiddlewareValidationResult(
+            errored=True,
+            error_message='must not have leading or trailing whitespace.',
+        )
+    if _FORBIDDEN_IN_MIDDLEWARE_KEY_SEGMENT.search(name):
+        return MiddlewareValidationResult(
+            errored=True,
+            error_message=(
+                'must be one path-free token: no whitespace, "/", ":", '
+                r'backslashes, or control characters (for example "myorg_logging_mw").'
+            ),
+        )
+    return MiddlewareValidationResult(errored=False, error_message='')
 
 
 class MultipartToolResponse(BaseModel):
@@ -293,7 +307,9 @@ class MiddlewareDesc(MiddlewareDescData):
         description: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        _validate_middleware_key_segment(name, label='MiddlewareDesc name')
+        res = _validate_middleware_key_segment(name)
+        if res.errored:
+            raise ValueError(f'MiddlewareDesc name {res.error_message}')
         # The pydantic class IS the config contract: ``MiddlewareDesc.__call__``
         # does ``cls(**config)``, so the schema the Dev UI renders has to match
         # the fields the constructor accepts. Derive it from the class every
@@ -328,8 +344,7 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
     """Build a JSON Schema describing a middleware's user-facing config fields.
 
     The Dev UI renders a config form for each registered middleware from this
-    schema. Without it the form has nothing to draw and falls back to a free-text
-    JSON box, so every middleware should expose one even when it has no knobs.
+    schema.
 
     Pydantic's full ``cls.model_json_schema()`` would also include the
     framework-injected ``registry`` and ``enqueue_parts`` attributes — those

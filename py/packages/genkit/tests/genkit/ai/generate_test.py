@@ -471,6 +471,29 @@ async def test_ai_middleware_decorator_registers_on_the_app() -> None:
     assert response.text == '[ECHO] user: "[LIVE] hi"'
 
 
+def test_middleware_validation_raises_correct_errors() -> None:
+    """Verify that registering middleware with invalid names raises expected errors."""
+    local_ai = Genkit()
+
+    # 1. Test @ai.middleware decorator raising ValueError
+    with pytest.raises(ValueError, match='middleware name must be one path-free token'):
+        @local_ai.middleware(name='invalid/name')
+        class InvalidDecoratorMw(BaseMiddleware):
+            pass
+
+    with pytest.raises(ValueError, match='middleware name must be a non-empty string'):
+        @local_ai.middleware(name='  ')
+        class InvalidDecoratorMwEmpty(BaseMiddleware):
+            pass
+
+    # 2. Test MiddlewareDesc constructor raising ValueError
+    with pytest.raises(ValueError, match='MiddlewareDesc name must be one path-free token'):
+        MiddlewareDesc(cls=PreMiddleware, name='invalid/name')
+
+    with pytest.raises(ValueError, match='MiddlewareDesc name must be a non-empty string'):
+        MiddlewareDesc(cls=PreMiddleware, name='')
+
+
 @pytest.mark.asyncio
 async def test_util_generate_action_runs_use_middleware() -> None:
     """The Dev UI hits ``/util/generate`` directly with ``use=[MiddlewareRef(...)]``.

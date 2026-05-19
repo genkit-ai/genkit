@@ -306,7 +306,9 @@ class Genkit:
                 backslashes, or control characters.
             description: Shown in the Dev UI.
         """
-        _validate_middleware_key_segment(name, label='middleware name')
+        res = _validate_middleware_key_segment(name)
+        if res.errored:
+            raise ValueError(f'middleware name {res.error_message}')
 
         def decorator(cls: type[MiddlewareT]) -> type[MiddlewareT]:
             cls.name = name
