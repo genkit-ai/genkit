@@ -36,6 +36,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	plugininternal "github.com/firebase/genkit/go/plugins/internal"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 )
@@ -546,7 +547,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 // convertTools converts Genkit tool definitions to Ollama tool format
 func convertTools(tools []*ai.ToolDefinition) ([]ollamaTool, error) {
 	ollamaTools := make([]ollamaTool, 0, len(tools))
-	for _, tool := range tools {
+	for _, tool := range plugininternal.SortToolDefinitions(tools) {
 		ollamaTools = append(ollamaTools, ollamaTool{
 			Type: "function",
 			Function: ollamaFunction{
