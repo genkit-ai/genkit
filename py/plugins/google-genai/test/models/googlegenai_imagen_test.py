@@ -103,13 +103,14 @@ def test_imagen_config_schema_exposes_supported_options() -> None:
     properties = schema['properties']
     number_of_images = properties['numberOfImages']
 
+    assert set(properties) == {
+        'numberOfImages',
+        'imageSize',
+        'aspectRatio',
+        'personGeneration',
+    }
     assert number_of_images['default'] == DEFAULT_NUMBER_OF_IMAGES
     assert number_of_images['anyOf'][0]['maximum'] == 4
-    assert 'aspectRatio' in properties
-    assert 'personGeneration' in properties
-    assert 'safetyFilterLevel' in properties
-    assert 'includeSafetyAttributes' in properties
-    assert 'enhancePrompt' in properties
 
 
 def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) -> None:
@@ -131,3 +132,23 @@ def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) ->
     config = imagen._get_config(request)
 
     assert config['number_of_images'] == 2
+
+
+def test_imagen_config_rejects_unsupported_options(mocker: MockerFixture) -> None:
+    """Test Imagen only accepts the supported Google AI options."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={'safetyFilterLevel': 'BLOCK_LOW_AND_ABOVE'},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    with pytest.raises(ValueError, match='configuration dictionary is invalid'):
+        imagen._get_config(request)

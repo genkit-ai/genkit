@@ -164,13 +164,6 @@ class ImagenImageSize(StrEnum):
     SIZE_2K = '2K'
 
 
-class ImagenOutputMimeType(StrEnum):
-    """Imagen output MIME types."""
-
-    IMAGE_PNG = 'image/png'
-    IMAGE_JPEG = 'image/jpeg'
-
-
 def vertexai_image_model_info(
     version: str,
 ) -> ModelInfo:
@@ -208,18 +201,8 @@ def googleai_image_model_info(
 class ImagenConfigSchema(BaseModel):
     """Imagen Config Schema."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True)
+    model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
-    output_gcs_uri: str | None = Field(
-        None,
-        alias='outputGcsUri',
-        description='Cloud Storage URI used to store the generated images.',
-    )
-    negative_prompt: str | None = Field(
-        None,
-        alias='negativePrompt',
-        description='Description of what to discourage in the generated images.',
-    )
     number_of_images: int | None = Field(
         DEFAULT_NUMBER_OF_IMAGES,
         alias='numberOfImages',
@@ -232,72 +215,15 @@ class ImagenConfigSchema(BaseModel):
         alias='aspectRatio',
         description='Aspect ratio of the generated images.',
     )
-    guidance_scale: float | None = Field(
-        None,
-        alias='guidanceScale',
-        description=(
-            'Controls how much the model adheres to the text prompt. Large values '
-            'increase prompt alignment, but may compromise image quality.'
-        ),
-    )
-    seed: int | None = Field(
-        None,
-        description='Random seed for image generation. Not available when add_watermark is true.',
-    )
-    safety_filter_level: genai_types.SafetyFilterLevel | None = Field(
-        None,
-        alias='safetyFilterLevel',
-        description='Filter level for safety filtering.',
-    )
     person_generation: genai_types.PersonGeneration | None = Field(
         None,
         alias='personGeneration',
         description='Allows generation of people by the model.',
     )
-    include_safety_attributes: bool | None = Field(
-        None,
-        alias='includeSafetyAttributes',
-        description='Whether to report safety scores of each generated image and the positive prompt.',
-    )
-    include_rai_reason: bool | None = Field(
-        None,
-        alias='includeRaiReason',
-        description='Whether to include the Responsible AI filter reason if an image is filtered.',
-    )
-    language: genai_types.ImagePromptLanguage | None = Field(
-        None,
-        description='Language of the text in the prompt.',
-    )
-    output_mime_type: ImagenOutputMimeType | None = Field(
-        None,
-        alias='outputMimeType',
-        description='MIME type of the generated image.',
-    )
-    output_compression_quality: int | None = Field(
-        None,
-        alias='outputCompressionQuality',
-        ge=0,
-        le=100,
-        description='Compression quality of the generated image, for image/jpeg only.',
-    )
-    add_watermark: bool | None = Field(
-        None,
-        alias='addWatermark',
-        description='Whether to add a watermark to the generated images.',
-    )
-    labels: dict[str, str] | None = Field(
-        None,
-        description='User-specified labels to track billing usage.',
-    )
     image_size: ImagenImageSize | None = Field(
         None,
         alias='imageSize',
         description='Largest dimension of the generated image. Not supported for Imagen 3 models.',
-    )
-    enhance_prompt: bool | None = Field(
-        None,
-        alias='enhancePrompt',
-        description='Whether to use prompt rewriting logic.',
     )
 
 
@@ -372,6 +298,10 @@ class ImagenModel:
         request_config = self._with_default_config(request.config)
         ta = TypeAdapter(genai_types.GenerateImagesConfigOrDict)
         try:
+            request_config = ImagenConfigSchema.model_validate(request_config).model_dump(
+                mode='json',
+                exclude_none=True,
+            )
             return ta.validate_python(request_config)
         except ValidationError as e:
             raise ValueError(
