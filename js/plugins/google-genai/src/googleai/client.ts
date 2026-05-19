@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { GenkitError, StatusName } from 'genkit';
+import { GenkitError, StatusName, type ErrorResponseMetadata } from 'genkit';
 import { logger } from 'genkit/logging';
 import {
   extractErrMsg,
   getGenkitClientHeader,
+  parseRetryAfterMs,
   processStream,
 } from '../common/utils.js';
 import {
@@ -513,10 +514,20 @@ async function makeRequest(
           status = 'UNAVAILABLE';
           break;
       }
+      // Capture Retry-After header for retry middleware to use
+      const retryAfterHeader = response.headers.get('retry-after');
+      const retryAfterMs = retryAfterHeader
+        ? parseRetryAfterMs(retryAfterHeader)
+        : undefined;
+      const responseMetadata: ErrorResponseMetadata | undefined = retryAfterMs
+        ? { retryAfterMs }
+        : undefined;
+
       throw new GenkitError({
         status,
         message: `Error fetching from ${url}: [${response.status} ${response.statusText}] ${errorMessage}`,
         detail: errorDetail,
+        responseMetadata,
       });
     }
     return response;

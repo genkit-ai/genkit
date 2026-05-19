@@ -626,4 +626,26 @@ export function isKnownKey<T extends object>(
   return key in obj;
 }
 
-export const TEST_ONLY = { aggregateResponses };
+/**
+ * Parses the value of a `Retry-After` HTTP header into milliseconds.
+ * Supports both delay-seconds (e.g. "60") and HTTP-date formats
+ * (e.g. "Mon, 19 May 2026 12:00:00 GMT") per RFC 7231 §7.1.3.
+ *
+ * @param value The raw Retry-After header value.
+ * @returns The delay in milliseconds, or undefined if the value cannot be parsed.
+ */
+export function parseRetryAfterMs(value: string): number | undefined {
+  // Try as delay-seconds (e.g., "60")
+  const seconds = Number(value);
+  if (!isNaN(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  // Try as HTTP-date (e.g., "Mon, 19 May 2026 12:00:00 GMT")
+  const date = new Date(value);
+  if (!isNaN(date.getTime())) {
+    return Math.max(0, date.getTime() - Date.now());
+  }
+  return undefined;
+}
+
+export const TEST_ONLY = { aggregateResponses, parseRetryAfterMs };

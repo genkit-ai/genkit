@@ -153,6 +153,7 @@ export {
   type ActionContext,
   type ActionMetadata,
   type DynamicActionProviderAction,
+  type ErrorResponseMetadata,
   type Flow,
   type FlowConfig,
   type FlowFn,

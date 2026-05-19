@@ -94,6 +94,13 @@ const DEFAULT_RETRY_STATUSES: StatusName[] = [
   'INTERNAL',
 ];
 
+/**
+ * Error names that should never be retried, even when the error is not a GenkitError.
+ * - AbortError: User explicitly cancelled the operation via AbortController.
+ * - ToolInterruptError: Deliberate control-flow signal for tool interrupt handling.
+ */
+const NEVER_RETRY_ERROR_NAMES = ['AbortError', 'ToolInterruptError'];
+
 let __setTimeout: (
   callback: (...args: any[]) => void,
   ms?: number
@@ -163,11 +170,22 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                     shouldRetry = true;
                   }
                 } else {
-                  shouldRetry = true;
+                  // Don't retry AbortError or ToolInterruptError
+                  shouldRetry = !NEVER_RETRY_ERROR_NAMES.includes(error.name);
                 }
 
                 if (shouldRetry) {
                   let delay = currentDelay;
+                  // Honor provider's Retry-After if available
+                  if (
+                    error instanceof GenkitError &&
+                    error.responseMetadata?.retryAfterMs
+                  ) {
+                    delay = Math.max(
+                      delay,
+                      error.responseMetadata.retryAfterMs
+                    );
+                  }
                   if (!noJitter) {
                     delay = delay + 1000 * Math.pow(2, i) * Math.random();
                   }
