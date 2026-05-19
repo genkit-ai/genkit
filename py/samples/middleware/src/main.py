@@ -35,6 +35,12 @@ class PromptInput(BaseModel):
     )
 
 
+ai = Genkit(
+    plugins=[GoogleAI()],
+    model='googleai/gemini-2.5-flash',
+)
+
+
 class LoggingMiddleware(BaseMiddleware):
     """Log request/response details without changing behavior."""
 
@@ -45,6 +51,13 @@ class LoggingMiddleware(BaseMiddleware):
         return response
 
 
+# Register ``ConciseReplyMiddleware`` by name so it shows up in the Dev UI's
+# Model Runner where you can pick it from a dropdown. In-process use does not
+# require registration — see ``logging_demo`` below.
+@ai.middleware(
+    name='concise_reply_mw',
+    description='Adds a short system instruction before the model call.',
+)
 class ConciseReplyMiddleware(BaseMiddleware):
     """Prepend a short system instruction before the model call.
 
@@ -59,21 +72,6 @@ class ConciseReplyMiddleware(BaseMiddleware):
         params.request = params.request.model_copy()
         params.request.messages = [system_message, *params.request.messages]
         return await next_fn(params)
-
-
-ai = Genkit(
-    plugins=[GoogleAI()],
-    model='googleai/gemini-2.5-flash',
-)
-
-# Register ``ConciseReplyMiddleware`` by name so it shows up in the Dev UI's
-# Model Runner where you can pick it from a dropdown. In-process use does not
-# require registration — see ``logging_demo`` below.
-ai.define_middleware(
-    ConciseReplyMiddleware,
-    name='concise_reply_mw',
-    description='Adds a short system instruction before the model call.',
-)
 
 
 @ai.flow()
