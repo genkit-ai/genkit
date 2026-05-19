@@ -273,8 +273,13 @@ export function toToolDefinition(
     })!,
   };
 
-  if (originalName !== name) {
-    out.metadata = { originalName };
+  const metadata = {
+    ...(tool.__action.key ? { key: tool.__action.key } : {}),
+    ...(originalName !== name ? { originalName } : {}),
+  };
+
+  if (Object.keys(metadata).length > 0) {
+    out.metadata = metadata;
   }
 
   return out;

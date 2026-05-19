@@ -1508,6 +1508,9 @@ describe('asTool', () => {
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
           },
+          metadata: {
+            key: '/prompt/toolPrompt',
+          },
         },
       ],
     });
@@ -1596,6 +1599,9 @@ describe('asTool', () => {
           },
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
+          },
+          metadata: {
+            key: '/prompt/agentA',
           },
         },
       ],
@@ -1716,6 +1722,9 @@ describe('asTool', () => {
           name: 'toolPrompt',
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
+          },
+          metadata: {
+            key: '/prompt/toolPrompt',
           },
         },
       ],

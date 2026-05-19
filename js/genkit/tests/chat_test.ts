@@ -271,6 +271,9 @@ describe('preamble', () => {
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
           },
+          metadata: {
+            key: '/prompt/agentB',
+          },
         },
       ],
       toolChoice: 'required',
@@ -359,6 +362,9 @@ describe('preamble', () => {
           name: 'agentA',
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
+          },
+          metadata: {
+            key: '/prompt/agentA',
           },
         },
       ],
@@ -480,6 +486,9 @@ describe('preamble', () => {
           name: 'agentB',
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
+          },
+          metadata: {
+            key: '/prompt/agentB',
           },
         },
       ],
