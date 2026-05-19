@@ -31,10 +31,9 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._tracing import SpanMetadata, run_in_new_span
-from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams, middleware
+from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams
 
 
-@middleware(name='tool_approval', description='Requires approval before executing tools')
 class ToolApproval(BaseMiddleware):
     """Tool approval middleware that interrupts execution for non-allowed tools.
 

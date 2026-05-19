@@ -31,7 +31,7 @@ from pydantic import Field
 from genkit import GenkitError
 from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, ModelHookParams, middleware
+from genkit.middleware import BaseMiddleware, ModelHookParams
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -44,7 +44,6 @@ _DEFAULT_FALLBACK_STATUSES: list[str] = [
 ]
 
 
-@middleware(name='fallback', description='Falls back to alternative models on failure')
 class Fallback(BaseMiddleware):
     """Fallback middleware to try alternative models on failure.
 
