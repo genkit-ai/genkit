@@ -55,11 +55,6 @@ from genkit._core._reflection_v2 import (
 )
 from genkit._core._registry import Registry
 
-# Module-level Genkit so `@ai.middleware(...)` can stamp the test classes
-# below. The tests build their own `Registry()` per case and ignore
-# `ai.registry`; this instance only exists for the decorator hook.
-ai = Genkit()
-
 
 class FakeReflectionManager:
     """Minimal WebSocket server that accepts one runtime client (CLI stand-in)."""
@@ -268,17 +263,13 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
     ``MiddlewareDesc`` wire shape.
     """
 
+    ai = Genkit()
+
+    @ai.middleware(name='concise_reply_mw')
     class _NoOpMiddleware(BaseMiddleware):
         pass
 
-    registry = Registry()
-    registry.register_value(
-        'middleware',
-        'concise_reply_mw',
-        MiddlewareDesc(cls=_NoOpMiddleware, name='concise_reply_mw'),
-    )
-
-    client, task = await _run_client_lifecycle(registry, fake_manager)
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:
         await ack_register(fake_manager)
         await fake_manager.write_rpc({
@@ -314,16 +305,15 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
     middleware.
     """
 
+    ai = Genkit()
+
     @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
     class _Fallback(BaseMiddleware):
         models: list[str] = Field(default_factory=list)
         statuses: list[str] = Field(default_factory=list)
         isolate_config: bool = False
 
-    registry = Registry()
-    registry.register_value('middleware', 'fallback', MiddlewareDesc(cls=_Fallback, name='fallback'))
-
-    client, task = await _run_client_lifecycle(registry, fake_manager)
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:
         await ack_register(fake_manager)
         await fake_manager.write_rpc({
@@ -359,14 +349,13 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
     The Dev UI renders an empty config form, signalling registered.
     """
 
+    ai = Genkit()
+
     @ai.middleware(name='no_op')
     class _NoOp(BaseMiddleware):
         pass
 
-    registry = Registry()
-    registry.register_value('middleware', 'no_op', MiddlewareDesc(cls=_NoOp, name='no_op'))
-
-    client, task = await _run_client_lifecycle(registry, fake_manager)
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:
         await ack_register(fake_manager)
         await fake_manager.write_rpc({

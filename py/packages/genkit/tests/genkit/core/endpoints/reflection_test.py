@@ -53,11 +53,6 @@ from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata
 
-# Module-level Genkit so `@ai.middleware(...)` can stamp the test classes
-# below. The tests build their own `Registry()` per case and ignore
-# `ai.registry`; this instance only exists for the decorator hook.
-ai = Genkit()
-
 
 @pytest.fixture
 def mock_registry() -> MagicMock:
@@ -339,16 +334,15 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
     The schema is derived from the middleware class's pydantic fields by ``MiddlewareDesc(cls=...)``.
     """
 
+    ai = Genkit()
+
     @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
     class _Fallback(BaseMiddleware):
         models: list[str] = Field(default_factory=list)
         statuses: list[str] = Field(default_factory=list)
         isolate_config: bool = False
 
-    registry = Registry()
-    registry.register_value('middleware', 'fallback', MiddlewareDesc(cls=_Fallback, name='fallback'))
-
-    client = await _registry_asgi_client(registry)
+    client = await _registry_asgi_client(ai.registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -372,14 +366,13 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     The Dev UI renders an empty config form, signalling registered.
     """
 
+    ai = Genkit()
+
     @ai.middleware(name='no_op')
     class _NoOp(BaseMiddleware):
         pass
 
-    registry = Registry()
-    registry.register_value('middleware', 'no_op', MiddlewareDesc(cls=_NoOp, name='no_op'))
-
-    client = await _registry_asgi_client(registry)
+    client = await _registry_asgi_client(ai.registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
