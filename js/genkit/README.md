@@ -25,26 +25,8 @@ import { googleAI } from '@genkit-ai/google-genai';
 const ai = genkit({ plugins: [googleAI()] });
 
 const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: 'Why is Genkit awesome?'
-});
-```
-
-Genkit also provides middleware to add common functionality to your AI requests. For example, you can use the `retry` middleware to automatically retry failed requests:
-
-```ts
-import { retry } from 'genkit/model/middleware';
-
-const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
-    prompt: 'Why is Genkit awesome?',
-    use: [
-      retry({
-        maxRetries: 3,
-        initialDelayMs: 1000,
-        backoffFactor: 2,
-      }),
-    ],
 });
 ```
 
@@ -57,7 +39,7 @@ import { genkit, z } from 'genkit';
 // Initialize Genkit with the Google AI plugin
 const ai = genkit({
   plugins: [googleAI()],
-  model: googleAI.model('gemini-2.5-flash', {
+  model: googleAI.model('gemini-flash-latest', {
     temperature: 0.8
   }),
 });
@@ -144,6 +126,38 @@ const { stream } = streamFlow({
 for await (const chunk of stream) {
   console.log(chunk);
 }
+```
+
+## Middleware
+
+The [`@genkit-ai/middleware`](https://www.npmjs.com/package/@genkit-ai/middleware) package provides ready-made middleware to add common functionality to your AI requests, including:
+
+- **`retry`** — Automatically retry failed requests with exponential backoff.
+- **`fallback`** — Fall back to alternative models when a model returns specific error statuses.
+- **`toolApproval`** — Restrict tool execution to an approved list, interrupting unapproved calls for review.
+- **`filesystem`** — Give the model sandboxed read/write access to a directory on the filesystem.
+- **`skills`** — Scan for skill definitions and inject them as available tools.
+
+```posix-terminal
+npm install @genkit-ai/middleware
+```
+
+For example, you can use the `retry` middleware to automatically retry failed requests:
+
+```ts
+import { retry } from '@genkit-ai/middleware';
+
+const { text } = await ai.generate({
+    model: googleAI.model('gemini-flash-latest'),
+    prompt: 'Why is Genkit awesome?',
+    use: [
+      retry({
+        maxRetries: 3,
+        initialDelayMs: 1000,
+        backoffFactor: 2,
+      }),
+    ],
+});
 ```
 
 For more details see: https://genkit.dev/docs/deploy-node
