@@ -432,6 +432,38 @@ func TestToOpenAIRequest(t *testing.T) {
 			},
 			expectedErr: "unsupported tool message part",
 		},
+		{
+			name: "tool role marshal error includes call id",
+			req: &ai.ModelRequest{
+				Messages: []*ai.Message{
+					{
+						Role: ai.RoleTool,
+						Content: []*ai.Part{
+							ai.NewToolResponsePart(&ai.ToolResponse{
+								Ref:    "call_bad",
+								Output: func() {},
+							}),
+						},
+					},
+				},
+			},
+			expectedErr: "failed to marshal tool response output for call_bad",
+		},
+		{
+			name: "model history rejects custom part",
+			req: &ai.ModelRequest{
+				Messages: []*ai.Message{
+					{
+						Role: ai.RoleModel,
+						Content: []*ai.Part{
+							ai.NewTextPart("before"),
+							ai.NewCustomPart(map[string]any{"type": "custom"}),
+						},
+					},
+				},
+			},
+			expectedErr: "unsupported part type in OpenAI model history",
+		},
 	}
 
 	for _, tt := range tests {

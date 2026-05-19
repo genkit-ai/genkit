@@ -449,7 +449,7 @@ func toOpenAIInput(messages []*ai.Message) (responses.ResponseInputParam, error)
 				}
 				output, err := json.Marshal(part.ToolResponse.Output)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to marshal tool response output for %s: %w", part.ToolResponse.Ref, err)
 				}
 				items = append(items, responses.ResponseInputItemUnionParam{
 					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
@@ -584,6 +584,8 @@ func toOpenAIModelHistoryItems(parts []*ai.Part) ([]responses.ResponseInputItemU
 			items = append(items, responses.ResponseInputItemUnionParam{
 				OfReasoning: reasoning,
 			})
+		default:
+			return nil, fmt.Errorf("unsupported part type in OpenAI model history: %+v", part)
 		}
 	}
 
