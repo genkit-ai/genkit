@@ -6,7 +6,6 @@
     "plugins/firebase",
     "plugins/google-cloud",
     "plugins/next",
-    "plugins/checks",
     "plugins/dev-local-vectorstore",
     "plugins/evaluators",
     "plugins/express",
@@ -26,7 +25,7 @@
   "sort": ["kind", "instance-first", "alphabetical"],
   "sortEntryPoints": true,
   "readme": "index.typedoc.md",
-  "plugin": ["typedoc-plugin-zod", "typedoc-github-theme", "./typedoc-ga.mjs"],
+  "plugin": ["typedoc-plugin-zod", "typedoc-rhineai-theme", "./typedoc-ga.mjs"],
   "navigation": {
     "includeCategories": false,
     "includeGroups": false,
