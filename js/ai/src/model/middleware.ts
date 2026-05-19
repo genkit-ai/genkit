@@ -242,6 +242,7 @@ export function augmentWithContext(
 
 /**
  * Options for the `retry` middleware.
+ * @deprecated Use `retry` from the `@genkit-ai/middleware` package instead.
  */
 export interface RetryOptions {
   /**
@@ -320,6 +321,8 @@ const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
 /**
  * Creates a middleware that retries requests on specific error statuses.
  *
+ * @deprecated Use `retry` from the `@genkit-ai/middleware` package instead.
+ *
  * ```ts
  * const { text } = await ai.generate({
  *   model: googleAI.model('gemini-pro-latest'),
@@ -384,6 +387,7 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
 
 /**
  * Options for the `fallback` middleware.
+ * @deprecated Use `fallback` from the `@genkit-ai/middleware` package instead.
  */
 export interface FallbackOptions {
   /**
@@ -403,6 +407,8 @@ export interface FallbackOptions {
 
 /**
  * Creates a middleware that falls back to a different model on specific error statuses.
+ *
+ * @deprecated Use `fallback` from the `@genkit-ai/middleware` package instead.
  *
  * ```ts
  * const { text } = await ai.generate({
