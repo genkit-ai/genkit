@@ -426,6 +426,7 @@ const GENERIC_IMAGE_MODEL = commonRef(
 );
 
 export const KNOWN_GEMINI_MODELS = {
+  'gemini-3.5-flash': commonRef('gemini-3.5-flash'),
   'gemini-3.1-flash-lite-preview': commonRef('gemini-3.1-flash-lite-preview'),
   'gemini-3.1-pro-preview': commonRef('gemini-3.1-pro-preview'),
   'gemini-3-flash-preview': commonRef('gemini-3-flash-preview'),
