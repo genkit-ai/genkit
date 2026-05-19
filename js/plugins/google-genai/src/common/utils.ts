@@ -635,6 +635,9 @@ export function isKnownKey<T extends object>(
  * @returns The delay in milliseconds, or undefined if the value cannot be parsed.
  */
 export function parseRetryAfterMs(value: string): number | undefined {
+  if (!value || !value.trim()) {
+    return undefined;
+  }
   // Try as delay-seconds (e.g., "60")
   const seconds = Number(value);
   if (!isNaN(seconds) && seconds >= 0) {

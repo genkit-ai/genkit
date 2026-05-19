@@ -519,9 +519,8 @@ async function makeRequest(
       const retryAfterMs = retryAfterHeader
         ? parseRetryAfterMs(retryAfterHeader)
         : undefined;
-      const responseMetadata: ErrorResponseMetadata | undefined = retryAfterMs
-        ? { retryAfterMs }
-        : undefined;
+      const responseMetadata: ErrorResponseMetadata | undefined =
+        retryAfterMs !== undefined ? { retryAfterMs } : undefined;
 
       throw new GenkitError({
         status,

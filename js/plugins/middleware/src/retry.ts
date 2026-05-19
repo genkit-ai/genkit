@@ -165,13 +165,14 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
               const error = e as Error;
               if (i < maxRetries) {
                 let shouldRetry = false;
-                if (error instanceof GenkitError) {
+                if (NEVER_RETRY_ERROR_NAMES.includes(error?.name)) {
+                  shouldRetry = false;
+                } else if (error instanceof GenkitError) {
                   if ((statuses as string[]).includes(error.status)) {
                     shouldRetry = true;
                   }
                 } else {
-                  // Don't retry AbortError or ToolInterruptError
-                  shouldRetry = !NEVER_RETRY_ERROR_NAMES.includes(error.name);
+                  shouldRetry = true;
                 }
 
                 if (shouldRetry) {

@@ -48,6 +48,7 @@ import { checkModelName, isKnownKey } from './utils.js';
  * Supports delay-seconds and HTTP-date formats (RFC 7231 §7.1.3).
  */
 function parseRetryAfterMs(value: string): number | undefined {
+  if (!value || !value.trim()) return undefined;
   const seconds = Number(value);
   if (!isNaN(seconds) && seconds >= 0) return seconds * 1000;
   const date = new Date(value);
@@ -202,9 +203,8 @@ export function claudeRunner<TConfigSchema extends z.ZodTypeAny>(
         const retryAfterMs = retryAfterHeader
           ? parseRetryAfterMs(retryAfterHeader)
           : undefined;
-        const responseMetadata: ErrorResponseMetadata | undefined = retryAfterMs
-          ? { retryAfterMs }
-          : undefined;
+        const responseMetadata: ErrorResponseMetadata | undefined =
+          retryAfterMs !== undefined ? { retryAfterMs } : undefined;
         throw new GenkitError({
           status,
           message: e.message,
