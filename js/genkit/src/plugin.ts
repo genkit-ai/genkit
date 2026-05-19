@@ -34,6 +34,8 @@ import { type ModelAction } from '@genkit-ai/ai/model';
 import {
   GenkitError,
   type ActionMetadata,
+  type DevUiExtensionType,
+  type DevUiHook,
   type ResolvableAction,
 } from '@genkit-ai/core';
 import type { Genkit } from './genkit.js';
@@ -48,7 +50,13 @@ export {
 } from '@genkit-ai/ai/model';
 export { reranker } from '@genkit-ai/ai/reranker';
 export { indexer, retriever } from '@genkit-ai/ai/retriever';
-export { type GenerateMiddleware, type GenkitPluginV2, type ResolvableAction };
+export {
+  type DevUiExtensionType,
+  type DevUiHook,
+  type GenerateMiddleware,
+  type GenkitPluginV2,
+  type ResolvableAction,
+};
 
 /** A v1 plugin provider returned by a {@link GenkitPlugin} factory function. */
 export interface PluginProvider {
@@ -56,6 +64,7 @@ export interface PluginProvider {
   initializer: () => void | Promise<void>;
   resolver?: (action: ActionType, target: string) => Promise<void>;
   listActions?: () => Promise<ActionMetadata[]>;
+  listDevUiHooks?: () => Promise<DevUiHook[]>;
 }
 
 /** A v1 Genkit plugin factory function. Returns a {@link PluginProvider} when called with a Genkit instance. */
@@ -78,7 +87,8 @@ export function genkitPlugin<T extends PluginInit>(
   pluginName: string,
   initFn: T,
   resolveFn?: PluginActionResolver,
-  listActionsFn?: () => Promise<ActionMetadata[]>
+  listActionsFn?: () => Promise<ActionMetadata[]>,
+  listDevUiHooksFn?: () => Promise<DevUiHook[]>
 ): GenkitPlugin {
   return (genkit: Genkit) => ({
     name: pluginName,
@@ -93,6 +103,12 @@ export function genkitPlugin<T extends PluginInit>(
     listActions: async (): Promise<ActionMetadata[]> => {
       if (listActionsFn) {
         return await listActionsFn();
+      }
+      return [];
+    },
+    listDevUiHooks: async (): Promise<DevUiHook[]> => {
+      if (listDevUiHooksFn) {
+        return await listDevUiHooksFn();
       }
       return [];
     },
@@ -133,6 +149,13 @@ export class GenkitPluginV2Instance implements Required<GenkitPluginV2> {
       return [];
     }
     return this.plugin.middleware();
+  }
+
+  devUiHooks(): DevUiHook[] | Promise<DevUiHook[]> {
+    if (!this.plugin.devUiHooks) {
+      return [];
+    }
+    return this.plugin.devUiHooks();
   }
 
   resolve(

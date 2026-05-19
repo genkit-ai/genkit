@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@genkit-ai/dev-local-vectorstore": "workspace:*",
+    "@genkit-ai/dev-ui-extensions": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
     "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/google-cloud": "workspace:*",

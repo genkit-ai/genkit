@@ -138,6 +138,10 @@ export {
   StatusCodes,
   StatusSchema,
   UserFacingError,
+  X_GENKIT_ALLOW_CUSTOM,
+  X_GENKIT_DATA_SOURCE,
+  X_GENKIT_UI,
+  action,
   annotateSchema,
   defineJsonSchema,
   defineSchema,
@@ -149,6 +153,7 @@ export {
   resetGenkitRuntimeConfig,
   runWithStreamingCallback,
   setGenkitRuntimeConfig,
+  toJsonSchema,
   z,
   type Action,
   type ActionContext,
@@ -172,6 +177,14 @@ export {
   type StreamingResponse,
   type TelemetryConfig,
 } from '@genkit-ai/core';
+export {
+  genkitPlugin,
+  genkitPluginV2,
+  type DevUiHook,
+  type GenkitPlugin,
+  type GenkitPluginV2,
+  type PluginInit,
+} from './plugin.js';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 
 initNodeFeatures();

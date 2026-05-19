@@ -85,6 +85,9 @@ export {
 export * from './plugin.js';
 export * from './reflection.js';
 export {
+  X_GENKIT_ALLOW_CUSTOM,
+  X_GENKIT_DATA_SOURCE,
+  X_GENKIT_UI,
   annotateSchema,
   defineJsonSchema,
   defineSchema,

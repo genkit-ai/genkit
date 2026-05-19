@@ -24,6 +24,7 @@ import { StatusCodes, type Status } from './action.js';
 import { getGenkitRuntimeConfig } from './config.js';
 import { GENKIT_REFLECTION_API_SPEC_VERSION, GENKIT_VERSION } from './index.js';
 import { logger } from './logging.js';
+import { AssetServer } from './asset-server.js';
 import type { Registry } from './registry.js';
 import { toJsonSchema } from './schema.js';
 import { flushTracing, setTelemetryServerUrl } from './tracing.js';
@@ -93,6 +94,8 @@ export class ReflectionServer {
     }
   >();
   private v2Server: any | null = null;
+  private projectRoot: string | null = null;
+  private assetServer: AssetServer | null = null;
 
   constructor(registry: Registry, options?: ReflectionServerOptions) {
     this.registry = registry;
@@ -106,6 +109,13 @@ export class ReflectionServer {
 
   get runtimeId() {
     return `${process.pid}${this.port !== null ? `-${this.port}` : ''}`;
+  }
+
+  /**
+   * Translates a module URL into an accessible URL if it's a local file path.
+   */
+  private getAssetUrl(moduleUrl: string): string {
+    return this.assetServer?.getAssetUrl(moduleUrl) || moduleUrl;
   }
 
   /**
@@ -136,12 +146,18 @@ export class ReflectionServer {
       );
       return;
     }
+
+    this.projectRoot = await findProjectRoot().catch(() => process.cwd());
+    this.assetServer = new AssetServer(this.projectRoot);
+    await this.assetServer.start();
+
     if (process.env.GENKIT_REFLECTION_V2_SERVER) {
       const { ReflectionServerV2 } = await import('./reflection-v2.js');
       this.v2Server = new ReflectionServerV2(this.registry, {
         configuredEnvs: this.options.configuredEnvs,
         name: this.options.name,
         url: process.env.GENKIT_REFLECTION_V2_SERVER,
+        assetServerUrl: this.assetServer.url!,
       });
       await this.v2Server.start();
       ReflectionServer.RUNNING_SERVERS.push(this);
@@ -386,6 +402,25 @@ export class ReflectionServer {
       }
     });
 
+    server.get('/api/dev-ui/hooks', async (_, response, next) => {
+      try {
+        const hooks = await this.registry.listDevUiHooks();
+        const mappedHooks = hooks.map((hook) => {
+          const { action, ...rest } = hook;
+          return {
+            ...rest,
+            moduleUrl: hook.moduleUrl
+              ? this.getAssetUrl(hook.moduleUrl)
+              : undefined,
+          };
+        });
+        response.json({ hooks: mappedHooks });
+      } catch (err) {
+        const { message, stack } = err as Error;
+        next({ message, stack });
+      }
+    });
+
     server.get('/api/envs', async (_, response) => {
       response.json(this.options.configuredEnvs);
     });
@@ -435,6 +470,7 @@ export class ReflectionServer {
       res.status(200).end(JSON.stringify({ error: errorResponse }));
     });
 
+    this.projectRoot = await findProjectRoot().catch(() => process.cwd());
     this.port = await this.findPort();
     this.server = server.listen(this.port, async () => {
       logger.debug(
@@ -460,6 +496,9 @@ export class ReflectionServer {
    * Stops the server and removes it from the list of running servers to clean up on exit.
    */
   async stop(): Promise<void> {
+    if (this.assetServer) {
+      await this.assetServer.stop();
+    }
     if (this.v2Server) {
       await this.v2Server.stop();
       const index = ReflectionServer.RUNNING_SERVERS.indexOf(this);
@@ -515,6 +554,7 @@ export class ReflectionServer {
           pid: process.pid,
           name: this.options.name,
           reflectionServerUrl: `http://localhost:${this.port}`,
+          assetServerUrl: this.assetServer?.url,
           timestamp,
           genkitVersion: `nodejs/${GENKIT_VERSION}`,
           reflectionApiSpecVersion: GENKIT_REFLECTION_API_SPEC_VERSION,
@@ -561,8 +601,10 @@ export class ReflectionServer {
 
 /**
  * Finds the project root by looking for a `package.json` file.
+ *
+ * @hidden
  */
-async function findProjectRoot(): Promise<string> {
+export async function findProjectRoot(): Promise<string> {
   let currentDir = process.cwd();
   while (currentDir !== path.parse(currentDir).root) {
     const packageJsonPath = path.join(currentDir, 'package.json');

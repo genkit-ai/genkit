@@ -118,6 +118,51 @@ describe('validate()', () => {
   }
 });
 
+describe('annotateSchema()', () => {
+  it('should merge annotations into the JSON schema', () => {
+    const { X_GENKIT_DATA_SOURCE, annotateSchema, toJsonSchema, z } =
+      require('../src/schema.js');
+    const schema = annotateSchema(z.string(), {
+      [X_GENKIT_DATA_SOURCE]: 'my-action',
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json['x-genkit-data-source'], 'my-action');
+  });
+
+  it('should merge annotations for nested fields', () => {
+    const { X_GENKIT_DATA_SOURCE, annotateSchema, toJsonSchema, z } =
+      require('../src/schema.js');
+    const schema = z.object({
+      field: annotateSchema(z.string(), {
+        [X_GENKIT_DATA_SOURCE]: 'nested-action',
+      }),
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(
+      json.properties.field['x-genkit-data-source'],
+      'nested-action'
+    );
+  });
+
+  it('should merge annotations for array items', () => {
+    const { X_GENKIT_DATA_SOURCE, annotateSchema, toJsonSchema, z } =
+      require('../src/schema.js');
+    const schema = z.array(
+      annotateSchema(z.string(), {
+        [X_GENKIT_DATA_SOURCE]: 'array-action',
+      })
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(
+      json.items['x-genkit-data-source'],
+      'array-action'
+    );
+  });
+});
+
 describe('parse()', () => {
   it('should throw a ValidationError for invalid schema', () => {
     assert.throws(() => {

@@ -112,6 +112,19 @@ export const ListActionsRequestSchema = z
 
 export type ListActionsRequest = z.infer<typeof ListActionsRequestSchema>;
 
+export const ListDevUiHooksRequestSchema = z
+  .object({
+    runtimeId: z
+      .string()
+      .optional()
+      .describe(
+        'ID of the Genkit runtime to list hooks from. Typically $pid-$port.'
+      ),
+  })
+  .optional();
+
+export type ListDevUiHooksRequest = z.infer<typeof ListDevUiHooksRequestSchema>;
+
 export const ListValuesRequestSchema = z.object({
   runtimeId: z
     .string()

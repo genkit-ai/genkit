@@ -15,6 +15,7 @@
  */
 
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
+import { devUiExtensions } from '@genkit-ai/dev-ui-extensions';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
@@ -166,5 +167,6 @@ export const ai = genkit({
     retry.plugin(),
     skills.plugin(),
     toolApproval.plugin(),
+    devUiExtensions,
   ],
 });

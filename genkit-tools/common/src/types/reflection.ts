@@ -17,6 +17,7 @@
 import { z } from 'zod';
 import { ActionMetadataSchema } from './action';
 import { RunActionRequestSchema } from './apis';
+import { DevUiHookSchema } from './plugin';
 
 export { ActionMetadataSchema };
 
@@ -30,6 +31,7 @@ export const ReflectionRegisterParamsSchema = z.object({
   genkitVersion: z.string().optional(),
   reflectionApiSpecVersion: z.number().optional(),
   envs: z.array(z.string()).optional(),
+  assetServerUrl: z.string().optional(),
 });
 
 export type ReflectionRegisterParams = z.infer<
@@ -153,6 +155,13 @@ export const ReflectionListValuesResponseSchema = z.object({
 export type ReflectionListValuesResponse = z.infer<
   typeof ReflectionListValuesResponseSchema
 >;
+
+/**
+ * ReflectionListDevUiHooksResponseSchema is the result for the 'listDevUiHooks' method.
+ */
+export const ReflectionListDevUiHooksResponseSchema = z.object({
+  hooks: z.array(DevUiHookSchema),
+});
 
 /**
  * ReflectionCancelActionResponseSchema is the result for the 'cancelAction' method.

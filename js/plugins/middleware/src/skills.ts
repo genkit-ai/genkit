@@ -15,19 +15,76 @@
  */
 
 import * as fs from 'fs';
-import { generateMiddleware, z, type GenerateMiddleware } from 'genkit';
+import {
+  X_GENKIT_ALLOW_CUSTOM,
+  X_GENKIT_DATA_SOURCE,
+  annotateSchema,
+  generateMiddleware,
+  z,
+  type GenerateMiddleware,
+} from 'genkit';
 import { tool } from 'genkit/beta';
 import * as path from 'path';
+
+/**
+ * Action that crawls the project directory for any directory containing a SKILL.md file.
+ * This is used as a data source for the Dev UI.
+ */
+export const listSkillsAction = {
+  name: 'folders/list',
+  actionType: 'custom' as const,
+  inputSchema: z.void(),
+  outputSchema: z.array(
+    z.object({
+      label: z.string(),
+      value: z.string(),
+    })
+  ),
+  handler: async () => {
+    const findSkillDirs = async (dir: string, results: string[] = []) => {
+      try {
+        const files = await fs.promises.readdir(dir);
+        for (const file of files) {
+          if (file === 'node_modules' || file === '.git' || file === 'lib')
+            continue;
+          const fullPath = path.join(dir, file);
+          const stat = await fs.promises.stat(fullPath).catch(() => null);
+          if (stat?.isDirectory()) {
+            const hasSkillMd = await fs.promises
+              .access(path.join(fullPath, 'SKILL.md'))
+              .then(() => true)
+              .catch(() => false);
+            if (hasSkillMd) {
+              results.push(path.relative(process.cwd(), fullPath));
+            }
+            await findSkillDirs(fullPath, results);
+          }
+        }
+      } catch (e) {
+        // Ignore errors for unreadable directories
+      }
+      return results;
+    };
+    const dirs = await findSkillDirs('.');
+    return dirs.map((d) => ({ label: d, value: d }));
+  },
+};
 
 export const SkillsOptionsSchema = z.object({
   /**
    * Paths to directories containing skills.
    * @default ['skills']
    */
-  skillPaths: z
-    .array(z.string())
-    .optional()
-    .describe('Paths to directories containing skills.'),
+  skillPaths: annotateSchema(
+    z
+      .array(z.string())
+      .optional()
+      .describe('Paths to directories containing skills.'),
+    {
+      [X_GENKIT_DATA_SOURCE]: '/custom/middleware:skills/folders/list',
+      [X_GENKIT_ALLOW_CUSTOM]: true,
+    }
+  ),
 });
 
 export type SkillsOptions = z.infer<typeof SkillsOptionsSchema>;
@@ -224,3 +281,22 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
       };
     }
   );
+
+// Add the discovery action to the plugin's init hook
+const originalPlugin = skills.plugin;
+skills.plugin = (options) => {
+  const p = originalPlugin(options);
+  const originalInit = p.init;
+  p.init = async () => {
+    const { action } = require('genkit');
+    const supplementalActions = [
+      action(listSkillsAction as any, listSkillsAction.handler),
+    ];
+    if (originalInit) {
+      const originalActions = await originalInit();
+      return [...(originalActions || []), ...supplementalActions];
+    }
+    return supplementalActions;
+  };
+  return p;
+};

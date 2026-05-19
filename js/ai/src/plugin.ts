@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { ActionMetadata, ResolvableAction } from '@genkit-ai/core';
+import type { ActionMetadata, ResolvableAction, DevUiHook } from '@genkit-ai/core';
 import type { ActionType } from '@genkit-ai/core/registry';
 import type { GenerateMiddleware } from './generate/middleware.js';
 import type { ModelAction } from './model.js';
@@ -38,4 +38,7 @@ export interface GenkitPluginV2 {
 
   // Returns a list of generate middleware to be used in `generate({use: [...])`.
   middleware?: () => GenerateMiddleware<any, any>[];
+
+  // Returns a list of UI hooks to be used in the Dev UI.
+  devUiHooks?: () => DevUiHook[] | Promise<DevUiHook[]>;
 }

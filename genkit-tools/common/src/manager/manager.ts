@@ -86,6 +86,9 @@ export abstract class BaseRuntimeManager {
   abstract listActions(
     input?: apis.ListActionsRequest
   ): Promise<Record<string, Action>>;
+  abstract listDevUiHooks(input?: {
+    runtimeId?: string;
+  }): Promise<{ hooks: any[] }>;
   abstract runAction(
     input: apis.RunActionRequest,
     streamingCallback?: StreamingCallback<any>,
@@ -270,6 +273,31 @@ export abstract class BaseRuntimeManager {
   }
 
   /**
+   * Proxies an asset request to the runtime.
+   */
+  async proxyAsset(
+    assetId: string,
+    runtimeId?: string
+  ): Promise<{ stream: NodeJS.ReadableStream; contentType: string }> {
+    const runtime = runtimeId
+      ? this.getRuntimeById(runtimeId)
+      : this.getMostRecentRuntime();
+    if (!runtime || !runtime.assetServerUrl) {
+      throw new Error('Asset not found');
+    }
+    const response = await axios.get(
+      `${runtime.assetServerUrl}/api/ui/assets/${assetId}`,
+      {
+        responseType: 'stream',
+      }
+    );
+    return {
+      stream: response.data,
+      contentType: response.headers['content-type'],
+    };
+  }
+
+  /**
    * Handles an HTTP error.
    */
   protected httpErrorHandler(error: AxiosError, message?: string): never {
@@ -450,6 +478,24 @@ export class RuntimeManager extends BaseRuntimeManager {
       .get(`${runtime.reflectionServerUrl}/api/actions`)
       .catch((err) => this.httpErrorHandler(err, 'Error listing actions.'));
     return response.data as Record<string, Action>;
+  }
+
+  /**
+   * Retrieves all UI hooks.
+   */
+  async listDevUiHooks(input?: {
+    runtimeId?: string;
+  }): Promise<{ hooks: any[] }> {
+    const runtime = input?.runtimeId
+      ? this.getRuntimeById(input.runtimeId)
+      : this.getMostRecentRuntime();
+    if (!runtime) {
+      return { hooks: [] };
+    }
+    const response = await axios
+      .get(`${runtime.reflectionServerUrl}/api/dev-ui/hooks`)
+      .catch((err) => this.httpErrorHandler(err, 'Error listing UI hooks.'));
+    return response.data as { hooks: any[] };
   }
 
   /**
@@ -990,7 +1036,7 @@ function isValidRuntimeInfo(data: any): data is RuntimeInfo {
   let timestamp = '';
   // runtime filename might come with underscores due OS filename restrictions
   // revert the underscores so the timestamp gets parsed correctly
-  if (typeof data.timestamp === 'string') {
+  if (data && typeof data.timestamp === 'string') {
     timestamp = data.timestamp.replaceAll('_', ':');
   }
 
@@ -1002,6 +1048,8 @@ function isValidRuntimeInfo(data: any): data is RuntimeInfo {
     typeof data.reflectionServerUrl === 'string' &&
     typeof data.timestamp === 'string' &&
     !isNaN(Date.parse(timestamp)) &&
-    (data.name === undefined || typeof data.name === 'string')
+    (data.name === undefined || typeof data.name === 'string') &&
+    (data.assetServerUrl === undefined ||
+      typeof data.assetServerUrl === 'string')
   );
 }

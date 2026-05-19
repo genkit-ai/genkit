@@ -280,6 +280,16 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
     }
   );
 
+  app.get('/api/ui/assets/:id', async (req, res) => {
+    try {
+      const { stream, contentType } = await manager.proxyAsset(req.params.id);
+      res.setHeader('Content-Type', contentType);
+      stream.pipe(res);
+    } catch (err) {
+      res.status(404).send('Asset not found');
+    }
+  });
+
   app.get('/api/__health', (_, res) => {
     res.status(200).send('');
   });

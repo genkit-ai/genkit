@@ -29,6 +29,22 @@ addFormats(ajv);
 export { z }; // provide a consistent zod to use throughout genkit
 
 /**
+ * Metadata key for specifying a custom UI component for a schema field.
+ */
+export const X_GENKIT_UI = 'x-genkit-ui';
+
+/**
+ * Metadata key for specifying a data source action for a schema field.
+ */
+export const X_GENKIT_DATA_SOURCE = 'x-genkit-data-source';
+
+/**
+ * Metadata key used in tandem with X_GENKIT_DATA_SOURCE to indicate user input
+ * is also allowed for a schema field.
+ */
+export const X_GENKIT_ALLOW_CUSTOM = 'x-genkit-allow-custom';
+
+/**
  * JSON schema.
  */
 export type JSONSchema = JSONSchemaType<any> | any;

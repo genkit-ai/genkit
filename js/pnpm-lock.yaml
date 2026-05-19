@@ -485,6 +485,31 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  plugins/dev-ui-extensions:
+    dependencies:
+      genkit:
+        specifier: workspace:^
+        version: link:../../genkit
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.16
+        version: 20.19.37
+      npm-run-all:
+        specifier: ^4.1.5
+        version: 4.1.5
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.3
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(postcss@8.4.31)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   plugins/evaluators:
     dependencies:
       compute-cosine-similarity:
@@ -1248,6 +1273,9 @@ importers:
       '@genkit-ai/dev-local-vectorstore':
         specifier: workspace:*
         version: link:../../plugins/dev-local-vectorstore
+      '@genkit-ai/dev-ui-extensions':
+        specifier: workspace:*
+        version: link:../../plugins/dev-ui-extensions
       '@genkit-ai/evaluator':
         specifier: workspace:*
         version: link:../../plugins/evaluators

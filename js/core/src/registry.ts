@@ -17,19 +17,21 @@
 import { Dotprompt } from 'dotprompt';
 import type * as z from 'zod';
 import {
+  isAction,
   runOutsideActionRuntimeContext,
   type Action,
   type ActionMetadata,
 } from './action.js';
 import {
   BackgroundAction,
+  isBackgroundAction,
   lookupBackgroundAction,
 } from './background-action.js';
 import { ActionContext } from './context.js';
 import { isDynamicActionProvider } from './dynamic-action-provider.js';
 import { GenkitError } from './error.js';
 import { logger } from './logging.js';
-import type { PluginProvider } from './plugin.js';
+import type { PluginProvider, DevUiHook } from './plugin.js';
 import { toJsonSchema, type JSONSchema } from './schema.js';
 
 export type AsyncProvider<T> = () => Promise<T>;
@@ -153,6 +155,7 @@ export class Registry {
     | PromiseLike<Action<z.ZodTypeAny, z.ZodTypeAny>>
   > = {};
   private pluginsByName: Record<string, PluginProvider> = {};
+  private devUiHooks: DevUiHook[] = [];
   private schemasByName: Record<string, Schema> = {};
   private valueByTypeAndName: Record<string, Record<string, any>> = {};
   private allPluginsInitialized = false;
@@ -450,7 +453,49 @@ export class Registry {
         }
         return [];
       },
+      listDevUiHooks: async () => {
+        if (provider.listDevUiHooks) {
+          return await provider.listDevUiHooks();
+        }
+        return [];
+      },
     };
+  }
+
+  /**
+   * Registers a UI hook.
+   */
+  registerDevUiHook(hook: DevUiHook) {
+    this.devUiHooks.push(hook);
+  }
+
+  /**
+   * Lists all UI hooks.
+   */
+  async listDevUiHooks(): Promise<DevUiHook[]> {
+    let allHooks = [...this.devUiHooks];
+    await Promise.all(
+      Object.entries(this.pluginsByName).map(async ([pluginName, plugin]) => {
+        if (plugin.listDevUiHooks) {
+          try {
+            const hooks = await plugin.listDevUiHooks();
+            allHooks = allHooks.concat(
+              hooks.map((hook) => {
+                if (!hook.actionId && hook.action) {
+                  if (isAction(hook.action) || isBackgroundAction(hook.action)) {
+                    hook.actionId = (hook.action as any).__action.key;
+                  }
+                }
+                return hook;
+              })
+            );
+          } catch (e) {
+            logger.error(`Error listing UI hooks for ${pluginName}\n`, e);
+          }
+        }
+      })
+    );
+    return [...((await this.parent?.listDevUiHooks()) || []), ...allHooks];
   }
 
   /**
