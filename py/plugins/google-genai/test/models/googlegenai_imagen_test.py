@@ -25,6 +25,7 @@ from pytest_mock import MockerFixture
 
 from genkit import (
     ActionRunContext,
+    GenkitError,
     MediaPart,
     Message,
     ModelRequest,
@@ -194,5 +195,5 @@ def test_imagen_config_rejects_unsupported_options(mocker: MockerFixture) -> Non
     googleai_client_mock = mocker.AsyncMock()
     imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
 
-    with pytest.raises(ValueError, match='configuration dictionary is invalid'):
+    with pytest.raises(GenkitError, match='configuration dictionary is invalid'):
         imagen._get_config(request)

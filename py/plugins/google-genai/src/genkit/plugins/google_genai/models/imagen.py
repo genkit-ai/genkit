@@ -33,6 +33,7 @@ from google.genai import types as genai_types
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema
 
 from genkit import (
+    GenkitError,
     Media,
     MediaPart,
     Message,
@@ -281,7 +282,10 @@ class ImagenModel:
                 if isinstance(part.root, TextPart):
                     prompt.append(part.root.text)
                 else:
-                    raise ValueError('Non-text messages are not supported')
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message='Non-text messages are not supported for Imagen models.',
+                    )
         return ' '.join(prompt)
 
     async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
@@ -297,7 +301,10 @@ class ImagenModel:
         prompt = self._build_prompt(request)
         config = self._get_config(request)
         if request.tools:
-            raise ValueError('Tools are not supported for this model.')
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Tools are not supported for Imagen models.',
+            )
 
         with tracer.start_as_current_span('generate_images') as span:
             span.set_attribute(
@@ -335,8 +342,10 @@ class ImagenModel:
                 return None
             return ta.validate_python(request_config)
         except ValidationError as e:
-            raise ValueError(
-                'The configuration dictionary is invalid. Refer the documentation for available fields'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='The configuration dictionary is invalid. Refer to the documentation for available fields.',
+                cause=e,
             ) from e
 
     def _normalize_config(self, config: object) -> dict[str, object]:
