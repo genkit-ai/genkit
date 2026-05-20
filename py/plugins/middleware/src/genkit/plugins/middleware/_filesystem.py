@@ -23,6 +23,14 @@ Tracks file mtime and size to detect external modifications and to
 suppress redundant reads. Error messages are queued as user-role
 messages via the engine's ``enqueue_parts`` mechanism so the model can
 observe the failure and self-correct.
+
+The read/write tracking cache lives on the ``Filesystem`` instance, so
+its lifetime matches the instance lifetime — typically one "agent
+session" spanning multiple ``ai.generate()`` calls. Reads from an
+earlier call (including a call that was interrupted for tool approval
+and resumed later) carry over and satisfy the write guard on a later
+call. To isolate two concurrent agents, give each one its own
+``Filesystem(...)`` instance.
 """
 
 from __future__ import annotations
@@ -135,11 +143,16 @@ class Filesystem(BaseMiddleware):
     start of each ``generate()`` call) so the model can observe the
     failure and self-correct.
 
-    A per-call file-state cache (mtime + size) is allocated inside
-    ``tools()``, so each ``generate()`` call has its own independent
-    read/write tracking. Concurrent calls on the same ``Filesystem``
-    instance are fully isolated — write guards from one call cannot
-    block another.
+    The file-state cache (mtime + size + last-read range) lives on the
+    instance, so the read-before-write guard and external-modification
+    check survive across multiple ``ai.generate()`` calls on the same
+    instance — for example, a ``read_file`` in one call satisfies the
+    guard for a ``write_file`` that runs after a ``ToolApproval``
+    interrupt + resume. The natural scope is "one agent session": build
+    a fresh ``Filesystem(...)`` per agent and reuse it for the duration
+    of that agent's work. Sharing one instance across truly parallel
+    agents lets them see each other's read state, which defeats the
+    external-modification check — give each agent its own instance.
     """
 
     root_dir: str
@@ -151,6 +164,10 @@ class Filesystem(BaseMiddleware):
     # belongs to this middleware. Computed once after validation since
     # ``tool_name_prefix`` is immutable.
     _fs_tool_name_set: frozenset[str] = PrivateAttr(default_factory=frozenset)
+    # Session-scoped state. Lives for the lifetime of the instance so
+    # reads in one ``ai.generate()`` carry over to writes in the next.
+    _cache: OrderedDict[str, _FileState] = PrivateAttr(default_factory=OrderedDict)
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     @model_validator(mode='after')
     def _validate_root(self) -> Filesystem:
@@ -188,26 +205,15 @@ class Filesystem(BaseMiddleware):
             raise ValueError(f'Path {rel!r} escapes the root directory.')
         return candidate
 
-    @staticmethod
-    def _get_cache(
-        abs_path: str,
-        cache: OrderedDict[str, _FileState],
-        lock: threading.Lock,
-    ) -> _FileState | None:
-        with lock:
-            return cache.get(abs_path)
+    def _get_cache(self, abs_path: str) -> _FileState | None:
+        with self._lock:
+            return self._cache.get(abs_path)
 
-    @staticmethod
-    def _set_cache(
-        abs_path: str,
-        state: _FileState,
-        cache: OrderedDict[str, _FileState],
-        lock: threading.Lock,
-    ) -> None:
-        with lock:
-            cache[abs_path] = state
-            while len(cache) > _MAX_CACHE_ENTRIES:
-                cache.popitem(last=False)
+    def _set_cache(self, abs_path: str, state: _FileState) -> None:
+        with self._lock:
+            self._cache[abs_path] = state
+            while len(self._cache) > _MAX_CACHE_ENTRIES:
+                self._cache.popitem(last=False)
 
     # ------------------------------------------------------------------
     # Tool implementations
@@ -256,8 +262,6 @@ class Filesystem(BaseMiddleware):
         offset: int,
         limit: int,
         enqueue_parts: Callable[[list[Part]], None] | None,
-        cache: OrderedDict[str, _FileState],
-        lock: threading.Lock,
     ) -> str:
         """Read a file and enqueue its content as a user message.
 
@@ -274,7 +278,7 @@ class Filesystem(BaseMiddleware):
             raise ValueError(f'File too large ({stat.st_size:,} bytes; max {_MAX_FILE_SIZE_BYTES:,}).')
 
         # Dedup: if mtime, size, offset, and limit all match, skip re-read.
-        cached = self._get_cache(abs_path, cache, lock)
+        cached = self._get_cache(abs_path)
         if (
             cached is not None
             and cached.mtime == stat.st_mtime
@@ -298,7 +302,7 @@ class Filesystem(BaseMiddleware):
                 media_part = Part(root=MediaPart(media=Media(url=data_uri, content_type=mime_type)))
                 enqueue_parts([media_part])
             new_state = _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=offset, limit=limit)
-            self._set_cache(abs_path, new_state, cache, lock)
+            self._set_cache(abs_path, new_state)
             return f'Image {file_path} queued as media part.'
 
         # Text file
@@ -321,21 +325,15 @@ class Filesystem(BaseMiddleware):
         if enqueue_parts:
             enqueue_parts([Part(root=TextPart(text=wrapped))])
         new_state = _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=offset, limit=limit)
-        self._set_cache(abs_path, new_state, cache, lock)
+        self._set_cache(abs_path, new_state)
         return f'File {file_path} read successfully. Content queued as user message.'
 
-    def _write_file_impl(
-        self,
-        file_path: str,
-        content: str,
-        cache: OrderedDict[str, _FileState],
-        lock: threading.Lock,
-    ) -> str:
+    def _write_file_impl(self, file_path: str, content: str) -> str:
         abs_path = self._resolve_safe(file_path)
         exists = os.path.isfile(abs_path)
 
         if exists:
-            cached = self._get_cache(abs_path, cache, lock)
+            cached = self._get_cache(abs_path)
             if cached is None:
                 raise ValueError(f'File must be read before writing: {file_path!r}')
             stat = os.stat(abs_path)
@@ -347,21 +345,15 @@ class Filesystem(BaseMiddleware):
             fh.write(content)
 
         stat = os.stat(abs_path)
-        self._set_cache(abs_path, _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=0, limit=0), cache, lock)
+        self._set_cache(abs_path, _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=0, limit=0))
         return f'File {file_path} written successfully.'
 
-    def _edit_file_impl(
-        self,
-        file_path: str,
-        edits: list[dict[str, Any]],
-        cache: OrderedDict[str, _FileState],
-        lock: threading.Lock,
-    ) -> str:
+    def _edit_file_impl(self, file_path: str, edits: list[dict[str, Any]]) -> str:
         abs_path = self._resolve_safe(file_path)
         if not os.path.isfile(abs_path):
             raise ValueError(f'File not found: {file_path!r}')
 
-        cached = self._get_cache(abs_path, cache, lock)
+        cached = self._get_cache(abs_path)
         if cached is None:
             raise ValueError(f'File must be read before editing: {file_path!r}')
         stat = os.stat(abs_path)
@@ -389,7 +381,7 @@ class Filesystem(BaseMiddleware):
         with open(abs_path, 'w', encoding='utf-8') as fh:
             fh.write(content)
         stat = os.stat(abs_path)
-        self._set_cache(abs_path, _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=0, limit=0), cache, lock)
+        self._set_cache(abs_path, _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=0, limit=0))
         return f'File {file_path} edited successfully.'
 
     # ------------------------------------------------------------------
@@ -397,22 +389,15 @@ class Filesystem(BaseMiddleware):
     # ------------------------------------------------------------------
 
     def tools(self) -> list[Any]:
-        """Return call-scoped filesystem tool actions.
+        """Return the filesystem tool actions backed by this instance's cache.
 
-        A fresh file-state cache and lock are allocated here so each
-        ``generate()`` call gets its own isolated read/write tracking.
-        Concurrent calls on the same ``Filesystem`` instance cannot
-        interfere with each other's write guards.
-
-        Tool closures capture ``self.enqueue_parts`` (bound by the engine
-        before this hook runs) so they can queue file content and error
-        messages as user messages for the next generate iteration.
+        The read/write tracking lives on ``self`` (see the class docstring),
+        so reads in one ``ai.generate()`` call carry over to writes in the
+        next on the same instance. ``self.enqueue_parts`` is rebound by the
+        engine at the start of every call; closures pick up the current
+        binding so queued file content lands in the right call's message
+        stream.
         """
-        # Per-call state: each generate() call gets its own cache so write guards
-        # from one call cannot block a different concurrent call that read the same
-        # file independently.
-        _call_cache: OrderedDict[str, _FileState] = OrderedDict()
-        _call_lock: threading.Lock = threading.Lock()
         enqueue_parts = self.enqueue_parts
 
         scratch = Registry()
@@ -438,8 +423,6 @@ class Filesystem(BaseMiddleware):
                 input.offset,
                 input.limit,
                 enqueue_parts,
-                _call_cache,
-                _call_lock,
             )
 
         t_list = define_tool(scratch, list_files, name=self._tool_name('list_files'))
@@ -454,9 +437,7 @@ class Filesystem(BaseMiddleware):
                 Creates parent directories if needed. Fails if the file was externally
                 modified since the last ``read_file`` call.
                 """
-                return await asyncio.to_thread(
-                    self._write_file_impl, input.file_path, input.content, _call_cache, _call_lock
-                )
+                return await asyncio.to_thread(self._write_file_impl, input.file_path, input.content)
 
             async def edit_file(input: _EditFileInput) -> str:
                 """Apply string-replacement edits to a file (requires prior read).
@@ -468,8 +449,6 @@ class Filesystem(BaseMiddleware):
                     self._edit_file_impl,
                     input.file_path,
                     [e.model_dump() for e in input.edits],
-                    _call_cache,
-                    _call_lock,
                 )
 
             t_write = define_tool(scratch, write_file, name=self._tool_name('write_file'))
