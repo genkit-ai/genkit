@@ -517,8 +517,8 @@ class ReflectionServerV2:
             await self._send_error(sid, JSON_RPC_SERVER_ERROR, 'Action was cancelled', err_data)
             return
         except Exception as e:
-            await _drain_chunks()
             logger.exception('reflection V2: runAction error')
+            await _drain_chunks()
             # Wire contract requires ``details`` to carry only ``stack`` and ``traceId``
             # (see ``GenkitErrorSchema.data.genkitErrorDetails`` in genkit-tools); anything
             # else in ``GenkitError.details`` is runtime-internal and gets dropped.
