@@ -18,7 +18,7 @@ package googlegenai
 
 import "testing"
 
-func TestIsDeprecatedGenAIModel(t *testing.T) {
+func TestDeprecatedGenAIModels(t *testing.T) {
 	tests := []struct {
 		name string
 		want bool
@@ -30,8 +30,9 @@ func TestIsDeprecatedGenAIModel(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isDeprecatedGenAIModel(tc.name); got != tc.want {
-				t.Errorf("isDeprecatedGenAIModel(%q) = %v, want %v", tc.name, got, tc.want)
+			_, got := deprecatedGenAIModels[tc.name]
+			if got != tc.want {
+				t.Errorf("deprecatedGenAIModels[%q] presence = %v, want %v", tc.name, got, tc.want)
 			}
 		})
 	}

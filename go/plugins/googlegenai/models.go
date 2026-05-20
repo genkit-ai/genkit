@@ -380,7 +380,7 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		name := strings.TrimPrefix(item.Name, "publishers/google/")
 		name = strings.TrimPrefix(name, "models/")
-		if isDeprecatedGenAIModel(name) {
+		if _, ok := deprecatedGenAIModels[name]; ok {
 			continue
 		}
 
@@ -408,9 +408,4 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 	}
 
 	return models, nil
-}
-
-func isDeprecatedGenAIModel(name string) bool {
-	_, ok := deprecatedGenAIModels[name]
-	return ok
 }
