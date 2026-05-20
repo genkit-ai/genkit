@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from genkit import Genkit, Message, Part, Role, TextPart
 from genkit.middleware import BaseMiddleware
 from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.middleware import Middleware
 
 logger = structlog.get_logger(__name__)
 
@@ -36,7 +37,7 @@ class PromptInput(BaseModel):
 
 
 ai = Genkit(
-    plugins=[GoogleAI()],
+    plugins=[GoogleAI(), Middleware()],
     model='googleai/gemini-2.5-flash',
 )
 
@@ -51,13 +52,7 @@ class LoggingMiddleware(BaseMiddleware):
         return response
 
 
-# Register ``ConciseReplyMiddleware`` by name so it shows up in the Dev UI's
-# Model Runner where you can pick it from a dropdown. In-process use does not
-# require registration — see ``logging_demo`` below.
-@ai.middleware(
-    name='concise_reply_mw',
-    description='Adds a short system instruction before the model call.',
-)
+@ai.middleware(name='concise_reply_mw')
 class ConciseReplyMiddleware(BaseMiddleware):
     """Prepend a short system instruction before the model call.
 
