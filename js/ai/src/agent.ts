@@ -30,6 +30,7 @@ import {
 import { Channel } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
+import { setCustomMetadataAttributes } from '@genkit-ai/core/tracing';
 import { generateStream } from './generate.js';
 import {
   MessageData,
@@ -555,6 +556,12 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           messages: [],
         });
       }
+
+      // Tag the current trace span with the sessionId so that traces
+      // belonging to the same agent conversation can be correlated.
+      setCustomMetadataAttributes({
+        'agent:sessionId': session.sessionId,
+      });
 
       let detachedSnapshotId: string | undefined;
       let resolveDetach:
