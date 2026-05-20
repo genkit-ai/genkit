@@ -83,7 +83,7 @@ export class Channel<T> implements AsyncIterable<T> {
 
         return {
           value,
-          done: !value,
+          done: value === null,
         };
       },
     };

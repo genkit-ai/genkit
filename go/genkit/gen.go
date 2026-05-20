@@ -79,6 +79,8 @@ type ReflectionRegisterParams struct {
 type ReflectionRunActionParams struct {
 	// Additional runtime context data (ex. auth context data).
 	Context json.RawMessage `json:"context,omitempty"`
+	// Initialization parameters to establish long running session states.
+	Init any `json:"init,omitempty"`
 	// An input with the type that this action expects.
 	Input json.RawMessage `json:"input,omitempty"`
 	// Action key that consists of the action type and ID.

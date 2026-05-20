@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { AsyncTaskQueue, LazyPromise } from '../src/async';
+import { AsyncTaskQueue, Channel, LazyPromise } from '../src/async';
 import { sleep } from './utils';
 
 describe('AsyncTaskQueue', () => {
@@ -141,5 +141,21 @@ describe('LazyPromise', () => {
 
     assert.ok(called);
     assert.equal(result, 'foo');
+  });
+});
+
+describe('Channel', () => {
+  it('should handle falsy values', async () => {
+    const channel = new Channel<number | string>();
+    channel.send(0);
+    channel.send('hello');
+    channel.close();
+
+    const results: (number | string)[] = [];
+    for await (const value of channel) {
+      results.push(value);
+    }
+
+    assert.deepStrictEqual(results, [0, 'hello']);
   });
 });
