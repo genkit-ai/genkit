@@ -17,19 +17,11 @@
 """Tests for Filesystem middleware."""
 
 import tempfile
-import threading
-from collections import OrderedDict
 from pathlib import Path
 
 import pytest
 
 from genkit.plugins.middleware import Filesystem
-
-
-def _make_call_state():
-    """Return a fresh (cache, lock) pair matching what tools() creates per call."""
-    return OrderedDict(), threading.Lock()
-
 
 # ---------------------------------------------------------------------------
 # Construction / validation
@@ -120,8 +112,7 @@ def test_read_file_queues_content() -> None:
         f = Path(tmpdir) / 'hello.txt'
         f.write_text('hello world\n')
         fs = Filesystem(root_dir=tmpdir)
-        cache, lock = _make_call_state()
-        result = fs._read_file_impl('hello.txt', 0, 0, enqueue_parts, cache, lock)
+        result = fs._read_file_impl('hello.txt', 0, 0, enqueue_parts)
         assert 'queued' in result.lower() or 'read' in result.lower()
         assert len(queued) == 1
 
@@ -137,10 +128,9 @@ def test_read_file_dedup_unchanged() -> None:
         f = Path(tmpdir) / 'hello.txt'
         f.write_text('hello world\n')
         fs = Filesystem(root_dir=tmpdir)
-        cache, lock = _make_call_state()
-        fs._read_file_impl('hello.txt', 0, 0, enqueue_parts, cache, lock)
+        fs._read_file_impl('hello.txt', 0, 0, enqueue_parts)
         queued.clear()
-        result = fs._read_file_impl('hello.txt', 0, 0, enqueue_parts, cache, lock)
+        result = fs._read_file_impl('hello.txt', 0, 0, enqueue_parts)
         assert 'unchanged' in result.lower()
         assert len(queued) == 0
 
@@ -155,16 +145,14 @@ def test_write_file_requires_read_first() -> None:
         f = Path(tmpdir) / 'existing.txt'
         f.write_text('original\n')
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
-        cache, lock = _make_call_state()
         with pytest.raises(ValueError, match='read'):
-            fs._write_file_impl('existing.txt', 'new content\n', cache, lock)
+            fs._write_file_impl('existing.txt', 'new content\n')
 
 
 def test_write_new_file_succeeds() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
-        cache, lock = _make_call_state()
-        result = fs._write_file_impl('new.txt', 'content\n', cache, lock)
+        result = fs._write_file_impl('new.txt', 'content\n')
         assert 'written' in result.lower()
         assert (Path(tmpdir) / 'new.txt').read_text() == 'content\n'
 
@@ -174,9 +162,8 @@ def test_edit_file_requires_read_first() -> None:
         f = Path(tmpdir) / 'edit_me.txt'
         f.write_text('hello world\n')
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
-        cache, lock = _make_call_state()
         with pytest.raises(ValueError, match='read'):
-            fs._edit_file_impl('edit_me.txt', [{'old_string': 'hello', 'new_string': 'hi'}], cache, lock)
+            fs._edit_file_impl('edit_me.txt', [{'old_string': 'hello', 'new_string': 'hi'}])
 
 
 def test_edit_file_after_read() -> None:
@@ -189,11 +176,38 @@ def test_edit_file_after_read() -> None:
         f = Path(tmpdir) / 'edit_me.txt'
         f.write_text('hello world\n')
         fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
-        cache, lock = _make_call_state()
-        fs._read_file_impl('edit_me.txt', 0, 0, enqueue_parts, cache, lock)
-        result = fs._edit_file_impl('edit_me.txt', [{'old_string': 'hello', 'new_string': 'hi'}], cache, lock)
+        fs._read_file_impl('edit_me.txt', 0, 0, enqueue_parts)
+        result = fs._edit_file_impl('edit_me.txt', [{'old_string': 'hello', 'new_string': 'hi'}])
         assert 'edited' in result.lower()
         assert f.read_text() == 'hi world\n'
+
+
+def test_read_then_write_persists_across_calls() -> None:
+    """The whole point of the per-instance cache: reads survive across separate
+    impl calls on the same Filesystem, including the case where the read and
+    write would normally span two ai.generate() invocations.
+    """
+    queued: list = []
+
+    def enqueue_parts(parts) -> None:
+        queued.extend(parts)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        f = Path(tmpdir) / 'persist.txt'
+        f.write_text('alpha\n')
+        fs = Filesystem(root_dir=tmpdir, allow_write_access=True)
+        fs._read_file_impl('persist.txt', 0, 0, enqueue_parts)
+
+        # A fresh Filesystem instance against the same dir must NOT inherit
+        # the prior read — that's exactly how parallel agents stay isolated.
+        fs2 = Filesystem(root_dir=tmpdir, allow_write_access=True)
+        with pytest.raises(ValueError, match='read'):
+            fs2._write_file_impl('persist.txt', 'beta\n')
+
+        # The original instance, however, still has its cache and can write.
+        result = fs._write_file_impl('persist.txt', 'beta\n')
+        assert 'written' in result.lower()
+        assert f.read_text() == 'beta\n'
 
 
 # ---------------------------------------------------------------------------

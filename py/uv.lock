@@ -31,6 +31,7 @@ members = [
     "genkit-workspace",
     "google-genai-media",
     "middleware",
+    "middleware-coding-agent",
     "output-formats",
     "prompts",
     "tool-interrupts",
@@ -3520,6 +3521,29 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "structlog", specifier = ">=24.0.0" },
+    { name = "uvloop", specifier = ">=0.21.0" },
+]
+
+[[package]]
+name = "middleware-coding-agent"
+version = "0.1.0"
+source = { editable = "samples/middleware-coding-agent" }
+dependencies = [
+    { name = "genkit" },
+    { name = "genkit-plugin-google-genai" },
+    { name = "genkit-plugin-middleware" },
+    { name = "pydantic" },
+    { name = "structlog" },
+    { name = "uvloop" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
+    { name = "genkit-plugin-middleware", editable = "plugins/middleware" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "structlog", specifier = ">=25.2.0" },
     { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
