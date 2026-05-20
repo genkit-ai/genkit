@@ -100,17 +100,19 @@ def test_extract_media_by_type_ignores_other_types() -> None:
 
 
 def test_to_virtual_try_on_request_requires_person() -> None:
-    """Missing personImage raises a descriptive ValueError."""
+    """Missing personImage raises a Genkit INVALID_ARGUMENT error."""
     req = _request_with([_product_part('gs://b/shirt.png')])
-    with pytest.raises(ValueError, match='personImage'):
+    with pytest.raises(GenkitError, match='personImage') as exc_info:
         _to_virtual_try_on_request(req, None)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 def test_to_virtual_try_on_request_requires_product() -> None:
-    """Missing productImage raises a descriptive ValueError."""
+    """Missing productImage raises a Genkit INVALID_ARGUMENT error."""
     req = _request_with([_person_part('gs://b/person.png')])
-    with pytest.raises(ValueError, match='productImage'):
+    with pytest.raises(GenkitError, match='productImage') as exc_info:
         _to_virtual_try_on_request(req, None)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 def test_to_virtual_try_on_request_shape() -> None:
@@ -214,6 +216,151 @@ async def test_generate_maps_client_error_to_genkit_error(mocker: MockerFixture)
 
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
     assert exc_info.value.original_message == 'quota exceeded'
+
+
+@pytest.mark.asyncio
+async def test_generate_requires_vertex_backend(mocker: MockerFixture) -> None:
+    """Virtual Try-On should fail with a Genkit status outside Vertex AI."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = False
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_malformed_response_body(mocker: MockerFixture) -> None:
+    """Malformed Vertex responses should surface as Genkit INTERNAL errors."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+
+    class _FakeResp:
+        body = '{not json'
+
+    client._api_client.async_request = mocker.AsyncMock(return_value=_FakeResp())
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_invalid_config(mocker: MockerFixture) -> None:
+    """Invalid model config should surface as Genkit INVALID_ARGUMENT."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    req.config = {'sampleCount': 0}
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    client._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_maps_transport_error_to_unavailable(mocker: MockerFixture) -> None:
+    """Transport failures from the predict call should use Genkit UNAVAILABLE."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+    client._api_client.async_request = mocker.AsyncMock(side_effect=ConnectionError('network down'))
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'UNAVAILABLE'
+
+
+@pytest.mark.asyncio
+async def test_generate_maps_unexpected_request_error_to_internal(mocker: MockerFixture) -> None:
+    """Unexpected request failures should use Genkit INTERNAL."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+    client._api_client.async_request = mocker.AsyncMock(side_effect=RuntimeError('boom'))
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_prediction_without_image_data(mocker: MockerFixture) -> None:
+    """Predictions missing image bytes should surface as Genkit INTERNAL errors."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+
+    class _FakeResp:
+        body = '{"predictions": [{}]}'
+
+    client._api_client.async_request = mocker.AsyncMock(return_value=_FakeResp())
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_unknown_response_body(mocker: MockerFixture) -> None:
+    """Unknown Vertex response shapes should surface as Genkit INTERNAL errors."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+
+    class _FakeResp:
+        body = '{"unexpected": true}'
+
+    client._api_client.async_request = mocker.AsyncMock(return_value=_FakeResp())
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'INTERNAL'
 
 
 @pytest.mark.asyncio

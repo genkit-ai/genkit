@@ -39,7 +39,7 @@ else:
 
 from google import genai
 from google.genai.errors import ClientError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import (
     FinishReason,
@@ -56,6 +56,15 @@ from genkit import (
 )
 from genkit.plugin_api import ActionRunContext, tracer
 from genkit.plugins.google_genai.models.utils import client_error_to_genkit_status
+
+_VIRTUAL_TRY_ON_UNAVAILABLE_ERRORS = (ConnectionError, TimeoutError, OSError)
+
+
+def _virtual_try_on_request_error_status(error: Exception) -> str:
+    """Map non-ClientError request failures to a Genkit status name."""
+    if isinstance(error, _VIRTUAL_TRY_ON_UNAVAILABLE_ERRORS):
+        return 'UNAVAILABLE'
+    return 'INTERNAL'
 
 
 class VirtualTryOnVersion(StrEnum):
@@ -204,10 +213,17 @@ def _to_virtual_try_on_request(request: ModelRequest, config: VirtualTryOnConfig
     persons = _extract_media_by_type(request, PART_METADATA_TYPE_PERSON_IMAGE)
     products = _extract_media_by_type(request, PART_METADATA_TYPE_PRODUCT_IMAGE)
     if not persons:
-        raise ValueError(f"virtual try-on requires a media part with metadata.type='{PART_METADATA_TYPE_PERSON_IMAGE}'")
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"virtual try-on requires a media part with metadata.type='{PART_METADATA_TYPE_PERSON_IMAGE}'",
+        )
     if not products:
-        raise ValueError(
-            f"virtual try-on requires at least one media part with metadata.type='{PART_METADATA_TYPE_PRODUCT_IMAGE}'"
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                'virtual try-on requires at least one media part with '
+                f"metadata.type='{PART_METADATA_TYPE_PRODUCT_IMAGE}'"
+            ),
         )
 
     instance: dict[str, Any] = {
@@ -229,12 +245,56 @@ def _to_virtual_try_on_request(request: ModelRequest, config: VirtualTryOnConfig
     }
 
 
+def _parse_virtual_try_on_response_body(body: object) -> dict[str, Any]:
+    """Decode and validate the top-level Vertex predict response."""
+    try:
+        response = json.loads(body) if isinstance(body, (bytes, bytearray, str)) else body
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise GenkitError(
+            status='INTERNAL',
+            message=f'virtual try-on returned a malformed response body: {str(e)}',
+            cause=e,
+        ) from e
+
+    if not isinstance(response, dict):
+        raise GenkitError(
+            status='INTERNAL',
+            message=f'virtual try-on returned an unexpected response body: {type(response).__name__}',
+        )
+
+    predictions = response.get('predictions')
+    if predictions is not None and not isinstance(predictions, list):
+        raise GenkitError(
+            status='INTERNAL',
+            message='virtual try-on returned an unexpected predictions value',
+        )
+
+    return response
+
+
 def _from_virtual_try_on_response(response: dict[str, Any]) -> list[Part]:
     """Convert a virtual-try-on predict response to MediaParts."""
     content: list[Part] = []
     for prediction in response.get('predictions') or []:
-        b64 = prediction.get('bytesBase64Encoded') or ''
-        mime_type = prediction.get('mimeType') or 'image/png'
+        if not isinstance(prediction, dict):
+            raise GenkitError(
+                status='INTERNAL',
+                message='virtual try-on returned an unexpected prediction value',
+            )
+        b64 = prediction.get('bytesBase64Encoded')
+        if not isinstance(b64, str) or not b64:
+            raise GenkitError(
+                status='INTERNAL',
+                message='virtual try-on returned a prediction without image data',
+            )
+        mime_type = prediction.get('mimeType')
+        if mime_type is not None and not isinstance(mime_type, str):
+            raise GenkitError(
+                status='INTERNAL',
+                message='virtual try-on returned an unexpected mimeType value',
+            )
+        if not mime_type:
+            mime_type = 'image/png'
         content.append(
             Part(
                 root=MediaPart(
@@ -266,18 +326,28 @@ class VirtualTryOnModel:
             return None
         if isinstance(request.config, VirtualTryOnConfig):
             return request.config
-        if isinstance(request.config, dict):
-            return VirtualTryOnConfig.model_validate(request.config)
-        # Fall back to generic dict coercion for BaseModel instances
-        if isinstance(request.config, BaseModel):
-            return VirtualTryOnConfig.model_validate(request.config.model_dump())
+        try:
+            if isinstance(request.config, dict):
+                return VirtualTryOnConfig.model_validate(request.config)
+            # Fall back to generic dict coercion for BaseModel instances
+            if isinstance(request.config, BaseModel):
+                return VirtualTryOnConfig.model_validate(request.config.model_dump())
+        except ValidationError as e:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='The virtual try-on configuration is invalid',
+                cause=e,
+            ) from e
         return None
 
     async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         """Handle a virtual-try-on generation request."""
         api_client = getattr(self._client, '_api_client', None)
         if api_client is None or not getattr(api_client, 'vertexai', False):
-            raise ValueError('Virtual Try-On is only available through the Vertex AI backend')
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message='Virtual Try-On is only available through the Vertex AI backend',
+            )
 
         config = self._get_config(request)
         payload = _to_virtual_try_on_request(request, config)
@@ -296,11 +366,25 @@ class VirtualTryOnModel:
                     message=e.message or 'Unknown error',
                     cause=e,
                 ) from e
+            except GenkitError:
+                raise
+            except Exception as e:
+                raise GenkitError(
+                    status=_virtual_try_on_request_error_status(e),
+                    message=f'virtual try-on request failed: {type(e).__name__}: {str(e)}',
+                    cause=e,
+                ) from e
             body = http_response.body if hasattr(http_response, 'body') else http_response
-            response = json.loads(body) if isinstance(body, (bytes, bytearray, str)) else body
+            response = _parse_virtual_try_on_response_body(body)
             span.set_attribute('genkit:output', json.dumps(response, default=str))
 
-        if not response.get('predictions'):
+        if 'predictions' not in response:
+            raise GenkitError(
+                status='INTERNAL',
+                message='virtual try-on returned a response without predictions',
+            )
+
+        if not response['predictions']:
             # Vertex returning zero predictions almost always means safety
             # filters blocked the output — surface it as a blocked response.
             return ModelResponse(
