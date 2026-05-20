@@ -38,6 +38,7 @@ from genkit._core._action import (
     create_action_key,
     parse_action_key,
     parse_dap_qualified_name,
+    set_action_name,
 )
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
@@ -499,8 +500,8 @@ class Registry:
             else:
                 # Name is local, prefix with namespace
                 name = f'{namespace}/{name}'
-            # Update the action's name
-            action._name = name  # pyright: ignore[reportPrivateUsage]
+            # Update the action's name via the module-level helper to respect encapsulation
+            set_action_name(action, name)
 
         with self._lock:
             if action.kind not in self._entries:

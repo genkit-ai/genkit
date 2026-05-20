@@ -14,11 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Abstract base class for Genkit plugins."""
+"""Abstract base class for Genkit plugins and middleware_plugin helper."""
+
+from __future__ import annotations
 
 import abc
+from collections.abc import Sequence
 
 from genkit._core._action import Action, ActionKind
+from genkit._core._middleware import MiddlewareDesc
 from genkit._core._typing import ActionMetadata
 
 
@@ -47,6 +51,20 @@ class Plugin(abc.ABC):
         """
         ...
 
+    def list_middleware(self) -> list[MiddlewareDesc]:
+        """Return middleware descriptors for this plugin to register on the app.
+
+        This runs while :class:`Genkit` is being constructed, after
+        built-in middleware is registered. Use unique flat names without
+        slash characters so they do not collide with built-ins or other
+        plugins.
+
+        Returns:
+            Descriptors to list in the Dev UI and to resolve by name from
+            ``generate(use=...)``.
+        """
+        return []
+
     async def model(self, name: str) -> Action | None:
         """Resolve a model action by name (local or namespaced)."""
         target = name if '/' in name else f'{self.name}/{name}'
@@ -56,3 +74,62 @@ class Plugin(abc.ABC):
         """Resolve an embedder action by name (local or namespaced)."""
         target = name if '/' in name else f'{self.name}/{name}'
         return await self.resolve(ActionKind.EMBEDDER, target)
+
+
+class _MiddlewareDescsPlugin(Plugin):
+    """Plugin implementation that contributes only middleware descriptors."""
+
+    def __init__(self, plugin_name: str, descs: list[MiddlewareDesc]) -> None:
+        self.name = plugin_name
+        self._descs = descs
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[ActionMetadata]:
+        return []
+
+    def list_middleware(self) -> list[MiddlewareDesc]:
+        return list(self._descs)
+
+
+def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
+    """Wrap a list of middleware descriptors as a single plugin.
+
+    Used by Genkit-provided middleware plugins. To build and release your own
+    middleware, use this helper function to expose them via the plugin interface.
+
+    Args:
+        descs: Non-empty sequence of middleware descriptors.
+
+    Returns:
+        A plugin whose ``list_middleware`` returns the descriptors.
+
+    Example:
+        from genkit import Genkit
+        from genkit.plugin_api import middleware_plugin, new_middleware
+
+        Genkit(plugins=[
+            middleware_plugin([
+                new_middleware(
+                    PrefixPromptMiddleware,
+                    name='prefix_prompt',
+                    description='Prepends a fixed prompt',
+                ),
+                new_middleware(
+                    OtherMiddleware,
+                    name='other',
+                ),
+            ]),
+        ])
+    """
+    built = list(descs)
+    if not built:
+        raise ValueError(
+            'middleware_plugin() needs a non-empty list of MiddlewareDesc instances. '
+            'Construct each with new_middleware(YourMiddleware, name=..., description=...).'
+        )
+    return _MiddlewareDescsPlugin('extension-middleware', built)
