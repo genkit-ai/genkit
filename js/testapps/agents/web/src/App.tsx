@@ -46,7 +46,7 @@ export default function App() {
             <NavLink
               key={item.to}
               to={item.to}
-              className={({ isActive }) =>
+              className={({ isActive }: { isActive: boolean }) =>
                 `nav-item ${isActive ? 'active' : ''}`
               }>
               <span className="nav-icon">{item.icon}</span>
