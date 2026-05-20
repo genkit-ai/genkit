@@ -168,10 +168,7 @@ from genkit import (
     ToolDefinition,
 )
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
-from genkit.plugin_api import (
-    ActionRunContext,
-    StatusName,
-)
+from genkit.plugin_api import ActionRunContext
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -182,7 +179,7 @@ def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
 from genkit.plugins.google_genai.models._deprecations import (  # noqa: E402
     deprecated_enum_metafactory,
 )
-from genkit.plugins.google_genai.models.utils import PartConverter  # noqa: E402
+from genkit.plugins.google_genai.models.utils import PartConverter, client_error_to_genkit_status  # noqa: E402
 
 
 class HarmCategory(StrEnum):
@@ -1363,20 +1360,8 @@ class GeminiModel:
                 config=request_cfg,
             )
         except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
             raise GenkitError(
-                status=status,
+                status=client_error_to_genkit_status(e),
                 message=e.message or 'Unknown error',
                 cause=e,
             ) from e
@@ -1487,20 +1472,8 @@ class GeminiModel:
                 config=request_cfg,
             )
         except ClientError as e:
-            status: StatusName = 'INTERNAL'
-            if e.code == 400:
-                status = 'INVALID_ARGUMENT'
-            elif e.code == 401:
-                status = 'UNAUTHENTICATED'
-            elif e.code == 403:
-                status = 'PERMISSION_DENIED'
-            elif e.code == 404:
-                status = 'NOT_FOUND'
-            elif e.code == 429:
-                status = 'RESOURCE_EXHAUSTED'
-
             raise GenkitError(
-                status=status,
+                status=client_error_to_genkit_status(e),
                 message=e.message or 'Unknown error',
                 cause=e,
             ) from e

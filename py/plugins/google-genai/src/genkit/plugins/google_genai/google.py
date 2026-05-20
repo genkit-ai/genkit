@@ -139,6 +139,13 @@ from genkit.plugins.google_genai.models.veo import (
     is_veo_model,
     veo_model_info,
 )
+from genkit.plugins.google_genai.models.virtual_try_on import (
+    VERTEXAI_KNOWN_VIRTUAL_TRY_ON_MODELS,
+    VirtualTryOnConfig,
+    VirtualTryOnModel,
+    is_virtual_try_on_model,
+    virtual_try_on_model_info,
+)
 
 
 class GenaiModels:
@@ -785,6 +792,11 @@ class VertexAI(Plugin):
         for name in genai_models.veo:
             actions.append(self._resolve_model(vertexai_name(name)))
 
+        # Virtual try-on models are not surfaced by client.models.list(); inject
+        # the hardcoded known-model list so they're addressable.
+        for name in VERTEXAI_KNOWN_VIRTUAL_TRY_ON_MODELS:
+            actions.append(self._resolve_model(vertexai_name(name)))
+
         for name in genai_models.embedders:
             actions.append(self._resolve_embedder(vertexai_name(name)))
 
@@ -894,7 +906,10 @@ class VertexAI(Plugin):
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
 
         # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        if is_virtual_try_on_model(clean_name):
+            model_ref = virtual_try_on_model_info(clean_name)
+            config_schema = VirtualTryOnConfig
+        elif clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = ImagenConfigSchema
@@ -907,7 +922,9 @@ class VertexAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_virtual_try_on_model(clean_name):
+                model = VirtualTryOnModel(clean_name, self._runtime_client())
+            elif clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())
@@ -976,6 +993,15 @@ class VertexAI(Plugin):
                     name=vertexai_name(name),
                     info=veo_model_info(name).model_dump(by_alias=True),
                     config_schema=VeoConfigSchema,
+                )
+            )
+
+        for name in VERTEXAI_KNOWN_VIRTUAL_TRY_ON_MODELS:
+            actions_list.append(
+                model_action_metadata(
+                    name=vertexai_name(name),
+                    info=virtual_try_on_model_info(name).model_dump(by_alias=True),
+                    config_schema=VirtualTryOnConfig,
                 )
             )
 
