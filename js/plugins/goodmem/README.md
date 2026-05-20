@@ -1,24 +1,24 @@
 # GoodMem plugin for Genkit
 
-GoodMem is a memory layer for AI agents with support for semantic storage, retrieval, and summarization. This package exposes GoodMem operations as Genkit tools/flows that can be used with any Genkit agent or flow.
+GoodMem gives AI agents retrieval-augmented generation (RAG) memory. Store documents in a space and GoodMem chunks, embeds, and indexes them so your agent can pull back the most relevant passages on any question. This plugin exposes GoodMem operations as Genkit tools that work with any Genkit agent or flow.
 
 ## Prerequisites
 
 ### 1. Install GoodMem
 
-You need a running GoodMem instance. Install it on your VM or local machine:
+You need a running GoodMem instance. Install it on your VM or local machine.
 
 **Visit:** [https://goodmem.ai/](https://goodmem.ai/)
 
 Follow the installation instructions for your platform (Docker, local installation, or cloud deployment).
 
-### 2. Create an Embedder
+### 2. Create an embedder
 
-Before you can create spaces and memories, you need to set up an embedder model in your GoodMem instance. You can list embedders programmatically with the `goodmem/list_embedders` tool (or the `listEmbedders()` helper).
+Spaces and memories require an embedder model on your GoodMem instance. You can list embedders programmatically with the `goodmem/list_embedders` tool or the `listEmbedders()` helper.
 
-### 3. Get Your API Key
+### 3. Get your API key
 
-Obtain an API key from your GoodMem instance (starts with `gm_`).
+Obtain an API key from your GoodMem instance. Keys start with `gm_`.
 
 ## Installing the plugin
 
@@ -42,13 +42,13 @@ const ai = genkit({
 });
 ```
 
-Once the plugin is loaded, the following 11 tools are automatically registered and available to any Genkit agent or flow.
+Once the plugin is loaded, 11 tools are automatically registered and available to any Genkit agent or flow.
 
 ## Tool naming
 
-All tools are namespaced under `goodmem/` and use snake_case action names — for example `goodmem/create_space`, `goodmem/list_embedders`. The `<plugin>/<action>` shape follows Genkit's convention; snake_case keeps action names consistent across the surface.
+All tools sit under the `goodmem/` namespace and use snake_case action names. For example: `goodmem/create_space`, `goodmem/list_embedders`. The `<plugin>/<action>` shape follows Genkit's convention; snake_case keeps action names consistent across the surface.
 
-## Available Tools
+## Available tools
 
 ### `goodmem/list_embedders`
 
@@ -69,22 +69,24 @@ List all spaces visible to the API key.
 Fetch a single space by its UUID.
 
 **Input:**
-- **spaceId** (required) — UUID of the space.
+
+- **spaceId** (required): UUID of the space.
 
 **Output:** `{ success, space }`.
 
 ### `goodmem/create_space`
 
-Create a new space (container for memories) with configurable settings. If a space with the same name already exists, it is reused instead of creating a duplicate.
+Create a new space (a container for memories) with configurable settings. If a space with the same name already exists, it is reused instead of creating a duplicate.
 
 **Input:**
-- **name** (required) — Unique name for the space.
-- **embedderId** (required) — ID of the embedder model that converts text to vector embeddings.
-- **chunkSize** (default: 256) — Number of characters per chunk when splitting documents.
-- **chunkOverlap** (default: 25) — Overlapping characters between consecutive chunks.
-- **keepStrategy** (default: `"KEEP_END"`) — Where to attach the separator when splitting (`"KEEP_END"`, `"KEEP_START"`, or `"DISCARD"`).
-- **lengthMeasurement** (default: `"CHARACTER_COUNT"`) — How chunk size is measured (`"CHARACTER_COUNT"` or `"TOKEN_COUNT"`).
-- **labels** (optional) — Map of string labels to attach at creation time.
+
+- **name** (required): unique name for the space.
+- **embedderId** (required): ID of the embedder model that converts text to vector embeddings.
+- **chunkSize** (default: 256): number of characters per chunk when splitting documents.
+- **chunkOverlap** (default: 25): overlapping characters between consecutive chunks.
+- **keepStrategy** (default: `"KEEP_END"`): where to attach the separator when splitting (`"KEEP_END"`, `"KEEP_START"`, or `"DISCARD"`).
+- **lengthMeasurement** (default: `"CHARACTER_COUNT"`): how chunk size is measured (`"CHARACTER_COUNT"` or `"TOKEN_COUNT"`).
+- **labels** (optional): map of string labels to attach at creation time.
 
 **Output:** `{ success, spaceId, name, embedderId, reused, message }`.
 
@@ -93,12 +95,13 @@ Create a new space (container for memories) with configurable settings. If a spa
 Update a GoodMem space. Supports renaming, toggling `publicRead`, modifying labels, and changing the default chunking config.
 
 **Input:**
-- **spaceId** (required) — UUID of the space to update.
-- **name** (optional) — New name.
-- **publicRead** (optional) — Whether the space is publicly readable.
-- **replaceLabels** (optional) — Replace ALL existing labels with this map.
-- **mergeLabels** (optional) — Merge these labels into existing labels (adds/overwrites individual keys). Mutually exclusive with `replaceLabels`.
-- **defaultChunkingConfig** (optional) — New chunking config (e.g., `{ recursive: { chunkSize: 512, ... } }`).
+
+- **spaceId** (required): UUID of the space to update.
+- **name** (optional): new name.
+- **publicRead** (optional): whether the space is publicly readable.
+- **replaceLabels** (optional): replace all existing labels with this map.
+- **mergeLabels** (optional): merge these labels into the existing labels, adding or overwriting individual keys. Mutually exclusive with `replaceLabels`.
+- **defaultChunkingConfig** (optional): new chunking config, for example `{ recursive: { chunkSize: 512, ... } }`.
 
 **Output:** `{ success, space }`.
 
@@ -107,7 +110,8 @@ Update a GoodMem space. Supports renaming, toggling `publicRead`, modifying labe
 Permanently delete a GoodMem space. All memories inside the space are deleted as well.
 
 **Input:**
-- **spaceId** (required) — UUID of the space.
+
+- **spaceId** (required): UUID of the space.
 
 **Output:** `{ success, spaceId, message }`.
 
@@ -116,13 +120,14 @@ Permanently delete a GoodMem space. All memories inside the space are deleted as
 Store a document or plain text as a memory in a space. The content is automatically chunked and embedded for semantic search.
 
 **Input:**
-- **spaceId** (required) — ID of the space to store the memory in.
-- **filePath** (optional) — Absolute path to a file (PDF, DOCX, TXT, images, etc.). Content type is auto-detected.
-- **textContent** (optional) — Plain text content. If both `filePath` and `textContent` are provided, the file takes priority.
-- **source** (optional) — Where this memory came from (e.g., `"google-drive"`, `"gmail"`).
-- **author** (optional) — The author or creator of the content.
-- **tags** (optional) — Comma-separated tags for categorization (e.g., `"legal,research,important"`).
-- **metadata** (optional) — Extra key-value metadata as JSON.
+
+- **spaceId** (required): ID of the space to store the memory in.
+- **filePath** (optional): absolute path to a file (PDF, DOCX, TXT, images, etc.). Content type is auto-detected.
+- **textContent** (optional): plain text content. If both `filePath` and `textContent` are provided, the file takes priority.
+- **source** (optional): where this memory came from, for example `"google-drive"` or `"gmail"`.
+- **author** (optional): the author or creator of the content.
+- **tags** (optional): comma-separated tags for categorization, for example `"legal,research,important"`.
+- **metadata** (optional): extra key-value metadata as JSON.
 
 **Output:** `{ success, memoryId, spaceId, status, contentType, fileName, message }`.
 
@@ -131,7 +136,12 @@ Store a document or plain text as a memory in a space. The content is automatica
 List the memories stored in a specific GoodMem space (GoodMem scopes memory listing to a single space).
 
 **Input:**
-- **spaceId** (required) — UUID of the space.
+
+- **spaceId** (required): UUID of the space.
+- **statusFilter** (optional): restrict results to memories in this processing status (`"PENDING"`, `"PROCESSING"`, `"COMPLETED"`, or `"FAILED"`).
+- **includeContent** (default: false): when true, each returned memory includes its original document content alongside the metadata.
+- **sortBy** (optional): field used to sort the returned memories (`"created_at"` or `"updated_at"`).
+- **sortOrder** (optional): sort direction (`"ASCENDING"` or `"DESCENDING"`).
 
 **Output:** `{ success, spaceId, memories, totalResults }`.
 
@@ -140,16 +150,20 @@ List the memories stored in a specific GoodMem space (GoodMem scopes memory list
 Perform semantic search across one or more spaces to find relevant memory chunks. Supports advanced post-processing with reranking, LLM-generated contextual responses, score thresholds, and chronological resorting.
 
 **Input:**
-- **query** (required) — Natural language search query.
-- **spaceIds** (required) — Array of space IDs to search across.
-- **maxResults** (default: 5) — Limit the number of returned results.
-- **includeMemoryDefinition** (default: true) — Fetch full memory metadata alongside matched chunks.
-- **waitForIndexing** (default: true) — Retry for up to **10 seconds** when no results are found (useful when memories were just added). Polls every 2 seconds.
-- **rerankerId** (optional) — UUID of a reranker model to improve result ordering.
-- **llmId** (optional) — UUID of an LLM that generates a contextual `abstractReply` alongside the retrieved chunks.
-- **relevanceThreshold** (optional, 0-1) — Minimum score for including results. Only used when `rerankerId` or `llmId` is set.
-- **llmTemperature** (optional, 0-2) — Creativity setting for LLM generation. Only used when `llmId` is set.
-- **chronologicalResort** (default: false) — Reorder results by creation time instead of relevance score.
+
+- **query** (required): natural language search query.
+- **spaceIds** (required): array of space IDs to search across.
+- **maxResults** (default: 5): limit the number of returned results.
+- **includeMemoryDefinition** (default: true): fetch full memory metadata alongside matched chunks.
+- **waitForIndexing** (default: true): retry up to `maxWaitSeconds` when no results are found. Useful when memories were just added and may still be processing.
+- **maxWaitSeconds** (default: 10): maximum time in seconds to keep polling for results when `waitForIndexing` is true.
+- **pollInterval** (default: 2): seconds to wait between polling attempts when `waitForIndexing` is true.
+- **rerankerId** (optional): UUID of a reranker model to improve result ordering.
+- **llmId** (optional): UUID of an LLM that generates a contextual `abstractReply` alongside the retrieved chunks.
+- **relevanceThreshold** (optional, 0-1): minimum score for including results. Only used when `rerankerId` or `llmId` is set.
+- **llmTemperature** (optional, 0-2): creativity setting for LLM generation. Only used when `llmId` is set.
+- **chronologicalResort** (default: false): reorder results by creation time instead of relevance score.
+- **metadataFilter** (optional): server-side SQL-style JSONPath expression applied to every space in `spaceIds`. For example, `CAST(val('$.category') AS TEXT) = 'feat'` returns only memories whose `metadata.category` equals `feat`.
 
 The advanced options (`rerankerId`, `llmId`, `relevanceThreshold`, `llmTemperature`, `maxResults`, `chronologicalResort`) are forwarded to the GoodMem retrieve API as a `postProcessor` block:
 
@@ -176,8 +190,9 @@ The advanced options (`rerankerId`, `llmId`, `relevanceThreshold`, `llmTemperatu
 Retrieve a specific memory by its ID, including metadata, processing status, and optionally the original content.
 
 **Input:**
-- **memoryId** (required) — The UUID of the memory to fetch.
-- **includeContent** (default: true) — Fetch the original document content in addition to metadata.
+
+- **memoryId** (required): the UUID of the memory to fetch.
+- **includeContent** (default: true): fetch the original document content in addition to metadata.
 
 **Output:** `{ success, memory, content?, contentError? }`.
 
@@ -186,13 +201,14 @@ Retrieve a specific memory by its ID, including metadata, processing status, and
 Permanently delete a memory and all its associated chunks and vector embeddings.
 
 **Input:**
-- **memoryId** (required) — The UUID of the memory to delete.
+
+- **memoryId** (required): the UUID of the memory to delete.
 
 **Output:** `{ success, memoryId, message }`.
 
-## Helper Functions
+## Helper functions
 
-The plugin also exports two helper functions for programmatic use (the `goodmem/list_spaces` and `goodmem/list_embedders` tools call into these):
+The plugin also exports two helper functions for programmatic use. The `goodmem/list_spaces` and `goodmem/list_embedders` tools call into these:
 
 ```ts
 import { listSpaces, listEmbedders } from 'genkitx-goodmem';
@@ -204,7 +220,7 @@ const spaces = await listSpaces({ baseUrl: '...', apiKey: '...' });
 const embedders = await listEmbedders({ baseUrl: '...', apiKey: '...' });
 ```
 
-## Example: Full Workflow
+## Example: full workflow
 
 ```ts
 import { genkit, z } from 'genkit';
@@ -248,7 +264,7 @@ const memoryFlow = ai.defineFlow(
       source: 'manual',
     });
 
-    // Retrieve relevant memories with reranking + LLM abstract reply
+    // Retrieve relevant memories with reranking and an LLM abstract reply
     const retrieve = await ai.registry.lookupAction(
       '/tool/goodmem/retrieve_memories'
     );
@@ -264,6 +280,8 @@ const memoryFlow = ai.defineFlow(
   }
 );
 ```
+
+A runnable demo with three scenarios (persistent project knowledge, a scribe and analyst pipeline, and metadata-driven retrieval) lives at `js/testapps/goodmem/`.
 
 ## Testing
 
