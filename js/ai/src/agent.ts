@@ -599,7 +599,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
                 }
               } else {
                 const turnSnapshotId =
-                  runner.newSnapshotId || crypto.randomUUID();
+                  runner.newSnapshotId || globalThis.crypto.randomUUID();
                 runner.newSnapshotId = turnSnapshotId;
                 await runner.maybeSnapshot(
                   'turnEnd',
