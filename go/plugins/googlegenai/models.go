@@ -74,6 +74,12 @@ var (
 		ConfigSchema: configToMap(genai.GenerateVideosConfig{}),
 	}
 
+	defaultLyriaOpts = ai.ModelOptions{
+		Supports:     &Media,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(LyriaConfig{}),
+	}
+
 	defaultEmbedOpts = ai.EmbedderOptions{
 		Supports:   &ai.EmbedderSupports{Input: []string{"text"}},
 		Dimensions: 768,
@@ -104,6 +110,8 @@ const (
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 
+	lyria002 = "lyria-002"
+
 	embedding001                      = "embedding-001"
 	textembeddinggecko003             = "textembedding-gecko@003"
 	textembeddinggecko002             = "textembedding-gecko@002"
@@ -133,6 +141,8 @@ var (
 		veo30FastGenerate001,
 		veo31Generate001,
 		veo31FastGenerate001,
+
+		lyria002,
 	}
 
 	googleAIModels = []string{
@@ -209,6 +219,15 @@ var (
 		},
 		imagen3FastGenerate001: {
 			Label:    "Imagen 3 Fast Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+	}
+
+	supportedLyriaModels = map[string]ai.ModelOptions{
+		lyria002: {
+			Label:    "Lyria 002",
 			Versions: []string{},
 			Supports: &Media,
 			Stage:    ai.ModelStageStable,
@@ -339,6 +358,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		if !ok {
 			opts = defaultVeoOpts
 		}
+	case ModelTypeLyria:
+		opts, ok = supportedLyriaModels[name]
+		if !ok {
+			opts = defaultLyriaOpts
+		}
 	default:
 		opts = defaultGeminiOpts
 	}
@@ -410,6 +434,7 @@ type genaiModels struct {
 	imagen    []string
 	embedders []string
 	veo       []string
+	lyria     []string
 }
 
 // listGenaiModels returns a list of supported models and embedders from the
@@ -439,6 +464,11 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		if strings.Contains(name, "veo") {
 			models.veo = append(models.veo, name)
+			continue
+		}
+
+		if strings.HasPrefix(name, "lyria") {
+			models.lyria = append(models.lyria, name)
 			continue
 		}
 
