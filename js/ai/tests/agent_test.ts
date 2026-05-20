@@ -558,6 +558,168 @@ describe('Agent', () => {
     });
   });
 
+  describe('sessionId', () => {
+    it('should generate sessionId for a fresh client-managed agent', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'sessionIdFreshClient' },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      // Client-managed agents return state, which should contain a sessionId
+      assert.ok(output.state, 'output.state should be present');
+      assert.ok(
+        output.state!.sessionId,
+        'sessionId should be generated for a fresh session'
+      );
+      // Should be a valid UUID
+      assert.match(
+        output.state!.sessionId!,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      );
+    });
+
+    it('should preserve sessionId across turns for client-managed agents', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'sessionIdPreserveClient' },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // Turn 1: fresh session
+      const session1 = flow.streamBidi({});
+      session1.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session1.close();
+      for await (const _ of session1.stream) {
+      }
+      const output1 = await session1.output;
+      const firstSessionId = output1.state!.sessionId!;
+      assert.ok(firstSessionId, 'First turn should have sessionId');
+
+      // Turn 2: pass state back (client-managed)
+      const session2 = flow.streamBidi({ state: output1.state });
+      session2.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }],
+      });
+      session2.close();
+      for await (const _ of session2.stream) {
+      }
+      const output2 = await session2.output;
+
+      assert.strictEqual(
+        output2.state!.sessionId,
+        firstSessionId,
+        'sessionId should be preserved across turns'
+      );
+    });
+
+    it('should generate sessionId for a fresh server-managed agent and persist in snapshot', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'sessionIdServerManaged', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.ok(output.snapshotId, 'should have snapshotId');
+
+      // Read snapshot and verify sessionId is persisted in the state
+      const snapshot = await store.getSnapshot(output.snapshotId!);
+      assert.ok(snapshot, 'snapshot should exist');
+      assert.ok(
+        snapshot!.state.sessionId,
+        'sessionId should be persisted in snapshot state'
+      );
+      assert.match(
+        snapshot!.state.sessionId!,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      );
+    });
+
+    it('should preserve sessionId from snapshot for server-managed agents', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'sessionIdServerPreserve', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // Turn 1
+      const session1 = flow.streamBidi({});
+      session1.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session1.close();
+      for await (const _ of session1.stream) {
+      }
+      const output1 = await session1.output;
+      const firstSnapshotId = output1.snapshotId!;
+
+      const snapshot1 = await store.getSnapshot(firstSnapshotId);
+      const firstSessionId = snapshot1!.state.sessionId!;
+      assert.ok(firstSessionId, 'First turn should have sessionId');
+
+      // Turn 2: resume from snapshot
+      const session2 = flow.streamBidi({ snapshotId: firstSnapshotId });
+      session2.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }],
+      });
+      session2.close();
+      for await (const _ of session2.stream) {
+      }
+      const output2 = await session2.output;
+
+      const snapshot2 = await store.getSnapshot(output2.snapshotId!);
+      assert.strictEqual(
+        snapshot2!.state.sessionId,
+        firstSessionId,
+        'sessionId should be preserved across turns via snapshot'
+      );
+    });
+  });
+
   describe('definePromptAgent', () => {
     it('should register and execute agent from prompt', async () => {
       const registry = new Registry();
