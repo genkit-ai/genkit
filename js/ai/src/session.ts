@@ -52,6 +52,7 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  * Schema for session execution state.
  */
 export const SessionStateSchema = z.object({
+  sessionId: z.string().optional(),
   messages: z.array(MessageSchema).optional(),
   custom: z.any().optional(),
   artifacts: z.array(ArtifactSchema).optional(),
@@ -61,6 +62,7 @@ export const SessionStateSchema = z.object({
  * State persisted for a session across turns.
  */
 export interface SessionState<S = unknown> {
+  sessionId?: string;
   messages?: MessageData[];
   custom?: S;
   artifacts?: Artifact[];
@@ -189,8 +191,13 @@ export class Session<S = unknown> extends EventEmitter {
   private state: SessionState<S>;
   private version: number = 0;
 
+  /** Stable identifier that correlates traces across agent turns. */
+  readonly sessionId: string;
+
   constructor(initialState: SessionState<S>) {
     super();
+    this.sessionId = initialState.sessionId || crypto.randomUUID();
+    initialState.sessionId = this.sessionId;
     this.state = initialState;
   }
 
