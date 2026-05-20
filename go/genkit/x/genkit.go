@@ -82,7 +82,7 @@ type StreamingFunc[In, Out, Stream any] = func(ctx context.Context, input In, st
 //	        fmt.Println(val.Stream)  // 5, 4, 3, 2, 1
 //	    }
 //	}
-func DefineStreamingFlow[In, Out, Stream any](g *genkit.Genkit, name string, fn StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
+func DefineStreamingFlow[In, Out, Stream any](g *genkit.Genkit, name string, fn StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream, struct{}] {
 	// Wrap the channel-based function to work with the callback-based API
 	wrappedFn := func(ctx context.Context, input In, sendChunk core.StreamCallback[Stream]) (Out, error) {
 		if sendChunk == nil {

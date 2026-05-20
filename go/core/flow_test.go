@@ -18,9 +18,12 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -69,7 +72,7 @@ func TestRunFlow(t *testing.T) {
 
 func TestFlowNameFromContext(t *testing.T) {
 	r := registry.New()
-	flows := []*Flow[struct{}, string, struct{}]{
+	flows := []*Flow[struct{}, string, struct{}, struct{}]{
 		DefineFlow(r, "DefineFlow", func(ctx context.Context, _ struct{}) (string, error) {
 			return FlowNameFromContext(ctx), nil
 		}),
@@ -256,4 +259,305 @@ func TestFlowNameFromContextOutsideFlow(t *testing.T) {
 			t.Errorf("FlowNameFromContext outside flow = %q, want empty string", got)
 		}
 	})
+}
+
+func TestBidiActionEcho(t *testing.T) {
+	ctx := context.Background()
+
+	// In=struct{} (no initial data), Out=string, OutStream=string, InStream=string
+	action := NewBidiAction(
+		"echo", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			var count int
+			for input := range inCh {
+				count++
+				outCh <- fmt.Sprintf("echo: %s", input)
+			}
+			return fmt.Sprintf("processed %d messages", count), nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// With unbuffered channels, we must send and receive concurrently.
+	go func() {
+		conn.Send("hello")
+		conn.Send("world")
+		conn.Close()
+	}()
+
+	var chunks []string
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d: %v", len(chunks), chunks)
+	}
+	if chunks[0] != "echo: hello" {
+		t.Errorf("expected 'echo: hello', got %q", chunks[0])
+	}
+	if chunks[1] != "echo: world" {
+		t.Errorf("expected 'echo: world', got %q", chunks[1])
+	}
+
+	output, err := conn.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "processed 2 messages" {
+		t.Errorf("expected 'processed 2 messages', got %q", output)
+	}
+}
+
+func TestBidiActionWithConfig(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct {
+		Prefix string
+	}
+
+	// In=Config (initial config), Out=string, OutStream=string, InStream=string
+	action := NewBidiAction(
+		"prefixed", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			for input := range inCh {
+				outCh <- fmt.Sprintf("%s: %s", cfg.Prefix, input)
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, Config{Prefix: "INFO"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		conn.Send("test message")
+		conn.Close()
+	}()
+
+	var chunks []string
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 1 || chunks[0] != "INFO: test message" {
+		t.Errorf("unexpected chunks: %v", chunks)
+	}
+}
+
+func TestBidiConnectionSendAfterClose(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"test", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return "", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn.Close()
+	// Wait for completion so we know the state is settled.
+	<-conn.Done()
+
+	if err := conn.Send("after close"); err == nil {
+		t.Error("expected error sending after close")
+	}
+}
+
+func TestBidiConnectionContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	action := NewBidiAction(
+		"blocking", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+
+	_, err = conn.Output()
+	if err == nil {
+		t.Error("expected error after context cancellation")
+	}
+}
+
+func TestBidiFlowRegistration(t *testing.T) {
+	r := registry.New()
+
+	flow := DefineBidiFlow(
+		r, "echoFlow",
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for input := range inCh {
+				outCh <- input
+			}
+			return "done", nil
+		},
+	)
+
+	if flow.Name() != "echoFlow" {
+		t.Errorf("expected name 'echoFlow', got %q", flow.Name())
+	}
+
+	desc := flow.Desc()
+	if desc.Type != api.ActionTypeFlow {
+		t.Errorf("expected type %q, got %q", api.ActionTypeFlow, desc.Type)
+	}
+
+	// Verify bidi metadata is set.
+	if bidi, ok := desc.Metadata["bidi"].(bool); !ok || !bidi {
+		t.Error("expected metadata[\"bidi\"] = true")
+	}
+
+	// Verify registered in registry.
+	action := r.LookupAction(desc.Key)
+	if action == nil {
+		t.Error("expected action to be registered")
+	}
+}
+
+func TestBidiFlowEcho(t *testing.T) {
+	r := registry.New()
+	ctx := context.Background()
+
+	flow := DefineBidiFlow(
+		r, "echoFlow",
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			var count int
+			for input := range inCh {
+				count++
+				outCh <- fmt.Sprintf("echo: %s", input)
+			}
+			return fmt.Sprintf("processed %d", count), nil
+		},
+	)
+
+	conn, err := flow.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		conn.Send("a")
+		conn.Send("b")
+		conn.Close()
+	}()
+
+	var chunks []string
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+
+	output, err := conn.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "processed 2" {
+		t.Errorf("expected 'processed 2', got %q", output)
+	}
+}
+
+func TestBidiFlowCoreRunWorks(t *testing.T) {
+	r := registry.New()
+	ctx := context.Background()
+
+	flow := DefineBidiFlow(
+		r, "withSteps",
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for input := range inCh {
+				// core.Run should work inside a BidiFlow.
+				result, err := Run(ctx, "uppercase", func() (string, error) {
+					return strings.ToUpper(input), nil
+				})
+				if err != nil {
+					return "", err
+				}
+				outCh <- result
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := flow.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		conn.Send("hello")
+		conn.Close()
+	}()
+
+	var chunks []string
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+
+	if len(chunks) != 1 || chunks[0] != "HELLO" {
+		t.Errorf("expected [HELLO], got %v", chunks)
+	}
+}
+
+func TestBidiActionDone(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"quick", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return "finished", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn.Close()
+	<-conn.Done()
+
+	output, err := conn.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "finished" {
+		t.Errorf("expected 'finished', got %q", output)
+	}
 }

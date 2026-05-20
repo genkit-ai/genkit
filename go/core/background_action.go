@@ -45,10 +45,10 @@ type Operation[Out any] struct {
 //
 // For internal use only.
 type BackgroundActionDef[In, Out any] struct {
-	*ActionDef[In, *Operation[Out], struct{}]
+	*Action[In, *Operation[Out], struct{}, struct{}]
 
-	check  *ActionDef[*Operation[Out], *Operation[Out], struct{}] // Sub-action that checks the status of a background operation.
-	cancel *ActionDef[*Operation[Out], *Operation[Out], struct{}] // Sub-action that cancels a background operation.
+	check  *Action[*Operation[Out], *Operation[Out], struct{}, struct{}] // Sub-action that checks the status of a background operation.
+	cancel *Action[*Operation[Out], *Operation[Out], struct{}, struct{}] // Sub-action that cancels a background operation.
 }
 
 // Start starts a background operation.
@@ -77,7 +77,7 @@ func (b *BackgroundActionDef[In, Out]) SupportsCancel() bool {
 
 // Register registers the model with the given registry.
 func (b *BackgroundActionDef[In, Out]) Register(r api.Registry) {
-	b.ActionDef.Register(r)
+	b.Action.Register(r)
 	b.check.Register(r)
 	if b.cancel != nil {
 		b.cancel.Register(r)
@@ -140,7 +140,7 @@ func NewBackgroundAction[In, Out any](
 			return updatedOp, nil
 		})
 
-	var cancelAction *ActionDef[*Operation[Out], *Operation[Out], struct{}]
+	var cancelAction *Action[*Operation[Out], *Operation[Out], struct{}, struct{}]
 	if cancelFn != nil {
 		cancelAction = NewAction(name, api.ActionTypeCancelOperation, metadata, nil,
 			func(ctx context.Context, op *Operation[Out]) (*Operation[Out], error) {
@@ -154,9 +154,9 @@ func NewBackgroundAction[In, Out any](
 	}
 
 	return &BackgroundActionDef[In, Out]{
-		ActionDef: startAction,
-		check:     checkAction,
-		cancel:    cancelAction,
+		Action: startAction,
+		check:  checkAction,
+		cancel: cancelAction,
 	}
 }
 
@@ -165,22 +165,22 @@ func LookupBackgroundAction[In, Out any](r api.Registry, key string) *Background
 	atype, provider, id := api.ParseKey(key)
 	name := api.NewName(provider, id)
 
-	startAction := ResolveActionFor[In, *Operation[Out], struct{}](r, atype, name)
+	startAction := ResolveActionFor[In, *Operation[Out], struct{}, struct{}](r, atype, name)
 	if startAction == nil {
 		return nil
 	}
 
-	checkAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCheckOperation, name)
+	checkAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}, struct{}](r, api.ActionTypeCheckOperation, name)
 	if checkAction == nil {
 		return nil
 	}
 
-	cancelAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}](r, api.ActionTypeCancelOperation, name)
+	cancelAction := ResolveActionFor[*Operation[Out], *Operation[Out], struct{}, struct{}](r, api.ActionTypeCancelOperation, name)
 
 	return &BackgroundActionDef[In, Out]{
-		ActionDef: startAction,
-		check:     checkAction,
-		cancel:    cancelAction,
+		Action: startAction,
+		check:  checkAction,
+		cancel: cancelAction,
 	}
 }
 

@@ -325,7 +325,7 @@ func RegisterAction(g *Genkit, action api.Registerable) {
 //		// handle error
 //	}
 //	fmt.Println(result) // Output: Hello, World!
-func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
+func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}, struct{}] {
 	return core.DefineFlow(g.reg, name, fn)
 }
 
@@ -376,20 +376,57 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 //			fmt.Println("Stream Chunk:", result.Stream) // Outputs: 1, 2, 3, 4, 5
 //		}
 //	}
-func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
+func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream, struct{}] {
 	return core.DefineStreamingFlow(g.reg, name, fn)
 }
 
-// NewFlow creates a [core.Flow] without registering it as an action.
-// To register the flow later, call [RegisterAction].
-func NewFlow[In, Out any](name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
-	return core.NewFlow(name, fn)
-}
-
-// NewStreamingFlow creates a streaming [core.Flow] without registering it as an action.
-// To register the flow later, call [RegisterAction].
-func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
-	return core.NewStreamingFlow(name, fn)
+// DefineBidiFlow defines a bidirectional streaming flow, registers it as a [core.Action] of type Flow,
+// and returns a [core.Flow] capable of bidirectional streaming.
+//
+// The provided function `fn` receives an initial input of type `In`, reads
+// incoming stream messages of type `StreamIn` from an input channel, and writes
+// outgoing stream messages of type `StreamOut` to an output channel. It returns
+// a final output of type `Out` when complete.
+//
+// Example:
+//
+//	chatFlow := genkit.DefineBidiFlow(g, "chat",
+//		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+//			var count int
+//			for input := range inCh {
+//				count++
+//				outCh <- fmt.Sprintf("reply: %s", input)
+//			}
+//			return fmt.Sprintf("processed %d messages", count), nil
+//		},
+//	)
+//
+//	// Start a bidi connection:
+//	conn, err := chatFlow.StreamBidi(ctx, struct{}{})
+//	if err != nil {
+//		// handle error
+//	}
+//
+//	// Send messages concurrently:
+//	go func() {
+//		conn.Send("hello")
+//		conn.Send("world")
+//		conn.Close()
+//	}()
+//
+//	// Receive streamed responses:
+//	for chunk, err := range conn.Receive() {
+//		if err != nil {
+//			// handle error
+//		}
+//		fmt.Println(chunk) // Outputs: "reply: hello", "reply: world"
+//	}
+//
+//	// Get the final output:
+//	output, err := conn.Output()
+//	fmt.Println(output) // Output: "processed 2 messages"
+func DefineBidiFlow[In, Out, StreamOut, StreamIn any](g *Genkit, name string, fn core.BidiFunc[In, Out, StreamOut, StreamIn]) *core.Flow[In, Out, StreamOut, StreamIn] {
+	return core.DefineBidiFlow(g.reg, name, fn)
 }
 
 // Run executes the given function `fn` within the context of the current flow run,

@@ -52,7 +52,7 @@ type Prompt interface {
 
 // prompt is a prompt template that can be executed to generate a model response.
 type prompt struct {
-	core.ActionDef[any, *GenerateActionOptions, struct{}]
+	core.Action[any, *GenerateActionOptions, struct{}, struct{}]
 	promptOptions
 	registry api.Registry
 }
@@ -133,7 +133,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		metadata["prompt"] = promptMetadata
 	}
 
-	p.ActionDef = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
+	p.Action = *core.DefineAction(r, name, api.ActionTypeExecutablePrompt, metadata, p.InputSchema, p.buildRequest)
 
 	return p
 }
@@ -141,13 +141,13 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 // LookupPrompt looks up a [Prompt] registered by [DefinePrompt].
 // It returns nil if the prompt was not defined.
 func LookupPrompt(r api.Registry, name string) Prompt {
-	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}](r, api.ActionTypeExecutablePrompt, name)
+	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}, struct{}](r, api.ActionTypeExecutablePrompt, name)
 	if action == nil {
 		return nil
 	}
 	return &prompt{
-		ActionDef: *action,
-		registry:  r,
+		Action:   *action,
+		registry: r,
 	}
 }
 
@@ -329,7 +329,7 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *prompt) Desc() api.ActionDesc {
-	desc := p.ActionDef.Desc()
+	desc := p.Action.Desc()
 	promptMeta := desc.Metadata["prompt"].(map[string]any)
 	if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
 		if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {

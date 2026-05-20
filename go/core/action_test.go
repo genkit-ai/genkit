@@ -34,7 +34,7 @@ func inc(_ context.Context, x int, _ noStream) (int, error) {
 
 func TestActionRun(t *testing.T) {
 	r := registry.New()
-	a := defineAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	got, err := a.Run(context.Background(), 3, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestActionRun(t *testing.T) {
 
 func TestActionRunJSON(t *testing.T) {
 	r := registry.New()
-	a := defineAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	input := []byte("3")
 	want := []byte("4")
 	got, err := a.RunJSON(context.Background(), input, nil)
@@ -73,7 +73,7 @@ func count(ctx context.Context, n int, cb func(context.Context, int) error) (int
 func TestActionStreaming(t *testing.T) {
 	ctx := context.Background()
 	r := registry.New()
-	a := defineAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
+	a := DefineStreamingAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
 	const n = 3
 
 	// Non-streaming.
@@ -108,7 +108,7 @@ func TestActionTracing(t *testing.T) {
 	tc := tracing.NewTestOnlyTelemetryClient()
 	tracing.WriteTelemetryImmediate(tc)
 	name := api.NewName("test", "TestTracing-inc")
-	a := defineAction(r, name, api.ActionTypeCustom, nil, nil, inc)
+	a := DefineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestResolveActionFor(t *testing.T) {
 		}
 		DefineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
 
-		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/resolvable")
+		found := ResolveActionFor[int, int, struct{}, struct{}](r, api.ActionTypeCustom, "test/resolvable")
 
 		if found == nil {
 			t.Fatal("ResolveActionFor returned nil")
@@ -380,7 +380,7 @@ func TestResolveActionFor(t *testing.T) {
 	t.Run("returns nil for non-existent action", func(t *testing.T) {
 		r := registry.New()
 
-		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/nonexistent")
+		found := ResolveActionFor[int, int, struct{}, struct{}](r, api.ActionTypeCustom, "test/nonexistent")
 
 		if found != nil {
 			t.Errorf("ResolveActionFor returned %v, want nil", found)
@@ -396,7 +396,7 @@ func TestLookupActionFor(t *testing.T) {
 		}
 		DefineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
 
-		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/lookupable")
+		found := LookupActionFor[string, string, struct{}, struct{}](r, api.ActionTypeCustom, "test/lookupable")
 
 		if found == nil {
 			t.Fatal("LookupActionFor returned nil")
@@ -406,7 +406,7 @@ func TestLookupActionFor(t *testing.T) {
 	t.Run("returns nil for non-existent action", func(t *testing.T) {
 		r := registry.New()
 
-		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/missing")
+		found := LookupActionFor[string, string, struct{}, struct{}](r, api.ActionTypeCustom, "test/missing")
 
 		if found != nil {
 			t.Errorf("LookupActionFor returned %v, want nil", found)
