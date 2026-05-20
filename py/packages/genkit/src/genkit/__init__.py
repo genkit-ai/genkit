@@ -16,6 +16,10 @@
 
 """Genkit — Build AI-powered applications."""
 
+from pkgutil import extend_path
+
+__path__ = extend_path(__path__, __name__)
+
 from genkit._ai._aio import ActionKind, ActionRunContext, Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
@@ -34,7 +38,6 @@ from genkit._core._action import Action, StreamResponse
 from genkit._core._error import GenkitError, PublicError
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
-from genkit._core._plugins import extend_plugin_namespace
 from genkit._core._typing import (
     CustomPart,
     DocumentPart,
@@ -80,7 +83,6 @@ from genkit.model import (
 # Flow is an alias for Action (used in samples for flow type hints)
 Flow = Action
 
-extend_plugin_namespace()
 
 __all__ = [
     # Main class
