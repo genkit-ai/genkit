@@ -22,15 +22,15 @@
  * Runs three scenarios against a live GoodMem server and an OpenAI-compatible
  * model:
  *
- *   1. Persistent project knowledge. Store project facts, wait for
- *      indexing, retrieve the top chunks for a semantic query, and
- *      have the model answer the question grounded in those chunks.
- *   2. Scribe and analyst pipeline. One step stores team notes, a
- *      second step retrieves and summarizes them. Each step runs
- *      inside its own Genkit span so the roles show up in the trace.
- *   3. Metadata-driven retrieval. Store release entries tagged by
- *      category, then retrieve only the features by passing a
- *      server-side JSONPath filter to retrieve_memories.
+ *   1. Persistent project context across sessions. Store project facts in
+ *      a space, then retrieve them from a separate call so the model can
+ *      answer a follow-up question grounded in the stored context.
+ *   2. Two-role team knowledge pipeline. A scribe step stores team notes;
+ *      an analyst step retrieves and summarizes them. Each step runs
+ *      inside its own Genkit span so the role shows up in the trace.
+ *   3. Structured team activity log. Store release entries tagged by
+ *      category, then use the metadataFilter parameter on
+ *      retrieve_memories to fetch only the feature entries.
  *
  * Required environment variables:
  *   GOODMEM_API_KEY, GOODMEM_BASE_URL, OPENAI_API_KEY.
@@ -63,18 +63,16 @@ const ai = genkit({
 const MODEL = openAI.model('gpt-4o-mini');
 
 const PROJECT_FACTS = [
-  'Acme Corp was founded in 2019 by Jane Smith and Carlos Rivera in Austin, Texas.',
-  "Acme Corp's flagship product is AcmeDB, a cloud-native distributed database for real-time analytics.",
-  'In March 2023, Acme Corp raised $50 million in Series B funding led by Benchmark Capital.',
-  "AcmeDB's free tier supports up to 10 GB of storage, 1 million reads per month, and 100,000 writes per month.",
-  'Acme Corp is headquartered in Austin, with remote offices in Berlin and Bangalore, and employs around 120 people.',
+  "I'm building a customer support assistant for our SaaS product.",
+  'The team uses Python 3.12 with FastAPI and Postgres.',
+  'For tests we use pytest with at least 80% coverage required.',
 ];
 
 const TEAM_NOTES = [
-  'Q2 goal: reduce customer support response time to under two hours.',
+  'Q2 goal: reduce customer support response time to under 2 hours.',
   'Our main services are auth-service, billing-service, and notifications-service.',
   'Known issue: notifications-service drops messages during high load.',
-  'Retro outcome: the CI pipeline is too slow; we should parallelize tests.',
+  'Team retro: the CI pipeline is too slow; we should parallelize tests.',
 ];
 
 interface ReleaseEntry {
@@ -225,7 +223,7 @@ async function deleteSpaceSilently(spaceId: string): Promise<void> {
 }
 
 async function scenario1PersistentMemory(embedderId: string): Promise<string> {
-  section('Scenario 1: persistent project knowledge');
+  section('Scenario 1: persistent project context across sessions');
   const spaceId = await createSpace('genkit-goodmem-persistent', embedderId);
   console.log(`  Space: ${spaceId}`);
 
@@ -237,7 +235,7 @@ async function scenario1PersistentMemory(embedderId: string): Promise<string> {
   console.log(`  Waiting ${INDEX_WAIT_MS / 1000}s for indexing.`);
   await new Promise((r) => setTimeout(r, INDEX_WAIT_MS));
 
-  const question = 'When was Acme Corp founded and by whom?';
+  const question = 'Remind me what our coverage requirement is.';
   console.log(`\n  Question: ${question}`);
 
   const chunks = await retrieveChunks(spaceId, question, { maxResults: 3 });
@@ -257,7 +255,7 @@ async function scenario1PersistentMemory(embedderId: string): Promise<string> {
 }
 
 async function scenario2ScribeAnalyst(embedderId: string): Promise<string> {
-  section('Scenario 2: scribe and analyst pipeline');
+  section('Scenario 2: two-role team knowledge pipeline');
   const spaceId = await createSpace('genkit-goodmem-team', embedderId);
   console.log(`  Space: ${spaceId}`);
 
@@ -277,8 +275,7 @@ async function scenario2ScribeAnalyst(embedderId: string): Promise<string> {
   console.log(`  Waiting ${INDEX_WAIT_MS / 1000}s for indexing.`);
   await new Promise((r) => setTimeout(r, INDEX_WAIT_MS));
 
-  const question =
-    'Summarize what we know about our services and current team priorities.';
+  const question = 'What do we know about our services and current priorities?';
 
   const summary = await runInNewSpan<string>(
     {
@@ -307,7 +304,7 @@ async function scenario2ScribeAnalyst(embedderId: string): Promise<string> {
 }
 
 async function scenario3MetadataFiltering(embedderId: string): Promise<string> {
-  section('Scenario 3: metadata-driven retrieval');
+  section('Scenario 3: structured team activity log');
   const spaceId = await createSpace('genkit-goodmem-release-log', embedderId);
   console.log(`  Space: ${spaceId}`);
 
@@ -325,7 +322,7 @@ async function scenario3MetadataFiltering(embedderId: string): Promise<string> {
   await new Promise((r) => setTimeout(r, INDEX_WAIT_MS));
 
   const filter = "CAST(val('$.category') AS TEXT) = 'feat'";
-  const question = 'Show the new features we shipped this cycle.';
+  const question = "Show me the new features we've shipped.";
   console.log(`\n  Question: ${question}`);
   console.log(`  Filter:   ${filter}`);
 
