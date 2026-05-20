@@ -15,6 +15,15 @@
  */
 
 export {
+  AgentInitSchema,
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentStreamChunkSchema,
+  type AgentInit,
+  type AgentInput,
+  type AgentOutput,
+} from '@genkit-ai/ai';
+export {
   InMemoryStreamManager,
   StreamNotFoundError,
   type ActionStreamInput,
@@ -23,4 +32,21 @@ export {
 } from '@genkit-ai/core';
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
-export { GenkitBeta, genkit, type GenkitBetaOptions } from './genkit-beta.js';
+export {
+  FileSessionStore,
+  GenkitBeta,
+  InMemorySessionStore,
+  SessionRunner,
+  genkit,
+  type AgentFn,
+  type AgentStreamChunk,
+  type GenkitBetaOptions,
+  type SessionSnapshot,
+  type SessionSnapshotInput,
+  type SessionState,
+  type SessionStore,
+  type SessionStoreOptions,
+  type SnapshotCallback,
+  type SnapshotContext,
+  type SnapshotMutator,
+} from './genkit-beta.js';

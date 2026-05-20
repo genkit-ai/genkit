@@ -47,6 +47,7 @@ export class Channel<T> implements AsyncIterable<T> {
   private ready: Task<void> = createTask<void>();
   private buffer: (T | null)[] = [];
   private err: unknown = null;
+  private done: boolean = false;
 
   send(value: T): void {
     this.buffer.push(value);
@@ -69,6 +70,9 @@ export class Channel<T> implements AsyncIterable<T> {
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return {
       next: async (): Promise<IteratorResult<T>> => {
+        if (this.done) {
+          return { value: undefined as unknown as T, done: true };
+        }
         if (this.err) {
           throw this.err;
         }
@@ -80,6 +84,8 @@ export class Channel<T> implements AsyncIterable<T> {
         if (!this.buffer.length) {
           this.ready = createTask<void>();
         }
+
+        if (value === null) this.done = true;
 
         return {
           value,
@@ -172,5 +178,27 @@ export class AsyncTaskQueue {
    */
   async merge() {
     await this.last;
+  }
+}
+
+/** A lightweight, cross-platform EventEmitter. */
+export class EventEmitter {
+  private listeners: Record<string, ((...args: any[]) => void)[]> = {};
+
+  on(event: string, listener: (...args: any[]) => void) {
+    if (!this.listeners[event]) {
+      this.listeners[event] = [];
+    }
+    this.listeners[event].push(listener);
+  }
+
+  off(event: string, listener: (...args: any[]) => void) {
+    if (!this.listeners[event]) return;
+    this.listeners[event] = this.listeners[event].filter((l) => l !== listener);
+  }
+
+  emit(event: string, ...args: any[]) {
+    if (!this.listeners[event]) return;
+    this.listeners[event].forEach((l) => l(...args));
   }
 }
