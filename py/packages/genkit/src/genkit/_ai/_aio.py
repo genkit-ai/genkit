@@ -298,8 +298,8 @@ class Genkit:
 
     def middleware(
         self,
-        name: str,
         *,
+        name: str,
         description: str | None = None,
     ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]:
         """Decorator that registers a custom middleware on this app's registry."""
