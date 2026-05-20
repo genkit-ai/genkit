@@ -1,0 +1,27 @@
+{
+  "name": "goodmem",
+  "version": "1.0.0",
+  "description": "End-to-end demo for the genkitx-goodmem plugin.",
+  "main": "lib/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node lib/index.js",
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "demo": "tsx src/index.ts",
+    "genkit:start": "cross-env GENKIT_ENV=dev genkit start -- tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@genkit-ai/compat-oai": "workspace:*",
+    "genkit": "workspace:*",
+    "genkitx-goodmem": "workspace:*"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "tsx": "^4.19.3",
+    "typescript": "^5.9.3"
+  }
+}
