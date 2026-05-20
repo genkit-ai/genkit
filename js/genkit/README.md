@@ -6,7 +6,7 @@ Genkit is a framework for building AI-powered applications. It provides open sou
 
 Install the following Genkit dependencies to use Genkit in your project:
 
-- `genkit` — Genkit core capabilities.
+- `genkit` - Genkit core capabilities.
 - A model plugin, e.g. `@genkit-ai/google-genai` for Google AI Gemini models.
 
 ```posix-terminal
@@ -129,7 +129,7 @@ let response = await ai.generate({
   tools: [confirmAction],
 });
 
-// The model triggered an interrupt — get user approval
+// The model triggered an interrupt - get user approval
 if (response.interrupts.length) {
   const interrupt = response.interrupts[0];
   console.log(interrupt.toolRequest.input); // { action: '...', reason: '...' }
@@ -162,7 +162,7 @@ const sendEmail = ai.defineTool(
     if (!resumed) {
       interrupt({ message: `Send email to ${input.to}?` });
     }
-    // Approved — proceed with sending
+    // Approved - proceed with sending
     return { sent: true };
   }
 );
@@ -198,7 +198,7 @@ let response = await ai.generate({
   use: [toolApproval({ approved: ['readInbox'] })], // sendEmail not approved
 });
 
-// sendEmail was interrupted — get user approval, then restart
+// sendEmail was interrupted - get user approval, then restart
 if (response.interrupts.length) {
   response = await ai.generate({
     model: googleAI.model('gemini-flash-latest'),
@@ -300,11 +300,11 @@ for await (const chunk of stream) {
 
 The [`@genkit-ai/middleware`](https://www.npmjs.com/package/@genkit-ai/middleware) package provides ready-made middleware to add common functionality to your AI requests:
 
-- **`retry`** — Automatically retry failed requests with exponential backoff.
-- **`fallback`** — Fall back to alternative models on specific error statuses.
-- **`toolApproval`** — Restrict tool execution to an approved list, interrupting unapproved calls for review.
-- **`filesystem`** — Give the model sandboxed read/write access to a directory on the filesystem.
-- **`skills`** — Scan for skill definitions and inject them as available tools.
+- **`retry`** - Automatically retry failed requests with exponential backoff.
+- **`fallback`** - Fall back to alternative models on specific error statuses.
+- **`toolApproval`** - Restrict tool execution to an approved list, interrupting unapproved calls for review.
+- **`filesystem`** - Give the model sandboxed read/write access to a directory on the filesystem.
+- **`skills`** - Scan for skill definitions and inject them as available tools.
 
 ```posix-terminal
 npm install @genkit-ai/middleware
@@ -334,7 +334,7 @@ Genkit comes with a powerful CLI and Developer UI for locally testing, debugging
 npx genkit start -- npx tsx src/index.ts
 ```
 
-The Developer UI lets you visually test flows, inspect traces, and experiment with prompts — all in your browser.
+The Developer UI lets you visually test flows, inspect traces, and experiment with prompts - all in your browser.
 
 ## Plugins
 
@@ -352,9 +352,9 @@ Browse all plugins: [npmjs.com/search?q=keywords:genkit-plugin](https://www.npmj
 
 Genkit flows can be deployed anywhere Node.js runs:
 
-- **Express** — [Deploy to Node.js](https://genkit.dev/docs/js/deployment/any-platform/)
-- **Firebase** — [Deploy to Firebase](https://genkit.dev/docs/js/deployment/firebase/)
-- **Cloud Run** — [Deploy to Cloud Run](https://genkit.dev/docs/js/deployment/cloud-run/)
+- **Express** - [Deploy to Node.js](https://genkit.dev/docs/js/deployment/any-platform/)
+- **Firebase** - [Deploy to Firebase](https://genkit.dev/docs/js/deployment/firebase/)
+- **Cloud Run** - [Deploy to Cloud Run](https://genkit.dev/docs/js/deployment/cloud-run/)
 
 ## Next Steps
 
