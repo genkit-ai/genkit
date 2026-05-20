@@ -16,7 +16,13 @@
 
 package googlegenai
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"testing"
+
+	"google.golang.org/genai"
+)
 
 func TestClassifyModelTunedEndpoint(t *testing.T) {
 	cases := []struct {
@@ -35,6 +41,67 @@ func TestClassifyModelTunedEndpoint(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ClassifyModel(tc.name); got != tc.want {
 				t.Fatalf("ClassifyModel(%q) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveVertexModelName(t *testing.T) {
+	ctx := context.Background()
+
+	vertex, err := genai.NewClient(ctx, &genai.ClientConfig{
+		Backend:    genai.BackendVertexAI,
+		Project:    "test-project",
+		Location:   "us-central1",
+		HTTPClient: &http.Client{},
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient (vertex): %v", err)
+	}
+
+	geminiAPI, err := genai.NewClient(ctx, &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test-key",
+	})
+	if err != nil {
+		t.Fatalf("genai.NewClient (gemini): %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		client *genai.Client
+		in     string
+		want   string
+	}{
+		{
+			name:   "short form on Vertex expands",
+			client: vertex,
+			in:     "endpoints/1234567890",
+			want:   "projects/test-project/locations/us-central1/endpoints/1234567890",
+		},
+		{
+			name:   "fully qualified path is unchanged",
+			client: vertex,
+			in:     "projects/my-proj/locations/us-central1/endpoints/999",
+			want:   "projects/my-proj/locations/us-central1/endpoints/999",
+		},
+		{
+			name:   "non-tuned name is unchanged",
+			client: vertex,
+			in:     "gemini-2.5-flash",
+			want:   "gemini-2.5-flash",
+		},
+		{
+			name:   "short form on Gemini API backend is unchanged",
+			client: geminiAPI,
+			in:     "endpoints/1234567890",
+			want:   "endpoints/1234567890",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveVertexModelName(tc.client, tc.in); got != tc.want {
+				t.Errorf("resolveVertexModelName(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
