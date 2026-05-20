@@ -567,10 +567,13 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         # trace inspector can render the "Context" panel for a flow run.
         if ctx.context:
             try:
-                cleaned_context = _sanitize_context(ctx.context)
-                extra_metadata['context'] = json.dumps(cleaned_context)
-            except (TypeError, ValueError):
-                extra_metadata['context'] = str(ctx.context)
+                extra_metadata['context'] = json.dumps(ctx.context)
+            except Exception:
+                try:
+                    cleaned_context = _sanitize_context(ctx.context)
+                    extra_metadata['context'] = json.dumps(cleaned_context)
+                except Exception:
+                    extra_metadata['context'] = str(ctx.context)
         span_meta = SpanMetadata(
             name=self._name,
             type='action',
