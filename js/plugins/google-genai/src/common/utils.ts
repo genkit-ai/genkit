@@ -690,4 +690,4 @@ export function parseRetryAfterMs(value: string): number | undefined {
   return undefined;
 }
 
-export const TEST_ONLY = { aggregateResponses, parseRetryAfterMs };
+export const TEST_ONLY = { aggregateResponses };
