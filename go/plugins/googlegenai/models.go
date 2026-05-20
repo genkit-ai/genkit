@@ -52,6 +52,17 @@ var (
 		Output:      []string{"media"},
 		LongRunning: true,
 	}
+
+	// VirtualTryOnSupports describes model capabilities for the virtual try-on
+	// image editing models. Unlike regular Imagen models these accept a system
+	// role (used to carry the person/product image part metadata).
+	VirtualTryOnSupports = ai.ModelSupports{
+		Multiturn:  false,
+		Tools:      false,
+		SystemRole: true,
+		Media:      true,
+		Output:     []string{"media"},
+	}
 )
 
 // Default options for unknown models of each type.
@@ -72,6 +83,12 @@ var (
 		Supports:     &VeoSupports,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: configToMap(genai.GenerateVideosConfig{}),
+	}
+
+	defaultVirtualTryOnOpts = ai.ModelOptions{
+		Supports:     &VirtualTryOnSupports,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(VirtualTryOnConfig{}),
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
@@ -104,6 +121,8 @@ const (
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 
+	virtualTryOn001 = "virtual-try-on-001"
+
 	embedding001                      = "embedding-001"
 	textembeddinggecko003             = "textembedding-gecko@003"
 	textembeddinggecko002             = "textembedding-gecko@002"
@@ -133,6 +152,8 @@ var (
 		veo30FastGenerate001,
 		veo31Generate001,
 		veo31FastGenerate001,
+
+		virtualTryOn001,
 	}
 
 	googleAIModels = []string{
@@ -260,6 +281,15 @@ var (
 		},
 	}
 
+	supportedVirtualTryOnModels = map[string]ai.ModelOptions{
+		virtualTryOn001: {
+			Label:    "Virtual Try-On 001",
+			Versions: []string{},
+			Supports: &VirtualTryOnSupports,
+			Stage:    ai.ModelStageStable,
+		},
+	}
+
 	embedderConfig = map[string]ai.EmbedderOptions{
 		embedding001: {
 			Dimensions: 768,
@@ -339,6 +369,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		if !ok {
 			opts = defaultVeoOpts
 		}
+	case ModelTypeVirtualTryOn:
+		opts, ok = supportedVirtualTryOnModels[name]
+		if !ok {
+			opts = defaultVirtualTryOnOpts
+		}
 	default:
 		opts = defaultGeminiOpts
 	}
@@ -406,10 +441,11 @@ func listModels(provider string) (map[string]ai.ModelOptions, error) {
 
 // genaiModels collects all the available models in go-genai SDK
 type genaiModels struct {
-	gemini    []string
-	imagen    []string
-	embedders []string
-	veo       []string
+	gemini       []string
+	imagen       []string
+	embedders    []string
+	veo          []string
+	virtualTryOn []string
 }
 
 // listGenaiModels returns a list of supported models and embedders from the
@@ -439,6 +475,11 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		if strings.Contains(name, "veo") {
 			models.veo = append(models.veo, name)
+			continue
+		}
+
+		if strings.HasPrefix(name, "virtual-try-on-") {
+			models.virtualTryOn = append(models.virtualTryOn, name)
 			continue
 		}
 

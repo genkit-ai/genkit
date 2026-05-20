@@ -15,11 +15,12 @@ import (
 type ModelType int
 
 const (
-	ModelTypeUnknown  ModelType = iota
-	ModelTypeGemini             // Text/multimodal generation (gemini-*, gemma-*)
-	ModelTypeImagen             // Image generation (imagen-*)
-	ModelTypeVeo                // Video generation (veo-*), long-running
-	ModelTypeEmbedder           // Embedding models (*embedding*)
+	ModelTypeUnknown      ModelType = iota
+	ModelTypeGemini                 // Text/multimodal generation (gemini-*, gemma-*)
+	ModelTypeImagen                 // Image generation (imagen-*)
+	ModelTypeVeo                    // Video generation (veo-*), long-running
+	ModelTypeEmbedder               // Embedding models (*embedding*)
+	ModelTypeVirtualTryOn           // Virtual try-on image editing (virtual-try-on-*)
 )
 
 // ClassifyModel determines the model type from its name.
@@ -28,6 +29,8 @@ func ClassifyModel(name string) ModelType {
 	switch {
 	case strings.HasPrefix(name, "veo"):
 		return ModelTypeVeo
+	case strings.HasPrefix(name, "virtual-try-on-"):
+		return ModelTypeVirtualTryOn
 	case strings.HasPrefix(name, "imagen"), strings.HasPrefix(name, "image"):
 		return ModelTypeImagen
 	case strings.HasPrefix(name, "gemini"), strings.HasPrefix(name, "gemma"):
@@ -61,6 +64,8 @@ func (mt ModelType) DefaultSupports() *ai.ModelSupports {
 		return &Media
 	case ModelTypeVeo:
 		return &VeoSupports
+	case ModelTypeVirtualTryOn:
+		return &VirtualTryOnSupports
 	default:
 		return nil
 	}
@@ -77,6 +82,8 @@ func (mt ModelType) DefaultConfig() any {
 		return &genai.GenerateVideosConfig{}
 	case ModelTypeEmbedder:
 		return &genai.EmbedContentConfig{}
+	case ModelTypeVirtualTryOn:
+		return &VirtualTryOnConfig{}
 	default:
 		return nil
 	}
