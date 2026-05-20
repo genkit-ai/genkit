@@ -196,7 +196,7 @@ export class Session<S = unknown> extends EventEmitter {
 
   constructor(initialState: SessionState<S>) {
     super();
-    this.sessionId = initialState.sessionId || crypto.randomUUID();
+    this.sessionId = initialState.sessionId || globalThis.crypto.randomUUID();
     initialState.sessionId = this.sessionId;
     this.state = initialState;
   }
@@ -330,7 +330,8 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     const result = mutator(current ? structuredClone(current) : undefined);
     if (result === null) return null;
 
-    const id = snapshotId || result.snapshotId || crypto.randomUUID();
+    const id =
+      snapshotId || result.snapshotId || globalThis.crypto.randomUUID();
     const full: SessionSnapshot<S> = {
       ...result,
       snapshotId: id,
@@ -557,7 +558,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
       if (snapshot.parentId) {
         ({ convoId } = parseSnapshotId(snapshot.parentId));
       } else {
-        convoId = crypto.randomUUID();
+        convoId = globalThis.crypto.randomUUID();
       }
       id = composeSnapshotId(convoId, generateSnapshotSuffix());
     }
