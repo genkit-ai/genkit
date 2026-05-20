@@ -26,11 +26,11 @@ else:
     from enum import StrEnum
 
 from functools import cached_property
-from typing import Any
+from typing import Annotated, Any
 
 from google import genai
 from google.genai import types as genai_types
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema
 
 from genkit import (
     Media,
@@ -163,6 +163,20 @@ class ImagenImageSize(StrEnum):
     SIZE_2K = '2K'
 
 
+class ImagenPersonGeneration(StrEnum):
+    """Controls whether Imagen may generate images of people."""
+
+    DONT_ALLOW = 'dont_allow'
+    ALLOW_ADULT = 'allow_adult'
+    ALLOW_ALL = 'allow_all'
+
+
+def is_imagen_model(name: str) -> bool:
+    """Return True when the model name refers to an Imagen image model."""
+    lower = name.lower()
+    return lower.startswith('imagen-') or lower.startswith('imagegeneration')
+
+
 def vertexai_image_model_info(
     version: str,
 ) -> ModelInfo:
@@ -209,21 +223,34 @@ class ImagenConfigSchema(BaseModel):
         le=4,
         description='Number of images to generate.',
     )
-    aspect_ratio: ImagenAspectRatio | None = Field(
+    aspect_ratio: str | None = Field(
         None,
         alias='aspectRatio',
-        description='Aspect ratio of the generated images.',
+        description=(
+            'Aspect ratio of the generated images (e.g. "1:1", "16:9", "9:16"). '
+            'Any ratio string supported by the model may be used.'
+        ),
     )
-    person_generation: genai_types.PersonGeneration | None = Field(
-        None,
-        alias='personGeneration',
-        description='Allows generation of people by the model.',
-    )
-    image_size: ImagenImageSize | None = Field(
-        None,
-        alias='imageSize',
-        description='Largest dimension of the generated image. Not supported for Imagen 3 models.',
-    )
+    person_generation: Annotated[
+        ImagenPersonGeneration | None,
+        WithJsonSchema({
+            'type': 'string',
+            'enum': [mode.value for mode in ImagenPersonGeneration],
+            'description': 'Allows generation of people by the model.',
+        }),
+    ] = Field(None, alias='personGeneration')
+    image_size: Annotated[
+        ImagenImageSize | None,
+        WithJsonSchema({
+            'type': 'string',
+            'enum': [size.value for size in ImagenImageSize],
+            'description': 'Largest dimension of the generated image.',
+        }),
+    ] = Field(None, alias='imageSize')
+
+
+# Alias for backwards compatibility with __init__.py exports.
+ImagenConfig = ImagenConfigSchema
 
 
 class ImagenModel:

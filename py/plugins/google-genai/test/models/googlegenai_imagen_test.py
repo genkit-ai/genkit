@@ -101,7 +101,6 @@ def test_imagen_config_schema_exposes_supported_options() -> None:
     schema = to_json_schema(ImagenConfigSchema)
     properties = schema['properties']
     number_of_images = properties['numberOfImages']
-
     assert set(properties) == {
         'numberOfImages',
         'imageSize',
@@ -110,6 +109,31 @@ def test_imagen_config_schema_exposes_supported_options() -> None:
     }
     assert number_of_images.get('default') is None
     assert number_of_images['anyOf'][0]['maximum'] == 4
+    assert properties['aspectRatio']['anyOf'][0]['type'] == 'string'
+    assert 'enum' not in properties['aspectRatio']
+    assert properties['personGeneration']['enum'] == ['dont_allow', 'allow_adult', 'allow_all']
+    assert properties['imageSize']['enum'] == ['1K', '2K']
+
+
+def test_imagen_config_accepts_custom_aspect_ratio(mocker: MockerFixture) -> None:
+    """Test aspect ratio accepts any string supported by the API."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={'aspect_ratio': '21:9'},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config['aspect_ratio'] == '21:9'
 
 
 def test_imagen_config_does_not_set_image_count_when_omitted(mocker: MockerFixture) -> None:

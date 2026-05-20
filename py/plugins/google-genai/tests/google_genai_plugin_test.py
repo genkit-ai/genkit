@@ -218,6 +218,14 @@ async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock
     names = {a.name for a in imagen_actions}
     expected = {'googleai/imagen-3.0-generate-002'} | {googleai_name(m) for m in GOOGLEAI_KNOWN_IMAGEN_MODELS}
     assert names == expected
+    for action in imagen_actions:
+        custom_options = action.metadata['model']['customOptions']
+        assert set(custom_options['properties']) == {
+            'numberOfImages',
+            'aspectRatio',
+            'personGeneration',
+            'imageSize',
+        }
 
 
 @patch('genkit.plugins.google_genai.google.genai.client.Client')

@@ -133,6 +133,7 @@ from genkit.plugins.google_genai.models.imagen import (
     ImagenConfigSchema,
     ImagenModel,
     googleai_image_model_info,
+    is_imagen_model,
     vertexai_image_model_info,
 )
 from genkit.plugins.google_genai.models.veo import (
@@ -574,7 +575,7 @@ class GoogleAI(Plugin):
         clean_name = name.replace(GOOGLEAI_PLUGIN_NAME + '/', '') if name.startswith(GOOGLEAI_PLUGIN_NAME) else name
 
         # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        if is_imagen_model(clean_name):
             model_ref = googleai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = ImagenConfigSchema
@@ -584,7 +585,7 @@ class GoogleAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_imagen_model(clean_name):
                 model = ImagenModel(clean_name, self._runtime_client())
             else:
                 model = GeminiModel(clean_name, self._runtime_client())
@@ -898,7 +899,7 @@ class VertexAI(Plugin):
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
 
         # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        if is_imagen_model(clean_name):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = ImagenConfigSchema
@@ -911,7 +912,7 @@ class VertexAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_imagen_model(clean_name):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())
