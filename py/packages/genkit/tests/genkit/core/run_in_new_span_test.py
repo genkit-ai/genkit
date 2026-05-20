@@ -212,7 +212,7 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
 
     # We pass a context dictionary with both serializable and unserializable values,
     # including nested dictionaries and lists.
-    complex_context = {
+    complex_context: dict[str, object] = {
         'auth': {
             'user_id': 123,
             'token': 'secret_token',
@@ -230,7 +230,9 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
 
     # The context key is mapped under genkit:metadata:context
     assert 'genkit:metadata:context' in attrs
-    context_json = json.loads(attrs['genkit:metadata:context'])
+    context_attr = attrs['genkit:metadata:context']
+    assert isinstance(context_attr, str)
+    context_json = json.loads(context_attr)
 
     # Assertions
     assert context_json['auth']['user_id'] == 123
@@ -257,7 +259,7 @@ async def test_action_context_telemetry_circular_references(exporter: InMemorySp
     )
 
     # Setup a context dictionary with circular references
-    circular_context = {
+    circular_context: dict[str, object] = {
         'key': 'val',
     }
     circular_context['self'] = circular_context
@@ -268,7 +270,9 @@ async def test_action_context_telemetry_circular_references(exporter: InMemorySp
     attrs = dict(span.attributes or {})
 
     assert 'genkit:metadata:context' in attrs
-    context_json = json.loads(attrs['genkit:metadata:context'])
+    context_attr = attrs['genkit:metadata:context']
+    assert isinstance(context_attr, str)
+    context_json = json.loads(context_attr)
 
     # 'key' is serializable, and 'self' circular reference should be safely cut off with '[Circular]'
     assert context_json == {'key': 'val', 'self': '[Circular]'}
