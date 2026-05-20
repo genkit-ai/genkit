@@ -56,6 +56,10 @@ class RegistryLike(Protocol):
         """Register an arbitrary value under kind/name."""
         ...
 
+    def list_values(self, kind: str) -> dict[str, object]:
+        """List all values registered under a kind, merged with the parent registry."""
+        ...
+
     def register_action_from_instance(self, action: Action) -> None:
         """Register a pre-built Action instance."""
         ...

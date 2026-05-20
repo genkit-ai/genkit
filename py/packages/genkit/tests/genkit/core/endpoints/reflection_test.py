@@ -360,6 +360,35 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
 
 
 @pytest.mark.asyncio
+async def test_values_middleware_uses_class_docstring_as_description_fallback() -> None:
+    """When no explicit description is passed, the class docstring is the fallback.
+
+    Mirrors the action/tool convention: authors get a Dev-UI-visible description
+    for free from a well-written docstring, with leading indentation cleaned up.
+    """
+
+    ai = Genkit()
+
+    @ai.middleware(name='docstring_mw')
+    class _DocMw(BaseMiddleware):
+        """Logs every model call with a configurable prefix.
+
+        Extra paragraphs end up in the description verbatim.
+        """
+
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        entry = response.json()['docstring_mw']
+        assert entry['description'] == (
+            'Logs every model call with a configurable prefix.\n\nExtra paragraphs end up in the description verbatim.'
+        )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     """A middleware with no config knobs still gets an (empty) object schema.
 

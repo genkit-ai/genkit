@@ -58,7 +58,7 @@ from genkit._core._action import (
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import BaseMiddleware, middleware_class_index
 from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -498,10 +498,14 @@ def register_prompt_actions(
     This links the executable prompt to actions in the registry, enabling
     lookup and DevUI integration.
     """
+    prompt_block: dict[str, Any] = {'name': name, 'variant': variant or ''}
+    use_metadata = _use_to_wire_metadata(registry, executable_prompt._use)  # pyright: ignore[reportPrivateUsage]
+    if use_metadata is not None:
+        prompt_block['use'] = use_metadata
     metadata: dict[str, object] = {
         'type': 'prompt',
         'source': 'programmatic',
-        'prompt': {'name': name, 'variant': variant or ''},
+        'prompt': prompt_block,
     }
 
     async def _ep_factory() -> ExecutablePrompt[Any, Any]:
@@ -517,6 +521,21 @@ def register_prompt_actions(
     executable_prompt._prompt_action = prompt_action  # pyright: ignore[reportPrivateUsage]
     setattr(prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010
     setattr(executable_prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010
+
+    # Propagate the prompt's input/output schemas onto both actions so the Dev
+    # UI Prompt Runner can render a typed form (otherwise the runner has nothing
+    # to introspect and the user just sees a free-form textarea). Dotprompts do
+    # the equivalent in their lazy factory after rendering frontmatter.
+    input_schema = executable_prompt._input_schema  # pyright: ignore[reportPrivateUsage]
+    if input_schema is not None:
+        in_js = to_json_schema(input_schema)
+        for action in (prompt_action, executable_prompt_action):
+            action.input_schema = in_js
+    output_schema = executable_prompt._output_schema  # pyright: ignore[reportPrivateUsage]
+    if output_schema is not None:
+        out_js = to_json_schema(output_schema)
+        for action in (prompt_action, executable_prompt_action):
+            action.output_schema = out_js
 
 
 def _resolve_output_schema(
@@ -1038,6 +1057,44 @@ def define_schema(registry: Registry, name: str, schema: type[BaseModel]) -> Non
     logger.debug(f'Registered schema "{name}"')
 
 
+def _use_to_wire_metadata(
+    registry: Registry,
+    use: Sequence[BaseMiddleware | MiddlewareRef] | None,
+) -> list[dict[str, Any]] | None:
+    """Serialize a prompt's ``use=`` list into the wire-shape the Dev UI reads.
+
+    Produces the ``[{name, config?}]`` list the Prompt Runner sidebar pre-fills
+    from ``metadata.prompt.use``. Inline ``BaseMiddleware`` instances surface
+    their configured fields so the sidebar matches what the prompt will
+    actually run with. The registered name is resolved off ``registry`` so a
+    class can live under multiple names without us tying it to a single
+    identity. Unregistered instances — subclasses passed inline without going
+    through ``@ai.middleware``, ``new_middleware``, or a middleware plugin —
+    are dropped because the Dev UI has no name to address them by.
+    """
+    if use is None:
+        return None
+    out: list[dict[str, Any]] = []
+    cls_index = middleware_class_index(registry)
+    for entry in use:
+        if isinstance(entry, MiddlewareRef):
+            item: dict[str, Any] = {'name': entry.name}
+            if entry.config is not None:
+                item['config'] = entry.config
+            out.append(item)
+            continue
+        if isinstance(entry, BaseMiddleware):
+            name = cls_index.get(type(entry))
+            if not name:
+                continue
+            config = entry.model_dump(exclude_none=True, mode='json')
+            item = {'name': name}
+            if config:
+                item['config'] = config
+            out.append(item)
+    return out
+
+
 def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN401
     """Convert dotprompt frontmatter ``use`` into middleware refs.
 
@@ -1081,6 +1138,7 @@ def _transform_prompt_metadata(
     variant: str | None,
     template: str,
     registry_key: str,
+    name: str,
 ) -> dict[str, Any]:
     """Transform dotprompt metadata into the format ExecutablePrompt expects."""
     # Convert Pydantic model to dict if needed
@@ -1116,6 +1174,10 @@ def _transform_prompt_metadata(
     parsed_use = _parse_dotprompt_use(raw_use)
 
     prompt_block: dict[str, Any] = {**md, 'template': template}
+    # The Dev UI keys its prompt picker off ``metadata.prompt.name`` and opens
+    # the action under that same name, so this has to match the registry key
+    # (filename for dotprompts, the explicit name for ``define_prompt``).
+    prompt_block['name'] = name
     if parsed_use is not None:
         prompt_block['use'] = [
             ({'name': ref.name, 'config': ref.config} if ref.config is not None else {'name': ref.name})
@@ -1187,7 +1249,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             return _cached_prompt
 
         raw_metadata = await registry.dotprompt.render_metadata(parsed_prompt)
-        metadata = _transform_prompt_metadata(raw_metadata, variant, parsed_prompt.template, registry_key)
+        metadata = _transform_prompt_metadata(raw_metadata, variant, parsed_prompt.template, registry_key, name)
 
         executable_prompt = ExecutablePrompt(
             registry=registry,

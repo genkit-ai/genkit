@@ -53,6 +53,7 @@ from genkit._core._middleware import (
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
+    middleware_class_index,
 )
 from genkit._core._model import (
     Document,
@@ -88,15 +89,25 @@ def register_middleware(
     refs: list[MiddlewareRef] = []
     # Track how many times each name appears so duplicates get unique suffixes.
     name_counts: dict[str, int] = {}
+    # Build the class→name index once so resolving the use list is O(M+N).
+    cls_index = middleware_class_index(registry)
     for i, entry in enumerate(use):
         if isinstance(entry, BaseMiddleware):
-            cls_name = entry.__class__.name  # type: ignore[attr-defined]
-            base_name = str(cls_name) if cls_name else f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
+            # Prefer the registered name so traces show ``concise_reply_mw``
+            # instead of an opaque id. For an unregistered ``use=[Foo()]``
+            # passed inline, fall back to a synthetic id that can't collide
+            # with any globally registered middleware.
+            registered = cls_index.get(type(entry))
+            base_name = registered or f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
             count = name_counts.get(base_name, 0)
             name_counts[base_name] = count + 1
             reg_name = base_name if count == 0 else f'{base_name}__{count}'
             registry.register_value('middleware', reg_name, entry)
-            refs.append(MiddlewareRef(name=reg_name))
+            # Surface the instance's configured fields on the ref so anything
+            # serializing the rendered request (Dev UI trace's Middleware tab,
+            # downstream tooling) sees what the prompt actually ran with.
+            config = entry.model_dump(exclude_none=True, mode='json') or None
+            refs.append(MiddlewareRef(name=reg_name, config=config))
         else:
             refs.append(entry)
     return refs

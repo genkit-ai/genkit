@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, NamedTuple
@@ -194,13 +195,6 @@ class BaseMiddleware(BaseModel):
     # ``Callable`` or opaque resources without opting in per-subclass.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # Class-level metadata stamped by ``@ai.middleware(...)``; the descriptor
-    # and the Dev UI's reflection endpoint read these.
-    # These are ClassVars, not fields, so they do not appear in ``model_dump()``
-    # or ``config`` dicts passed to ``cls(**config)``.
-    name: ClassVar[str] = ''
-    description: ClassVar[str | None] = None
-
     # Framework-injected at the start of each generate() call (see the class
     # docstring). They are public fields, not PrivateAttrs, so a middleware
     # author writing ``self.`` in their IDE sees them in autocomplete and knows
@@ -283,8 +277,13 @@ class MiddlewareDesc(MiddlewareDescData):
         res = _validate_middleware_key_segment(name)
         if res.errored:
             raise ValueError(f'MiddlewareDesc name {res.error_message}')
-        if description is None:
-            description = cls.description
+        # Fall back to the class docstring so authors get a Dev-UI-visible
+        # description "for free" — same pattern actions/tools use for their
+        # function docstrings. ``inspect.cleandoc`` strips the indentation
+        # pydantic-style class docstrings pick up from being inside a class
+        # body so the Dev UI doesn't render that leading whitespace.
+        if description is None and cls.__doc__:
+            description = inspect.cleandoc(cls.__doc__)
         super().__init__(
             name=name,
             description=description,
@@ -362,3 +361,24 @@ def new_middleware(
         A new MiddlewareDesc instance.
     """
     return MiddlewareDesc(cls=cls, name=name, description=description)
+
+
+def middleware_class_index(registry: RegistryLike) -> dict[type[BaseMiddleware], str]:
+    """Reverse index from a registered class to the name it was registered under.
+
+    Used by the generate pipeline and prompt registration to resolve inline
+    ``use=[Foo(...)]`` instances back to the name their class was registered
+    with via ``@ai.middleware``, ``new_middleware``, or a middleware plugin.
+    Callers that loop over a ``use`` list should build this once up front so
+    the total work is ``O(M + N)`` instead of ``O(M * N)`` for ``M`` inline
+    middlewares and ``N`` registered ones.
+
+    Classes that were never registered won't appear; the lookup just returns
+    ``None`` and the caller decides whether to drop the entry or assign a
+    synthetic id.
+    """
+    out: dict[type[BaseMiddleware], str] = {}
+    for reg_name, value in registry.list_values('middleware').items():
+        if isinstance(value, MiddlewareDesc):
+            out[value._cls] = reg_name
+    return out
