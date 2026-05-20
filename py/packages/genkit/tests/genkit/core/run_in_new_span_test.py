@@ -235,8 +235,40 @@ async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMem
     # Assertions
     assert context_json['auth']['user_id'] == 123
     assert context_json['auth']['token'] == 'secret_token'
-    assert 'raw_connection' not in context_json['auth']
+    assert context_json['auth']['raw_connection'] == 'Unserializable'
 
     assert context_json['serializable_list'] == [1, 'two', {'nested_key': 'nested_val'}]
-    assert context_json['unserializable_list'] == [1, 3]
-    assert 'top_level_unserializable' not in context_json
+    assert context_json['unserializable_list'] == [1, 'Unserializable', 3]
+    assert context_json['top_level_unserializable'] == 'Unserializable'
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_circular_references(exporter: InMemorySpanExporter) -> None:
+    """Verify that circular references inside the context are proactively detected and dropped."""
+    import json
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(
+        name='circularFlow',
+        kind=ActionKind.FLOW,
+        fn=noop,
+    )
+
+    # Setup a context dictionary with circular references
+    circular_context = {
+        'key': 'val',
+    }
+    circular_context['self'] = circular_context
+
+    await action.run(context=circular_context)
+
+    span = _by_name(exporter.get_finished_spans(), 'circularFlow')
+    attrs = dict(span.attributes or {})
+
+    assert 'genkit:metadata:context' in attrs
+    context_json = json.loads(attrs['genkit:metadata:context'])
+
+    # 'key' is serializable, and 'self' circular reference should be safely cut off with '[Circular]'
+    assert context_json == {'key': 'val', 'self': '[Circular]'}

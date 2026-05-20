@@ -58,40 +58,45 @@ def _record_latency(output: object, start_time: float) -> object:
     return output
 
 
-def _sanitize_context(context: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_value(val: object, seen: set[int] | None = None) -> object:
     """Recursively filter out dictionary keys or list items that cannot be serialized to JSON."""
-    sanitized = {}
-    for k, v in context.items():
-        if not isinstance(k, str):
-            k = str(k)
-        if isinstance(v, dict):
-            sanitized[k] = _sanitize_context(v)
-        elif isinstance(v, list):
-            sanitized[k] = _sanitize_list(v)
-        else:
-            try:
-                json.dumps(v)
-                sanitized[k] = v
-            except (TypeError, ValueError):
-                continue
-    return sanitized
+    if seen is None:
+        seen = set()
 
+    ref_id = id(val)
+    if ref_id in seen:
+        return '[Circular]'
 
-def _sanitize_list(items: list[Any]) -> list[Any]:
-    """Recursively filter list items for serializability."""
-    sanitized = []
-    for item in items:
-        if isinstance(item, dict):
-            sanitized.append(_sanitize_context(item))
-        elif isinstance(item, list):
-            sanitized.append(_sanitize_list(item))
-        else:
+    if isinstance(val, dict):
+        seen.add(ref_id)
+        sanitized = {}
+        for k, v in val.items():
+            if not isinstance(k, str):
+                k = str(k)
             try:
-                json.dumps(item)
-                sanitized.append(item)
+                sanitized[k] = _sanitize_value(v, seen)
             except (TypeError, ValueError):
-                continue
-    return sanitized
+                sanitized[k] = repr(v)
+        seen.remove(ref_id)
+        return sanitized
+    elif isinstance(val, (list, set, tuple)):
+        seen.add(ref_id)
+        sanitized_list = []
+        for item in val:
+            try:
+                sanitized_list.append(_sanitize_value(item, seen))
+            except (TypeError, ValueError):
+                sanitized_list.append(repr(item))
+        seen.remove(ref_id)
+        return sanitized_list
+    else:
+        if isinstance(val, (str, int, float, bool, type(None))):
+            return val
+        try:
+            json.dumps(val)
+            return val
+        except (TypeError, ValueError):
+            return repr(val)
 
 
 # =============================================================================
@@ -570,7 +575,7 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                 extra_metadata['context'] = json.dumps(ctx.context)
             except Exception:
                 try:
-                    cleaned_context = _sanitize_context(ctx.context)
+                    cleaned_context = _sanitize_value(ctx.context)
                     extra_metadata['context'] = json.dumps(cleaned_context)
                 except Exception:
                     extra_metadata['context'] = str(ctx.context)
