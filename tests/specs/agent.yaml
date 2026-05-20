@@ -17,7 +17,7 @@ tests:
     description: >
       A single user message is sent to a client-managed agent.
       The agent generates one model response and returns it along with
-      the accumulated session state.
+      the accumulated session state. A sessionId must be generated.
     agent: promptAgent
     steps:
       - type: send
@@ -31,6 +31,7 @@ tests:
           - turnEnd: {}
         expectOutput:
           message: { role: model, content: [{ text: hello back }] }
+          hasSessionId: true
           stateContains:
             messages:
               - { role: user, content: [{ text: hi }] }
@@ -40,6 +41,7 @@ tests:
     description: >
       A single user message is sent to a server-managed agent.
       The output should contain a snapshotId and no inline state.
+      The snapshot state must contain a generated sessionId.
     agent: promptAgentWithStore
     steps:
       - type: send
@@ -54,6 +56,13 @@ tests:
         expectOutput:
           message: { role: model, content: [{ text: hello back }] }
           hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: done
+          hasSessionId: true
 
   # ---------------------------------------------------------------------------
   # Streaming
@@ -369,8 +378,8 @@ tests:
     description: >
       Two sequential invocations against a server-managed agent.
       The second invocation resumes from the first snapshot. After
-      both complete, getSnapshotData verifies the parent chain and
-      accumulated history.
+      both complete, getSnapshotData verifies the parent chain,
+      accumulated history, and that a sessionId is present.
     agent: promptAgentWithStore
     steps:
       - type: send
@@ -396,6 +405,7 @@ tests:
         expectSnapshot:
           parentId: '{{snap1}}'
           status: done
+          hasSessionId: true
           stateContains:
             messages:
               - { role: user, content: [{ text: first }] }
@@ -410,7 +420,8 @@ tests:
     description: >
       Two sequential invocations against a client-managed agent.
       The second invocation seeds session state from the first
-      invocation's output state. History should accumulate.
+      invocation's output state. History should accumulate and the
+      sessionId must be preserved across invocations.
     agent: promptAgent
     steps:
       - type: send
@@ -421,6 +432,7 @@ tests:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
         captureState: state1
+        captureSessionId: sid1
 
       - type: send
         init: { state: '{{state1}}' }
@@ -432,6 +444,7 @@ tests:
         expectOutput:
           message: { role: model, content: [{ text: reply2 }] }
           stateContains:
+            sessionId: '{{sid1}}'
             messages:
               - { role: user, content: [{ text: first }] }
               - { role: model, content: [{ text: reply1 }] }

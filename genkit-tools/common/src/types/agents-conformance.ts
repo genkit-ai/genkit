@@ -51,6 +51,8 @@ export const OutputAssertionsSchema = z.object({
   message: MessageSchema.optional(),
   /** If true, asserts output.snapshotId is a non-empty string. */
   hasSnapshotId: z.boolean().optional(),
+  /** If true, asserts output.state.sessionId is a non-empty string. */
+  hasSessionId: z.boolean().optional(),
   /** Partial match on output.state. */
   stateContains: SessionStateSchema.partial().optional(),
   /** Partial match on output.artifacts. */
@@ -71,6 +73,8 @@ export const SnapshotAssertionsSchema = z.object({
   parentId: z.string().optional(),
   /** Expected status (e.g. "done", "pending", "failed", "aborted"). */
   status: z.string().optional(),
+  /** If true, asserts snapshot.state.sessionId is a non-empty string. */
+  hasSessionId: z.boolean().optional(),
   /** Partial match on snapshot.state. */
   stateContains: SessionStateSchema.partial().optional(),
 });
@@ -101,6 +105,8 @@ export const SendInvocationSchema = z.object({
   captureSnapshotId: z.string().optional(),
   /** Capture output.state under this name for {{name}} references. */
   captureState: z.string().optional(),
+  /** Capture output.state.sessionId under this name for {{name}} references. */
+  captureSessionId: z.string().optional(),
 });
 export type SendInvocation = z.infer<typeof SendInvocationSchema>;
 

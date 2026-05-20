@@ -54,6 +54,7 @@ initNodeFeatures();
 const OutputAssertionsSchema = z.object({
   message: z.any().optional(),
   hasSnapshotId: z.boolean().optional(),
+  hasSessionId: z.boolean().optional(),
   stateContains: z.any().optional(),
   artifactsContain: z.array(z.any()).optional(),
 });
@@ -61,6 +62,7 @@ const OutputAssertionsSchema = z.object({
 const SnapshotAssertionsSchema = z.object({
   parentId: z.string().optional(),
   status: z.string().optional(),
+  hasSessionId: z.boolean().optional(),
   stateContains: z.any().optional(),
   errorContains: z.any().optional(),
 });
@@ -76,6 +78,7 @@ const SendInvocationSchema = z.object({
   expectError: z.string().optional(),
   captureSnapshotId: z.string().optional(),
   captureState: z.string().optional(),
+  captureSessionId: z.string().optional(),
 });
 
 const GetSnapshotDataInvocationSchema = z.object({
@@ -594,6 +597,18 @@ async function executeSendInvocation(
       );
     }
 
+    // hasSessionId: verify output.state contains a non-empty sessionId
+    if (expect.hasSessionId) {
+      assert.ok(
+        output.state,
+        'Expected output to have state for sessionId check'
+      );
+      assert.ok(
+        output.state.sessionId && typeof output.state.sessionId === 'string',
+        `Expected output.state to have a sessionId, got: ${output.state?.sessionId}`
+      );
+    }
+
     // stateContains: partial matching
     if (expect.stateContains) {
       assert.ok(output.state, 'Expected output to have state');
@@ -632,6 +647,14 @@ async function executeSendInvocation(
     );
     captures.set(invocation.captureState, output.state);
   }
+
+  if (invocation.captureSessionId) {
+    assert.ok(
+      output.state?.sessionId,
+      `captureSessionId '${invocation.captureSessionId}' requested but output has no state.sessionId`
+    );
+    captures.set(invocation.captureSessionId, output.state.sessionId);
+  }
 }
 
 async function executeGetSnapshotDataInvocation(
@@ -663,6 +686,14 @@ async function executeGetSnapshotDataInvocation(
         snapshot.status,
         expect.status,
         `Expected status '${expect.status}', got '${snapshot.status}'`
+      );
+    }
+
+    if (expect.hasSessionId) {
+      assert.ok(
+        snapshot.state?.sessionId &&
+          typeof snapshot.state.sessionId === 'string',
+        `Expected snapshot.state to have a sessionId, got: ${snapshot.state?.sessionId}`
       );
     }
 
@@ -736,6 +767,14 @@ async function executeWaitUntilCompletedInvocation(
 
     if (expect.status !== undefined) {
       assert.strictEqual(snapshot.status, expect.status);
+    }
+
+    if (expect.hasSessionId) {
+      assert.ok(
+        snapshot.state?.sessionId &&
+          typeof snapshot.state.sessionId === 'string',
+        `Expected snapshot.state to have a sessionId, got: ${snapshot.state?.sessionId}`
+      );
     }
 
     if (expect.stateContains) {
