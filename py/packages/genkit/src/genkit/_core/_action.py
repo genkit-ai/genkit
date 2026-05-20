@@ -18,6 +18,7 @@
 
 import asyncio
 import inspect
+import json
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -55,6 +56,42 @@ def _record_latency(output: object, start_time: float) -> object:
             if hasattr(output, 'model_copy'):
                 output = cast(Any, output).model_copy(update={'latency_ms': latency_ms})
     return output
+
+
+def _sanitize_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Recursively filter out dictionary keys or list items that cannot be serialized to JSON."""
+    sanitized = {}
+    for k, v in context.items():
+        if not isinstance(k, str):
+            k = str(k)
+        if isinstance(v, dict):
+            sanitized[k] = _sanitize_context(v)
+        elif isinstance(v, list):
+            sanitized[k] = _sanitize_list(v)
+        else:
+            try:
+                json.dumps(v)
+                sanitized[k] = v
+            except (TypeError, ValueError):
+                continue
+    return sanitized
+
+
+def _sanitize_list(items: list[Any]) -> list[Any]:
+    """Recursively filter list items for serializability."""
+    sanitized = []
+    for item in items:
+        if isinstance(item, dict):
+            sanitized.append(_sanitize_context(item))
+        elif isinstance(item, list):
+            sanitized.append(_sanitize_list(item))
+        else:
+            try:
+                json.dumps(item)
+                sanitized.append(item)
+            except (TypeError, ValueError):
+                continue
+    return sanitized
 
 
 # =============================================================================
@@ -525,12 +562,21 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         # ``type``/``subtype`` set canonical genkit:type / genkit:metadata:subtype attrs.
         # ``self._span_metadata`` uses short keys; run_in_new_span auto-prefixes them with
         # ``genkit:metadata:``. ``telemetry_labels`` are caller-controlled passthrough attrs.
+        extra_metadata: dict[str, str] = {k: str(v) for k, v in self._span_metadata.items()}
+        # Surface action context (auth, headers, etc.) on the span so the Dev UI
+        # trace inspector can render the "Context" panel for a flow run.
+        if ctx.context:
+            try:
+                cleaned_context = _sanitize_context(ctx.context)
+                extra_metadata['context'] = json.dumps(cleaned_context)
+            except (TypeError, ValueError):
+                extra_metadata['context'] = str(ctx.context)
         span_meta = SpanMetadata(
             name=self._name,
             type='action',
             subtype=str(self._kind),
             input=input,
-            metadata={k: str(v) for k, v in self._span_metadata.items()} or None,
+            metadata=extra_metadata or None,
             telemetry_labels={k: str(v) for k, v in (telemetry_labels or {}).items()} or None,
         )
 

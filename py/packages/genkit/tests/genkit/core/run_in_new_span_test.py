@@ -187,3 +187,56 @@ async def test_action_error_attribute_keeps_original_text(exporter: InMemorySpan
     assert attrs['genkit:type'] == 'action'
     assert attrs['genkit:metadata:subtype'] == 'custom'
     assert attrs['genkit:state'] == 'error'
+
+
+@pytest.mark.asyncio
+async def test_action_context_telemetry_sanitizes_unserializable(exporter: InMemorySpanExporter) -> None:
+    """Verify that unserializable values in action context are dropped from tracing metadata.
+
+    Also verify that JSON-serializable values are kept.
+    """
+    import json
+
+    class UnserializableObject:
+        def __repr__(self) -> str:
+            return 'Unserializable'
+
+    async def noop() -> str:
+        return 'ok'
+
+    action = Action(
+        name='sanitizedFlow',
+        kind=ActionKind.FLOW,
+        fn=noop,
+    )
+
+    # We pass a context dictionary with both serializable and unserializable values,
+    # including nested dictionaries and lists.
+    complex_context = {
+        'auth': {
+            'user_id': 123,
+            'token': 'secret_token',
+            'raw_connection': UnserializableObject(),  # should be dropped
+        },
+        'serializable_list': [1, 'two', {'nested_key': 'nested_val'}],
+        'unserializable_list': [1, UnserializableObject(), 3],  # UnserializableObject should be dropped, keeping [1, 3]
+        'top_level_unserializable': UnserializableObject(),  # should be dropped entirely
+    }
+
+    await action.run(context=complex_context)
+
+    span = _by_name(exporter.get_finished_spans(), 'sanitizedFlow')
+    attrs = dict(span.attributes or {})
+
+    # The context key is mapped under genkit:metadata:context
+    assert 'genkit:metadata:context' in attrs
+    context_json = json.loads(attrs['genkit:metadata:context'])
+
+    # Assertions
+    assert context_json['auth']['user_id'] == 123
+    assert context_json['auth']['token'] == 'secret_token'
+    assert 'raw_connection' not in context_json['auth']
+
+    assert context_json['serializable_list'] == [1, 'two', {'nested_key': 'nested_val'}]
+    assert context_json['unserializable_list'] == [1, 3]
+    assert 'top_level_unserializable' not in context_json
