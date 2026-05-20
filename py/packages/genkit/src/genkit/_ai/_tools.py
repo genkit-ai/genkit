@@ -201,8 +201,7 @@ def restart_tool(
     """
     tool_req = interrupt.tool_request
 
-    existing_meta = interrupt.metadata or {}
-    new_meta: dict[str, Any] = dict(existing_meta) if existing_meta else {}
+    new_meta: dict[str, Any] = dict(interrupt.metadata or {})
 
     new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
 
