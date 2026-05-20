@@ -99,6 +99,30 @@ def test_extract_media_by_type_ignores_other_types() -> None:
     assert got == []
 
 
+def test_extract_media_by_type_rejects_http_url() -> None:
+    """http(s) URIs on tagged images should raise INVALID_ARGUMENT."""
+    req = _request_with([_person_part('https://example.com/person.png')])
+    with pytest.raises(GenkitError, match='http') as exc_info:
+        _extract_media_by_type(req, PART_METADATA_TYPE_PERSON_IMAGE)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+def test_extract_media_by_type_rejects_empty_data_uri() -> None:
+    """Tagged data URIs without payload should raise INVALID_ARGUMENT."""
+    req = _request_with([_product_part('data:image/png;base64,')])
+    with pytest.raises(GenkitError, match='image data') as exc_info:
+        _extract_media_by_type(req, PART_METADATA_TYPE_PRODUCT_IMAGE)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+def test_extract_media_by_type_rejects_unsupported_url() -> None:
+    """Tagged images with unsupported schemes should raise INVALID_ARGUMENT."""
+    req = _request_with([_person_part('file:///tmp/person.png')])
+    with pytest.raises(GenkitError, match='gs:// or data:') as exc_info:
+        _extract_media_by_type(req, PART_METADATA_TYPE_PERSON_IMAGE)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
 def test_to_virtual_try_on_request_requires_person() -> None:
     """Missing personImage raises a Genkit INVALID_ARGUMENT error."""
     req = _request_with([_product_part('gs://b/shirt.png')])

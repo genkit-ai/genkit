@@ -173,6 +173,38 @@ def virtual_try_on_model_info(version: str) -> ModelInfo:
     return ModelInfo(label=f'Vertex AI - {version}', supports=VIRTUAL_TRY_ON_SUPPORTS)
 
 
+def _virtual_try_on_image_from_url(url: str) -> dict[str, Any]:
+    """Convert a tagged media URL into a Vertex virtual-try-on image payload."""
+    if not url:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='virtual try-on requires a media URL for tagged input images',
+        )
+    if url.startswith('gs://'):
+        return {'image': {'gcsUri': url}}
+    if url.startswith(('http://', 'https://')):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='virtual try-on does not support http(s) URIs. Please specify a Cloud Storage URI.',
+        )
+    if url.startswith('data:'):
+        prefix, _, payload = url.partition(',')
+        if not payload:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='virtual try-on requires image data in data URIs',
+            )
+        if ';base64' in prefix:
+            return {'image': {'bytesBase64Encoded': payload}}
+        # Non-base64 data URIs are rare; decode percent-encoding and re-encode as base64.
+        decoded = urllib.parse.unquote_to_bytes(payload)
+        return {'image': {'bytesBase64Encoded': base64.b64encode(decoded).decode('ascii')}}
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message='virtual try-on only supports gs:// or data: image URIs',
+    )
+
+
 def _extract_media_by_type(request: ModelRequest, part_type: str) -> list[dict[str, Any]]:
     """Collect input images tagged with the given metadata type.
 
@@ -189,22 +221,7 @@ def _extract_media_by_type(request: ModelRequest, part_type: str) -> list[dict[s
             metadata = getattr(root, 'metadata', None) or {}
             if metadata.get('type') != part_type:
                 continue
-            url = root.media.url or ''
-            if url.startswith('gs://'):
-                out.append({'image': {'gcsUri': url}})
-                continue
-            # data:<mime>[;base64],<payload>
-            if url.startswith('data:'):
-                prefix, _, payload = url.partition(',')
-                if not payload:
-                    continue
-                if ';base64' in prefix:
-                    out.append({'image': {'bytesBase64Encoded': payload}})
-                else:
-                    # Non-base64 data URIs are rare; decode percent-encoding
-                    # and re-encode as base64 for the Vertex API.
-                    decoded = urllib.parse.unquote_to_bytes(payload)
-                    out.append({'image': {'bytesBase64Encoded': base64.b64encode(decoded).decode('ascii')}})
+            out.append(_virtual_try_on_image_from_url(root.media.url or ''))
     return out
 
 
