@@ -193,8 +193,6 @@ export function claudeRunner<TConfigSchema extends z.ZodTypeAny>(
             status = 'INTERNAL';
             break;
           case 503:
-            status = 'UNAVAILABLE';
-            break;
           case 529:
             status = 'UNAVAILABLE';
             break;
