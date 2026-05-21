@@ -97,6 +97,7 @@ export {
   type ToolResponsePart,
 };
 
+/** An action that represents a generative AI model, accepting a {@link GenerateRequest} and returning a {@link GenerateResponseData}. */
 export type ModelAction<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = Action<
@@ -107,6 +108,7 @@ export type ModelAction<
   __configSchema: CustomOptionsSchema;
 };
 
+/** An action that represents a generative AI model that runs in the background (asynchronously). */
 export type BackgroundModelAction<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = BackgroundAction<
@@ -116,21 +118,25 @@ export type BackgroundModelAction<
   __configSchema: CustomOptionsSchema;
 };
 
+/** A simple middleware function that can intercept and transform model requests and responses. */
 export type ModelMiddleware = SimpleMiddleware<
   z.infer<typeof GenerateRequestSchema>,
   z.infer<typeof GenerateResponseSchema>
 >;
 
+/** A middleware function that receives additional {@link ActionRunOptions} (e.g. streaming callback) alongside the request. */
 export type ModelMiddlewareWithOptions = MiddlewareWithOptions<
   z.infer<typeof GenerateRequestSchema>,
   z.infer<typeof GenerateResponseSchema>,
   z.infer<typeof GenerateResponseChunkSchema>
 >;
 
+/** Union of middleware types accepted by model definitions: either a {@link ModelMiddleware} or {@link ModelMiddlewareWithOptions}. */
 export type ModelMiddlewareArgument =
   | ModelMiddleware
   | ModelMiddlewareWithOptions;
 
+/** Options for defining a new model via {@link defineModel} or {@link model}. */
 export type DefineModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = {
@@ -147,6 +153,10 @@ export type DefineModelOptions<
   use?: ModelMiddlewareArgument[];
 };
 
+/**
+ * Creates a {@link ModelAction} without registering it. Useful for plugin authors
+ * who need to return a model action from a resolver.
+ */
 export function model<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
   options: DefineModelOptions<CustomOptionsSchema>,
   runner: (
@@ -263,6 +273,7 @@ export function defineModel<
   return act as ModelAction<CustomOptionsSchema>;
 }
 
+/** Options for defining a background model that processes requests asynchronously. */
 export type DefineBackgroundModelOptions<
   CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = DefineModelOptions<CustomOptionsSchema> & {
@@ -369,11 +380,16 @@ function getModelMiddleware(options: {
   return middleware;
 }
 
+/** Zod schema for a {@link ModelReference}. */
 export const ModelReferenceSchema = z.object({
   name: z.string(),
   config: z.any().optional(),
 });
 
+/**
+ * A reference to a model that includes optional configuration and version info.
+ * Can be passed anywhere a {@link ModelArgument} is accepted.
+ */
 export interface ModelReference<CustomOptions extends z.ZodTypeAny>
   extends z.infer<typeof ModelReferenceSchema> {
   name: string;
@@ -512,11 +528,16 @@ function getPartCounts(parts: Part[]): PartCounts {
   );
 }
 
+/**
+ * Union type for all the ways a model can be specified: by name string,
+ * {@link ModelAction}, or {@link ModelReference}.
+ */
 export type ModelArgument<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
   | ModelAction<CustomOptions>
   | ModelReference<CustomOptions>
   | string;
 
+/** The result of resolving a {@link ModelArgument} to a concrete action, config, and version. */
 export interface ResolvedModel<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 > {

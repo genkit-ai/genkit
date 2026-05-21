@@ -70,6 +70,7 @@ export {
   assertUnstable,
   getCallableJSON,
   getHttpStatus,
+  type ErrorResponseMetadata,
   type StatusName,
 } from './error.js';
 export {

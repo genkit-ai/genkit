@@ -132,6 +132,10 @@ export interface ClientOptions {
    * Custom HTTP request headers.
    */
   customHeaders?: Headers | Record<string, string>;
+  /**
+   * Enables additional debug traces (e.g. raw model API call details).
+   */
+  experimental_debugTraces?: boolean;
 }
 
 /**

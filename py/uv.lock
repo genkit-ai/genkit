@@ -15,6 +15,7 @@ members = [
     "evaluators",
     "fastapi-bugbot",
     "flask-hello",
+    "basic-flows",
     "gemini-code-execution",
     "gemini-context-caching",
     "genkit",
@@ -1379,6 +1380,17 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic" },
 ]
+
+[[package]]
+name = "flow-sample1"
+version = "0.2.0"
+source = { editable = "samples/flow-sample1" }
+dependencies = [
+    { name = "genkit" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "genkit", editable = "packages/genkit" }]
 
 [[package]]
 name = "fqdn"
