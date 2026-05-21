@@ -171,6 +171,10 @@ function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
     for (let i = 0; i < inner.items.length; i++) {
       applyAnnotations(inner.items[i], json.items[i]);
     }
+  } else if (inner instanceof z.ZodDiscriminatedUnion && json.anyOf) {
+    for (let i = 0; i < inner.options.length; i++) {
+      applyAnnotations(inner.options[i], json.anyOf[i]);
+    }
   }
 
   return json;

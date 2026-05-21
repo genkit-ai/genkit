@@ -272,6 +272,22 @@ describe('annotateSchema()', () => {
     assert.strictEqual(json.items[1]['x-hint'], 'second');
   });
 
+  it('should merge annotations for ZodDiscriminatedUnion (anyOf)', () => {
+    const schema = z.discriminatedUnion('type', [
+      annotateSchema(z.object({ type: z.literal('a'), a: z.string() }), {
+        'x-hint': 'a',
+      }),
+      annotateSchema(z.object({ type: z.literal('b'), b: z.number() }), {
+        'x-hint': 'b',
+      }),
+    ]);
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.anyOf, 'JSON schema should have anyOf');
+    assert.strictEqual(json.anyOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.anyOf[1]['x-hint'], 'b');
+  });
+
   it('should not overwrite existing JSON schema fields and log a warning', () => {
     const warnSpy = mock.method(console, 'warn', () => {});
     const schema = annotateSchema(z.string(), { type: 'number', 'x-ok': true });
