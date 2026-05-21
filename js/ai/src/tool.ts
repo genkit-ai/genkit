@@ -497,6 +497,7 @@ export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   config: InterruptConfig<I, O>
 ): ToolAction<I, O> {
   const i = interrupt(config);
+  delete i.__action.metadata.dynamic;
   registry.registerAction('tool', i);
   return i;
 }
