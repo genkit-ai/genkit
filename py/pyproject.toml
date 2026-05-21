@@ -16,31 +16,94 @@
 
 [project]
 authors = [{ name = "Google" }]
-dependencies = [
-  "dotpromptz==0.1.5",
-  "genkit",
-  "genkit-plugin-anthropic",
-  "genkit-plugin-compat-oai",
-  "genkit-plugin-fastapi",
-  "genkit-plugin-flask",
-  "genkit-plugin-google-cloud",
-  "genkit-plugin-google-genai",
-  "genkit-plugin-ollama",
-  "genkit-plugin-evaluators",
-  "genkit-plugin-vertex-ai",
-  # Internal tools (private, not published)
-  "liccheck>=0.9.2",
-  "setuptools>=75.0.0,<82",                   # Required by liccheck (provides pkg_resources, removed in setuptools 82+)
-  "mcp>=1.25.0",
-  "python-multipart>=0.0.22",
-  "strenum>=0.4.15; python_version < '3.11'",
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Framework :: AsyncIO",
+  "Framework :: Pydantic",
+  "Framework :: Pydantic :: 2",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
+  "License :: OSI Approved :: Apache Software License",
 ]
-description = "Workspace for Genkit packages"
+dependencies = [
+  "opentelemetry-api>=1.29.0",
+  "opentelemetry-sdk>=1.29.0",
+  "pydantic>=2.10.5",
+  "partial-json-parser>=0.2.1.1.post5",
+  "json5>=0.10.0",
+  "structlog>=25.2.0",
+  "rich>=13.0.0",
+  "asgiref>=3.8.1",
+  "httpx>=0.28.1",
+  "psutil>=7.0.0",
+  "starlette>=0.46.1",
+  "python-multipart>=0.0.22",
+  "sse-starlette>=2.2.1",
+  "pillow>=12.1.1",
+  "typing_extensions>=4.0",
+  "strenum>=0.4.15; python_version < '3.11'",
+  "dotpromptz>=0.1.5",
+  "uvicorn>=0.34.0",
+  "uvloop>=0.21.0; sys_platform != 'win32'",
+  "anyio>=4.9.0",
+  "opentelemetry-instrumentation-logging>=0.60b1",
+  "websockets>=15.0",
+]
+description = "Genkit AI Framework"
+keywords = [
+  "genkit",
+  "ai",
+  "llm",
+  "machine-learning",
+  "artificial-intelligence",
+  "generative-ai",
+  "framework",
+  "sdk",
+]
 license = "Apache-2.0"
-name = "genkit-workspace"
-readme = "README.md"
+name = "genkit"
+readme = "README-pypi.md"
 requires-python = ">=3.10"
-version = "0.1.0"
+version = "0.6.0"
+
+[project.optional-dependencies]
+flask        = ["genkit-plugin-flask"]
+google-cloud = ["genkit-plugin-google-cloud"]
+google-genai = ["genkit-plugin-google-genai"]
+ollama       = ["genkit-plugin-ollama"]
+openai       = ["genkit-plugin-compat-oai"]
+vertex-ai    = ["genkit-plugin-vertex-ai"]
+
+[project.urls]
+"Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
+"Changelog"     = "https://github.com/genkit-ai/genkit/blob/main/py/CHANGELOG.md"
+"Documentation" = "https://firebase.google.com/docs/genkit"
+"Homepage"      = "https://github.com/genkit-ai/genkit"
+"Repository"    = "https://github.com/genkit-ai/genkit/tree/main/py"
+
+[build-system]
+build-backend = "hatchling.build"
+requires      = ["hatchling"]
+
+# The core genkit wheel ships only the framework. Plugin sub-packages
+# (genkit.plugins.<name>) live in this same source tree for IDE
+# resolution but build into their own wheels via per-plugin pyproject.toml
+# files; the exclude below keeps them out of the core wheel.
+[tool.hatch.build.targets.wheel]
+packages = ["src/genkit"]
+exclude  = ["src/genkit/plugins/*/**"]
 
 [dependency-groups]
 dev = [
@@ -61,6 +124,27 @@ dev = [
   "tox-uv>=1.25.0",
   "nox>=2025.2.9",
   "nox-uv>=0.2.2",
+  # Internal tooling for workspace-wide checks and samples; not shipped
+  # with any published wheel.
+  "liccheck>=0.9.2",
+  "setuptools>=75.0.0,<82",                   # Required by liccheck (pkg_resources)
+  "mcp>=1.25.0",
+]
+
+# Monorepo dev convenience: pull every in-tree plugin wheel into the dev
+# environment so a fresh `uv sync` mirrors what `pip install genkit
+# genkit-plugin-*` would give an app developer. End users install plugins
+# via the `[project.optional-dependencies]` extras above (or directly).
+plugins = [
+  "genkit-plugin-anthropic",
+  "genkit-plugin-compat-oai",
+  "genkit-plugin-evaluators",
+  "genkit-plugin-fastapi",
+  "genkit-plugin-flask",
+  "genkit-plugin-google-cloud",
+  "genkit-plugin-google-genai",
+  "genkit-plugin-ollama",
+  "genkit-plugin-vertex-ai",
 ]
 
 lint = [
@@ -93,12 +177,6 @@ lint = [
   "structlog>=24.0.0",
 ]
 
-[tool.hatch.build.targets.wheel]
-
-
-[tool.setuptools]
-py-modules = []
-
 # Pytest for unit testing and coverage.
 [tool.pytest]
 
@@ -121,8 +199,8 @@ filterwarnings = [
 ]
 norecursedirs = ["testapps", ".git", ".tox", ".nox", ".venv", "build", "dist"]
 python_files = ["*_test.py"]
-pythonpath = ["."]
-testpaths = ["packages", "plugins", "samples", "tests", "tools"]
+pythonpath = [".", "src"]
+testpaths = ["tests", "samples", "tools"]
 #asyncio_mode = "auto"
 asyncio_mode = "strict"
 
@@ -137,11 +215,11 @@ omit = [
   "**/typing.py",    # Often auto-generated or complex types
   "**/types.py",     # Often auto-generated or complex types
 ]
-source = ["packages", "plugins"]
+source = ["src/genkit"]
 
 # uv based package management.
 [tool.uv]
-default-groups = ["dev", "lint"]
+default-groups = ["dev", "lint", "plugins"]
 override-dependencies = ["werkzeug>=3.1.6"]
 
 [tool.uv.sources]
@@ -162,7 +240,7 @@ tool-interrupts      = { workspace = true }
 tracing              = { workspace = true }
 vertexai-imagen      = { workspace = true }
 
-# Core packages
+# Core package (workspace root resolves to itself for member dependencies)
 genkit = { workspace = true }
 # Plugins (alphabetical)
 genkit-plugin-anthropic             = { workspace = true }
@@ -176,14 +254,22 @@ genkit-plugin-evaluators            = { workspace = true }
 genkit-plugin-vertex-ai             = { workspace = true }
 [tool.uv.workspace]
 exclude = ["*/shared", "testapps/*"]
-members = ["packages/*", "plugins/*", "samples/*"]
+# Plugins live inside the core genkit source tree (src/genkit/plugins/<name>/)
+# so static analyzers resolve `genkit.plugins.<name>` from a single
+# directory. Each plugin is still its own wheel with its own pyproject.toml;
+# only the on-disk layout changed.
+members = [
+  "src/genkit/plugins/*",
+  "samples/*",
+]
 
 
 # Ruff checks and formatting.
 [tool.ruff]
 exclude = [
-  "packages/genkit/src/genkit/_core/_typing.py",  # Generated by generate_schema_typing
+  "src/genkit/_core/_typing.py",  # Generated by generate_schema_typing
   "tools/schema_to_typing",  # Internal generator script
+  "bin/doc_update",  # Local docs tooling, not part of the published package
   ".bzr",
   ".direnv",
   ".eggs",
@@ -250,22 +336,22 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 # Auto-generated file from schema
-"packages/genkit/src/genkit/_core/_typing.py" = ["E501"]
+"src/genkit/_core/_typing.py" = ["E501"]
 # Base model uses **kwargs: Any to match pydantic signatures
-"packages/genkit/src/genkit/_core/_base.py" = ["ANN401"]
+"src/genkit/_core/_base.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
-"packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
+"src/genkit/_core/_http_client.py" = ["ANN401"]
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
-"packages/genkit/src/genkit/_core/trace/_adjusting_exporter.py" = ["ANN401"]
+"src/genkit/_core/trace/_adjusting_exporter.py" = ["ANN401"]
 # Re-export modules (F401 would flag imports used only for re-export)
-"packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
-"packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
-"packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
-"packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
-"packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
+"src/genkit/_ai/__init__.py" = ["F401"]
+"src/genkit/_ai/_document.py" = ["F401"]
+"src/genkit/_ai/_model.py" = ["F401"]
+"src/genkit/_ai/_formats/__init__.py" = ["F401"]
+"src/genkit/_core/trace/__init__.py" = ["F401"]
 # Test files don't need docstrings; test method names are self-documenting
 "**/tests/**/*.py" = ["D", "ANN401"]
-"packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
+"tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Validation/provenance/safe-defaults test methods are self-documenting via names;
 # S108 false positives on Path('/tmp/x') used as dummy non-existent paths in tests.
 # Samples have install_rich_traceback() call after imports, before other code
@@ -309,7 +395,7 @@ enable-version-header    = true
 field-constraints        = true
 input                    = "../genkit-tools/genkit-schema.json"
 input-file-type          = "jsonschema"
-output                   = "packages/genkit/src/genkit/_core/_typing.py"
+output                   = "src/genkit/_core/_typing.py"
 output-model-type        = "pydantic_v2.BaseModel"
 snake-case-field         = true
 strict-nullable          = true
@@ -382,16 +468,8 @@ exclude = [
 
 [tool.ty.environment]
 root = [
-  # Core package
-  "packages/genkit/src",
-  # Plugins
-  "plugins/anthropic/src",
-  "plugins/compat-oai/src",
-  "plugins/flask/src",
-  "plugins/google-cloud/src",
-  "plugins/google-genai/src",
-  "plugins/ollama/src",
-  "plugins/vertex-ai/src",
+  # Core package (plugins live under src/genkit/plugins/<name>/)
+  "src",
   ".",  # For samples.shared and other root-level imports
 ]
 
@@ -408,17 +486,10 @@ exclude = [
   "build",
   "dist",
 ]
-extraPaths = [
-  "packages/genkit/src",
-  "plugins/anthropic/src",
-  "plugins/compat-oai/src",
-  "plugins/fastapi/src",
-  "plugins/flask/src",
-  "plugins/google-cloud/src",
-  "plugins/google-genai/src",
-  "plugins/ollama/src",
-  "plugins/vertex-ai/src",
-]
+# A single entry covers everything: plugin sources live under
+# src/genkit/plugins/<name>/ alongside the rest of the genkit package,
+# so static analyzers walk one tree.
+extraPaths = ["src"]
 pythonVersion = "3.10"
 reportMissingImports = true
 reportMissingTypeStubs = false
@@ -428,15 +499,9 @@ venvPath = "."
 
 # Pyrefly type checking configuration (Meta's new type checker).
 #
-# Import Resolution Note:
-# Pyrefly doesn't fully support PEP 420 namespace packages. The genkit plugins use
-# namespace packages (genkit.plugins.*) where intermediate directories (genkit/ and
-# genkit/plugins/) don't have __init__.py files. This is intentional for allowing
-# multiple packages to contribute to the same namespace, but pyrefly can't resolve
-# these imports statically. We use ignore-missing-imports for "genkit.plugins.*" to
-# suppress false positive import errors while still catching real type errors.
-# At runtime, these imports work correctly because Python's import system handles
-# PEP 420 namespace packages natively.
+# Plugins live in the core genkit source tree (src/genkit/plugins/<name>/)
+# as regular subpackages, so static analyzers resolve them from a single
+# tree without any namespace-package gymnastics.
 [tool.pyrefly]
 project_excludes = [
   "**/__pycache__",
@@ -450,38 +515,23 @@ project_excludes = [
   "build",
   "dist",
   "testapps",
-  "testapps",
 ]
 project_includes = [
-  # Core package (source and tests)
-  "packages/genkit/src/**/*.py",
-  "packages/genkit/tests/**/*.py",
-  # Plugins (source and tests)
-  "plugins/*/src/**/*.py",
-  "plugins/*/tests/**/*.py",
-  # Samples
+  "src/**/*.py",
+  "tests/**/*.py",
   "samples/*/src/**/*.py",
   "samples/*/tests/**/*.py",
 ]
 
-# Search path for first-party code import resolution.
-search-path = ["."]
-# Ignore missing imports for namespace packages - pyrefly can't resolve PEP 420
-# namespace packages but these imports work at runtime.
-# model_performance_test is local to sample-test (excluded from workspace).
-ignore-missing-imports = ["genkit.plugins.*"]
-python_version         = "3.10"
+search-path    = ["."]
+python_version = "3.10"
 
 # Treat warnings as errors.
 [tool.pyrefly.errors]
 deprecated     = "error"
 redundant-cast = "error"
 
-# Ty analysis: suppress unresolved-import for plugins (PEP 420 namespace packages).
-[tool.ty.analysis]
-allowed-unresolved-imports = ["genkit.plugins.**"]
-
-# Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
+# Downgrade unused-type-ignore to avoid noise from comments pyright needs but ty doesn't.
 [tool.ty.rules]
 unused-type-ignore-comment = "ignore"
 
@@ -494,12 +544,12 @@ no-matching-overload = "ignore"
 
 # Vertex AI model_garden has relative imports ty struggles to resolve (PEP 420 / namespace).
 [[tool.ty.overrides]]
-include = ["plugins/vertex-ai/**"]
+include = ["src/genkit/plugins/vertex_ai/**"]
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
 
 # genkit._ai._formats._schema: dict.get with str keys from JSON schema traversal.
 [[tool.ty.overrides]]
-include = ["packages/genkit/src/genkit/_ai/_formats/_schema.py"]
+include = ["src/genkit/_ai/_formats/_schema.py"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "ignore"

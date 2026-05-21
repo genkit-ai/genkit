@@ -122,10 +122,10 @@ echo -e "${BLUE}=== Genkit Python SDK Release: v${VERSION} ===${NC}"
 echo ""
 
 # Check we're in the py directory or repo root
-if [ -f "pyproject.toml" ] && [ -d "packages" ]; then
+if [ -f "pyproject.toml" ] && [ -d "src/genkit" ]; then
     # We're in py/
     cd ..
-elif [ -d "py/packages" ]; then
+elif [ -d "py/src/genkit" ]; then
     # We're in repo root
     :
 else
@@ -138,10 +138,10 @@ cd py
 
 # Step 1: Verify version in packages
 echo -e "${YELLOW}Step 1: Verifying package versions...${NC}"
-GENKIT_VERSION=$(grep "^version = " packages/genkit/pyproject.toml | cut -d'"' -f2)
+GENKIT_VERSION=$(grep "^version = " pyproject.toml | cut -d'"' -f2)
 if [ "$GENKIT_VERSION" != "$VERSION" ]; then
     echo -e "${RED}Error: genkit package version is ${GENKIT_VERSION}, expected ${VERSION}${NC}"
-    echo "Update packages/genkit/pyproject.toml before creating release"
+    echo "Update pyproject.toml before creating release"
     exit 1
 fi
 echo -e "${GREEN}✓ Package version matches: ${VERSION}${NC}"

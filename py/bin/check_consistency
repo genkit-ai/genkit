@@ -36,7 +36,7 @@
 #  15. IDE autocomplete - __all__ exports in __init__.py
 #  16. IDE autocomplete - No broad "type: ignore" comments
 #  17. Python version classifiers (3.10-3.14)
-#  18. Namespace package __init__.py (plugins must not have __init__.py in genkit/ or genkit/plugins/)
+#  18. Single-tree plugin layout (all plugins live under src/genkit/plugins/)
 #  19. Test file basename uniqueness (no duplicate basenames across test directories)
 #  20. CHANGELOG.md files exist
 
@@ -72,7 +72,7 @@ echo -e "${BLUE}[1/$TOTAL_CHECKS] Checking Python version consistency...${NC}"
 EXPECTED_PYTHON_VERSION=">=3.10"
 python_version_errors=0
 
-for f in packages/*/pyproject.toml plugins/*/pyproject.toml samples/*/pyproject.toml; do
+for f in pyproject.toml src/genkit/plugins/*/pyproject.toml samples/*/pyproject.toml; do
   if [ -f "$f" ]; then
     version=$(grep 'requires-python' "$f" 2>/dev/null | cut -d'"' -f2 || echo "")
     if [ -n "$version" ] && [ "$version" != "$EXPECTED_PYTHON_VERSION" ]; then
@@ -93,11 +93,11 @@ echo ""
 # Check 2: Plugin Version Sync
 # -----------------------------------------------------------------------------
 echo -e "${BLUE}[2/$TOTAL_CHECKS] Checking plugin version sync...${NC}"
-CORE_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+CORE_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
 echo -e "  Core framework version: ${YELLOW}$CORE_VERSION${NC}"
 plugin_version_errors=0
 
-for f in plugins/*/pyproject.toml; do
+for f in src/genkit/plugins/*/pyproject.toml; do
   if [ -f "$f" ]; then
     plugin_version=$(grep '^version' "$f" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
     plugin_name=$(grep '^name' "$f" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
@@ -121,12 +121,12 @@ echo ""
 echo -e "${BLUE}[3/$TOTAL_CHECKS] Checking package naming consistency...${NC}"
 naming_errors=0
 
-# Check plugins
-for d in plugins/*/; do
+# Check plugins (plugin dir name uses underscores, wheel name uses hyphens)
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
     name=$(basename "$d")
     pkg=$(grep '^name' "$d/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
-    expected="genkit-plugin-$name"
+    expected="genkit-plugin-${name//_/-}"
     if [ "$pkg" != "$expected" ]; then
       echo -e "  ${RED}MISMATCH${NC}: Plugin $d has name '$pkg' (expected '$expected')"
       naming_errors=$((naming_errors + 1))
@@ -163,7 +163,7 @@ workspace_errors=0
 sources_content=$(sed -n '/\[tool.uv.sources\]/,/^\[/p' pyproject.toml | grep -v '^\[' | grep '=' | cut -d'=' -f1 | tr -d ' ')
 
 # Check plugins are in sources
-for d in plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
     pkg=$(grep '^name' "$d/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
     if ! echo "$sources_content" | grep -q "^$pkg$"; then
@@ -219,7 +219,7 @@ echo -e "${BLUE}[6/$TOTAL_CHECKS] Checking README files exist...${NC}"
 readme_warnings_before=$WARNINGS
 
 # Check plugins have READMEs
-for d in plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ ! -f "$d/README.md" ]; then
     echo -e "  ${YELLOW}WARNING${NC}: Plugin $d is missing README.md"
     WARNINGS=$((WARNINGS + 1))
@@ -247,18 +247,18 @@ echo ""
 echo -e "${BLUE}[7/$TOTAL_CHECKS] Checking LICENSE files exist...${NC}"
 license_missing=0
 
-# Check core package
-if [ ! -f "packages/genkit/LICENSE" ]; then
-  echo -e "  ${YELLOW}WARNING${NC}: packages/genkit/ is missing LICENSE file"
+# Check core package (LICENSE lives at the workspace root for the root wheel)
+if [ ! -f "LICENSE" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: workspace root is missing LICENSE file"
   WARNINGS=$((WARNINGS + 1))
   license_missing=$((license_missing + 1))
 fi
 
 # Check plugins
-for d in plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ ! -f "$d/LICENSE" ]; then
     pkg_name=$(basename "$d")
-    echo -e "  ${YELLOW}WARNING${NC}: plugins/$pkg_name/ is missing LICENSE file"
+    echo -e "  ${YELLOW}WARNING${NC}: src/genkit/plugins/$pkg_name/ is missing LICENSE file"
     WARNINGS=$((WARNINGS + 1))
     license_missing=$((license_missing + 1))
   fi
@@ -276,17 +276,17 @@ echo -e "${BLUE}[8/$TOTAL_CHECKS] Checking py.typed marker files (PEP 561)...${N
 pytyped_missing=0
 
 # Check core package
-if [ ! -f "packages/genkit/src/genkit/py.typed" ]; then
-  echo -e "  ${YELLOW}WARNING${NC}: packages/genkit/ is missing py.typed marker"
+if [ ! -f "src/genkit/py.typed" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: src/genkit/ is missing py.typed marker"
   WARNINGS=$((WARNINGS + 1))
   pytyped_missing=$((pytyped_missing + 1))
 fi
 
 # Check plugins
-for d in plugins/*/src/genkit/plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ ! -f "$d/py.typed" ]; then
-    pkg_name=$(echo "$d" | sed 's|plugins/||' | sed 's|/src/genkit/plugins/.*||')
-    echo -e "  ${YELLOW}WARNING${NC}: plugins/$pkg_name/ is missing py.typed marker"
+    pkg_name=$(basename "$d")
+    echo -e "  ${YELLOW}WARNING${NC}: src/genkit/plugins/$pkg_name/ is missing py.typed marker"
     WARNINGS=$((WARNINGS + 1))
     pytyped_missing=$((pytyped_missing + 1))
   fi
@@ -319,13 +319,13 @@ echo -e "${BLUE}[10/$TOTAL_CHECKS] Checking for in-function imports...${NC}"
 # The check uses a simple heuristic: imports with 8+ spaces of indentation
 # are likely inside functions, not in TYPE_CHECKING blocks (which use 4 spaces).
 #
-# NOTE: Core framework (packages/genkit) is excluded from this check because
-# some in-function imports are intentional for lazy loading and circular import
-# avoidance. See PR #4400 for the cleanup effort.
+# NOTE: Core framework (src/genkit/*, excluding plugins/) is excluded from
+# this check because some in-function imports are intentional for lazy
+# loading and circular import avoidance. See PR #4400 for the cleanup effort.
 
 # Find deeply indented imports in plugins only (core framework excluded)
 deep_imports=$(grep -rn "^        import \|^        from .* import" \
-  plugins/*/src/ 2>/dev/null \
+  src/genkit/plugins/ 2>/dev/null \
   | grep -v "__pycache__" \
   | grep -v "\.pyc:" \
   | grep -v "# noqa" \
@@ -358,19 +358,19 @@ PUBLISHABLE_FIELDS=("authors" "classifiers")
 
 # Check core package
 for field in "${REQUIRED_FIELDS[@]}" "${PUBLISHABLE_FIELDS[@]}"; do
-  if ! grep -q "^$field" packages/genkit/pyproject.toml 2>/dev/null; then
-    echo -e "  ${RED}MISSING${NC}: packages/genkit/pyproject.toml missing '$field'"
+  if ! grep -q "^$field" pyproject.toml 2>/dev/null; then
+    echo -e "  ${RED}MISSING${NC}: pyproject.toml missing '$field'"
     metadata_errors=$((metadata_errors + 1))
   fi
 done
 
 # Check plugins
-for d in plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ -f "$d/pyproject.toml" ]; then
     for field in "${REQUIRED_FIELDS[@]}" "${PUBLISHABLE_FIELDS[@]}"; do
       if ! grep -q "^$field" "$d/pyproject.toml" 2>/dev/null; then
         pkg_name=$(basename "$d")
-        echo -e "  ${RED}MISSING${NC}: plugins/$pkg_name/pyproject.toml missing '$field'"
+        echo -e "  ${RED}MISSING${NC}: src/genkit/plugins/$pkg_name/pyproject.toml missing '$field'"
         metadata_errors=$((metadata_errors + 1))
       fi
     done
@@ -424,7 +424,7 @@ SECRET_PATTERNS=(
 EXCLUDE_PATTERNS="tests/|test/|\.env\.example|README\.md|GEMINI\.md|\.pyc$|__pycache__|\.git/|dist/"
 
 for pattern in "${SECRET_PATTERNS[@]}"; do
-  matches=$(grep -rE "$pattern" packages/ plugins/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#" || true)
+  matches=$(grep -rE "$pattern" src/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#" || true)
   if [ -n "$matches" ]; then
     echo -e "  ${RED}FOUND${NC}: Potential secrets matching pattern '$pattern'"
     secrets_found=$((secrets_found + 1))
@@ -433,7 +433,7 @@ done
 
 # Check for hardcoded credential assignments
 hardcoded_check=$(grep -rE "(api_key|apikey|secret|password|token)\s*=\s*['\"][a-zA-Z0-9_-]{20,}['\"]" \
-  packages/ plugins/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#|test_|_test\.|mock|fake|dummy|example" || true)
+  src/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#|test_|_test\.|mock|fake|dummy|example" || true)
 if [ -n "$hardcoded_check" ]; then
   echo -e "  ${RED}FOUND${NC}: Potential hardcoded credentials"
   secrets_found=$((secrets_found + 1))
@@ -452,8 +452,8 @@ echo ""
 # -----------------------------------------------------------------------------
 echo -e "${BLUE}[14/$TOTAL_CHECKS] Checking for typos and spelling errors...${NC}"
 if uv run typos --version > /dev/null 2>&1; then
-  # Run typos on plugins/ only (packages/genkit is checked separately by core team)
-  if uv run typos plugins/ samples/ --config typos.toml --format brief > /tmp/typos_output_$$ 2>&1; then
+  # Run typos on plugins/ only (the core framework is checked separately by core team)
+  if uv run typos src/genkit/plugins/ samples/ --config typos.toml --format brief > /tmp/typos_output_$$ 2>&1; then
     echo -e "  ${GREEN}✓${NC} No typos found in plugins/samples"
   else
     typos_count=$(grep -c "error:" /tmp/typos_output_$$ 2>/dev/null || echo "0")
@@ -480,18 +480,18 @@ echo -e "${BLUE}[15/$TOTAL_CHECKS] Checking __all__ exports for IDE autocomplete
 all_missing=0
 
 # Check main genkit package
-if ! grep -q "^__all__" packages/genkit/src/genkit/__init__.py 2>/dev/null; then
-  echo -e "  ${RED}MISSING${NC}: packages/genkit/src/genkit/__init__.py missing __all__"
+if ! grep -q "^__all__" src/genkit/__init__.py 2>/dev/null; then
+  echo -e "  ${RED}MISSING${NC}: src/genkit/__init__.py missing __all__"
   all_missing=$((all_missing + 1))
 fi
 
 # Check plugin __init__.py files
-# Use nullglob to handle case where no files match
 shopt -s nullglob
-plugin_init_files=(plugins/*/src/genkit/plugins/*/__init__.py)
+plugin_init_files=(src/genkit/plugins/*/__init__.py)
 shopt -u nullglob
 
-for f in "${plugin_init_files[@]}"; do
+# `set -u` would trip on expanding an empty array, so guard with `+`.
+for f in "${plugin_init_files[@]+"${plugin_init_files[@]}"}"; do
   if [ -f "$f" ]; then
     # Skip empty or minimal __init__.py files (less than 5 lines of actual code)
     code_lines=$(grep -cv "^#\|^$\|^\"\"\"" "$f" 2>/dev/null || echo "0")
@@ -513,7 +513,7 @@ echo ""
 # Check 16: IDE Autocomplete - Broad type: ignore comments
 # -----------------------------------------------------------------------------
 echo -e "${BLUE}[16/$TOTAL_CHECKS] Checking for broad type: ignore comments...${NC}"
-broad_ignores=$(grep -rn "# type: ignore$" packages/ plugins/ 2>/dev/null \
+broad_ignores=$(grep -rn "# type: ignore$" src/ 2>/dev/null \
   | grep -v "__pycache__" \
   | grep -v "\.pyc:" \
   | grep -v "/test" \
@@ -544,7 +544,7 @@ classifier_errors=0
 REQUIRED_VERSIONS=("3.10" "3.11" "3.12" "3.13" "3.14")
 
 # Check core package and plugins
-for pkg in packages/genkit plugins/*/; do
+for pkg in . src/genkit/plugins/*/; do
   if [ -d "$pkg" ] && [ -f "$pkg/pyproject.toml" ]; then
     pkg_name=$(grep '^name' "$pkg/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
     missing_versions=""
@@ -570,36 +570,27 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------------
-# Check 18: Namespace Package __init__.py
+# Check 18: Single-tree Plugin Layout
 # -----------------------------------------------------------------------------
-echo -e "${BLUE}[18/$TOTAL_CHECKS] Checking namespace package __init__.py files...${NC}"
-namespace_errors=0
+echo -e "${BLUE}[18/$TOTAL_CHECKS] Checking plugin layout sits inside the core tree...${NC}"
+layout_errors=0
 
-# Plugins use namespace packages (genkit.plugins.*) and must NOT have __init__.py
-# in the genkit/ or genkit/plugins/ directories, only in their specific plugin dir.
-# Having __init__.py in namespace directories breaks imports across packages.
-for plugin in plugins/*/; do
-  if [ -d "$plugin" ]; then
-    plugin_name=$(basename "$plugin")
-
-    # Check for __init__.py in genkit/ namespace directory
-    if [ -f "$plugin/src/genkit/__init__.py" ]; then
-      echo -e "  ${RED}ERROR${NC}: $plugin_name has src/genkit/__init__.py (breaks namespace package)"
-      namespace_errors=$((namespace_errors + 1))
-    fi
-
-    # Check for __init__.py in genkit/plugins/ namespace directory
-    if [ -f "$plugin/src/genkit/plugins/__init__.py" ]; then
-      echo -e "  ${RED}ERROR${NC}: $plugin_name has src/genkit/plugins/__init__.py (breaks namespace package)"
-      namespace_errors=$((namespace_errors + 1))
-    fi
-  fi
+# Plugins are sub-packages under src/genkit/plugins/<name>/. Anything that
+# looks like a plugin living back at the workspace root (its own src/ tree)
+# would break the single-tree layout that lets type checkers and IDEs
+# resolve `genkit.plugins.<name>` from one directory.
+shopt -s nullglob
+stray_plugin_dirs=(plugins/*/)
+shopt -u nullglob
+for stray in "${stray_plugin_dirs[@]+"${stray_plugin_dirs[@]}"}"; do
+  echo -e "  ${RED}ERROR${NC}: $stray exists outside src/genkit/plugins/ — move it inside the core tree."
+  layout_errors=$((layout_errors + 1))
 done
 
-if [ $namespace_errors -eq 0 ]; then
-  echo -e "  ${GREEN}✓${NC} No __init__.py files in namespace directories"
+if [ $layout_errors -eq 0 ]; then
+  echo -e "  ${GREEN}✓${NC} All plugins live under src/genkit/plugins/"
 else
-  ERRORS=$((ERRORS + namespace_errors))
+  ERRORS=$((ERRORS + layout_errors))
 fi
 echo ""
 
@@ -654,17 +645,17 @@ changelog_missing=0
 
 
 # Check core package
-if [ ! -f "packages/genkit/CHANGELOG.md" ]; then
-  echo -e "  ${YELLOW}WARNING${NC}: packages/genkit/ is missing CHANGELOG.md"
+if [ ! -f "CHANGELOG.md" ]; then
+  echo -e "  ${YELLOW}WARNING${NC}: workspace root is missing CHANGELOG.md"
   WARNINGS=$((WARNINGS + 1))
   changelog_missing=$((changelog_missing + 1))
 fi
 
 # Check plugins
-for d in plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ ! -f "$d/CHANGELOG.md" ]; then
     pkg_name=$(basename "$d")
-    echo -e "  ${YELLOW}WARNING${NC}: plugins/$pkg_name/ is missing CHANGELOG.md"
+    echo -e "  ${YELLOW}WARNING${NC}: src/genkit/plugins/$pkg_name/ is missing CHANGELOG.md"
     WARNINGS=$((WARNINGS + 1))
     changelog_missing=$((changelog_missing + 1))
   fi

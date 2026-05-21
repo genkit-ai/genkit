@@ -98,7 +98,7 @@ if [ "$CI_MODE" = true ]; then
 fi
 
 # Get core version
-CORE_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+CORE_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
 echo -e "Release version: ${CYAN}$CORE_VERSION${NC}"
 echo ""
 
@@ -179,14 +179,14 @@ check_package_metadata() {
 }
 
 echo -e "\n${CYAN}Checking core package...${NC}"
-if ! check_package_metadata "packages/genkit" "core"; then
+if ! check_package_metadata "." "core"; then
   ERRORS=$((ERRORS + 1))
 else
-  echo -e "  ${GREEN}✓${NC} packages/genkit metadata OK"
+  echo -e "  ${GREEN}✓${NC} core metadata OK"
 fi
 
 echo -e "\n${CYAN}Checking plugins...${NC}"
-for d in plugins/*/; do
+for d in src/genkit/plugins/*/; do
   if [ -d "$d" ] && [ -f "${d}pyproject.toml" ]; then
     if ! check_package_metadata "$d" "plugin"; then
       ERRORS=$((ERRORS + 1))
@@ -225,7 +225,7 @@ echo -e "\n${CYAN}Checking for dependency issues (deptry)...${NC}"
 deptry_errors=0
 # Check each plugin individually (core package has workspace deps that confuse deptry)
 # Exclude test directories since they legitimately use dev dependencies
-for pkg in plugins/*/; do
+for pkg in src/genkit/plugins/*/; do
   if [ -d "$pkg" ] && [ -f "$pkg/pyproject.toml" ]; then
     pkg_name=$(grep '^name' "$pkg/pyproject.toml" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
     if [ "$VERBOSE" = true ]; then
@@ -343,7 +343,7 @@ else
 fi
 
 # Pyright check
-if uv run pyright packages/ > /dev/null 2>&1; then
+if uv run pyright src/ > /dev/null 2>&1; then
   echo -e "  ${GREEN}✓${NC} Pyright type check passed"
 else
   echo -e "  ${RED}ERROR${NC}: Pyright type check failed"
@@ -371,7 +371,7 @@ else
 fi
 
 echo -e "\n${CYAN}Checking for typos and spelling errors...${NC}"
-if uv run typos packages/ plugins/ --config typos.toml --format brief > /tmp/typos_release_$$ 2>&1; then
+if uv run typos src/ --config typos.toml --format brief > /tmp/typos_release_$$ 2>&1; then
   echo -e "  ${GREEN}✓${NC} No typos found"
 else
   typos_count=$(grep -c "error:" /tmp/typos_release_$$ 2>/dev/null || echo "0")
@@ -381,7 +381,7 @@ else
       echo -e "    $line"
     done
     if [ "$typos_count" -gt 10 ]; then
-      echo -e "    ... and $((typos_count - 10)) more. Run 'uv run typos packages/ plugins/' for full list."
+      echo -e "    ... and $((typos_count - 10)) more. Run 'uv run typos src/' for full list."
     fi
     ERRORS=$((ERRORS + 1))
   else
@@ -484,7 +484,7 @@ EXCLUDE_PATTERNS="tests/|test/|\.env\.example|README\.md|GEMINI\.md|\.pyc$|__pyc
 
 for pattern in "${SECRET_PATTERNS[@]}"; do
   # Search in Python files and config files, excluding test directories
-  matches=$(grep -rE "$pattern" packages/ plugins/ samples/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#" || true)
+  matches=$(grep -rE "$pattern" src/ samples/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#" || true)
   if [ -n "$matches" ]; then
     echo -e "  ${RED}FOUND${NC}: Potential secrets matching pattern '$pattern':"
     echo "$matches" | head -3 | while read -r line; do
@@ -497,7 +497,7 @@ done
 # Also check for common secret variable assignments with actual values
 # (not just references to environment variables)
 hardcoded_check=$(grep -rE "(api_key|apikey|api-key|secret|password|token)\s*=\s*['\"][a-zA-Z0-9_-]{20,}['\"]" \
-  packages/ plugins/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#|test_|_test\.|mock|fake|dummy|example" || true)
+  src/ 2>/dev/null | grep -vE "$EXCLUDE_PATTERNS" | grep -vE "^\s*#|test_|_test\.|mock|fake|dummy|example" || true)
 if [ -n "$hardcoded_check" ]; then
   echo -e "  ${RED}FOUND${NC}: Potential hardcoded credentials:"
   echo "$hardcoded_check" | head -5 | while read -r line; do
@@ -538,7 +538,12 @@ echo -e "${BLUE}━━━ Section 6: Documentation ━━━${NC}"
 
 echo -e "\n${CYAN}Checking README files...${NC}"
 readme_missing=0
-for pkg in packages/genkit plugins/*/; do
+# Core wheel reads README-pypi.md; plugins ship their own README.md.
+if [ ! -f "README-pypi.md" ]; then
+  echo -e "  ${YELLOW}MISSING${NC}: README-pypi.md (PyPI-facing README for the core wheel)"
+  readme_missing=$((readme_missing + 1))
+fi
+for pkg in src/genkit/plugins/*/; do
   if [ -d "$pkg" ] && [ ! -f "$pkg/README.md" ]; then
     pkg_name=$(basename "$pkg")
     echo -e "  ${YELLOW}MISSING${NC}: $pkg_name/README.md"

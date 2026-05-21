@@ -91,7 +91,11 @@ from pydantic.alias_generators import to_camel
 from genkit._core._base import GenkitModel
 from genkit._core._compat import StrEnum
 
-warnings.filterwarnings('ignore', message='Field name "schema" in "OutputConfig" shadows an attribute in parent', category=UserWarning)
+warnings.filterwarnings(
+    'ignore',
+    message='Field name "schema" in "OutputConfig" shadows an attribute in parent',
+    category=UserWarning,
+)
 
 '''
 
@@ -144,7 +148,6 @@ def _typed_map_aliases(defs: dict) -> dict[str, str]:
     a class with no fields and ``extra='forbid'`` would reject every key on the
     Dev UI's ``{'genkitx:ignore-trace': 'true'}`` payload.
     """
-
     result: dict[str, str] = {}
     for name, defn in defs.items():
         if not isinstance(defn, dict) or defn.get('type') != 'object':
@@ -265,7 +268,11 @@ def _emit_model(
         req = req - omit - {_camel_to_snake(k) for k in omit}
     ext = ', protected_namespaces=()' if any(_camel_to_snake(k) in ('schema', 'schema_') for k in props) else ''
     frz = ', frozen=True' if name == 'PathMetadata' else ''
-    cfg = f"ConfigDict(alias_generator=to_camel, extra='{'allow' if name in allow else 'forbid'}', populate_by_name=True{ext}{frz})"
+    extra = 'allow' if name in allow else 'forbid'
+    cfg = (
+        f'ConfigDict(alias_generator=to_camel, extra=\'{extra}\', '
+        f'populate_by_name=True{ext}{frz})'
+    )
     lines = [
         f'class {name}(GenkitModel):',
         f'    """Model for {name.lower().replace("_", " ")} data."""',
@@ -312,6 +319,7 @@ def _emit_model(
 
 
 def generate(schema_path: Path, _out: Path) -> str:
+    """Generate ``_typing.py`` source from a Genkit JSON schema file."""
     schema = json.loads(schema_path.read_text())
     defs = dict(schema.get('$defs', {}))
     defs.update({k: v for k, v in _extract_inline_classes(schema).items() if k not in defs})
@@ -364,7 +372,7 @@ def generate(schema_path: Path, _out: Path) -> str:
 
     # Pass 2.5: union types (anyOf/oneOf)
     # Part and DocumentPart need RootModel so Part(root=TextPart(...)) works; others get type aliases
-    ROOT_MODEL_UNIONS = frozenset({'Part', 'DocumentPart'})
+    root_model_unions = frozenset({'Part', 'DocumentPart'})
     for name, defn in defs.items():
         if name in EXCLUDED or name in emitted or not isinstance(defn, dict):
             continue
@@ -377,7 +385,7 @@ def generate(schema_path: Path, _out: Path) -> str:
                 continue
             class_name = _output_name(name)
             union_str = ' | '.join(_output_name(r) for r in refs)
-            if name in ROOT_MODEL_UNIONS:
+            if name in root_model_unions:
                 out.extend([
                     f'class {class_name}(RootModel[{union_str}]):',
                     f'    """Root model for {name} union (Part(root=X), DocumentPart(root=X))."""',
@@ -448,10 +456,11 @@ def generate(schema_path: Path, _out: Path) -> str:
 
 
 def main() -> None:
+    """CLI entry: read schema JSON and write generated typing module."""
     # From py/tools/schema_to_typing/schema_to_typing.py -> repo root is parent.parent.parent.parent
     top = Path(__file__).resolve().parent.parent.parent.parent
     schema = top / 'genkit-tools' / 'genkit-schema.json'
-    out = top / 'py' / 'packages' / 'genkit' / 'genkit' / '_core' / '_typing.py'
+    out = top / 'py' / 'src' / 'genkit' / '_core' / '_typing.py'
     if len(sys.argv) >= 2:
         schema = Path(sys.argv[1]).resolve()
         out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else schema.parent / '_typing.py'

@@ -2,7 +2,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-# Generates py/packages/genkit/src/genkit/_core/_typing.py from the JSON schema
+# Generates py/src/genkit/_core/_typing.py from the JSON schema
 # using our custom generator (py/tools/schema_to_typing/schema_to_typing.py).
 #
 # Usage: ./py/bin/generate_schema_typing [--ci]
@@ -22,7 +22,7 @@ done
 
 TOP_DIR=$(git rev-parse --show-toplevel)
 SCHEMA_FILE="${TOP_DIR}/genkit-tools/genkit-schema.json"
-TYPING_FILE="${TOP_DIR}/py/packages/genkit/src/genkit/_core/_typing.py"
+TYPING_FILE="${TOP_DIR}/py/src/genkit/_core/_typing.py"
 GENERATOR="${TOP_DIR}/py/tools/schema_to_typing/schema_to_typing.py"
 
 if [[ $CI_ENABLED == "true" ]] && [[ -f $TYPING_FILE ]]; then

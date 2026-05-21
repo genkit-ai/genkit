@@ -33,8 +33,7 @@ on:
   # pull_request:
   #   paths:
   #     - "py/samples/**"
-  #     - "py/packages/**"
-  #     - "py/plugins/**"
+  #     - "py/src/**"
   #     - ".github/workflows/python-samples.yml"
 
 concurrency:
