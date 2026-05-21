@@ -187,7 +187,7 @@ describe('filesystem middleware', () => {
         (m: any) =>
           m.role === 'tool' &&
           m.content.some((c: any) =>
-            c.toolResponse?.output?.toString().includes('Access denied')
+            c.toolResponse?.output?.toString()?.includes('Access denied')
           )
       );
       assert.ok(toolMsg);
@@ -314,7 +314,7 @@ describe('filesystem middleware', () => {
         (m: any) =>
           m.role === 'tool' &&
           m.content.some((c: any) =>
-            c.toolResponse?.output?.toString().includes('Access denied')
+            c.toolResponse?.output?.toString()?.includes('Access denied')
           )
       );
       assert.ok(toolMsg);
@@ -428,7 +428,7 @@ describe('filesystem middleware', () => {
           m.content.some((c: any) =>
             c.toolResponse?.output
               ?.toString()
-              .includes('Search content not found')
+              ?.includes('Search content not found')
           )
       );
       if (!toolMsg) {
@@ -560,16 +560,16 @@ describe('filesystem middleware', () => {
           m.content.some((c: any) =>
             c.toolResponse?.output
               ?.toString()
-              .includes("Tool 'read_file' failed")
+              ?.includes("Tool 'read_file' failed")
           )
       );
       assert.ok(toolMsg, 'Tool response with error should be present');
 
       const errorOutput = toolMsg.content
         .find((c: any) =>
-          c.toolResponse?.output?.toString().includes("Tool 'read_file' failed")
+          c.toolResponse?.output?.toString()?.includes("Tool 'read_file' failed")
         )
-        .toolResponse.output.toString();
+        ?.toolResponse.output.toString();
       assert.match(
         errorOutput,
         /Tool 'read_file' failed: .*ENOENT.*/,
