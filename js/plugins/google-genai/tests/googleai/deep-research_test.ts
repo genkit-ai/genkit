@@ -285,6 +285,7 @@ describe('Deep Research', () => {
         apiKey: 'request-api-key',
         baseUrl: 'https://custom.url',
         customHeaders: undefined,
+        experimental_debugTraces: undefined,
       });
     });
 

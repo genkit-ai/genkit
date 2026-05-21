@@ -152,6 +152,7 @@ async function getGlobalDerivedOptions(
     location: 'global',
     projectId,
     authClient,
+    experimental_debugTraces: options?.experimental_debugTraces,
   };
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;
@@ -167,6 +168,7 @@ function getExpressDerivedOptions(
   return {
     kind: 'express',
     apiKey,
+    experimental_debugTraces: options?.experimental_debugTraces,
   };
 }
 
@@ -222,6 +224,7 @@ async function getRegionalDerivedOptions(
     location,
     projectId,
     authClient,
+    experimental_debugTraces: options?.experimental_debugTraces,
   };
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;

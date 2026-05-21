@@ -19,20 +19,13 @@ from genkit._core._error import GenkitError
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
 
 
-@pytest.mark.asyncio
-async def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
-    """``tool.restart``: copy interrupt metadata, set ``resumed``; ``interrupt`` stays on the restart TRP."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
+def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
+    """``restart_tool``: copy interrupt metadata, set ``resumed``; ``interrupt`` stays on the restart TRP."""
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': {'reason': 'hold'}},
     )
-    out = pay.restart(None, interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
+    out = restart_tool(interrupt_trp, resumed_metadata={'k': 'v'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
@@ -40,20 +33,13 @@ async def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
     assert out.tool_request.input == {'amount': 10}
 
 
-@pytest.mark.asyncio
-async def test_restart_replace_input_sets_replaced_input() -> None:
+def test_restart_replace_input_sets_replaced_input() -> None:
     """Restart with new input sets ``replacedInput`` to prior input and updates ``tool_request.input``."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': True},
     )
-    out = pay.restart({'amount': 99}, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
+    out = restart_tool(interrupt_trp, resumed_metadata={'by': 'u'}, replace_input={'amount': 99})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
@@ -62,20 +48,13 @@ async def test_restart_replace_input_sets_replaced_input() -> None:
     assert out.metadata.get('interrupt') is True
 
 
-@pytest.mark.asyncio
-async def test_restart_resumed_defaults_to_true() -> None:
+def test_restart_resumed_defaults_to_true() -> None:
     """When ``resumed_metadata=None``, restart TRP sets ``metadata.resumed`` to True."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='pay', ref='r1', input={}),
         metadata={'interrupt': True},
     )
-    out = pay.restart(None, interrupt=interrupt_trp, resumed_metadata=None)
+    out = restart_tool(interrupt_trp, resumed_metadata=None)
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
@@ -227,103 +206,34 @@ def test_respond_to_interrupt_wire_format_with_metadata() -> None:
     assert result.metadata.get('interruptResponse') == {'by': 'admin'}
 
 
-@pytest.mark.asyncio
-async def test_restart_tool_matches_method_no_replace_input() -> None:
-    """``restart_tool`` is equivalent to calling ``tool.restart`` (no replace_input)."""
-    ai = Genkit()
+def test_restart_tool_does_not_require_tool_reference() -> None:
+    """``restart_tool`` works from an interrupt alone — no ``Tool`` needed.
 
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
+    Middleware-contributed tools (``read_file`` from a filesystem middleware,
+    anything gated by a ``ToolApproval`` middleware) never give the caller
+    a ``Tool`` reference; they just appear in ``response.interrupts``. The
+    helper has to be callable from the interrupt by itself.
+    """
     interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
-        metadata={'interrupt': {'reason': 'hold'}},
-    )
-
-    via_helper = restart_tool(tool=pay, interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
-    via_method = pay.restart(None, interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
-
-    assert via_helper.model_dump() == via_method.model_dump()
-
-
-@pytest.mark.asyncio
-async def test_restart_tool_with_replace_input() -> None:
-    """``restart_tool`` forwards ``replace_input`` and matches ``tool.restart``."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
+        tool_request=ToolRequest(name='middleware_tool', ref='r1', input={'p': 1}),
         metadata={'interrupt': True},
     )
 
-    out = restart_tool({'amount': 99}, tool=pay, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
+    out = restart_tool(interrupt_trp, resumed_metadata={'toolApproved': True})
 
-    assert isinstance(out, ToolRequestPart)
+    assert out.tool_request.name == 'middleware_tool'
+    assert out.tool_request.input == {'p': 1}
     assert out.metadata is not None
-    assert out.metadata.get('replacedInput') == {'amount': 10}
-    assert out.tool_request.input == {'amount': 99}
-    assert out.metadata.get('resumed') == {'by': 'u'}
-    assert out.metadata.get('interrupt') is True
-
-
-@pytest.mark.asyncio
-async def test_restart_tool_resumed_defaults_to_true() -> None:
-    """``restart_tool`` with ``resumed_metadata=None`` sets ``metadata.resumed`` to True."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='r1', input={}),
-        metadata={'interrupt': True},
-    )
-
-    out = restart_tool(tool=pay, interrupt=interrupt_trp)
-
-    assert isinstance(out, ToolRequestPart)
-    assert out.metadata is not None
-    assert out.metadata.get('resumed') is True
-    assert out.tool_request.ref == 'r1'
-
-
-@pytest.mark.asyncio
-async def test_restart_tool_rejects_mismatched_tool() -> None:
-    """``restart_tool`` propagates the ``Tool.restart`` name-mismatch guard."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='other', ref='r1', input={}),
-        metadata={'interrupt': True},
-    )
-
-    with pytest.raises(ValueError, match="Interrupt is for tool 'other', not 'pay'"):
-        restart_tool(tool=pay, interrupt=interrupt_trp)
+    assert out.metadata.get('resumed') == {'toolApproved': True}
 
 
 def test_restart_preserves_ref_on_wire() -> None:
-    """restart() preserves the original tool_request.ref so the resumed TRP can be correlated."""
-    ai = Genkit()
-
-    @ai.tool(name='pay')
-    async def pay(inp: dict) -> str:  # noqa: ARG001
-        return 'ok'
-
+    """``restart_tool`` preserves the original tool_request.ref so the resumed TRP can be correlated."""
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='pay', ref='corr-id-1', input={'amount': 50}),
         metadata={'interrupt': True},
     )
-    out = pay.restart(None, interrupt=interrupt_trp)
+    out = restart_tool(interrupt_trp)
 
     assert out.tool_request.ref == 'corr-id-1'
 

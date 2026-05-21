@@ -40,6 +40,7 @@ export const EmbeddingSchema = z.object({
   embedding: z.array(z.number()),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
+/** A single embedding vector with optional metadata. */
 export type Embedding = z.infer<typeof EmbeddingSchema>;
 
 /**
@@ -58,6 +59,7 @@ const EmbedRequestSchema = z.object({
   options: z.any().optional(),
 });
 
+/** An embed request containing documents to embed and optional configuration. */
 export interface EmbedRequest<O = any> {
   input: Document[];
   options?: O;
@@ -101,6 +103,7 @@ function withMetadata<CustomOptions extends z.ZodTypeAny>(
   return withMeta;
 }
 
+/** Configuration options for defining an embedder via {@link defineEmbedder} or {@link embedder}. */
 export interface EmbedderOptions<ConfigSchema extends z.ZodTypeAny> {
   name: string;
   configSchema?: ConfigSchema;
@@ -311,6 +314,7 @@ export const EmbedderInfoSchema = z.object({
   /** Embedding dimension */
   dimensions: z.number().optional(),
 });
+/** Embedder metadata information including label, capabilities, and dimensions. */
 export type EmbedderInfo = z.infer<typeof EmbedderInfoSchema>;
 
 /**

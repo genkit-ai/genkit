@@ -126,7 +126,7 @@ ai.defineFlow('combine tools and builtins', async () => {
 
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-3.1-flash-lite'),
+    model: googleAI.model('gemini-3.5-flash'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
@@ -1342,15 +1342,6 @@ ai.defineFlow('lyria-foreign-language', async () => {
   });
 
   return response;
-});
-
-// Gemma 3
-ai.defineFlow('gemma-3', async () => {
-  const { text } = await ai.generate({
-    model: googleAI.model('gemma-3-27b-it'),
-    prompt: 'Tell me a short joke about a programmer.',
-  });
-  return text;
 });
 
 // Gemma 4 with thinkingConfig

@@ -12,7 +12,7 @@ import pytest
 from genkit import Genkit, Message, ModelResponse
 from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import Interrupt, ToolRunContext, respond_to_interrupt
+from genkit._ai._tools import Interrupt, ToolRunContext, respond_to_interrupt, restart_tool
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import FinishReason, Resume
@@ -439,7 +439,7 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
         },
     ]
 
-    restart_trp = pay.restart({'ok': True}, interrupt=first.interrupts[0], resumed_metadata={'by': 'test'})
+    restart_trp = restart_tool(first.interrupts[0], resumed_metadata={'by': 'test'}, replace_input={'ok': True})
 
     second = await generate_action(
         ai.registry,
@@ -555,7 +555,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
             messages=list(first.messages),
             resume=Resume(
                 respond=[respond_to_interrupt({'done': True}, interrupt=ia)],
-                restart=[b_tool.restart({'ok': True}, interrupt=ib, resumed_metadata=None)],
+                restart=[restart_tool(ib, replace_input={'ok': True})],
             ),
         ),
     )

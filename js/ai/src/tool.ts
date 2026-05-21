@@ -38,6 +38,11 @@ import {
 import { MultipartToolResponseSchema } from './parts.js';
 import { isExecutablePrompt, type ExecutablePrompt } from './prompt.js';
 
+/**
+ * Interface for tools that support the interrupts / human-in-the-loop pattern.
+ * Provides `respond` and `restart` methods for resuming interrupted tool calls.
+ * @beta
+ */
 export interface Resumable<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
@@ -138,6 +143,7 @@ export type DynamicToolAction<
     };
   };
 
+/** Runtime options passed to a tool when it is executed by the framework. */
 export interface ToolRunOptions extends ActionRunOptions<z.ZodTypeAny> {
   /**
    * If resumed is supplied to a tool at runtime, that means that it was previously interrupted and this is a second
@@ -280,6 +286,7 @@ export function toToolDefinition(
   return out;
 }
 
+/** Options available inside a tool's implementation function, including `interrupt` and `context`. */
 export interface ToolFnOptions extends ActionFnArg<never> {
   /**
    * A function that can be called during tool execution that will result in the tool
@@ -290,11 +297,13 @@ export interface ToolFnOptions extends ActionFnArg<never> {
   context: ActionContext;
 }
 
+/** The implementation function for a standard tool. Receives typed input and {@link ToolFnOptions}. */
 export type ToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
   input: z.infer<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<z.infer<O>>;
 
+/** The implementation function for a multipart tool that can return structured output, content parts, and metadata. */
 export type MultipartToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
   input: z.infer<I>,
   ctx: ToolFnOptions & ToolRunOptions
