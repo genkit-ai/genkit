@@ -133,10 +133,20 @@ function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
     }
   }
 
-  // Apply annotations in reverse order (inner-most first, outer-most last)
-  // so that outer annotations correctly overwrite inner ones.
+  // Resolve annotations (outer-most last so it wins)
+  const resolvedAnnotations: Record<string, any> = {};
   for (let i = annotationsToApply.length - 1; i >= 0; i--) {
-    Object.assign(json, annotationsToApply[i]);
+    Object.assign(resolvedAnnotations, annotationsToApply[i]);
+  }
+
+  for (const key in resolvedAnnotations) {
+    if (Object.prototype.hasOwnProperty.call(json, key)) {
+      console.warn(
+        `Annotation key "${key}" conflicts with existing JSON schema property and will be ignored.`
+      );
+      continue;
+    }
+    json[key] = resolvedAnnotations[key];
   }
 
   const inner = current;

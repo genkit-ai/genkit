@@ -251,16 +251,31 @@ describe('annotateSchema()', () => {
   });
 
   it('should merge annotations for ZodRecord (additionalProperties)', () => {
-    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'value' }));
+    const schema = z.record(
+      annotateSchema(z.string(), { 'x-hint': 'value' })
+    );
 
     const json = toJsonSchema({ schema });
-    assert.ok(
-      json.additionalProperties,
-      'JSON schema should have additionalProperties'
-    );
+    assert.ok(json.additionalProperties, 'JSON schema should have additionalProperties');
     assert.strictEqual(json.additionalProperties['x-hint'], 'value');
   });
-});
+
+  it('should not overwrite existing JSON schema fields and log a warning', () => {
+    const warnSpy = mock.method(console, 'warn', () => {});
+    const schema = annotateSchema(z.string(), { type: 'number', 'x-ok': true });
+
+    const json = toJsonSchema({ schema });
+
+    assert.strictEqual(json.type, 'string');
+    assert.strictEqual(json['x-ok'], true);
+    assert.strictEqual(warnSpy.mock.callCount(), 1);
+    assert.ok(
+      warnSpy.mock.calls[0].arguments[0].includes('Annotation key "type" conflicts')
+    );
+    warnSpy.mock.restore();
+  });
+  });
+
 
 describe('disableSchemaCodeGeneration()', () => {
   let compileMock: any;
