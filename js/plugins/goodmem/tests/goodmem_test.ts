@@ -17,7 +17,7 @@
 import * as assert from 'assert';
 import { genkit } from 'genkit';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
-import { goodmem, listSpaces, listEmbedders } from '../src/index.js';
+import { goodmem, listEmbedders, listSpaces } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -161,8 +161,7 @@ describe('GoodMem Plugin', () => {
         { spaceId: 'sp-1', name: 'test-space' },
         { spaceId: 'sp-2', name: 'another-space' },
       ];
-      globalThis.fetch = async () =>
-        mockResponse({ spaces: mockSpaces });
+      globalThis.fetch = async () => mockResponse({ spaces: mockSpaces });
 
       const result = await listSpaces({
         baseUrl: 'http://localhost:8080',
@@ -204,11 +203,8 @@ describe('GoodMem Plugin', () => {
 
   describe('listEmbedders', () => {
     it('should return embedders array from response', async () => {
-      const mockEmbedders = [
-        { embedderId: 'emb-1', name: 'text-embedding' },
-      ];
-      globalThis.fetch = async () =>
-        mockResponse({ embedders: mockEmbedders });
+      const mockEmbedders = [{ embedderId: 'emb-1', name: 'text-embedding' }];
+      globalThis.fetch = async () => mockResponse({ embedders: mockEmbedders });
 
       const result = await listEmbedders({
         baseUrl: 'http://localhost:8080',
@@ -230,7 +226,7 @@ describe('GoodMem Plugin', () => {
         callCount++;
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.endsWith('/v1/spaces') && callCount === 1) {
-          // listSpaces call — no matching space
+          // listSpaces call: no matching space
           return mockResponse({ spaces: [] });
         }
         // POST to create space
@@ -265,9 +261,7 @@ describe('GoodMem Plugin', () => {
     it('should reuse an existing space with the same name', async () => {
       globalThis.fetch = async () =>
         mockResponse({
-          spaces: [
-            { spaceId: 'existing-id', name: 'test-space' },
-          ],
+          spaces: [{ spaceId: 'existing-id', name: 'test-space' }],
         });
 
       const ai = genkit({
@@ -380,10 +374,7 @@ describe('GoodMem Plugin', () => {
 
       assert.strictEqual(result.success, false);
       assert.ok(result.error);
-      assert.match(
-        result.error,
-        /No content provided/
-      );
+      assert.match(result.error, /No content provided/);
     });
 
     it('should fail gracefully when file is not found', async () => {
@@ -430,6 +421,128 @@ describe('GoodMem Plugin', () => {
 
       assert.strictEqual(result.success, false);
       assert.ok(result.error);
+    });
+  });
+
+  // ---- listMemories tool ----
+
+  describe('goodmem/list_memories', () => {
+    it('passes every set query parameter through the URL', async () => {
+      let capturedUrl = '';
+      globalThis.fetch = async (url: any) => {
+        capturedUrl = typeof url === 'string' ? url : url.toString();
+        return mockResponse({ memories: [] });
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      await callTool(ai, 'goodmem/list_memories', {
+        spaceId: 'sp-1',
+        statusFilter: 'COMPLETED',
+        includeContent: true,
+        sortBy: 'created_at',
+        sortOrder: 'DESCENDING',
+      });
+
+      assert.ok(
+        capturedUrl.startsWith(
+          'http://localhost:8080/v1/spaces/sp-1/memories?'
+        ),
+        `URL did not include a query string: ${capturedUrl}`
+      );
+      assert.match(capturedUrl, /statusFilter=COMPLETED/);
+      assert.match(capturedUrl, /includeContent=true/);
+      assert.match(capturedUrl, /sortBy=created_at/);
+      assert.match(capturedUrl, /sortOrder=DESCENDING/);
+    });
+
+    it('sends no query string when no optional filters are set', async () => {
+      let capturedUrl = '';
+      globalThis.fetch = async (url: any) => {
+        capturedUrl = typeof url === 'string' ? url : url.toString();
+        return mockResponse({ memories: [] });
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      await callTool(ai, 'goodmem/list_memories', { spaceId: 'sp-1' });
+
+      assert.strictEqual(
+        capturedUrl,
+        'http://localhost:8080/v1/spaces/sp-1/memories'
+      );
+    });
+
+    it('omits includeContent from the URL when set to false', async () => {
+      let capturedUrl = '';
+      globalThis.fetch = async (url: any) => {
+        capturedUrl = typeof url === 'string' ? url : url.toString();
+        return mockResponse({ memories: [] });
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      await callTool(ai, 'goodmem/list_memories', {
+        spaceId: 'sp-1',
+        includeContent: false,
+      });
+
+      assert.strictEqual(
+        capturedUrl,
+        'http://localhost:8080/v1/spaces/sp-1/memories'
+      );
+    });
+
+    it('keeps only the filters that are set', async () => {
+      let capturedUrl = '';
+      globalThis.fetch = async (url: any) => {
+        capturedUrl = typeof url === 'string' ? url : url.toString();
+        return mockResponse({ memories: [] });
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      await callTool(ai, 'goodmem/list_memories', {
+        spaceId: 'sp-1',
+        statusFilter: 'PENDING',
+      });
+
+      assert.ok(capturedUrl.includes('statusFilter=PENDING'));
+      assert.ok(!capturedUrl.includes('sortBy='));
+      assert.ok(!capturedUrl.includes('sortOrder='));
+      assert.ok(!capturedUrl.includes('includeContent='));
     });
   });
 
@@ -483,7 +596,10 @@ describe('GoodMem Plugin', () => {
 
       assert.strictEqual(result.success, true);
       assert.strictEqual(result.totalResults, 1);
-      assert.strictEqual(result.results[0].chunkText, 'Paris is the capital of France');
+      assert.strictEqual(
+        result.results[0].chunkText,
+        'Paris is the capital of France'
+      );
       assert.strictEqual(result.results[0].relevanceScore, 0.95);
       assert.strictEqual(result.memories.length, 1);
       assert.strictEqual(result.resultSetId, 'rs-1');
@@ -534,6 +650,184 @@ describe('GoodMem Plugin', () => {
 
       assert.strictEqual(result.success, false);
       assert.ok(result.error);
+    });
+
+    it('applies metadataFilter to every spaceKey when set', async () => {
+      let capturedBody: any;
+      globalThis.fetch = async (_url: any, init: any) => {
+        capturedBody = JSON.parse(init.body as string);
+        return mockNdjsonResponse([
+          { resultSetBoundary: { resultSetId: 'rs-mf' } },
+          {
+            retrievedItem: {
+              chunk: {
+                chunk: {
+                  chunkId: 'c-1',
+                  chunkText: 'hello',
+                  memoryId: 'mem-1',
+                },
+                relevanceScore: 0.5,
+                memoryIndex: 0,
+              },
+            },
+          },
+        ]);
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      const filter = "CAST(val('$.category') AS TEXT) = 'feat'";
+      await callTool(ai, 'goodmem/retrieve_memories', {
+        query: 'q',
+        spaceIds: ['sp-1', 'sp-2'],
+        metadataFilter: filter,
+        waitForIndexing: false,
+      });
+
+      assert.strictEqual(capturedBody.spaceKeys.length, 2);
+      for (const key of capturedBody.spaceKeys) {
+        assert.strictEqual(key.filter, filter);
+      }
+    });
+
+    it('omits the filter key from spaceKeys when metadataFilter is not set', async () => {
+      let capturedBody: any;
+      globalThis.fetch = async (_url: any, init: any) => {
+        capturedBody = JSON.parse(init.body as string);
+        return mockNdjsonResponse([
+          { resultSetBoundary: { resultSetId: 'rs-no-mf' } },
+        ]);
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      await callTool(ai, 'goodmem/retrieve_memories', {
+        query: 'q',
+        spaceIds: ['sp-1', 'sp-2'],
+        waitForIndexing: false,
+      });
+
+      assert.strictEqual(capturedBody.spaceKeys.length, 2);
+      for (const key of capturedBody.spaceKeys) {
+        assert.strictEqual(key.filter, undefined);
+      }
+    });
+
+    it('treats an empty metadataFilter the same as unset', async () => {
+      let capturedBody: any;
+      globalThis.fetch = async (_url: any, init: any) => {
+        capturedBody = JSON.parse(init.body as string);
+        return mockNdjsonResponse([
+          { resultSetBoundary: { resultSetId: 'rs-empty-mf' } },
+        ]);
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      await callTool(ai, 'goodmem/retrieve_memories', {
+        query: 'q',
+        spaceIds: ['sp-1'],
+        metadataFilter: '',
+        waitForIndexing: false,
+      });
+
+      assert.strictEqual(capturedBody.spaceKeys[0].filter, undefined);
+    });
+
+    it('respects custom maxWaitSeconds and pollInterval while polling', async () => {
+      let calls = 0;
+      globalThis.fetch = async () => {
+        calls++;
+        return mockNdjsonResponse([
+          { resultSetBoundary: { resultSetId: 'rs-empty' } },
+        ]);
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      const start = Date.now();
+      const result = await callTool(ai, 'goodmem/retrieve_memories', {
+        query: 'q',
+        spaceIds: ['sp-1'],
+        waitForIndexing: true,
+        maxWaitSeconds: 0.5,
+        pollInterval: 0.1,
+      });
+      const elapsed = Date.now() - start;
+
+      assert.ok(
+        elapsed < 2000,
+        `expected polling to stop quickly, took ${elapsed}ms`
+      );
+      assert.ok(
+        calls >= 2,
+        `expected polling to call fetch more than once, got ${calls}`
+      );
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.totalResults, 0);
+      assert.match(result.message ?? '', /No results found/);
+    });
+
+    it('skips the polling loop when waitForIndexing is false', async () => {
+      let calls = 0;
+      globalThis.fetch = async () => {
+        calls++;
+        return mockNdjsonResponse([
+          { resultSetBoundary: { resultSetId: 'rs-skip' } },
+        ]);
+      };
+
+      const ai = genkit({
+        plugins: [
+          goodmem({
+            baseUrl: 'http://localhost:8080',
+            apiKey: 'test-key',
+          }),
+        ],
+      });
+      await new Promise((r) => setTimeout(r, 200));
+
+      const result = await callTool(ai, 'goodmem/retrieve_memories', {
+        query: 'q',
+        spaceIds: ['sp-1'],
+        waitForIndexing: false,
+      });
+
+      assert.strictEqual(calls, 1);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.totalResults, 0);
     });
 
     it('should handle abstractReply in NDJSON response', async () => {
@@ -750,10 +1044,7 @@ describe('GoodMem Plugin', () => {
       });
 
       assert.strictEqual(capturedHeaders['X-API-Key'], 'gm_test_api_key');
-      assert.strictEqual(
-        capturedHeaders['Content-Type'],
-        'application/json'
-      );
+      assert.strictEqual(capturedHeaders['Content-Type'], 'application/json');
       assert.strictEqual(capturedHeaders['Accept'], 'application/json');
     });
   });
@@ -773,10 +1064,7 @@ describe('GoodMem Plugin', () => {
         apiKey: 'test-key',
       });
 
-      assert.strictEqual(
-        capturedUrl,
-        'http://localhost:8080/v1/spaces'
-      );
+      assert.strictEqual(capturedUrl, 'http://localhost:8080/v1/spaces');
     });
   });
 });

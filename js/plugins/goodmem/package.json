@@ -1,6 +1,6 @@
 {
   "name": "genkitx-goodmem",
-  "description": "Genkit AI framework plugin for GoodMem memory layer — semantic storage, retrieval, and summarization.",
+  "description": "Genkit AI framework plugin for GoodMem, a retrieval-augmented generation (RAG) memory service.",
   "keywords": [
     "genkit",
     "genkit-plugin",

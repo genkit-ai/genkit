@@ -642,14 +642,13 @@ importers:
         version: 5.9.3
 
   plugins/goodmem:
-    dependencies:
-      genkit:
-        specifier: workspace:^
-        version: link:../../genkit
     devDependencies:
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
+      genkit:
+        specifier: workspace:*
+        version: link:../../genkit
       npm-run-all:
         specifier: ^4.1.5
         version: 4.1.5
@@ -1547,6 +1546,28 @@ importers:
         version: 6.1.3
       tsx:
         specifier: ^4.19.2
+        version: 4.20.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  testapps/goodmem:
+    dependencies:
+      '@genkit-ai/compat-oai':
+        specifier: workspace:*
+        version: link:../../plugins/compat-oai
+      genkit:
+        specifier: workspace:*
+        version: link:../../genkit
+      genkitx-goodmem:
+        specifier: workspace:*
+        version: link:../../plugins/goodmem
+    devDependencies:
+      cross-env:
+        specifier: ^7.0.3
+        version: 7.0.3
+      tsx:
+        specifier: ^4.19.3
         version: 4.20.3
       typescript:
         specifier: ^5.9.3
