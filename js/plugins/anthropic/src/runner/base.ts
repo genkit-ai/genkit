@@ -15,10 +15,7 @@
  */
 
 import { Anthropic } from '@anthropic-ai/sdk';
-import type {
-  DocumentBlockParam,
-  Tool,
-} from '@anthropic-ai/sdk/resources/messages';
+import type { DocumentBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import type {
   GenerateRequest,
   GenerateResponseChunkData,
@@ -416,7 +413,7 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
    * which lacks the `type` field. We default to `{ type: "object" }` to
    * prevent 400 errors from the Anthropic API.
    */
-  protected toAnthropicTool(tool: ToolDefinition): Tool {
+  protected toAnthropicTool(tool: ToolDefinition): ApiTypes['Tool'] {
     const schema = tool.inputSchema || {};
     const inputSchema =
       'type' in schema ? schema : { ...schema, type: 'object' as const };
@@ -424,7 +421,7 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
       name: tool.name,
       description: tool.description,
       input_schema: inputSchema,
-    } as Tool;
+    } as ApiTypes['Tool'];
   }
 
   /**
