@@ -17,6 +17,7 @@
 """Tests for the Virtual Try-On model implementation."""
 
 import base64
+from typing import Any, cast
 
 import pytest
 from google.genai.errors import ClientError
@@ -293,7 +294,7 @@ async def test_generate_rejects_invalid_config(mocker: MockerFixture) -> None:
         _person_part('gs://b/person.png'),
         _product_part('gs://b/shirt.png'),
     ])
-    req.config = {'sampleCount': 0}
+    req.config = cast(Any, {'sampleCount': 0})
     model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
 
     with pytest.raises(GenkitError) as exc_info:

@@ -30,7 +30,7 @@ import base64
 import json
 import sys
 import urllib.parse
-from typing import Any
+from typing import Any, cast
 
 if sys.version_info < (3, 11):
     from strenum import StrEnum
@@ -54,13 +54,13 @@ from genkit import (
     Role,
     Supports,
 )
-from genkit.plugin_api import ActionRunContext, tracer
+from genkit.plugin_api import ActionRunContext, StatusName, tracer
 from genkit.plugins.google_genai.models.utils import client_error_to_genkit_status
 
 _VIRTUAL_TRY_ON_UNAVAILABLE_ERRORS = (ConnectionError, TimeoutError, OSError)
 
 
-def _virtual_try_on_request_error_status(error: Exception) -> str:
+def _virtual_try_on_request_error_status(error: Exception) -> StatusName:
     """Map non-ClientError request failures to a Genkit status name."""
     if isinstance(error, _VIRTUAL_TRY_ON_UNAVAILABLE_ERRORS):
         return 'UNAVAILABLE'
@@ -279,6 +279,7 @@ def _parse_virtual_try_on_response_body(body: object) -> dict[str, Any]:
             message=f'virtual try-on returned an unexpected response body: {type(response).__name__}',
         )
 
+    response = cast(dict[str, Any], response)
     predictions = response.get('predictions')
     if predictions is not None and not isinstance(predictions, list):
         raise GenkitError(
