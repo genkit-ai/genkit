@@ -149,7 +149,7 @@ class MiddlewareContext:
 
     ``registry`` is the call-scoped child registry (resolve tools, register
     call-local actions). ``enqueue_parts`` queues extra user message parts for
-    the next turn. Not for plugin caches — use ``PrivateAttr`` on the middleware.
+    the next turn.
     """
 
     registry: RegistryLike
@@ -159,15 +159,16 @@ class MiddlewareContext:
 class BaseMiddleware(BaseModel):
     """Subclass for config fields + hook overrides; pass instances in ``use=[...]``.
 
-    **Where to put things**
+    To author a middleware,
 
-    - User knobs → public fields (``max_retries``, ``root_dir``). Dev UI + traces.
-    - Per-call engine → ``ctx`` on every hook (``ctx.registry``, ``ctx.enqueue_parts``).
-    - Caches across ``generate()`` → ``PrivateAttr`` (e.g. ``_cache``). Hooks run on a
-      per-call ``model_copy()``; undeclared ``self._…`` set in a hook won't persist.
-    - Don't mutate config fields in hooks — use ``ctx`` for call-scoped work.
+    1. Subclass `BaseMiddleware` and add pydantic fields for config.
 
-    Register with ``@ai.middleware``. Example:
+    2. Override the ``wrap_generate`` / ``wrap_model`` / ``wrap_tool`` hooks.
+
+    3. Wrap your subclass with the ``@ai.middleware`` decorator to make it available
+    in your local Dev UI.
+
+    Example:
 
         @ai.middleware(name='logger')
         class Logger(BaseMiddleware):
