@@ -30,7 +30,16 @@ const ai = genkit({
 // Basic Hi
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-3.5-flash'),
+    model: vertexAI.model('gemini-flash-latest'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello',
+  });
+
+  return text;
+});
+
+ai.defineFlow('basic-hi-lite', async () => {
+  const { text } = await ai.generate({
+    model: vertexAI.model('gemini-flash-lite-latest'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
