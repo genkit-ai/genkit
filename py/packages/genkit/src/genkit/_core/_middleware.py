@@ -21,9 +21,10 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, ClassVar, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, create_model
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from genkit._core._action import Action
 from genkit._core._logger import get_logger
@@ -142,88 +143,61 @@ class ToolHookParams(BaseModel):
     tool: Action
 
 
+@dataclass
+class MiddlewareContext:
+    """Per-``generate()`` services shared by every middleware in ``use=[...]``.
+
+    ``registry`` is the call-scoped child registry (resolve tools, register
+    call-local actions). ``enqueue_parts`` queues extra user message parts for
+    the next turn.
+    """
+
+    registry: RegistryLike
+    enqueue_parts: Callable[[list[Part]], None]
+
+
 class BaseMiddleware(BaseModel):
-    """Pydantic-backed middleware: config fields + hook overrides in one class.
+    """BaseMiddleware is the base class that you extend to create a middleware.
+    A middleware is defined by its custom configuration (backed by Pydantic),
+    and a set of hooks to inject logic into the generate pipeline. 
+
+    The base middleware has no custom configuration and noop hooks. The hooks
+    that are not overriden are still called by the engine when the middleware
+    is invoked. 
 
     To author a middleware,
+
     1. Subclass `BaseMiddleware` and add pydantic fields for config.
+
     2. Override the ``wrap_generate`` / ``wrap_model`` / ``wrap_tool`` hooks.
-    3. Wrap your subclass with the `@ai.middleware` decorator to make it available
+
+    3. Wrap your subclass with the ``@ai.middleware`` decorator to make it available
     in your local Dev UI.
 
-    To use a middleware, you can either:
-    1. Construct a Middleware instance directly and pass into the ``use`` argument of
-    `ai.generate(...)`. Preferred in almost all app developer-facing use cases.
-    2. Reference it by name with :class:`MiddlewareRef`. Used mainly by Dev UI.
-
     Example:
+
         @ai.middleware(name='logger')
         class Logger(BaseMiddleware):
             prefix: str = '[trace]'
 
-            async def wrap_model(self, params, next_fn):
+            async def wrap_model(self, params, next_fn, ctx):
                 t = time.monotonic()
                 resp = await next_fn(params)
                 log(f'{self.prefix} {time.monotonic() - t:.3f}s')
                 return resp
-
-        await ai.generate(
-            prompt='...',
-            use=[Logger(prefix='[span]')],
-        )
-
-    Inside any hook, two framework-injected attributes are guaranteed to be set:
-
-    1. `self.registry` — the per-call registry. Use it to resolve actions
-      and to inspect what else is in scope for this call. Anything you register
-      through it is automatically scoped to the call and torn down at the end.
-    2. `self.enqueue_parts(parts)` — queue an extra user message to be injected
-      into the conversation at the start of the next generate iteration. Use it
-      from a tool closure or from ``wrap_tool`` to surface error details, file
-      contents, or other rich context to the model without forging a tool
-      response.
-
-    Outside a `generate()` call these attributes are `None` — they only
-    become valid once the engine binds the instance to a specific call.
-
-    Avoid storing additional mutable state on ``self`` inside your hooks.
-    Each `generate()` call works on its own shallow copy of the middleware
-    instance.
     """
 
-    # ``arbitrary_types_allowed`` lets subclasses keep non-pydantic fields like
-    # ``Callable`` or opaque resources without opting in per-subclass.
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(extra='forbid')
 
-    # Framework-injected at the start of each generate() call (see the class
-    # docstring). They are public fields, not PrivateAttrs, so a middleware
-    # author writing ``self.`` in their IDE sees them in autocomplete and knows
-    # they exist.  Annotated as required so hooks can write
-    # ``self.registry.lookup_action(...)`` without a None-narrow; the runtime
-    # default of ``None`` lets bare constructors like ``Retry(max_retries=3)``
-    # work, with the engine rebinding before any hook fires.
-    registry: RegistryLike = Field(default=None, exclude=True, repr=False)  # type: ignore[assignment]
-    enqueue_parts: Callable[[list[Part]], None] = Field(default=None, exclude=True, repr=False)  # type: ignore[assignment]
-
-    def tools(self) -> list[Action]:
-        """Return additional tools to expose to the model for this generate call.
-
-        Called once per ``generate()`` call after the engine has bound
-        ``self.registry``.
-
-        Tools are registered on a call-scoped child registry, so they
-        do not pollute the root registry and are invisible to other
-        concurrent ``generate()`` calls.
-
-        Override to contribute tools dynamically. The default returns
-        ``[]``.
-        """
+    def tools(self, ctx: MiddlewareContext) -> list[Action]:
+        """Return additional tools to expose to the model for this generate call."""
         return []
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
         return await next_fn(params)
@@ -232,6 +206,7 @@ class BaseMiddleware(BaseModel):
         self,
         params: ModelHookParams,
         next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
     ) -> ModelResponse:
         """Wrap each model API call."""
         return await next_fn(params)
@@ -240,6 +215,7 @@ class BaseMiddleware(BaseModel):
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
     ) -> MultipartToolResponse:
         """Wrap each tool execution.
 
@@ -261,9 +237,7 @@ class MiddlewareDesc(MiddlewareDescData):
     # reference; parent's `alias_generator` and `extra='forbid'` settings are inherited.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # The class the registry instantiates per `generate()` call. The engine
-    # binds per-call attrs (`self.registry`, `self.enqueue_parts`) onto the
-    # result before any hook fires.
+    # The class the registry instantiates per `generate()` call.
     _cls: type[BaseMiddleware] = PrivateAttr()
 
     def __init__(
@@ -302,33 +276,15 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
 
     The Dev UI renders a config form for each registered middleware from this
     schema.
-
-    Pydantic's full ``cls.model_json_schema()`` would also include the
-    framework-injected ``registry`` and ``enqueue_parts`` attributes — those
-    aren't config the user sets, and their types (a registry protocol, a
-    callable) aren't always representable in JSON Schema. Build the schema from
-    a stripped pydantic model containing only the subclass-added fields so the
-    Dev UI sees just the knobs the author meant to expose.
     """
-    base_fields = set(BaseMiddleware.model_fields)
-    new_fields: dict[str, Any] = {
-        field_name: (info.annotation, info)
-        for field_name, info in cls.model_fields.items()
-        if field_name not in base_fields
-    }
-    if not new_fields:
+    if cls is BaseMiddleware or not cls.model_fields:
         return {
             'type': 'object',
             'properties': {},
             'additionalProperties': True,
         }
     try:
-        stripped = create_model(  # type: ignore[call-overload]
-            f'{cls.__name__}Config',
-            __config__=ConfigDict(arbitrary_types_allowed=True),
-            **new_fields,
-        )
-        return stripped.model_json_schema()
+        return cls.model_json_schema()
     except Exception as e:
         # If a config field carries a type pydantic can't translate, prefer a
         # permissive empty schema over crashing the whole registration —
