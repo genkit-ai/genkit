@@ -40,6 +40,8 @@ const schemaAnnotations = new WeakMap<z.ZodTypeAny, Record<string, any>>();
 
 /**
  * Annotates a Zod schema with UI-specific metadata.
+ *
+ * NOTE: It's typically recommended to use x-genkit-* (or similar) as the prefix.
  */
 export function annotateSchema<T extends z.ZodTypeAny>(
   schema: T,
@@ -146,6 +148,15 @@ function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
     }
   } else if (inner instanceof z.ZodArray && json.items) {
     applyAnnotations(inner.element, json.items);
+  } else if (inner instanceof z.ZodUnion && json.anyOf) {
+    for (let i = 0; i < inner.options.length; i++) {
+      applyAnnotations(inner.options[i], json.anyOf[i]);
+    }
+  } else if (inner instanceof z.ZodIntersection && json.allOf) {
+    applyAnnotations(inner._def.left, json.allOf[0]);
+    applyAnnotations(inner._def.right, json.allOf[1]);
+  } else if (inner instanceof z.ZodRecord && json.additionalProperties) {
+    applyAnnotations(inner.valueSchema, json.additionalProperties);
   }
 
   return json;

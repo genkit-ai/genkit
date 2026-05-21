@@ -224,6 +224,42 @@ describe('annotateSchema()', () => {
     const json = toJsonSchema({ schema });
     assert.strictEqual(json.title, 'Outer');
   });
+
+  it('should merge annotations for ZodUnion (anyOf)', () => {
+    // Use objects to force anyOf instead of simple type array optimization
+    const schema = z.union([
+      annotateSchema(z.object({ a: z.string() }), { 'x-hint': 'a' }),
+      annotateSchema(z.object({ b: z.number() }), { 'x-hint': 'b' }),
+    ]);
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.anyOf, 'JSON schema should have anyOf');
+    assert.strictEqual(json.anyOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.anyOf[1]['x-hint'], 'b');
+  });
+
+  it('should merge annotations for ZodIntersection (allOf)', () => {
+    const schema = z.intersection(
+      annotateSchema(z.object({ a: z.string() }), { 'x-hint': 'a' }),
+      annotateSchema(z.object({ b: z.number() }), { 'x-hint': 'b' })
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.allOf, 'JSON schema should have allOf');
+    assert.strictEqual(json.allOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.allOf[1]['x-hint'], 'b');
+  });
+
+  it('should merge annotations for ZodRecord (additionalProperties)', () => {
+    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'value' }));
+
+    const json = toJsonSchema({ schema });
+    assert.ok(
+      json.additionalProperties,
+      'JSON schema should have additionalProperties'
+    );
+    assert.strictEqual(json.additionalProperties['x-hint'], 'value');
+  });
 });
 
 describe('disableSchemaCodeGeneration()', () => {
