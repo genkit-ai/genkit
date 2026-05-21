@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs';
+import { promises as fs } from 'fs';
 import { z, type Genkit } from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import * as path from 'path';
@@ -24,7 +24,7 @@ import * as path from 'path';
 // ---------------------------------------------------------------------------
 
 export interface GoodMemPluginParams {
-  /** Base URL of the GoodMem API server (e.g., "https://api.goodmem.ai" or "http://localhost:8080"). */
+  /** Base URL of the GoodMem API server (e.g., "https://api.goodmem.ai" or "https://localhost:8080"). */
   baseUrl: string;
   /** GoodMem API key for authentication (X-API-Key header). */
   apiKey: string;
@@ -496,7 +496,7 @@ const DeleteMemoryOutputSchema = z.object({
  * const ai = genkit({
  *   plugins: [
  *     goodmem({
- *       baseUrl: 'http://localhost:8080',
+ *       baseUrl: 'https://localhost:8080',
  *       apiKey: process.env.GOODMEM_API_KEY!,
  *     }),
  *   ],
@@ -541,7 +541,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to list embedders',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -568,7 +568,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to list spaces',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -594,7 +594,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to get space',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -673,7 +673,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to create space',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -734,7 +734,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to update space',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -777,7 +777,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to delete space',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -807,25 +807,31 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
         let fileName: string | null = null;
 
         if (filePath) {
-          if (!fs.existsSync(filePath)) {
+          let fileBuffer: Buffer;
+          try {
+            fileBuffer = await fs.readFile(filePath);
+          } catch (err: any) {
+            if (err.code === 'ENOENT') {
+              return {
+                success: false,
+                error: `File not found: ${filePath}`,
+              };
+            }
             return {
               success: false,
-              error: `File not found: ${filePath}`,
+              error: `Failed to read file ${filePath}: ${err.message}`,
             };
           }
-          const fileBuffer = fs.readFileSync(filePath);
-          const base64 = fileBuffer.toString('base64');
           const ext = path.extname(filePath).replace('.', '');
           const detectedMime = getMimeType(ext);
           const mimeType = detectedMime || 'application/octet-stream';
           fileName = path.basename(filePath);
 
+          requestBody.contentType = mimeType;
           if (mimeType.startsWith('text/')) {
-            requestBody.contentType = mimeType;
             requestBody.originalContent = fileBuffer.toString('utf-8');
           } else {
-            requestBody.contentType = mimeType;
-            requestBody.originalContentB64 = base64;
+            requestBody.originalContentB64 = fileBuffer.toString('base64');
           }
         } else if (textContent) {
           requestBody.contentType = 'text/plain';
@@ -872,7 +878,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to create memory',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -912,7 +918,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to list memories',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -1083,7 +1089,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to retrieve memories',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -1127,7 +1133,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to get memory',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }
@@ -1171,7 +1177,7 @@ export function goodmem(params: GoodMemPluginParams): GenkitPlugin {
           return {
             success: false,
             error: error.message || 'Failed to delete memory',
-            details: error.response?.body || String(error),
+            details: String(error),
           };
         }
       }

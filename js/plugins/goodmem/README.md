@@ -35,7 +35,7 @@ import { goodmem } from 'genkitx-goodmem';
 const ai = genkit({
   plugins: [
     goodmem({
-      baseUrl: process.env.GOODMEM_BASE_URL || 'http://localhost:8080',
+      baseUrl: process.env.GOODMEM_BASE_URL || 'https://localhost:8080',
       apiKey: process.env.GOODMEM_API_KEY!,
     }),
   ],
@@ -229,7 +229,7 @@ import { goodmem } from 'genkitx-goodmem';
 const ai = genkit({
   plugins: [
     goodmem({
-      baseUrl: 'http://localhost:8080',
+      baseUrl: 'https://localhost:8080',
       apiKey: process.env.GOODMEM_API_KEY!,
     }),
   ],
