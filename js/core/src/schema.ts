@@ -100,6 +100,10 @@ export function toJsonSchema({
   return annotatedSchema;
 }
 
+/**
+ * Recursively applies annotations to a JSON schema by walking the Zod tree
+ * and matching it against the JSON schema structure.
+ */
 function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
   if (!json || typeof json !== 'object') return json;
 
