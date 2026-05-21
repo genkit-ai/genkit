@@ -54,7 +54,9 @@ func isTunedGeminiName(name string) bool {
 	if strings.HasPrefix(name, "endpoints/") {
 		return true
 	}
-	if strings.HasPrefix(name, "projects/") && strings.Contains(name, "/endpoints/") {
+	if strings.HasPrefix(name, "projects/") &&
+		strings.Contains(name, "/locations/") &&
+		strings.Contains(name, "/endpoints/") {
 		return true
 	}
 	return false

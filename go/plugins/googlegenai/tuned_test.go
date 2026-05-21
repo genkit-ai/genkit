@@ -114,6 +114,7 @@ func TestIsTunedGeminiName(t *testing.T) {
 	}{
 		{"endpoints/1234567890", true},
 		{"projects/p/locations/us-central1/endpoints/999", true},
+		{"projects/p/endpoints/999", false},
 		{"gemini-2.5-flash", false},
 		{"imagen-3.0-generate-001", false},
 		{"projects/p/locations/us-central1/publishers/google/models/gemini-2.5-flash", false},
