@@ -44,7 +44,6 @@ import {
   GenerateContentRequest,
   GenerateContentResponse,
   GoogleSearchRetrieval,
-  GoogleSearchRetrievalTool,
   Model,
   Tool,
   ToolConfig,
@@ -676,17 +675,9 @@ export function defineModel(
       }
 
       if (googleSearchRetrieval) {
-        // Gemini 1.5 models use googleSearchRetrieval, newer models use googleSearch.
-        if (ref.name.startsWith('vertexai/gemini-1.5')) {
-          tools.push({
-            googleSearchRetrieval:
-              googleSearchRetrieval as GoogleSearchRetrieval,
-          } as GoogleSearchRetrievalTool);
-        } else {
-          tools.push({
-            googleSearch: googleSearchRetrieval as GoogleSearchRetrieval,
-          } as GoogleSearchRetrievalTool);
-        }
+        tools.push({
+          googleSearch: googleSearchRetrieval as GoogleSearchRetrieval,
+        });
       }
 
       if (vertexRetrieval) {
