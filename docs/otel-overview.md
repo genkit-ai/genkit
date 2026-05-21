@@ -1,6 +1,6 @@
 # Genkit Telemetry Overview
 
-This document outlines the core OpenTelemetry instrumentation strategy for Genkit, organized by Trace Spans and Trace Events.
+This document outlines the **PRE-EXISTING** core OpenTelemetry instrumentation strategy for Genkit, organized by Trace Spans and Trace Events.
 
 ---
 

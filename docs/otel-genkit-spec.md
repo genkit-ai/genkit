@@ -1,6 +1,6 @@
 # Genkit OpenTelemetry Specification
 
-This document defines the official OpenTelemetry instrumentation standards for the Genkit framework across all supported languages.
+This document defines the official OpenTelemetry instrumentation standards for the Genkit framework across all supported languages. It does not define "how" data should be collected; just "what" data should be collected.
 
 ## 1. Instrumentation Scope
 
@@ -48,6 +48,7 @@ These attributes are fundamental to Genkit's trace structure and should be prese
 | Genkit | `genkit.isFailureSource` | Recommended | boolean | Marks the specific span where an error originated. | `true` |
 | Genkit | `genkit.metadata.context` | Opt-In | string | JSON-stringified execution context (e.g., auth data). (Enabled by default for local development). | `"{\"auth\":...}"` |
 | Genkit | `genkit.metadata.subtype` | Conditionally Required | string | Specific category for spans of type `action`. | `"flow"` |
+| Genkit | `genkit.metadata.resumed` | Recommended | boolean | Marks if the operation was resumed after an interrupt. | `true` |
 
 ### Specialized Spans
 
@@ -55,24 +56,89 @@ These attributes are fundamental to Genkit's trace structure and should be prese
 - `genkit.metadata.subtype`: `flow`
 - `genkit.isRoot`: `true` (if entry point)
 
-#### Session Flows
-When a flow is executed within the context of a long-running session or conversation, the following attributes should be propagated to all spans within that flow to enable trace grouping.
+#### Agents (New)
+When a turn is executed within the context of a long-running session or conversation, the following attributes should be propagated to all spans within that run to enable trace grouping.
 
 | Convention | Attribute | Requirement Level | Type | Description | Example |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | Session | `session.id` | Required | string | Unique identifier for the user session. | `"sess-abc-123"` |
 | Gen AI | `gen_ai.conversation.id` | Recommended | string | Identifier for the specific chat thread. | `"main"` |
 
-#### Models (GenAI)
-Genkit should align with the [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/) where possible.
-- `gen_ai.system`: The provider name (e.g., `googleai`, `vertexai`).
-- `gen_ai.request.model`: The model ID.
-- `gen_ai.response.model`: The actual model used (if different).
-- `genkit.metadata.subtype`: `model`
+WIP: Genkit should align with the OTel GenAI Semantic Conventions for [agent spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-agent-spans/#spans) for agents.
+
+#### Models
+
+Genkit aligns with the OTel GenAI Semantic Conventions for [model spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/#spans). These attributes should be present on spans where `genkit.metadata.subtype` is `model`.
+
+> [!NOTE]
+> Genkit by convention does not break out input/output params into separate attributes. e.g. `gen_ai.request.top_k` would actually be included as part of `genkit.input`.
+> 
+> An audit is necessary to determine which attributes below should *always* be present, and which should be added via a developer choice (e.g. plugin). 
+> 
+> For example:
+>
+> - Attributes `gen_ai.operation.name`, `gen_ai.provider.name`, `server.address`, `server.port`, and others, that are not specifically covered by the Genkit spec, are candidates to include _always_.
+> - We should (by default) forgo `gen_ai.input.messages` / `gen_ai.output.messages` in favor of `genkit.input` / `genkit.output`. These are very large, and duplication is costly. Input/output is _standard_ for all genkit action types, and are inherent to Genkit observability.
+> - It would be prudent to include *some* overlapping data, such as `gen_ai.usage.input_tokens`, because they are not provided in a standard location by each model provider, and will frequently be observed, or aggregated.
+
+| Convention | Attribute | Requirement Level | Type | Description | Example |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Gen AI | `gen_ai.operation.name` | Required | string | The operation type. | `"chat"` |
+| Gen AI | `gen_ai.provider.name` | Required | string | The provider/system name. | `"gcp.vertex_ai"` |
+| Gen AI | `gen_ai.request.model` | Conditionally Required | string | The model ID requested. | `"gemini-1.5-flash"` |
+| Gen AI | `gen_ai.request.stream` | Conditionally Required | boolean | Whether streaming was used. | `true` |
+| Gen AI | `gen_ai.request.top_k` | Conditionally Required | double | Top-k sampling threshold. | `1.0` |
+| Gen AI | `gen_ai.request.seed` | Conditionally Required | int | Seed for deterministic sampling. | `42` |
+| Gen AI | `gen_ai.request.choice.count` | Conditionally Required | int | Number of completions to return. | `1` |
+| Gen AI | `gen_ai.output.type` | Conditionally Required | string | Requested content type. | `"text"` |
+| Gen AI | `gen_ai.conversation.id` | Conditionally Required | string | Identifier for the chat thread. | `"main"` |
+| Server | `server.address` | Recommended | string | Hostname or IP of the remote GenAI API/provider. | `"example.com"` |
+| Server | `server.port` | Conditionally Required | int | Port of the remote GenAI API/provider. | `443` |
+| Error | `error.type` | Conditionally Required | string | Error class if operation failed. | `"timeout"` |
+| Gen AI | `gen_ai.response.model` | Recommended | string | The actual model used. | `"gemini-1.5-flash-001"` |
+| Gen AI | `gen_ai.request.temperature` | Recommended | double | Sampling temperature. | `0.7` |
+| Gen AI | `gen_ai.request.top_p` | Recommended | double | Nucleus sampling probability. | `0.95` |
+| Gen AI | `gen_ai.request.presence_penalty` | Recommended | double | Presence penalty. | `0.5` |
+| Gen AI | `gen_ai.request.frequency_penalty` | Recommended | double | Frequency penalty. | `0.5` |
+| Gen AI | `gen_ai.request.max_tokens` | Recommended | int | Maximum tokens to generate. | `2048` |
+| Gen AI | `gen_ai.request.stop_sequences` | Recommended | string[] | Sequences that stop generation. | `["STOP"]` |
+| Gen AI | `gen_ai.response.finish_reasons` | Recommended | string[] | Reasons the model stopped. | `["stop"]` |
+| Gen AI | `gen_ai.response.id` | Recommended | string | Provider-generated response ID. | `"chatcmpl-123"` |
+| Gen AI | `gen_ai.response.time_to_first_chunk` | Recommended | double | Latency to first chunk (seconds). | `0.5` |
+| Gen AI | `gen_ai.usage.input_tokens` | Recommended | int | Total input tokens (incl. cached). | `150` |
+| Gen AI | `gen_ai.usage.output_tokens` | Recommended | int | Total output tokens. | `45` |
+| Gen AI | `gen_ai.usage.reasoning.output_tokens` | Recommended | int | Tokens used for reasoning. | `50` |
+| Gen AI | `gen_ai.usage.cache_read.input_tokens` | Recommended | int | Input tokens served from cache. | `100` |
+| Gen AI | `gen_ai.usage.cache_creation.input_tokens` | Recommended | int | Input tokens written to cache. | `150` |
+| Gen AI | `gen_ai.input.messages` | Opt-In | any[] | Structured conversation history. | `[...]` |
+| Gen AI | `gen_ai.output.messages` | Opt-In | any[] | Structured completion messages. | `[...]` |
+| Gen AI | `gen_ai.system_instructions` | Opt-In | any[] | System-level instructions. | `[...]` |
+| Gen AI | `gen_ai.tool.definitions` | Opt-In | any[] | List of tool definitions available to the model. | `[...]` |
 
 #### Tools
-- `genkit.metadata.subtype`: `tool`
-- `genkit.metadata.resumed`: `true` (if resumed after interrupt)
+
+Genkit aligns with the OTel GenAI Semantic Convention for [tool execution spans](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/#execute-tool-span). These attributes should be present on spans where `genkit.metadata.subtype` is `tool`.
+
+> [!NOTE]
+> An audit is necessary to determine which attributes below should *always* be present, and which should be added via a developer choice (e.g. plugin). 
+>
+> For example:
+>
+> - We might forgo `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result` in favor of `genkit.input` / `genkit.output`. These are very large, and duplication is costly. Input/output is _standard_ for all genkit action types, and are inherent to Genkit observability.
+
+| Convention | Attribute | Requirement Level | Type | Description | Example |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Gen AI | `gen_ai.operation.name` | Required | string | The operation type. | `"execute_tool"` |
+| Gen AI | `gen_ai.tool.name` | Required | string | Name of the tool being executed. | `"get_weather"` |
+| Server | `server.address` | Recommended | string | Hostname or IP of the remote tool provider (if applicable). | `"api.weather.com"` |
+| Server | `server.port` | Conditionally Required | int | Port of the remote tool provider. | `443` |
+| Error | `error.type` | Conditionally Required | string | Error class if operation failed. | `"timeout"` |
+| Gen AI | `gen_ai.tool.type` | Recommended | string | Type of the tool. | `"function"` |
+| Gen AI | `gen_ai.tool.description` | Recommended | string | Description of the tool. | `"Get current weather"` |
+| Gen AI | `gen_ai.tool.call.id` | Recommended | string | The tool call identifier. | `"call_abc_123"` |
+| Gen AI | `gen_ai.tool.call.arguments` | Opt-In | any | Parameters passed to the tool. | `{"city": "Paris"}` |
+| Gen AI | `gen_ai.tool.call.result` | Opt-In | any | Result returned by the tool. | `{"temp": 72}` |
+| Genkit | `genkit.metadata.resumed` | Recommended | boolean | True if resumed after interrupt. | `true` |
 
 ## 3. Schema Management & Validation
 
