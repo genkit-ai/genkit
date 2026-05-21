@@ -32,14 +32,13 @@
 #  11. Required pyproject.toml fields for publishable packages
 #  12. Sample run.sh scripts exist
 #  13. No hardcoded API keys or secrets
-#  14. Typos and spelling errors (via typos tool)
-#  15. IDE autocomplete - __all__ exports in __init__.py
-#  16. IDE autocomplete - No broad "type: ignore" comments
-#  17. Python version classifiers (3.10-3.14)
-#  18. Namespace package __init__.py (plugins must not have __init__.py in genkit/ or genkit/plugins/)
-#  19. Test file basename uniqueness (no duplicate basenames across test directories)
-#  20. CHANGELOG.md files exist
-
+#  14. IDE autocomplete - __all__ exports in __init__.py
+#  15. IDE autocomplete - No broad "type: ignore" comments
+#  16. Python version classifiers (3.10-3.14)
+#  17. Namespace package __init__.py (plugins must not have __init__.py in genkit/ or genkit/plugins/)
+#  18. Test file basename uniqueness (no duplicate basenames across test directories)
+#  19. CHANGELOG.md files exist
+#
 set -euo pipefail
 
 # Colors for output
