@@ -115,25 +115,19 @@ export const filesystem: GenerateMiddleware<typeof FilesystemOptionsSchema> =
             if (e.name === 'ToolInterruptError') throw e;
 
             if (filesystemToolNames.includes(req.toolRequest.name)) {
-              const errorPart = {
-                text: `Tool '${req.toolRequest.name}' failed: ${
-                  e.message || String(e)
-                }`,
+              // Return a tool response with the error text so the LLM can
+              // see what went wrong and retry.  This is provider-agnostic
+              // (Anthropic requires a proper tool response after every tool
+              // call — injecting a user-role message breaks its protocol).
+              return {
+                toolResponse: {
+                  name: req.toolRequest.name,
+                  ref: req.toolRequest.ref,
+                  output: `Tool '${req.toolRequest.name}' failed: ${
+                    e.message || String(e)
+                  }`,
+                },
               };
-              if (
-                messageQueue.length > 0 &&
-                messageQueue[messageQueue.length - 1].role === 'user'
-              ) {
-                messageQueue[messageQueue.length - 1].content.push(errorPart);
-              } else {
-                messageQueue.push({
-                  role: 'user',
-                  content: [errorPart],
-                });
-              }
-              // Don't throw, don't return a response, we return control back to the LLM, let it try again.
-              // We add a message to the queue to let the LLM know about the error and let it correct.
-              return;
             }
             throw e;
           }
