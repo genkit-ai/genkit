@@ -250,13 +250,31 @@ describe('annotateSchema()', () => {
     assert.strictEqual(json.allOf[1]['x-hint'], 'b');
   });
 
-  it('should merge annotations for ZodRecord (additionalProperties)', () => {
-    const schema = z.record(
-      annotateSchema(z.string(), { 'x-hint': 'value' })
+  it('should merge annotations for nested ZodIntersection (flattened allOf)', () => {
+    const schema = z.intersection(
+      z.intersection(
+        annotateSchema(z.object({ a: z.string() }), { 'x-hint': 'a' }),
+        annotateSchema(z.object({ b: z.number() }), { 'x-hint': 'b' })
+      ),
+      annotateSchema(z.object({ c: z.boolean() }), { 'x-hint': 'c' })
     );
 
     const json = toJsonSchema({ schema });
-    assert.ok(json.additionalProperties, 'JSON schema should have additionalProperties');
+    assert.ok(json.allOf, 'JSON schema should have allOf');
+    assert.strictEqual(json.allOf.length, 3, 'Should have 3 elements in allOf');
+    assert.strictEqual(json.allOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.allOf[1]['x-hint'], 'b');
+    assert.strictEqual(json.allOf[2]['x-hint'], 'c');
+  });
+
+  it('should merge annotations for ZodRecord (additionalProperties)', () => {
+    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'value' }));
+
+    const json = toJsonSchema({ schema });
+    assert.ok(
+      json.additionalProperties,
+      'JSON schema should have additionalProperties'
+    );
     assert.strictEqual(json.additionalProperties['x-hint'], 'value');
   });
 
@@ -267,7 +285,10 @@ describe('annotateSchema()', () => {
     ]);
 
     const json = toJsonSchema({ schema });
-    assert.ok(Array.isArray(json.items), 'JSON schema items should be an array');
+    assert.ok(
+      Array.isArray(json.items),
+      'JSON schema items should be an array'
+    );
     assert.strictEqual(json.items[0]['x-hint'], 'first');
     assert.strictEqual(json.items[1]['x-hint'], 'second');
   });
@@ -298,12 +319,13 @@ describe('annotateSchema()', () => {
     assert.strictEqual(json['x-ok'], true);
     assert.strictEqual(warnSpy.mock.callCount(), 1);
     assert.ok(
-      warnSpy.mock.calls[0].arguments[0].includes('Annotation key "type" conflicts')
+      warnSpy.mock.calls[0].arguments[0].includes(
+        'Annotation key "type" conflicts'
+      )
     );
     warnSpy.mock.restore();
   });
-  });
-
+});
 
 describe('disableSchemaCodeGeneration()', () => {
   let compileMock: any;

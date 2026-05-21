@@ -163,8 +163,21 @@ function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
       applyAnnotations(inner.options[i], json.anyOf[i]);
     }
   } else if (inner instanceof z.ZodIntersection && json.allOf) {
-    applyAnnotations(inner._def.left, json.allOf[0]);
-    applyAnnotations(inner._def.right, json.allOf[1]);
+    const schemas: z.ZodTypeAny[] = [];
+    const collect = (s: z.ZodTypeAny) => {
+      if (s instanceof z.ZodIntersection) {
+        collect(s._def.left);
+        collect(s._def.right);
+      } else {
+        schemas.push(s);
+      }
+    };
+    collect(inner);
+    if (schemas.length === json.allOf.length) {
+      for (let i = 0; i < schemas.length; i++) {
+        applyAnnotations(schemas[i], json.allOf[i]);
+      }
+    }
   } else if (inner instanceof z.ZodRecord && json.additionalProperties) {
     applyAnnotations(inner.valueSchema, json.additionalProperties);
   } else if (inner instanceof z.ZodTuple && Array.isArray(json.items)) {
