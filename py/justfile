@@ -59,14 +59,6 @@ test:
 test-watch:
     "{{ py_dir }}/bin/watch_python_tests"
 
-# Run tests with nox (multi-version).
-test-nox:
-    "{{ py_dir }}/bin/run_python_tests_with_nox"
-
-# Run tests with tox (multi-version).
-test-tox:
-    "{{ py_dir }}/bin/run_python_tests_with_tox"
-
 # Run security checks (bandit, pip-audit).
 security:
     "{{ py_dir }}/bin/run_python_security_checks"
