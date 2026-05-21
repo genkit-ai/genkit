@@ -22,6 +22,7 @@ import copy
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -49,6 +50,7 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
+    MiddlewareContext,
     MiddlewareDesc,
     ModelHookParams,
     MultipartToolResponse,
@@ -145,45 +147,52 @@ def resolve_middleware_from_use(
     return out
 
 
-def _bind_call_state(
+@dataclass
+class _GenerateMiddlewarePipeline:
+    """Holds the middleware chain and the shared context for a single generate call."""
+
+    middleware: list[BaseMiddleware]
+    ctx: MiddlewareContext
+
+
+def _prepare_middleware(
     middleware: list[BaseMiddleware],
     *,
     registry: Registry,
     enqueue_parts: Callable[[list[Part]], None],
-) -> list[BaseMiddleware]:
-    """Return per-call copies of each middleware with framework attrs bound.
+) -> _GenerateMiddlewarePipeline:
+    """Return per-call middleware copies and one shared ``MiddlewareContext``.
 
-    The same ``BaseMiddleware`` instance can show up in concurrent ``generate()``
-    calls. Each call needs its own ``self.registry`` and ``self.enqueue_parts`.
-    So we shallow-copy here and set the attrs on the copy to prevent side-effects.
+    The same ``BaseMiddleware`` instance can appear in concurrent ``generate()``
+    calls; shallow-copy each entry so config mutations do not cross calls.
     """
-    bound: list[BaseMiddleware] = []
-    for mw in middleware:
-        copy = mw.model_copy()
-        copy.registry = registry
-        copy.enqueue_parts = enqueue_parts
-        bound.append(copy)
-    return bound
+    return _GenerateMiddlewarePipeline(
+        middleware=[mw.model_copy() for mw in middleware],
+        ctx=MiddlewareContext(registry=registry, enqueue_parts=enqueue_parts),
+    )
 
 
 async def _chain_tool_middleware(
     middleware: list[BaseMiddleware],
     params: ToolHookParams,
     next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+    ctx: MiddlewareContext,
 ) -> MultipartToolResponse:
     """Run the tool middleware chain and return the tool response."""
     runner: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = next_fn
     for mw in reversed(middleware):
         _mw = mw
         _inner = runner
+        _ctx = ctx
 
         async def run_next(
             p: ToolHookParams,
             *,
             _m: BaseMiddleware = _mw,
             _i: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = _inner,
+            _c: MiddlewareContext = _ctx,
         ) -> MultipartToolResponse:
-            return await _m.wrap_tool(p, _i)
+            return await _m.wrap_tool(p, _i, _c)
 
         runner = run_next
     return await runner(params)
@@ -451,15 +460,16 @@ async def generate_with_request(
         else:
             queue.append(Message(role=Role.USER, content=list(parts)))
 
+    mw_pipeline: _GenerateMiddlewarePipeline | None = None
     if middleware:
-        middleware = _bind_call_state(
+        mw_pipeline = _prepare_middleware(
             middleware,
             registry=registry,
             enqueue_parts=enqueue_parts,
         )
         mw_tools: list[Action[Any, Any, Never]] = []
-        for mw in middleware:
-            contributed = mw.tools()
+        for mw in mw_pipeline.middleware:
+            contributed = mw.tools(mw_pipeline.ctx)
             mw_tools.extend(contributed)
 
         if mw_tools:
@@ -474,12 +484,11 @@ async def generate_with_request(
     return await _generate_action_turn(
         registry=registry,
         raw_request=raw_request,
-        middleware=middleware,
+        mw_pipeline=mw_pipeline,
         on_chunk=on_chunk,
         message_index=message_index,
         current_turn=current_turn,
         context=context,
-        enqueue_parts=enqueue_parts,
         queue=queue,
     )
 
@@ -487,15 +496,16 @@ async def generate_with_request(
 async def _generate_action_turn(
     registry: Registry,
     raw_request: GenerateActionOptions,
-    middleware: list[BaseMiddleware],
+    mw_pipeline: _GenerateMiddlewarePipeline | None,
     on_chunk: Callable[[ModelResponseChunk], None] | None,
     message_index: int,
     current_turn: int,
     context: dict[str, Any] | None,
-    enqueue_parts: Callable[[list[Part]], None],
     queue: list[Message],
 ) -> ModelResponse:
     """Run one model call plus tool resolution, then recurse for the next turn."""
+    middleware = mw_pipeline.middleware if mw_pipeline else []
+    mw_ctx = mw_pipeline.ctx if mw_pipeline else None
     tools_in = raw_request.tools
     if tools_in:
         raw_request = raw_request.model_copy()
@@ -517,7 +527,7 @@ async def _generate_action_turn(
     ) = await _resolve_resume_options(
         registry,
         raw_request,
-        middleware=middleware,
+        mw_pipeline=mw_pipeline,
     )
 
     # NOTE: in the future we should make it possible to interrupt a restart, but
@@ -587,14 +597,17 @@ async def _generate_action_turn(
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
+            _ctx = mw_ctx
 
             async def run_next(
                 p: GenerateHookParams,
                 *,
                 _m: BaseMiddleware = _mw,
                 _i: Callable[[GenerateHookParams], Awaitable[ModelResponse]] = _inner,
+                _c: MiddlewareContext | None = _ctx,
             ) -> ModelResponse:
-                return await _m.wrap_generate(p, _i)
+                assert _c is not None
+                return await _m.wrap_generate(p, _i, _c)
 
             runner = run_next
         return await runner(params)
@@ -622,8 +635,10 @@ async def _generate_action_turn(
                 *,
                 _mw: BaseMiddleware = _mw,
                 _inner: Callable[[ModelHookParams], Awaitable[ModelResponse]] = _inner,
+                _c: MiddlewareContext | None = mw_ctx,
             ) -> ModelResponse:
-                return await _mw.wrap_model(params, _inner)
+                assert _c is not None
+                return await _mw.wrap_model(params, _inner, _c)
 
             runner = cast(Callable[[ModelHookParams], Awaitable[ModelResponse]], run_next)
 
@@ -753,7 +768,7 @@ async def _generate_action_turn(
             registry,
             raw_request,
             generated_msg,
-            middleware=middleware,
+            mw_pipeline=mw_pipeline,
         )
 
         # if an interrupt message is returned, stop the tool loop and return a
@@ -789,12 +804,11 @@ async def _generate_action_turn(
         return await _generate_action_turn(
             registry=registry,
             raw_request=next_request,
-            middleware=middleware,
+            mw_pipeline=mw_pipeline,
             current_turn=current_turn + 1,
             message_index=message_index + 1,
             on_chunk=on_chunk,
             context=context,
-            enqueue_parts=enqueue_parts,
             queue=queue,
         )
 
@@ -1078,7 +1092,7 @@ async def resolve_tool_requests(
     request: GenerateActionOptions,
     message: Message,
     *,
-    middleware: list[BaseMiddleware] | None = None,
+    mw_pipeline: _GenerateMiddlewarePipeline | None = None,
 ) -> tuple[Message | None, Message | None, GenerateActionOptions | None]:
     """Execute tool requests in a message, returning responses or interrupt info."""
     # TODO(#4342): prompt transfer
@@ -1093,7 +1107,7 @@ async def resolve_tool_requests(
                 tool_dict[short] = tool_action
 
     revised_model_message = message.model_copy(deep=True)
-    mw_list = middleware or []
+    mw_list = mw_pipeline.middleware if mw_pipeline else []
 
     work: list[tuple[int, Action, ToolRequestPart]] = []
     for i, tool_request_part in enumerate(message.content):
@@ -1120,8 +1134,8 @@ async def resolve_tool_requests(
             return await _resolve_tool_request(p.tool, p.tool_request_part)
 
         try:
-            if mw_list:
-                multipart = await _chain_tool_middleware(mw_list, params, base)
+            if mw_list and mw_pipeline is not None:
+                multipart = await _chain_tool_middleware(mw_list, params, base, mw_pipeline.ctx)
             else:
                 multipart = await base(params)
             return (multipart, None)
@@ -1236,7 +1250,7 @@ async def _resolve_resume_options(
     _registry: Registry,
     raw_request: GenerateActionOptions,
     *,
-    middleware: list[BaseMiddleware] | None = None,
+    mw_pipeline: _GenerateMiddlewarePipeline | None = None,
 ) -> tuple[GenerateActionOptions, ModelResponse | None, Message | None]:
     """Handle resume options by resolving pending tool calls from a previous turn."""
     if not raw_request.resume:
@@ -1268,7 +1282,7 @@ async def _resolve_resume_options(
             _registry,
             raw_request,
             part,
-            middleware=middleware,
+            mw_pipeline=mw_pipeline,
         )
         tool_responses.append(Part(root=resumed_response))
         updated_content[i] = Part(root=resumed_request)
@@ -1305,7 +1319,7 @@ async def _resolve_resumed_tool_request(
     raw_request: GenerateActionOptions,
     tool_request_part: Part,
     *,
-    middleware: list[BaseMiddleware] | None = None,
+    mw_pipeline: _GenerateMiddlewarePipeline | None = None,
 ) -> tuple[ToolRequestPart, ToolResponsePart]:
     """Resolve a single tool request from pending output, resume.respond, or resume.restart."""
     # Type narrowing: ensure we're working with a ToolRequestPart
@@ -1368,7 +1382,7 @@ async def _resolve_resumed_tool_request(
     )
     if restart_trp:
         tool = await resolve_tool(registry, tool_req_root.tool_request.name)
-        executed = await _run_restart_through_middleware(tool, restart_trp, middleware=middleware)
+        executed = await _run_restart_through_middleware(tool, restart_trp, mw_pipeline=mw_pipeline)
         metadata = dict(tool_req_root.metadata) if tool_req_root.metadata else {}
         interrupt = metadata.get('interrupt')
         if interrupt:
@@ -1397,7 +1411,7 @@ async def _run_restart_through_middleware(
     tool: Action,
     restart_trp: ToolRequestPart,
     *,
-    middleware: list[BaseMiddleware] | None,
+    mw_pipeline: _GenerateMiddlewarePipeline | None,
 ) -> ToolResponsePart:
     """Run a restarted tool through the wrap_tool middleware chain.
 
@@ -1406,8 +1420,8 @@ async def _run_restart_through_middleware(
     regardless of whether it was triggered by the model or by a resumed
     interrupt.  Without this, a restart would silently bypass approval checks.
     """
-    mw_list = middleware or []
-    if not mw_list:
+    mw_list = mw_pipeline.middleware if mw_pipeline else []
+    if not mw_list or mw_pipeline is None:
         return await run_tool_after_restart(tool, restart_trp)
 
     params = ToolHookParams(
@@ -1423,7 +1437,7 @@ async def _run_restart_through_middleware(
         )
 
     try:
-        multipart = await _chain_tool_middleware(mw_list, params, next_fn)
+        multipart = await _chain_tool_middleware(mw_list, params, next_fn, mw_pipeline.ctx)
     except Exception as e:
         if _interrupt_from_tool_exc(e) is not None:
             # Re-interrupting during restart is a hard error — same as the legacy

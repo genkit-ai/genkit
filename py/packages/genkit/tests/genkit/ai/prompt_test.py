@@ -39,11 +39,11 @@ from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig
 from genkit._core._typing import Part, Role, TextPart, ToolChoice
-from genkit.middleware import BaseMiddleware, MiddlewareDesc, ModelHookParams, middleware_plugin
+from genkit.middleware import BaseMiddleware, MiddlewareContext, MiddlewareDesc, ModelHookParams, middleware_plugin
 
 
 class _PreMiddleware(BaseMiddleware):
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
             ModelHookParams(
@@ -57,7 +57,7 @@ class _PreMiddleware(BaseMiddleware):
 
 
 class _PostMiddleware(BaseMiddleware):
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
         assert resp.message is not None
         txt = text_from_message(resp.message)

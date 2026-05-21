@@ -38,6 +38,7 @@ from genkit._core._typing import (
 from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
+    MiddlewareContext,
     MiddlewareDesc,
     ModelHookParams,
     MultipartToolResponse,
@@ -329,7 +330,7 @@ define_echo_model(ai)
 
 @ai.middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
             ModelHookParams(
@@ -346,7 +347,7 @@ class PreMiddleware(BaseMiddleware):
 
 @ai.middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         resp: ModelResponse = await next_fn(params)
         assert resp.message is not None
         txt = text_from_message(resp.message)
@@ -392,7 +393,7 @@ class ConfiguredPrefixMiddleware(BaseMiddleware):
 
     prefix: str = 'DEFAULT'
 
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
             ModelHookParams(
@@ -449,7 +450,7 @@ async def test_ai_middleware_decorator_registers_on_the_app() -> None:
     class LivePrefixMiddleware(BaseMiddleware):
         prefix: str = 'DEFAULT'
 
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
                 ModelHookParams(
@@ -667,7 +668,7 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
 
 @ai.middleware(name='add_ctx')
 class AddContextMiddleware(BaseMiddleware):
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         return await next_fn(
             ModelHookParams(
                 request=params.request,
@@ -679,7 +680,7 @@ class AddContextMiddleware(BaseMiddleware):
 
 @ai.middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
-    async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
             ModelHookParams(
@@ -735,7 +736,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
 
     @ai.middleware(name='mod_stream_mw')
     class ModifyStreamMiddleware(BaseMiddleware):
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable) -> ModelResponse:
+        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
             if params.on_chunk:
                 params.on_chunk(
                     ModelResponseChunk(
@@ -832,6 +833,7 @@ async def test_wrap_generate_called_per_turn() -> None:
             self,
             params: GenerateHookParams,
             next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
         ) -> ModelResponse:
             iters_a.append(params.iteration)
             return await next_fn(params)
@@ -841,6 +843,7 @@ async def test_wrap_generate_called_per_turn() -> None:
             self,
             params: GenerateHookParams,
             next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
         ) -> ModelResponse:
             iters_b.append(params.iteration)
             return await next_fn(params)
@@ -915,6 +918,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
             self,
             params: ToolHookParams,
             next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
         ) -> MultipartToolResponse:
             tool_names.append(params.tool_request_part.tool_request.name)
             return await next_fn(params)
@@ -978,6 +982,7 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
             self,
             params: ToolHookParams,
             next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
         ) -> MultipartToolResponse:
             raise Interrupt({'blocked': True})
 
@@ -1031,7 +1036,7 @@ async def test_middleware_contributed_tools_available_to_model() -> None:
     class ToolProviderMiddleware(BaseMiddleware):
         """Middleware that contributes a tool dynamically per generate() call."""
 
-        def tools(self) -> list:
+        def tools(self, ctx: MiddlewareContext) -> list:
             # Build a tool action on a throw-away registry; the generate engine
             # will adopt it into a call-scoped child registry.
             scratch = Registry()
@@ -1085,10 +1090,10 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
     This verifies:
 
     - **Cooperation:** Middleware A contributes a tool via ``tools()`` and
-      middleware B resolves it through ``self.registry`` in the same call
+      middleware B resolves it through ``ctx.registry`` in the same call
       (proves both middleware see the same per-call child registry, so they
       can pass tools and other actions to one another).
-    - **Isolation:** Anything middleware writes via ``self.registry`` does NOT
+    - **Isolation:** Anything middleware writes via ``ctx.registry`` does NOT
       survive the call (proves writes are auto-cleaned and cannot leak into the
       root registry or across concurrent generate() calls).
     """
@@ -1097,7 +1102,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
 
     @ai.middleware(name='provider_mw')
     class ProviderMW(BaseMiddleware):
-        def tools(self) -> list:
+        def tools(self, ctx: MiddlewareContext) -> list:
             scratch = Registry()
 
             async def shared_tool() -> str:
@@ -1112,14 +1117,15 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
             self,
             params: GenerateHookParams,
             next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
-            tool = await self.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
+            tool = await ctx.registry.resolve_action(ActionKind.TOOL, 'shared_tool')
             if tool is not None:
                 seen_by_b.append(tool.name)
             # Also exercise the write path: anything we register through
-            # self.registry must not survive the call.
+            # ctx.registry must not survive the call.
             scratch = Registry()
 
             async def leaky_tool() -> str:
@@ -1127,7 +1133,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
                 return 'nope'
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
-            self.registry.register_action_from_instance(leak)
+            ctx.registry.register_action_from_instance(leak)
             return await next_fn(params)
 
     pm, _ = define_programmable_model(ai)
@@ -1177,9 +1183,10 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
             self,
             params: ToolHookParams,
             next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
         ) -> MultipartToolResponse:
             result = await next_fn(params)
-            self.enqueue_parts([Part(TextPart(text='extra-context'))])
+            ctx.enqueue_parts([Part(TextPart(text='extra-context'))])
             return result
 
     pm, _ = define_programmable_model(ai)
@@ -1242,6 +1249,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
             self,
             params: ToolHookParams,
             next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
         ) -> MultipartToolResponse:
             invocations.append(params.tool.name)
             return await next_fn(params)
