@@ -55,7 +55,6 @@ dev = [
   "pytest-watcher>=0.4.3",
   "pytest-mock>=3.14.0",
   "twine>=6.1.0",
-  "poethepoet>=0.33.1",
   "pip>=25.0.1",
 ]
 
