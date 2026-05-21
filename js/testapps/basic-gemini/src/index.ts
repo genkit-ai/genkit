@@ -981,6 +981,56 @@ ai.defineFlow('embed-multimodal', async () => {
   return embeddings;
 });
 
+ai.defineFlow('antigravity', async () => {
+  const { message } = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Read Hacker News, summarize the top 10 stories.',
+    config: {
+      environment: 'remote',
+      // not specifying tools allows all the default tools
+    },
+  });
+  return message;
+});
+
+ai.defineFlow('antigravity-tools', async () => {
+  const { message } = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Read Hacker News, summarize the top 10 stories.',
+    config: {
+      environment: 'remote',
+      tools: [{ type: 'google_search' }], // This allows ONLY google_search
+    },
+  });
+  return message;
+});
+
+ai.defineFlow('antigravity-multi-turn', async () => {
+  const response1 = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Create a simple python script to print hello world.',
+    config: {
+      environment: 'remote',
+      store: true,
+    },
+  });
+
+  const interactionId = response1.message?.metadata?.interactionId as string;
+  const environmentId = response1.message?.metadata?.environmentId as string;
+
+  const response2 = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Now modify the script to print it backwards and run it.',
+    config: {
+      environment: environmentId,
+      previousInteractionId: interactionId,
+      store: true,
+    },
+  });
+
+  return { turn1: response1.message, turn2: response2.message };
+});
+
 ai.defineFlow('embed-multimodal-gemini-embedding-2', async () => {
   const photoBase64 = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 

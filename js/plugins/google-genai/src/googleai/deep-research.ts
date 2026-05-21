@@ -95,6 +95,8 @@ export const DeepResearchConfigSchema = z
         'Whether to enable multi-turn plan review before research begins.'
       )
       .optional(),
+    // TODO(V2): Remove googleSearch, urlContext, and codeExecution wrappers
+    // and rely entirely on `config.tools` being passed through.
     googleSearch: z
       .union([z.boolean(), z.object({}).passthrough()])
       .describe(
@@ -299,6 +301,7 @@ export function defineModel(
         }
       }
 
+      // TODO(v2): Remove these explicit tool pushes for googleSearch, urlContext, and codeExecution.
       if (googleSearch) {
         tools.push({
           type: 'google_search',

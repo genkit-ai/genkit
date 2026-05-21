@@ -437,6 +437,31 @@ export function fromCodeExecutionResult(step: CodeExecutionResultStep): Part {
   return maybeAddGeminiThoughtSignature(step, part);
 }
 
+export function fromServerFunctionCall(step: FunctionCallContent): Part {
+  return {
+    custom: {
+      serverFunctionCall: {
+        id: step.id,
+        name: step.name,
+        arguments: step.arguments,
+      },
+    },
+  };
+}
+
+export function fromServerFunctionResult(step: FunctionResultContent): Part {
+  return {
+    custom: {
+      serverFunctionResult: {
+        callId: step.call_id,
+        name: step.name,
+        result: step.result,
+        isError: step.is_error,
+      },
+    },
+  };
+}
+
 export function fromInteractionStep(step: Step): Part[] {
   switch (step.type) {
     case 'model_output':
@@ -453,6 +478,10 @@ export function fromInteractionStep(step: Step): Part[] {
       return [fromCodeExecutionResult(step)];
     case 'thought':
       return [fromThoughtContent(step)];
+    case 'function_call':
+      return [fromServerFunctionCall(step)];
+    case 'function_result':
+      return [fromServerFunctionResult(step)];
   }
 
   return [{ custom: { unknownStep: step } }];
@@ -552,6 +581,16 @@ export function fromInteractionSync(
     message: {
       role: 'model',
       content: [],
+      ...(interaction.id || interaction.environment_id
+        ? {
+            metadata: {
+              ...(interaction.id ? { interactionId: interaction.id } : {}),
+              ...(interaction.environment_id
+                ? { environmentId: interaction.environment_id }
+                : {}),
+            },
+          }
+        : {}),
     },
     custom: interaction,
     raw: interaction,
@@ -633,6 +672,16 @@ export function fromInteraction<T extends Object>(
       message: {
         role: 'model',
         content: [{ text: 'Operation cancelled.' }],
+        ...(interaction.id || interaction.environment_id
+          ? {
+              metadata: {
+                ...(interaction.id ? { interactionId: interaction.id } : {}),
+                ...(interaction.environment_id
+                  ? { environmentId: interaction.environment_id }
+                  : {}),
+              },
+            }
+          : {}),
       },
     };
   } else if (interaction.status === 'completed') {
@@ -647,6 +696,16 @@ export function fromInteraction<T extends Object>(
         message: {
           role: 'model',
           content,
+          ...(interaction.id || interaction.environment_id
+            ? {
+                metadata: {
+                  ...(interaction.id ? { interactionId: interaction.id } : {}),
+                  ...(interaction.environment_id
+                    ? { environmentId: interaction.environment_id }
+                    : {}),
+                },
+              }
+            : {}),
         },
         custom: interaction,
         raw: interaction,
