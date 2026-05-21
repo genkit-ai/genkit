@@ -46,7 +46,7 @@ func main() {
 	// Define a simple flow that uses the multipart tool
 	genkit.DefineStreamingFlow(g, "cardFlow", func(ctx context.Context, input any, cb ai.ModelStreamCallback) (string, error) {
 		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName("googleai/gemini-3-pro-preview"),
+			ai.WithModelName("googleai/gemini-2.5-pro"),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature: genai.Ptr[float32](1.0),
 				ThinkingConfig: &genai.ThinkingConfig{

@@ -581,7 +581,7 @@ func TestGoogleAILive(t *testing.T) {
 		}
 	})
 	t.Run("multipart tool", func(t *testing.T) {
-		m := googlegenai.GoogleAIModel(g, "gemini-3-pro-preview")
+		m := googlegenai.GoogleAIModel(g, "gemini-2.5-pro")
 		img64, err := fetchImgAsBase64()
 		if err != nil {
 			t.Fatal(err)

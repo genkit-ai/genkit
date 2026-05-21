@@ -40,6 +40,7 @@ var AnthropicModels = map[string]ai.ModelOptions{
 	"claude-3-haiku@20240307": {
 		Label:    "Claude 3 Haiku",
 		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
 	},
 	"claude-3-opus@20240229": {
 		Label:    "Claude 3 Opus",

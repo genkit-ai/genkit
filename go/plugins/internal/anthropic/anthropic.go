@@ -56,6 +56,7 @@ func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOp
 		Supports:     info.Supports,
 		Versions:     info.Versions,
 		ConfigSchema: configSchema,
+		Stage:        info.Stage,
 	}
 
 	return ai.NewModel(api.NewName(provider, name), meta, func(
