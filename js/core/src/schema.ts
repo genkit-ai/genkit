@@ -107,24 +107,33 @@ export function toJsonSchema({
 function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
   if (!json || typeof json !== 'object') return json;
 
-  const annotations = schemaAnnotations.get(schema);
-  if (annotations) {
-    Object.assign(json, annotations);
+  const annotationsToApply: Record<string, any>[] = [];
+  let current = schema;
+
+  // Collect all annotations in the hierarchy (outer to inner)
+  while (current) {
+    const ann = schemaAnnotations.get(current);
+    if (ann) annotationsToApply.push(ann);
+
+    if (
+      current instanceof z.ZodOptional ||
+      current instanceof z.ZodNullable ||
+      current instanceof z.ZodDefault ||
+      current instanceof z.ZodEffects
+    ) {
+      current = (current as any)._def.innerType || (current as any)._def.schema;
+    } else {
+      break;
+    }
   }
 
-  let inner = schema;
-  // Handle common Zod wrappers
-  while (
-    inner instanceof z.ZodOptional ||
-    inner instanceof z.ZodNullable ||
-    inner instanceof z.ZodDefault ||
-    inner instanceof z.ZodEffects
-  ) {
-    inner = (inner as any)._def.innerType || (inner as any)._def.schema;
-    const innerAnn = schemaAnnotations.get(inner);
-    if (innerAnn) Object.assign(json, innerAnn);
+  // Apply annotations in reverse order (inner-most first, outer-most last)
+  // so that outer annotations correctly overwrite inner ones.
+  for (let i = annotationsToApply.length - 1; i >= 0; i--) {
+    Object.assign(json, annotationsToApply[i]);
   }
 
+  const inner = current;
   if (inner instanceof z.ZodObject && json.properties) {
     for (const key in inner.shape) {
       if (json.properties[key]) {

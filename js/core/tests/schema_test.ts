@@ -214,6 +214,16 @@ describe('annotateSchema()', () => {
       'optional-action'
     );
   });
+
+  it('should favor outer annotations over inner ones', () => {
+    const schema = annotateSchema(
+      annotateSchema(z.string(), { title: 'Inner' }).optional(),
+      { title: 'Outer' }
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json.title, 'Outer');
+  });
 });
 
 describe('disableSchemaCodeGeneration()', () => {
