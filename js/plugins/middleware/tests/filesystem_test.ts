@@ -567,7 +567,9 @@ describe('filesystem middleware', () => {
 
       const errorOutput = toolMsg.content
         .find((c: any) =>
-          c.toolResponse?.output?.toString()?.includes("Tool 'read_file' failed")
+          c.toolResponse?.output
+            ?.toString()
+            ?.includes("Tool 'read_file' failed")
         )
         ?.toolResponse.output.toString();
       assert.match(
