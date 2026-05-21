@@ -380,32 +380,39 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		name := strings.TrimPrefix(item.Name, "publishers/google/")
 		name = strings.TrimPrefix(name, "models/")
-		if _, ok := deprecatedGenAIModels[name]; ok {
-			continue
-		}
-
-		// The Vertex AI backend does not populate SupportedActions,
-		// so we fall back to name-based categorization.
-		if slices.Contains(item.SupportedActions, "embedContent") || strings.Contains(name, "embed") {
-			models.embedders = append(models.embedders, name)
-			continue
-		}
-
-		if strings.Contains(name, "imagen") {
-			models.imagen = append(models.imagen, name)
-			continue
-		}
-
-		if strings.Contains(name, "veo") {
-			models.veo = append(models.veo, name)
-			continue
-		}
-
-		// Only include models with known generative prefixes.
-		if strings.HasPrefix(name, "gemini") || strings.HasPrefix(name, "gemma") {
-			models.gemini = append(models.gemini, name)
-		}
+		categorizeModel(&models, name, item.SupportedActions)
 	}
 
 	return models, nil
+}
+
+// categorizeModel routes a discovered model name into the appropriate bucket
+// of m. It returns true if the name was placed and false if the model was
+// filtered out or did not match any known prefix.
+//
+// supportedActions is the list of API actions advertised by the provider for
+// this model. The Vertex AI backend does not populate it, so name-based
+// matching is used as a fallback.
+func categorizeModel(m *genaiModels, name string, supportedActions []string) bool {
+	if _, ok := deprecatedGenAIModels[name]; ok {
+		return false
+	}
+
+	if slices.Contains(supportedActions, "embedContent") || strings.Contains(name, "embed") {
+		m.embedders = append(m.embedders, name)
+		return true
+	}
+	if strings.Contains(name, "imagen") {
+		m.imagen = append(m.imagen, name)
+		return true
+	}
+	if strings.Contains(name, "veo") {
+		m.veo = append(m.veo, name)
+		return true
+	}
+	if strings.HasPrefix(name, "gemini") || strings.HasPrefix(name, "gemma") {
+		m.gemini = append(m.gemini, name)
+		return true
+	}
+	return false
 }
