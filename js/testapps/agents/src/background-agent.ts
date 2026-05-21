@@ -45,7 +45,6 @@ const store = new InMemorySessionStore();
  */
 export const backgroundAgent = ai.defineAgent({
   name: 'reportPrompt',
-  model: 'googleai/gemini-flash-latest',
   system: `You are a senior research analyst. When given a topic, produce a comprehensive research report in markdown format.
 
 Your report must include:

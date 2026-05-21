@@ -33,7 +33,6 @@ import { getWeather } from './tool-agent.js';
 // No store — client-managed state!
 export const clientStateAgent = ai.defineAgent({
   name: 'clientWeatherPrompt',
-  model: 'googleai/gemini-flash-latest',
   system:
     'You are a helpful weather assistant. Use the getWeather tool to look up weather. Be concise.',
   tools: [getWeather],

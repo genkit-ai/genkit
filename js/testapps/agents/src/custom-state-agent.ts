@@ -160,7 +160,6 @@ const removeTask = ai.defineTool(
 export const taskAgent = ai.defineAgent({
   name: 'taskPrompt',
   stateSchema: TaskStateSchema,
-  model: 'googleai/gemini-flash-latest',
   system: `You are a concise task management assistant. Help the user manage their task list.
 
 Rules:

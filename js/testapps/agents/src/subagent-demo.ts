@@ -41,7 +41,7 @@
 
 import { agents, retry } from '@genkit-ai/middleware';
 import { z } from 'genkit';
-import { ai } from './genkit.js';
+import { ai, defaultModel } from './genkit.js';
 
 // ---------------------------------------------------------------------------
 // Sub-Agent 1: Researcher — answers research questions
@@ -51,7 +51,7 @@ const researcher = ai.defineAgent({
   name: 'researcher',
   description:
     'A thorough research assistant that searches the web and provides well-sourced answers.',
-  model: 'googleai/gemini-flash-latest',
+  model: defaultModel,
   config: {
     tools: [{ googleSearch: {} }],
   },
@@ -68,7 +68,6 @@ const researcher = ai.defineAgent({
 const coder = ai.defineAgent({
   name: 'coder',
   description: 'An expert programmer that writes clean, well-commented code.',
-  model: 'googleai/gemini-flash-latest',
   maxTurns: 10,
   system:
     'You are an expert programmer. When asked to write code, provide clean, well-commented code with explanations. Use TypeScript by default unless asked otherwise.',
@@ -85,7 +84,6 @@ const coder = ai.defineAgent({
 
 export const orchestratorAgent = ai.defineAgent({
   name: 'orchestrator',
-  model: 'googleai/gemini-flash-latest',
   system: `You are a helpful project assistant.
 
 Analyze the user's request and delegate to the appropriate sub-agent.

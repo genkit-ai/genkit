@@ -18,7 +18,7 @@ import * as fs from 'fs';
 import { z } from 'genkit';
 import { FileSessionStore } from 'genkit/beta';
 import * as path from 'path';
-import { ai } from './genkit.js';
+import { ai, liteModel } from './genkit.js';
 
 export { FileSessionStore };
 
@@ -28,7 +28,7 @@ export const fileStore = new FileSessionStore<any>('./.snapshots');
 // reference it by name via definePromptAgent.
 export const fileStoreAgent = ai.defineAgent({
   name: 'fileStorePrompt',
-  model: 'googleai/gemini-flash-lite-latest',
+  model: liteModel,
   system: `You are a personal logbook assistant.`,
   store: fileStore,
 });

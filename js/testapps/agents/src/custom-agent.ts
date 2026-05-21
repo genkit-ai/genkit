@@ -36,7 +36,7 @@
  */
 
 import { z } from 'genkit';
-import { ai } from './genkit.js';
+import { ai, liteModel } from './genkit.js';
 
 // ---------------------------------------------------------------------------
 // Typed custom state — tracks research steps
@@ -81,7 +81,7 @@ export const customAgent = ai.defineCustomAgent(
       sendChunk({ status: 'Decomposing question into sub-topics…' });
 
       const decompose = await ai.generate({
-        model: 'googleai/gemini-flash-lite-latest',
+        model: liteModel,
         prompt: `You are a research planner. Given a user question, break it into exactly 2-3 focused sub-questions that together would provide a comprehensive answer. Return ONLY the sub-questions as a JSON array of strings, no other text.
 ${historyContext}
 User question: "${userText}"`,
@@ -107,7 +107,6 @@ User question: "${userText}"`,
         });
 
         const research = await ai.generate({
-          model: 'googleai/gemini-flash-latest',
           prompt: `Answer this question concisely but thoroughly in 2-3 paragraphs. Be specific and factual.
 
 Question: ${q}`,
@@ -132,7 +131,6 @@ Question: ${q}`,
         .join('\n\n');
 
       const synthesisStream = ai.generateStream({
-        model: 'googleai/gemini-flash-latest',
         prompt: `You are a research synthesizer. Based on the research below, write a comprehensive, well-structured answer to the original question. Use markdown formatting.
 ${historyContext}
 Current question: "${userText}"

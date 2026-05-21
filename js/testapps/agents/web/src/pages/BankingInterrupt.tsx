@@ -112,27 +112,24 @@ export default function BankingInterrupt() {
         },
       ]);
 
-      // ── Build the tool response message ──────────────────────────────
-      // To resume an interrupted flow, send a message with role 'tool'
-      // containing a toolResponse that matches the interrupt's ref.
+      // ── Build the resume payload ──────────────────────────────
+      // To resume an interrupted flow, send a resume object containing a
+      // respond block that matches the interrupt's ref and provides the output.
       const input: AgentInput = {
-        messages: [
-          {
-            role: 'tool',
-            content: [
-              {
-                toolResponse: {
-                  name: 'userApproval',
-                  ref: currentInterrupt.ref,
-                  output: {
-                    approved,
-                    feedback: feedback || undefined,
-                  },
+        resume: {
+          respond: [
+            {
+              toolResponse: {
+                name: 'userApproval',
+                ref: currentInterrupt.ref,
+                output: {
+                  approved,
+                  feedback: feedback || undefined,
                 },
               },
-            ],
-          },
-        ],
+            },
+          ],
+        },
       };
 
       // Resume from the snapshot where the flow was interrupted.
@@ -272,7 +269,7 @@ export default function BankingInterrupt() {
           </li>
           <li>
             When the user approves or denies, the client sends a{' '}
-            <code>toolResponse</code> message with{' '}
+            <code>resume</code> payload with{' '}
             <code>{'init: { snapshotId }'}</code> to <strong>resume</strong>{' '}
             from the exact point where the flow paused.
           </li>
@@ -296,16 +293,15 @@ for (const p of msg.content) {
 streamFlow({
   url: '/api/bankingAgent',
   input: {
-    messages: [{
-      role: 'tool',
-      content: [{
+    resume: {
+      respond: [{
         toolResponse: {
           name: 'userApproval',
           ref: interrupt.ref,
           output: { approved: true },
         },
       }],
-    }],
+    },
   },
   init: { snapshotId },
 });`}</pre>
@@ -315,7 +311,7 @@ streamFlow({
           The interrupt pattern uses <strong>tool calls as control flow</strong>
           . The <code>userApproval</code> tool never executes server-side — it
           exists solely to pause the flow and hand control back to the client.
-          The client's <code>toolResponse</code> resumes execution.
+          The client's <code>resume</code> payload resumes execution.
         </p>
       </aside>
     </div>

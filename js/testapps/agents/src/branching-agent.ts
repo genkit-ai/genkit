@@ -16,7 +16,7 @@
 
 import { z } from 'genkit';
 import { InMemorySessionStore } from 'genkit/beta';
-import { ai } from './genkit.js';
+import { ai, liteModel } from './genkit.js';
 
 var count = 0;
 
@@ -29,7 +29,7 @@ export const branchingStore = new InMemorySessionStore();
 
 export const nameAgent = ai.defineAgent({
   name: 'namePrompt',
-  model: 'googleai/gemini-flash-lite-latest',
+  model: liteModel,
   input: { schema: z.object({}) },
   system: `You are a {{ roundRobin 'sarcastic' 'business-like' }} assistant.`,
   store: branchingStore,
