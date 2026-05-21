@@ -260,6 +260,18 @@ describe('annotateSchema()', () => {
     assert.strictEqual(json.additionalProperties['x-hint'], 'value');
   });
 
+  it('should merge annotations for ZodTuple (items array)', () => {
+    const schema = z.tuple([
+      annotateSchema(z.string(), { 'x-hint': 'first' }),
+      annotateSchema(z.number(), { 'x-hint': 'second' }),
+    ]);
+
+    const json = toJsonSchema({ schema });
+    assert.ok(Array.isArray(json.items), 'JSON schema items should be an array');
+    assert.strictEqual(json.items[0]['x-hint'], 'first');
+    assert.strictEqual(json.items[1]['x-hint'], 'second');
+  });
+
   it('should not overwrite existing JSON schema fields and log a warning', () => {
     const warnSpy = mock.method(console, 'warn', () => {});
     const schema = annotateSchema(z.string(), { type: 'number', 'x-ok': true });

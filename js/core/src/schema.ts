@@ -167,6 +167,10 @@ function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
     applyAnnotations(inner._def.right, json.allOf[1]);
   } else if (inner instanceof z.ZodRecord && json.additionalProperties) {
     applyAnnotations(inner.valueSchema, json.additionalProperties);
+  } else if (inner instanceof z.ZodTuple && Array.isArray(json.items)) {
+    for (let i = 0; i < inner.items.length; i++) {
+      applyAnnotations(inner.items[i], json.items[i]);
+    }
   }
 
   return json;
