@@ -36,6 +36,19 @@ export type JSONSchema = JSONSchemaType<any> | any;
 const jsonSchemas = new WeakMap<z.ZodTypeAny, JSONSchema>();
 const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
 const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
+const schemaAnnotations = new WeakMap<z.ZodTypeAny, Record<string, any>>();
+
+/**
+ * Annotates a Zod schema with UI-specific metadata.
+ */
+export function annotateSchema<T extends z.ZodTypeAny>(
+  schema: T,
+  annotations: Record<string, any>
+): T {
+  const current = schemaAnnotations.get(schema) || {};
+  schemaAnnotations.set(schema, { ...current, ...annotations });
+  return schema;
+}
 
 /**
  * Wrapper object for various ways schema can be provided.
@@ -82,8 +95,43 @@ export function toJsonSchema({
   const outSchema = zodToJsonSchema(schema!, {
     removeAdditionalStrategy: 'strict',
   });
-  jsonSchemas.set(schema!, outSchema as JSONSchema);
-  return outSchema as JSONSchema;
+  const annotatedSchema = applyAnnotations(schema!, outSchema as JSONSchema);
+  jsonSchemas.set(schema!, annotatedSchema);
+  return annotatedSchema;
+}
+
+function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
+  if (!json || typeof json !== 'object') return json;
+
+  const annotations = schemaAnnotations.get(schema);
+  if (annotations) {
+    Object.assign(json, annotations);
+  }
+
+  let inner = schema;
+  // Handle common Zod wrappers
+  while (
+    inner instanceof z.ZodOptional ||
+    inner instanceof z.ZodNullable ||
+    inner instanceof z.ZodDefault ||
+    inner instanceof z.ZodEffects
+  ) {
+    inner = (inner as any)._def.innerType || (inner as any)._def.schema;
+    const innerAnn = schemaAnnotations.get(inner);
+    if (innerAnn) Object.assign(json, innerAnn);
+  }
+
+  if (inner instanceof z.ZodObject && json.properties) {
+    for (const key in inner.shape) {
+      if (json.properties[key]) {
+        applyAnnotations(inner.shape[key], json.properties[key]);
+      }
+    }
+  } else if (inner instanceof z.ZodArray && json.items) {
+    applyAnnotations(inner.element, json.items);
+  }
+
+  return json;
 }
 
 /**

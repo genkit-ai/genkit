@@ -21,6 +21,7 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { setGenkitRuntimeConfig } from '../src/config.js';
 import {
   ValidationError,
+  annotateSchema,
   parseSchema,
   toJsonSchema,
   validateSchema,
@@ -161,6 +162,56 @@ describe('toJsonSchema', () => {
         required: ['output'],
         type: 'object',
       }
+    );
+  });
+});
+
+describe('annotateSchema()', () => {
+  it('should merge annotations into the JSON schema', () => {
+    const schema = annotateSchema(z.string(), {
+      'x-genkit-data-source': 'my-action',
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json['x-genkit-data-source'], 'my-action');
+  });
+
+  it('should merge annotations for nested fields', () => {
+    const schema = z.object({
+      field: annotateSchema(z.string(), {
+        'x-genkit-data-source': 'nested-action',
+      }),
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(
+      json.properties.field['x-genkit-data-source'],
+      'nested-action'
+    );
+  });
+
+  it('should merge annotations for array items', () => {
+    const schema = z.array(
+      annotateSchema(z.string(), {
+        'x-genkit-data-source': 'array-action',
+      })
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json.items['x-genkit-data-source'], 'array-action');
+  });
+
+  it('should merge annotations for optional fields', () => {
+    const schema = z.object({
+      field: annotateSchema(z.string(), {
+        'x-genkit-data-source': 'optional-action',
+      }).optional(),
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(
+      json.properties.field['x-genkit-data-source'],
+      'optional-action'
     );
   });
 });

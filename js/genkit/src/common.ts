@@ -138,6 +138,7 @@ export {
   StatusCodes,
   StatusSchema,
   UserFacingError,
+  annotateSchema,
   defineJsonSchema,
   defineSchema,
   getClientHeader,
