@@ -57,6 +57,7 @@ const rewriteWildcardReexportsForEsm: Plugin = {
           /(export\s*\*\s*from\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
           '$1$2$3.mjs$2'
         );
+        if (rewritten === source) return null;
         return { contents: rewritten, loader };
       }
     );
