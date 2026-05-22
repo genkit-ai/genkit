@@ -35,6 +35,19 @@ import uvicorn
 from pydantic import BaseModel
 
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
+from genkit._ai._retriever import (
+    IndexerFn,
+    IndexerOptions,
+    IndexerRef,
+    IndexerRequest,
+    RetrieverFn,
+    RetrieverOptions,
+    RetrieverRef,
+    RetrieverRequest,
+    RetrieverResponse,
+    define_indexer,
+    define_retriever,
+)
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
     EvaluatorFn,
@@ -398,6 +411,28 @@ class Genkit:
     ) -> Action:
         """Register a custom embedder action."""
         return define_embedder(self.registry, name, fn, options, metadata, description)
+
+    def define_retriever(
+        self,
+        name: str,
+        fn: RetrieverFn,
+        options: RetrieverOptions | None = None,
+        metadata: dict[str, object] | None = None,
+        description: str | None = None,
+    ) -> Action:
+        """Register a retriever action."""
+        return define_retriever(self.registry, name, fn, options, metadata, description)
+
+    def define_indexer(
+        self,
+        name: str,
+        fn: IndexerFn,
+        options: IndexerOptions | None = None,
+        metadata: dict[str, object] | None = None,
+        description: str | None = None,
+    ) -> Action:
+        """Register an indexer action."""
+        return define_indexer(self.registry, name, fn, options, metadata, description)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
@@ -1076,6 +1111,67 @@ class Genkit:
         response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
         return response.embeddings
 
+    async def retrieve(
+        self,
+        *,
+        retriever: str | RetrieverRef,
+        query: str | Document,
+        options: dict[str, object] | None = None,
+    ) -> RetrieverResponse:
+        """Retrieve documents from a vector store.
+
+        Args:
+            retriever: Name or reference to the retriever.
+            query: The query document or text string.
+            options: Optional retriever-specific options (e.g., k).
+
+        Returns:
+            RetrieverResponse containing matched documents.
+        """
+        if isinstance(retriever, RetrieverRef):
+            name = retriever.name
+            merged_options = {**(retriever.config or {}), **(options or {})} if retriever.config or options else options
+        else:
+            name = retriever
+            merged_options = options
+
+        retriever_action = await self.registry.resolve_retriever(name)
+        if retriever_action is None:
+            raise ValueError(f'Retriever "{name}" not found')
+
+        query_doc = Document.from_text(query) if isinstance(query, str) else query
+        request = RetrieverRequest(query=query_doc, options=merged_options)
+        result = await retriever_action.run(request)
+        return result.response
+
+    async def index(
+        self,
+        *,
+        indexer: str | IndexerRef,
+        documents: list[Document],
+        options: dict[str, object] | None = None,
+    ) -> None:
+        """Index documents into a vector store.
+
+        Args:
+            indexer: Name or reference to the indexer.
+            documents: Documents to index.
+            options: Optional indexer-specific options.
+        """
+        if isinstance(indexer, IndexerRef):
+            name = indexer.name
+            merged_options = {**(indexer.config or {}), **(options or {})} if indexer.config or options else options
+        else:
+            name = indexer
+            merged_options = options
+
+        indexer_action = await self.registry.resolve_indexer(name)
+        if indexer_action is None:
+            raise ValueError(f'Indexer "{name}" not found')
+
+        request = IndexerRequest(documents=documents, options=merged_options)
+        await indexer_action.run(request)
+
     async def evaluate(
         self,
         evaluator: str | EvaluatorRef | None = None,
@@ -1165,6 +1261,15 @@ class Genkit:
             raise ValueError(f'Failed to resolve background action from original request: {operation.action}')
 
         return await background_action.cancel(operation)
+
+    async def close(self) -> None:
+        """Shut down the Genkit instance, releasing plugin resources.
+
+        Iterates all registered plugins and calls their ``close()`` method.
+        Safe to call multiple times.
+        """
+        for plugin in self.registry._plugins.values():
+            await plugin.close()
 
     async def generate_operation(
         self,
