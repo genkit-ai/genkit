@@ -17,8 +17,9 @@
 import {
   getContext,
   run,
-  z,
   type ActionContext,
+  type GenkitSchema,
+  type InferOutput,
   type Operation,
 } from '@genkit-ai/core';
 import { type Registry } from '@genkit-ai/core/registry';
@@ -56,7 +57,7 @@ export class GenkitAI {
   /**
    * Embeds the given `content` using the specified `embedder`.
    */
-  embed<CustomOptions extends z.ZodTypeAny>(
+  embed<CustomOptions extends GenkitSchema>(
     params: EmbedderParams<CustomOptions>
   ): Promise<Embedding[]> {
     return embed(this.registry, params);
@@ -65,11 +66,11 @@ export class GenkitAI {
   /**
    * A veneer for interacting with embedder models in bulk.
    */
-  embedMany<ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny>(params: {
+  embedMany<ConfigSchema extends GenkitSchema = GenkitSchema>(params: {
     embedder: EmbedderArgument<ConfigSchema>;
     content: string[] | DocumentData[];
     metadata?: Record<string, unknown>;
-    options?: z.infer<ConfigSchema>;
+    options?: InferOutput<ConfigSchema>;
   }): Promise<EmbeddingBatch> {
     return embedMany(this.registry, params);
   }
@@ -86,9 +87,9 @@ export class GenkitAI {
    * const { text } = await ai.generate('hi');
    * ```
    */
-  generate<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generate<O extends GenkitSchema = GenkitSchema>(
     strPrompt: string
-  ): Promise<GenerateResponse<z.infer<O>>>;
+  ): Promise<GenerateResponse<InferOutput<O>>>;
 
   /**
    * Make a generate call to the default model with a multipart request.
@@ -105,9 +106,9 @@ export class GenkitAI {
    * ]);
    * ```
    */
-  generate<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generate<O extends GenkitSchema = GenkitSchema>(
     parts: Part[]
-  ): Promise<GenerateResponse<z.infer<O>>>;
+  ): Promise<GenerateResponse<InferOutput<O>>>;
 
   /**
    * Generate calls a generative model based on the provided prompt and configuration. If
@@ -135,24 +136,24 @@ export class GenkitAI {
    * ```
    */
   generate<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
   >(
     opts:
       | GenerateOptions<O, CustomOptions>
       | PromiseLike<GenerateOptions<O, CustomOptions>>
-  ): Promise<GenerateResponse<z.infer<O>>>;
+  ): Promise<GenerateResponse<InferOutput<O>>>;
 
   async generate<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
   >(
     options:
       | string
       | Part[]
       | GenerateOptions<O, CustomOptions>
       | PromiseLike<GenerateOptions<O, CustomOptions>>
-  ): Promise<GenerateResponse<z.infer<O>>> {
+  ): Promise<GenerateResponse<InferOutput<O>>> {
     let resolvedOptions: GenerateOptions<O, CustomOptions>;
     if (options instanceof Promise) {
       resolvedOptions = await options;
@@ -182,9 +183,9 @@ export class GenkitAI {
    * console.log((await response).text);
    * ```
    */
-  generateStream<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generateStream<O extends GenkitSchema = GenkitSchema>(
     strPrompt: string
-  ): GenerateStreamResponse<z.infer<O>>;
+  ): GenerateStreamResponse<O>;
 
   /**
    * Make a streaming generate call to the default model with a multipart request.
@@ -205,9 +206,9 @@ export class GenkitAI {
    * console.log((await response).text);
    * ```
    */
-  generateStream<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generateStream<O extends GenkitSchema = GenkitSchema>(
     parts: Part[]
-  ): GenerateStreamResponse<z.infer<O>>;
+  ): GenerateStreamResponse<O>;
 
   /**
    * Streaming generate calls a generative model based on the provided prompt and configuration. If
@@ -239,24 +240,24 @@ export class GenkitAI {
    * ```
    */
   generateStream<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
   >(
     opts:
       | GenerateStreamOptions<O, CustomOptions>
       | PromiseLike<GenerateStreamOptions<O, CustomOptions>>
-  ): GenerateStreamResponse<z.infer<O>>;
+  ): GenerateStreamResponse<O>;
 
   generateStream<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
   >(
     options:
       | string
       | Part[]
       | GenerateStreamOptions<O, CustomOptions>
       | PromiseLike<GenerateStreamOptions<O, CustomOptions>>
-  ): GenerateStreamResponse<z.infer<O>> {
+  ): GenerateStreamResponse<O> {
     if (typeof options === 'string' || Array.isArray(options)) {
       options = { prompt: options };
     }

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { StreamingCallback, z } from '@genkit-ai/core';
+import type { GenkitSchema, StreamingCallback, z } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import {
   ATTR_PREFIX,
@@ -46,8 +46,8 @@ export const SESSION_ID_ATTR = `${ATTR_PREFIX}:sessionId`;
 export const THREAD_NAME_ATTR = `${ATTR_PREFIX}:threadName`;
 
 export type ChatGenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = GenerateOptions<O, CustomOptions>;
 
 export interface PromptRenderOptions<I> {

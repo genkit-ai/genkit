@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 
-import { action, z, type Action } from '@genkit-ai/core';
+import {
+  action,
+  z,
+  type Action,
+  type GenkitSchema,
+  type InferOutput,
+} from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
-import { toJsonSchema } from '@genkit-ai/core/schema';
+import { mergedInputJsonSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { SpanMetadata, runInNewSpan } from '@genkit-ai/core/tracing';
 import { randomUUID } from 'crypto';
 
@@ -95,18 +101,18 @@ export type EvalResponses = z.infer<typeof EvalResponsesSchema>;
 
 /** Implementation function for an evaluator. Receives a data point and optional config, returns an {@link EvalResponse}. */
 export type EvaluatorFn<
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = (
   input: z.infer<EvalDataPoint>,
-  evaluatorOptions?: z.infer<CustomOptions>
+  evaluatorOptions?: InferOutput<CustomOptions>
 ) => Promise<EvalResponse>;
 
 /** An action that evaluates data points and returns evaluation responses. */
 export type EvaluatorAction<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = Action<typeof EvalRequestSchema, typeof EvalResponsesSchema> & {
   __dataPointType?: DataPoint;
   __configSchema?: CustomOptions;
@@ -114,7 +120,7 @@ export type EvaluatorAction<
 
 function withMetadata<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   evaluator: Action<typeof EvalRequestSchema, typeof EvalResponsesSchema>,
   dataPointType?: DataPoint,
@@ -130,23 +136,24 @@ const EvalRequestSchema = z.object({
   dataset: z.array(BaseDataPointSchema),
   evalRunId: z.string(),
   options: z.unknown(),
+  batchSize: z.number().optional(),
 });
 
 /** Parameters for running an evaluation via {@link evaluate}. */
 export interface EvaluatorParams<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   evaluator: EvaluatorArgument<DataPoint, CustomOptions>;
   dataset: Dataset<DataPoint>;
   evalRunId?: string;
-  options?: z.infer<CustomOptions>;
+  options?: InferOutput<CustomOptions>;
 }
 
 /** Configuration options for defining an evaluator via {@link defineEvaluator}. */
 export interface EvaluatorOptions<
   DataPoint extends typeof BaseDataPointSchema,
-  EvaluatorOpts extends z.ZodTypeAny,
+  EvaluatorOpts extends GenkitSchema,
 > {
   name: string;
   displayName: string;
@@ -161,9 +168,9 @@ export interface EvaluatorOptions<
  */
 export function defineEvaluator<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
-  EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
+  EvaluatorOpts extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: EvaluatorOptions<DataPoint, EvaluatorOpts>,
@@ -181,9 +188,9 @@ export function defineEvaluator<
  */
 export function evaluator<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
-  EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
+  EvaluatorOpts extends GenkitSchema = GenkitSchema,
 >(
   options: EvaluatorOptions<DataPoint, EvaluatorOpts>,
   runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>
@@ -198,18 +205,28 @@ export function evaluator<
       schema: options.configSchema,
     });
   }
+  // Build the merged inputJsonSchema for the dev UI: show typed dataset and
+  // options fields (batchSize already in the static EvalRequestSchema).
+  const evalInputJsonSchema = mergedInputJsonSchema(
+    EvalRequestSchema,
+    'options',
+    options.configSchema,
+    options.dataPointType
+      ? {
+          dataset: {
+            type: 'array',
+            items: toJsonSchema({ schema: options.dataPointType }) ?? {},
+          },
+        }
+      : undefined
+  );
+
   const evaluator = action(
     {
       actionType: 'evaluator',
       name: options.name,
-      inputSchema: EvalRequestSchema.extend({
-        dataset: options.dataPointType
-          ? z.array(options.dataPointType)
-          : z.array(BaseDataPointSchema),
-        options: options.configSchema ?? z.unknown(),
-        evalRunId: z.string(),
-        batchSize: z.number().optional(),
-      }),
+      inputSchema: EvalRequestSchema,
+      inputJsonSchema: evalInputJsonSchema,
       outputSchema: EvalResponsesSchema,
       metadata: {
         type: 'evaluator',
@@ -280,7 +297,7 @@ export function evaluator<
 /** Union type for specifying an evaluator: by name string, action, or reference. */
 export type EvaluatorArgument<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > =
   | string
   | EvaluatorAction<DataPoint, CustomOptions>
@@ -291,7 +308,7 @@ export type EvaluatorArgument<
  */
 export async function evaluate<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   params: EvaluatorParams<DataPoint, CustomOptions>
@@ -325,7 +342,7 @@ export const EvaluatorInfoSchema = z.object({
 export type EvaluatorInfo = z.infer<typeof EvaluatorInfoSchema>;
 
 /** A reference to an evaluator, including its name, optional config schema, and info. */
-export interface EvaluatorReference<CustomOptions extends z.ZodTypeAny> {
+export interface EvaluatorReference<CustomOptions extends GenkitSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: EvaluatorInfo;
@@ -335,7 +352,7 @@ export interface EvaluatorReference<CustomOptions extends z.ZodTypeAny> {
  * Helper method to configure a {@link EvaluatorReference} to a plugin.
  */
 export function evaluatorRef<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: EvaluatorReference<CustomOptionsSchema>
 ): EvaluatorReference<CustomOptionsSchema> {
@@ -371,9 +388,9 @@ function getBatchedArray<T extends { testCaseId?: string }>(
 }
 
 async function runBatch<
-  EvalDataPoint extends
-    typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
-  EvaluatorOpts extends z.ZodTypeAny = z.ZodTypeAny,
+  EvalDataPoint extends typeof BaseEvalDataPointSchema =
+    typeof BaseEvalDataPointSchema,
+  EvaluatorOpts extends GenkitSchema = GenkitSchema,
 >(
   runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>,
   batch: BaseDataPoint[],

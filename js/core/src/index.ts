@@ -28,6 +28,8 @@ export const GENKIT_CLIENT_HEADER = `genkit-node/${GENKIT_VERSION} gl-node/${pro
 export const GENKIT_REFLECTION_API_SPEC_VERSION = 1;
 
 export { z } from 'zod';
+// z4 exports Zod v4 API (zod package ships both v3 and v4 from the same install)
+export { default as z4 } from 'zod/v4';
 export * from './action.js';
 export { getAsyncContext } from './async-context.js';
 export {
@@ -88,9 +90,19 @@ export {
   annotateSchema,
   defineJsonSchema,
   defineSchema,
+  mergedInputJsonSchema,
   toJsonSchema,
   type JSONSchema,
 } from './schema.js';
+export {
+  isNonZodStandardSchema,
+  isZodV3Schema,
+  isZodV4Schema,
+  type GenkitSchema,
+  type InferInput,
+  type InferOutput,
+  type StandardSchemaV1,
+} from './standard.js';
 export * from './telemetryTypes.js';
 export * from './utils.js';
 

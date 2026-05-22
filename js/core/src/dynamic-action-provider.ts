@@ -15,6 +15,7 @@
  */
 
 import * as z from 'zod';
+import type { GenkitSchema } from './standard.js';
 import {
   Action,
   ActionMetadata,
@@ -133,7 +134,7 @@ export type DynamicActionProviderAction = Action<
   };
 
 export function isDynamicActionProvider(
-  obj: Action<z.ZodTypeAny, z.ZodTypeAny>
+  obj: Action<GenkitSchema, GenkitSchema>
 ): obj is DynamicActionProviderAction {
   return obj.__action?.metadata?.type == 'dynamic-action-provider';
 }

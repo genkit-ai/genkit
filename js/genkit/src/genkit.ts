@@ -114,7 +114,6 @@ import {
   type FlowFn,
   type JSONSchema,
   type StreamingCallback,
-  type z,
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import type { HasRegistry } from '@genkit-ai/core/registry';
@@ -137,9 +136,9 @@ import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
  * @deprecated use `ai.definePrompt({messages: fn})`
  */
 export type PromptFn<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
-> = (input: z.infer<I>) => Promise<GenerateRequest<CustomOptionsSchema>>;
+  I extends GenkitSchema = GenkitSchema,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
+> = (input: InferInput<I>) => Promise<GenerateRequest<CustomOptionsSchema>>;
 
 /**
  * Options for initializing Genkit.
@@ -204,9 +203,9 @@ export class Genkit extends GenkitAI implements HasRegistry {
    * Defines and registers a flow function.
    */
   defineFlow<
-    I extends z.ZodTypeAny = z.ZodTypeAny,
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    S extends z.ZodTypeAny = z.ZodTypeAny,
+    I extends GenkitSchema = GenkitSchema,
+    O extends GenkitSchema = GenkitSchema,
+    S extends GenkitSchema = GenkitSchema,
   >(
     config: FlowConfig<I, O, S> | string,
     fn: FlowFn<I, O, S>
@@ -221,7 +220,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
    *
    * Tools can be passed to models by name or value during `generate` calls to be called automatically based on the prompt and situation.
    */
-  defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  defineTool<I extends GenkitSchema, O extends GenkitSchema>(
     config: { multipart: true } & ToolConfig<I, O>,
     fn: MultipartToolFn<I, O>
   ): MultipartToolAction<I, O>;
@@ -231,12 +230,12 @@ export class Genkit extends GenkitAI implements HasRegistry {
    *
    * Tools can be passed to models by name or value during `generate` calls to be called automatically based on the prompt and situation.
    */
-  defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  defineTool<I extends GenkitSchema, O extends GenkitSchema>(
     config: ToolConfig<I, O>,
     fn: ToolFn<I, O>
   ): ToolAction<I, O>;
 
-  defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  defineTool<I extends GenkitSchema, O extends GenkitSchema>(
     config: ({ multipart?: true } & ToolConfig<I, O>) | string,
     fn: ToolFn<I, O> | MultipartToolFn<I, O>
   ): ToolAction<I, O> | MultipartToolAction<I, O> {
@@ -247,7 +246,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
    * Defines a dynamic tool. Dynamic tools are just like regular tools ({@link Genkit.defineTool}) but will not be registered in the
    * Genkit registry and can be defined dynamically at runtime.
    */
-  dynamicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  dynamicTool<I extends GenkitSchema, O extends GenkitSchema>(
     config: ToolConfig<I, O>,
     fn?: ToolFn<I, O>
   ): ToolAction<I, O> {
@@ -269,7 +268,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
    *
    * Defined schemas can be referenced by `name` in prompts in place of inline schemas.
    */
-  defineSchema<T extends z.ZodTypeAny>(name: string, schema: T): T {
+  defineSchema<T extends GenkitSchema>(name: string, schema: T): T {
     return defineSchema(this.registry, name, schema);
   }
 
@@ -285,7 +284,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Defines a new model and adds it to the registry.
    */
-  defineModel<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+  defineModel<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
     options: {
       apiVersion: 'v2';
     } & DefineModelOptions<CustomOptionsSchema>,
@@ -298,7 +297,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Defines a new model and adds it to the registry.
    */
-  defineModel<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+  defineModel<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
     options: DefineModelOptions<CustomOptionsSchema>,
     runner: (
       request: GenerateRequest<CustomOptionsSchema>,
@@ -309,7 +308,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Defines a new model and adds it to the registry.
    */
-  defineModel<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+  defineModel<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
     options: any,
     runner: (
       request: GenerateRequest<CustomOptionsSchema>,
@@ -323,7 +322,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
    * Defines a new background model and adds it to the registry.
    */
   defineBackgroundModel<
-    CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+    CustomOptionsSchema extends GenkitSchema = GenkitSchema,
   >(
     options: DefineBackgroundModelOptions<CustomOptionsSchema>
   ): BackgroundModelAction<CustomOptionsSchema> {
@@ -335,13 +334,13 @@ export class Genkit extends GenkitAI implements HasRegistry {
    * .prompt files or prompts previously defined with {@link Genkit.definePrompt}
    */
   prompt<
-    I extends z.ZodTypeAny = z.ZodTypeAny,
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+    I extends GenkitSchema = GenkitSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(
     name: string,
     options?: { variant?: string }
-  ): ExecutablePrompt<z.infer<I>, O, CustomOptions> {
+  ): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
     return this.wrapExecutablePromptPromise(
       `${name}${options?.variant ? `.${options?.variant}` : ''}`,
       prompt(this.registry, name, {
@@ -355,19 +354,19 @@ export class Genkit extends GenkitAI implements HasRegistry {
   }
 
   private wrapExecutablePromptPromise<
-    I extends z.ZodTypeAny = z.ZodTypeAny,
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+    I extends GenkitSchema = GenkitSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(
     name: string,
-    promise: Promise<ExecutablePrompt<z.infer<I>, O, CustomOptions>>
+    promise: Promise<ExecutablePrompt<InferInput<I>, O, CustomOptions>>
   ) {
     const executablePrompt = (async (
       input?: I,
       opts?: PromptGenerateOptions<O, CustomOptions>
-    ): Promise<GenerateResponse<z.infer<O>>> => {
+    ): Promise<GenerateResponse<InferOutput<O>>> => {
       return (await promise)(input, opts);
-    }) as ExecutablePrompt<z.infer<I>, O, CustomOptions>;
+    }) as ExecutablePrompt<InferInput<I>, O, CustomOptions>;
 
     executablePrompt.ref = { name };
 
@@ -461,14 +460,14 @@ export class Genkit extends GenkitAI implements HasRegistry {
    * ```
    */
   definePrompt<
-    I extends z.ZodTypeAny = z.ZodTypeAny,
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+    I extends GenkitSchema = GenkitSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(
     options: PromptConfig<I, O, CustomOptions>,
     /** @deprecated use `options.messages` with a template string instead. */
     templateOrFn?: string | PromptFn<I>
-  ): ExecutablePrompt<z.infer<I>, O, CustomOptions> {
+  ): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
     // For backwards compatibility...
     if (templateOrFn) {
       if (options.messages) {
@@ -489,7 +488,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
           ...options,
           messages: async (input) => {
             const response = await (
-              templateOrFn as PromptFn<z.infer<I>, CustomOptions>
+              templateOrFn as PromptFn<InferInput<I>, CustomOptions>
             )(input);
             return response.messages;
           },
@@ -502,7 +501,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Creates a retriever action for the provided {@link RetrieverFn} implementation.
    */
-  defineRetriever<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
+  defineRetriever<OptionsType extends GenkitSchema = GenkitSchema>(
     options: {
       name: string;
       configSchema?: OptionsType;
@@ -521,9 +520,9 @@ export class Genkit extends GenkitAI implements HasRegistry {
    * @param handler A function that queries a datastore and returns items from which to extract documents.
    * @returns A Genkit retriever.
    */
-  defineSimpleRetriever<C extends z.ZodTypeAny = z.ZodTypeAny, R = any>(
+  defineSimpleRetriever<C extends GenkitSchema = GenkitSchema, R = any>(
     options: SimpleRetrieverOptions<C, R>,
-    handler: (query: Document, config: z.infer<C>) => Promise<R[]>
+    handler: (query: Document, config: InferOutput<C>) => Promise<R[]>
   ): RetrieverAction<C> {
     return defineSimpleRetriever(this.registry, options, handler);
   }
@@ -531,7 +530,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Creates an indexer action for the provided {@link IndexerFn} implementation.
    */
-  defineIndexer<IndexerOptions extends z.ZodTypeAny>(
+  defineIndexer<IndexerOptions extends GenkitSchema>(
     options: {
       name: string;
       embedderInfo?: EmbedderInfo;
@@ -547,9 +546,9 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   defineEvaluator<
     DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-    EvalDataPoint extends
-      typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
-    EvaluatorOptions extends z.ZodTypeAny = z.ZodTypeAny,
+    EvalDataPoint extends typeof BaseEvalDataPointSchema =
+      typeof BaseEvalDataPointSchema,
+    EvaluatorOptions extends GenkitSchema = GenkitSchema,
   >(
     options: {
       name: string;
@@ -567,7 +566,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Creates embedder model for the provided {@link EmbedderFn} model implementation.
    */
-  defineEmbedder<ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+  defineEmbedder<ConfigSchema extends GenkitSchema = GenkitSchema>(
     options: {
       name: string;
       configSchema?: ConfigSchema;
@@ -595,7 +594,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    *  Creates a reranker action for the provided {@link RerankerFn} implementation.
    */
-  defineReranker<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
+  defineReranker<OptionsType extends GenkitSchema = GenkitSchema>(
     options: {
       name: string;
       configSchema?: OptionsType;
@@ -611,7 +610,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   evaluate<
     DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-    CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(params: EvaluatorParams<DataPoint, CustomOptions>): Promise<EvalResponses> {
     return evaluate(this.registry, params);
   }
@@ -619,7 +618,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Reranks documents from a {@link RerankerArgument} based on the provided query.
    */
-  rerank<CustomOptions extends z.ZodTypeAny>(
+  rerank<CustomOptions extends GenkitSchema>(
     params: RerankerParams<CustomOptions>
   ): Promise<Array<RankedDocument>> {
     return rerank(this.registry, params);
@@ -628,7 +627,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Indexes `documents` using the provided `indexer`.
    */
-  index<CustomOptions extends z.ZodTypeAny>(
+  index<CustomOptions extends GenkitSchema>(
     params: IndexerParams<CustomOptions>
   ): Promise<void> {
     return index(this.registry, params);
@@ -637,7 +636,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   /**
    * Retrieves documents from the `retriever` based on the provided `query`.
    */
-  retrieve<CustomOptions extends z.ZodTypeAny>(
+  retrieve<CustomOptions extends GenkitSchema>(
     params: RetrieverParams<CustomOptions>
   ): Promise<Array<Document>> {
     return retrieve(this.registry, params);

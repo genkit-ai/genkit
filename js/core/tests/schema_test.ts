@@ -68,7 +68,7 @@ describe('validate()', () => {
       schema: z.object({ foo: z.boolean() }),
       data: { foo: 123 },
       valid: false,
-      errors: [{ path: 'foo', message: 'must be boolean' }],
+      errors: [{ path: 'foo', message: 'Expected boolean, received number' }],
     },
     {
       it: 'should allow for date types',
@@ -81,7 +81,7 @@ describe('validate()', () => {
       schema: z.object({ foo: z.array(z.object({ bar: z.boolean() })) }),
       data: { foo: [{ bar: 123 }] },
       valid: false,
-      errors: [{ path: 'foo.0.bar', message: 'must be boolean' }],
+      errors: [{ path: 'foo.0.bar', message: 'Expected boolean, received number' }],
     },
     {
       it: 'should be understandable for top-level errors',

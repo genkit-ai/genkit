@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { getAsyncContext, type z } from '@genkit-ai/core';
+import { getAsyncContext, type GenkitSchema } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -34,8 +34,8 @@ import {
 } from './index.js';
 
 export type BaseGenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = Omit<GenerateOptions<O, CustomOptions>, 'prompt'>;
 
 export interface SessionOptions<S = any> {

@@ -24,6 +24,9 @@ import {
   type Action,
   type ActionContext,
   type ActionRunOptions,
+  type GenkitSchema,
+  type InferInput,
+  type InferOutput,
   type JSONSchema7,
 } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -44,8 +47,8 @@ import { isExecutablePrompt, type ExecutablePrompt } from './prompt.js';
  * @beta
  */
 export interface Resumable<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
 > {
   /**
    * respond constructs a tool response corresponding to the provided interrupt tool request
@@ -61,7 +64,7 @@ export interface Resumable<
      * The data with which you want to respond. Must conform to a tool's output schema or an
      * interrupt's input schema.
      **/
-    outputData: z.infer<O>,
+    outputData: InferOutput<O>,
     options?: { metadata?: Record<string, any> }
   ): ToolResponsePart;
 
@@ -86,7 +89,7 @@ export interface Resumable<
        * if the user revised an action before confirming. When input is replaced, the existing
        * tool request will be amended in the message history.
        **/
-      replaceInput?: z.infer<I>;
+      replaceInput?: InferInput<I>;
     }
   ): ToolRequestPart;
 }
@@ -95,8 +98,8 @@ export interface Resumable<
  * An action with a `tool` type.
  */
 export type ToolAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
 > = Action<I, O, z.ZodTypeAny, ToolRunOptions> &
   Resumable<I, O> & {
     __action: {
@@ -110,8 +113,8 @@ export type ToolAction<
  * An action with a `tool.v2` type.
  */
 export type MultipartToolAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
 > = Action<
   I,
   typeof MultipartToolResponseSchema,
@@ -130,8 +133,8 @@ export type MultipartToolAction<
  * A dynamic action with a `tool` type. Dynamic tools are detached actions -- not associated with any registry.
  */
 export type DynamicToolAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
 > = Action<I, O, z.ZodTypeAny, ToolRunOptions> & {
   /** @deprecated no-op, for backwards compatibility only. */
   attach(registry: Registry): ToolAction<I, O>;
@@ -157,7 +160,7 @@ export interface ToolRunOptions extends ActionRunOptions<z.ZodTypeAny> {
 /**
  * Configuration for a tool.
  */
-export interface ToolConfig<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
+export interface ToolConfig<I extends GenkitSchema, O extends GenkitSchema> {
   /** Unique name of the tool to use as a key in the registry. */
   name: string;
   /** Description of the tool. This is passed to the model to help understand what the tool is used for. */
@@ -178,14 +181,14 @@ export interface ToolConfig<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
  * A reference to a tool in the form of a name, definition, or the action itself.
  */
 export type ToolArgument<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
 > = string | ToolAction<I, O> | Action<I, O> | ExecutablePrompt<any, any, any>;
 
 /**
  * Converts an action to a tool action by setting the appropriate metadata.
  */
-export function asTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function asTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   action: Action<I, O>
 ): ToolAction<I, O> {
@@ -200,7 +203,7 @@ export function asTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   fn.__action = {
     ...action.__action,
     metadata: { ...action.__action.metadata, type: 'tool' },
-  };
+  } as (typeof fn)['__action'];
   return fn;
 }
 
@@ -208,8 +211,8 @@ export function asTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  * Resolves a mix of various formats of tool references to a list of tool actions by looking them up in the registry.
  */
 export async function resolveTools<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   tools?: (ToolArgument | ToolDefinition)[]
@@ -258,7 +261,7 @@ export async function lookupToolByName(
  * Converts a tool action to a definition of the tool to be passed to a model.
  */
 export function toToolDefinition(
-  tool: Action<z.ZodTypeAny, z.ZodTypeAny>
+  tool: Action<GenkitSchema, GenkitSchema>
 ): ToolDefinition {
   const originalName = tool.__action.name;
   let name = originalName;
@@ -298,27 +301,27 @@ export interface ToolFnOptions extends ActionFnArg<never> {
 }
 
 /** The implementation function for a standard tool. Receives typed input and {@link ToolFnOptions}. */
-export type ToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
-  input: z.infer<I>,
+export type ToolFn<I extends GenkitSchema, O extends GenkitSchema> = (
+  input: InferOutput<I>,
   ctx: ToolFnOptions & ToolRunOptions
-) => Promise<z.infer<O>>;
+) => Promise<InferOutput<O>>;
 
 /** The implementation function for a multipart tool that can return structured output, content parts, and metadata. */
-export type MultipartToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
-  input: z.infer<I>,
+export type MultipartToolFn<I extends GenkitSchema, O extends GenkitSchema> = (
+  input: InferOutput<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<{
-  output?: z.infer<O>;
+  output?: InferOutput<O>;
   content?: Part[];
   metadata?: Record<string, any>;
 }>;
 
-export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: { multipart: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O>
 ): MultipartToolAction<I, O>;
-export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
@@ -329,22 +332,36 @@ export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  *
  * A tool is an action that can be passed to a model to be called automatically if it so chooses.
  */
-export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineTool<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: { multipart?: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O> | MultipartToolFn<I, O>
 ): ToolAction<I, O> | MultipartToolAction<I, O> {
-  const a = tool(config, fn);
+  let a: ToolAction<I, O> | MultipartToolAction<I, O>;
+  if (config.multipart) {
+    a = multipartTool(
+      config as { multipart: true } & ToolConfig<I, O>,
+      fn as MultipartToolFn<I, O>
+    );
+  } else {
+    a = basicTool(config, fn as ToolFn<I, O>);
+  }
   delete a.__action.metadata.dynamic;
-  registry.registerAction(config.multipart ? 'tool.v2' : 'tool', a);
+  registry.registerAction(
+    config.multipart ? 'tool.v2' : 'tool',
+    a as Action<I, O>
+  );
   if (!config.multipart) {
     // For non-multipart tools, we register a v2 tool action as well
-    registry.registerAction('tool.v2', basicToolV2(config, fn as ToolFn<I, O>));
+    registry.registerAction(
+      'tool.v2',
+      basicToolV2(config, fn as ToolFn<I, O>) as unknown as Action<I, O>
+    );
   }
-  return a as ToolAction<I, O>;
+  return a;
 }
 
-function implementTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+function implementTool<I extends GenkitSchema, O extends GenkitSchema>(
   a: ToolAction<I, O>,
   config: ToolConfig<I, O>,
   registry?: Registry
@@ -385,14 +402,14 @@ function implementTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
 
 /** InterruptConfig defines the options for configuring an interrupt. */
 export type InterruptConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  R extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  R extends GenkitSchema = GenkitSchema,
 > = ToolConfig<I, R> & {
   /** requestMetadata adds additional `interrupt` metadata to the `toolRequest` generated by the interrupt */
   requestMetadata?:
     | Record<string, any>
     | ((
-        input: z.infer<I>
+        input: InferOutput<I>
       ) => Record<string, any> | Promise<Record<string, any>>);
 };
 
@@ -479,20 +496,25 @@ export function isMultipartTool(t: unknown): t is MultipartToolAction {
   return isAction(t) && t.__action?.metadata?.type === 'tool.v2';
 }
 
-export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function interrupt<I extends GenkitSchema, O extends GenkitSchema>(
   config: InterruptConfig<I, O>
 ): ToolAction<I, O> {
   const { requestMetadata, ...toolConfig } = config;
 
-  return tool<I, O>(toolConfig, async (input, { interrupt }) => {
+  const interruptFn = async (
+    input: InferOutput<I>,
+    { interrupt }: ToolFnOptions & ToolRunOptions
+  ): Promise<InferOutput<O>> => {
     if (!config.requestMetadata) interrupt();
     else if (typeof config.requestMetadata === 'object')
       interrupt(config.requestMetadata);
     else interrupt(await Promise.resolve(config.requestMetadata(input)));
-  });
+    return undefined as unknown as InferOutput<O>;
+  };
+  return basicTool<I, O>(toolConfig, interruptFn);
 }
 
-export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineInterrupt<I extends GenkitSchema, O extends GenkitSchema>(
   registry: Registry,
   config: InterruptConfig<I, O>
 ): ToolAction<I, O> {
@@ -529,11 +551,11 @@ function interruptTool(registry?: Registry) {
   };
 }
 
-export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function tool<I extends GenkitSchema, O extends GenkitSchema>(
   config: { multipart: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O>
 ): MultipartToolAction<I, O>;
-export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function tool<I extends GenkitSchema, O extends GenkitSchema>(
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
 ): ToolAction<I, O>;
@@ -542,11 +564,16 @@ export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  * Defines a dynamic tool. Dynamic tools are just like regular tools but will not be registered in the
  * Genkit registry and can be defined dynamically at runtime.
  */
-export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function tool<I extends GenkitSchema, O extends GenkitSchema>(
   config: { multipart?: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O> | MultipartToolFn<I, O>
 ): ToolAction<I, O> | MultipartToolAction<I, O> {
-  return config.multipart ? multipartTool(config, fn) : basicTool(config, fn);
+  return config.multipart
+    ? multipartTool(
+        config as { multipart: true } & ToolConfig<I, O>,
+        fn as MultipartToolFn<I, O> | undefined
+      )
+    : basicTool(config, fn as ToolFn<I, O> | undefined);
 }
 
 function recordResumedMetadata(runOptions: any) {
@@ -558,7 +585,7 @@ function recordResumedMetadata(runOptions: any) {
   }
 }
 
-function basicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+function basicTool<I extends GenkitSchema, O extends GenkitSchema>(
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
 ): ToolAction<I, O> {
@@ -585,7 +612,7 @@ function basicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   return a;
 }
 
-function basicToolV2<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+function basicToolV2<I extends GenkitSchema, O extends GenkitSchema>(
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
 ): MultipartToolAction<I, O> {
@@ -600,7 +627,7 @@ function basicToolV2<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   });
 }
 
-function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
   config: ToolConfig<I, O>,
   fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O> {
@@ -639,7 +666,7 @@ function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  *
  * @deprecated renamed to {@link tool}.
  */
-export function dynamicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function dynamicTool<I extends GenkitSchema, O extends GenkitSchema>(
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
 ): DynamicToolAction<I, O> {

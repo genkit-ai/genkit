@@ -19,21 +19,28 @@ import Ajv, { type ErrorObject, type JSONSchemaType } from 'ajv';
 import addFormats from 'ajv-formats';
 import { z } from 'zod';
 import zodToJsonSchema from 'zod-to-json-schema';
+import { toJSONSchema as z4ToJSONSchema } from 'zod/v4/core';
 import { getGenkitRuntimeConfig } from './config.js';
 import { GenkitError } from './error.js';
-
 import type { Registry } from './registry.js';
-const ajv = new Ajv();
-addFormats(ajv);
+import {
+  isNonZodStandardSchema,
+  isZodV3Schema,
+  isZodV4Schema,
+  type GenkitSchema,
+} from './standard.js';
 
 export { z }; // provide a consistent zod to use throughout genkit
+
+const ajv = new Ajv();
+addFormats(ajv);
 
 /**
  * JSON schema.
  */
 export type JSONSchema = JSONSchemaType<any> | any;
 
-const jsonSchemas = new WeakMap<z.ZodTypeAny, JSONSchema>();
+const jsonSchemas = new WeakMap<object, JSONSchema>();
 const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
 const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
 const schemaAnnotations = new WeakMap<z.ZodTypeAny, Record<string, any>>();
@@ -53,11 +60,13 @@ export function annotateSchema<T extends z.ZodTypeAny>(
 }
 
 /**
- * Wrapper object for various ways schema can be provided.
+ * Wrapper object for various ways schema can be provided. Accepts Zod v3, Zod
+ * v4, or any Standard Schema v1-compliant schema, as well as a pre-converted
+ * JSON schema.
  */
 export interface ProvidedSchema {
   jsonSchema?: JSONSchema;
-  schema?: z.ZodTypeAny;
+  schema?: GenkitSchema;
 }
 
 /**
@@ -82,9 +91,17 @@ export class ValidationError extends GenkitError {
 }
 
 /**
- * Converts a Zod schema into a JSON schema, utilizing an in-memory cache for known objects.
- * @param options Provide a json schema and/or zod schema. JSON schema has priority.
- * @returns A JSON schema.
+ * Converts a schema to a JSON schema for use with LLM tool definitions, the
+ * dev UI, and the reflection API. Uses an in-memory cache for Zod schemas.
+ *
+ * - Zod v3: uses `zod-to-json-schema` (cached).
+ * - Zod v4: uses the built-in `z4.toJSONSchema()` (cached).
+ * - Other Standard Schema: returns `{}` (no JSON Schema can be derived without
+ *   library-specific tooling). Pass an explicit `jsonSchema` alongside the
+ *   schema for richer LLM tool descriptions.
+ *
+ * @param options Provide a json schema and/or schema. JSON schema has priority.
+ * @returns A JSON schema, or null if neither is provided.
  */
 export function toJsonSchema({
   jsonSchema,
@@ -93,22 +110,47 @@ export function toJsonSchema({
   // if neither jsonSchema or schema is present return undefined
   if (!jsonSchema && !schema) return null;
   if (jsonSchema) return jsonSchema;
-  if (jsonSchemas.has(schema!)) return jsonSchemas.get(schema!)!;
-  const outSchema = zodToJsonSchema(schema!, {
-    removeAdditionalStrategy: 'strict',
-  });
-  const annotatedSchema = applyAnnotations(schema!, outSchema as JSONSchema);
-  jsonSchemas.set(schema!, annotatedSchema);
-  return annotatedSchema;
+
+  const s = schema!;
+
+  if (jsonSchemas.has(s as object)) return jsonSchemas.get(s as object)!;
+
+  let outSchema: JSONSchema;
+
+  if (isZodV3Schema(s)) {
+    // Zod v3: use the battle-tested zod-to-json-schema adapter, then apply any
+    // UI-specific annotations registered via `annotateSchema()`.
+    const raw = zodToJsonSchema(s, {
+      removeAdditionalStrategy: 'strict',
+    }) as JSONSchema;
+    outSchema = applyAnnotations(s, raw);
+  } else if (isZodV4Schema(s)) {
+    // Zod v4: use the built-in converter
+    outSchema = z4ToJSONSchema(s as any, {
+      target: 'draft-7',
+      unrepresentable: 'any',
+    });
+  } else {
+    // Non-Zod Standard Schema: we cannot generically produce JSON Schema.
+    // Return an empty schema so the system keeps running — callers that need
+    // LLM-facing schema info should provide an explicit `jsonSchema`.
+    outSchema = {};
+  }
+
+  jsonSchemas.set(s as object, outSchema);
+  return outSchema;
 }
 
 /**
- * Recursively applies annotations to a JSON schema by walking the Zod tree
- * and matching it against the JSON schema structure.
+ * Recursively applies annotations (registered via `annotateSchema`) to a JSON
+ * schema by walking the Zod tree and matching it against the JSON schema
+ * structure.
  *
  * Note: This currently does not resolve JSON schema `$ref` nodes. Annotations
  * on recursive schemas (using `z.lazy`) may not be correctly applied to the
  * referenced definitions.
+ *
+ * Only applies to Zod v3 schemas — `annotateSchema` accepts Zod v3 only.
  */
 function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
   if (!json || typeof json !== 'object') return json;
@@ -239,12 +281,87 @@ export type ValidationResponse =
     };
 
 /**
- * Validates the provided data against the provided schema.
+ * Validates the provided data using native schema validation when possible,
+ * falling back to Ajv/cfworker JSON Schema validation.
+ *
+ * - Zod v3/v4: uses the schema's native `.parse()` for rich error messages.
+ * - Standard Schema: calls `schema['~standard'].validate()`.
+ * - JSON Schema only: uses Ajv or cfworker.
  */
 export function validateSchema(
   data: unknown,
   options: ProvidedSchema
 ): ValidationResponse {
+  const { schema } = options;
+
+  // ── Zod v3 fast path ──────────────────────────────────────────────────────
+  if (schema && isZodV3Schema(schema)) {
+    const result = schema.safeParse(data);
+    const jsonSch = toJsonSchema(options) ?? {};
+    if (!result.success) {
+      return {
+        valid: false,
+        errors: result.error.errors.map((e) => ({
+          path: e.path.join('.') || '(root)',
+          message: e.message,
+        })),
+        schema: jsonSch,
+      };
+    }
+    return { valid: true, schema: jsonSch };
+  }
+
+  // ── Zod v4 fast path ──────────────────────────────────────────────────────
+  if (schema && isZodV4Schema(schema)) {
+    const result = (schema as any).safeParse(data);
+    const jsonSch = toJsonSchema(options) ?? {};
+    if (!result.success) {
+      const issues = result.error?.issues ?? [];
+      return {
+        valid: false,
+        errors: issues.map((e: any) => ({
+          path: (e.path ?? []).join('.') || '(root)',
+          message: e.message,
+        })),
+        schema: jsonSch,
+      };
+    }
+    return { valid: true, schema: jsonSch };
+  }
+
+  // ── Non-Zod Standard Schema fast path ─────────────────────────────────────
+  if (schema && isNonZodStandardSchema(schema)) {
+    const result = schema['~standard'].validate(data);
+    const jsonSch = toJsonSchema(options) ?? {};
+    // Standard Schema validate() may return a Promise for async schemas.
+    // We do not support async validation in this synchronous code path.
+    if (result instanceof Promise) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          'Async Standard Schema validators are not supported in synchronous ' +
+          'Genkit validation contexts. Use a synchronous schema or provide ' +
+          'an explicit jsonSchema.',
+      });
+    }
+    if (result.issues) {
+      return {
+        valid: false,
+        errors: result.issues.map((issue) => ({
+          path:
+            (issue.path ?? [])
+              .map((p) => (typeof p === 'object' ? p.key : p))
+              .join('.')
+              .replace(/^\./, '') || '(root)',
+          message: issue.message,
+        })),
+        schema: jsonSch,
+      };
+    }
+    return { valid: true, schema: jsonSch };
+  }
+
+  // ── JSON Schema fallback (Ajv / cfworker) ─────────────────────────────────
   const toValidate = toJsonSchema(options);
   if (!toValidate) {
     return { valid: true, schema: toValidate };
@@ -292,12 +409,39 @@ export function validateSchema(
 }
 
 /**
- * Parses raw data object against the provided schema.
+ * Parses raw data against the provided schema. Uses native schema parsing when
+ * possible (Zod v3/v4 `.parse()`, Standard Schema `validate()`), falling back
+ * to JSON Schema validation.
+ *
+ * Returns the validated (and potentially transformed) output value.
  */
 export function parseSchema<T = unknown>(
   data: unknown,
   options: ProvidedSchema
 ): T {
+  const { schema } = options;
+
+  // For Zod v3/v4: use native .parse() which applies transforms and returns the
+  // output type, converting ZodError into a ValidationError.
+  if (schema && (isZodV3Schema(schema) || isZodV4Schema(schema))) {
+    try {
+      return (schema as any).parse(data) as T;
+    } catch (e: any) {
+      const issues: Array<{ path: (string | number)[]; message: string }> =
+        e?.errors ?? e?.issues ?? [];
+      const jsonSch = toJsonSchema(options) ?? {};
+      throw new ValidationError({
+        data,
+        errors: issues.map((issue) => ({
+          path: (issue.path ?? []).join('.') || '(root)',
+          message: issue.message,
+        })),
+        schema: jsonSch,
+      });
+    }
+  }
+
+  // For Standard Schema and JSON Schema: use the validation path.
   const result = validateSchema(data, options);
   if (!result.valid) {
     throw new ValidationError({
@@ -306,15 +450,77 @@ export function parseSchema<T = unknown>(
       schema: result.schema,
     });
   }
+
+  // For Standard Schema: return the validated output value (which may differ
+  // from the input if the schema applies coercions).
+  if (schema && isNonZodStandardSchema(schema)) {
+    const validateResult = schema['~standard'].validate(data);
+    if (!(validateResult instanceof Promise) && !validateResult.issues) {
+      return validateResult.value as T;
+    }
+  }
+
   return data as T;
 }
 
 /**
+ * Builds a merged JSON Schema that is the combination of a static envelope
+ * schema and an optional `configSchema` override for a named property.
+ *
+ * This is used by retriever/indexer/reranker/evaluator actions that have a
+ * fixed request envelope (e.g. `{ query, options }`) where the `options`
+ * property type depends on a user-supplied `configSchema`. Rather than using
+ * Zod's `.extend()` (which requires a Zod-specific schema), we:
+ *
+ *  1. Keep the static Zod envelope as the action's `inputSchema` (for runtime
+ *     validation — `options` stays typed as `z.any()`).
+ *  2. Pass this merged JSON schema as `inputJsonSchema` so the dev UI and
+ *     reflection API see the fully-typed structure.
+ *
+ * @param envelopeSchema The static Zod (or other) envelope schema.
+ * @param propertyName The property name to override (e.g. `"options"`).
+ * @param configSchema The user-supplied schema for that property (optional).
+ * @param extraProps Additional JSON schema property overrides to merge in.
+ */
+export function mergedInputJsonSchema(
+  envelopeSchema: GenkitSchema,
+  propertyName: string,
+  configSchema?: GenkitSchema,
+  extraProps?: Record<string, JSONSchema>
+): JSONSchema | undefined {
+  const envelopeJson = toJsonSchema({ schema: envelopeSchema });
+  if (!envelopeJson) return undefined;
+
+  const merged: JSONSchema = { ...envelopeJson };
+  if (!merged.properties) merged.properties = {};
+
+  if (configSchema) {
+    const configJson = toJsonSchema({ schema: configSchema });
+    merged.properties = {
+      ...merged.properties,
+      [propertyName]: configJson
+        ? { ...configJson }
+        : merged.properties[propertyName],
+    };
+  }
+
+  if (extraProps) {
+    merged.properties = {
+      ...merged.properties,
+      ...Object.fromEntries(Object.entries(extraProps).map(([k, v]) => [k, v])),
+    };
+  }
+
+  return merged;
+}
+
+/**
  * Registers provided schema as a named schema object in the Genkit registry.
+ * Accepts Zod v3, Zod v4, or any Standard Schema v1-compliant schema.
  *
  * @hidden
  */
-export function defineSchema<T extends z.ZodTypeAny>(
+export function defineSchema<T extends GenkitSchema>(
   registry: Registry,
   name: string,
   schema: T

@@ -22,6 +22,11 @@ import { getContext, runWithContext, type ActionContext } from './context.js';
 import type { ActionType, Registry } from './registry.js';
 import { parseSchema } from './schema.js';
 import {
+  type GenkitSchema,
+  type InferInput,
+  type InferOutput,
+} from './standard.js';
+import {
   type ActionStreamInput,
   type ActionStreamSubscriber,
   type StreamManager,
@@ -47,9 +52,9 @@ const makeNoopAbortSignal = () => new AbortController().signal;
  * Action metadata.
  */
 export interface ActionMetadata<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > {
   actionType?: ActionType;
   key?: string;
@@ -160,43 +165,51 @@ export interface ActionFnArg<S> {
  * Streaming response from an action.
  */
 export interface StreamingResponse<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > {
   /** Iterator over the streaming chunks. */
-  stream: AsyncGenerator<z.infer<S>>;
+  stream: AsyncGenerator<InferOutput<S>>;
   /** Final output of the action. */
-  output: Promise<z.infer<O>>;
+  output: Promise<InferOutput<O>>;
 }
 
 /**
  * Self-describing, validating, observable, locally and remotely callable function.
+ *
+ * Generic parameters accept Zod v3, Zod v4, or any Standard Schema v1-compliant
+ * schema. Public call sites use `InferInput<I>` (the pre-validation type);
+ * runner callbacks and return values use `InferOutput<I>` (the post-validation
+ * / post-transform type).
  */
 export type Action<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  RunOptions extends ActionRunOptions<z.infer<S>> = ActionRunOptions<
-    z.infer<S>
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  RunOptions extends ActionRunOptions<InferOutput<S>> = ActionRunOptions<
+    InferOutput<S>
   >,
-> = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
+> = ((
+  input?: InferInput<I>,
+  options?: RunOptions
+) => Promise<InferOutput<O>>) & {
   __action: ActionMetadata<I, O, S>;
   __registry?: Registry;
   run(
-    input?: z.infer<I>,
+    input?: InferInput<I>,
     options?: RunOptions
-  ): Promise<ActionResult<z.infer<O>>>;
+  ): Promise<ActionResult<InferOutput<O>>>;
 
-  stream(input?: z.infer<I>, opts?: RunOptions): StreamingResponse<O, S>;
+  stream(input?: InferInput<I>, opts?: RunOptions): StreamingResponse<O, S>;
 };
 
 /**
  * Action factory params.
  */
 export type ActionParams<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > = {
   name:
     | string
@@ -210,20 +223,20 @@ export type ActionParams<
   outputSchema?: O;
   outputJsonSchema?: JSONSchema7;
   metadata?: Record<string, any>;
-  use?: Middleware<z.infer<I>, z.infer<O>, z.infer<S>>[];
+  use?: Middleware<InferInput<I>, InferOutput<O>, InferOutput<S>>[];
   streamSchema?: S;
   actionType: ActionType;
 };
 
 export type ActionAsyncParams<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > = ActionParams<I, O, S> & {
   fn: (
-    input: z.infer<I>,
-    options: ActionFnArg<z.infer<S>>
-  ) => Promise<z.infer<O>>;
+    input: InferOutput<I>,
+    options: ActionFnArg<InferOutput<S>>
+  ) => Promise<InferOutput<O>>;
 };
 
 export type SimpleMiddleware<I = any, O = any> = (
@@ -248,29 +261,29 @@ export type Middleware<I = any, O = any, S = any> =
  * Creates an action with provided middleware.
  */
 export function actionWithMiddleware<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S>,
-  middleware: Middleware<z.infer<I>, z.infer<O>, z.infer<S>>[]
+  middleware: Middleware<InferInput<I>, InferOutput<O>, InferOutput<S>>[]
 ): Action<I, O, S> {
   const wrapped = (async (
-    req: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>>
+    req: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>>
   ) => {
     return (await wrapped.run(req, options)).result;
   }) as Action<I, O, S>;
   wrapped.__action = action.__action;
   wrapped.run = async (
-    req: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>>
-  ): Promise<ActionResult<z.infer<O>>> => {
+    req: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>>
+  ): Promise<ActionResult<InferOutput<O>>> => {
     let telemetry;
     const dispatch = async (
       index: number,
-      req: z.infer<I>,
-      opts?: ActionRunOptions<z.infer<S>>
+      req: InferInput<I>,
+      opts?: ActionRunOptions<InferOutput<S>>
     ) => {
       if (index === middleware.length) {
         // end of the chain, call the original model action
@@ -281,16 +294,20 @@ export function actionWithMiddleware<
 
       const currentMiddleware = middleware[index];
       if (currentMiddleware.length === 3) {
-        return (currentMiddleware as MiddlewareWithOptions<I, O, z.infer<S>>)(
-          req,
-          opts,
-          async (modifiedReq, modifiedOptions) =>
-            dispatch(index + 1, modifiedReq || req, modifiedOptions || opts)
+        return (
+          currentMiddleware as MiddlewareWithOptions<
+            InferInput<I>,
+            InferOutput<O>,
+            InferOutput<S>
+          >
+        )(req, opts, async (modifiedReq, modifiedOptions) =>
+          dispatch(index + 1, modifiedReq || req, modifiedOptions || opts)
         );
       } else if (currentMiddleware.length === 2) {
-        return (currentMiddleware as SimpleMiddleware<I, O>)(
-          req,
-          async (modifiedReq) => dispatch(index + 1, modifiedReq || req, opts)
+        return (
+          currentMiddleware as SimpleMiddleware<InferInput<I>, InferOutput<O>>
+        )(req, async (modifiedReq) =>
+          dispatch(index + 1, modifiedReq || req, opts)
         );
       } else {
         throw new Error('unspported middleware function shape');
@@ -307,16 +324,16 @@ export function actionWithMiddleware<
  * Creates an action with the provided config.
  */
 export function action<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(
   config: ActionParams<I, O, S>,
   fn: (
-    input: z.infer<I>,
-    options: ActionFnArg<z.infer<S>>
-  ) => Promise<z.infer<O>>
-): Action<I, O, z.infer<S>> {
+    input: InferOutput<I>,
+    options: ActionFnArg<InferOutput<S>>
+  ) => Promise<InferOutput<O>>
+): Action<I, O, S> {
   const actionName =
     typeof config.name === 'string'
       ? config.name
@@ -335,18 +352,20 @@ export function action<
   } as ActionMetadata<I, O, S>;
 
   const actionFn = (async (
-    input?: I,
-    options?: ActionRunOptions<z.infer<S>>
+    input?: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>>
   ) => {
     return (await actionFn.run(input, options)).result;
-  }) as Action<I, O, z.infer<S>>;
+  }) as Action<I, O, S>;
   actionFn.__action = { ...actionMetadata };
 
   actionFn.run = async (
-    input: z.infer<I>,
-    options?: ActionRunOptions<z.infer<S>>
-  ): Promise<ActionResult<z.infer<O>>> => {
-    input = parseSchema(input, {
+    input: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>>
+  ): Promise<ActionResult<InferOutput<O>>> => {
+    // parseSchema validates the input and returns the output type (post-transforms).
+    // We cast to InferOutput<I> since parseSchema returns T=unknown generically.
+    let parsedInput = parseSchema<InferOutput<I>>(input, {
       schema: config.inputSchema,
       jsonSchema: config.inputJsonSchema,
     });
@@ -381,11 +400,11 @@ export function action<
           options.onTraceStart({ traceId, spanId });
         }
         metadata.name = actionName;
-        metadata.input = input;
+        metadata.input = parsedInput;
 
         try {
           const actFn = () =>
-            fn(input, {
+            fn(parsedInput, {
               ...options,
               // Context can either be explicitly set, or inherited from the parent action.
               context: {
@@ -431,11 +450,11 @@ export function action<
   };
 
   actionFn.stream = (
-    input?: z.infer<I>,
-    opts?: ActionRunOptions<z.infer<S>>
+    input?: InferInput<I>,
+    opts?: ActionRunOptions<InferOutput<S>>
   ): StreamingResponse<O, S> => {
-    let chunkStreamController: ReadableStreamController<z.infer<S>>;
-    const chunkStream = new ReadableStream<z.infer<S>>({
+    let chunkStreamController: ReadableStreamController<InferOutput<S>>;
+    const chunkStream = new ReadableStream<InferOutput<S>>({
       start(controller) {
         chunkStreamController = controller;
       },
@@ -444,10 +463,10 @@ export function action<
     });
 
     const invocationPromise = actionFn
-      .run(config.inputSchema ? config.inputSchema.parse(input) : input, {
-        onChunk: ((chunk: z.infer<S>) => {
+      .run(input, {
+        onChunk: ((chunk: InferOutput<S>) => {
           chunkStreamController.enqueue(chunk);
-        }) as S extends z.ZodVoid ? undefined : StreamingCallback<z.infer<S>>,
+        }) as any,
         context: {
           ...actionFn.__registry?.context,
           ...(opts?.context ?? getContext()),
@@ -492,16 +511,16 @@ export function isAction(a: unknown): a is Action {
  * Defines an action with the given config and registers it in the registry.
  */
 export function defineAction<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   config: ActionParams<I, O, S>,
   fn: (
-    input: z.infer<I>,
-    options: ActionFnArg<z.infer<S>>
-  ) => Promise<z.infer<O>>
+    input: InferOutput<I>,
+    options: ActionFnArg<InferOutput<S>>
+  ) => Promise<InferOutput<O>>
 ): Action<I, O, S> {
   if (isInRuntimeContext()) {
     throw new Error(
@@ -509,7 +528,7 @@ export function defineAction<
         'See: https://github.com/genkit-ai/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
     );
   }
-  const act = action(config, async (i: I, options): Promise<z.infer<O>> => {
+  const act = action(config, async (i, options): Promise<InferOutput<O>> => {
     await registry.initializeAllPlugins();
     return await runInActionRuntimeContext(() => fn(i, options));
   });
@@ -522,9 +541,9 @@ export function defineAction<
  * Defines an action with the given config promise and registers it in the registry.
  */
 export function defineActionAsync<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   actionType: ActionType,
@@ -543,7 +562,7 @@ export function defineActionAsync<
     config.then((resolvedConfig) => {
       const act = action(
         resolvedConfig,
-        async (i: I, options): Promise<z.infer<O>> => {
+        async (i, options): Promise<InferOutput<O>> => {
           await registry.initializeAllPlugins();
           return await runInActionRuntimeContext(() =>
             resolvedConfig.fn(i, options)

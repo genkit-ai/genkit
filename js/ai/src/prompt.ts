@@ -23,6 +23,9 @@ import {
   type Action,
   type ActionAsyncParams,
   type ActionContext,
+  type GenkitSchema,
+  type InferInput,
+  type InferOutput,
   type JSONSchema7,
   type z,
 } from '@genkit-ai/core';
@@ -69,7 +72,7 @@ import type { ToolAction, ToolArgument } from './tool.js';
 /**
  * Prompt action.
  */
-export type PromptAction<I extends z.ZodTypeAny = z.ZodTypeAny> = Action<
+export type PromptAction<I extends GenkitSchema = GenkitSchema> = Action<
   I,
   typeof GenerateRequestSchema,
   z.ZodNever
@@ -89,7 +92,7 @@ export function isPromptAction(action: Action): action is PromptAction {
 /**
  * Prompt action.
  */
-export type ExecutablePromptAction<I extends z.ZodTypeAny = z.ZodTypeAny> =
+export type ExecutablePromptAction<I extends GenkitSchema = GenkitSchema> =
   Action<
     I,
     typeof GenerateResponseSchema,
@@ -107,23 +110,23 @@ export type ExecutablePromptAction<I extends z.ZodTypeAny = z.ZodTypeAny> =
  * Configuration for a prompt action.
  */
 export interface PromptConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   name: string;
   variant?: string;
   model?: ModelArgument<CustomOptions>;
-  config?: z.infer<CustomOptions>;
+  config?: InferOutput<CustomOptions>;
   description?: string;
   input?: {
     schema?: I;
     jsonSchema?: JSONSchema7;
   };
-  system?: string | Part | Part[] | PartsResolver<z.infer<I>>;
-  prompt?: string | Part | Part[] | PartsResolver<z.infer<I>>;
-  messages?: string | MessageData[] | MessagesResolver<z.infer<I>>;
-  docs?: DocumentData[] | DocsResolver<z.infer<I>>;
+  system?: string | Part | Part[] | PartsResolver<InferInput<I> | undefined>;
+  prompt?: string | Part | Part[] | PartsResolver<InferInput<I> | undefined>;
+  messages?: string | MessageData[] | MessagesResolver<InferInput<I> | undefined>;
+  docs?: DocumentData[] | DocsResolver<InferInput<I> | undefined>;
   output?: OutputOptions<O>;
   maxTurns?: number;
   returnToolRequests?: boolean;
@@ -138,8 +141,8 @@ export interface PromptConfig<
  * Generate options of a prompt.
  */
 export type PromptGenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = Omit<GenerateOptions<O, CustomOptions>, 'prompt' | 'system'>;
 
 /**
@@ -147,8 +150,8 @@ export type PromptGenerateOptions<
  */
 export interface ExecutablePrompt<
   I = undefined,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   /** Prompt reference. */
   ref: { name: string; metadata?: Record<string, any> };
@@ -163,7 +166,7 @@ export interface ExecutablePrompt<
   (
     input?: I,
     opts?: PromptGenerateOptions<O, CustomOptions>
-  ): Promise<GenerateResponse<z.infer<O>>>;
+  ): Promise<GenerateResponse<InferOutput<O>>>;
 
   /**
    * Generates a response by rendering the prompt template with given user input and then calling the model.
@@ -174,7 +177,7 @@ export interface ExecutablePrompt<
   stream(
     input?: I,
     opts?: PromptGenerateOptions<O, CustomOptions>
-  ): GenerateStreamResponse<z.infer<O>>;
+  ): GenerateStreamResponse<InferOutput<O>>;
 
   /**
    * Renders the prompt template based on user input.
@@ -230,13 +233,13 @@ interface PromptCache {
  * @returns The new `ExecutablePrompt`.
  */
 export function definePrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: PromptConfig<I, O, CustomOptions>
-): ExecutablePrompt<z.infer<I>, O, CustomOptions> {
+): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
   return definePromptAsync(
     registry,
     `${options.name}${options.variant ? `.${options.variant}` : ''}`,
@@ -246,19 +249,19 @@ export function definePrompt<
 }
 
 function definePromptAsync<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   name: string,
   optionsPromise: PromiseLike<PromptConfig<I, O, CustomOptions>>,
   metadata?: Record<string, any>
-): ExecutablePrompt<z.infer<I>, O, CustomOptions> {
+): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
   const promptCache = {} as PromptCache;
 
   const renderOptionsFn = async (
-    input: z.infer<I>,
+    input: InferInput<I> | undefined,
     renderOptions: PromptGenerateOptions<O, CustomOptions> | undefined
   ): Promise<GenerateOptions> => {
     return await runInNewSpan(
@@ -364,11 +367,11 @@ function definePromptAsync<
         actionType: 'prompt',
         metadata,
         fn: async (
-          input: z.infer<I>
-        ): Promise<GenerateRequest<z.ZodTypeAny>> => {
+          input: InferOutput<I>
+        ): Promise<GenerateRequest<GenkitSchema>> => {
           return toGenerateRequest(
             registry,
-            await renderOptionsFn(input, undefined)
+            await renderOptionsFn(input as InferInput<I> | undefined, undefined)
           );
         },
       } as ActionAsyncParams<any, any, any>;
@@ -381,7 +384,7 @@ function definePromptAsync<
     rendererActionConfig,
     (action) => {
       (action as PromptAction<I>).__executablePrompt =
-        executablePrompt as never as ExecutablePrompt<z.infer<I>>;
+        executablePrompt as never as ExecutablePrompt<I>;
     }
   ) as Promise<PromptAction<I>>;
 
@@ -396,10 +399,10 @@ function definePromptAsync<
         description: options.description,
         actionType: 'executable-prompt',
         metadata,
-        fn: async (input: z.infer<I>): Promise<GenerateActionOptions> => {
+        fn: async (input: InferOutput<I>): Promise<GenerateActionOptions> => {
           return await toGenerateActionOptions(
             registry,
-            await renderOptionsFn(input, undefined)
+            await renderOptionsFn(input as InferInput<I> | undefined, undefined)
           );
         },
       } as ActionAsyncParams<any, any, any>;
@@ -413,7 +416,7 @@ function definePromptAsync<
     executablePromptActionConfig,
     (action) => {
       (action as ExecutablePromptAction<I>).__executablePrompt =
-        executablePrompt as never as ExecutablePrompt<z.infer<I>>;
+        executablePrompt as never as ExecutablePrompt<I>;
     }
   ) as Promise<ExecutablePromptAction<I>>;
 
@@ -459,23 +462,23 @@ function promptMetadata(options: PromptConfig<any, any, any>) {
 }
 
 function wrapInExecutablePrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(wrapOpts: {
   registry: Registry;
   name: string;
   renderOptionsFn: (
-    input: z.infer<I>,
+    input: InferInput<I> | undefined,
     renderOptions: PromptGenerateOptions<O, CustomOptions> | undefined
   ) => Promise<GenerateOptions>;
   rendererAction: Promise<PromptAction<I>>;
   metadata?: Record<string, any>;
 }) {
   const executablePrompt = (async (
-    input?: I,
+    input?: InferInput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
-  ): Promise<GenerateResponse<z.infer<O>>> => {
+  ): Promise<GenerateResponse<InferOutput<O>>> => {
     return await runInNewSpan(
       wrapOpts.registry,
       {
@@ -495,12 +498,12 @@ function wrapInExecutablePrompt<
         return output;
       }
     );
-  }) as ExecutablePrompt<z.infer<I>, O, CustomOptions>;
+  }) as ExecutablePrompt<InferInput<I>, O, CustomOptions>;
 
   executablePrompt.ref = { name: wrapOpts.name, metadata: wrapOpts.metadata };
 
   executablePrompt.render = async (
-    input?: I,
+    input?: InferInput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateOptions<O, CustomOptions>> => {
     return {
@@ -509,9 +512,9 @@ function wrapInExecutablePrompt<
   };
 
   executablePrompt.stream = (
-    input?: I,
+    input?: InferInput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
-  ): GenerateStreamResponse<z.infer<O>> => {
+  ): GenerateStreamResponse<InferOutput<O>> => {
     return generateStream(
       wrapOpts.registry,
       wrapOpts.renderOptionsFn(input, opts)
@@ -525,13 +528,13 @@ function wrapInExecutablePrompt<
 }
 
 async function renderSystemPrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   session: Session | undefined,
-  input: z.infer<I>,
+  input: InferInput<I> | undefined,
   messages: MessageData[],
   options: PromptConfig<I, O, CustomOptions>,
   promptCache: PromptCache,
@@ -572,13 +575,13 @@ async function renderSystemPrompt<
 }
 
 async function renderMessages<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   session: Session | undefined,
-  input: z.infer<I>,
+  input: InferInput<I> | undefined,
   messages: MessageData[],
   options: PromptConfig<I, O, CustomOptions>,
   renderOptions: PromptGenerateOptions<O, CustomOptions>,
@@ -626,13 +629,13 @@ async function renderMessages<
 }
 
 async function renderUserPrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   session: Session | undefined,
-  input: z.infer<I>,
+  input: InferInput<I> | undefined,
   messages: MessageData[],
   options: PromptConfig<I, O, CustomOptions>,
   promptCache: PromptCache,
@@ -729,9 +732,9 @@ function normalizeParts(parts: string | Part | Part[]): Part[] {
 }
 
 async function renderDotpromptToParts<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   promptFn: PromptFunction,
@@ -915,8 +918,8 @@ function loadPrompt(
 
 export async function prompt<
   I = undefined,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   name: string,
@@ -935,8 +938,8 @@ function registryLookupKey(name: string, variant?: string, ns?: string) {
 
 async function lookupPrompt<
   I = undefined,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   name: string,

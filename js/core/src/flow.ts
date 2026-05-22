@@ -14,27 +14,27 @@
  * limitations under the License.
  */
 
-import type { z } from 'zod';
 import { ActionFnArg, action, type Action } from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
+import { type GenkitSchema, type InferOutput } from './standard.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
 
 /**
  * Flow is an observable, streamable, (optionally) strongly typed function.
  */
 export interface Flow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > extends Action<I, O, S> {}
 
 /**
  * Configuration for a streaming flow.
  */
 export interface FlowConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > {
   /** Name of the flow. */
   name: string;
@@ -59,25 +59,29 @@ export interface FlowSideChannel<S> extends ActionFnArg<S> {
 
 /**
  * Function to be executed in the flow.
+ *
+ * The `input` parameter receives the **output** (post-validation/transform)
+ * type of the input schema. The return type is the output type of the output
+ * schema. Callers of the flow pass the **input** (pre-validation) type.
  */
 export type FlowFn<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > = (
-  /** Input to the flow. */
-  input: z.infer<I>,
+  /** Validated input to the flow (post-transform output type). */
+  input: InferOutput<I>,
   /** Callback for streaming functions only. */
-  streamingCallback: FlowSideChannel<z.infer<S>>
-) => Promise<z.infer<O>> | z.infer<O>;
+  streamingCallback: FlowSideChannel<InferOutput<S>>
+) => Promise<InferOutput<O>> | InferOutput<O>;
 
 /**
  * Defines a  flow. This operates on the currently active registry.
  */
 export function flow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(config: FlowConfig<I, O, S> | string, fn: FlowFn<I, O, S>): Flow<I, O, S> {
   const resolvedConfig: FlowConfig<I, O, S> =
     typeof config === 'string' ? { name: config } : config;
@@ -89,9 +93,9 @@ export function flow<
  * Defines a non-streaming flow. This operates on the currently active registry.
  */
 export function defineFlow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   config: FlowConfig<I, O, S> | string,
@@ -108,9 +112,9 @@ export function defineFlow<
  * Registers a flow as an action in the registry.
  */
 function flowAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(config: FlowConfig<I, O, S>, fn: FlowFn<I, O, S>): Flow<I, O, S> {
   return action(
     {
@@ -126,13 +130,13 @@ function flowAction<
       { sendChunk, context, trace, abortSignal, streamingRequested }
     ) => {
       const ctx = sendChunk;
-      (ctx as FlowSideChannel<z.infer<S>>).sendChunk = sendChunk;
-      (ctx as FlowSideChannel<z.infer<S>>).context = context;
-      (ctx as FlowSideChannel<z.infer<S>>).trace = trace;
-      (ctx as FlowSideChannel<z.infer<S>>).abortSignal = abortSignal;
-      (ctx as FlowSideChannel<z.infer<S>>).streamingRequested =
+      (ctx as FlowSideChannel<InferOutput<S>>).sendChunk = sendChunk;
+      (ctx as FlowSideChannel<InferOutput<S>>).context = context;
+      (ctx as FlowSideChannel<InferOutput<S>>).trace = trace;
+      (ctx as FlowSideChannel<InferOutput<S>>).abortSignal = abortSignal;
+      (ctx as FlowSideChannel<InferOutput<S>>).streamingRequested =
         streamingRequested;
-      return fn(input, ctx as FlowSideChannel<z.infer<S>>);
+      return fn(input, ctx as FlowSideChannel<InferOutput<S>>);
     }
   );
 }
