@@ -63,13 +63,13 @@ type modelSupports struct {
 // register arbitrary model IDs by passing explicit opts to [DefineModel].
 var knownModels = map[string]modelSupports{
 	// Anthropic Claude 3 / 3.5 / 3.7
-	"anthropic.claude-3-haiku-20240307-v1:0":      {Tools: true, Media: true},
-	"anthropic.claude-3-sonnet-20240229-v1:0":     {Tools: true, Media: true},
-	"anthropic.claude-3-opus-20240229-v1:0":       {Tools: true, Media: true},
-	"anthropic.claude-3-5-haiku-20241022-v1:0":    {Tools: true, Media: false},
-	"anthropic.claude-3-5-sonnet-20240620-v1:0":   {Tools: true, Media: true},
-	"anthropic.claude-3-5-sonnet-20241022-v2:0":   {Tools: true, Media: true},
-	"anthropic.claude-3-7-sonnet-20250219-v1:0":   {Tools: true, Media: true},
+	"anthropic.claude-3-haiku-20240307-v1:0":    {Tools: true, Media: true},
+	"anthropic.claude-3-sonnet-20240229-v1:0":   {Tools: true, Media: true},
+	"anthropic.claude-3-opus-20240229-v1:0":     {Tools: true, Media: true},
+	"anthropic.claude-3-5-haiku-20241022-v1:0":  {Tools: true, Media: false},
+	"anthropic.claude-3-5-sonnet-20240620-v1:0": {Tools: true, Media: true},
+	"anthropic.claude-3-5-sonnet-20241022-v2:0": {Tools: true, Media: true},
+	"anthropic.claude-3-7-sonnet-20250219-v1:0": {Tools: true, Media: true},
 	// Anthropic Claude 4 family
 	"anthropic.claude-opus-4-20250514-v1:0":   {Tools: true, Media: true},
 	"anthropic.claude-sonnet-4-20250514-v1:0": {Tools: true, Media: true},
@@ -91,16 +91,16 @@ var knownModels = map[string]modelSupports{
 	"ai21.jamba-1-5-large-v1:0": {Tools: true, Media: false},
 	"ai21.jamba-1-5-mini-v1:0":  {Tools: true, Media: false},
 	// Meta Llama 3 / 3.1 / 3.2 / 3.3
-	"meta.llama3-8b-instruct-v1:0":      {Tools: true, Media: false},
-	"meta.llama3-70b-instruct-v1:0":     {Tools: true, Media: false},
-	"meta.llama3-1-8b-instruct-v1:0":    {Tools: true, Media: false},
-	"meta.llama3-1-70b-instruct-v1:0":   {Tools: true, Media: false},
-	"meta.llama3-1-405b-instruct-v1:0":  {Tools: true, Media: false},
-	"meta.llama3-2-1b-instruct-v1:0":    {Tools: true, Media: false},
-	"meta.llama3-2-3b-instruct-v1:0":    {Tools: true, Media: false},
-	"meta.llama3-2-11b-instruct-v1:0":   {Tools: true, Media: true},
-	"meta.llama3-2-90b-instruct-v1:0":   {Tools: true, Media: true},
-	"meta.llama3-3-70b-instruct-v1:0":   {Tools: true, Media: false},
+	"meta.llama3-8b-instruct-v1:0":     {Tools: true, Media: false},
+	"meta.llama3-70b-instruct-v1:0":    {Tools: true, Media: false},
+	"meta.llama3-1-8b-instruct-v1:0":   {Tools: true, Media: false},
+	"meta.llama3-1-70b-instruct-v1:0":  {Tools: true, Media: false},
+	"meta.llama3-1-405b-instruct-v1:0": {Tools: true, Media: false},
+	"meta.llama3-2-1b-instruct-v1:0":   {Tools: true, Media: false},
+	"meta.llama3-2-3b-instruct-v1:0":   {Tools: true, Media: false},
+	"meta.llama3-2-11b-instruct-v1:0":  {Tools: true, Media: true},
+	"meta.llama3-2-90b-instruct-v1:0":  {Tools: true, Media: true},
+	"meta.llama3-3-70b-instruct-v1:0":  {Tools: true, Media: false},
 	// DeepSeek
 	"deepseek.r1-v1:0": {Tools: true, Media: false},
 	// Writer Palmyra

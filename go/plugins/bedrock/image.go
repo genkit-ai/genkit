@@ -86,9 +86,9 @@ func promptOf(req *ai.ModelRequest) string {
 
 // Titan-family request shape (also used by Nova Canvas).
 type titanImageReq struct {
-	TaskType              string                 `json:"taskType"`
-	TextToImageParams     titanImageTextParams   `json:"textToImageParams"`
-	ImageGenerationConfig titanImageGenConfig    `json:"imageGenerationConfig"`
+	TaskType              string               `json:"taskType"`
+	TextToImageParams     titanImageTextParams `json:"textToImageParams"`
+	ImageGenerationConfig titanImageGenConfig  `json:"imageGenerationConfig"`
 }
 
 type titanImageTextParams struct {

@@ -123,13 +123,13 @@ func TestImageFormatFor(t *testing.T) {
 
 func TestDocumentFormatFor(t *testing.T) {
 	for mime, want := range map[string]types.DocumentFormat{
-		"application/pdf":  types.DocumentFormatPdf,
-		"text/csv":         types.DocumentFormatCsv,
-		"text/html":        types.DocumentFormatHtml,
-		"text/plain":       types.DocumentFormatTxt,
-		"text/markdown":    types.DocumentFormatMd,
-		"image/png":        "", // not a document
-		"application/zip":  "", // unknown
+		"application/pdf": types.DocumentFormatPdf,
+		"text/csv":        types.DocumentFormatCsv,
+		"text/html":       types.DocumentFormatHtml,
+		"text/plain":      types.DocumentFormatTxt,
+		"text/markdown":   types.DocumentFormatMd,
+		"image/png":       "", // not a document
+		"application/zip": "", // unknown
 	} {
 		if got := documentFormatFor(mime); got != want {
 			t.Errorf("documentFormatFor(%q) = %q, want %q", mime, got, want)

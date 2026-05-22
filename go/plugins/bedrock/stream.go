@@ -189,4 +189,3 @@ func indexOf(p *int32) int32 {
 	}
 	return *p
 }
-

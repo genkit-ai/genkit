@@ -52,8 +52,8 @@ import (
 )
 
 const (
-	claudeModelID  = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-	titanEmbedID   = "amazon.titan-embed-text-v2:0"
+	claudeModelID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+	titanEmbedID  = "amazon.titan-embed-text-v2:0"
 )
 
 type weatherIn struct {
