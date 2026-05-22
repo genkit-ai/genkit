@@ -24,6 +24,7 @@ import type {
   TextBlockParam,
   TextDelta,
   ThinkingBlock,
+  ThinkingBlockParam,
   Tool,
   ToolResultBlockParam,
   ToolUseBlock,
@@ -376,9 +377,26 @@ function toAnthropicThinking(
 function toAnthropicContent(
   content: GenkitPart[]
 ): Array<
-  TextBlockParam | ImageBlockParam | ToolUseBlockParam | ToolResultBlockParam
+  | TextBlockParam
+  | ImageBlockParam
+  | ToolUseBlockParam
+  | ToolResultBlockParam
+  | ThinkingBlockParam
 > {
   return content.map((p) => {
+    if (p.reasoning) {
+      if (p.metadata?.thoughtSignature) {
+        return {
+          type: 'thinking',
+          thinking: p.reasoning,
+          signature: p.metadata.thoughtSignature,
+        } as ThinkingBlockParam;
+      }
+      return {
+        type: 'thinking',
+        thinking: p.reasoning,
+      } as ThinkingBlockParam;
+    }
     if (p.text) {
       return {
         type: 'text',
