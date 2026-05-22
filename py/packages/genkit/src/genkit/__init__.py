@@ -61,6 +61,17 @@ from genkit.embedder import (
     EmbedResponse,
 )
 
+# Import retriever/indexer types
+from genkit._ai._retriever import (
+    IndexerOptions,
+    IndexerRef,
+    IndexerRequest,
+    RetrieverOptions,
+    RetrieverRef,
+    RetrieverRequest,
+    RetrieverResponse,
+)
+
 # Import model-related types from the model namespace.
 from genkit.model import (
     Constrained,
@@ -140,4 +151,12 @@ __all__ = [
     'ModelRequest',
     'ModelResponse',
     'ModelResponseChunk',
+    # Retriever/Indexer
+    'IndexerOptions',
+    'IndexerRef',
+    'IndexerRequest',
+    'RetrieverOptions',
+    'RetrieverRef',
+    'RetrieverRequest',
+    'RetrieverResponse',
 ]

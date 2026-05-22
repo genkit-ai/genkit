@@ -419,6 +419,8 @@ class Registry:
             if plugin.name in self._plugins:
                 raise ValueError(f'Plugin {plugin.name} already registered')
             self._plugins[plugin.name] = plugin
+            # Allow plugins to resolve other actions at runtime (e.g., embedders).
+            plugin._registry = self
             self._all_plugins_initialized.clear()
 
     async def initialize_all_plugins(self) -> None:
@@ -785,3 +787,25 @@ class Registry:
         if action is None:
             return None
         return cast(Action[EvalRequest, EvalResponse, Never], action)
+
+    async def resolve_retriever(self, name: str) -> Action | None:
+        """Resolve a retriever action by name.
+
+        Args:
+            name: The retriever name (e.g., "my-retriever" or "plugin/retriever").
+
+        Returns:
+            A retriever action, or None if not found.
+        """
+        return await self.resolve_action(ActionKind.RETRIEVER, name)
+
+    async def resolve_indexer(self, name: str) -> Action | None:
+        """Resolve an indexer action by name.
+
+        Args:
+            name: The indexer name (e.g., "my-indexer" or "plugin/indexer").
+
+        Returns:
+            An indexer action, or None if not found.
+        """
+        return await self.resolve_action(ActionKind.INDEXER, name)

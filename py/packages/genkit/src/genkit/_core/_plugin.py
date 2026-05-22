@@ -17,15 +17,20 @@
 """Abstract base class for Genkit plugins."""
 
 import abc
+from typing import TYPE_CHECKING
 
 from genkit._core._action import Action, ActionKind
 from genkit._core._typing import ActionMetadata
+
+if TYPE_CHECKING:
+    from genkit._core._registry import Registry
 
 
 class Plugin(abc.ABC):
     """Abstract base class for Genkit plugins."""
 
     name: str  # plugin namespace
+    _registry: 'Registry | None' = None
 
     @abc.abstractmethod
     async def init(self) -> list[Action]:
@@ -56,3 +61,10 @@ class Plugin(abc.ABC):
         """Resolve an embedder action by name (local or namespaced)."""
         target = name if '/' in name else f'{self.name}/{name}'
         return await self.resolve(ActionKind.EMBEDDER, target)
+
+    async def close(self) -> None:
+        """Release resources held by the plugin (connections, file handles, etc.).
+
+        Override this in plugins that hold open connections. The default is a no-op.
+        Called by ``Genkit.close()`` during shutdown.
+        """

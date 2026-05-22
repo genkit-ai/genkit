@@ -1,0 +1,62 @@
+{
+  "name": "genkitx-valkey",
+  "description": "Genkit AI framework plugin for Valkey vector database.",
+  "keywords": [
+    "genkit",
+    "genkit-retriever",
+    "genkit-plugin",
+    "genkit-indexer",
+    "valkey",
+    "vector",
+    "embedding",
+    "ai",
+    "genai",
+    "generative-ai"
+  ],
+  "version": "1.34.0",
+  "type": "commonjs",
+  "scripts": {
+    "check": "tsc",
+    "compile": "tsup-node",
+    "build:clean": "rimraf ./lib",
+    "build": "npm-run-all build:clean check compile",
+    "build:watch": "tsup-node --watch",
+    "test": "jest --verbose"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/genkit-ai/genkit.git",
+    "directory": "js/plugins/valkey"
+  },
+  "author": "genkit",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@valkey/valkey-glide": "2.4.0"
+  },
+  "peerDependencies": {
+    "genkit": "workspace:^"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.16",
+    "genkitx-ollama": "workspace:*",
+    "jest": "^29.7.0",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.0.1",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  },
+  "types": "./lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "require": "./lib/index.js",
+      "import": "./lib/index.mjs",
+      "default": "./lib/index.js"
+    }
+  }
+}

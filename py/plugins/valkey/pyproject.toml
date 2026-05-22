@@ -1,0 +1,24 @@
+[project]
+name = "genkit-plugin-valkey"
+version = "0.1.0"
+description = "Valkey vector store plugin for Genkit"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "genkit>=0.1.0,<1.0.0",
+    "valkey-glide>=2.0.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/genkit"]
