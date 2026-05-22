@@ -14,6 +14,45 @@
  * limitations under the License.
  */
 
+import type { Plugin } from 'esbuild';
+import { readFile } from 'node:fs/promises';
+
+/**
+ * Rewrites relative `.js` import/export specifiers to `.mjs` for ESM-format
+ * builds. With `bundle: false`, esbuild transpiles each source file
+ * individually and preserves its import paths as-is, so the ESM output of
+ * `import './foo.js'` keeps pointing at `./foo.js` (CJS) instead of
+ * `./foo.mjs`. That breaks Vite's SSR module runner (e.g. Angular SSR),
+ * which can't surface named exports re-exported through a CJS file.
+ */
+const rewriteJsExtensionsForEsm: Plugin = {
+  name: 'rewrite-js-extensions-for-esm',
+  setup(build) {
+    if (build.initialOptions.format !== 'esm') return;
+    const loaders: Record<string, 'ts' | 'tsx' | 'js' | 'jsx'> = {
+      ts: 'ts',
+      tsx: 'tsx',
+      mts: 'ts',
+      cts: 'ts',
+      js: 'js',
+      jsx: 'jsx',
+      mjs: 'js',
+      cjs: 'js',
+    };
+    build.onLoad({ filter: /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/ }, async (args) => {
+      const ext = args.path.match(/\.([^.]+)$/)?.[1] ?? '';
+      const loader = loaders[ext];
+      if (!loader) return null;
+      const source = await readFile(args.path, 'utf8');
+      const rewritten = source.replace(
+        /(['"])(\.\.?\/[^'"]+?)\.js(['"])/g,
+        '$1$2.mjs$3'
+      );
+      return { contents: rewritten, loader };
+    });
+  },
+};
+
 export const defaultOptions = {
   format: ['cjs', 'esm'],
   dts: true,
@@ -24,6 +63,7 @@ export const defaultOptions = {
   entry: ['src/**/*.ts'],
   bundle: false,
   treeshake: false,
+  esbuildPlugins: [rewriteJsExtensionsForEsm],
 };
 
 /**
