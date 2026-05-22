@@ -47,8 +47,8 @@ const rewriteJsExtensionsForEsm: Plugin = {
         if (!loader) return null;
         const source = await readFile(args.path, 'utf8');
         const rewritten = source.replace(
-          /(['"])(\.\.?\/[^'"]+?)\.js(['"])/g,
-          '$1$2.mjs$3'
+          /(['"`])(\.\.?\/[^'"`]+?)\.js\1/g,
+          '$1$2.mjs$1'
         );
         return { contents: rewritten, loader };
       }
