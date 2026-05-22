@@ -829,11 +829,9 @@ export function defineModel(
         };
       }
 
-      // Cannot use tools with JSON mode
       const jsonMode =
         request.output?.format === 'json' ||
-        (request.output?.contentType === 'application/json' &&
-          tools.length === 0);
+        request.output?.contentType === 'application/json';
 
       const generationConfig: GenerationConfig = {
         ...removeClientOptionOverrides(restOfConfigOptions),

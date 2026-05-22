@@ -665,10 +665,8 @@ export function defineModel(
         toolConfig.retrievalConfig = structuredClone(retrievalConfig);
       }
 
-      // Cannot use tools and function calling at the same time
       const jsonMode =
-        (request.output?.format === 'json' || !!request.output?.schema) &&
-        tools.length === 0;
+        request.output?.format === 'json' || !!request.output?.schema;
 
       if (toolsFromConfig) {
         tools.push(...(toolsFromConfig as any[]));
