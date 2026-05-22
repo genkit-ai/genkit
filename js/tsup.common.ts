@@ -18,15 +18,22 @@ import type { Plugin } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 
 /**
- * Rewrites relative `.js` import/export specifiers to `.mjs` for ESM-format
- * builds. With `bundle: false`, esbuild transpiles each source file
- * individually and preserves its import paths as-is, so the ESM output of
- * `import './foo.js'` keeps pointing at `./foo.js` (CJS) instead of
- * `./foo.mjs`. That breaks Vite's SSR module runner (e.g. Angular SSR),
- * which can't surface named exports re-exported through a CJS file.
+ * Rewrites `export * from './foo.js'` to `export * from './foo.mjs'` in
+ * ESM-format builds. With `bundle: false`, esbuild transpiles each source
+ * file individually and preserves its import paths as-is, so the ESM
+ * output of a wildcard re-export keeps pointing at the sibling CJS `.js`
+ * file. Vite's SSR module runner (e.g. Angular SSR) cannot statically
+ * expand `export *` through a CJS file, leaving named bindings (`z`,
+ * `genkit`, …) undefined for consumers.
+ *
+ * Scope is intentionally narrow: only `export *` wildcard re-exports are
+ * affected. Regular `import`/`import-from` statements keep their `.js`
+ * targets so existing CJS-interop paths (which tolerate extensionless
+ * `require`) continue to work for plugins whose source uses extensionless
+ * relative imports.
  */
-const rewriteJsExtensionsForEsm: Plugin = {
-  name: 'rewrite-js-extensions-for-esm',
+const rewriteWildcardReexportsForEsm: Plugin = {
+  name: 'rewrite-wildcard-reexports-for-esm',
   setup(build) {
     if (build.initialOptions.format !== 'esm') return;
     const loaders: Record<string, 'ts' | 'tsx' | 'js' | 'jsx'> = {
@@ -47,8 +54,8 @@ const rewriteJsExtensionsForEsm: Plugin = {
         if (!loader) return null;
         const source = await readFile(args.path, 'utf8');
         const rewritten = source.replace(
-          /(['"`])(\.\.?\/[^'"`]+?)\.js\1/g,
-          '$1$2.mjs$1'
+          /(export\s*\*\s*from\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
+          '$1$2$3.mjs$2'
         );
         return { contents: rewritten, loader };
       }
@@ -66,7 +73,7 @@ export const defaultOptions = {
   entry: ['src/**/*.ts'],
   bundle: false,
   treeshake: false,
-  esbuildPlugins: [rewriteJsExtensionsForEsm],
+  esbuildPlugins: [rewriteWildcardReexportsForEsm],
 };
 
 /**
