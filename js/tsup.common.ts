@@ -39,17 +39,20 @@ const rewriteJsExtensionsForEsm: Plugin = {
       mjs: 'js',
       cjs: 'js',
     };
-    build.onLoad({ filter: /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/ }, async (args) => {
-      const ext = args.path.match(/\.([^.]+)$/)?.[1] ?? '';
-      const loader = loaders[ext];
-      if (!loader) return null;
-      const source = await readFile(args.path, 'utf8');
-      const rewritten = source.replace(
-        /(['"])(\.\.?\/[^'"]+?)\.js(['"])/g,
-        '$1$2.mjs$3'
-      );
-      return { contents: rewritten, loader };
-    });
+    build.onLoad(
+      { filter: /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/ },
+      async (args) => {
+        const ext = args.path.match(/\.([^.]+)$/)?.[1] ?? '';
+        const loader = loaders[ext];
+        if (!loader) return null;
+        const source = await readFile(args.path, 'utf8');
+        const rewritten = source.replace(
+          /(['"])(\.\.?\/[^'"]+?)\.js(['"])/g,
+          '$1$2.mjs$3'
+        );
+        return { contents: rewritten, loader };
+      }
+    );
   },
 };
 
