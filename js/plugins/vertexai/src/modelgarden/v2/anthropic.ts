@@ -385,16 +385,11 @@ function toAnthropicContent(
 > {
   return content.map((p) => {
     if (p.reasoning) {
-      if (p.metadata?.thoughtSignature) {
-        return {
-          type: 'thinking',
-          thinking: p.reasoning,
-          signature: p.metadata.thoughtSignature,
-        } as ThinkingBlockParam;
-      }
+      const signature = p.metadata?.thoughtSignature;
       return {
         type: 'thinking',
         thinking: p.reasoning,
+        ...(signature ? { signature } : {}),
       } as ThinkingBlockParam;
     }
     if (p.text) {
