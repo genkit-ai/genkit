@@ -5,11 +5,10 @@
 # Prerequisites:
 #   Valkey:  docker run -d --name valkey-search -p 6379:6379 valkey/valkey-search:latest
 #   Ollama:  ollama pull nomic-embed-text && ollama pull gemma4:e2b
-#   Install: pip install genkit valkey-glide genkit-plugin-valkey genkit-plugin-ollama
-#            (or: cd py && uv sync)
+#   Install: cd py && uv sync
 #
 # How to run:
-#   python valkey-sample.py
+#   uv run src/main.py
 
 from __future__ import annotations
 

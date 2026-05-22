@@ -72,6 +72,8 @@ Each entry in the plugin params array accepts:
 | `clientConfig` | `GlideClientConfiguration` | Yes | Connection config for `@valkey/valkey-glide` |
 | `embedderOptions` | `object` | No | Options passed to the embedder |
 | `prefix` | `string` | No | Hash key prefix (defaults to `indexName`) |
+| `distanceMetric` | `'COSINE' \| 'L2' \| 'IP'` | No | HNSW distance metric (defaults to `COSINE`) |
+| `metadataFields` | `ValkeyMetadataField[]` | No | Metadata fields to index for query-time filtering |
 
 ## License
 

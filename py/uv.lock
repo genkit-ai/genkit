@@ -10,11 +10,11 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "basic-flows",
     "context",
     "evaluators",
     "fastapi-bugbot",
     "flask-hello",
-    "basic-flows",
     "gemini-code-execution",
     "gemini-context-caching",
     "genkit",
@@ -265,6 +265,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/89/76/a7f3e639b78601118
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/0b/8bdc52111c83e2dc2f97403dc87c0830b8989d9ae45732b34b686326fb2c/bandit-1.9.3-py3-none-any.whl", hash = "sha256:4745917c88d2246def79748bde5e08b9d5e9b92f877863d43fab70cd8814ce6a", size = 134451, upload-time = "2026-01-19T04:05:20.938Z" },
 ]
+
+[[package]]
+name = "basic-flows"
+version = "0.2.0"
+source = { editable = "samples/basic-flows" }
+dependencies = [
+    { name = "genkit" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "genkit", editable = "packages/genkit" }]
 
 [[package]]
 name = "beautifulsoup4"
@@ -1238,17 +1249,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "flow-sample1"
-version = "0.2.0"
-source = { editable = "samples/flow-sample1" }
-dependencies = [
-    { name = "genkit" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "genkit", editable = "packages/genkit" }]
-
-[[package]]
 name = "fqdn"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1303,7 +1303,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
@@ -1382,7 +1382,7 @@ provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", 
 
 [[package]]
 name = "genkit-plugin-anthropic"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/anthropic" }
 dependencies = [
     { name = "anthropic" },
@@ -1397,7 +1397,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-compat-oai"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/compat-oai" }
 dependencies = [
     { name = "genkit" },
@@ -1413,7 +1413,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-evaluators"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/evaluators" }
 dependencies = [
     { name = "genkit" },
@@ -1428,7 +1428,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-fastapi"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/fastapi" }
 dependencies = [
     { name = "fastapi" },
@@ -1445,7 +1445,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-flask"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/flask" }
 dependencies = [
     { name = "flask" },
@@ -1464,7 +1464,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-google-cloud"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/google-cloud" }
 dependencies = [
     { name = "genkit" },
@@ -1484,7 +1484,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-google-genai"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/google-genai" }
 dependencies = [
     { name = "genkit" },
@@ -1504,7 +1504,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-ollama"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/ollama" }
 dependencies = [
     { name = "genkit" },
@@ -1539,13 +1539,13 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "valkey-glide", specifier = ">=1.3.0" },
+    { name = "valkey-glide", specifier = ">=2.0.0,<3.0.0" },
 ]
 provides-extras = ["dev"]
 
 [[package]]
 name = "genkit-plugin-vertex-ai"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/vertex-ai" }
 dependencies = [
     { name = "anthropic" },
