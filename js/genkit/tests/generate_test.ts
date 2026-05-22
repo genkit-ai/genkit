@@ -441,9 +441,7 @@ describe('generate', () => {
               outputSchema: {
                 $schema: 'http://json-schema.org/draft-07/schema#',
               },
-              metadata: {
-                key: '/tool/testTool',
-              },
+              key: '/tool/testTool',
             },
           ],
         }
@@ -653,9 +651,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            metadata: {
-              key: '/tool/dynamicTestTool1',
-            },
+            key: '/tool/dynamicTestTool1',
           },
           {
             description: 'description 2',
@@ -664,9 +660,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            metadata: {
-              key: '/tool/dynamicTestTool2',
-            },
+            key: '/tool/dynamicTestTool2',
           },
           {
             description: 'description',
@@ -683,9 +677,7 @@ describe('generate', () => {
               additionalProperties: true,
               type: 'object',
             },
-            metadata: {
-              key: '/tool.v2/dynamicMultipartTool',
-            },
+            key: '/tool.v2/dynamicMultipartTool',
           },
         ],
       });
@@ -1291,9 +1283,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            metadata: {
-              key: '/tool/interruptingTool',
-            },
+            key: '/tool/interruptingTool',
           },
           {
             description: 'description',
@@ -1304,9 +1294,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            metadata: {
-              key: '/tool/simpleTool',
-            },
+            key: '/tool/simpleTool',
           },
           {
             description: 'description',
@@ -1317,9 +1305,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            metadata: {
-              key: '/tool/resumableTool',
-            },
+            key: '/tool/resumableTool',
           },
           {
             description: 'description',
@@ -1330,9 +1316,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
-            metadata: {
-              key: '/tool/dynamicInterrupt',
-            },
+            key: '/tool/dynamicInterrupt',
           },
         ],
       });
@@ -1533,7 +1517,7 @@ describe('generate', () => {
       ai = genkit({
         model: 'programmableModel',
       });
-      pm = defineProgrammableModel(ai);
+      defineProgrammableModel(ai);
     });
 
     it('starts the operation', async () => {
