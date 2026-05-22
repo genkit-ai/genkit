@@ -411,7 +411,7 @@ function commonRef(
         tools: true,
         toolChoice: true,
         systemRole: true,
-        constrained: 'no-tools',
+        constrained: 'all',
       },
     },
   });
