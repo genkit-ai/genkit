@@ -56,7 +56,6 @@ import {
 } from './converters/beta.js';
 import {
   citationsDeltaToPart,
-  inputJsonDeltaError,
   redactedThinkingBlockToPart,
   textBlockToPart,
   textDeltaToPart,
@@ -455,9 +454,7 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       if (event.delta.type === 'citations_delta') {
         return citationsDeltaToPart(event.delta);
       }
-      if (event.delta.type === 'input_json_delta') {
-        throw inputJsonDeltaError();
-      }
+      // input_json_delta - ignore
       // signature_delta - ignore
       return undefined;
     }

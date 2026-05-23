@@ -204,6 +204,81 @@ func TestToAnthropicTools(t *testing.T) {
 			},
 		},
 		{
+			name: "tool with strict opt-out omits the strict field",
+			tools: []*ai.ToolDefinition{
+				{
+					Name:        "loose-tool",
+					Description: "tool that opts out of strict",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"items": map[string]any{
+								"type":     "array",
+								"maxItems": 5,
+							},
+						},
+					},
+					Metadata: map[string]any{"strict": false},
+				},
+			},
+			check: func(t *testing.T, got []anthropic.ToolUnionParam) {
+				if len(got) != 1 {
+					t.Fatalf("expected 1 tool, got %d", len(got))
+				}
+				tool := got[0].OfTool
+				if tool.Strict.Valid() {
+					t.Errorf("expected Strict to be omitted, got value=%v", tool.Strict.Value)
+				}
+				if _, ok := tool.InputSchema.ExtraFields["additionalProperties"]; ok {
+					t.Errorf("expected additionalProperties to be absent, got %v", tool.InputSchema.ExtraFields["additionalProperties"])
+				}
+				// maxItems must be preserved when strict is off.
+				items, _ := tool.InputSchema.Properties.(map[string]any)["items"].(map[string]any)
+				if items["maxItems"] != float64(5) {
+					t.Errorf("expected maxItems to be preserved, got %v", items["maxItems"])
+				}
+			},
+		},
+		{
+			name: "tool with explicit strict=true still enforces additionalProperties",
+			tools: []*ai.ToolDefinition{
+				{
+					Name:        "explicit-strict",
+					Description: "tool that opts in to strict explicitly",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"nested": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"x": map[string]any{"type": "string"},
+								},
+							},
+						},
+					},
+					Metadata: map[string]any{"strict": true},
+				},
+			},
+			check: func(t *testing.T, got []anthropic.ToolUnionParam) {
+				if len(got) != 1 {
+					t.Fatalf("expected 1 tool, got %d", len(got))
+				}
+				tool := got[0].OfTool
+				if !tool.Strict.Valid() || !tool.Strict.Value {
+					t.Errorf("expected Strict=true, got valid=%v value=%v", tool.Strict.Valid(), tool.Strict.Value)
+				}
+				if tool.InputSchema.ExtraFields["additionalProperties"] != false {
+					t.Errorf("expected top-level additionalProperties: false, got %v", tool.InputSchema.ExtraFields["additionalProperties"])
+				}
+				// Nested object must also have additionalProperties: false.
+				props, _ := tool.InputSchema.Properties.(map[string]any)
+				nested, _ := props["nested"].(map[string]any)
+				if nested["additionalProperties"] != false {
+					t.Errorf("expected nested additionalProperties: false, got %v", nested["additionalProperties"])
+				}
+			},
+		},
+		{
 			name: "empty tool name",
 			tools: []*ai.ToolDefinition{
 				{
@@ -233,6 +308,61 @@ func TestToAnthropicTools(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, got)
+			}
+		})
+	}
+}
+
+// TestToAnthropicToolsVertex verifies the strict field is never set when the
+// provider is "vertexai", regardless of the tool's strict metadata.
+func TestToAnthropicToolsVertex(t *testing.T) {
+	tests := []struct {
+		name string
+		tool *ai.ToolDefinition
+	}{
+		{
+			name: "default strict is downgraded on vertex",
+			tool: &ai.ToolDefinition{
+				Name:        "default-tool",
+				Description: "default strict behavior",
+				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+			},
+		},
+		{
+			name: "explicit strict=true is downgraded on vertex",
+			tool: &ai.ToolDefinition{
+				Name:        "explicit-strict-vertex",
+				Description: "user explicitly opted into strict but vertex does not support it",
+				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				Metadata:    map[string]any{"strict": true},
+			},
+		},
+		{
+			name: "explicit strict=false is also downgraded on vertex",
+			tool: &ai.ToolDefinition{
+				Name:        "explicit-loose-vertex",
+				Description: "user opted out and vertex doesn't support strict anyway",
+				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				Metadata:    map[string]any{"strict": false},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := toAnthropicTools("vertexai", []*ai.ToolDefinition{tt.tool})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected 1 tool, got %d", len(got))
+			}
+			tool := got[0].OfTool
+			if tool.Strict.Valid() {
+				t.Errorf("expected Strict to be unset on vertex, got value=%v", tool.Strict.Value)
+			}
+			if _, ok := tool.InputSchema.ExtraFields["additionalProperties"]; ok {
+				t.Errorf("expected additionalProperties to be absent on vertex, got %v", tool.InputSchema.ExtraFields["additionalProperties"])
 			}
 		})
 	}

@@ -228,15 +228,16 @@ export function defineModel(
         clientOpt
       );
 
-      return fromVeoOperation(response);
+      return fromVeoOperation(response, clientOpt);
     },
     async check(operation) {
+      const checkClientOptions = toVeoClientOptions(operation, clientOptions);
       const response = await veoCheckOperation(
         toVeoModel(operation),
         toVeoOperationRequest(operation),
-        toVeoClientOptions(operation, clientOptions)
+        checkClientOptions
       );
-      return fromVeoOperation(response);
+      return fromVeoOperation(response, checkClientOptions);
     },
   });
 }

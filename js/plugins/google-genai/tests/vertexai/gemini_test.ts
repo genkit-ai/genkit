@@ -777,30 +777,6 @@ describe('Vertex AI Gemini', () => {
 
   describe('defineModel - Regional Client', () => {
     runCommonTests(defaultRegionalClientOptions);
-
-    it('handles googleSearchRetrieval tool for gemini-1.5', async () => {
-      const model = defineModel('gemini-1.5-pro', defaultRegionalClientOptions);
-      mockFetchResponse(defaultApiResponse);
-      const request: GenerateRequest<typeof GeminiConfigSchema> = {
-        ...minimalRequest,
-        config: {
-          googleSearchRetrieval: {},
-        },
-      };
-      await model.run(request);
-      const apiRequest: GenerateContentRequest = JSON.parse(
-        fetchStub.lastCall.args[1].body
-      );
-      const searchTool = apiRequest.tools?.find(isGoogleSearchRetrievalTool);
-      assert.ok(searchTool, 'Expected GoogleSearchRetrievalTool');
-      if (searchTool) {
-        assert.ok(
-          searchTool.googleSearchRetrieval,
-          'Expected googleSearchRetrieval property'
-        );
-        assert.deepStrictEqual(searchTool, { googleSearchRetrieval: {} });
-      }
-    });
   });
 
   describe('defineModel - Global Client', () => {

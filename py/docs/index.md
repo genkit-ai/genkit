@@ -21,11 +21,15 @@
 
 ::: genkit.PromptGenerateOptions
 
-::: genkit.ResumeOptions
+::: genkit.Tool
+
+::: genkit.tool
+
+::: genkit.respond_to_interrupt
+
+::: genkit.restart_tool
 
 ::: genkit.ToolRunContext
-
-::: genkit.tool_response
 
 ::: genkit.StreamResponse
 

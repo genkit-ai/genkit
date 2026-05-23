@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +14,18 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ */
+
+/**
+ * Plugin authoring utilities — factory functions (`model`, `embedder`,
+ * `retriever`, etc.), plugin lifecycle types, and the v1/v2 plugin
+ * interfaces for building Genkit plugins.
+ *
+ * ```ts
+ * import { model, embedder, genkitPlugin } from 'genkit/plugin';
+ * ```
+ *
+ * @module plugin
  */
 
 import type { GenerateMiddleware } from '@genkit-ai/ai';
@@ -36,6 +50,7 @@ export { reranker } from '@genkit-ai/ai/reranker';
 export { indexer, retriever } from '@genkit-ai/ai/retriever';
 export { type GenerateMiddleware, type GenkitPluginV2, type ResolvableAction };
 
+/** A v1 plugin provider returned by a {@link GenkitPlugin} factory function. */
 export interface PluginProvider {
   name: string;
   initializer: () => void | Promise<void>;
@@ -43,10 +58,13 @@ export interface PluginProvider {
   listActions?: () => Promise<ActionMetadata[]>;
 }
 
+/** A v1 Genkit plugin factory function. Returns a {@link PluginProvider} when called with a Genkit instance. */
 export type GenkitPlugin = (genkit: Genkit) => PluginProvider;
 
+/** Initialization function called during plugin setup. */
 export type PluginInit = (genkit: Genkit) => void | Promise<void>;
 
+/** Optional resolver function for lazily-resolved plugin actions. */
 export type PluginActionResolver = (
   genkit: Genkit,
   action: ActionType,
@@ -81,6 +99,10 @@ export function genkitPlugin<T extends PluginInit>(
   });
 }
 
+/**
+ * Concrete implementation of a v2 plugin that wraps a {@link GenkitPluginV2} definition
+ * and provides default implementations for all optional hooks.
+ */
 export class GenkitPluginV2Instance implements Required<GenkitPluginV2> {
   readonly version = 'v2';
   readonly name: string;
@@ -135,12 +157,16 @@ export class GenkitPluginV2Instance implements Required<GenkitPluginV2> {
   }
 }
 
+/**
+ * Creates a new v2 plugin instance from the provided options.
+ */
 export function genkitPluginV2(
   options: Omit<GenkitPluginV2, 'version' | 'model'>
 ): GenkitPluginV2Instance {
   return new GenkitPluginV2Instance(options);
 }
 
+/** Checks whether the given plugin conforms to the v2 plugin interface. */
 export function isPluginV2(plugin: unknown): plugin is GenkitPluginV2 {
   return (plugin as GenkitPluginV2).version === 'v2';
 }

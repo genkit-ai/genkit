@@ -33,6 +33,7 @@ import {
   StatusName,
   modelRef,
   z,
+  type ErrorResponseMetadata,
 } from 'genkit';
 import type { ModelAction, ModelInfo, ToolDefinition } from 'genkit/model';
 import { model } from 'genkit/plugin';
@@ -51,6 +52,19 @@ import type {
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
+
+/**
+ * Parses a `Retry-After` header value into milliseconds.
+ * Supports delay-seconds and HTTP-date formats (RFC 7231 §7.1.3).
+ */
+function parseRetryAfterMs(value: string): number | undefined {
+  if (!value || !value.trim()) return undefined;
+  const seconds = Number(value);
+  if (!isNaN(seconds) && seconds >= 0) return seconds * 1000;
+  const date = new Date(value);
+  if (!isNaN(date.getTime())) return Math.max(0, date.getTime() - Date.now());
+  return undefined;
+}
 
 const VisualDetailLevelSchema = z.enum(['auto', 'low', 'high']).optional();
 
@@ -632,9 +646,18 @@ export function openAIModelRunner(
             status = 'UNAVAILABLE';
             break;
         }
+        const retryAfterHeader =
+          e.headers?.get?.('retry-after') ??
+          (e.headers as any)?.['retry-after'];
+        const retryAfterMs = retryAfterHeader
+          ? parseRetryAfterMs(retryAfterHeader)
+          : undefined;
+        const responseMetadata: ErrorResponseMetadata | undefined =
+          retryAfterMs !== undefined ? { retryAfterMs } : undefined;
         throw new GenkitError({
           status,
           message: e.message,
+          responseMetadata,
         });
       }
       throw e;
