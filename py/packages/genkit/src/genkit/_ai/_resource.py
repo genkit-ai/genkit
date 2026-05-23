@@ -202,7 +202,7 @@ def dynamic_resource(opts: ResourceOptions, fn: ResourceFn) -> Action:
             'dynamic': True,
         },
         description=opts.get('description'),
-        span_metadata={'genkit:metadata:resource:uri': uri},
+        span_metadata={'resource:uri': uri},
     )
     act.matches = matcher
     return act

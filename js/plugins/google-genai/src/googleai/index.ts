@@ -30,6 +30,7 @@ import { calculateApiKey } from './utils.js';
 // These are namespaced because they all intentionally have
 // functions of the same name with the same arguments.
 // (All exports from these files are used here)
+import * as antigravity from './antigravity.js';
 import * as deepResearch from './deep-research.js';
 import * as embedder from './embedder.js';
 import * as gemini from './gemini.js';
@@ -37,6 +38,7 @@ import * as imagen from './imagen.js';
 import * as lyria from './lyria.js';
 import * as veo from './veo.js';
 
+export { type AntigravityConfig } from './antigravity.js';
 export { type DeepResearchConfig } from './deep-research.js';
 export { type EmbeddingConfig } from './embedder.js';
 export { type GeminiConfig, type GeminiTtsConfig } from './gemini.js';
@@ -52,6 +54,7 @@ async function initializer(options?: GoogleAIPluginOptions) {
     ...veo.listKnownModels(options),
     ...deepResearch.listKnownModels(options),
     ...lyria.listKnownModels(options),
+    ...antigravity.listKnownModels(options),
   ];
 }
 
@@ -72,6 +75,8 @@ async function resolver(
         return imagen.defineModel(actionName, options);
       } else if (lyria.isLyriaModelName(actionName)) {
         return lyria.defineModel(actionName, options);
+      } else if (antigravity.isAntigravityModelName(actionName)) {
+        return antigravity.defineModel(actionName, options);
       } else {
         // gemini, tts, image, gemma, unknown models
         return gemini.defineModel(actionName, options);
@@ -109,6 +114,7 @@ async function listActions(
       ...veo.listActions(allModels),
       ...deepResearch.listActions(allModels),
       ...lyria.listActions(allModels),
+      ...antigravity.listActions(allModels),
       ...embedder.listActions(allModels),
     ];
   } catch (e: unknown) {
@@ -171,6 +177,10 @@ export type GoogleAIPlugin = {
     name: lyria.KnownModels | (lyria.LyriaModelName & {}),
     config?: lyria.LyriaConfig
   ): ModelReference<lyria.LyriaConfigSchemaType>;
+  model(
+    name: antigravity.KnownModels | (antigravity.AntigravityModelName & {}),
+    config?: antigravity.AntigravityConfig
+  ): ModelReference<antigravity.AntigravityConfigSchemaType>;
   model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
 
   embedder(
@@ -195,6 +205,9 @@ export const googleAI = googleAIPlugin as GoogleAIPlugin;
   }
   if (lyria.isLyriaModelName(name)) {
     return lyria.model(name, config);
+  }
+  if (antigravity.isAntigravityModelName(name)) {
+    return antigravity.model(name, config);
   }
   if (imagen.isImagenModelName(name)) {
     return imagen.model(name, config);

@@ -26,7 +26,7 @@ from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-3-flash-preview',
+    model='googleai/gemini-flash-latest',
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 

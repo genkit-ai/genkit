@@ -272,4 +272,137 @@ describe('retry', () => {
     assert.strictEqual(result.text, 'success');
     assert.strictEqual(totalDelay, 50 + 60);
   });
+
+  it('should not retry on AbortError', async () => {
+    let requestCount = 0;
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'programmableModel' }, async (req) => {
+      requestCount++;
+      const err = new DOMException('The operation was aborted', 'AbortError');
+      throw err;
+    });
+
+    TEST_ONLY.setRetryTimeout((callback, ms) => {
+      callback();
+      return 0 as any;
+    });
+
+    await assert.rejects(
+      ai.generate({
+        model: pm,
+        prompt: 'test',
+        use: [retry({ maxRetries: 3 })],
+      }),
+      /AbortError/
+    );
+
+    assert.strictEqual(requestCount, 1);
+  });
+
+  it('should not retry on ToolInterruptError', async () => {
+    let requestCount = 0;
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'programmableModel' }, async (req) => {
+      requestCount++;
+      const err = new Error('tool interrupt');
+      err.name = 'ToolInterruptError';
+      throw err;
+    });
+
+    TEST_ONLY.setRetryTimeout((callback, ms) => {
+      callback();
+      return 0 as any;
+    });
+
+    await assert.rejects(
+      ai.generate({
+        model: pm,
+        prompt: 'test',
+        use: [retry({ maxRetries: 3 })],
+      }),
+      /tool interrupt/
+    );
+
+    assert.strictEqual(requestCount, 1);
+  });
+
+  it('should use retryAfterMs as delay floor', async () => {
+    let requestCount = 0;
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'programmableModel' }, async (req) => {
+      requestCount++;
+      if (requestCount < 2) {
+        throw new GenkitError({
+          status: 'RESOURCE_EXHAUSTED',
+          message: 'rate limited',
+          responseMetadata: { retryAfterMs: 5000 },
+        });
+      }
+      return { message: { role: 'model', content: [{ text: 'success' }] } };
+    });
+
+    let totalDelay = 0;
+    TEST_ONLY.setRetryTimeout((callback, ms) => {
+      totalDelay += ms!;
+      callback();
+      return 0 as any;
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      prompt: 'test',
+      use: [
+        retry({
+          maxRetries: 2,
+          initialDelayMs: 100,
+          noJitter: true,
+        }),
+      ],
+    });
+
+    assert.strictEqual(requestCount, 2);
+    assert.strictEqual(result.text, 'success');
+    // retryAfterMs (5000) should override initialDelayMs (100)
+    assert.strictEqual(totalDelay, 5000);
+  });
+
+  it('should use computed delay when it exceeds retryAfterMs', async () => {
+    let requestCount = 0;
+    const ai = genkit({});
+    const pm = ai.defineModel({ name: 'programmableModel' }, async (req) => {
+      requestCount++;
+      if (requestCount < 2) {
+        throw new GenkitError({
+          status: 'RESOURCE_EXHAUSTED',
+          message: 'rate limited',
+          responseMetadata: { retryAfterMs: 10 },
+        });
+      }
+      return { message: { role: 'model', content: [{ text: 'success' }] } };
+    });
+
+    let totalDelay = 0;
+    TEST_ONLY.setRetryTimeout((callback, ms) => {
+      totalDelay += ms!;
+      callback();
+      return 0 as any;
+    });
+
+    const result = await ai.generate({
+      model: pm,
+      prompt: 'test',
+      use: [
+        retry({
+          maxRetries: 2,
+          initialDelayMs: 500,
+          noJitter: true,
+        }),
+      ],
+    });
+
+    assert.strictEqual(requestCount, 2);
+    assert.strictEqual(result.text, 'success');
+    // initialDelayMs (500) exceeds retryAfterMs (10), so 500 is used
+    assert.strictEqual(totalDelay, 500);
+  });
 });

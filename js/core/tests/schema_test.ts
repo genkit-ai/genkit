@@ -21,6 +21,7 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { setGenkitRuntimeConfig } from '../src/config.js';
 import {
   ValidationError,
+  annotateSchema,
   parseSchema,
   toJsonSchema,
   validateSchema,
@@ -162,6 +163,167 @@ describe('toJsonSchema', () => {
         type: 'object',
       }
     );
+  });
+});
+
+describe('annotateSchema()', () => {
+  it('should merge annotations into the JSON schema', () => {
+    const schema = annotateSchema(z.string(), {
+      'x-genkit-data-source': 'my-action',
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json['x-genkit-data-source'], 'my-action');
+  });
+
+  it('should merge annotations for nested fields', () => {
+    const schema = z.object({
+      field: annotateSchema(z.string(), {
+        'x-genkit-data-source': 'nested-action',
+      }),
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(
+      json.properties.field['x-genkit-data-source'],
+      'nested-action'
+    );
+  });
+
+  it('should merge annotations for array items', () => {
+    const schema = z.array(
+      annotateSchema(z.string(), {
+        'x-genkit-data-source': 'array-action',
+      })
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json.items['x-genkit-data-source'], 'array-action');
+  });
+
+  it('should merge annotations for optional fields', () => {
+    const schema = z.object({
+      field: annotateSchema(z.string(), {
+        'x-genkit-data-source': 'optional-action',
+      }).optional(),
+    });
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(
+      json.properties.field['x-genkit-data-source'],
+      'optional-action'
+    );
+  });
+
+  it('should favor outer annotations over inner ones', () => {
+    const schema = annotateSchema(
+      annotateSchema(z.string(), { title: 'Inner' }).optional(),
+      { title: 'Outer' }
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.strictEqual(json.title, 'Outer');
+  });
+
+  it('should merge annotations for ZodUnion (anyOf)', () => {
+    // Use objects to force anyOf instead of simple type array optimization
+    const schema = z.union([
+      annotateSchema(z.object({ a: z.string() }), { 'x-hint': 'a' }),
+      annotateSchema(z.object({ b: z.number() }), { 'x-hint': 'b' }),
+    ]);
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.anyOf, 'JSON schema should have anyOf');
+    assert.strictEqual(json.anyOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.anyOf[1]['x-hint'], 'b');
+  });
+
+  it('should merge annotations for ZodIntersection (allOf)', () => {
+    const schema = z.intersection(
+      annotateSchema(z.object({ a: z.string() }), { 'x-hint': 'a' }),
+      annotateSchema(z.object({ b: z.number() }), { 'x-hint': 'b' })
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.allOf, 'JSON schema should have allOf');
+    assert.strictEqual(json.allOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.allOf[1]['x-hint'], 'b');
+  });
+
+  it('should merge annotations for nested ZodIntersection (flattened allOf)', () => {
+    const schema = z.intersection(
+      z.intersection(
+        annotateSchema(z.object({ a: z.string() }), { 'x-hint': 'a' }),
+        annotateSchema(z.object({ b: z.number() }), { 'x-hint': 'b' })
+      ),
+      annotateSchema(z.object({ c: z.boolean() }), { 'x-hint': 'c' })
+    );
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.allOf, 'JSON schema should have allOf');
+    assert.strictEqual(json.allOf.length, 3, 'Should have 3 elements in allOf');
+    assert.strictEqual(json.allOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.allOf[1]['x-hint'], 'b');
+    assert.strictEqual(json.allOf[2]['x-hint'], 'c');
+  });
+
+  it('should merge annotations for ZodRecord (additionalProperties)', () => {
+    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'value' }));
+
+    const json = toJsonSchema({ schema });
+    assert.ok(
+      json.additionalProperties,
+      'JSON schema should have additionalProperties'
+    );
+    assert.strictEqual(json.additionalProperties['x-hint'], 'value');
+  });
+
+  it('should merge annotations for ZodTuple (items array)', () => {
+    const schema = z.tuple([
+      annotateSchema(z.string(), { 'x-hint': 'first' }),
+      annotateSchema(z.number(), { 'x-hint': 'second' }),
+    ]);
+
+    const json = toJsonSchema({ schema });
+    assert.ok(
+      Array.isArray(json.items),
+      'JSON schema items should be an array'
+    );
+    assert.strictEqual(json.items[0]['x-hint'], 'first');
+    assert.strictEqual(json.items[1]['x-hint'], 'second');
+  });
+
+  it('should merge annotations for ZodDiscriminatedUnion (anyOf)', () => {
+    const schema = z.discriminatedUnion('type', [
+      annotateSchema(z.object({ type: z.literal('a'), a: z.string() }), {
+        'x-hint': 'a',
+      }),
+      annotateSchema(z.object({ type: z.literal('b'), b: z.number() }), {
+        'x-hint': 'b',
+      }),
+    ]);
+
+    const json = toJsonSchema({ schema });
+    assert.ok(json.anyOf, 'JSON schema should have anyOf');
+    assert.strictEqual(json.anyOf[0]['x-hint'], 'a');
+    assert.strictEqual(json.anyOf[1]['x-hint'], 'b');
+  });
+
+  it('should not overwrite existing JSON schema fields and log a warning', () => {
+    const warnSpy = mock.method(console, 'warn', () => {});
+    const schema = annotateSchema(z.string(), { type: 'number', 'x-ok': true });
+
+    const json = toJsonSchema({ schema });
+
+    assert.strictEqual(json.type, 'string');
+    assert.strictEqual(json['x-ok'], true);
+    assert.strictEqual(warnSpy.mock.callCount(), 1);
+    assert.ok(
+      warnSpy.mock.calls[0].arguments[0].includes(
+        'Annotation key "type" conflicts'
+      )
+    );
+    warnSpy.mock.restore();
   });
 });
 

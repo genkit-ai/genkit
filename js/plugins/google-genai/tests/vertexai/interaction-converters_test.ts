@@ -25,11 +25,11 @@ import {
   toInteractionContent,
   toInteractionRole,
   toInteractionTool,
-} from '../../src/common/interaction-converters.js';
+} from '../../src/vertexai/interaction-converters.js';
 import {
   Content,
   GeminiInteraction,
-} from '../../src/common/interaction-types.js';
+} from '../../src/vertexai/interaction-types.js';
 
 describe('Interaction Converters', () => {
   describe('ensureToolIds', () => {
@@ -278,7 +278,6 @@ describe('Interaction Converters', () => {
           url: 'data:image/png;base64,BASE64DATA',
           contentType: 'image/png',
         },
-        metadata: { resolution: undefined },
       });
     });
 
@@ -294,7 +293,6 @@ describe('Interaction Converters', () => {
           url: 'gs://bucket/image.png',
           contentType: 'image/png',
         },
-        metadata: { resolution: undefined },
       });
     });
 

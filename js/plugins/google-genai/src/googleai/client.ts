@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-import { GenkitError, StatusName } from 'genkit';
+import { GenkitError, StatusName, type ErrorResponseMetadata } from 'genkit';
 import { logger } from 'genkit/logging';
+import { runInNewSpan } from 'genkit/tracing';
 import {
+  buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
+  parseRetryAfterMs,
   processStream,
 } from '../common/utils.js';
 import {
@@ -38,6 +41,8 @@ import {
   VeoPredictRequest,
 } from './types.js';
 
+export const tracingHooks = { runInNewSpan };
+
 /**
  * Creates an interaction using the Google AI API.
  *
@@ -55,16 +60,19 @@ export async function createInteraction(
     resourcePath: 'interactions',
     clientOptions,
   });
+
   const fetchOptions = getFetchOptions({
     method: 'POST',
     apiKey,
     clientOptions,
     body: JSON.stringify(createInteractionRequest),
+    isInteraction: true,
   });
 
-  const response = await makeRequest(url, fetchOptions);
-
-  return await response.json();
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    request: createInteractionRequest,
+    clientOptions,
+  });
 }
 
 /**
@@ -84,15 +92,17 @@ export async function getInteraction(
     resourcePath: `interactions/${interactionId}`,
     clientOptions,
   });
+
   const fetchOptions = getFetchOptions({
     method: 'GET',
     apiKey,
     clientOptions,
+    isInteraction: true,
   });
 
-  const response = await makeRequest(url, fetchOptions);
-
-  return await response.json();
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    clientOptions,
+  });
 }
 
 /**
@@ -116,6 +126,7 @@ export async function cancelInteraction(
     method: 'POST',
     apiKey,
     clientOptions,
+    isInteraction: true,
   });
 
   try {
@@ -194,10 +205,12 @@ export async function generateContent(
     clientOptions,
     body: JSON.stringify(generateContentRequest),
   });
-  const response = await makeRequest(url, fetchOptions);
 
-  const responseJson = (await response.json()) as GenerateContentResponse;
-  return responseJson;
+  return maybeTraceRequest<GenerateContentResponse>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    clientOptions,
+  });
 }
 
 /**
@@ -228,8 +241,15 @@ export async function generateContentStream(
     body: JSON.stringify(generateContentRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return processStream(response);
+  return maybeTraceRequest<GenerateContentStreamResult>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return processStream(response);
+    },
+  });
 }
 
 /**
@@ -260,8 +280,11 @@ export async function embedContent(
     body: JSON.stringify(embedContentRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json();
+  return maybeTraceRequest<EmbedContentResponse>(url, fetchOptions, {
+    model: model,
+    request: embedContentRequest,
+    clientOptions,
+  });
 }
 
 export async function imagenPredict(
@@ -283,8 +306,11 @@ export async function imagenPredict(
     body: JSON.stringify(imagenPredictRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json() as Promise<ImagenPredictResponse>;
+  return maybeTraceRequest<ImagenPredictResponse>(url, fetchOptions, {
+    model: model,
+    request: imagenPredictRequest,
+    clientOptions,
+  });
 }
 
 export async function veoPredict(
@@ -306,8 +332,11 @@ export async function veoPredict(
     body: JSON.stringify(veoPredictRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json() as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    model: model,
+    request: veoPredictRequest,
+    clientOptions,
+  });
 }
 
 export async function veoCheckOperation(
@@ -325,8 +354,9 @@ export async function veoCheckOperation(
     clientOptions,
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  return response.json() as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    clientOptions,
+  });
 }
 
 /**
@@ -371,10 +401,15 @@ function getFetchOptions(params: {
   apiKey: string | undefined;
   body?: string;
   clientOptions?: ClientOptions;
+  isInteraction?: boolean;
 }) {
   const fetchOptions: RequestInit = {
     method: params.method,
-    headers: getHeaders(params.apiKey, params.clientOptions),
+    headers: getHeaders(
+      params.apiKey,
+      params.clientOptions,
+      params.isInteraction
+    ),
   };
   if (params.body) {
     fetchOptions.body = params.body;
@@ -414,7 +449,8 @@ function getAbortSignal(
  */
 function getHeaders(
   apiKey?: string,
-  clientOptions?: ClientOptions
+  clientOptions?: ClientOptions,
+  isInteraction?: boolean
 ): HeadersInit {
   let customHeaders = {};
   if (clientOptions?.customHeaders) {
@@ -428,11 +464,65 @@ function getHeaders(
     'x-goog-api-client': getGenkitClientHeader(),
   };
 
+  if (isInteraction) {
+    headers['Api-Revision'] = '2026-05-20';
+  }
+
   if (apiKey) {
     headers['x-goog-api-key'] = apiKey;
   }
 
   return headers;
+}
+
+interface TraceOptions<T> {
+  request?: unknown;
+  model?: string;
+  streaming?: boolean;
+  processFn?: (resp: Response) => Promise<T>;
+  clientOptions?: ClientOptions;
+}
+
+async function maybeTraceRequest<T>(
+  url: string,
+  fetchOptions: RequestInit,
+  traceOptions: TraceOptions<T>
+): Promise<T> {
+  const call = async () => {
+    const response = await makeRequest(url, fetchOptions);
+    let processedResponse: Promise<T>;
+    if (traceOptions.processFn) {
+      // This is for streaming etc.
+      processedResponse = traceOptions.processFn(response);
+    } else {
+      // default processing is just get the json response
+      processedResponse = await response.json();
+    }
+    return processedResponse;
+  };
+
+  if (traceOptions.clientOptions?.experimental_debugTraces) {
+    return tracingHooks.runInNewSpan(
+      { metadata: { name: 'httpRequest' } },
+      async (metadata) => {
+        metadata.input = buildTraceMetadataInput(
+          url,
+          fetchOptions,
+          traceOptions
+        );
+        const processedResponse = await call();
+
+        if (traceOptions.streaming) {
+          metadata.output = '[Streaming Response]';
+        } else {
+          metadata.output = processedResponse;
+        }
+
+        return processedResponse;
+      }
+    );
+  }
+  return call();
 }
 
 /**
@@ -463,14 +553,15 @@ async function makeRequest(
               .map((d: any) => {
                 if (d.detail && typeof d.detail === 'string') {
                   const match = d.detail.match(/\[ORIGINAL ERROR\]\s*([^[]+)/);
-                  return match ? match[1].trim() : d.detail;
+                  const detailText = match ? match[1].trim() : d.detail;
+                  return `${detailText}\nRaw: ${JSON.stringify(d, null, 2)}`;
                 }
-                return JSON.stringify(d);
+                return JSON.stringify(d, null, 2);
               })
               .filter(Boolean)
               .join('\n');
             if (detailsText) {
-              errorMessage += `\nDetails: ${detailsText}`;
+              errorMessage += `\nDetails:\n${detailsText}`;
             }
           }
         }
@@ -495,10 +586,19 @@ async function makeRequest(
           status = 'UNAVAILABLE';
           break;
       }
+      // Capture Retry-After header for retry middleware to use
+      const retryAfterHeader = response.headers.get('retry-after');
+      const retryAfterMs = retryAfterHeader
+        ? parseRetryAfterMs(retryAfterHeader)
+        : undefined;
+      const responseMetadata: ErrorResponseMetadata | undefined =
+        retryAfterMs !== undefined ? { retryAfterMs } : undefined;
+
       throw new GenkitError({
         status,
         message: `Error fetching from ${url}: [${response.status} ${response.statusText}] ${errorMessage}`,
         detail: errorDetail,
+        responseMetadata,
       });
     }
     return response;
@@ -516,4 +616,5 @@ export const TEST_ONLY = {
   getAbortSignal,
   getHeaders,
   makeRequest,
+  tracingHooks,
 };

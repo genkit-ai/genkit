@@ -19,6 +19,10 @@ import type { ActionType } from '@genkit-ai/core/registry';
 import type { GenerateMiddleware } from './generate/middleware.js';
 import type { ModelAction } from './model.js';
 
+/**
+ * The v2 plugin interface for Genkit. Plugins implement this interface to provide
+ * models, tools, middleware, and other actions to the Genkit framework.
+ */
 export interface GenkitPluginV2 {
   version: 'v2';
   name: string;

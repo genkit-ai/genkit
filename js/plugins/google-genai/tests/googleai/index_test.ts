@@ -278,14 +278,6 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
-    it('should have config values for gemma', () => {
-      const modelRef = googleAI.model('gemma-3-12b-it', {
-        temperature: 0.7,
-      });
-      assert.strictEqual(modelRef.name, 'googleai/gemma-3-12b-it');
-      assert.strictEqual(modelRef.config?.temperature, 0.7);
-    });
-
     it('should return an Imagen model reference with correct schema', () => {
       const modelRef = googleAI.model('imagen-new-model');
       assert.strictEqual(

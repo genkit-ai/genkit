@@ -18,12 +18,17 @@ import { z } from '@genkit-ai/core';
 import type { Embedding } from './embedder.js';
 import { PartSchema, type Part } from './parts.js';
 
-// We need both metadata and embedMetadata because they can
-// contain the same fields (e.g. video start/stop) with different values.
+/**
+ * Zod schema for the serializable data representation of a {@link Document}.
+ * Contains an array of content parts and optional metadata.
+ */
 export const DocumentDataSchema = z.object({
   content: z.array(PartSchema),
+  // We need both metadata and embedMetadata because they can
+  // contain the same fields (e.g. video start/stop) with different values.
   metadata: z.record(z.string(), z.any()).optional(),
 });
+/** Serializable data representation of a {@link Document}. */
 export type DocumentData = z.infer<typeof DocumentDataSchema>;
 
 function deepCopy<T>(value: T): T {

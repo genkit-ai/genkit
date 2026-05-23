@@ -54,6 +54,41 @@ describe('toAnthropicRequest', () => {
       },
     },
     {
+      should:
+        'should transform genkit reasoning part back to anthropic thinking block',
+      input: {
+        messages: [
+          {
+            role: 'model',
+            content: [
+              {
+                reasoning: 'I need to think about this.',
+                metadata: { thoughtSignature: 'sig_123' },
+              },
+              { text: 'I thought about it.' },
+            ],
+          },
+        ],
+      },
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'thinking',
+                thinking: 'I need to think about this.',
+                signature: 'sig_123',
+              } as any,
+              { type: 'text', text: 'I thought about it.' },
+            ],
+          },
+        ],
+      },
+    },
+    {
       should: 'should transform system message',
       input: {
         messages: [
@@ -296,6 +331,118 @@ describe('fromAnthropicResponse', () => {
           outputCharacters: 17,
           outputImages: 0,
           outputTokens: 50,
+          outputVideos: 0,
+          custom: {
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 0,
+          },
+        },
+      },
+    },
+    {
+      should:
+        'should transform response with thinking, text, and multiple tool calls correctly',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'Do some tasks.' }],
+          },
+        ],
+        tools: [
+          {
+            name: 'someListFilesTool',
+            description: 'Lists files',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+      },
+      response: {
+        model: 'claude-opus-4-7',
+        id: 'msg_vrtx_123',
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'thinking',
+            thinking: 'I will do multiple tool calls.',
+            signature: 'sig_abc',
+          },
+          {
+            type: 'text',
+            text: 'Here we go.',
+          },
+          {
+            type: 'tool_use',
+            id: 'toolu_vrtx_1',
+            name: 'someListFilesTool',
+            input: {},
+          },
+          {
+            type: 'tool_use',
+            id: 'toolu_vrtx_2',
+            name: 'someListFilesTool',
+            input: {},
+          },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        usage: {
+          input_tokens: 800,
+          output_tokens: 444,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 0,
+            ephemeral_1h_input_tokens: 0,
+          },
+        },
+      },
+      expectedOutput: {
+        custom: {
+          id: 'msg_vrtx_123',
+          model: 'claude-opus-4-7',
+          type: 'message',
+        },
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'I will do multiple tool calls.',
+              metadata: { thoughtSignature: 'sig_abc' },
+            },
+            {
+              text: 'Here we go.',
+            },
+            {
+              toolRequest: {
+                name: 'someListFilesTool',
+                ref: 'toolu_vrtx_1',
+                input: {},
+              },
+            },
+            {
+              toolRequest: {
+                name: 'someListFilesTool',
+                ref: 'toolu_vrtx_2',
+                input: {},
+              },
+            },
+          ],
+        },
+        usage: {
+          inputAudioFiles: 0,
+          inputCharacters: 14,
+          inputImages: 0,
+          inputTokens: 800,
+          inputVideos: 0,
+          outputAudioFiles: 0,
+          outputCharacters: 11,
+          outputImages: 0,
+          outputTokens: 444,
           outputVideos: 0,
           custom: {
             cache_creation_input_tokens: 0,
