@@ -70,6 +70,13 @@ func TestIsZero(t *testing.T) {
 		{"struct with n", IsZero(sample{N: 1}), false},
 		{"populated struct", IsZero(sample{Name: "x", N: 1}), false},
 
+		// Pointers: nil and non-nil pointing to a zero-value pointee are both
+		// considered zero (transitive unwrap).
+		{"non-nil pointer to zero struct", IsZero(&sample{}), true},
+		{"non-nil pointer to populated struct", IsZero(&sample{Name: "x"}), false},
+		{"pointer to zero int", IsZero(new(int)), true},
+		{"pointer to nonzero int", func() bool { n := 7; return IsZero(&n) }(), false},
+
 		// Primitives.
 		{"empty string", IsZero(""), true},
 		{"non-empty string", IsZero("x"), false},

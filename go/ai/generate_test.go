@@ -2286,6 +2286,63 @@ func TestGenerateDataStream(t *testing.T) {
 			t.Errorf("finalOutput = %#v, want {Name: \"populated\", Value: 42}", finalOutput)
 		}
 	})
+
+	t.Run("skips zero-value pointer-to-struct chunks during incremental streaming", func(t *testing.T) {
+		// Same scenario as the previous subtest, but with a pointer output type.
+		// When chunk.Output unmarshals into **streamingTestData, the JSON unmarshaler
+		// allocates a non-nil pointer to a zero-value struct (&streamingTestData{}).
+		// IsZero must transitively unwrap the pointer and treat the pointee's zero
+		// value as zero, otherwise the same flicker bug recurs for callers that use
+		// GenerateDataStream[*T].
+		streamModel := DefineModel(r, "test/streamSkipZeroPtrModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if cb != nil {
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(`{`)}})
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(`"name":"populated"`)}})
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(`,"value":42}`)}})
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"name":"populated","value":42}`)},
+				},
+			}, nil
+		})
+
+		var chunks []*streamingTestData
+		var finalOutput *streamingTestData
+
+		for val, err := range GenerateDataStream[*streamingTestData](context.Background(), r,
+			WithModel(streamModel),
+			WithPrompt("test zero-value pointer chunk skip"),
+		) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if val.Done {
+				finalOutput = val.Output
+			} else {
+				chunks = append(chunks, val.Chunk)
+			}
+		}
+
+		if len(chunks) != 2 {
+			t.Fatalf("expected 2 non-empty chunks (nil and &zero pointer chunks should be skipped); got %d: %#v", len(chunks), chunks)
+		}
+		for i, c := range chunks {
+			if c == nil || *c == (streamingTestData{}) {
+				t.Errorf("chunk[%d] is nil or points to zero value; should be skipped", i)
+			}
+		}
+		if finalOutput == nil || finalOutput.Name != "populated" || finalOutput.Value != 42 {
+			t.Errorf("finalOutput = %#v, want non-nil *{Name: \"populated\", Value: 42}", finalOutput)
+		}
+	})
 }
 
 func TestGenerateText(t *testing.T) {
