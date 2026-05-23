@@ -28,6 +28,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/base"
+	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 
@@ -261,18 +262,10 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 	req.Tools = tools
 
 	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
-		// Native structured output via OutputConfig
-		var outputSchema map[string]any
-		if b, err := json.Marshal(i.Output.Schema); err != nil {
-			return nil, fmt.Errorf("failed to clone output schema: %w", err)
-		} else if err := json.Unmarshal(b, &outputSchema); err != nil {
-			return nil, fmt.Errorf("failed to clone output schema: %w", err)
-		}
-		enforceStrictSchema(outputSchema)
-
+		// Native structured output via OutputConfig.
 		req.OutputConfig = anthropic.OutputConfigParam{
 			Format: anthropic.JSONOutputFormatParam{
-				Schema: outputSchema,
+				Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
 				// Type is elided, defaults to "json_schema"
 			},
 		}
@@ -317,35 +310,38 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 			return nil, fmt.Errorf("tool name must match regex: %s", ToolNameRegex)
 		}
 
-		var schema anthropic.ToolInputSchemaParam
 		inputSchema := t.InputSchema
 		if len(inputSchema) == 0 {
 			inputSchema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 
-		// Strict tools require additionalProperties: false recursively
-		var strictInputSchema map[string]any
-		if b, err := json.Marshal(inputSchema); err != nil {
-			return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
-		} else if err := json.Unmarshal(b, &strictInputSchema); err != nil {
-			return nil, fmt.Errorf("failed to clone tool input schema: %w", err)
+		// Vertex AI's Anthropic endpoint does not support the strict field;
+		// elsewhere, strict is the default unless the tool opts out.
+		strictSupported := provider != "vertexai"
+		strictRequested := true
+		if v, ok := t.Metadata["strict"].(bool); ok {
+			strictRequested = v
 		}
-		enforceStrictSchema(strictInputSchema)
-		inputSchema = strictInputSchema
+		strict := strictSupported && strictRequested
 
-		var err error
-		schema, err = base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
+		if strict {
+			inputSchema = pluginjsonschema.EnforceStrict(inputSchema)
+		}
+
+		schema, err := base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse tool input schema: %w", err)
 		}
 
 		// ToolInputSchemaParam struct doesn't have AdditionalProperties field,
 		// so we must add it to ExtraFields manually for the top-level schema.
-		if schema.ExtraFields == nil {
-			schema.ExtraFields = make(map[string]any)
-		}
-		if t, ok := inputSchema["type"].(string); ok && t == "object" {
-			schema.ExtraFields["additionalProperties"] = false
+		if strict {
+			if schema.ExtraFields == nil {
+				schema.ExtraFields = make(map[string]any)
+			}
+			if typ, ok := inputSchema["type"].(string); ok && typ == "object" {
+				schema.ExtraFields["additionalProperties"] = false
+			}
 		}
 
 		tool := &anthropic.ToolParam{
@@ -353,35 +349,16 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 			Description: anthropic.String(t.Description),
 			InputSchema: schema,
 		}
-		// Vertex AI's Anthropic endpoint does not support the strict field.
-		if provider != "vertexai" {
+		// Only set strict when true. Sending strict: false still triggers
+		// Anthropic's supported-keywords validator (which rejects e.g.
+		// maxItems/minItems); omitting the field skips validation entirely.
+		if strict {
 			tool.Strict = anthropic.Bool(true)
 		}
 		resp = append(resp, anthropic.ToolUnionParam{OfTool: tool})
 	}
 
 	return resp, nil
-}
-
-// enforceStrictSchema is a helper function that sets additionalProperties to false
-// for every object in a schema
-func enforceStrictSchema(schema map[string]any) {
-	if t, ok := schema["type"].(string); ok && t == "object" {
-		schema["additionalProperties"] = false
-		if props, ok := schema["properties"].(map[string]any); ok {
-			for _, v := range props {
-				if subSchema, ok := v.(map[string]any); ok {
-					enforceStrictSchema(subSchema)
-				}
-			}
-		}
-	}
-	// recursively enforce additionalProperties to false
-	if t, ok := schema["type"].(string); ok && t == "array" {
-		if items, ok := schema["items"].(map[string]any); ok {
-			enforceStrictSchema(items)
-		}
-	}
 }
 
 // toAnthropicParts translates [ai.Part] to an anthropic.ContentBlockParamUnion type

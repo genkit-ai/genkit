@@ -23,14 +23,13 @@ from typing import Any, TypedDict
 from pydantic import BaseModel, Field
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._tracing import run_in_new_span
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     Media,
     MediaPart,
     ModelInfo,
     Part,
     Role,
-    SpanMetadata,
     TextPart,
 )
 from genkit.model import Message, ModelRequest, ModelResponse, ModelResponseChunk
@@ -358,9 +357,9 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
 
     report: TestReport = []
 
-    with run_in_new_span(SpanMetadata(name='testModels'), labels={'genkit:type': 'testSuite'}):
+    with run_in_new_span(SpanMetadata(name='testModels', type='testSuite')):
         for test_name, test_fn in tests.items():
-            with run_in_new_span(SpanMetadata(name=test_name), labels={'genkit:type': 'testCase'}):
+            with run_in_new_span(SpanMetadata(name=test_name, type='testCase')):
                 case_report: TestCaseReport = {
                     'description': test_name,
                     'models': [],

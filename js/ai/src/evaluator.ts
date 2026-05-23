@@ -24,6 +24,7 @@ import { randomUUID } from 'crypto';
 export const ATTR_PREFIX = 'genkit';
 export const SPAN_STATE_ATTR = ATTR_PREFIX + ':state';
 
+/** Zod schema for a base evaluation data point containing input, output, context, and reference fields. */
 export const BaseDataPointSchema = z.object({
   input: z.unknown(),
   output: z.unknown().optional(),
@@ -33,7 +34,7 @@ export const BaseDataPointSchema = z.object({
   traceIds: z.array(z.string()).optional(),
 });
 
-// DataPoint that is to be used for actions. This needs testCaseId to be present.
+/** Zod schema for an evaluation data point used in evaluator actions. Requires `testCaseId` to be present. */
 export const BaseEvalDataPointSchema = BaseDataPointSchema.extend({
   testCaseId: z.string(),
 });
@@ -48,6 +49,7 @@ export enum EvalStatusEnum {
   FAIL = 'FAIL',
 }
 
+/** Zod schema for an evaluation score, including optional numeric/string/boolean score, status, and details. */
 export const ScoreSchema = z.object({
   id: z
     .string()
@@ -77,6 +79,7 @@ export type Dataset<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
 > = Array<z.infer<DataPoint>>;
 
+/** Zod schema for a single evaluation response, containing test case ID and evaluation score(s). */
 export const EvalResponseSchema = z.object({
   sampleIndex: z.number().optional(),
   testCaseId: z.string(),
@@ -86,9 +89,11 @@ export const EvalResponseSchema = z.object({
 });
 export type EvalResponse = z.infer<typeof EvalResponseSchema>;
 
+/** Zod schema for an array of {@link EvalResponse} objects. */
 export const EvalResponsesSchema = z.array(EvalResponseSchema);
 export type EvalResponses = z.infer<typeof EvalResponsesSchema>;
 
+/** Implementation function for an evaluator. Receives a data point and optional config, returns an {@link EvalResponse}. */
 export type EvaluatorFn<
   EvalDataPoint extends
     typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
@@ -98,6 +103,7 @@ export type EvaluatorFn<
   evaluatorOptions?: z.infer<CustomOptions>
 ) => Promise<EvalResponse>;
 
+/** An action that evaluates data points and returns evaluation responses. */
 export type EvaluatorAction<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
@@ -126,6 +132,7 @@ const EvalRequestSchema = z.object({
   options: z.unknown(),
 });
 
+/** Parameters for running an evaluation via {@link evaluate}. */
 export interface EvaluatorParams<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
@@ -136,6 +143,7 @@ export interface EvaluatorParams<
   options?: z.infer<CustomOptions>;
 }
 
+/** Configuration options for defining an evaluator via {@link defineEvaluator}. */
 export interface EvaluatorOptions<
   DataPoint extends typeof BaseDataPointSchema,
   EvaluatorOpts extends z.ZodTypeAny,
@@ -269,6 +277,7 @@ export function evaluator<
   return ewm;
 }
 
+/** Union type for specifying an evaluator: by name string, action, or reference. */
 export type EvaluatorArgument<
   DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
@@ -307,6 +316,7 @@ export async function evaluate<
   })) as EvalResponses;
 }
 
+/** Zod schema for evaluator metadata including a label and list of metric names. */
 export const EvaluatorInfoSchema = z.object({
   /** Friendly label for this evaluator */
   label: z.string().optional(),
@@ -314,6 +324,7 @@ export const EvaluatorInfoSchema = z.object({
 });
 export type EvaluatorInfo = z.infer<typeof EvaluatorInfoSchema>;
 
+/** A reference to an evaluator, including its name, optional config schema, and info. */
 export interface EvaluatorReference<CustomOptions extends z.ZodTypeAny> {
   name: string;
   configSchema?: CustomOptions;

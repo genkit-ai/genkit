@@ -44,7 +44,7 @@ from genkit._ai._evaluator import (
 )
 from genkit._ai._formats import built_in_formats
 from genkit._ai._formats._types import FormatDef
-from genkit._ai._generate import define_generate_action, generate_action
+from genkit._ai._generate import define_generate_action, generate_action, registry_with_inline_tools
 from genkit._ai._model import (
     Message,
     ModelConfig,
@@ -95,7 +95,7 @@ from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
-from genkit._core._tracing import run_in_new_span
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
@@ -105,7 +105,6 @@ from genkit._core._typing import (
     ModelInfo,
     Operation,
     Part,
-    SpanMetadata,
     ToolChoice,
     ToolRequestPart,
     ToolResponsePart,
@@ -861,31 +860,31 @@ class Genkit:
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
         """
+        prompt_config = PromptConfig(
+            model=model,
+            prompt=prompt,
+            system=system,
+            messages=messages,
+            tools=tools,
+            return_tool_requests=return_tool_requests,
+            tool_choice=tool_choice,
+            resume_respond=resume_respond,
+            resume_restart=resume_restart,
+            resume_metadata=resume_metadata,
+            config=config,
+            max_turns=max_turns,
+            output_format=output_format,
+            output_content_type=output_content_type,
+            output_instructions=output_instructions,
+            output_schema=output_schema,
+            output_constrained=output_constrained,
+            docs=docs,
+        )
+        registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
+        gen_options = await to_generate_action_options(registry, prompt_config)
         return await generate_action(
-            self.registry,
-            await to_generate_action_options(
-                self.registry,
-                PromptConfig(
-                    model=model,
-                    prompt=prompt,
-                    system=system,
-                    messages=messages,
-                    tools=tools,
-                    return_tool_requests=return_tool_requests,
-                    tool_choice=tool_choice,
-                    resume_respond=resume_respond,
-                    resume_restart=resume_restart,
-                    resume_metadata=resume_metadata,
-                    config=config,
-                    max_turns=max_turns,
-                    output_format=output_format,
-                    output_content_type=output_content_type,
-                    output_instructions=output_instructions,
-                    output_schema=output_schema,
-                    output_constrained=output_constrained,
-                    docs=docs,
-                ),
-            ),
+            registry,
+            gen_options,
             middleware=use,
             context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
         )
@@ -975,31 +974,31 @@ class Genkit:
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
 
         async def _run_generate() -> ModelResponse[Any]:
+            prompt_config = PromptConfig(
+                model=model,
+                prompt=prompt,
+                system=system,
+                messages=messages,
+                tools=tools,
+                return_tool_requests=return_tool_requests,
+                tool_choice=tool_choice,
+                resume_respond=resume_respond,
+                resume_restart=resume_restart,
+                resume_metadata=resume_metadata,
+                config=config,
+                max_turns=max_turns,
+                output_format=output_format,
+                output_content_type=output_content_type,
+                output_instructions=output_instructions,
+                output_schema=output_schema,
+                output_constrained=output_constrained,
+                docs=docs,
+            )
+            registry = await registry_with_inline_tools(self.registry, prompt_config.tools)
+            gen_options = await to_generate_action_options(registry, prompt_config)
             return await generate_action(
-                self.registry,
-                await to_generate_action_options(
-                    self.registry,
-                    PromptConfig(
-                        model=model,
-                        prompt=prompt,
-                        system=system,
-                        messages=messages,
-                        tools=tools,
-                        return_tool_requests=return_tool_requests,
-                        tool_choice=tool_choice,
-                        resume_respond=resume_respond,
-                        resume_restart=resume_restart,
-                        resume_metadata=resume_metadata,
-                        config=config,
-                        max_turns=max_turns,
-                        output_format=output_format,
-                        output_content_type=output_content_type,
-                        output_instructions=output_instructions,
-                        output_schema=output_schema,
-                        output_constrained=output_constrained,
-                        docs=docs,
-                    ),
-                ),
+                registry,
+                gen_options,
                 on_chunk=lambda c: channel.send(c),
                 middleware=use,
                 context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
@@ -1134,8 +1133,8 @@ class Genkit:
         if not inspect.iscoroutinefunction(fn):
             raise TypeError('fn must be a coroutine function')
 
-        span_metadata = SpanMetadata(name=name, metadata=metadata)
-        with run_in_new_span(span_metadata, labels={'genkit:type': 'flowStep'}) as span:
+        span_metadata = SpanMetadata(name=name, type='flowStep', metadata=metadata)
+        with run_in_new_span(span_metadata) as span:
             try:
                 result = await fn()
                 output = (

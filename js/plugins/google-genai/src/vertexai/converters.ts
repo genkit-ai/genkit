@@ -431,19 +431,18 @@ export function toVeoMedia(media: MediaPart['media']): VeoMedia {
 }
 
 export function fromVeoOperation(
-  fromOp: VeoOperation
+  fromOp: VeoOperation,
+  clientOpt?: ClientOptions
 ): Operation<GenerateResponseData> {
   const toOp: Operation<GenerateResponseData> = { id: fromOp.name };
   if (fromOp.done !== undefined) {
     toOp.done = fromOp.done;
   }
+  if (clientOpt) {
+    toOp.metadata = { clientOptions: clientOpt };
+  }
   if (fromOp.error) {
     toOp.error = { message: fromOp.error.message };
-  }
-  if (fromOp.clientOptions) {
-    toOp.metadata = {
-      clientOptions: fromOp.clientOptions,
-    };
   }
 
   if (fromOp.response) {
@@ -456,7 +455,7 @@ export function fromVeoOperation(
           if (veoMedia.bytesBase64Encoded) {
             return {
               media: {
-                url: `data:${veoMedia.mimeType}:base64,${veoMedia.bytesBase64Encoded}`,
+                url: `data:${veoMedia.mimeType};base64,${veoMedia.bytesBase64Encoded}`,
                 contentType: veoMedia.mimeType,
               },
             };

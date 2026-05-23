@@ -13,7 +13,7 @@ import asyncio
 from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.0-flash')
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
 
 async def _run_realtime_demo(topic: str) -> str:
