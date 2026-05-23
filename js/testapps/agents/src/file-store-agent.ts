@@ -24,8 +24,6 @@ export { FileSessionStore };
 
 export const fileStore = new FileSessionStore<any>('./.snapshots');
 
-// defineAgent registers the prompt internally, so pruningAgent can also
-// reference it by name via definePromptAgent.
 export const fileStoreAgent = ai.defineAgent({
   name: 'fileStoreAgent',
   model: liteModel,
@@ -80,8 +78,10 @@ export const pruningStore = new FileSessionStore<any>('./.snapshots-pruning', {
   maxPersistedChainLength: 3,
 });
 
-export const pruningAgent = ai.definePromptAgent({
-  promptName: 'fileStoreAgent',
+export const pruningAgent = ai.defineAgent({
+  name: 'pruningAgent',
+  model: liteModel,
+  system: `You are a personal logbook assistant.`,
   store: pruningStore,
 });
 

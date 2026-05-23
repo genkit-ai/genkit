@@ -170,9 +170,9 @@ Write a clear, cohesive response that integrates all the research findings. Don'
 // Test flow
 // ---------------------------------------------------------------------------
 
-export const testCustomAgent = ai.defineFlow(
+export const testResearchAgent = ai.defineFlow(
   {
-    name: 'testCustomAgent',
+    name: 'testResearchAgent',
     inputSchema: z
       .string()
       .default(

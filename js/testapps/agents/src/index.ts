@@ -18,11 +18,11 @@ import { expressHandler } from '@genkit-ai/express';
 import express from 'express';
 
 import { branchingAgent, demonstrateBranching } from './branching-agent.js';
+import { researchAgent, testResearchAgent } from './research-agent.js';
 import {
   testWeatherAgentStateless,
   weatherAgentStateless,
 } from './weather-agent-stateless.js';
-import { researchAgent, testCustomAgent } from './research-agent.js';
 import {
   testWeatherAgent,
   testWeatherAgentStream,
@@ -38,30 +38,30 @@ import {
 } from './file-store-agent.js';
 
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
+import { bankingAgent, testBankingAgent } from './banking-agent.js';
 import {
   codingAgent,
   listWorkspaceFiles,
   readWorkspaceFile,
   testCodingAgent,
 } from './coding-agent.js';
-import { taskAgent, testTaskAgent } from './task-agent.js';
-import { bankingAgent, testBankingAgent } from './banking-agent.js';
-import {
-  testPromptFileAgent,
-  tripPlannerAgent,
-} from './trip-planner-agent.js';
 import {
   orchestratorAgent,
-  testSubAgentDemo,
-  testSubAgentSimple,
+  testOrchestratorAgent,
+  testOrchestratorAgentSimple,
 } from './orchestrator-agent.js';
+import { taskAgent, testTaskAgent } from './task-agent.js';
+import {
+  testTripPlannerAgent,
+  tripPlannerAgent,
+} from './trip-planner-agent.js';
 
 // Force-reference all agents/flows so they register with Genkit.
 // (Side-effect imports would also work, but explicit references
 // make it clear which actions are available.)
 void [
   researchAgent,
-  testCustomAgent,
+  testResearchAgent,
   weatherAgent,
   testWeatherAgent,
   testWeatherAgentStream,
@@ -82,10 +82,10 @@ void [
   taskAgent,
   testTaskAgent,
   orchestratorAgent,
-  testSubAgentDemo,
-  testSubAgentSimple,
+  testOrchestratorAgent,
+  testOrchestratorAgentSimple,
   tripPlannerAgent,
-  testPromptFileAgent,
+  testTripPlannerAgent,
   codingAgent,
   testCodingAgent,
   listWorkspaceFiles,
@@ -161,7 +161,7 @@ app.post('/api/workspace/files', expressHandler(listWorkspaceFiles));
 app.post('/api/workspace/file', expressHandler(readWorkspaceFile));
 
 // Also expose the test flows for programmatic testing
-app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
+app.post('/api/testResearchAgent', expressHandler(testResearchAgent));
 app.post('/api/testWeatherAgent', expressHandler(testWeatherAgent));
 app.post(
   '/api/testWeatherAgentStateless',
@@ -171,7 +171,7 @@ app.post('/api/testBankingAgent', expressHandler(testBankingAgent));
 app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
 app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
 app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
-app.post('/api/testPromptFileAgent', expressHandler(testPromptFileAgent));
+app.post('/api/testTripPlannerAgent', expressHandler(testTripPlannerAgent));
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 app.listen(PORT, () => {
