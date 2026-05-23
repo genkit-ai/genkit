@@ -24,6 +24,7 @@ import {
   type DocumentData,
 } from './retriever.js';
 
+/** Implementation function for a reranker. Receives a query, documents, and options. */
 export type RerankerFn<RerankerOptions extends z.ZodTypeAny> = (
   query: Document,
   documents: Document[],
@@ -85,8 +86,10 @@ export const RerankerInfoSchema = z.object({
     })
     .optional(),
 });
+/** Reranker metadata information. */
 export type RerankerInfo = z.infer<typeof RerankerInfoSchema>;
 
+/** An action that reranks documents based on relevance to a query. */
 export type RerankerAction<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
   Action<typeof RerankerRequestSchema, typeof RerankerResponseSchema> & {
     __configSchema?: CustomOptions;
@@ -170,6 +173,7 @@ export function reranker<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
   return rwm;
 }
 
+/** Parameters for running a reranking via the `rerank` function. */
 export interface RerankerParams<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 > {
@@ -179,6 +183,7 @@ export interface RerankerParams<
   options?: z.infer<CustomOptions>;
 }
 
+/** Union type for specifying a reranker: by name string, action, or reference. */
 export type RerankerArgument<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 > = RerankerAction<CustomOptions> | RerankerReference<CustomOptions> | string;
@@ -217,6 +222,7 @@ export const CommonRerankerOptionsSchema = z.object({
   k: z.number().describe('Number of documents to rerank').optional(),
 });
 
+/** A reference to a reranker, including its name, optional config schema, and info. */
 export interface RerankerReference<CustomOptions extends z.ZodTypeAny> {
   name: string;
   configSchema?: CustomOptions;

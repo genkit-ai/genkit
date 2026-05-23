@@ -194,6 +194,7 @@ export const StatusNameSchema = z.enum([
   'UNAVAILABLE',
   'DATA_LOSS',
 ]);
+/** A string union of all supported status names (e.g. `'OK'`, `'NOT_FOUND'`, `'INTERNAL'`). */
 export type StatusName = z.infer<typeof StatusNameSchema>;
 
 const statusCodeMap: Record<StatusName, number> = {
@@ -233,4 +234,5 @@ export const StatusSchema = z.object({
 });
 // then also change: genkit-tools/src/types/status.ts
 
+/** A status object containing a numeric code, message, and optional details. Used by {@link GenkitError}. */
 export type Status = z.infer<typeof StatusSchema>;

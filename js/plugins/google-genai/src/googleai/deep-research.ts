@@ -22,22 +22,19 @@ import {
   modelRef,
 } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
-import {
-  ensureToolIds,
-  fromInteraction,
-  toInteractionTool,
-  toInteractionTurn,
-} from '../common/interaction-converters.js';
-import {
-  InteractionTool,
-  ResponseModality,
-} from '../common/interaction-types.js';
 import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
   cancelInteraction,
   createInteraction,
   getInteraction,
 } from './client.js';
+import {
+  ensureToolIds,
+  fromInteraction,
+  toInteractionSteps,
+  toInteractionTool,
+} from './interaction-converters.js';
+import { InteractionTool, ResponseModality } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -88,6 +85,54 @@ export const DeepResearchConfigSchema = z
       .array(z.enum(['TEXT', 'IMAGE', 'AUDIO']))
       .describe('The modalities to be used in response.')
       .optional(),
+    visualization: z
+      .enum(['AUTO', 'OFF'])
+      .describe('Whether to enable agent-generated charts and images.')
+      .optional(),
+    collaborativePlanning: z
+      .boolean()
+      .describe(
+        'Whether to enable multi-turn plan review before research begins.'
+      )
+      .optional(),
+    // TODO(V2): Remove googleSearch, urlContext, and codeExecution wrappers
+    // and rely entirely on `config.tools` being passed through.
+    googleSearch: z
+      .union([z.boolean(), z.object({}).passthrough()])
+      .describe(
+        'Search the public web. Enabled by default if no tools are provided.'
+      )
+      .optional(),
+    urlContext: z
+      .union([z.boolean(), z.object({}).passthrough()])
+      .describe(
+        'Read and summarize web page content. Enabled by default if no tools are provided.'
+      )
+      .optional(),
+    codeExecution: z
+      .union([z.boolean(), z.object({}).passthrough()])
+      .describe(
+        'Execute code to perform calculations and data analysis. Enabled by default if no tools are provided.'
+      )
+      .optional(),
+    fileSearch: z
+      .object({
+        fileSearchStoreNames: z.array(z.string()),
+      })
+      .passthrough()
+      .optional(),
+    mcpServers: z
+      .array(
+        z
+          .object({
+            name: z.string().optional(),
+            url: z.string().optional(),
+            headers: z.record(z.string()).optional(),
+            allowedTools: z.array(z.string()).optional(),
+          })
+          .passthrough()
+      )
+      .optional(),
   })
   .passthrough();
 export type DeepResearchConfigSchemaType = typeof DeepResearchConfigSchema;
@@ -122,9 +167,29 @@ function commonRef(
 
 const GENERIC_MODEL = commonRef('deep-research');
 
+const ADVANCED_DEEP_RESEARCH_INFO = {
+  supports: {
+    multiturn: true,
+    media: true,
+    tools: true,
+    toolChoice: false,
+    systemRole: false,
+    output: ['text', 'media'],
+    longRunning: true,
+  },
+} as ModelInfo;
+
 const KNOWN_MODELS = {
   'deep-research-pro-preview-12-2025': commonRef(
     'deep-research-pro-preview-12-2025'
+  ),
+  'deep-research-preview-04-2026': commonRef(
+    'deep-research-preview-04-2026',
+    ADVANCED_DEEP_RESEARCH_INFO
+  ),
+  'deep-research-max-preview-04-2026': commonRef(
+    'deep-research-max-preview-04-2026',
+    ADVANCED_DEEP_RESEARCH_INFO
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
@@ -187,6 +252,7 @@ export function defineModel(
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
     customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
   return pluginBackgroundModel({
@@ -199,9 +265,16 @@ export function defineModel(
         baseUrl,
         apiVersion,
         thinkingSummaries,
+        visualization,
+        collaborativePlanning,
         previousInteractionId,
         store,
         responseModalities,
+        googleSearch,
+        urlContext,
+        codeExecution,
+        fileSearch,
+        mcpServers,
         ...rest
       } = request.config || {};
       const apiKey = calculateApiKey(pluginOptions?.apiKey, apiKeyConfig);
@@ -228,15 +301,55 @@ export function defineModel(
         }
       }
 
-      let responseMimeType = request.output?.contentType;
+      // TODO(v2): Remove these explicit tool pushes for googleSearch, urlContext, and codeExecution.
+      if (googleSearch) {
+        tools.push({
+          type: 'google_search',
+          ...(googleSearch === true ? {} : googleSearch),
+        } as InteractionTool);
+      }
+      if (urlContext) {
+        tools.push({
+          type: 'url_context',
+          ...(urlContext === true ? {} : urlContext),
+        } as InteractionTool);
+      }
+      if (codeExecution) {
+        tools.push({
+          type: 'code_execution',
+          ...(codeExecution === true ? {} : codeExecution),
+        } as InteractionTool);
+      }
+      if (fileSearch) {
+        const { fileSearchStoreNames, ...restFileSearch } = fileSearch;
+        tools.push({
+          type: 'file_search',
+          file_search_store_names: fileSearchStoreNames,
+          ...restFileSearch,
+        } as InteractionTool);
+      }
+      if (mcpServers) {
+        for (const mcpServer of mcpServers) {
+          const { allowedTools, ...restMcp } = mcpServer;
+          tools.push({
+            type: 'mcp_server',
+            ...restMcp,
+            ...(allowedTools ? { allowed_tools: allowedTools } : {}),
+          } as InteractionTool);
+        }
+      }
+
       let responseFormat: any = undefined;
       if (
         request.output?.format === 'json' ||
         request.output?.contentType === 'application/json'
       ) {
-        responseMimeType = 'application/json';
+        responseFormat = {
+          type: 'text',
+          mime_type: 'application/json',
+        };
         if (request.output.schema) {
-          responseFormat = cleanSchema(request.output.schema);
+          responseFormat.schema = cleanSchema(request.output.schema);
         }
       }
 
@@ -249,7 +362,7 @@ export function defineModel(
 
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
-        input: ensureToolIds(messages).map(toInteractionTurn),
+        input: toInteractionSteps(ensureToolIds(messages)),
         background: true,
         agent_config: {
           type: 'deep-research',
@@ -257,11 +370,15 @@ export function defineModel(
             | 'auto'
             | 'none'
             | undefined,
+          visualization: visualization?.toLowerCase() as
+            | 'auto'
+            | 'off'
+            | undefined,
+          collaborative_planning: collaborativePlanning,
         },
         previous_interaction_id: previousInteractionId,
         store,
         tools: tools.length ? tools : undefined,
-        response_mime_type: responseMimeType,
         response_format: responseFormat,
         response_modalities: responseModalitiesConverted,
         ...rest,

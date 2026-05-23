@@ -129,7 +129,13 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 
 	var addr string
 	if envPort := os.Getenv("GENKIT_REFLECTION_PORT"); envPort != "" {
-		addr = "127.0.0.1:" + envPort
+		// Validate that the user-provided port is a valid integer.
+		_, err := strconv.Atoi(envPort)
+		if err != nil {
+			errCh <- fmt.Errorf("invalid GENKIT_REFLECTION_PORT: %w", err)
+			return nil
+		}
+		addr = net.JoinHostPort("127.0.0.1", envPort)
 	} else {
 		var err error
 		addr, err = findAvailablePort(3100)
@@ -217,8 +223,10 @@ func (s *reflectionServer) writeRuntimeFile(url string) error {
 	// remove colons to avoid problems with different OS file name restrictions
 	timestamp = strings.ReplaceAll(timestamp, ":", "_")
 
-	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s.json", os.Getpid(), timestamp))
+	// Extract port from the URL string.
+	_, port, _ := net.SplitHostPort(url)
 
+	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s-%s.json", os.Getpid(), port, timestamp))
 	data := runtimeFileData{
 		ID:                       runtimeID,
 		PID:                      os.Getpid(),

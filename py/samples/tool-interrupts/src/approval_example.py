@@ -92,7 +92,7 @@ def _print_unexpected_tool(name: str) -> None:
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-3-flash-preview',
+    model='googleai/gemini-flash-latest',
     prompt_dir=_PROMPTS_DIR,
 )
 
@@ -157,11 +157,7 @@ async def interactive_restart_cli() -> None:
         ans = input('Approve transfer? [y/N]: ').strip().lower()
 
         if ans in ('y', 'yes'):
-            restart = restart_tool(
-                tool=request_transfer,
-                interrupt=interrupt,
-                resumed_metadata={'via': 'cli', 'path': 'restart'},
-            )
+            restart = restart_tool(interrupt, resumed_metadata={'via': 'cli', 'path': 'restart'})
             response = await ai.generate(
                 messages=messages,
                 resume_restart=restart,

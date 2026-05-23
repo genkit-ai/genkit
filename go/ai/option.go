@@ -964,6 +964,7 @@ func WithToolRestarts(parts ...*Part) GenerateOption {
 // toolOptions holds configuration options for defining tools.
 type toolOptions struct {
 	inputOptions
+	StrictSchema *bool
 }
 
 // ToolOption is an option for defining a tool.
@@ -973,7 +974,24 @@ type ToolOption interface {
 
 // applyTool applies the option to the tool options.
 func (o *toolOptions) applyTool(opts *toolOptions) error {
+	if o.StrictSchema != nil {
+		if opts.StrictSchema != nil {
+			return errors.New("cannot set strict schema more than once (WithStrictSchema)")
+		}
+		opts.StrictSchema = o.StrictSchema
+	}
 	return o.inputOptions.applyTool(opts)
+}
+
+// WithStrictSchema controls whether the provider enforces strict JSON schema
+// validation on this tool's input. Strict mode requires recursive
+// additionalProperties: false and may reject some JSON Schema keywords
+// (e.g. minItems/maxItems on Anthropic).
+//
+// When unset, the provider's default applies. Providers without strict-tool
+// support ignore this option.
+func WithStrictSchema(strict bool) ToolOption {
+	return &toolOptions{StrictSchema: &strict}
 }
 
 // promptExecutionOptions are options for generating a model response by executing a prompt.

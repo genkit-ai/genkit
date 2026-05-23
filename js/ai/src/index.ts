@@ -157,6 +157,7 @@ export {
   respondTool,
   restartTool,
   type InterruptConfig,
+  type MultipartToolAction,
   type ToolAction,
   type ToolArgument,
   type ToolConfig,

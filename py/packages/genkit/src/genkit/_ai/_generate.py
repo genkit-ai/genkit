@@ -48,12 +48,11 @@ from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import GenerateActionOptions
 from genkit._core._registry import Registry
-from genkit._core._tracing import run_in_new_span
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     Part,
     Role,
-    SpanMetadata,
     ToolDefinition,
     ToolRequest,
     ToolRequestPart,
@@ -130,6 +129,29 @@ def tools_to_action_names(
     return names
 
 
+async def registry_with_inline_tools(registry: Registry, tools: Sequence[str | Tool] | None) -> Registry:
+    """Creates a child registry and ensures that all tools are registered.
+
+    Supports dynamically defined tools that are only passed in at call time
+    and never actually registered.
+    """
+    if not tools:
+        return registry
+
+    child: Registry | None = None
+    for t in tools:
+        if not isinstance(t, Tool):
+            continue
+        resolved = await registry.resolve_action(ActionKind.TOOL, t.name)
+        if resolved is t.action():
+            continue
+        if child is None:
+            child = registry.new_child()
+        child.register_action_from_instance(t.action())
+
+    return child if child is not None else registry
+
+
 # Matches data URIs: everything up to the first comma is the media-type +
 # parameters (e.g. "data:audio/L16;codec=pcm;rate=24000;base64,").
 _DATA_URI_RE = re.compile(r'data:[^,]{0,200},(?=.{100})', re.ASCII)
@@ -191,13 +213,7 @@ async def generate_action(
     so reflection runs do not stack another util span on the action span.
     """
     span_name = 'generate'
-    with run_in_new_span(
-        SpanMetadata(name=span_name),
-        labels={'genkit:type': 'util'},
-    ) as span:
-        span.set_attribute('genkit:name', span_name)
-        with contextlib.suppress(Exception):
-            span.set_attribute('genkit:input', raw_request.model_dump_json(by_alias=True, exclude_none=True))
+    with run_in_new_span(SpanMetadata(name=span_name, type='util', input=raw_request)) as span:
         result = await _generate_action(
             registry, raw_request, on_chunk, message_index, current_turn, middleware, context
         )

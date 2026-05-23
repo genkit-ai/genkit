@@ -36,6 +36,21 @@ export type JSONSchema = JSONSchemaType<any> | any;
 const jsonSchemas = new WeakMap<z.ZodTypeAny, JSONSchema>();
 const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
 const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
+const schemaAnnotations = new WeakMap<z.ZodTypeAny, Record<string, any>>();
+
+/**
+ * Annotates a Zod schema with UI-specific metadata.
+ *
+ * NOTE: It's typically recommended to use x-genkit-* (or similar) as the prefix.
+ */
+export function annotateSchema<T extends z.ZodTypeAny>(
+  schema: T,
+  annotations: Record<string, any>
+): T {
+  const current = schemaAnnotations.get(schema) || {};
+  schemaAnnotations.set(schema, { ...current, ...annotations });
+  return schema;
+}
 
 /**
  * Wrapper object for various ways schema can be provided.
@@ -82,8 +97,100 @@ export function toJsonSchema({
   const outSchema = zodToJsonSchema(schema!, {
     removeAdditionalStrategy: 'strict',
   });
-  jsonSchemas.set(schema!, outSchema as JSONSchema);
-  return outSchema as JSONSchema;
+  const annotatedSchema = applyAnnotations(schema!, outSchema as JSONSchema);
+  jsonSchemas.set(schema!, annotatedSchema);
+  return annotatedSchema;
+}
+
+/**
+ * Recursively applies annotations to a JSON schema by walking the Zod tree
+ * and matching it against the JSON schema structure.
+ *
+ * Note: This currently does not resolve JSON schema `$ref` nodes. Annotations
+ * on recursive schemas (using `z.lazy`) may not be correctly applied to the
+ * referenced definitions.
+ */
+function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
+  if (!json || typeof json !== 'object') return json;
+
+  const annotationsToApply: Record<string, any>[] = [];
+  let current = schema;
+
+  // Collect all annotations in the hierarchy (outer to inner)
+  while (current) {
+    const ann = schemaAnnotations.get(current);
+    if (ann) annotationsToApply.push(ann);
+
+    if (
+      current instanceof z.ZodOptional ||
+      current instanceof z.ZodNullable ||
+      current instanceof z.ZodDefault ||
+      current instanceof z.ZodEffects
+    ) {
+      current = (current as any)._def.innerType || (current as any)._def.schema;
+    } else {
+      break;
+    }
+  }
+
+  // Resolve annotations (outer-most last so it wins)
+  const resolvedAnnotations: Record<string, any> = {};
+  for (let i = annotationsToApply.length - 1; i >= 0; i--) {
+    Object.assign(resolvedAnnotations, annotationsToApply[i]);
+  }
+
+  for (const key in resolvedAnnotations) {
+    if (Object.prototype.hasOwnProperty.call(json, key)) {
+      console.warn(
+        `Annotation key "${key}" conflicts with existing JSON schema property and will be ignored.`
+      );
+      continue;
+    }
+    json[key] = resolvedAnnotations[key];
+  }
+
+  const inner = current;
+  if (inner instanceof z.ZodObject && json.properties) {
+    for (const key in inner.shape) {
+      if (json.properties[key]) {
+        applyAnnotations(inner.shape[key], json.properties[key]);
+      }
+    }
+  } else if (inner instanceof z.ZodArray && json.items) {
+    applyAnnotations(inner.element, json.items);
+  } else if (inner instanceof z.ZodUnion && json.anyOf) {
+    for (let i = 0; i < inner.options.length; i++) {
+      applyAnnotations(inner.options[i], json.anyOf[i]);
+    }
+  } else if (inner instanceof z.ZodIntersection && json.allOf) {
+    const schemas: z.ZodTypeAny[] = [];
+    const collect = (s: z.ZodTypeAny) => {
+      if (s instanceof z.ZodIntersection) {
+        collect(s._def.left);
+        collect(s._def.right);
+      } else {
+        schemas.push(s);
+      }
+    };
+    collect(inner);
+    if (schemas.length === json.allOf.length) {
+      for (let i = 0; i < schemas.length; i++) {
+        applyAnnotations(schemas[i], json.allOf[i]);
+      }
+    }
+  } else if (inner instanceof z.ZodRecord && json.additionalProperties) {
+    applyAnnotations(inner.valueSchema, json.additionalProperties);
+  } else if (inner instanceof z.ZodTuple && Array.isArray(json.items)) {
+    for (let i = 0; i < inner.items.length; i++) {
+      applyAnnotations(inner.items[i], json.items[i]);
+    }
+  } else if (inner instanceof z.ZodDiscriminatedUnion && json.anyOf) {
+    for (let i = 0; i < inner.options.length; i++) {
+      applyAnnotations(inner.options[i], json.anyOf[i]);
+    }
+  }
+
+  return json;
 }
 
 /**
