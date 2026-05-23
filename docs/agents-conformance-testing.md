@@ -180,6 +180,8 @@ is not needed for tests targeting these agents.
 | `customAgentFailing` | Server-managed. Throws `Error('intentional failure')` during processing. Used for detach + background failure tests. |
 | `customAgentWithArtifacts` | Client-managed. Adds artifact `doc1` (v1), updates it to `doc1` (v2), then adds `doc2`. Returns all artifacts. |
 | `customAgentWithCustomState` | Client-managed. Reads `custom.counter`, increments it (default 0→1), and persists it. Returns `{ text: 'done' }`. |
+| `customAgentWithArtifactsStore` | Server-managed. Adds a numbered artifact (`doc1`, `doc2`, …) on each invocation based on existing artifact count. Returns all accumulated artifacts. Used for artifact persistence across snapshots. |
+| `customAgentWithCustomStateStore` | Server-managed. Same counter logic as `customAgentWithCustomState` but with a server-managed store. Used for custom state persistence via snapshots. |
 
 ### Required Tools
 
@@ -223,25 +225,26 @@ _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
 ## 5. Test Coverage
 
-The spec currently covers the following categories (22 tests total):
+The spec currently covers the following categories (30 tests total):
 
 | Category | Tests |
 |----------|-------|
 | Basic single-turn | Client-managed, server-managed |
 | Streaming | Model chunk forwarding |
 | Multi-turn | Multiple turns in one step |
-| Tool calling | Automatic tool execution |
-| Interrupt & resume | Snapshot-based tool interrupt resume |
+| Tool calling | Automatic tool execution, multiple tool calls in one response |
+| Interrupt & resume | Snapshot-based tool interrupt resume, multiple interrupt requests, state accumulation after resume |
 | Interrupt & restart | Tool interrupt with `resume.restart` (re-execute with metadata) |
 | Resume validation | Forged restart inputs rejected, non-existent tool respond rejected |
 | Snapshot chaining | Parent chain across steps |
+| Snapshot branching | Forking from a snapshot into independent histories |
 | Client-managed state | State seeding across steps |
-| Server-managed state | Init state ignored for server-managed agents |
+| Server-managed state | Init state rejected for server-managed agents |
 | Detach | Background completion, background failure, pure detach without payload |
-| Abort | Pending agent, completed agent, non-existent snapshot |
+| Abort | Pending agent, completed agent, non-existent snapshot, failed agent, already-aborted agent |
 | Error details | Failed snapshot includes error message |
-| Artifacts | Streamed chunks, deduplication by name |
-| Custom state | Update during execution, persistence across steps |
+| Artifacts | Streamed chunks, deduplication by name, persistence across invocations (server-managed) |
+| Custom state | Update during execution, persistence across steps (client-managed), persistence via snapshots (server-managed) |
 
 ## 6. Future Extensions
 

@@ -449,6 +449,50 @@ function setupHarness(
     }
   );
 
+  // customAgentWithArtifactsStore: server-managed, adds a numbered artifact
+  // on each invocation. Used for verifying artifact persistence across
+  // snapshot-based invocations.
+  const customAgentWithArtifactsStore = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentWithArtifactsStore',
+      store: new InMemorySessionStore(),
+    },
+    async (sess) => {
+      await sess.run(async () => {
+        const existing = sess.session.getArtifacts();
+        const count = existing.length + 1;
+        sess.session.addArtifacts([
+          { name: `doc${count}`, parts: [{ text: `content${count}` }] },
+        ]);
+      });
+      return {
+        artifacts: sess.session.getArtifacts(),
+        message: { role: 'model', content: [{ text: 'done' }] },
+      };
+    }
+  );
+
+  // customAgentWithCustomStateStore: server-managed, increments a counter
+  // on each turn. Used for verifying custom state persistence via snapshots.
+  const customAgentWithCustomStateStore = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentWithCustomStateStore',
+      store: new InMemorySessionStore(),
+    },
+    async (sess) => {
+      await sess.run(async () => {
+        const prev = (sess.session.getCustom() as any) || {};
+        const counter = (prev.counter || 0) + 1;
+        sess.session.updateCustom(() => ({ counter }));
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+      };
+    }
+  );
+
   return {
     promptAgent,
     promptAgentWithStore,
@@ -459,6 +503,8 @@ function setupHarness(
     customAgentFailing,
     customAgentWithArtifacts,
     customAgentWithCustomState,
+    customAgentWithArtifactsStore,
+    customAgentWithCustomStateStore,
   };
 }
 

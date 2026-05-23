@@ -710,3 +710,355 @@ tests:
             messages:
               - { role: user, content: [{ text: first }] }
               - { role: user, content: [{ text: second }] }
+
+  # ===========================================================================
+  # Phase 3: Additional API Coverage
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Snapshot branching
+  # ---------------------------------------------------------------------------
+  - name: snapshot branching across invocations
+    description: >
+      Two different continuations from the same snapshot produce
+      independent histories. Each child snapshot must have the same
+      parentId but divergent message histories after the branch point.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: root }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: rootReply }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: branch-a }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply-a }] }
+            finishReason: stop
+        captureSnapshotId: snap2a
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: branch-b }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply-b }] }
+            finishReason: stop
+        captureSnapshotId: snap2b
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2a}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: root }] }
+              - { role: model, content: [{ text: rootReply }] }
+              - { role: user, content: [{ text: branch-a }] }
+              - { role: model, content: [{ text: reply-a }] }
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2b}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: root }] }
+              - { role: model, content: [{ text: rootReply }] }
+              - { role: user, content: [{ text: branch-b }] }
+              - { role: model, content: [{ text: reply-b }] }
+
+  # ---------------------------------------------------------------------------
+  # Multiple tool calls in one model response
+  # ---------------------------------------------------------------------------
+  - name: multiple tool calls in one model response
+    description: >
+      Model issues two tool requests in a single message. Both tools
+      execute automatically and their responses are fed back to the
+      model which then produces a final text response.
+    agent: promptAgentWithTools
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: do both }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest: { name: testTool, input: {}, ref: ref1 }
+                - toolRequest: { name: testTool, input: {}, ref: ref2 }
+            finishReason: stop
+          - message: { role: model, content: [{ text: all done }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: all done }] }
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: do both }] }
+              - role: model
+                content:
+                  - toolRequest: { name: testTool, input: {}, ref: ref1 }
+                  - toolRequest: { name: testTool, input: {}, ref: ref2 }
+              - role: tool
+                content:
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref1 }
+                  - toolResponse:
+                      { name: testTool, output: 'tool called', ref: ref2 }
+              - { role: model, content: [{ text: all done }] }
+
+  # ---------------------------------------------------------------------------
+  # Multiple interrupt tool requests
+  # ---------------------------------------------------------------------------
+  - name: interrupt with multiple tool requests
+    description: >
+      Model returns two interrupt tool requests in a single message.
+      The agent returns both tool requests to the client as the output
+      message. The client resumes by providing responses for both tools.
+    agent: promptAgentWithInterrupt
+    steps:
+      # Phase 1: model returns two interrupt requests
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: confirm both }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    { name: interruptTool, input: { query: 'q1?' }, ref: 'i1' }
+                - toolRequest:
+                    { name: interruptTool, input: { query: 'q2?' }, ref: 'i2' }
+            finishReason: stop
+        expectOutput:
+          message:
+            content:
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'q1?' }, ref: 'i1' }
+              - toolRequest:
+                  { name: interruptTool, input: { query: 'q2?' }, ref: 'i2' }
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      # Phase 2: client responds to both
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              respond:
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: 'i1',
+                      output: { answer: 'yes1' },
+                    }
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: 'i2',
+                      output: { answer: 'yes2' },
+                    }
+        modelResponses:
+          - message: { role: model, content: [{ text: both confirmed }] }
+            finishReason: stop
+        expectOutput:
+          message: { role: model, content: [{ text: both confirmed }] }
+
+  # ---------------------------------------------------------------------------
+  # Interrupt resume — full state accumulation
+  # ---------------------------------------------------------------------------
+  - name: interrupt resume state accumulation
+    description: >
+      After interrupt and resume, the accumulated state must contain
+      the full exchange: user message, model tool request, client
+      tool response, and the final model response.
+    agent: promptAgentWithInterrupt
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: check }] }]
+        modelResponses:
+          - message:
+              role: model
+              content:
+                - toolRequest:
+                    { name: interruptTool, input: { query: 'ok?' }, ref: 't1' }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - resume:
+              respond:
+                - toolResponse:
+                    {
+                      name: interruptTool,
+                      ref: 't1',
+                      output: { answer: 'confirmed' },
+                    }
+        modelResponses:
+          - message: { role: model, content: [{ text: done }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          status: done
+          stateContains:
+            messages:
+              - { role: user, content: [{ text: check }] }
+              - role: model
+                content:
+                  - toolRequest:
+                      {
+                        name: interruptTool,
+                        input: { query: 'ok?' },
+                        ref: 't1',
+                      }
+              - role: tool
+                content:
+                  - toolResponse:
+                      {
+                        name: interruptTool,
+                        ref: 't1',
+                        output: { answer: 'confirmed' },
+                      }
+              - { role: model, content: [{ text: done }] }
+
+  # ---------------------------------------------------------------------------
+  # Artifacts across invocations (server-managed)
+  # ---------------------------------------------------------------------------
+  - name: artifacts persisted across invocations
+    description: >
+      Artifacts added in the first invocation persist in the server-managed
+      snapshot. The second invocation loads the snapshot, adds a new artifact,
+      and the output contains both the original and new artifacts.
+    agent: customAgentWithArtifactsStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        expectOutput:
+          hasSnapshotId: true
+          artifactsContain:
+            - name: doc1
+              parts: [{ text: content1 }]
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        expectOutput:
+          artifactsContain:
+            - name: doc1
+              parts: [{ text: content1 }]
+            - name: doc2
+              parts: [{ text: content2 }]
+
+  # ---------------------------------------------------------------------------
+  # Custom state via server-managed store
+  # ---------------------------------------------------------------------------
+  - name: custom state persisted via server-managed store
+    description: >
+      Custom state is preserved when resuming from a server-managed
+      snapshot. The counter should increment across invocations and
+      be visible in the snapshot state.
+    agent: customAgentWithCustomStateStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          status: done
+          stateContains:
+            custom: { counter: 2 }
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: user, content: [{ text: second }] }
+
+  # ---------------------------------------------------------------------------
+  # Abort terminal states — failed and aborted
+  # ---------------------------------------------------------------------------
+  - name: abort failed agent
+    description: >
+      Abort an agent that has already failed. The abort returns "failed"
+      as the previous status but the snapshot remains "failed" because
+      terminal states cannot be overridden.
+    agent: customAgentFailing
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: fail }] }]
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: failed
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: failed
+
+  - name: abort already aborted agent
+    description: >
+      Abort an agent that was already aborted. The abort returns
+      "aborted" as previous status and the snapshot remains "aborted".
+    agent: customAgentBlocking
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: work }] }]
+            detach: true
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: pending
+
+      - type: abort
+        snapshotId: '{{snap1}}'
+        expectPreviousStatus: aborted
+
+      - type: getSnapshotData
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: aborted
