@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from genkit import Genkit, Message
 from genkit.plugins.google_genai import GeminiConfigSchema, GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-3-pro-preview')
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
 
 
 class CodeExecutionInput(BaseModel):

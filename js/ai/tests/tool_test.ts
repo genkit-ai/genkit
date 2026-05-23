@@ -217,6 +217,14 @@ describe('isDynamicTool', () => {
     assert.strictEqual(isDynamicTool(regular), false);
   });
 
+  it('should return false for a registered interrupt', () => {
+    const interrupt = defineInterrupt(registry, {
+      name: 'myInterrupt',
+      description: 'test interrupt',
+    });
+    assert.strictEqual(isDynamicTool(interrupt), false);
+  });
+
   it('should return false for a non-tool action', () => {
     const regularAction = action(
       { actionType: 'util', name: 'regularAction', description: 'test' },

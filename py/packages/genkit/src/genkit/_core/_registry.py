@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import cast
 
@@ -157,13 +158,18 @@ class Registry:
         # - Registry state is protected by the thread lock (`_lock`) because the dev
         #   reflection server runs in a separate OS thread and inspects the same
         #   registry instance.
-        # - Plugin initialization is lazy and "init-once" via an in-flight task
-        #   cache (`_plugin_init_tasks`). This assumes a single asyncio event loop
-        #   drives plugin initialization for a given registry instance. (The dev
-        #   reflection server schedules coroutines onto that loop.)
+        # - Plugin initialization is lazy and "init-once" per event loop.  The dev
+        #   reflection server runs asyncio.run() in its own daemon thread, which
+        #   creates a second event loop.  asyncio.Task objects are loop-bound, so
+        #   we key both the in-flight task cache and the "all done" flag by the
+        #   running loop.
         self._plugins: dict[str, Plugin] = {}
-        self._plugin_init_tasks: dict[str, asyncio.Task[None]] = {}
-        self._all_plugins_initialized: bool = False
+        self._plugin_init_tasks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Task[None]]] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._all_plugins_initialized: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, bool] = (
+            weakref.WeakKeyDictionary()
+        )
 
     # -------------------------------------------------------------------------
     # Child registry support
@@ -413,20 +419,26 @@ class Registry:
             if plugin.name in self._plugins:
                 raise ValueError(f'Plugin {plugin.name} already registered')
             self._plugins[plugin.name] = plugin
-            self._all_plugins_initialized = False
+            self._all_plugins_initialized.clear()
 
     async def initialize_all_plugins(self) -> None:
-        """Run ``init()`` for every plugin on this registry exactly once (until a new plugin is registered).
+        """Run ``init()`` for every plugin on this registry exactly once per event loop.
+
+        Skip setting _all_plugins_initialized if a new plugin was registered
+        during initialization.
 
         Used before enumerating registered actions so plugin-registered entries exist in ``_entries``.
         """
-        if self._all_plugins_initialized:
+        loop = asyncio.get_running_loop()
+        if self._all_plugins_initialized.get(loop):
             return
         with self._lock:
             plugin_names = list(self._plugins.keys())
         for name in plugin_names:
             await self._ensure_plugin_initialized(name)
-        self._all_plugins_initialized = True
+        with self._lock:
+            if len(self._plugins) == len(plugin_names):
+                self._all_plugins_initialized[loop] = True
 
     async def _ensure_plugin_initialized(self, plugin_name: str) -> None:
         """Ensure a plugin is initialized exactly once.
@@ -443,8 +455,14 @@ class Registry:
         # IMPORTANT: Do not hold `_lock` across any `await`. The critical section
         # below is sync-only (dict access + task creation), so it is safe to use
         # `_lock` to make the init-once behavior atomic across threads/tasks.
+        #
+        # Tasks are loop-bound: key the cache by the running loop so that the
+        # reflection server thread (which calls asyncio.run() and gets its own
+        # loop) never awaits a Task created on the main application loop.
+        loop = asyncio.get_running_loop()
         with self._lock:
-            task = self._plugin_init_tasks.get(plugin_name)
+            loop_tasks = self._plugin_init_tasks.setdefault(loop, {})
+            task = loop_tasks.get(plugin_name)
             if task is None:
                 plugin = self._plugins.get(plugin_name)
                 if plugin is None:
@@ -458,7 +476,7 @@ class Registry:
                         self.register_action_instance(action, namespace=plugin_name)
 
                 task = asyncio.create_task(run_init())
-                self._plugin_init_tasks[plugin_name] = task
+                loop_tasks[plugin_name] = task
 
         await task
 

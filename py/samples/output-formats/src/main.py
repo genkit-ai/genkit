@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from genkit import Genkit
 from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI(api_version='v1alpha')], model='googleai/gemini-3-flash-preview')
+ai = Genkit(plugins=[GoogleAI(api_version='v1alpha')], model='googleai/gemini-flash-latest')
 
 
 class HaikuInput(BaseModel):

@@ -18,7 +18,7 @@ import * as assert from 'assert';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
-import { GeminiInteraction } from '../../src/common/interaction-types.js';
+import { GeminiInteraction } from '../../src/googleai/interaction-types.js';
 import { LyriaConfigSchema, defineModel } from '../../src/googleai/lyria.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
 
@@ -65,9 +65,14 @@ describe('Lyria 3', () => {
   const mockInteractionResponse: GeminiInteraction = {
     id: 'interaction-123',
     status: 'completed',
-    outputs: [
-      { type: 'text', text: 'Here are the lyrics...' },
-      { type: 'audio', mime_type: 'audio/mpeg', data: 'audio-data' },
+    steps: [
+      {
+        type: 'model_output',
+        content: [
+          { type: 'text', text: 'Here are the lyrics...' },
+          { type: 'audio', mime_type: 'audio/mpeg', data: 'audio-data' },
+        ],
+      },
     ],
   };
 

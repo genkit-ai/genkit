@@ -17,14 +17,14 @@
 import { ActionMetadata, modelActionMetadata, z } from 'genkit';
 import { ModelAction, ModelInfo, ModelReference, modelRef } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import { isKnownKey } from '../common/utils.js';
+import { createInteraction } from './client.js';
 import {
   ensureToolIds,
   fromInteractionSync,
-  toInteractionTurn,
-} from '../common/interaction-converters.js';
-import { ResponseModality } from '../common/interaction-types.js';
-import { isKnownKey } from '../common/utils.js';
-import { createInteraction } from './client.js';
+  toInteractionSteps,
+} from './interaction-converters.js';
+import { ResponseModality } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -156,6 +156,7 @@ export function defineModel(
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
     customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
   return pluginModel(
@@ -192,7 +193,7 @@ export function defineModel(
 
       const req: CreateInteractionRequest = {
         model: extractVersion(ref),
-        input: ensureToolIds(messages).map(toInteractionTurn),
+        input: toInteractionSteps(ensureToolIds(messages)),
         response_modalities: responseModalitiesConverted,
         ...rest,
       };

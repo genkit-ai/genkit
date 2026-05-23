@@ -34,6 +34,7 @@ import {
   extractText,
   extractVersion,
   modelName,
+  parseRetryAfterMs,
   processStream,
 } from '../../src/common/utils.js';
 
@@ -805,6 +806,52 @@ describe('Common Utils', () => {
         aggregated.candidates?.[0].content.parts[1].text,
         ' World'
       );
+    });
+  });
+
+  describe('parseRetryAfterMs', () => {
+    it('parses delay-seconds to milliseconds', () => {
+      assert.strictEqual(parseRetryAfterMs('60'), 60_000);
+      assert.strictEqual(parseRetryAfterMs('0'), 0);
+      assert.strictEqual(parseRetryAfterMs('120'), 120_000);
+    });
+
+    it('parses fractional delay-seconds', () => {
+      assert.strictEqual(parseRetryAfterMs('1.5'), 1_500);
+    });
+
+    it('parses HTTP-date format', () => {
+      const futureDate = new Date(Date.now() + 30_000);
+      const result = parseRetryAfterMs(futureDate.toUTCString());
+      assert.ok(result !== undefined);
+      // Should be approximately 30 seconds (allow some tolerance for test execution time)
+      assert.ok(
+        result > 28_000 && result <= 31_000,
+        `Expected ~30000ms, got ${result}ms`
+      );
+    });
+
+    it('returns 0 for HTTP-date in the past', () => {
+      const pastDate = new Date(Date.now() - 60_000);
+      assert.strictEqual(parseRetryAfterMs(pastDate.toUTCString()), 0);
+    });
+
+    it('returns 0 for negative delay-seconds (parsed as ancient date)', () => {
+      // '-5' fails the seconds >= 0 check, but JS Date parses it as year -5,
+      // which is in the past, so Math.max(0, past - now) = 0.
+      assert.strictEqual(parseRetryAfterMs('-5'), 0);
+    });
+
+    it('returns undefined for unparseable values', () => {
+      assert.strictEqual(parseRetryAfterMs('not-a-number-or-date'), undefined);
+    });
+
+    it('returns undefined for empty string', () => {
+      assert.strictEqual(parseRetryAfterMs(''), undefined);
+    });
+
+    it('returns undefined for whitespace-only string', () => {
+      assert.strictEqual(parseRetryAfterMs('   '), undefined);
     });
   });
 

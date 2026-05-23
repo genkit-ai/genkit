@@ -41,7 +41,7 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-3-flash-preview',
+    model='googleai/gemini-flash-latest',
     prompt_dir=_PROMPTS_DIR,
 )
 

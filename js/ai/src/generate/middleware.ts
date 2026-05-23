@@ -41,6 +41,7 @@ export const MiddlewareDescSchema = z.object({
   /** User defined metadata for the middleware. */
   metadata: z.record(z.any()).nullish(),
 });
+/** Descriptor for a registered middleware, returned by reflection API. */
 export type MiddlewareDesc = z.infer<typeof MiddlewareDescSchema>;
 
 /**

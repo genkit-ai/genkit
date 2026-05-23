@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,8 +16,20 @@
  * limitations under the License.
  */
 
+/**
+ * Schema utilities — JSON Schema conversion, validation helpers, and related
+ * types for working with Zod schemas in Genkit.
+ *
+ * ```ts
+ * import { toJsonSchema, parseSchema, ValidationError } from 'genkit/schema';
+ * ```
+ *
+ * @module schema
+ */
+
 export {
   ValidationError,
+  annotateSchema,
   parseSchema,
   toJsonSchema,
   validateSchema,
