@@ -31,7 +31,7 @@ var (
 		ToolChoice:  true,
 		SystemRole:  true,
 		Media:       true,
-		Constrained: ai.ConstrainedSupportNoTools,
+		Constrained: ai.ConstrainedSupportAll,
 	}
 
 	// Media describes model capabilities for image generation models (Imagen).
