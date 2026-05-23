@@ -2226,6 +2226,66 @@ func TestGenerateDataStream(t *testing.T) {
 			t.Error("expected parsing error to be propagated")
 		}
 	})
+
+	t.Run("skips zero-value struct chunks during incremental streaming", func(t *testing.T) {
+		// Simulate a model emitting JSON token by token. The first chunk is a
+		// lone opening brace; the partial parser completes it to `{}`, which
+		// unmarshals into a zero-value streamingTestData{}. Subsequent chunks
+		// build up populated objects. GenerateDataStream must skip the zero-
+		// value chunk to avoid the production bug where the client briefly
+		// sees an empty struct between meaningful chunks.
+		streamModel := DefineModel(r, "test/streamSkipZeroModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			if cb != nil {
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(`{`)}})
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(`"name":"populated"`)}})
+				cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(`,"value":42}`)}})
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"name":"populated","value":42}`)},
+				},
+			}, nil
+		})
+
+		var chunks []streamingTestData
+		var finalOutput streamingTestData
+
+		for val, err := range GenerateDataStream[streamingTestData](context.Background(), r,
+			WithModel(streamModel),
+			WithPrompt("test zero-value chunk skip"),
+		) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if val.Done {
+				finalOutput = val.Output
+			} else {
+				chunks = append(chunks, val.Chunk)
+			}
+		}
+
+		// The first chunk parses to streamingTestData{} (zero value) and must
+		// be suppressed. The two remaining chunks build a populated object and
+		// should both surface.
+		if len(chunks) != 2 {
+			t.Fatalf("expected 2 non-empty chunks (zero-value chunks should be skipped); got %d: %#v", len(chunks), chunks)
+		}
+		for i, c := range chunks {
+			if c == (streamingTestData{}) {
+				t.Errorf("chunk[%d] is zero-value; zero-value chunks should be skipped", i)
+			}
+		}
+		if finalOutput.Name != "populated" || finalOutput.Value != 42 {
+			t.Errorf("finalOutput = %#v, want {Name: \"populated\", Value: 42}", finalOutput)
+		}
+	})
 }
 
 func TestGenerateText(t *testing.T) {

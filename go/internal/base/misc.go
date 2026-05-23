@@ -52,3 +52,17 @@ func IsNil[T any](v T) bool {
 		return false
 	}
 }
+
+// IsZero returns true if v is the zero value for its type.
+//
+// Unlike [IsNil], it returns true for zero-value structs and primitives (e.g.
+// Recipe{}, "", 0) in addition to nil pointers/interfaces/maps/slices/channels/funcs.
+// Empty-but-non-nil slices and maps (e.g. []int{}) are still considered non-zero,
+// matching reflect.Value.IsZero semantics.
+func IsZero[T any](v T) bool {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		return true
+	}
+	return rv.IsZero()
+}
