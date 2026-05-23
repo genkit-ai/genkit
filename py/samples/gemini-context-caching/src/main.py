@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from genkit import Genkit, Message, Part, Role, TextPart
 from genkit.plugins.google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-3-pro-preview')
+ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-pro-latest')
 
 DEFAULT_TEXT_FILE = 'https://www.gutenberg.org/cache/epub/74/pg74.txt'
 

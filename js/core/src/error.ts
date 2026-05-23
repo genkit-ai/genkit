@@ -26,6 +26,18 @@ export interface HttpErrorWireFormat {
 }
 
 /**
+ * Metadata from the HTTP response that triggered this error.
+ * This is not serialized into the wire format — it's only available
+ * in-process for middleware (e.g. retry) to make informed decisions.
+ */
+export interface ErrorResponseMetadata {
+  /** Provider-suggested retry delay in milliseconds (parsed from Retry-After header). */
+  retryAfterMs?: number;
+  /** Raw HTTP response headers, if available. */
+  headers?: Record<string, string>;
+}
+
+/**
  * Base error class for Genkit errors.
  */
 export class GenkitError extends Error {
@@ -33,6 +45,13 @@ export class GenkitError extends Error {
   status: StatusName;
   detail?: any;
   code: number;
+
+  /**
+   * Metadata from the HTTP response that triggered this error.
+   * Not serialized into the wire format — only available in-process
+   * for middleware (e.g. retry) to make informed decisions.
+   */
+  responseMetadata?: ErrorResponseMetadata;
 
   // For easy printing, we wrap the error with information like the source
   // and status, but that's redundant with JSON.
@@ -43,17 +62,20 @@ export class GenkitError extends Error {
     message,
     detail,
     source,
+    responseMetadata,
   }: {
     status: StatusName;
     message: string;
     detail?: any;
     source?: string;
+    responseMetadata?: ErrorResponseMetadata;
   }) {
     super(`${source ? `${source}: ` : ''}${status}: ${message}`);
     this.originalMessage = message;
     this.code = httpStatusCode(status);
     this.status = status;
     this.detail = detail;
+    this.responseMetadata = responseMetadata;
     this.name = 'GenkitError';
   }
 

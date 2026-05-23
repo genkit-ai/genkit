@@ -29,7 +29,7 @@
     "genkit": "workspace:^"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0"
+    "@anthropic-ai/sdk": "^0.97.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",

@@ -636,7 +636,7 @@ describe('Vertex AI Converters', () => {
               },
               {
                 media: {
-                  url: 'data:video/webm:base64,VID2DATA',
+                  url: 'data:video/webm;base64,VID2DATA',
                   contentType: 'video/webm',
                 },
               },
@@ -670,9 +670,8 @@ describe('Vertex AI Converters', () => {
       const veoOp: VeoOperation = {
         name: 'operations/789',
         done: false,
-        clientOptions: clientOptions,
       };
-      const result = fromVeoOperation(veoOp);
+      const result = fromVeoOperation(veoOp, clientOptions);
       assert.deepStrictEqual(result, {
         id: 'operations/789',
         done: false,

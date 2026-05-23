@@ -49,7 +49,6 @@ import { checkModelName, removeUndefinedProperties } from '../utils.js';
 import { BaseRunner } from './base.js';
 import {
   citationsDeltaToPart,
-  inputJsonDeltaError,
   redactedThinkingBlockToPart,
   textBlockToPart,
   textDeltaToPart,
@@ -363,10 +362,7 @@ export class Runner extends BaseRunner<RunnerTypes> {
         return citationsDeltaToPart(delta);
       }
 
-      if (delta.type === 'input_json_delta') {
-        throw inputJsonDeltaError();
-      }
-
+      // input_json_delta - ignore
       // signature_delta - ignore
       return undefined;
     }

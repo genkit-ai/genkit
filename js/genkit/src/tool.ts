@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,12 +16,24 @@
  * limitations under the License.
  */
 
+/**
+ * Tool types — action types, configuration, and helpers for defining tools
+ * that models can call (function calling).
+ *
+ * ```ts
+ * import { type ToolAction, type ToolConfig } from 'genkit/tool';
+ * ```
+ *
+ * @module tool
+ */
+
 export {
   asTool,
   dynamicTool,
   interrupt,
   toToolDefinition,
   tool,
+  type MultipartToolAction,
   type ToolAction,
   type ToolArgument,
   type ToolConfig,
