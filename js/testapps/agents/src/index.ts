@@ -17,55 +17,58 @@
 import { expressHandler } from '@genkit-ai/express';
 import express from 'express';
 
-import { demonstrateBranching, nameAgent } from './branching-agent.js';
+import { branchingAgent, demonstrateBranching } from './branching-agent.js';
+import { researchAgent, testResearchAgent } from './research-agent.js';
 import {
-  clientStateAgent,
-  testClientStateAgent,
-} from './client-state-agent.js';
-import { customAgent, testCustomAgent } from './custom-agent.js';
+  testWeatherAgentStateless,
+  weatherAgentStateless,
+} from './weather-agent-stateless.js';
 import {
   testWeatherAgent,
   testWeatherAgentStream,
   weatherAgent,
-} from './tool-agent.js';
-import { testWorkspaceAgent, workspaceAgent } from './workspace-builder.js';
+} from './weather-agent.js';
+import { testWorkspaceAgent, workspaceAgent } from './workspace-agent.js';
 
 import {
   fileStoreAgent,
   pruningAgent,
   testFileStoreAgent,
   testFileStoreChainPruningAgent,
-} from './file-store.js';
+} from './file-store-agent.js';
 
 import { backgroundAgent, testBackgroundAgent } from './background-agent.js';
+import { bankingAgent, testBankingAgent } from './banking-agent.js';
 import {
   codingAgent,
   listWorkspaceFiles,
   readWorkspaceFile,
   testCodingAgent,
 } from './coding-agent.js';
-import { taskAgent, testTaskAgent } from './custom-state-agent.js';
-import { bankingAgent, testBankingAgent } from './interrupt-agent.js';
-import { testPromptFileAgent, tripPlannerAgent } from './prompt-file-agent.js';
 import {
   orchestratorAgent,
-  testSubAgentDemo,
-  testSubAgentSimple,
-} from './subagent-demo.js';
+  testOrchestratorAgent,
+  testOrchestratorAgentSimple,
+} from './orchestrator-agent.js';
+import { taskAgent, testTaskAgent } from './task-agent.js';
+import {
+  testTripPlannerAgent,
+  tripPlannerAgent,
+} from './trip-planner-agent.js';
 
 // Force-reference all agents/flows so they register with Genkit.
 // (Side-effect imports would also work, but explicit references
 // make it clear which actions are available.)
 void [
-  customAgent,
-  testCustomAgent,
+  researchAgent,
+  testResearchAgent,
   weatherAgent,
   testWeatherAgent,
   testWeatherAgentStream,
-  nameAgent,
+  branchingAgent,
   demonstrateBranching,
-  clientStateAgent,
-  testClientStateAgent,
+  weatherAgentStateless,
+  testWeatherAgentStateless,
   workspaceAgent,
   testWorkspaceAgent,
   fileStoreAgent,
@@ -79,10 +82,10 @@ void [
   taskAgent,
   testTaskAgent,
   orchestratorAgent,
-  testSubAgentDemo,
-  testSubAgentSimple,
+  testOrchestratorAgent,
+  testOrchestratorAgentSimple,
   tripPlannerAgent,
-  testPromptFileAgent,
+  testTripPlannerAgent,
   codingAgent,
   testCodingAgent,
   listWorkspaceFiles,
@@ -90,8 +93,8 @@ void [
 ];
 
 export * from './background-agent.js';
-export * from './interrupt-agent.js';
-export * from './subagent-demo.js';
+export * from './banking-agent.js';
+export * from './orchestrator-agent.js';
 
 // ---------------------------------------------------------------------------
 // Express server — exposes agents for the web UI
@@ -116,13 +119,13 @@ app.use((_req, res, next) => {
 });
 
 // Expose agents
-app.post('/api/customAgent', expressHandler(customAgent));
+app.post('/api/researchAgent', expressHandler(researchAgent));
 app.post('/api/weatherAgent', expressHandler(weatherAgent));
 app.post(
   '/api/weatherAgent/state',
   expressHandler(weatherAgent.getSnapshotDataAction)
 );
-app.post('/api/clientStateAgent', expressHandler(clientStateAgent));
+app.post('/api/weatherAgentStateless', expressHandler(weatherAgentStateless));
 app.post('/api/bankingAgent', expressHandler(bankingAgent));
 app.post('/api/workspaceAgent', expressHandler(workspaceAgent));
 app.post('/api/backgroundAgent', expressHandler(backgroundAgent));
@@ -134,10 +137,10 @@ app.post(
   '/api/backgroundAgent/abort',
   expressHandler(backgroundAgent.abortAgentAction)
 );
-app.post('/api/branchingAgent', expressHandler(nameAgent));
+app.post('/api/branchingAgent', expressHandler(branchingAgent));
 app.post(
   '/api/branchingAgent/state',
-  expressHandler(nameAgent.getSnapshotDataAction)
+  expressHandler(branchingAgent.getSnapshotDataAction)
 );
 app.post('/api/taskAgent', expressHandler(taskAgent));
 app.post('/api/orchestratorAgent', expressHandler(orchestratorAgent));
@@ -158,14 +161,17 @@ app.post('/api/workspace/files', expressHandler(listWorkspaceFiles));
 app.post('/api/workspace/file', expressHandler(readWorkspaceFile));
 
 // Also expose the test flows for programmatic testing
-app.post('/api/testCustomAgent', expressHandler(testCustomAgent));
+app.post('/api/testResearchAgent', expressHandler(testResearchAgent));
 app.post('/api/testWeatherAgent', expressHandler(testWeatherAgent));
-app.post('/api/testClientStateAgent', expressHandler(testClientStateAgent));
+app.post(
+  '/api/testWeatherAgentStateless',
+  expressHandler(testWeatherAgentStateless)
+);
 app.post('/api/testBankingAgent', expressHandler(testBankingAgent));
 app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
 app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
 app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
-app.post('/api/testPromptFileAgent', expressHandler(testPromptFileAgent));
+app.post('/api/testTripPlannerAgent', expressHandler(testTripPlannerAgent));
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 app.listen(PORT, () => {

@@ -47,7 +47,7 @@ import { ai, defaultModel } from './genkit.js';
 // Sub-Agent 1: Researcher — answers research questions
 // ---------------------------------------------------------------------------
 
-const researcher = ai.defineAgent({
+export const researcher = ai.defineAgent({
   name: 'researcher',
   description:
     'A thorough research assistant that searches the web and provides well-sourced answers.',
@@ -65,7 +65,7 @@ const researcher = ai.defineAgent({
 // Sub-Agent 2: Coder — generates and explains code
 // ---------------------------------------------------------------------------
 
-const coder = ai.defineAgent({
+export const coder = ai.defineAgent({
   name: 'coder',
   description: 'An expert programmer that writes clean, well-commented code.',
   maxTurns: 10,
@@ -83,7 +83,7 @@ const coder = ai.defineAgent({
 // ---------------------------------------------------------------------------
 
 export const orchestratorAgent = ai.defineAgent({
-  name: 'orchestrator',
+  name: 'orchestratorAgent',
   system: `You are a helpful project assistant.
 
 Analyze the user's request and delegate to the appropriate sub-agent.
@@ -112,9 +112,9 @@ After receiving sub-agent responses, synthesize a final answer for the user.`,
 // Test flow — demonstrates sub-agent delegation
 // ---------------------------------------------------------------------------
 
-export const testSubAgentDemo = ai.defineFlow(
+export const testOrchestratorAgent = ai.defineFlow(
   {
-    name: 'testSubAgentDemo',
+    name: 'testOrchestratorAgent',
     inputSchema: z
       .string()
       .default(
@@ -135,9 +135,9 @@ export const testSubAgentDemo = ai.defineFlow(
 // Test flow — simple delegation to a single sub-agent
 // ---------------------------------------------------------------------------
 
-export const testSubAgentSimple = ai.defineFlow(
+export const testOrchestratorAgentSimple = ai.defineFlow(
   {
-    name: 'testSubAgentSimple',
+    name: 'testOrchestratorAgentSimple',
     inputSchema: z
       .string()
       .default('Write a function that calculates the fibonacci sequence.'),

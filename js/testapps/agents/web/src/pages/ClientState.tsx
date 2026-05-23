@@ -40,7 +40,7 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 // stateless. All session state lives in the blob the client round-trips.
 // ---------------------------------------------------------------------------
 
-const ENDPOINT = '/api/clientStateAgent';
+const ENDPOINT = '/api/weatherAgentStateless';
 
 export default function ClientState() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

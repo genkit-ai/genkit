@@ -40,7 +40,7 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //   3. Synthesizes all sub-answers into a final response (streamed)
 // ---------------------------------------------------------------------------
 
-const ENDPOINT = '/api/customAgent';
+const ENDPOINT = '/api/researchAgent';
 
 interface SubAnswer {
   question: string;

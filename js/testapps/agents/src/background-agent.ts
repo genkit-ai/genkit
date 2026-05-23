@@ -44,7 +44,7 @@ const store = new InMemorySessionStore();
  * 3. Updates the snapshot to status 'done' (or 'failed') when complete.
  */
 export const backgroundAgent = ai.defineAgent({
-  name: 'reportPrompt',
+  name: 'backgroundAgent',
   system: `You are a senior research analyst. When given a topic, produce a comprehensive research report in markdown format.
 
 Your report must include:

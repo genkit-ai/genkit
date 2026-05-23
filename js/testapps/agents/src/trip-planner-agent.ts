@@ -140,9 +140,9 @@ export const tripPlannerAgent = ai.definePromptAgent({
 // Test flow
 // ---------------------------------------------------------------------------
 
-export const testPromptFileAgent = ai.defineFlow(
+export const testTripPlannerAgent = ai.defineFlow(
   {
-    name: 'testPromptFileAgent',
+    name: 'testTripPlannerAgent',
     inputSchema: z
       .string()
       .default('I want to plan a trip to Paris. What should I see there?'),
