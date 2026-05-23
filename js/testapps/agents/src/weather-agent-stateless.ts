@@ -27,21 +27,21 @@
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
-// Reuse the same getWeather tool from tool-agent.
-import { getWeather } from './tool-agent.js';
+// Reuse the same getWeather tool from weather-agent.
+import { getWeather } from './weather-agent.js';
 
 // No store — client-managed state!
-export const clientStateAgent = ai.defineAgent({
-  name: 'clientWeatherPrompt',
+export const weatherAgentStateless = ai.defineAgent({
+  name: 'weatherAgentStateless',
   system:
     'You are a helpful weather assistant. Use the getWeather tool to look up weather. Be concise.',
   tools: [getWeather],
   // No `store` property → stateless. The client must round-trip the `state` blob.
 });
 
-export const testClientStateAgent = ai.defineFlow(
+export const testWeatherAgentStateless = ai.defineFlow(
   {
-    name: 'testClientStateAgent',
+    name: 'testWeatherAgentStateless',
     inputSchema: z.object({
       // `state` is the full SessionState returned from a prior turn; omit on
       // first call. The client owns this blob and must echo it back each turn.
@@ -51,7 +51,7 @@ export const testClientStateAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (input, { sendChunk }) => {
-    const res = await clientStateAgent.run(
+    const res = await weatherAgentStateless.run(
       {
         messages: [{ role: 'user' as const, content: [{ text: input.text }] }],
       },

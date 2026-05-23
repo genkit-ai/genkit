@@ -27,8 +27,8 @@ ai.defineHelper('roundRobin', (o1, o2) => {
 
 export const branchingStore = new InMemorySessionStore();
 
-export const nameAgent = ai.defineAgent({
-  name: 'namePrompt',
+export const branchingAgent = ai.defineAgent({
+  name: 'branchingAgent',
   model: liteModel,
   input: { schema: z.object({}) },
   system: `You are a {{ roundRobin 'sarcastic' 'business-like' }} assistant.`,
@@ -42,7 +42,7 @@ export const demonstrateBranching = ai.defineFlow(
     outputSchema: z.any(),
   },
   async () => {
-    const turn1 = await nameAgent.run(
+    const turn1 = await branchingAgent.run(
       {
         messages: [{ role: 'user' as const, content: [{ text: 'Hello!' }] }],
       },
@@ -51,7 +51,7 @@ export const demonstrateBranching = ai.defineFlow(
 
     const snapshot1 = turn1.result.snapshotId;
 
-    const turn2A = await nameAgent.run(
+    const turn2A = await branchingAgent.run(
       {
         messages: [
           { role: 'user' as const, content: [{ text: 'My name is Bob.' }] },
@@ -62,7 +62,7 @@ export const demonstrateBranching = ai.defineFlow(
 
     const snapshot2A = turn2A.result.snapshotId;
 
-    const turn3A = await nameAgent.run(
+    const turn3A = await branchingAgent.run(
       {
         messages: [
           { role: 'user' as const, content: [{ text: 'What is my name?' }] },
@@ -71,7 +71,7 @@ export const demonstrateBranching = ai.defineFlow(
       { init: { snapshotId: snapshot2A } }
     );
 
-    const turn2B = await nameAgent.run(
+    const turn2B = await branchingAgent.run(
       {
         messages: [
           { role: 'user' as const, content: [{ text: 'My name is John.' }] },
@@ -82,7 +82,7 @@ export const demonstrateBranching = ai.defineFlow(
 
     const snapshot2B = turn2B.result.snapshotId;
 
-    const turn3B = await nameAgent.run(
+    const turn3B = await branchingAgent.run(
       {
         messages: [
           { role: 'user' as const, content: [{ text: 'What is my name?' }] },

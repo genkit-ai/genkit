@@ -83,7 +83,7 @@ const coder = ai.defineAgent({
 // ---------------------------------------------------------------------------
 
 export const orchestratorAgent = ai.defineAgent({
-  name: 'orchestrator',
+  name: 'orchestratorAgent',
   system: `You are a helpful project assistant.
 
 Analyze the user's request and delegate to the appropriate sub-agent.

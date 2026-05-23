@@ -53,7 +53,7 @@ export const transferMoney = ai.defineTool(
 );
 
 export const bankingAgent = ai.defineAgent({
-  name: 'bankingPrompt',
+  name: 'bankingAgent',
   system:
     'You are a helpful banking assistant. If the user wants to transfer money, ALWAYS use the userApproval interrupt to confirm the details before executing the transferMoney tool.',
   tools: [userApproval, transferMoney],

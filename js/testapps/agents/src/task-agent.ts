@@ -158,7 +158,7 @@ const removeTask = ai.defineTool(
 // ---------------------------------------------------------------------------
 
 export const taskAgent = ai.defineAgent({
-  name: 'taskPrompt',
+  name: 'taskAgent',
   stateSchema: TaskStateSchema,
   system: `You are a concise task management assistant. Help the user manage their task list.
 

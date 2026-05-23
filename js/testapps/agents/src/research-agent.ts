@@ -51,8 +51,8 @@ interface ResearchState {
 // Custom Agent — multi-step orchestration
 // ---------------------------------------------------------------------------
 
-export const customAgent = ai.defineCustomAgent(
-  { name: 'customAgent' },
+export const researchAgent = ai.defineCustomAgent(
+  { name: 'researchAgent' },
   async (sess, { sendChunk }) => {
     let lastMessage: any;
 
@@ -181,7 +181,7 @@ export const testCustomAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await customAgent.run(
+    const res = await researchAgent.run(
       {
         messages: [{ role: 'user', content: [{ text }] }],
       },

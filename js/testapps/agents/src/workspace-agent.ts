@@ -55,7 +55,7 @@ const emitArtifact = ai.defineTool(
 // ---------------------------------------------------------------------------
 
 export const workspaceAgent = ai.defineAgent({
-  name: 'workspacePrompt',
+  name: 'workspaceAgent',
   system: `You are a helpful code generation assistant. When the user asks you to create a file, use the emitArtifact tool to produce it.
 
 Rules:
