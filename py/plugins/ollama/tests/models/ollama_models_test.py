@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportMissingImports=false
 
 """Unit tests for Ollama models package."""
 
@@ -30,6 +31,7 @@ from genkit import (
     Media,
     MediaPart,
     Message,
+    ModelConfig,
     ModelRequest,
     ModelResponseChunk,
     ModelUsage,
@@ -39,6 +41,20 @@ from genkit import (
 )
 from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.models import ModelDefinition, OllamaModel, _convert_parameters
+
+
+def _ollama_parameters(
+    *,
+    type: str = 'object',  # noqa: A002
+    required: list[str] | None = None,
+    properties: dict[str, ollama_api.Tool.Function.Parameters.Property] | None = None,
+) -> ollama_api.Tool.Function.Parameters:
+    """Build Ollama parameters without tripping pyright on the `$defs` alias."""
+    return ollama_api.Tool.Function.Parameters.model_construct(
+        type=type,
+        required=required,
+        properties=properties,
+    )
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
@@ -73,7 +89,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         # Mock internal methods
         mock_chat_response = ollama_api.ChatResponse(
             message=ollama_api.Message(
-                role='',
+                role='assistant',
                 content='Generated chat text',
             ),
         )
@@ -181,7 +197,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         # Mock internal methods
         mock_chat_response = ollama_api.ChatResponse(
             message=ollama_api.Message(
-                role='',
+                role='assistant',
                 content='Generated chat text',
             ),
         )
@@ -347,7 +363,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         """Test _chat_with_ollama in non-streaming mode with successful response."""
         expected_response = ollama_api.ChatResponse(
             message=ollama_api.Message(
-                role='',
+                role='assistant',
                 content='Ollama non-stream response',
             ),
         )
@@ -382,13 +398,13 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
             yield ollama_api.ChatResponse(
                 message=ollama_api.Message(
-                    role='',
+                    role='assistant',
                     content='chunk1',
                 ),
             )
             yield ollama_api.ChatResponse(
                 message=ollama_api.Message(
-                    role='',
+                    role='assistant',
                     content='chunk2',
                 ),
             )
@@ -422,7 +438,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         expected_response = ollama_api.ChatResponse(
             message=ollama_api.Message(
-                role='',
+                role='assistant',
                 content='json output',
             ),
         )
@@ -441,7 +457,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         expected_response = ollama_api.ChatResponse(
             message=ollama_api.Message(
-                role='',
+                role='assistant',
                 content='schema output',
             ),
         )
@@ -460,7 +476,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
 
         expected_response = ollama_api.ChatResponse(
             message=ollama_api.Message(
-                role='',
+                role='assistant',
                 content='normal output',
             ),
         )
@@ -500,7 +516,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
                     content=[Part(root=TextPart(text='Test generate message'))],
                 )
             ],
-            config={'temperature': 0.8},
+            config=ModelConfig(temperature=0.8),
         )
         self.ctx = ActionRunContext()
         cast(Any, self.ctx).send_chunk = MagicMock()
@@ -597,7 +613,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         ({'properties': {'name': {'type': 'string'}}}, None),
         (
             {'type': 'object'},
-            ollama_api.Tool.Function.Parameters(type='object', properties={}),
+            _ollama_parameters(type='object', properties={}),
         ),
         (
             {
@@ -608,7 +624,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
                 },
                 'required': ['name'],
             },
-            ollama_api.Tool.Function.Parameters(
+            _ollama_parameters(
                 type='object',
                 required=['name'],
                 properties={
@@ -624,7 +640,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
                     'city': {'type': 'string', 'description': 'City name'},
                 },
             },
-            ollama_api.Tool.Function.Parameters(
+            _ollama_parameters(
                 type='object',
                 required=None,
                 properties={
@@ -640,7 +656,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
                 'type': 'object',
                 'properties': {},
             },
-            ollama_api.Tool.Function.Parameters(
+            _ollama_parameters(
                 type='object',
                 required=None,
                 properties={},
@@ -655,7 +671,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
                     'zip': {'type': 'string'},
                 },
             },
-            ollama_api.Tool.Function.Parameters(
+            _ollama_parameters(
                 type='object',
                 required=None,
                 properties={
@@ -666,7 +682,7 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
         ),
         (
             {'type': 'object', 'description': 'A general description'},
-            ollama_api.Tool.Function.Parameters(
+            _ollama_parameters(
                 type='object',
                 required=None,
                 properties={},
@@ -678,6 +694,71 @@ def test_convert_parameters(input_schema: dict[str, Any], expected_output: objec
     """Unit Tests for _convert_parameters function with various input schemas."""
     result = _convert_parameters(input_schema)
     assert result == expected_output
+
+
+def test_convert_parameters_rejects_non_object_schema() -> None:
+    """Ollama only accepts object-typed tool schemas — primitives must raise."""
+    with pytest.raises(ValueError, match='object-typed input schema'):
+        _convert_parameters({'type': 'string'})
+
+
+class TestBuildRequestOptions:
+    """Field-mapping tests for OllamaModel.build_request_options."""
+
+    def test_model_config_keys_map_to_snake_case(self) -> None:
+        """Regression: top_p was previously emitted as topP and silently dropped."""
+        from genkit.plugins.ollama.models import OllamaModel
+        from genkit import ModelConfig as _MC
+
+        cfg = _MC(temperature=0.5, top_p=0.9, top_k=40, max_output_tokens=128, stop_sequences=['STOP'])
+        options = cast(dict[str, Any], OllamaModel.build_request_options(cfg))
+        assert options['temperature'] == 0.5
+        assert options['top_p'] == 0.9
+        assert options['top_k'] == 40
+        assert options['num_predict'] == 128
+        assert list(options['stop']) == ['STOP']
+
+    def test_ollama_config_adds_extra_options(self) -> None:
+        """OllamaConfig's num_ctx / min_p / seed / num_predict flow through."""
+        from genkit.plugins.ollama.models import OllamaConfig, OllamaModel
+
+        cfg = OllamaConfig(temperature=0.2, num_ctx=8192, min_p=0.05, seed=7, num_predict=64)
+        options = cast(dict[str, Any], OllamaModel.build_request_options(cfg))
+        assert options['num_ctx'] == 8192
+        assert options['min_p'] == 0.05
+        assert options['seed'] == 7
+        assert options['num_predict'] == 64
+
+    def test_ollama_config_num_predict_wins_over_max_output_tokens(self) -> None:
+        """When both are set, num_predict overrides the inherited max_output_tokens."""
+        from genkit.plugins.ollama.models import OllamaConfig, OllamaModel
+
+        cfg = OllamaConfig(max_output_tokens=10, num_predict=999)
+        options = cast(dict[str, Any], OllamaModel.build_request_options(cfg))
+        assert options['num_predict'] == 999
+
+    def test_request_kwargs_extracts_think_and_keep_alive(self) -> None:
+        """think and keep_alive live at the request level, not inside options."""
+        from genkit.plugins.ollama.models import OllamaConfig, OllamaModel
+
+        cfg = OllamaConfig(think='high', keep_alive='5m', temperature=0.1)
+        kwargs = OllamaModel.build_request_kwargs(cfg)
+        assert kwargs == {'think': 'high', 'keep_alive': '5m'}
+
+    def test_request_kwargs_empty_for_plain_model_config(self) -> None:
+        """ModelConfig (non-Ollama) yields no request-level kwargs."""
+        from genkit.plugins.ollama.models import OllamaModel
+        from genkit import ModelConfig as _MC
+
+        assert OllamaModel.build_request_kwargs(_MC(temperature=0.5)) == {}
+
+    def test_none_config_returns_empty_options(self) -> None:
+        """None config still produces a usable Options instance."""
+        from genkit.plugins.ollama.models import OllamaModel
+
+        result = OllamaModel.build_request_options(None)
+        assert isinstance(result, ollama_api.Options)
+        assert result.top_p is None
 
 
 class TestResolveImage(unittest.IsolatedAsyncioTestCase):

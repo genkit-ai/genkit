@@ -18,7 +18,7 @@ uv sync
 genkit start -- uv run src/main.py
 ```
 
-Dev UI: http://localhost:4000. Most samples need `GEMINI_API_KEY`. See [plugins/README.md](../plugins/README.md) for provider setup.
+Dev UI: http://localhost:4000. Most samples need `GEMINI_API_KEY`; the Ollama sample needs a local Ollama server instead. See [plugins/README.md](../plugins/README.md) for provider setup.
 
 ## Samples
 
@@ -34,6 +34,7 @@ Dev UI: http://localhost:4000. Most samples need `GEMINI_API_KEY`. See [plugins/
 | `gemini-context-caching` | Cache a large source document for follow-up prompts |
 | `google-genai-media` | Speech, image, and video generation |
 | `middleware` | Observe or modify model requests |
+| `ollama` | Local model chat, streaming, tools, and embeddings with Ollama |
 | `output-formats` | Text, enum, JSON, array, and JSONL outputs |
 | `prompts` | `.prompt` files, variants, helpers, and streaming |
 | `tool-interrupts` | Trivia (`respond_example.py`) and bank approval (`approval_example.py`) — interrupt + resume |

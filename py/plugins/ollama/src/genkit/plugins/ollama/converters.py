@@ -200,5 +200,7 @@ def strip_data_uri_prefix(url: str) -> str:
     Raises:
         ValueError: If the URL doesn't contain a comma.
     """
-    comma_idx = url.index(',')
+    comma_idx = url.find(',')
+    if comma_idx == -1:
+        raise ValueError(f'Malformed data URI (no comma separator): {url[:64]!r}')
     return url[comma_idx + 1 :]

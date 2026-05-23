@@ -16,12 +16,14 @@
 
 """Ollama Plugin for Genkit."""
 
-from functools import partial
+import inspect
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import structlog
 
 import ollama as ollama_api
-from genkit import ModelConfig
+from genkit import Constrained, ModelInfo, Supports
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
@@ -32,16 +34,19 @@ from genkit.plugin_api import (
     loop_local_client,
     to_json_schema,
 )
-from genkit.plugins.ollama.constants import (
+
+from ._errors import wrap_connection_errors
+from .constants import (
     DEFAULT_OLLAMA_SERVER_URL,
     OllamaAPITypes,
 )
-from genkit.plugins.ollama.embedders import (
+from .embedders import (
     EmbeddingDefinition,
     OllamaEmbedder,
 )
-from genkit.plugins.ollama.models import (
+from .models import (
     ModelDefinition,
+    OllamaConfig,
     OllamaModel,
 )
 
@@ -61,6 +66,19 @@ def ollama_name(name: str) -> str:
     return f'{OLLAMA_PLUGIN_NAME}/{name}'
 
 
+def ollama_model_info(model_ref: ModelDefinition, label: str) -> dict[str, object]:
+    """Build first-party model metadata for an Ollama model."""
+    supports = Supports(
+        multiturn=model_ref.api_type == OllamaAPITypes.CHAT,
+        media=model_ref.api_type == OllamaAPITypes.CHAT and model_ref.supports.media,
+        tools=model_ref.api_type == OllamaAPITypes.CHAT and model_ref.supports.tools,
+        system_role=True,
+        output=['text', 'json'],
+        constrained=Constrained.ALL,
+    )
+    return ModelInfo(label=label, supports=supports).model_dump(by_alias=True, exclude_none=True)
+
+
 class Ollama(Plugin):
     """Ollama plugin for Genkit.
 
@@ -75,34 +93,57 @@ class Ollama(Plugin):
         models: list[ModelDefinition] | None = None,
         embedders: list[EmbeddingDefinition] | None = None,
         server_address: str | None = None,
-        request_headers: dict[str, str] | None = None,
+        request_headers: dict[str, str]
+        | Callable[[], dict[str, str]]
+        | Callable[[], Awaitable[dict[str, str]]]
+        | None = None,
+        timeout: float | None = None,
     ) -> None:
         """Initialize the Ollama plugin.
 
         Args:
-            models: An Optional list of model definitions to be registered with Genkit.
-            embedders: An Optional list of embedding model definitions to be
-                registered with Genkit.
-            server_address: The URL of the Ollama server. Defaults to a predefined
-                Ollama server URL if not provided.
-            request_headers: Optional HTTP headers to include with requests to the
-                Ollama server.
+            models: Optional list of model definitions to pre-register with
+                Genkit.
+            embedders: Optional list of embedding model definitions to
+                pre-register.
+            server_address: URL of the Ollama server. Defaults to
+                ``http://127.0.0.1:11434``.
+            request_headers: HTTP headers to include with every request.
+                Accepts a static dict, a sync callable returning a dict, or
+                an async callable returning a dict. Callables are resolved
+                once during :meth:`init` — use this for OAuth tokens whose
+                lifetime exceeds the plugin instance's lifetime.
+            timeout: Request timeout in seconds applied to the underlying
+                ``httpx`` client. ``None`` uses the ollama-python default.
         """
         self.models = models or []
         self.embedders = embedders or []
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
-        self.request_headers = request_headers or {}
+        self._request_headers_source = request_headers
+        # Static dicts are usable immediately; callables resolve during init().
+        self.request_headers: dict[str, str] = dict(request_headers) if isinstance(request_headers, dict) else {}
+        self.timeout = timeout
 
-        self.client = loop_local_client(partial(ollama_api.AsyncClient, host=self.server_address))
+        self.client = loop_local_client(self._make_client)
+
+    def _make_client(self) -> ollama_api.AsyncClient:
+        """Construct an ``AsyncClient`` with the resolved headers and timeout."""
+        kwargs: dict[str, Any] = {'host': self.server_address, 'headers': self.request_headers}
+        if self.timeout is not None:
+            kwargs['timeout'] = self.timeout
+        return ollama_api.AsyncClient(**kwargs)
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
 
-        Returns pre-registered models and embedders.
+        Resolves request_headers (which may be a callable or coroutine) and
+        returns pre-registered models and embedders.
 
         Returns:
             List of Action objects for pre-configured models and embedders.
         """
+        self.request_headers = await self._resolve_request_headers()
+
         actions = []
 
         # Register pre-configured models
@@ -118,6 +159,18 @@ class Ollama(Plugin):
             actions.append(action)
 
         return actions
+
+    async def _resolve_request_headers(self) -> dict[str, str]:
+        """Resolve a static dict / sync callable / async callable into a dict."""
+        source = self._request_headers_source
+        if source is None:
+            return {}
+        if isinstance(source, dict):
+            return dict(source)
+        result = source()
+        if inspect.isawaitable(result):
+            result = await result
+        return dict(cast(dict[str, str], result))
 
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         """Resolve an action by creating and returning an Action object.
@@ -163,22 +216,27 @@ class Ollama(Plugin):
             model_definition=model_ref,
         )
 
-        return Action(
+        action_metadata = model_action_metadata(
+            name=name,
+            config_schema=OllamaConfig,
+            info=ollama_model_info(model_ref=model_ref, label=f'Ollama - {clean_name}'),
+        )
+
+        server_address = self.server_address
+
+        async def _run(request: Any, ctx: Any = None) -> Any:
+            async with wrap_connection_errors(server_address):
+                return await model.generate(request, ctx)
+
+        action = Action(
             kind=ActionKind.MODEL,
             name=name,
-            fn=model.generate,
-            metadata={
-                'model': {
-                    'label': f'Ollama - {clean_name}',
-                    'multiturn': model_ref.api_type == OllamaAPITypes.CHAT,
-                    'system_role': True,
-                    'tools': model_ref.supports.tools,
-                    'output': ['text', 'json'],
-                    'constrained': 'all',
-                    'customOptions': to_json_schema(ModelConfig),
-                },
-            },
+            fn=_run,
+            metadata=action_metadata.metadata,
         )
+        action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]
+        action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
+        return action
 
     def _create_embedder_action(self, name: str) -> Action:
         """Create an Action object for an Ollama embedder.
@@ -198,10 +256,16 @@ class Ollama(Plugin):
             embedding_definition=embedder_ref,
         )
 
+        server_address = self.server_address
+
+        async def _run(request: Any) -> Any:
+            async with wrap_connection_errors(server_address):
+                return await embedder.embed(request)
+
         return Action(
             kind=ActionKind.EMBEDDER,
             name=name,
-            fn=embedder.embed,
+            fn=_run,
             metadata={
                 'embedder': {
                     'label': f'Ollama Embedding - {clean_name}',
@@ -245,15 +309,11 @@ class Ollama(Plugin):
                 actions.append(
                     model_action_metadata(
                         name=ollama_name(name),
-                        config_schema=ModelConfig,
-                        info={
-                            'label': f'Ollama - {name}',
-                            'multiturn': True,
-                            'system_role': True,
-                            'tools': True,
-                            'output': ['text', 'json'],
-                            'constrained': 'all',
-                        },
+                        config_schema=OllamaConfig,
+                        info=ollama_model_info(
+                            model_ref=ModelDefinition(name=name),
+                            label=f'Ollama - {name}',
+                        ),
                     )
                 )
         return actions

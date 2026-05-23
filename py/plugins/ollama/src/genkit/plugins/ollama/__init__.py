@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnsupportedDunderAll=false
 
 """Ollama plugin for Genkit.
 
@@ -128,10 +129,16 @@ Example:
     ```python
     from genkit import Genkit
     from genkit.plugins.ollama import Ollama
+    from genkit.plugins.ollama.models import ModelDefinition
 
     # Configure with model name and optional server URL
     ai = Genkit(
-        plugins=[Ollama(models=['llama3.2', 'mistral'])],
+        plugins=[
+            Ollama(models=[
+                ModelDefinition(name='llama3.2'),
+                ModelDefinition(name='mistral'),
+            ]),
+        ],
         model='ollama/llama3.2',
     )
 
@@ -155,7 +162,11 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
-from genkit.plugins.ollama.plugin_api import Ollama, ollama_name
+from ._errors import OllamaConnectionError
+from .constants import OllamaAPITypes
+from .embedders import EmbeddingDefinition
+from .models import ModelDefinition, OllamaConfig, OllamaSupports
+from .plugin_api import Ollama, ollama_name
 
 
 def package_name() -> str:
@@ -170,5 +181,11 @@ def package_name() -> str:
 __all__ = [
     package_name.__name__,
     Ollama.__name__,
+    ModelDefinition.__name__,
+    OllamaConfig.__name__,
+    OllamaConnectionError.__name__,
+    OllamaSupports.__name__,
+    EmbeddingDefinition.__name__,
+    OllamaAPITypes.__name__,
     ollama_name.__name__,
 ]
