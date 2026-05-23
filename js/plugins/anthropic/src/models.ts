@@ -15,13 +15,19 @@
  * limitations under the License.
  */
 
+import { APIError } from '@anthropic-ai/sdk';
 import type {
   GenerateRequest,
   GenerateResponseData,
   ModelReference,
   StreamingCallback,
 } from 'genkit';
-import { z } from 'genkit';
+import {
+  GenkitError,
+  z,
+  type ErrorResponseMetadata,
+  type StatusName,
+} from 'genkit';
 import type { GenerateResponseChunkData, ModelAction } from 'genkit/model';
 import { modelRef } from 'genkit/model';
 import { model } from 'genkit/plugin';
@@ -36,6 +42,19 @@ import {
   type ClaudeRunnerParams,
 } from './types.js';
 import { checkModelName, isKnownKey } from './utils.js';
+
+/**
+ * Parses a `Retry-After` header value into milliseconds.
+ * Supports delay-seconds and HTTP-date formats (RFC 7231 §7.1.3).
+ */
+function parseRetryAfterMs(value: string): number | undefined {
+  if (!value || !value.trim()) return undefined;
+  const seconds = Number(value);
+  if (!isNaN(seconds) && seconds >= 0) return seconds * 1000;
+  const date = new Date(value);
+  if (!isNaN(date.getTime())) return Math.max(0, date.getTime() - Date.now());
+  return undefined;
+}
 
 // This contains all the Anthropic config schema types
 type ConfigSchemaType = AnthropicConfigSchemaType;
@@ -148,11 +167,50 @@ export function claudeRunner<TConfigSchema extends z.ZodTypeAny>(
     const runner = isBeta
       ? (betaRunner ??= new BetaRunner(runnerParams))
       : (stableRunner ??= new Runner(runnerParams));
-    return runner.run(normalizedRequest, {
-      streamingRequested,
-      sendChunk,
-      abortSignal,
-    });
+    try {
+      return await runner.run(normalizedRequest, {
+        streamingRequested,
+        sendChunk,
+        abortSignal,
+      });
+    } catch (e) {
+      if (e instanceof APIError) {
+        let status: StatusName = 'UNKNOWN';
+        switch (e.status) {
+          case 429:
+            status = 'RESOURCE_EXHAUSTED';
+            break;
+          case 401:
+            status = 'UNAUTHENTICATED';
+            break;
+          case 403:
+            status = 'PERMISSION_DENIED';
+            break;
+          case 400:
+            status = 'INVALID_ARGUMENT';
+            break;
+          case 500:
+            status = 'INTERNAL';
+            break;
+          case 503:
+          case 529:
+            status = 'UNAVAILABLE';
+            break;
+        }
+        const retryAfterHeader = e.headers?.get?.('retry-after');
+        const retryAfterMs = retryAfterHeader
+          ? parseRetryAfterMs(retryAfterHeader)
+          : undefined;
+        const responseMetadata: ErrorResponseMetadata | undefined =
+          retryAfterMs !== undefined ? { retryAfterMs } : undefined;
+        throw new GenkitError({
+          status,
+          message: e.message,
+          responseMetadata,
+        });
+      }
+      throw e;
+    }
   };
 }
 

@@ -167,7 +167,6 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit._core._typing import GenerationCommonConfig
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
@@ -1690,33 +1689,45 @@ class GeminiModel:
         self,
         config: GeminiConfigSchema | ModelConfig | dict,
     ) -> dict[str, Any] | None:
-        """Normalize any config type into a plain dict for uniform processing.
+        """Return the config as a snake_case dict for the rest of the pipeline.
 
-        Handles three input shapes:
-        - GeminiConfigSchema (and subclasses like TTS/Image): model_dump
-        - ModelConfig: model_dump
-        - dict: route to the appropriate schema first, then model_dump
+        Callers can hand us three shapes: a typed ``GeminiConfigSchema``, the
+        generic ``GenerationCommonConfig`` (which keeps plugin-specific keys
+        as alias-form extras), or a raw dict in either casing. Only the
+        plugin schema knows the alias mapping (e.g. ``codeExecution`` <->
+        ``code_execution``), so we re-validate through it whenever the input
+        isn't already one — that's what folds aliased keys onto their
+        canonical snake_case fields before tool extraction runs.
 
-        Returns:
-            A mutable dict ready for tool extraction and key cleanup,
-            or None if the config is empty after dumping.
+        Returns ``None`` if the config has no meaningful values.
         """
         if isinstance(config, GeminiConfigSchema):
             schema = config
-        elif isinstance(config, (ModelConfig, GenerationCommonConfig)):
-            schema = config
+        elif isinstance(config, ModelConfig):
+            # Re-route through the plugin schema so the alias machinery folds
+            # any plugin-specific extras onto their canonical fields.
+            schema = self._pick_plugin_schema(config.model_dump(exclude_none=True, by_alias=True))
         elif isinstance(config, dict):
-            if 'image_config' in config:
-                schema = GeminiImageConfigSchema(**config)
-            elif 'speech_config' in config:
-                schema = GeminiTtsConfigSchema(**config)
-            else:
-                schema = GeminiConfigSchema(**config)
+            schema = self._pick_plugin_schema(config)
         else:
             return None
 
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
+
+    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
+        """Validate ``data`` through whichever subclass matches the model.
+
+        Routing is purely by model name so each family gets its own
+        validation rules -- most importantly Gemma, which intentionally
+        relaxes the standard Gemini temperature bounds and would otherwise
+        reject valid configs. The per-request ``version`` override (when
+        present) takes precedence over the version this instance is bound
+        to, mirroring how the actual model name is resolved at call time.
+        """
+        model_name = data.get('version') or self._version
+        schema_cls = get_model_config_schema(model_name)
+        return schema_cls.model_validate(data)
 
     def _extract_tools_from_config(
         self,

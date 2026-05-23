@@ -173,7 +173,7 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
  *
  * Usage: To use the models, initialize the xAI plugin inside
  * `configureGenkit` and pass the configuration options. If no API key is
- * provided in the options, the environment variable `OPENAI_API_KEY` must be
+ * provided in the options, the environment variable `XAI_API_KEY` must be
  * set.
  *
  * Example:

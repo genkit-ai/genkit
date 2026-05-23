@@ -31,8 +31,7 @@ export const getWeather = ai.defineTool(
 );
 
 export const weatherAgent = ai.defineAgent({
-  name: 'weatherPrompt',
-  model: 'googleai/gemini-flash-latest',
+  name: 'weatherAgent',
   system:
     'You are an assistant helping with weather information. Use the getWeather tool.',
   tools: [getWeather],

@@ -50,7 +50,7 @@ import { z } from 'genkit';
 import { FileSessionStore } from 'genkit/beta';
 import * as path from 'path';
 import { promisify } from 'util';
-import { ai } from './genkit.js';
+import { ai, liteModel } from './genkit.js';
 
 const execAsync = promisify(exec);
 
@@ -111,7 +111,7 @@ const runShell = ai.defineTool(
     if (!isApproved) {
       // AI-powered safety gate — use a fast/cheap model to evaluate the command.
       const safetyCheck = await ai.generate({
-        model: 'googleai/gemini-flash-lite-latest',
+        model: liteModel,
         prompt: `You are a shell command safety evaluator. Evaluate the following shell command for safety.
 
 Command: "${input.command}"
@@ -189,13 +189,6 @@ export const codingAgent = ai.defineAgent({
   description:
     'An expert AI coding assistant that can read, create, edit files, ' +
     'and run shell commands in a sandboxed workspace.',
-  model: 'googleai/gemini-flash-latest',
-  config: {
-    thinkingConfig: {
-      thinkingLevel: 'HIGH',
-      includeThoughts: true,
-    },
-  },
   system: `You are an expert AI coding assistant working in a sandboxed workspace directory.
 
 You have access to filesystem tools to interact with the workspace:

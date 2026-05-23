@@ -14,21 +14,25 @@
  * limitations under the License.
  */
 
-import { GenerateResponseData, MessageData, Operation, Part } from 'genkit';
+import { GenerateResponseData, MessageData, Operation, Part, z } from 'genkit';
 import { ToolDefinition } from 'genkit/model';
 import {
   AudioContent,
+  CodeExecutionCallStep,
+  CodeExecutionResultStep,
   Content,
   DocumentContent,
   FunctionCallContent,
   FunctionResultContent,
   GeminiInteraction,
+  GoogleSearchCallStep,
+  GoogleSearchResultStep,
   ImageContent,
   InteractionFunctionTool,
   InteractionTool,
+  Step,
   TextContent,
   ThoughtContent,
-  Turn,
   VideoContent,
 } from './interaction-types.js';
 import { cleanSchema } from './utils.js';
@@ -112,38 +116,17 @@ export function toInteractionTool(tool: ToolDefinition): InteractionTool {
  * @returns The corresponding Interaction Content object.
  * @throws Error if the part type is unsupported.
  */
-export function toInteractionContent(part: Part): Content {
+export function toInteractionContent(part: Part): Content | undefined {
   if (part.text !== undefined) {
     return { type: 'text', text: part.text };
   }
   if (part.media) {
     return toInteractionMedia(part);
   }
-  if (part.toolRequest) {
-    return {
-      type: 'function_call',
-      name: part.toolRequest.name,
-      arguments: part.toolRequest.input as Record<string, any>,
-      id: part.toolRequest.ref || '',
-    };
-  }
-  if (part.toolResponse) {
-    let output = part.toolResponse.output;
-    if (
-      typeof output !== 'object' &&
-      typeof output !== 'string' &&
-      output !== undefined
-    ) {
-      output = { result: output };
-    }
-    return {
-      type: 'function_result',
-      name: part.toolResponse.name,
-      result: output as Record<string, any> | string,
-      call_id: part.toolResponse.ref || '',
-    };
-  }
-  throw new Error('Unsupported part type for Interaction input');
+  console.warn(
+    `Unsupported part type for Interaction input: ${JSON.stringify(part)}`
+  );
+  return undefined;
 }
 
 function toInteractionMedia(part: Part): Content {
@@ -212,19 +195,146 @@ export function toInteractionRole(role: MessageData['role']): string {
   }
 }
 
+const GoogleSearchArgsSchema = z.object({ queries: z.array(z.string()) });
+const RecordUnknownSchema = z.record(z.unknown());
+const RecordUnknownOrStringSchema = z.union([RecordUnknownSchema, z.string()]);
+const OptionalStringSchema = z.string().optional();
+
+const GoogleSearchCallSchema = z.object({
+  id: z.string(),
+  arguments: GoogleSearchArgsSchema,
+});
+
+const GoogleSearchResultSchema = z.object({
+  callId: z.string(),
+  result: RecordUnknownSchema,
+});
+
+const ExecutableCodeSchema = z.object({
+  code: z.string(),
+  language: z.string().default('PYTHON'),
+});
+
+const CodeExecutionResultSchema = z.object({
+  output: z.string(),
+  outcome: z.string().optional(),
+});
+
 /**
- * Converts a Genkit MessageData object into an Interaction Turn.
- *
- * Maps the role using `toInteractionRole` and converts all content parts using `toInteractionContent`.
- *
- * @param message - The Genkit message data.
- * @returns The converted Interaction Turn.
+ * Converts an array of Genkit MessageData objects into an array of Interaction Steps.
  */
-export function toInteractionTurn(message: MessageData): Turn {
-  return {
-    role: toInteractionRole(message.role),
-    content: message.content.map(toInteractionContent),
-  };
+export function toInteractionSteps(messages: MessageData[]): Step[] {
+  const steps: Step[] = [];
+
+  for (const message of messages) {
+    const normalContent: Content[] = [];
+
+    for (const part of message.content) {
+      if (part.toolRequest) {
+        steps.push({
+          type: 'function_call',
+          name: part.toolRequest.name,
+          arguments: RecordUnknownSchema.optional().parse(
+            part.toolRequest.input
+          ),
+          id: part.toolRequest.ref || '',
+        });
+      } else if (part.toolResponse) {
+        let output = part.toolResponse.output;
+        if (
+          typeof output !== 'object' &&
+          typeof output !== 'string' &&
+          output !== undefined
+        ) {
+          output = { result: output };
+        }
+        steps.push({
+          type: 'function_result',
+          name: part.toolResponse.name,
+          result: RecordUnknownOrStringSchema.optional().parse(output),
+          call_id: part.toolResponse.ref || '',
+        });
+      } else if (part.custom?.googleSearchCall) {
+        const gsCall = GoogleSearchCallSchema.parse(
+          part.custom.googleSearchCall
+        );
+        steps.push({
+          type: 'google_search_call',
+          id: gsCall.id,
+          arguments: gsCall.arguments,
+          signature: OptionalStringSchema.parse(
+            part.metadata?.thoughtSignature
+          ),
+        });
+      } else if (part.custom?.googleSearchResult) {
+        const gsResult = GoogleSearchResultSchema.parse(
+          part.custom.googleSearchResult
+        );
+        steps.push({
+          type: 'google_search_result',
+          call_id: gsResult.callId,
+          result: gsResult.result,
+          signature: OptionalStringSchema.parse(
+            part.metadata?.thoughtSignature
+          ),
+        });
+      } else if (part.custom?.executableCode) {
+        const execCode = ExecutableCodeSchema.parse(part.custom.executableCode);
+        steps.push({
+          type: 'code_execution_call',
+          id: z.string().parse(part.metadata?.callId),
+          arguments: {
+            code: execCode.code,
+            language: execCode.language,
+          },
+          signature: OptionalStringSchema.parse(
+            part.metadata?.thoughtSignature
+          ),
+        });
+      } else if (part.custom?.codeExecutionResult) {
+        const execResult = CodeExecutionResultSchema.parse(
+          part.custom.codeExecutionResult
+        );
+        steps.push({
+          type: 'code_execution_result',
+          call_id: z.string().parse(part.metadata?.callId),
+          result: execResult.output,
+          signature: OptionalStringSchema.parse(
+            part.metadata?.thoughtSignature
+          ),
+        });
+      } else if (part.reasoning) {
+        steps.push({
+          type: 'thought',
+          summary: [{ type: 'text', text: part.reasoning }],
+          signature: OptionalStringSchema.parse(
+            part.metadata?.thoughtSignature
+          ),
+        });
+      } else {
+        const content = toInteractionContent(part);
+        if (content) {
+          normalContent.push(content);
+        }
+      }
+    }
+
+    if (normalContent.length > 0) {
+      if (message.role === 'model') {
+        steps.push({
+          type: 'model_output',
+          content: normalContent,
+        });
+      } else {
+        steps.push({
+          type: 'user_input',
+          content: normalContent,
+        });
+      }
+    }
+  }
+
+  return steps;
 }
 
 /**
@@ -254,9 +364,127 @@ export function fromInteractionContent(content: Content): Part {
     case 'function_result':
       return fromFunctionResultContent(content);
     default:
-      // We need the 'any' because currently this is an exhaustive list
-      throw new Error(`Unsupported content type: ${(content as any).type}`);
+      return {
+        custom: {
+          unknownContent: content,
+        },
+      };
   }
+}
+
+function maybeAddGeminiThoughtSignature(step: Step, part: Part): Part {
+  let updatedPart = part;
+
+  if ('signature' in step && step.signature) {
+    updatedPart.metadata = {
+      ...(part.metadata ?? {}),
+      thoughtSignature: step.signature,
+    };
+  }
+  return updatedPart;
+}
+
+export function fromGoogleSearchCall(step: GoogleSearchCallStep): Part {
+  const part: Part = {
+    custom: {
+      googleSearchCall: {
+        id: step.id,
+        arguments: step.arguments,
+      },
+    },
+  };
+  return maybeAddGeminiThoughtSignature(step, part);
+}
+
+export function fromGoogleSearchResult(step: GoogleSearchResultStep): Part {
+  const part: Part = {
+    custom: {
+      googleSearchResult: {
+        callId: step.call_id,
+        result: step.result,
+      },
+    },
+  };
+  return maybeAddGeminiThoughtSignature(step, part);
+}
+
+export function fromCodeExecutionCall(step: CodeExecutionCallStep): Part {
+  const part: Part = {
+    custom: {
+      executableCode: {
+        code: step.arguments.code,
+        language: step.arguments.language || 'PYTHON',
+      },
+    },
+  };
+  part.metadata = { callId: step.id };
+  return maybeAddGeminiThoughtSignature(step, part);
+}
+
+export function fromCodeExecutionResult(step: CodeExecutionResultStep): Part {
+  const part: Part = {
+    custom: {
+      codeExecutionResult: {
+        output:
+          typeof step.result === 'string'
+            ? step.result
+            : JSON.stringify(step.result),
+        outcome: 'OUTCOME_OK',
+      },
+    },
+  };
+  part.metadata = { callId: step.call_id };
+  return maybeAddGeminiThoughtSignature(step, part);
+}
+
+export function fromServerFunctionCall(step: FunctionCallContent): Part {
+  return {
+    custom: {
+      serverFunctionCall: {
+        id: step.id,
+        name: step.name,
+        arguments: step.arguments,
+      },
+    },
+  };
+}
+
+export function fromServerFunctionResult(step: FunctionResultContent): Part {
+  return {
+    custom: {
+      serverFunctionResult: {
+        callId: step.call_id,
+        name: step.name,
+        result: step.result,
+        isError: step.is_error,
+      },
+    },
+  };
+}
+
+export function fromInteractionStep(step: Step): Part[] {
+  switch (step.type) {
+    case 'model_output':
+      return step.content.map(fromInteractionContent);
+    case 'user_input':
+      return [];
+    case 'google_search_call':
+      return [fromGoogleSearchCall(step)];
+    case 'google_search_result':
+      return [fromGoogleSearchResult(step)];
+    case 'code_execution_call':
+      return [fromCodeExecutionCall(step)];
+    case 'code_execution_result':
+      return [fromCodeExecutionResult(step)];
+    case 'thought':
+      return [fromThoughtContent(step)];
+    case 'function_call':
+      return [fromServerFunctionCall(step)];
+    case 'function_result':
+      return [fromServerFunctionResult(step)];
+  }
+
+  return [{ custom: { unknownStep: step } }];
 }
 
 function fromMediaContent(
@@ -285,13 +513,17 @@ function fromTextContent(content: TextContent): Part {
 
 function fromImageContent(content: ImageContent): Part {
   const part = fromMediaContent(content);
-  part.metadata = { resolution: content.resolution };
+  if (content.resolution !== undefined) {
+    part.metadata = { resolution: content.resolution };
+  }
   return part;
 }
 
 function fromVideoContent(content: VideoContent): Part {
   const part = fromMediaContent(content);
-  part.metadata = { resolution: content.resolution };
+  if (content.resolution !== undefined) {
+    part.metadata = { resolution: content.resolution };
+  }
   return part;
 }
 
@@ -349,8 +581,19 @@ export function fromInteractionSync(
     message: {
       role: 'model',
       content: [],
+      ...(interaction.id || interaction.environment_id
+        ? {
+            metadata: {
+              ...(interaction.id ? { interactionId: interaction.id } : {}),
+              ...(interaction.environment_id
+                ? { environmentId: interaction.environment_id }
+                : {}),
+            },
+          }
+        : {}),
     },
     custom: interaction,
+    raw: interaction,
   };
 
   if (interaction.status === 'cancelled') {
@@ -360,9 +603,11 @@ export function fromInteractionSync(
     return response;
   }
 
-  const outputs = interaction.outputs;
-  if (outputs?.length) {
-    response.message!.content = outputs.map(fromInteractionContent);
+  const steps = interaction.steps;
+  if (steps?.length) {
+    response.message!.content = steps
+      .flatMap(fromInteractionStep)
+      .filter((p) => p && Object.keys(p).length > 0);
 
     if (interaction.usage) {
       response.usage = {
@@ -427,20 +672,43 @@ export function fromInteraction<T extends Object>(
       message: {
         role: 'model',
         content: [{ text: 'Operation cancelled.' }],
+        ...(interaction.id || interaction.environment_id
+          ? {
+              metadata: {
+                ...(interaction.id ? { interactionId: interaction.id } : {}),
+                ...(interaction.environment_id
+                  ? { environmentId: interaction.environment_id }
+                  : {}),
+              },
+            }
+          : {}),
       },
     };
   } else if (interaction.status === 'completed') {
     op.done = true;
-    const outputs = interaction.outputs;
-    if (outputs?.length) {
-      const content = outputs.map(fromInteractionContent);
+    const steps = interaction.steps;
+    if (steps?.length) {
+      const content = steps
+        .flatMap(fromInteractionStep)
+        .filter((p) => p && Object.keys(p).length > 0);
       op.output = {
         finishReason: 'stop',
         message: {
           role: 'model',
           content,
+          ...(interaction.id || interaction.environment_id
+            ? {
+                metadata: {
+                  ...(interaction.id ? { interactionId: interaction.id } : {}),
+                  ...(interaction.environment_id
+                    ? { environmentId: interaction.environment_id }
+                    : {}),
+                },
+              }
+            : {}),
         },
         custom: interaction,
+        raw: interaction,
       };
       if (interaction.usage) {
         op.output.usage = {

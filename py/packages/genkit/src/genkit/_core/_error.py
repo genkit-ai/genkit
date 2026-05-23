@@ -153,6 +153,15 @@ class HttpErrorWireFormat(BaseModel):
     status: str = StatusCodes.INTERNAL.name
 
 
+class GenkitInterrupt(Exception):  # noqa: N818 - marker base class; intentionally not suffixed *Error
+    """Marker base class for tool interrupts.
+
+    Raised by tools to pause execution and hand control back to the caller.
+    The tracing wrapper uses this to distinguish control-flow interrupts from
+    real errors so they don't appear as red failures in the Dev UI.
+    """
+
+
 class GenkitError(Exception):
     """Base error class for Genkit errors."""
 
