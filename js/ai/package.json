@@ -37,7 +37,7 @@
     "node-fetch": "^3.3.2",
     "partial-json": "^0.1.7",
     "uri-templates": "^0.2.0",
-    "uuid": "^10.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@types/uri-templates": "^0.1.34",

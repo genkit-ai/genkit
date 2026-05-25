@@ -36,7 +36,7 @@
     "google-auth-library": "^9.14.2",
     "knex": "^3.1.0",
     "pg": "^8.15.6",
-    "uuid": "^11.1.0"
+    "uuid": "^14.0.0"
   },
   "peerDependencies": {
     "genkit": "workspace:^"
