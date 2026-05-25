@@ -22,7 +22,7 @@ import {
   isConfig,
   type ChecksEvaluationMetric,
   type ChecksEvaluationMetricConfig,
-} from './metrics';
+} from './metrics.js';
 
 export function checksEvaluators(
   ai: Genkit,

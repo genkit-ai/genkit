@@ -16,7 +16,7 @@
 
 import { z } from 'genkit';
 import { ModelInfo } from 'genkit/model';
-import { compatOaiImageModelRef } from '../image';
+import { compatOaiImageModelRef } from '../image.js';
 
 /** XAI image generation ModelRef helper, same as the OpenAI-compatible model specification. */
 export function xaiImageModelRef<
