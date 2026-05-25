@@ -26,6 +26,7 @@ Callers identify which image is which by setting a ``type`` key in the
 conventions so the same request shape works across runtimes.
 """
 
+import asyncio
 import base64
 import json
 import sys
@@ -57,7 +58,7 @@ from genkit import (
 from genkit.plugin_api import ActionRunContext, StatusName, tracer
 from genkit.plugins.google_genai.models.utils import client_error_to_genkit_status
 
-_VIRTUAL_TRY_ON_UNAVAILABLE_ERRORS = (ConnectionError, TimeoutError, OSError)
+_VIRTUAL_TRY_ON_UNAVAILABLE_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError)
 
 
 def _virtual_try_on_request_error_status(error: Exception) -> StatusName:

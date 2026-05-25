@@ -16,6 +16,7 @@
 
 """Tests for the Virtual Try-On model implementation."""
 
+import asyncio
 import base64
 from typing import Any, cast
 
@@ -310,6 +311,25 @@ async def test_generate_maps_transport_error_to_unavailable(mocker: MockerFixtur
     client = mocker.MagicMock()
     client._api_client.vertexai = True
     client._api_client.async_request = mocker.AsyncMock(side_effect=ConnectionError('network down'))
+
+    req = _request_with([
+        _person_part('gs://b/person.png'),
+        _product_part('gs://b/shirt.png'),
+    ])
+    model = VirtualTryOnModel(VirtualTryOnVersion.VIRTUAL_TRY_ON_001, client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model.generate(req, ActionRunContext())
+
+    assert exc_info.value.status == 'UNAVAILABLE'
+
+
+@pytest.mark.asyncio
+async def test_generate_maps_async_timeout_to_unavailable(mocker: MockerFixture) -> None:
+    """Async timeouts from the predict call should use Genkit UNAVAILABLE."""
+    client = mocker.MagicMock()
+    client._api_client.vertexai = True
+    client._api_client.async_request = mocker.AsyncMock(side_effect=asyncio.TimeoutError('timed out'))
 
     req = _request_with([
         _person_part('gs://b/person.png'),
