@@ -219,13 +219,10 @@ from genkit.plugins.google_genai.models.gemini import (
     VertexAIGeminiVersion,
 )
 from genkit.plugins.google_genai.models.imagen import (
-    ImagenAspectRatio,
-    ImagenConfig,
     ImagenConfigSchema,
     ImagenImageSize,
     ImagenPersonGeneration,
     ImagenVersion,
-    is_imagen_model,
 )
 from genkit.plugins.google_genai.models.lyria import LyriaConfig, LyriaVersion
 from genkit.plugins.google_genai.models.veo import VeoConfig, VeoVersion
@@ -252,13 +249,10 @@ __all__ = [
     GeminiConfigSchema.__name__,
     GeminiImageConfigSchema.__name__,
     GeminiTtsConfigSchema.__name__,
-    ImagenAspectRatio.__name__,
-    ImagenConfig.__name__,
     ImagenConfigSchema.__name__,
     ImagenImageSize.__name__,
     ImagenPersonGeneration.__name__,
     ImagenVersion.__name__,
-    is_imagen_model.__name__,
     VeoVersion.__name__,
     VeoConfig.__name__,
     LyriaVersion.__name__,

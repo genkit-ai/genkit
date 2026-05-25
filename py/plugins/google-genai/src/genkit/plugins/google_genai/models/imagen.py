@@ -180,16 +180,6 @@ DEFAULT_IMAGE_SUPPORT = Supports(
 )
 
 
-class ImagenAspectRatio(StrEnum):
-    """Imagen output aspect ratios."""
-
-    RATIO_1_1 = '1:1'
-    RATIO_3_4 = '3:4'
-    RATIO_4_3 = '4:3'
-    RATIO_9_16 = '9:16'
-    RATIO_16_9 = '16:9'
-
-
 class ImagenImageSize(StrEnum):
     """Imagen output image sizes."""
 
@@ -281,10 +271,6 @@ class ImagenConfigSchema(BaseModel):
             'description': 'Largest dimension of the generated image.',
         }),
     ] = Field(None, alias='imageSize')
-
-
-# Alias for backwards compatibility with __init__.py exports.
-ImagenConfig = ImagenConfigSchema
 
 
 class ImagenModel:
