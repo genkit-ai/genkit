@@ -18,22 +18,33 @@ import type { Plugin } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 
 /**
- * Rewrites `export * from './foo.js'` to `export * from './foo.mjs'` in
- * ESM-format builds. With `bundle: false`, esbuild transpiles each source
- * file individually and preserves its import paths as-is, so the ESM
- * output of a wildcard re-export keeps pointing at the sibling CJS `.js`
- * file. Vite's SSR module runner (e.g. Angular SSR) cannot statically
- * expand `export *` through a CJS file, leaving named bindings (`z`,
- * `genkit`, …) undefined for consumers.
+ * Rewrites all relative `.js` imports and exports to their `.mjs`
+ * equivalents in ESM-format builds.  With `bundle: false`, esbuild
+ * transpiles each source file individually and preserves its import paths
+ * as-is, so the ESM output keeps pointing at the sibling CJS `.js` files.
  *
- * Scope is intentionally narrow: only `export *` wildcard re-exports are
- * affected. Regular `import`/`import-from` statements keep their `.js`
- * targets so existing CJS-interop paths (which tolerate extensionless
- * `require`) continue to work for plugins whose source uses extensionless
- * relative imports.
+ * This causes two classes of problems:
+ *
+ * 1. **Bundler failures** - Webpack (Next.js) injects `import.meta`-based
+ *    HMR code into every module it processes; when the module is a CJS
+ *    `.js` file reached from an ESM entry, the parse fails.  Vite's SSR
+ *    runner cannot statically expand `export *` through CJS, leaving
+ *    named bindings undefined.
+ *
+ * 2. **Dual-instance / `instanceof` breakage** - If only *re-exports* are
+ *    rewritten but regular `import … from` statements are left pointing
+ *    at `.js`, Node (and bundlers) load the same logical module twice:
+ *    once as ESM (`.mjs`) via the re-export and once as CJS (`.js`) via
+ *    the internal import.  Classes such as `GenkitError` then exist as
+ *    two distinct constructors, so `instanceof` checks across the
+ *    boundary fail.
+ *
+ * To avoid both issues every relative `.js` path - whether it appears in
+ * an `import`, `export`, `export *`, or side-effect `import` - is
+ * rewritten to `.mjs` in ESM output.
  */
-const rewriteWildcardReexportsForEsm: Plugin = {
-  name: 'rewrite-wildcard-reexports-for-esm',
+const rewriteRelativeImportsForEsm: Plugin = {
+  name: 'rewrite-relative-imports-for-esm',
   setup(build) {
     if (build.initialOptions.format !== 'esm') return;
     const loaders: Record<string, 'ts' | 'tsx' | 'js' | 'jsx'> = {
@@ -53,10 +64,18 @@ const rewriteWildcardReexportsForEsm: Plugin = {
         const loader = loaders[ext];
         if (!loader) return null;
         const source = await readFile(args.path, 'utf8');
-        const rewritten = source.replace(
-          /(export\s*\*\s*from\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
-          '$1$2$3.mjs$2'
-        );
+        const rewritten = source
+          // Rewrite `from './foo.js'` in both import and export statements.
+          //   import { Foo } from './foo.js'    → import { Foo } from './foo.mjs'
+          //   export { Bar } from '../bar.js'   → export { Bar } from '../bar.mjs'
+          //   export * from './utils/index.js'  → export * from './utils/index.mjs'
+          .replace(/(from\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g, '$1$2$3.mjs$2')
+          // Rewrite side-effect imports: `import './foo.js'`
+          //   import './polyfills.js'  → import './polyfills.mjs'
+          .replace(
+            /(import\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
+            '$1$2$3.mjs$2'
+          );
         if (rewritten === source) return null;
         return { contents: rewritten, loader };
       }
@@ -74,7 +93,7 @@ export const defaultOptions = {
   entry: ['src/**/*.ts'],
   bundle: false,
   treeshake: false,
-  esbuildPlugins: [rewriteWildcardReexportsForEsm],
+  esbuildPlugins: [rewriteRelativeImportsForEsm],
 };
 
 /**
