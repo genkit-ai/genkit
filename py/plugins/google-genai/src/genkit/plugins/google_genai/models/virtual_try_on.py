@@ -186,7 +186,7 @@ def _virtual_try_on_image_from_url(url: str) -> dict[str, Any]:
     if url.startswith(('http://', 'https://')):
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message='virtual try-on does not support http(s) URIs. Please specify a Cloud Storage URI.',
+            message='virtual try-on does not support http(s) URIs. Please specify a Cloud Storage (gs://) or data URI.',
         )
     if url.startswith('data:'):
         prefix, _, payload = url.partition(',')
