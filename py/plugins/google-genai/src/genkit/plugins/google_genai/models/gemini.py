@@ -714,6 +714,58 @@ GEMINI_2_5_FLASH_PREVIEW_04_17 = ModelInfo(
     ),
 )
 
+GEMINI_2_5_FLASH_LITE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Lite',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.NO_TOOLS,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_FLASH_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Flash Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_5_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.5 Flash',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
 GENERIC_GEMINI_MODEL = ModelInfo(
     label='Google AI - Gemini',
     supports=Supports(
@@ -890,6 +942,32 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
 
 
 SUPPORTED_MODELS = {}
+
+
+def _add_model(model_info: ModelInfo, names: list[str]):
+    for name in names:
+        SUPPORTED_MODELS[name] = model_info
+    if model_info.versions:
+        for version in model_info.versions:
+            SUPPORTED_MODELS[version] = model_info
+
+
+_add_model(GEMINI_1_5_PRO, ['gemini-1.5-pro'])
+_add_model(GEMINI_1_5_FLASH, ['gemini-1.5-flash'])
+_add_model(GEMINI_1_5_FLASH_8B, ['gemini-1.5-flash-8b'])
+_add_model(GEMINI_2_0_FLASH, ['gemini-2.0-flash'])
+_add_model(GEMINI_2_0_FLASH_LITE, ['gemini-2.0-flash-lite'])
+_add_model(GEMINI_2_0_PRO_EXP_02_05, ['gemini-2.0-pro-exp-02-05'])
+_add_model(GEMINI_2_0_FLASH_EXP_IMAGEN, ['gemini-2.0-flash-exp'])
+_add_model(GEMINI_2_0_FLASH_THINKING_EXP_01_21, ['gemini-2.0-flash-thinking-exp-01-21'])
+_add_model(GEMINI_2_5_PRO_EXP_03_25, ['gemini-2.5-pro-exp-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_03_25, ['gemini-2.5-pro-preview-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_05_06, ['gemini-2.5-pro-preview-05-06'])
+_add_model(GEMINI_2_5_FLASH_PREVIEW_04_17, ['gemini-2.5-flash-preview-04-17'])
+_add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
+_add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
+_add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
+_add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
 
 
 DEFAULT_SUPPORTS_MODEL = Supports(
@@ -1660,10 +1738,30 @@ class GeminiModel:
                 cfg = genai_types.GenerateContentConfig()
 
             if has_output:
-                response_mime_type = 'application/json' if request.output_format == 'json' else None
+                model_name = self._version
+                if request.config:
+                    if isinstance(request.config, dict):
+                        version = request.config.get('version')
+                    else:
+                        version = getattr(request.config, 'version', None)
+                    if version:
+                        model_name = version
+
+                # Check if the model supports constrained generation with this configuration
+                model_info = google_model_info(model_name)
+                model_supports_constrained = (
+                    model_info.supports.constrained if model_info and model_info.supports else Constrained.NO_TOOLS
+                )
+                supports_constrained = model_supports_constrained == Constrained.ALL or (
+                    model_supports_constrained == Constrained.NO_TOOLS and not request.tools
+                )
+
+                response_mime_type = (
+                    'application/json' if request.output_format == 'json' and supports_constrained else None
+                )
                 cfg.response_mime_type = response_mime_type
 
-                if request.output_schema and request.output_constrained:
+                if request.output_schema and request.output_constrained and supports_constrained:
                     cfg.response_schema = self._convert_schema_property(request.output_schema)
 
             if tools:
