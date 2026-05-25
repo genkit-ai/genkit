@@ -46,10 +46,7 @@ Supported Models:
         - imagen-4.0-ultra-generate-001
 
     Vertex AI:
-        - imagegeneration@006
-        - imagen-3.0-generate-002
-        - imagen-3.0-fast-generate-001
-        - Imagen 4 models when returned by models.list()
+        - Imagen models returned by models.list()
 """
 
 import base64
