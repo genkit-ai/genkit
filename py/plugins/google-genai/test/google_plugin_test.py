@@ -656,15 +656,15 @@ async def test_vertexai_resolve_action_embedder(
             False,
         ),
         (
-            'vertexai/imagen-3.0-generate-002',
-            'vertexai/imagen-3.0-generate-002',
-            'imagen-3.0-generate-002',
+            'vertexai/imagen-gemini-pro-deluxe-max',
+            'vertexai/imagen-gemini-pro-deluxe-max',
+            'imagen-gemini-pro-deluxe-max',
             True,
         ),
         (
-            'imagen-3.0-fast-generate-001',
-            'vertexai/imagen-3.0-fast-generate-001',
-            'imagen-3.0-fast-generate-001',
+            'imagegeneration-gemini-pro-deluxe-max',
+            'vertexai/imagegeneration-gemini-pro-deluxe-max',
+            'imagegeneration-gemini-pro-deluxe-max',
             True,
         ),
         (
