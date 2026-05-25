@@ -59,7 +59,7 @@ else:
     from enum import StrEnum
 
 from functools import cached_property
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from google import genai
 from google.genai import types as genai_types
@@ -359,7 +359,8 @@ class ImagenModel:
             )
             if not request_config:
                 return None
-            return ta.validate_python(request_config)
+            ta.validate_python(request_config)
+            return cast(genai_types.GenerateImagesConfigOrDict, request_config)
         except ValidationError as e:
             raise GenkitError(
                 status='INVALID_ARGUMENT',

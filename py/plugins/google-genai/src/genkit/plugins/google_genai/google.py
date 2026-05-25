@@ -128,7 +128,6 @@ from genkit.plugins.google_genai.models.gemini import (
     google_model_info,
 )
 from genkit.plugins.google_genai.models.imagen import (
-    GOOGLEAI_KNOWN_IMAGEN_MODELS,
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
     ImagenConfigSchema,
     ImagenModel,
