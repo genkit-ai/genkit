@@ -178,8 +178,8 @@ def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) ->
     assert config['number_of_images'] == 2
 
 
-def test_imagen_config_allows_extra_options(mocker: MockerFixture) -> None:
-    """Test Imagen preserves options not explicitly listed in the schema."""
+def test_imagen_config_allows_vertexai_extra_options(mocker: MockerFixture) -> None:
+    """Test Vertex AI Imagen options not shown in Google AI metadata still pass through."""
     request = ModelRequest(
         messages=[
             Message(
@@ -192,7 +192,7 @@ def test_imagen_config_allows_extra_options(mocker: MockerFixture) -> None:
         config={'safety_filter_level': 'BLOCK_LOW_AND_ABOVE'},
     )
     googleai_client_mock = mocker.AsyncMock()
-    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+    imagen = ImagenModel(ImagenVersion.IMAGEN3, googleai_client_mock)
 
     config = imagen._get_config(request)
 
