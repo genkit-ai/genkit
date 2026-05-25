@@ -14,7 +14,43 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Imagen model implementation for Google GenAI plugin."""
+"""Imagen image generation models for Google GenAI plugin.
+
+Imagen is Google's image generation model family that creates images from text
+prompts. It supports both Google AI and Vertex AI backends.
+
+Architecture:
+    ```
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │                     Imagen Image Generation Flow                      │
+    ├──────────────────────────────────────────────────────────────────────┤
+    │                                                                       │
+    │   Input                    Model                     Output           │
+    │   ┌─────────┐             ┌─────────┐             ┌─────────┐        │
+    │   │ Text    │ ─predict──► │ Imagen  │ ──────────► │ Image   │        │
+    │   │ Prompt  │             │ Model   │             │ (bytes) │        │
+    │   └─────────┘             └─────────┘             └─────────┘        │
+    │                                                                       │
+    └──────────────────────────────────────────────────────────────────────┘
+    ```
+
+Note:
+    Imagen models may be discovered dynamically through the SDK models.list()
+    API. Known Google AI Imagen models are also registered explicitly because
+    models.list() does not always surface them in every environment.
+
+Supported Models:
+    Google AI:
+        - imagen-4.0-generate-001
+        - imagen-4.0-fast-generate-001
+        - imagen-4.0-ultra-generate-001
+
+    Vertex AI:
+        - imagegeneration@006
+        - imagen-3.0-generate-002
+        - imagen-3.0-fast-generate-001
+        - Imagen 4 models when returned by models.list()
+"""
 
 import base64
 import json
