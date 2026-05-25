@@ -64,7 +64,13 @@ Invent one creative ${category.toLowerCase()} that fits the theme perfectly.`,
           stopSequences: [],
         },
       });
-      const item = { ...result.output!, category };
+      const output = result.output;
+      if (!output) {
+        throw new Error(
+          `Model failed to generate a valid ${category} menu item.`
+        );
+      }
+      const item = { ...output, category };
       items.push(item);
       sendChunk(item);
     }

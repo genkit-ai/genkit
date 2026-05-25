@@ -70,10 +70,11 @@ const rewriteRelativeImportsForEsm: Plugin = {
           //   export { Bar } from '../bar.js'   → export { Bar } from '../bar.mjs'
           //   export * from './utils/index.js'  → export * from './utils/index.mjs'
           .replace(/(from\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g, '$1$2$3.mjs$2')
-          // Rewrite side-effect imports: `import './foo.js'`
-          //   import './polyfills.js'  → import './polyfills.mjs'
+          // Rewrite side-effect and dynamic imports:
+          //   import './polyfills.js'             → import './polyfills.mjs'
+          //   await import('./reflection-v2.js')  → await import('./reflection-v2.mjs')
           .replace(
-            /(import\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
+            /(import\s*\(?\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
             '$1$2$3.mjs$2'
           );
         if (rewritten === source) return null;

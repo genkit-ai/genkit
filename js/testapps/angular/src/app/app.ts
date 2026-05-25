@@ -48,7 +48,7 @@ export class App {
     this.reset();
     this.isLoading.set(true);
     try {
-      const result = await runFlow<Menu, string | null>({
+      const result = await runFlow<Menu>({
         url: '/api/menu',
         input: theme,
       });
@@ -66,12 +66,15 @@ export class App {
     this.reset();
     this.isLoading.set(true);
     try {
-      const { stream, output } = streamFlow<Menu, string | null, MenuItem>({
+      const { stream, output } = streamFlow<Menu, MenuItem>({
         url: '/api/menu',
         input: theme,
       });
 
-      // Each chunk is a complete MenuItem — show them one by one
+      // Each chunk is a complete MenuItem — show them one by one.
+      // Cast needed: streamFlow's chunk type is a union that includes the
+      // output type's primitives (string | null), but at runtime each
+      // chunk is always a full MenuItem object from sendChunk().
       for await (const item of stream) {
         this.menuItems.update((items) => [
           ...items,
