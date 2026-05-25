@@ -944,7 +944,7 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
 SUPPORTED_MODELS = {}
 
 
-def _add_model(model_info: ModelInfo, names: list[str]):
+def _add_model(model_info: ModelInfo, names: list[str]) -> None:
     for name in names:
         SUPPORTED_MODELS[name] = model_info
     if model_info.versions:
