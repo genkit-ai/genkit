@@ -25,7 +25,6 @@ from pytest_mock import MockerFixture
 
 from genkit import (
     ActionRunContext,
-    GenkitError,
     MediaPart,
     Message,
     ModelRequest,
@@ -179,8 +178,8 @@ def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) ->
     assert config['number_of_images'] == 2
 
 
-def test_imagen_config_rejects_unsupported_options(mocker: MockerFixture) -> None:
-    """Test Imagen only accepts the supported Google AI options."""
+def test_imagen_config_allows_extra_options(mocker: MockerFixture) -> None:
+    """Test Imagen preserves options not explicitly listed in the schema."""
     request = ModelRequest(
         messages=[
             Message(
@@ -190,10 +189,11 @@ def test_imagen_config_rejects_unsupported_options(mocker: MockerFixture) -> Non
                 ],
             ),
         ],
-        config={'safetyFilterLevel': 'BLOCK_LOW_AND_ABOVE'},
+        config={'safety_filter_level': 'BLOCK_LOW_AND_ABOVE'},
     )
     googleai_client_mock = mocker.AsyncMock()
     imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
 
-    with pytest.raises(GenkitError, match='configuration dictionary is invalid'):
-        imagen._get_config(request)
+    config = imagen._get_config(request)
+
+    assert config['safety_filter_level'] == 'BLOCK_LOW_AND_ABOVE'

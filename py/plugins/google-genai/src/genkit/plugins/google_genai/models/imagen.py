@@ -251,7 +251,7 @@ def googleai_image_model_info(
 class ImagenConfigSchema(BaseModel):
     """Imagen Config Schema."""
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
+    model_config = ConfigDict(extra='allow', populate_by_name=True)
 
     number_of_images: int | None = Field(
         None,  # Don't silently change default behavior
