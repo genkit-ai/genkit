@@ -52,18 +52,25 @@ class LoggingMiddleware(BaseMiddleware):
         return response
 
 
+class ConciseReplyConfig(BaseModel):
+    """Per-call system instruction for ConciseReplyMiddleware."""
+
+    instruction: str = 'Answer in one short paragraph.'
+
+
 @ai.middleware(name='concise_reply_mw')
-class ConciseReplyMiddleware(BaseMiddleware):
+class ConciseReplyMiddleware(BaseMiddleware[ConciseReplyConfig]):
     """Prepend a short system instruction before the model call.
 
     Each call can supply its own value by constructing a fresh instance:
     ``ConciseReplyMiddleware(instruction=...)``.
     """
 
-    instruction: str = 'Answer in one short paragraph.'
-
     async def wrap_model(self, params, next_fn, ctx: GenerateMiddlewareContext):
-        system_message = Message(role=Role.SYSTEM, content=[Part(root=TextPart(text=self.instruction))])
+        system_message = Message(
+            role=Role.SYSTEM,
+            content=[Part(root=TextPart(text=self.config.instruction))],
+        )
         params.request = params.request.model_copy()
         params.request.messages = [system_message, *params.request.messages]
         return await next_fn(params)
