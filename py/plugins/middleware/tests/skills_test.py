@@ -23,7 +23,7 @@ import pytest
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._model import GenerateActionOptions
-from genkit.middleware import GenerateHookParams, MiddlewareContext
+from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
 from genkit.plugins.middleware import Skills
 
 
@@ -36,7 +36,7 @@ def _make_params() -> GenerateHookParams:
 
 
 @pytest.mark.asyncio
-async def test_skills_no_paths(ctx: MiddlewareContext) -> None:
+async def test_skills_no_paths(ctx: GenerateMiddlewareContext) -> None:
     """Test that middleware works with no skill paths."""
     skills = Skills(skill_paths=[])
 
@@ -48,7 +48,7 @@ async def test_skills_no_paths(ctx: MiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skills_nonexistent_path(ctx: MiddlewareContext) -> None:
+async def test_skills_nonexistent_path(ctx: GenerateMiddlewareContext) -> None:
     """Test that nonexistent paths are silently skipped."""
     skills = Skills(skill_paths=['/nonexistent/path'])
 
@@ -60,7 +60,7 @@ async def test_skills_nonexistent_path(ctx: MiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skills_scan_with_skill(ctx: MiddlewareContext) -> None:
+async def test_skills_scan_with_skill(ctx: GenerateMiddlewareContext) -> None:
     """Test that skills are scanned and injected into system message."""
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = Path(tmpdir) / 'test-skill'

@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from genkit import GenkitError
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, MiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 _DEFAULT_RETRY_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -56,7 +56,7 @@ class Retry(BaseMiddleware[RetryConfig]):
         self,
         params: ModelHookParams,
         next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Retry the model call up to max_retries times on transient failures."""
         current_delay_ms = float(self.config.initial_delay_ms)

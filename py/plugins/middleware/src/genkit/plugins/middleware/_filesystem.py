@@ -19,13 +19,13 @@
 Provides sandboxed file operations — ``list_files``, ``read_file``,
 ``write_file``, ``edit_file`` — confined to a configurable root directory.
 
-``read_file`` queues file content as user messages via ``ctx.enqueue_parts``
-so the tool response stays small. Tool errors are queued the same way so the
-model can self-correct on the next turn.
+``read_file`` queues file content as user messages so the tool response stays
+small. Tool errors are queued the same way so the model can self-correct on
+the next turn.
 
-Like the JS middleware, this class holds no session cache. Each ``generate()``
-call gets a fresh middleware copy; only per-call ``ctx.enqueue_parts`` carries
-read content forward inside that call's message stream.
+Each ``generate()`` gets a fresh middleware instance with its own message
+queue; ``wrap_generate`` drains queued messages into the request before the
+next model call.
 """
 
 from __future__ import annotations
@@ -41,18 +41,19 @@ from typing import Any
 from pydantic import BaseModel as PydanticBaseModel
 
 from genkit._ai._tools import Interrupt, define_tool
-from genkit._core._model import ModelResponse
+from genkit._core._model import Message, ModelResponse, ModelResponseChunk
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     Media,
     MediaPart,
     Part,
+    Role,
     TextPart,
 )
 from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
-    MiddlewareContext,
+    GenerateMiddlewareContext,
     MultipartToolResponse,
     ToolHookParams,
 )
@@ -115,14 +116,16 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
     """Filesystem middleware with sandboxed file operations.
 
     Contributes ``list_files``, ``read_file``, and optionally ``write_file``
-    and ``edit_file``. Tool errors are queued via ``ctx.enqueue_parts`` so the
-    model can self-correct on the next turn.
+    and ``edit_file``. Tool errors are queued as user messages so the model
+    can self-correct on the next turn.
     """
 
     def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init__(**kwargs)
         if not self.config.root_dir or not self.config.root_dir.strip():
             raise ValueError('Filesystem.root_dir must not be empty.')
+        # One queue per generate() — the engine copies middleware per call.
+        self._message_queue: list[Message] = []
 
     @property
     def _root_abs(self) -> str:
@@ -148,6 +151,13 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
         if c_norm != root_norm and not c_norm.startswith(root_norm + os.sep):
             raise ValueError(f'Path {rel!r} escapes the root directory.')
         return candidate
+
+    def _enqueue_parts(self, parts: list[Part]) -> None:
+        """Append parts to the pending user message for the next model turn."""
+        if self._message_queue and self._message_queue[-1].role == Role.USER:
+            self._message_queue[-1].content.extend(parts)
+        else:
+            self._message_queue.append(Message(role=Role.USER, content=list(parts)))
 
     def _list_files(self, dir_path: str = '', recursive: bool = False) -> list[dict[str, Any]]:
         """List files and directories under ``dir_path`` (relative to root)."""
@@ -182,13 +192,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
 
         return results
 
-    def _read_file_impl(
-        self,
-        file_path: str,
-        offset: int,
-        limit: int,
-        enqueue_parts: Callable[[list[Part]], None] | None,
-    ) -> str:
+    def _read_file_impl(self, file_path: str, offset: int, limit: int) -> str:
         """Read a file and enqueue its content as a user message."""
         abs_path = self._resolve_safe(file_path)
         if not os.path.isfile(abs_path):
@@ -208,9 +212,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 raise ValueError(f'Image too large ({len(raw):,} bytes; max {_MAX_READ_SLICE_BYTES:,}).')
             b64 = base64.b64encode(raw).decode('ascii')
             data_uri = f'data:{mime_type};base64,{b64}'
-            if enqueue_parts:
-                media_part = Part(root=MediaPart(media=Media(url=data_uri, content_type=mime_type)))
-                enqueue_parts([media_part])
+            self._enqueue_parts([Part(root=MediaPart(media=Media(url=data_uri, content_type=mime_type)))])
             return f'Image {file_path} queued as media part.'
 
         with open(abs_path, encoding='utf-8', errors='replace') as fh:
@@ -229,8 +231,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
         else:
             wrapped = f'<read_file path="{file_path}" totalLines="{total}">\n{sliced}\n</read_file>'
 
-        if enqueue_parts:
-            enqueue_parts([Part(root=TextPart(text=wrapped))])
+        self._enqueue_parts([Part(root=TextPart(text=wrapped))])
         return f'File {file_path} read successfully. Content queued as user message.'
 
     def _write_file_impl(self, file_path: str, content: str) -> str:
@@ -267,9 +268,8 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             fh.write(content)
         return f'File {file_path} edited successfully.'
 
-    def tools(self, ctx: MiddlewareContext) -> list[Any]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
         """Return filesystem tool actions for this generate() call."""
-        enqueue_parts = ctx.enqueue_parts
         scratch = Registry()
 
         async def list_files(input: _ListFilesInput) -> list[dict[str, Any]]:
@@ -281,7 +281,6 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 input.file_path,
                 input.offset,
                 input.limit,
-                enqueue_parts,
             )
 
         t_list = define_tool(scratch, list_files, name=self._tool_name('list_files'))
@@ -310,16 +309,35 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
-        """Pass through — the engine drains enqueued messages automatically."""
+        """Drain queued user messages into the request before the next model turn."""
+        if not self._message_queue:
+            return await next_fn(params)
+
+        message_index = params.message_index
+        if ctx.on_chunk:
+            for msg in self._message_queue:
+                ctx.send_chunk(ModelResponseChunk(role=msg.role, content=msg.content, index=message_index))
+                message_index += 1
+
+        new_request = params.request.model_copy()
+        new_request.messages = [*params.request.messages, *self._message_queue]
+        self._message_queue.clear()
+
+        params = params.model_copy(
+            update={
+                'request': new_request,
+                'message_index': message_index,
+            }
+        )
         return await next_fn(params)
 
     async def wrap_tool(
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> MultipartToolResponse:
         """Catch filesystem tool errors and enqueue them as user messages."""
         if params.tool.name not in self._filesystem_tool_names():
@@ -331,5 +349,5 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             raise
         except Exception as exc:
             error_msg = f'Tool "{params.tool.name}" failed: {exc}'
-            ctx.enqueue_parts([Part(root=TextPart(text=error_msg))])
+            self._enqueue_parts([Part(root=TextPart(text=error_msg))])
             return MultipartToolResponse(output='Tool call failed; see user message below for details.')

@@ -19,14 +19,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from genkit import GenkitError
 from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, MiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -51,7 +51,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
 
     async def _resolve_fallback_model(
         self,
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
         model_name: str,
     ) -> Action[Any, Any, Any]:
         """Look up a fallback model on the per-call registry."""
@@ -67,7 +67,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
         self,
         params: ModelHookParams,
         next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
@@ -79,13 +79,13 @@ class Fallback(BaseMiddleware[FallbackConfig]):
             last_error = exc
 
         assert last_error is not None  # noqa: S101
-        on_chunk = cast(Callable[[object], None], params.on_chunk) if params.on_chunk else None
+        on_chunk = ctx.on_chunk
         for model_name in self.config.models:
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             try:
                 result = await fallback_action.run(
                     input=params.request,
-                    context=params.context,
+                    context=ctx.custom_context,
                     on_chunk=on_chunk,
                 )
                 return result.response  # type: ignore[return-value]

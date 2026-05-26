@@ -21,7 +21,7 @@ import pytest
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolRequest, ToolRequestPart
-from genkit.middleware import MiddlewareContext, MultipartToolResponse, ToolHookParams
+from genkit.middleware import GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
 from genkit.plugins.middleware import ToolApproval
 
 
@@ -36,7 +36,7 @@ def _make_tool(name: str):
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_allowed_tool(ctx: MiddlewareContext) -> None:
+async def test_tool_approval_allowed_tool(ctx: GenerateMiddlewareContext) -> None:
     """Test that allowed tools pass through without approval."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
@@ -53,7 +53,7 @@ async def test_tool_approval_allowed_tool(ctx: MiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_non_allowed_tool(ctx: MiddlewareContext) -> None:
+async def test_tool_approval_non_allowed_tool(ctx: GenerateMiddlewareContext) -> None:
     """Test that non-allowed tools raise Interrupt."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
@@ -71,7 +71,7 @@ async def test_tool_approval_non_allowed_tool(ctx: MiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_resumed_with_approval(ctx: MiddlewareContext) -> None:
+async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContext) -> None:
     """Test that resumed tools with approval metadata pass through."""
     approval = ToolApproval(allowed_tools=[])
 
@@ -91,7 +91,7 @@ async def test_tool_approval_resumed_with_approval(ctx: MiddlewareContext) -> No
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_empty_allowed_list(ctx: MiddlewareContext) -> None:
+async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) -> None:
     """Test that empty allowed list requires approval for all tools."""
     approval = ToolApproval(allowed_tools=[])
 

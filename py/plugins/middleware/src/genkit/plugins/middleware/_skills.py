@@ -31,7 +31,7 @@ from genkit._ai._tools import define_tool
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, GenerateHookParams, MiddlewareContext
+from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 
 _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
@@ -142,7 +142,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
         new_request.messages = messages
         return new_request
 
-    def tools(self, ctx: MiddlewareContext) -> list[Any]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Any]:
         if not self._scan_skills():
             return []
 
@@ -168,7 +168,7 @@ class Skills(BaseMiddleware[SkillsConfig]):
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         skills = await asyncio.to_thread(self._scan_skills)
         if skills:

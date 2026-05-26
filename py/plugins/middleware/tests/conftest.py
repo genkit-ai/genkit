@@ -6,9 +6,9 @@
 import pytest
 
 from genkit._core._registry import Registry
-from genkit.middleware import MiddlewareContext
+from genkit.middleware import GenerateMiddlewareContext
 
 
 @pytest.fixture
-def ctx() -> MiddlewareContext:
-    return MiddlewareContext(registry=Registry(), enqueue_parts=lambda _parts: None)
+def ctx() -> GenerateMiddlewareContext:
+    return GenerateMiddlewareContext(registry=Registry())

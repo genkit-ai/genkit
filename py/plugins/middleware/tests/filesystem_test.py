@@ -102,36 +102,27 @@ def test_list_files_root() -> None:
 
 
 def test_read_file_queues_content() -> None:
-    queued: list = []
-
-    def enqueue_parts(parts) -> None:
-        queued.extend(parts)
-
     with tempfile.TemporaryDirectory() as tmpdir:
         f = Path(tmpdir) / 'hello.txt'
         f.write_text('hello world\n')
         fs = Filesystem(root_dir=tmpdir)
-        result = fs._read_file_impl('hello.txt', 0, 0, enqueue_parts)
+        result = fs._read_file_impl('hello.txt', 0, 0)
         assert 'queued' in result.lower() or 'read' in result.lower()
-        assert len(queued) == 1
+        assert len(fs._message_queue) == 1
+        assert len(fs._message_queue[0].content) == 1
 
 
 def test_read_file_rereads_each_time() -> None:
     """No dedup cache — each read queues content again."""
-    queued: list = []
-
-    def enqueue_parts(parts) -> None:
-        queued.extend(parts)
-
     with tempfile.TemporaryDirectory() as tmpdir:
         f = Path(tmpdir) / 'hello.txt'
         f.write_text('hello world\n')
         fs = Filesystem(root_dir=tmpdir)
-        fs._read_file_impl('hello.txt', 0, 0, enqueue_parts)
-        queued.clear()
-        result = fs._read_file_impl('hello.txt', 0, 0, enqueue_parts)
+        fs._read_file_impl('hello.txt', 0, 0)
+        fs._message_queue.clear()
+        result = fs._read_file_impl('hello.txt', 0, 0)
         assert 'read' in result.lower()
-        assert len(queued) == 1
+        assert len(fs._message_queue) == 1
 
 
 # ---------------------------------------------------------------------------

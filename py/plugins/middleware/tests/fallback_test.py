@@ -27,11 +27,7 @@ from genkit.plugins.middleware import Fallback
 
 
 def _make_params() -> ModelHookParams:
-    return ModelHookParams(
-        request=ModelRequest(messages=[]),
-        on_chunk=None,
-        context={},
-    )
+    return ModelHookParams(request=ModelRequest(messages=[]))
 
 
 def _make_fallback(**kwargs) -> Fallback:

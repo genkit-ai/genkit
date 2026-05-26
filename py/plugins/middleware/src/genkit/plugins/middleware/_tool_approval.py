@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._tracing import SpanMetadata, run_in_new_span
-from genkit.middleware import BaseMiddleware, MiddlewareContext, MultipartToolResponse, ToolHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
 
 
 class ToolApprovalConfig(BaseModel):
@@ -41,7 +41,7 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> MultipartToolResponse:
         """Intercept tool execution and require approval if not in allowed list."""
         tool_name = params.tool.name
