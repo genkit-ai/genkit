@@ -390,6 +390,7 @@ root = [
   # Plugins
   "plugins/anthropic/src",
   "plugins/compat-oai/src",
+  "plugins/django/src",
   "plugins/flask/src",
   "plugins/google-cloud/src",
   "plugins/google-genai/src",

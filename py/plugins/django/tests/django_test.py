@@ -18,12 +18,17 @@
 """Tests for the Django plugin."""
 
 import json
-from typing import Any
+import sys
+import types
+from collections.abc import Iterator, Mapping
+from typing import Any, cast
 
 import pytest
-
 from django.http import HttpRequest
 from django.test import AsyncClient
+from django.test.utils import override_settings
+from django.urls import path
+
 from genkit import ActionRunContext, Genkit
 from genkit.plugin_api import RequestData
 from genkit.plugins.django import genkit_django_handler
@@ -41,7 +46,8 @@ def _build_views() -> dict[str, Any]:
 
     async def my_context_provider(request_data: RequestData[HttpRequest]) -> dict[str, Any]:
         """Provide a context for the flow."""
-        return {'username': request_data.request.headers.get('authorization')}
+        headers = cast(Mapping[str, str], request_data.request.headers)
+        return {'username': headers.get('authorization')}
 
     @genkit_django_handler(ai, context_provider=my_context_provider)
     @ai.flow()
@@ -60,19 +66,14 @@ def _build_views() -> dict[str, Any]:
 
 
 @pytest.fixture
-def urlconf(tmp_path, monkeypatch):  # noqa: ANN001
+def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Install a temporary URLconf module that mounts the test views."""
-    import sys
-    import types
-
-    from django.test.utils import override_settings
-
     views = _build_views()
 
     module = types.ModuleType('genkit_django_tests_urls')
-    from django.urls import path  # noqa: PLC0415
-
-    module.urlpatterns = [
+    # Django reads urlpatterns off the module object; type checkers can't see
+    # this attribute on `types.ModuleType`, hence the suppressions.
+    module.urlpatterns = [  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
         path('chat', views['say_hi']),
         path('error_flow', views['raise_error']),
     ]
@@ -83,7 +84,7 @@ def urlconf(tmp_path, monkeypatch):  # noqa: ANN001
 
 
 @pytest.mark.asyncio
-async def test_simple_post(urlconf) -> None:  # noqa: ANN001, ARG001
+async def test_simple_post(urlconf: None) -> None:  # noqa: ARG001
     """A POST with the {data: ...} envelope returns {result: ...}."""
     client = AsyncClient()
     response = await client.post(
@@ -98,7 +99,7 @@ async def test_simple_post(urlconf) -> None:  # noqa: ANN001, ARG001
 
 
 @pytest.mark.asyncio
-async def test_streaming(urlconf) -> None:  # noqa: ANN001, ARG001
+async def test_streaming(urlconf: None) -> None:  # noqa: ARG001
     """A POST with Accept: text/event-stream streams chunks then result."""
     client = AsyncClient()
     response = await client.post(
@@ -125,7 +126,7 @@ async def test_streaming(urlconf) -> None:  # noqa: ANN001, ARG001
 
 
 @pytest.mark.asyncio
-async def test_400_missing_data_returns_valid_json(urlconf) -> None:  # noqa: ANN001, ARG001
+async def test_400_missing_data_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
     """400 (missing data) must return valid JSON."""
     client = AsyncClient()
     response = await client.post(
@@ -138,7 +139,7 @@ async def test_400_missing_data_returns_valid_json(urlconf) -> None:  # noqa: AN
 
 
 @pytest.mark.asyncio
-async def test_400_invalid_json_returns_valid_json(urlconf) -> None:  # noqa: ANN001, ARG001
+async def test_400_invalid_json_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
     """400 (malformed body) must return valid JSON, not crash."""
     client = AsyncClient()
     response = await client.post(
@@ -151,7 +152,7 @@ async def test_400_invalid_json_returns_valid_json(urlconf) -> None:  # noqa: AN
 
 
 @pytest.mark.asyncio
-async def test_405_non_post_returns_valid_json(urlconf) -> None:  # noqa: ANN001, ARG001
+async def test_405_non_post_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
     """GET (or any non-POST) must return 405 with valid JSON, not a Django default."""
     client = AsyncClient()
     response = await client.get('/chat')
@@ -160,7 +161,7 @@ async def test_405_non_post_returns_valid_json(urlconf) -> None:  # noqa: ANN001
 
 
 @pytest.mark.asyncio
-async def test_500_flow_exception_returns_valid_json(urlconf) -> None:  # noqa: ANN001, ARG001
+async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
     """500 (flow exception) must return valid JSON in HttpErrorWireFormat shape."""
     client = AsyncClient()
     code_snippet = 'query = f"SELECT * FROM users WHERE id={user_input}"'

@@ -16,11 +16,12 @@
 
 """Django + Genkit - Serve flows as HTTP endpoints. See README.md."""
 
-from typing import Any
-
-from pydantic import BaseModel, Field
+from collections.abc import Mapping
+from typing import Any, cast
 
 from django.http import HttpRequest
+from pydantic import BaseModel, Field
+
 from genkit import Genkit, ModelResponse
 from genkit._core._action import ActionRunContext
 from genkit.plugin_api import RequestData
@@ -42,7 +43,10 @@ class SayHiInput(BaseModel):
 
 async def my_context_provider(request: RequestData[HttpRequest]) -> dict[str, Any]:
     """Provide a context for the flow."""
-    return {'username': request.request.headers.get('authorization')}
+    # Django types `HttpRequest.headers` as a cached_property which trips static
+    # checkers; cast to a Mapping so .get() resolves.
+    headers = cast(Mapping[str, str], request.request.headers)
+    return {'username': headers.get('authorization')}
 
 
 @genkit_django_handler(ai, context_provider=my_context_provider)

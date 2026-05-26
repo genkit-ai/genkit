@@ -13,13 +13,3 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
-
-"""URL config for the django-hello sample."""
-
-from django.urls import path
-
-from recipes.views import say_hi
-
-urlpatterns = [
-    path('chat', say_hi),
-]

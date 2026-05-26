@@ -22,5 +22,4 @@ from django.apps import AppConfig
 class RecipesConfig(AppConfig):
     """Recipes app for the django-hello sample."""
 
-    default_auto_field = 'django.db.models.BigAutoField'
     name = 'recipes'
