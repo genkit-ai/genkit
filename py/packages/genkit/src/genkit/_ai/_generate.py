@@ -464,6 +464,10 @@ async def generate_with_request(
     # future mutations) don't leak back to the caller's ``raw_request``.
     raw_request = raw_request.model_copy()
     registry = registry if registry.is_child else registry.new_child()
+
+    if raw_request.tools:
+        raw_request.tools = await expand_wildcard_tools(registry, raw_request.tools)
+
     middleware = resolve_middleware_from_use(registry, raw_request.use)
     run_ctx = GenerateMiddlewareContext(
         registry=registry,
@@ -513,10 +517,6 @@ async def _generate_action_turn(
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
     on_chunk = run_ctx.on_chunk
-    tools_in = raw_request.tools
-    if tools_in:
-        raw_request = raw_request.model_copy()
-        raw_request.tools = await expand_wildcard_tools(registry, tools_in)
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
