@@ -14,24 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fallback middleware for Genkit model calls.
-
-Automatically falls back to alternative models when the primary model fails with
-retryable errors. Useful for handling rate limits, service outages, or unsupported
-features by seamlessly switching to backup models.
-"""
+"""Fallback middleware for Genkit model calls."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from genkit import GenkitError
 from genkit._core._action import Action, ActionKind
 from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, ModelHookParams
+from genkit.middleware import BaseMiddleware, MiddlewareContext, ModelHookParams
 
 _DEFAULT_FALLBACK_STATUSES: list[str] = [
     'UNAVAILABLE',
@@ -44,33 +39,23 @@ _DEFAULT_FALLBACK_STATUSES: list[str] = [
 ]
 
 
-class Fallback(BaseMiddleware):
-    """Fallback middleware to try alternative models on failure.
-
-    When the primary model call fails with a retryable ``GenkitError``
-    status (one of the ``statuses`` list), each model in ``models`` is
-    tried in order until one succeeds or all are exhausted.
-
-    Only ``GenkitError`` failures with a matching status trigger fallback.
-    Raw network errors, ``TimeoutError``, and other non-``GenkitError``
-    exceptions propagate immediately without trying any fallback model.
-    (Use ``Retry`` for transient non-API errors.)
-
-    If ``models`` is empty and the primary fails with a retryable status,
-    the original error is re-raised unchanged.
-
-    Fallback names are resolved on the **same call-scoped registry** as
-    the rest of the ``generate()`` pipeline — the engine binds it to
-    ``self.registry`` whenever your ``Fallback`` instance runs inside
-    ``use=[...]``.
-    """
+class FallbackConfig(BaseModel):
+    """Models and statuses that trigger fallback."""
 
     models: list[str] = Field(default_factory=list)
     statuses: list[str] = Field(default_factory=lambda: list(_DEFAULT_FALLBACK_STATUSES))
 
-    async def _resolve_fallback_model(self, model_name: str) -> Action[Any, Any, Any]:
-        """Look up a fallback model action on the per-call registry bound to ``self``."""
-        action = await self.registry.resolve_action(ActionKind.MODEL, model_name)
+
+class Fallback(BaseMiddleware[FallbackConfig]):
+    """Fallback middleware to try alternative models on failure."""
+
+    async def _resolve_fallback_model(
+        self,
+        ctx: MiddlewareContext,
+        model_name: str,
+    ) -> Action[Any, Any, Any]:
+        """Look up a fallback model on the per-call registry."""
+        action = await ctx.registry.resolve_action(ActionKind.MODEL, model_name)
         if action is None:
             raise GenkitError(
                 status='NOT_FOUND',
@@ -82,22 +67,21 @@ class Fallback(BaseMiddleware):
         self,
         params: ModelHookParams,
         next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
         try:
             return await next_fn(params)
         except Exception as exc:
-            if not isinstance(exc, GenkitError) or exc.status not in self.statuses:
+            if not isinstance(exc, GenkitError) or exc.status not in self.config.statuses:
                 raise
             last_error = exc
 
         assert last_error is not None  # noqa: S101
-        # Pass the streaming callback through so fallback models can stream
-        # to the same caller as the primary model would have.
         on_chunk = cast(Callable[[object], None], params.on_chunk) if params.on_chunk else None
-        for model_name in self.models:
-            fallback_action = await self._resolve_fallback_model(model_name)
+        for model_name in self.config.models:
+            fallback_action = await self._resolve_fallback_model(ctx, model_name)
             try:
                 result = await fallback_action.run(
                     input=params.request,
@@ -107,7 +91,7 @@ class Fallback(BaseMiddleware):
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
                 last_error = e2
-                if not isinstance(e2, GenkitError) or e2.status not in self.statuses:
+                if not isinstance(e2, GenkitError) or e2.status not in self.config.statuses:
                     raise
 
         raise last_error

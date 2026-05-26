@@ -22,13 +22,11 @@ sandboxed ``workspace/`` directory. Read-only tools (``read_file``,
 mutate the workspace (``write_file``, ``edit_file``) is gated by
 ``ToolApproval``, so the CLI pauses and asks ``y/N`` before each write.
 
-The agent state — middleware instances, message history, the
-read-before-write cache inside ``Filesystem`` — is owned by a
+The agent state — middleware instances and message history — is owned by a
 ``CodingAgent`` session object built once per ``main()`` invocation.
-That ties every ``ai.generate()`` and resume in this REPL to one shared
-``Filesystem`` instance, so a read in one turn satisfies the guard for a
-write in the next turn (including writes that come back through a
-``ToolApproval`` interrupt + resume).
+That ties every ``ai.generate()`` and resume in this REPL to the same
+middleware stack. ``Filesystem`` itself keeps no cross-call cache; file
+content reaches the model through enqueued messages inside each call.
 
 Re-running cleanly:
 
@@ -38,7 +36,8 @@ Re-running cleanly:
 
 from pathlib import Path
 
-from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, ToolRequestPart, restart_tool
+from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, Tool, ToolRequestPart, restart_tool
+from genkit._ai._generate import resolve_tool
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Filesystem, Middleware, Skills, ToolApproval
 
@@ -64,13 +63,7 @@ SYSTEM_PROMPT = (
 
 
 class CodingAgent:
-    """One agent session: owns the middleware instances and the running conversation.
-
-    Constructing a ``CodingAgent`` allocates a fresh ``Filesystem`` (and
-    therefore a fresh read/write cache), so two ``CodingAgent``\\ s running
-    against the same workspace stay isolated — each enforces its own
-    read-before-write guard against its own view of what it read.
-    """
+    """One agent session: owns the middleware stack and the running conversation."""
 
     def __init__(self) -> None:
         self.middleware = [
@@ -97,7 +90,7 @@ class CodingAgent:
                 self.messages = response.messages
                 return response
 
-            approved = _ask_for_approvals(response.interrupts)
+            approved = await _ask_for_approvals(response.interrupts)
             if not approved:
                 print('Tool denied.')  # noqa: T201
                 self.messages = response.messages
@@ -108,7 +101,7 @@ class CodingAgent:
             self.messages = response.messages
 
 
-def _ask_for_approvals(interrupts: list[ToolRequestPart]) -> list[ToolRequestPart]:
+async def _ask_for_approvals(interrupts: list[ToolRequestPart]) -> list[ToolRequestPart]:
     """Prompt the user y/N for each pending interrupt; return the approved restart parts."""
     approved: list[ToolRequestPart] = []
     for trp in interrupts:
@@ -116,7 +109,10 @@ def _ask_for_approvals(interrupts: list[ToolRequestPart]) -> list[ToolRequestPar
         print(f'Tool:  {trp.tool_request.name}')  # noqa: T201
         print(f'Input: {trp.tool_request.input}')  # noqa: T201
         if input('Approve? (y/N): ').strip().lower() in ('y', 'yes'):
-            approved.append(restart_tool(trp, resumed_metadata={'toolApproved': True}))
+            tool = Tool(await resolve_tool(ai.registry, trp.tool_request.name))
+            approved.append(
+                restart_tool(tool=tool, interrupt=trp, resumed_metadata={'toolApproved': True}),
+            )
     return approved
 
 

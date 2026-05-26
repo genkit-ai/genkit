@@ -20,7 +20,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, Part, Role, TextPart
-from genkit.middleware import BaseMiddleware
+from genkit.middleware import BaseMiddleware, MiddlewareContext
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware
 
@@ -45,7 +45,7 @@ ai = Genkit(
 class LoggingMiddleware(BaseMiddleware):
     """Log request/response details without changing behavior."""
 
-    async def wrap_model(self, params, next_fn):
+    async def wrap_model(self, params, next_fn, ctx: MiddlewareContext):
         await logger.ainfo('middleware saw request', message_count=len(params.request.messages))
         response = await next_fn(params)
         await logger.ainfo('middleware saw response', finish_reason=response.finish_reason)
@@ -62,7 +62,7 @@ class ConciseReplyMiddleware(BaseMiddleware):
 
     instruction: str = 'Answer in one short paragraph.'
 
-    async def wrap_model(self, params, next_fn):
+    async def wrap_model(self, params, next_fn, ctx: MiddlewareContext):
         system_message = Message(role=Role.SYSTEM, content=[Part(root=TextPart(text=self.instruction))])
         params.request = params.request.model_copy()
         params.request.messages = [system_message, *params.request.messages]

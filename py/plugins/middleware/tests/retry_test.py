@@ -23,7 +23,7 @@ from pydantic import ValidationError
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._error import GenkitError
-from genkit.middleware import ModelHookParams
+from genkit.middleware import MiddlewareContext, ModelHookParams
 from genkit.plugins.middleware import Retry
 
 
@@ -36,19 +36,19 @@ def _make_params() -> ModelHookParams:
 
 
 @pytest.mark.asyncio
-async def test_retry_success_on_first_attempt() -> None:
+async def test_retry_success_on_first_attempt(ctx: MiddlewareContext) -> None:
     """Test that successful calls pass through without retry."""
     retry = Retry(max_retries=3)
 
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    result = await retry.wrap_model(_make_params(), next_fn)
+    result = await retry.wrap_model(_make_params(), next_fn, ctx)
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_retry_on_retryable_error() -> None:
+async def test_retry_on_retryable_error(ctx: MiddlewareContext) -> None:
     """Test that retryable errors trigger retry."""
     retry = Retry(max_retries=2, initial_delay_ms=10, jitter=False)
 
@@ -61,13 +61,13 @@ async def test_retry_on_retryable_error() -> None:
             raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
         return ModelResponse(message=None)
 
-    result = await retry.wrap_model(_make_params(), next_fn)
+    result = await retry.wrap_model(_make_params(), next_fn, ctx)
     assert result is not None
     assert call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_retry_exhausted() -> None:
+async def test_retry_exhausted(ctx: MiddlewareContext) -> None:
     """Test that errors are raised after max retries."""
     retry = Retry(max_retries=1, initial_delay_ms=10, jitter=False)
 
@@ -75,11 +75,11 @@ async def test_retry_exhausted() -> None:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
 
     with pytest.raises(GenkitError):
-        await retry.wrap_model(_make_params(), next_fn)
+        await retry.wrap_model(_make_params(), next_fn, ctx)
 
 
 @pytest.mark.asyncio
-async def test_retry_non_retryable_error() -> None:
+async def test_retry_non_retryable_error(ctx: MiddlewareContext) -> None:
     """Test that non-retryable errors fail immediately."""
     retry = Retry(max_retries=3)
 
@@ -91,7 +91,7 @@ async def test_retry_non_retryable_error() -> None:
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
 
     with pytest.raises(GenkitError):
-        await retry.wrap_model(_make_params(), next_fn)
+        await retry.wrap_model(_make_params(), next_fn, ctx)
     assert call_count == 1
 
 
@@ -107,7 +107,7 @@ def test_retry_rejects_negative_max_retries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_non_genkit_error() -> None:
+async def test_retry_non_genkit_error(ctx: MiddlewareContext) -> None:
     """Test that non-GenkitError exceptions are retried."""
     retry = Retry(max_retries=2, initial_delay_ms=10, jitter=False)
 
@@ -120,6 +120,6 @@ async def test_retry_non_genkit_error() -> None:
             raise ConnectionError('Network failure')
         return ModelResponse(message=None)
 
-    result = await retry.wrap_model(_make_params(), next_fn)
+    result = await retry.wrap_model(_make_params(), next_fn, ctx)
     assert result is not None
     assert call_count == 2

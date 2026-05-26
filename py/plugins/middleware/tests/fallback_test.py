@@ -22,7 +22,6 @@ import pytest
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._error import GenkitError
-from genkit._core._registry import Registry
 from genkit.middleware import ModelHookParams
 from genkit.plugins.middleware import Fallback
 
@@ -36,30 +35,23 @@ def _make_params() -> ModelHookParams:
 
 
 def _make_fallback(**kwargs) -> Fallback:
-    """Return a Fallback with framework-bound ``self.registry`` set.
-
-    The engine binds ``self.registry`` before any hook fires in production;
-    direct unit tests have to simulate that step explicitly.
-    """
-    fb = Fallback(**kwargs)
-    fb.registry = Registry()
-    return fb
+    return Fallback(**kwargs)
 
 
 @pytest.mark.asyncio
-async def test_fallback_success_on_first_model() -> None:
+async def test_fallback_success_on_first_model(ctx) -> None:
     """Test that successful primary model calls pass through."""
     fallback = _make_fallback(models=['model2', 'model3'])
 
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    result = await fallback.wrap_model(_make_params(), next_fn)
+    result = await fallback.wrap_model(_make_params(), next_fn, ctx)
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_fallback_on_retryable_error() -> None:
+async def test_fallback_on_retryable_error(ctx) -> None:
     """Test that retryable errors are classified correctly."""
     fallback = _make_fallback(models=['model2'])
 
@@ -67,11 +59,11 @@ async def test_fallback_on_retryable_error() -> None:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
 
     with pytest.raises(GenkitError):
-        await fallback.wrap_model(_make_params(), next_fn)
+        await fallback.wrap_model(_make_params(), next_fn, ctx)
 
 
 @pytest.mark.asyncio
-async def test_fallback_non_retryable_error() -> None:
+async def test_fallback_non_retryable_error(ctx) -> None:
     """Test that non-retryable errors fail immediately."""
     fallback = _make_fallback(models=['model2'])
 
@@ -79,11 +71,11 @@ async def test_fallback_non_retryable_error() -> None:
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
 
     with pytest.raises(GenkitError):
-        await fallback.wrap_model(_make_params(), next_fn)
+        await fallback.wrap_model(_make_params(), next_fn, ctx)
 
 
 @pytest.mark.asyncio
-async def test_fallback_non_genkit_error() -> None:
+async def test_fallback_non_genkit_error(ctx) -> None:
     """Test that non-GenkitError exceptions fail immediately."""
     fallback = _make_fallback(models=['model2'])
 
@@ -91,4 +83,4 @@ async def test_fallback_non_genkit_error() -> None:
         raise ConnectionError('Network failure')
 
     with pytest.raises(ConnectionError):
-        await fallback.wrap_model(_make_params(), next_fn)
+        await fallback.wrap_model(_make_params(), next_fn, ctx)

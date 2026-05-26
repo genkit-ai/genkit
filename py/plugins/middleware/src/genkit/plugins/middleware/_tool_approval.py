@@ -14,13 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tool approval middleware for Genkit.
-
-Requires explicit approval for tool calls by interrupting execution and
-waiting for the caller to approve and resume. Tools in the allowed list
-bypass approval. Useful for sensitive operations or user confirmation
-flows.
-"""
+"""Tool approval middleware for Genkit."""
 
 from __future__ import annotations
 
@@ -31,56 +25,35 @@ from pydantic import BaseModel, Field
 
 from genkit._ai._tools import Interrupt
 from genkit._core._tracing import SpanMetadata, run_in_new_span
-from genkit.middleware import BaseMiddleware, MultipartToolResponse, ToolHookParams
+from genkit.middleware import BaseMiddleware, MiddlewareContext, MultipartToolResponse, ToolHookParams
 
 
-class ToolApproval(BaseMiddleware):
-    """Tool approval middleware that interrupts execution for non-allowed tools.
-
-    A tool call is allowed through only when one of the following is true:
-
-    * The tool's name appears in ``allowed_tools``.
-    * The call is being resumed with explicit approval metadata
-      (``resumed.toolApproved: true``).
-
-    An empty ``allowed_tools`` list therefore requires approval for every
-    tool call.
-
-    Allowed-list entries must match the plain tool name as passed to
-    ``define_tool`` (e.g. ``'search'``), not the full registry key
-    (e.g. ``'/tool/search'``).
-    """
+class ToolApprovalConfig(BaseModel):
+    """Tools that may run without an approval interrupt."""
 
     allowed_tools: list[str] = Field(default_factory=list)
+
+
+class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
+    """Tool approval middleware that interrupts execution for non-allowed tools."""
 
     async def wrap_tool(
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
     ) -> MultipartToolResponse:
-        """Intercept tool execution and require approval if not in allowed list.
-
-        Tools in ``allowed_tools`` (or those resumed with explicit approval)
-        pass through to ``next_fn``.  All others raise ``Interrupt`` with a
-        message identifying the blocked tool — the engine converts that into
-        the wire-shape interrupt ``ToolRequestPart`` the caller sees.
-        """
+        """Intercept tool execution and require approval if not in allowed list."""
         tool_name = params.tool.name
 
-        # Tools in the allowed list run without interruption.
-        if tool_name in self.allowed_tools:
+        if tool_name in self.config.allowed_tools:
             return await next_fn(params)
 
-        # Check if this is an approved resume (caller must opt in explicitly;
-        # Bare resume metadata alone is not treated as approval; toolApproved must be explicit.
         metadata = params.tool_request_part.metadata or {}
         resumed = metadata.get('resumed')
         if isinstance(resumed, dict) and resumed.get('toolApproved'):
             return await next_fn(params)
 
-        # Emit a tool-shaped span so the interrupt is attributed to the tool in traces.
-        # From the trace tree, the consumer of Dev UI should see that a tool action span
-        # was created and immediately interrupted.
         tool_input = params.tool_request_part.tool_request.input
         with run_in_new_span(
             SpanMetadata(name=tool_name, type='action', subtype='tool', input=tool_input),

@@ -43,7 +43,7 @@ Or register all five with the ``Middleware`` plugin so they appear in
 the Dev UI.
 """
 
-from genkit.middleware import MiddlewareDesc
+from genkit.middleware import GenerateMiddleware
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, new_middleware
 from genkit.plugins.middleware._fallback import Fallback
 from genkit.plugins.middleware._filesystem import Filesystem
@@ -86,7 +86,7 @@ class Middleware(Plugin):
         """No actions to list."""
         return []
 
-    def list_middleware(self) -> list[MiddlewareDesc]:
+    def list_middleware(self) -> list[GenerateMiddleware]:
         """Return descriptors for all middleware exposed by this plugin."""
         return [
             new_middleware(

@@ -21,7 +21,7 @@ import pytest
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._registry import Registry
 from genkit._core._typing import ToolRequest, ToolRequestPart
-from genkit.middleware import MultipartToolResponse, ToolHookParams
+from genkit.middleware import MiddlewareContext, MultipartToolResponse, ToolHookParams
 from genkit.plugins.middleware import ToolApproval
 
 
@@ -36,7 +36,7 @@ def _make_tool(name: str):
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_allowed_tool() -> None:
+async def test_tool_approval_allowed_tool(ctx: MiddlewareContext) -> None:
     """Test that allowed tools pass through without approval."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
@@ -48,12 +48,12 @@ async def test_tool_approval_allowed_tool() -> None:
     tool_request_part = ToolRequestPart(tool_request=tool_request)
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
-    result = await approval.wrap_tool(params, next_fn)
+    result = await approval.wrap_tool(params, next_fn, ctx)
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_non_allowed_tool() -> None:
+async def test_tool_approval_non_allowed_tool(ctx: MiddlewareContext) -> None:
     """Test that non-allowed tools raise Interrupt."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
@@ -66,12 +66,12 @@ async def test_tool_approval_non_allowed_tool() -> None:
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt) as exc_info:
-        await approval.wrap_tool(params, next_fn)
+        await approval.wrap_tool(params, next_fn, ctx)
     assert 'delete_database' in exc_info.value.metadata['message']
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_resumed_with_approval() -> None:
+async def test_tool_approval_resumed_with_approval(ctx: MiddlewareContext) -> None:
     """Test that resumed tools with approval metadata pass through."""
     approval = ToolApproval(allowed_tools=[])
 
@@ -86,12 +86,12 @@ async def test_tool_approval_resumed_with_approval() -> None:
     )
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
-    result = await approval.wrap_tool(params, next_fn)
+    result = await approval.wrap_tool(params, next_fn, ctx)
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_tool_approval_empty_allowed_list() -> None:
+async def test_tool_approval_empty_allowed_list(ctx: MiddlewareContext) -> None:
     """Test that empty allowed list requires approval for all tools."""
     approval = ToolApproval(allowed_tools=[])
 
@@ -104,4 +104,4 @@ async def test_tool_approval_empty_allowed_list() -> None:
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt):
-        await approval.wrap_tool(params, next_fn)
+        await approval.wrap_tool(params, next_fn, ctx)

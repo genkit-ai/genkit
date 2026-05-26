@@ -14,13 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Skills middleware for Genkit.
-
-Scans skill directories for ``SKILL.md`` files and injects a system
-prompt describing the available skills. Also contributes a ``use_skill``
-tool for loading the full skill instructions into the conversation
-context on demand.
-"""
+"""Skills middleware for Genkit."""
 
 from __future__ import annotations
 
@@ -37,49 +31,30 @@ from genkit._ai._tools import define_tool
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._typing import Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, GenerateHookParams
+from genkit.middleware import BaseMiddleware, GenerateHookParams, MiddlewareContext
 
-# Marker placed in TextPart.metadata so later iterations can find and replace
-# the skills block without duplicating it.
 _SKILLS_MARKER = 'skills-instructions'
-
 _MISSING_DESCRIPTION = 'No description provided.'
 
 
 class _UseSkillInput(PydanticBaseModel):
-    """Input for the ``use_skill`` tool.
-
-    Model providers like Gemini publish tool inputs as JSON objects rather
-    than bare scalars, so we expose the single ``skill_name`` argument as a
-    one-field object schema instead of a raw string.
-    """
+    """Input for the ``use_skill`` tool."""
 
     skill_name: str = Field(description='The name of the skill to load (as listed in the system prompt).')
 
 
-class Skills(BaseMiddleware):
-    """Skills middleware that exposes ``SKILL.md`` files as loadable instructions.
-
-    Scans the configured directories for subdirectories containing a
-    ``SKILL.md`` file. Each discovered skill is exposed via:
-
-    * a system prompt that lists every available skill and its
-      description; and
-    * a ``use_skill`` tool, contributed per generate call, that the model
-      can invoke to load the full ``SKILL.md`` content on demand.
-
-    Skills are scanned once per ``generate()`` call (inside ``tools()``),
-    so filesystem changes between calls are always picked up.
-    """
+class SkillsConfig(PydanticBaseModel):
+    """Directories to scan for skill folders containing ``SKILL.md``."""
 
     skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
 
-    # --- skill scanning ---
+
+class Skills(BaseMiddleware[SkillsConfig]):
+    """Skills middleware that exposes ``SKILL.md`` files as loadable instructions."""
 
     def _scan_skills(self) -> dict[str, dict[str, str]]:
-        """Scan skill directories and return ``{skill_name: {path, description}}``."""
         skills: dict[str, dict[str, str]] = {}
-        for path_str in self.skill_paths:
+        for path_str in self.config.skill_paths:
             path = Path(path_str).resolve()
             if not path.is_dir():
                 continue
@@ -99,7 +74,6 @@ class Skills(BaseMiddleware):
         return skills
 
     def _parse_skill_file(self, path: Path) -> tuple[str, str]:
-        """Return ``(name, description)`` from SKILL.md YAML frontmatter."""
         try:
             content = path.read_text(encoding='utf-8').lstrip('\ufeff')
         except Exception:
@@ -117,10 +91,7 @@ class Skills(BaseMiddleware):
         except Exception:
             return '', ''
 
-    # --- prompt injection ---
-
     def _build_skills_prompt(self, skills: dict[str, dict[str, str]]) -> str:
-        """Build the skills system prompt, omitting skills with no description."""
         if not skills:
             return ''
         lines = [
@@ -140,7 +111,6 @@ class Skills(BaseMiddleware):
         return '\n'.join(lines)
 
     def _inject_skills_prompt(self, request: ModelRequest, prompt_text: str) -> ModelRequest:
-        """Inject or refresh skills prompt in the system message."""
         messages = list(request.messages)
         system_idx: int | None = None
         for i, msg in enumerate(messages):
@@ -153,7 +123,6 @@ class Skills(BaseMiddleware):
 
         if system_idx is not None:
             msg = messages[system_idx]
-            # Replace existing skills part or append.
             new_content = []
             replaced = False
             for part in msg.content:
@@ -173,30 +142,13 @@ class Skills(BaseMiddleware):
         new_request.messages = messages
         return new_request
 
-    # --- middleware hooks ---
-
-    def tools(self) -> list[Any]:
-        """Return a ``use_skill`` action scoped to the current generate call.
-
-        Skills are scanned fresh inside ``use_skill``, so ``SKILL.md``
-        files added or modified mid-conversation are picked up. This
-        matches ``wrap_generate``, which also re-scans each turn to
-        refresh the system prompt.
-        """
-        # Initial scan only decides whether to expose the tool at all; the
-        # closure rescans on every invocation so the model sees up-to-date
-        # skills even within a single generate() call.
+    def tools(self, ctx: MiddlewareContext) -> list[Any]:
         if not self._scan_skills():
             return []
 
         scratch = Registry()
 
         async def use_skill(input: _UseSkillInput) -> str:
-            """Load the full instructions for a named skill.
-
-            Returns the full ``SKILL.md`` content on success, or a short
-            error string if the skill is unknown or unreadable.
-            """
             skill_name = input.skill_name
             skills = await asyncio.to_thread(self._scan_skills)
             info = skills.get(skill_name)
@@ -216,8 +168,8 @@ class Skills(BaseMiddleware):
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
     ) -> ModelResponse:
-        """Inject the skills system prompt before each generate iteration."""
         skills = await asyncio.to_thread(self._scan_skills)
         if skills:
             prompt_text = self._build_skills_prompt(skills)

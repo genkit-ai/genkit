@@ -23,7 +23,7 @@ import pytest
 
 from genkit import ModelRequest, ModelResponse
 from genkit._core._model import GenerateActionOptions
-from genkit.middleware import GenerateHookParams
+from genkit.middleware import GenerateHookParams, MiddlewareContext
 from genkit.plugins.middleware import Skills
 
 
@@ -36,31 +36,31 @@ def _make_params() -> GenerateHookParams:
 
 
 @pytest.mark.asyncio
-async def test_skills_no_paths() -> None:
+async def test_skills_no_paths(ctx: MiddlewareContext) -> None:
     """Test that middleware works with no skill paths."""
     skills = Skills(skill_paths=[])
 
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    result = await skills.wrap_generate(_make_params(), next_fn)
+    result = await skills.wrap_generate(_make_params(), next_fn, ctx)
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_skills_nonexistent_path() -> None:
+async def test_skills_nonexistent_path(ctx: MiddlewareContext) -> None:
     """Test that nonexistent paths are silently skipped."""
     skills = Skills(skill_paths=['/nonexistent/path'])
 
     async def next_fn(params):
         return ModelResponse(message=None)
 
-    result = await skills.wrap_generate(_make_params(), next_fn)
+    result = await skills.wrap_generate(_make_params(), next_fn, ctx)
     assert result is not None
 
 
 @pytest.mark.asyncio
-async def test_skills_scan_with_skill() -> None:
+async def test_skills_scan_with_skill(ctx: MiddlewareContext) -> None:
     """Test that skills are scanned and injected into system message."""
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = Path(tmpdir) / 'test-skill'
@@ -80,7 +80,7 @@ You are a test assistant.
             assert len(params.request.messages) > 0
             return ModelResponse(message=None)
 
-        result = await skills.wrap_generate(_make_params(), next_fn)
+        result = await skills.wrap_generate(_make_params(), next_fn, ctx)
         assert result is not None
 
 

@@ -19,18 +19,13 @@
 Provides sandboxed file operations — ``list_files``, ``read_file``,
 ``write_file``, ``edit_file`` — confined to a configurable root directory.
 
-Tracks file mtime and size to detect external modifications and to
-suppress redundant reads. Error messages are queued as user-role
-messages via the engine's ``enqueue_parts`` mechanism so the model can
-observe the failure and self-correct.
+``read_file`` queues file content as user messages via ``ctx.enqueue_parts``
+so the tool response stays small. Tool errors are queued the same way so the
+model can self-correct on the next turn.
 
-The read/write tracking cache lives on the ``Filesystem`` instance, so
-its lifetime matches the instance lifetime — typically one "agent
-session" spanning multiple ``ai.generate()`` calls. Reads from an
-earlier call (including a call that was interrupted for tool approval
-and resumed later) carry over and satisfy the write guard on a later
-call. To isolate two concurrent agents, give each one its own
-``Filesystem(...)`` instance.
+Like the JS middleware, this class holds no session cache. Each ``generate()``
+call gets a fresh middleware copy; only per-call ``ctx.enqueue_parts`` carries
+read content forward inside that call's message stream.
 """
 
 from __future__ import annotations
@@ -39,14 +34,11 @@ import asyncio
 import base64
 import mimetypes
 import os
-import threading
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel as PydanticBaseModel, PrivateAttr, model_validator
+from pydantic import BaseModel as PydanticBaseModel
 
 from genkit._ai._tools import Interrupt, define_tool
 from genkit._core._model import ModelResponse
@@ -60,6 +52,7 @@ from genkit._core._typing import (
 from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
+    MiddlewareContext,
     MultipartToolResponse,
     ToolHookParams,
 )
@@ -106,95 +99,46 @@ class _EditFileInput(PydanticBaseModel):
     edits: list[_EditSpec]
 
 
-# File-size limits.
 _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB — absolute ceiling for reading
 _MAX_READ_SLICE_BYTES = 256 * 1024  # 256 KB — max bytes returned per slice
-_MAX_CACHE_ENTRIES = 200
-
-# Stub returned when an unchanged file is re-requested at the same byte range.
-_FILE_UNCHANGED_STUB = (
-    'File unchanged since last read. '
-    'The content from the earlier read_file result in this conversation is still current'
-    ' — refer to that instead of re-reading.'
-)
 
 
-@dataclass
-class _FileState:
-    """Per-path read state used for change detection and redundant-read suppression."""
-
-    mtime: float
-    size: int
-    offset: int  # 0 when the read covered the whole file
-    limit: int  # 0 when the read covered the whole file
-
-
-class Filesystem(BaseMiddleware):
-    """Filesystem middleware with sandboxed file operations.
-
-    Contributes the following tools via ``tools()``:
-
-    * ``list_files`` and ``read_file`` — always.
-    * ``write_file`` and ``edit_file`` — only when
-      ``allow_write_access=True``.
-
-    All paths are restricted to ``root_dir``. Tool errors are queued as
-    user messages via ``self.enqueue_parts`` (bound by the engine at the
-    start of each ``generate()`` call) so the model can observe the
-    failure and self-correct.
-
-    The file-state cache (mtime + size + last-read range) lives on the
-    instance, so the read-before-write guard and external-modification
-    check survive across multiple ``ai.generate()`` calls on the same
-    instance — for example, a ``read_file`` in one call satisfies the
-    guard for a ``write_file`` that runs after a ``ToolApproval``
-    interrupt + resume. The natural scope is "one agent session": build
-    a fresh ``Filesystem(...)`` per agent and reuse it for the duration
-    of that agent's work. Sharing one instance across truly parallel
-    agents lets them see each other's read state, which defeats the
-    external-modification check — give each agent its own instance.
-    """
+class FilesystemConfig(PydanticBaseModel):
+    """Sandbox root and write/tool naming options."""
 
     root_dir: str
     allow_write_access: bool = False
     tool_name_prefix: str = ''
 
-    _root_abs: str = PrivateAttr(default='')
-    # Cached short-name set used by ``wrap_tool`` to decide whether a tool
-    # belongs to this middleware. Computed once after validation since
-    # ``tool_name_prefix`` is immutable.
-    _fs_tool_name_set: frozenset[str] = PrivateAttr(default_factory=frozenset)
-    # Session-scoped state. Lives for the lifetime of the instance so
-    # reads in one ``ai.generate()`` carry over to writes in the next.
-    _cache: OrderedDict[str, _FileState] = PrivateAttr(default_factory=OrderedDict)
-    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    @model_validator(mode='after')
-    def _validate_root(self) -> Filesystem:
-        if not self.root_dir or not self.root_dir.strip():
+class Filesystem(BaseMiddleware[FilesystemConfig]):
+    """Filesystem middleware with sandboxed file operations.
+
+    Contributes ``list_files``, ``read_file``, and optionally ``write_file``
+    and ``edit_file``. Tool errors are queued via ``ctx.enqueue_parts`` so the
+    model can self-correct on the next turn.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
+        super().__init__(**kwargs)
+        if not self.config.root_dir or not self.config.root_dir.strip():
             raise ValueError('Filesystem.root_dir must not be empty.')
-        self._root_abs = str(Path(self.root_dir).resolve())
-        names = {self._tool_name('list_files'), self._tool_name('read_file')}
-        if self.allow_write_access:
-            names |= {self._tool_name('write_file'), self._tool_name('edit_file')}
-        self._fs_tool_name_set = frozenset(names)
-        return self
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    @property
+    def _root_abs(self) -> str:
+        return str(Path(self.config.root_dir).resolve())
 
     def _tool_name(self, base: str) -> str:
-        return f'{self.tool_name_prefix}{base}'
+        return f'{self.config.tool_name_prefix}{base}'
+
+    def _filesystem_tool_names(self) -> frozenset[str]:
+        names = {self._tool_name('list_files'), self._tool_name('read_file')}
+        if self.config.allow_write_access:
+            names |= {self._tool_name('write_file'), self._tool_name('edit_file')}
+        return frozenset(names)
 
     def _resolve_safe(self, rel: str) -> str:
-        """Resolve ``rel`` to an absolute path, raising ValueError if it escapes root.
-
-        Comparison goes through ``os.path.normcase`` so the case-insensitive
-        Windows filesystem doesn't punch a hole in the sandbox check.
-        """
-        # Strip both forward and back slashes — the latter matters on Windows
-        # where users can paste backslash-prefixed relative paths.
+        """Resolve ``rel`` to an absolute path, raising ValueError if it escapes root."""
         rel = rel.strip().lstrip('/').lstrip('\\')
         if not rel:
             rel = '.'
@@ -205,26 +149,8 @@ class Filesystem(BaseMiddleware):
             raise ValueError(f'Path {rel!r} escapes the root directory.')
         return candidate
 
-    def _get_cache(self, abs_path: str) -> _FileState | None:
-        with self._lock:
-            return self._cache.get(abs_path)
-
-    def _set_cache(self, abs_path: str, state: _FileState) -> None:
-        with self._lock:
-            self._cache[abs_path] = state
-            while len(self._cache) > _MAX_CACHE_ENTRIES:
-                self._cache.popitem(last=False)
-
-    # ------------------------------------------------------------------
-    # Tool implementations
-    # ------------------------------------------------------------------
-
     def _list_files(self, dir_path: str = '', recursive: bool = False) -> list[dict[str, Any]]:
-        """List files and directories under ``dir_path`` (relative to root).
-
-        Paths in the returned entries are relative to ``dir_path``, not to root —
-        matching the non-recursive case.
-        """
+        """List files and directories under ``dir_path`` (relative to root)."""
         abs_dir = self._resolve_safe(dir_path)
         if not os.path.isdir(abs_dir):
             raise ValueError(f'Not a directory: {dir_path!r}')
@@ -263,12 +189,7 @@ class Filesystem(BaseMiddleware):
         limit: int,
         enqueue_parts: Callable[[list[Part]], None] | None,
     ) -> str:
-        """Read a file and enqueue its content as a user message.
-
-        Returns a short acknowledgement string (not the file content itself) so
-        the tool response stays small — actual content reaches the model via the
-        enqueued user message.
-        """
+        """Read a file and enqueue its content as a user message."""
         abs_path = self._resolve_safe(file_path)
         if not os.path.isfile(abs_path):
             raise ValueError(f'File not found: {file_path!r}')
@@ -276,17 +197,6 @@ class Filesystem(BaseMiddleware):
         stat = os.stat(abs_path)
         if stat.st_size > _MAX_FILE_SIZE_BYTES:
             raise ValueError(f'File too large ({stat.st_size:,} bytes; max {_MAX_FILE_SIZE_BYTES:,}).')
-
-        # Dedup: if mtime, size, offset, and limit all match, skip re-read.
-        cached = self._get_cache(abs_path)
-        if (
-            cached is not None
-            and cached.mtime == stat.st_mtime
-            and cached.size == stat.st_size
-            and cached.offset == offset
-            and cached.limit == limit
-        ):
-            return _FILE_UNCHANGED_STUB
 
         mime_type, _ = mimetypes.guess_type(abs_path)
         is_image = bool(mime_type and mime_type.startswith('image/'))
@@ -301,11 +211,8 @@ class Filesystem(BaseMiddleware):
             if enqueue_parts:
                 media_part = Part(root=MediaPart(media=Media(url=data_uri, content_type=mime_type)))
                 enqueue_parts([media_part])
-            new_state = _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=offset, limit=limit)
-            self._set_cache(abs_path, new_state)
             return f'Image {file_path} queued as media part.'
 
-        # Text file
         with open(abs_path, encoding='utf-8', errors='replace') as fh:
             lines = fh.readlines()
 
@@ -324,41 +231,19 @@ class Filesystem(BaseMiddleware):
 
         if enqueue_parts:
             enqueue_parts([Part(root=TextPart(text=wrapped))])
-        new_state = _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=offset, limit=limit)
-        self._set_cache(abs_path, new_state)
         return f'File {file_path} read successfully. Content queued as user message.'
 
     def _write_file_impl(self, file_path: str, content: str) -> str:
         abs_path = self._resolve_safe(file_path)
-        exists = os.path.isfile(abs_path)
-
-        if exists:
-            cached = self._get_cache(abs_path)
-            if cached is None:
-                raise ValueError(f'File must be read before writing: {file_path!r}')
-            stat = os.stat(abs_path)
-            if cached.mtime != stat.st_mtime or cached.size != stat.st_size:
-                raise ValueError(f'File externally modified since last read: {file_path!r}. Re-read before writing.')
-
         os.makedirs(os.path.dirname(abs_path) or '.', exist_ok=True)
         with open(abs_path, 'w', encoding='utf-8') as fh:
             fh.write(content)
-
-        stat = os.stat(abs_path)
-        self._set_cache(abs_path, _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=0, limit=0))
         return f'File {file_path} written successfully.'
 
     def _edit_file_impl(self, file_path: str, edits: list[dict[str, Any]]) -> str:
         abs_path = self._resolve_safe(file_path)
         if not os.path.isfile(abs_path):
             raise ValueError(f'File not found: {file_path!r}')
-
-        cached = self._get_cache(abs_path)
-        if cached is None:
-            raise ValueError(f'File must be read before editing: {file_path!r}')
-        stat = os.stat(abs_path)
-        if cached.mtime != stat.st_mtime or cached.size != stat.st_size:
-            raise ValueError(f'File externally modified since last read: {file_path!r}. Re-read before editing.')
 
         with open(abs_path, encoding='utf-8', errors='replace') as fh:
             content = fh.read()
@@ -380,43 +265,17 @@ class Filesystem(BaseMiddleware):
 
         with open(abs_path, 'w', encoding='utf-8') as fh:
             fh.write(content)
-        stat = os.stat(abs_path)
-        self._set_cache(abs_path, _FileState(mtime=stat.st_mtime, size=stat.st_size, offset=0, limit=0))
         return f'File {file_path} edited successfully.'
 
-    # ------------------------------------------------------------------
-    # Middleware hooks
-    # ------------------------------------------------------------------
-
-    def tools(self) -> list[Any]:
-        """Return the filesystem tool actions backed by this instance's cache.
-
-        The read/write tracking lives on ``self`` (see the class docstring),
-        so reads in one ``ai.generate()`` call carry over to writes in the
-        next on the same instance. ``self.enqueue_parts`` is rebound by the
-        engine at the start of every call; closures pick up the current
-        binding so queued file content lands in the right call's message
-        stream.
-        """
-        enqueue_parts = self.enqueue_parts
-
+    def tools(self, ctx: MiddlewareContext) -> list[Any]:
+        """Return filesystem tool actions for this generate() call."""
+        enqueue_parts = ctx.enqueue_parts
         scratch = Registry()
 
         async def list_files(input: _ListFilesInput) -> list[dict[str, Any]]:
-            """List files and directories within the workspace.
-
-            Returns entries with ``path`` (relative to the queried directory),
-            ``is_directory``, and ``size_bytes``.
-            """
             return await asyncio.to_thread(self._list_files, input.dir_path, input.recursive)
 
         async def read_file(input: _ReadFileInput) -> str:
-            """Read a file and queue its content as a user message.
-
-            File content is delivered via an enqueued user message so the tool
-            response stays small. Use ``offset`` (1-indexed first line) and
-            ``limit`` (max lines) to read slices of large files.
-            """
             return await asyncio.to_thread(
                 self._read_file_impl,
                 input.file_path,
@@ -429,22 +288,12 @@ class Filesystem(BaseMiddleware):
         t_read = define_tool(scratch, read_file, name=self._tool_name('read_file'))
         tools_out = [t_list.action(), t_read.action()]
 
-        if self.allow_write_access:
+        if self.config.allow_write_access:
 
             async def write_file(input: _WriteFileInput) -> str:
-                """Write content to a file (requires prior read for existing files).
-
-                Creates parent directories if needed. Fails if the file was externally
-                modified since the last ``read_file`` call.
-                """
                 return await asyncio.to_thread(self._write_file_impl, input.file_path, input.content)
 
             async def edit_file(input: _EditFileInput) -> str:
-                """Apply string-replacement edits to a file (requires prior read).
-
-                Each edit must have ``old_string`` and ``new_string``. Set
-                ``replace_all: true`` to replace every occurrence instead of just the first.
-                """
                 return await asyncio.to_thread(
                     self._edit_file_impl,
                     input.file_path,
@@ -461,6 +310,7 @@ class Filesystem(BaseMiddleware):
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
     ) -> ModelResponse:
         """Pass through — the engine drains enqueued messages automatically."""
         return await next_fn(params)
@@ -469,17 +319,10 @@ class Filesystem(BaseMiddleware):
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
     ) -> MultipartToolResponse:
-        """Catch filesystem tool errors and enqueue them as user messages.
-
-        On success, returns the tool result as-is.  ``Interrupt`` (from
-        ``next_fn`` or anywhere downstream) propagates unchanged so the
-        engine can turn it into a wire interrupt.  Any *other* exception
-        from a filesystem tool is converted into a brief acknowledgement
-        response, with the error text queued via ``self.enqueue_parts`` so
-        the model sees the failure on the next turn and can self-correct.
-        """
-        if params.tool.name not in self._fs_tool_name_set:
+        """Catch filesystem tool errors and enqueue them as user messages."""
+        if params.tool.name not in self._filesystem_tool_names():
             return await next_fn(params)
 
         try:
@@ -488,6 +331,5 @@ class Filesystem(BaseMiddleware):
             raise
         except Exception as exc:
             error_msg = f'Tool "{params.tool.name}" failed: {exc}'
-            if self.enqueue_parts is not None:
-                self.enqueue_parts([Part(root=TextPart(text=error_msg))])
+            ctx.enqueue_parts([Part(root=TextPart(text=error_msg))])
             return MultipartToolResponse(output='Tool call failed; see user message below for details.')
