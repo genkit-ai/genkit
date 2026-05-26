@@ -1087,7 +1087,7 @@ def _use_to_wire_metadata(
             name = cls_index.get(type(entry))
             if not name:
                 continue
-            config = entry.model_dump(exclude_none=True, mode='json')
+            config = entry.config.model_dump(exclude_none=True, mode='json')
             item = {'name': name}
             if config:
                 item['config'] = config

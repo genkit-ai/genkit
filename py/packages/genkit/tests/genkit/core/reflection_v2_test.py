@@ -41,7 +41,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from pydantic import Field
+from pydantic import BaseModel, Field
 from websockets.asyncio.server import serve
 
 from genkit import Genkit
@@ -260,7 +260,7 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
     Without explicit serialization the response would fall through to
     ``json.dumps(default=str)`` and the dev-ui would receive the string
     ``"name='concise_reply_mw' description=None ..."`` instead of the
-    ``MiddlewareDesc`` wire shape.
+    ``GenerateMiddleware`` wire shape.
     """
 
     ai = Genkit()
@@ -299,7 +299,7 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
 async def test_reflection_server_v2_list_values_includes_derived_config_schema(
     fake_manager: FakeReflectionManager,
 ) -> None:
-    """Middleware registered via ``MiddlewareDesc(cls=...)`` exposes a derived configSchema.
+    """Middleware registered via ``GenerateMiddleware(cls=...)`` exposes a derived configSchema.
 
     The Dev UI uses this schema to render a config form for each registered
     middleware.
@@ -307,11 +307,14 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
 
     ai = Genkit()
 
-    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
-    class _Fallback(BaseMiddleware):
+    class _FallbackConfig(BaseModel):
         models: list[str] = Field(default_factory=list)
         statuses: list[str] = Field(default_factory=list)
         isolate_config: bool = False
+
+    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
+    class _Fallback(BaseMiddleware[_FallbackConfig]):
+        pass
 
     client, task = await _run_client_lifecycle(ai.registry, fake_manager)
     try:

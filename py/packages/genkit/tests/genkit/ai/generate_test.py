@@ -38,8 +38,8 @@ from genkit._core._typing import (
 from genkit.middleware import (
     BaseMiddleware,
     GenerateHookParams,
+    GenerateMiddleware,
     MiddlewareContext,
-    MiddlewareDesc,
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
@@ -375,7 +375,7 @@ async def test_generate_accepts_inline_base_middleware_instance() -> None:
 @pytest.mark.asyncio
 async def test_generate_interleaves_inline_instances_and_middleware_refs() -> None:
     """Inline instances and ``MiddlewareRef`` entries preserve ``use=`` ordering together."""
-    ai = Genkit(plugins=[middleware_plugin([MiddlewareDesc(cls=PostMiddleware, name='post_mw')])])
+    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware, name='post_mw')])])
     define_echo_model(ai)
 
     response = await ai.generate(
@@ -387,11 +387,13 @@ async def test_generate_interleaves_inline_instances_and_middleware_refs() -> No
     assert response.text == '[ECHO] user: "PRE hi" POST'
 
 
-@ai.middleware(name='configured_prefix_mw')
-class ConfiguredPrefixMiddleware(BaseMiddleware):
-    """Inline middleware driven purely by a pydantic config field."""
-
+class _PrefixConfig(BaseModel):
     prefix: str = 'DEFAULT'
+
+
+@ai.middleware(name='configured_prefix_mw')
+class ConfiguredPrefixMiddleware(BaseMiddleware[_PrefixConfig]):
+    """Inline middleware driven purely by a pydantic config field."""
 
     async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
@@ -399,7 +401,7 @@ class ConfiguredPrefixMiddleware(BaseMiddleware):
             ModelHookParams(
                 request=ModelRequest(
                     messages=[
-                        Message(role=Role.USER, content=[Part(TextPart(text=f'{self.prefix} {txt}'))]),
+                        Message(role=Role.USER, content=[Part(TextPart(text=f'{self.config.prefix} {txt}'))]),
                     ],
                 ),
                 on_chunk=params.on_chunk,
@@ -424,11 +426,24 @@ async def test_generate_inline_instance_uses_pydantic_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_inline_instance_accepts_config_object() -> None:
+    """``Retry(config=RetryConfig(...))`` attaches a validated config instance."""
+    ai = Genkit()
+    define_echo_model(ai)
+
+    response = await ai.generate(
+        model='echoModel',
+        prompt='hi',
+        use=[ConfiguredPrefixMiddleware(config=_PrefixConfig(prefix='[CFG]'))],
+    )
+
+    assert response.text == '[ECHO] user: "[CFG] hi"'
+
+
+@pytest.mark.asyncio
 async def test_generate_middleware_ref_config_instantiates_class() -> None:
     """``MiddlewareRef(config=...)`` feeds ``**config`` into the class constructor."""
-    ai = Genkit(
-        plugins=[middleware_plugin([MiddlewareDesc(cls=ConfiguredPrefixMiddleware, name='configured_prefix_mw')])]
-    )
+    ai = Genkit(plugins=[middleware_plugin([new_middleware(ConfiguredPrefixMiddleware, name='configured_prefix_mw')])])
     define_echo_model(ai)
 
     response = await ai.generate(
@@ -447,16 +462,14 @@ async def test_ai_middleware_decorator_registers_on_the_app() -> None:
     define_echo_model(local_ai)
 
     @local_ai.middleware(name='live_prefix_mw')
-    class LivePrefixMiddleware(BaseMiddleware):
-        prefix: str = 'DEFAULT'
-
+    class LivePrefixMiddleware(BaseMiddleware[_PrefixConfig]):
         async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
                 ModelHookParams(
                     request=ModelRequest(
                         messages=[
-                            Message(role=Role.USER, content=[Part(TextPart(text=f'{self.prefix} {txt}'))]),
+                            Message(role=Role.USER, content=[Part(TextPart(text=f'{self.config.prefix} {txt}'))]),
                         ],
                     ),
                     on_chunk=params.on_chunk,
@@ -490,21 +503,50 @@ def test_middleware_validation_raises_correct_errors() -> None:
         class InvalidDecoratorMwEmpty(BaseMiddleware):
             pass
 
-    # 2. Test MiddlewareDesc constructor raising ValueError
-    with pytest.raises(ValueError, match='MiddlewareDesc name must be one path-free token'):
-        MiddlewareDesc(cls=PreMiddleware, name='invalid/name')
+    # 2. Test new_middleware helper raising ValueError on bad names
+    with pytest.raises(ValueError, match='GenerateMiddleware name must be one path-free token'):
+        new_middleware(PreMiddleware, name='invalid/name')
 
-    with pytest.raises(ValueError, match='MiddlewareDesc name must be a non-empty string'):
-        MiddlewareDesc(cls=PreMiddleware, name='')
+    with pytest.raises(ValueError, match='GenerateMiddleware name must be a non-empty string'):
+        new_middleware(PreMiddleware, name='')
 
     # 3. Test new_middleware helper behavior
-    desc = new_middleware(cls=PreMiddleware, name='custom_mw', description='custom desc')
-    assert isinstance(desc, MiddlewareDesc)
+    desc = new_middleware(PreMiddleware, name='custom_mw', description='custom desc')
+    assert isinstance(desc, GenerateMiddleware)
     assert desc.name == 'custom_mw'
     assert desc.description == 'custom desc'
 
-    with pytest.raises(ValueError, match='MiddlewareDesc name must be one path-free token'):
-        new_middleware(cls=PreMiddleware, name='invalid/name')
+    with pytest.raises(TypeError, match='pass either config= or keyword config fields'):
+        ConfiguredPrefixMiddleware(config=_PrefixConfig(prefix='x'), prefix='y')
+
+    class _WrongConfig(BaseModel):
+        other: str = 'x'
+
+    with pytest.raises(TypeError, match='expected config type'):
+        ConfiguredPrefixMiddleware(config=_WrongConfig())  # type: ignore[arg-type]
+
+
+def test_base_middleware_rejects_explicit_config_class() -> None:
+    with pytest.raises(TypeError, match='must not define Config'):
+
+        class _Bad(BaseMiddleware):
+            class Config(BaseModel):
+                x: int = 1
+
+
+def test_base_middleware_infers_config_from_generic() -> None:
+    """``BaseMiddleware[RetryConfig]`` sets ``Config`` without a redundant alias."""
+
+    class _RetryConfig(BaseModel):
+        max_retries: int = 3
+
+    class _Retry(BaseMiddleware[_RetryConfig]):
+        pass
+
+    assert _Retry.Config is _RetryConfig
+    assert _Retry(max_retries=5).config.max_retries == 5
+    schema = cast(dict[str, Any], new_middleware(_Retry, name='retry').config_schema)
+    assert schema['properties']['max_retries']['type'] == 'integer'
 
 
 @pytest.mark.asyncio
@@ -564,7 +606,7 @@ async def test_prompt_call_runs_per_call_middleware() -> None:
 @pytest.mark.asyncio
 async def test_prompt_call_use_interleaves_inline_and_refs() -> None:
     """Prompts mix inline ``BaseMiddleware`` and ``MiddlewareRef`` like ``generate``."""
-    ai = Genkit(plugins=[middleware_plugin([MiddlewareDesc(cls=PostMiddleware, name='post_mw')])])
+    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware, name='post_mw')])])
     define_echo_model(ai)
 
     my_prompt = ai.define_prompt(
@@ -619,8 +661,8 @@ async def test_generate_applies_middleware() -> None:
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(cls=PreMiddleware, name='pre_mw'),
-                MiddlewareDesc(cls=PostMiddleware, name='post_mw'),
+                new_middleware(PreMiddleware, name='pre_mw'),
+                new_middleware(PostMiddleware, name='post_mw'),
             ])
         ],
     )
@@ -646,7 +688,7 @@ async def test_generate_applies_middleware() -> None:
 @pytest.mark.asyncio
 async def test_generate_middleware_next_fn_args_optional() -> None:
     """Can call next function without modifying params (pass params through)."""
-    ai = Genkit(plugins=[middleware_plugin([MiddlewareDesc(cls=PostMiddleware, name='post_mw')])])
+    ai = Genkit(plugins=[middleware_plugin([new_middleware(PostMiddleware, name='post_mw')])])
     define_echo_model(ai)
 
     response = await generate_action(
@@ -704,8 +746,8 @@ async def test_generate_middleware_can_modify_context() -> None:
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(cls=AddContextMiddleware, name='add_ctx'),
-                MiddlewareDesc(cls=InjectContextMiddleware, name='inject_ctx'),
+                new_middleware(AddContextMiddleware, name='add_ctx'),
+                new_middleware(InjectContextMiddleware, name='inject_ctx'),
             ])
         ],
     )
@@ -851,8 +893,8 @@ async def test_wrap_generate_called_per_turn() -> None:
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(cls=TrackerA, name='track_gen', description='track generate'),
-                MiddlewareDesc(cls=TrackerB, name='track_gen2', description='track generate 2'),
+                new_middleware(TrackerA, name='track_gen', description='track generate'),
+                new_middleware(TrackerB, name='track_gen2', description='track generate 2'),
             ])
         ],
     )
@@ -926,7 +968,7 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
     ai = Genkit(
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(cls=Tracker, name='track_tool', description='track tool'),
+                new_middleware(Tracker, name='track_tool', description='track tool'),
             ])
         ],
     )

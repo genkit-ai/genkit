@@ -22,7 +22,7 @@ import abc
 from collections.abc import Sequence
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._middleware import MiddlewareDesc
+from genkit._core._middleware import GenerateMiddleware
 from genkit._core._typing import ActionMetadata
 
 
@@ -51,7 +51,7 @@ class Plugin(abc.ABC):
         """
         ...
 
-    def list_middleware(self) -> list[MiddlewareDesc]:
+    def list_middleware(self) -> list[GenerateMiddleware]:
         """Return middleware descriptors for this plugin to register on the app.
 
         This runs while :class:`Genkit` is being constructed, after
@@ -79,7 +79,7 @@ class Plugin(abc.ABC):
 class _MiddlewareDescsPlugin(Plugin):
     """Plugin implementation that contributes only middleware descriptors."""
 
-    def __init__(self, plugin_name: str, descs: list[MiddlewareDesc]) -> None:
+    def __init__(self, plugin_name: str, descs: list[GenerateMiddleware]) -> None:
         self.name = plugin_name
         self._descs = descs
 
@@ -92,11 +92,11 @@ class _MiddlewareDescsPlugin(Plugin):
     async def list_actions(self) -> list[ActionMetadata]:
         return []
 
-    def list_middleware(self) -> list[MiddlewareDesc]:
+    def list_middleware(self) -> list[GenerateMiddleware]:
         return list(self._descs)
 
 
-def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
+def middleware_plugin(descs: Sequence[GenerateMiddleware]) -> Plugin:
     """Wrap a list of middleware descriptors as a single plugin.
 
     Used by Genkit-provided middleware plugins. To build and release your own
@@ -129,7 +129,7 @@ def middleware_plugin(descs: Sequence[MiddlewareDesc]) -> Plugin:
     built = list(descs)
     if not built:
         raise ValueError(
-            'middleware_plugin() needs a non-empty list of MiddlewareDesc instances. '
+            'middleware_plugin() needs a non-empty list of GenerateMiddleware instances. '
             'Construct each with new_middleware(YourMiddleware, name=..., description=...).'
         )
     return _MiddlewareDescsPlugin('extension-middleware', built)

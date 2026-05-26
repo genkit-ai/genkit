@@ -20,8 +20,8 @@ Keeping interfaces here instead of in their implementation modules breaks
 circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Middleware cycle:
 
     1. Registry (_registry.py) imports Plugin (_plugin.py) to manage plugins.
-    2. Plugin (_plugin.py) imports MiddlewareDesc (_middleware.py) to type-hint list_middleware.
-    3. BaseMiddleware/MiddlewareDesc (_middleware.py) need to annotate their request-scoped
+    2. Plugin (_plugin.py) imports GenerateMiddleware (_middleware.py) to type-hint list_middleware.
+    3. BaseMiddleware/GenerateMiddleware (_middleware.py) need to annotate their request-scoped
        registry attribute, which refers back to Registry.
 
     If _middleware.py imported Registry from _registry.py directly, it would complete the

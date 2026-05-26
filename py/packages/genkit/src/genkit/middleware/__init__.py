@@ -66,8 +66,8 @@ A_after()
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
+    GenerateMiddleware,
     MiddlewareContext,
-    MiddlewareDesc,
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
@@ -78,7 +78,7 @@ __all__ = [
     'BaseMiddleware',
     'GenerateHookParams',
     'MiddlewareContext',
-    'MiddlewareDesc',
+    'GenerateMiddleware',
     'ModelHookParams',
     'MultipartToolResponse',
     'ToolHookParams',

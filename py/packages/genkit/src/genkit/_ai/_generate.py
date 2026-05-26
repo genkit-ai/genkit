@@ -50,11 +50,13 @@ from genkit._core._logger import get_logger
 from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
+    GenerateMiddleware,
     MiddlewareContext,
-    MiddlewareDesc,
+    MiddlewareDef,
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
+    _copy_middleware_instance,
     middleware_class_index,
 )
 from genkit._core._model import (
@@ -85,7 +87,13 @@ def register_middleware(
     registry: Registry,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None,
 ) -> list[MiddlewareRef] | None:
-    """Register inline middleware instances on ``registry`` and return refs for ``use=``."""
+    """Normalize ``use=`` to ``MiddlewareRef`` entries (name + config only).
+
+    Inline ``BaseMiddleware`` instances are not stored on the registry. Their
+    config is serialized onto the ref and, when the class is not registered on
+    a parent registry, a ``GenerateMiddleware`` is registered on this layer so
+    ``resolve_middleware_from_use`` can build a fresh instance per ``generate()``.
+    """
     if use is None:
         return None
     refs: list[MiddlewareRef] = []
@@ -99,16 +107,19 @@ def register_middleware(
             # instead of an opaque id. For an unregistered ``use=[Foo()]``
             # passed inline, fall back to a synthetic id that can't collide
             # with any globally registered middleware.
-            registered = cls_index.get(type(entry))
+            mw_cls = type(entry)
+            registered = cls_index.get(mw_cls)
             base_name = registered or f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
             count = name_counts.get(base_name, 0)
             name_counts[base_name] = count + 1
             reg_name = base_name if count == 0 else f'{base_name}__{count}'
-            registry.register_value('middleware', reg_name, entry)
-            # Surface the instance's configured fields on the ref so anything
-            # serializing the rendered request (Dev UI trace's Middleware tab,
-            # downstream tooling) sees what the prompt actually ran with.
-            config = entry.model_dump(exclude_none=True, mode='json') or None
+            if registered is None and registry.lookup_value('middleware', reg_name) is None:
+                registry.register_value(
+                    'middleware',
+                    reg_name,
+                    GenerateMiddleware(cls=mw_cls, name=reg_name),
+                )
+            config = cast(BaseModel, entry.config).model_dump(exclude_none=True, mode='json') or None
             refs.append(MiddlewareRef(name=reg_name, config=config))
         else:
             refs.append(entry)
@@ -119,31 +130,38 @@ def resolve_middleware_from_use(
     registry: Registry,
     use: Sequence[MiddlewareRef] | None,
 ) -> list[BaseMiddleware]:
-    """Resolve a list of ``MiddlewareRef``s to concrete ``BaseMiddleware`` instances."""
+    """Resolve ``MiddlewareRef`` entries to fresh ``BaseMiddleware`` instances.
+
+    Each ref is instantiated from the registered ``GenerateMiddleware`` and
+    ``ref.config`` (same path for Dev UI, dotprompt, and inline ``use=[Mw(...)]``).
+    """
     if not use:
         return []
     out: list[BaseMiddleware] = []
     for entry in use:
         defn = registry.lookup_value('middleware', entry.name)
-        if isinstance(defn, MiddlewareDesc):
-            cfg = entry.config if isinstance(entry.config, dict) else None
-            out.append(defn(cfg))
-            continue
-        if isinstance(defn, BaseMiddleware):
-            # Inline instance registered by register_middleware; the user's
-            # own config is already baked in, so ignore entry.config.
-            out.append(defn)
-            continue
-        raise GenkitError(
-            status='NOT_FOUND',
-            message=(
-                f'A middleware with the name "{entry.name}" cannot be found. '
-                'Please make sure the middleware is registered correctly via the '
-                '@ai.middleware(...) decorator if you defined one inline, or pass '
-                'a middleware instance directly.'
-            ),
-            source='genkit.generate',
-        )
+        if defn is None:
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=(
+                    f'A middleware with the name "{entry.name}" cannot be found. '
+                    'Register it via @ai.middleware(...), a middleware plugin, or pass '
+                    'a BaseMiddleware instance in use= so the framework can normalize it.'
+                ),
+                source='genkit.generate',
+            )
+        if not isinstance(defn, GenerateMiddleware):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'Middleware "{entry.name}" is registered with the wrong type '
+                    f'({type(defn).__name__}). Expected GenerateMiddleware from '
+                    '@ai.middleware(...), a middleware plugin, or inline use= normalization.'
+                ),
+                source='genkit.generate',
+            )
+        cfg = entry.config if isinstance(entry.config, dict) else None
+        out.append(defn.instantiate(cfg))
     return out
 
 
@@ -151,7 +169,7 @@ def resolve_middleware_from_use(
 class _GenerateMiddlewarePipeline:
     """Holds the middleware chain and the shared context for a single generate call."""
 
-    middleware: list[BaseMiddleware]
+    middleware: list[MiddlewareDef]
     ctx: MiddlewareContext
 
 
@@ -161,19 +179,15 @@ def _prepare_middleware(
     registry: Registry,
     enqueue_parts: Callable[[list[Part]], None],
 ) -> _GenerateMiddlewarePipeline:
-    """Return per-call middleware copies and one shared ``MiddlewareContext``.
-
-    The same ``BaseMiddleware`` instance can appear in concurrent ``generate()``
-    calls; shallow-copy each entry so config mutations do not cross calls.
-    """
+    """Return per-call middleware defs and one shared ``MiddlewareContext``."""
     return _GenerateMiddlewarePipeline(
-        middleware=[mw.model_copy() for mw in middleware],
+        middleware=[_copy_middleware_instance(mw) for mw in middleware],
         ctx=MiddlewareContext(registry=registry, enqueue_parts=enqueue_parts),
     )
 
 
 async def _chain_tool_middleware(
-    middleware: list[BaseMiddleware],
+    middleware: list[MiddlewareDef],
     params: ToolHookParams,
     next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
     ctx: MiddlewareContext,
@@ -188,7 +202,7 @@ async def _chain_tool_middleware(
         async def run_next(
             p: ToolHookParams,
             *,
-            _m: BaseMiddleware = _mw,
+            _m: MiddlewareDef = _mw,
             _i: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = _inner,
             _c: MiddlewareContext = _ctx,
         ) -> MultipartToolResponse:
@@ -478,8 +492,11 @@ async def generate_with_request(
                 registry.register_action_from_instance(t)
                 mw_tool_names.append(t.name)
             existing = list(raw_request.tools) if raw_request.tools else []
+            for name in mw_tool_names:
+                if name not in existing:
+                    existing.append(name)
             raw_request = raw_request.model_copy()
-            raw_request.tools = existing + mw_tool_names
+            raw_request.tools = existing
 
     return await _generate_action_turn(
         registry=registry,
@@ -602,7 +619,7 @@ async def _generate_action_turn(
             async def run_next(
                 p: GenerateHookParams,
                 *,
-                _m: BaseMiddleware = _mw,
+                _m: MiddlewareDef = _mw,
                 _i: Callable[[GenerateHookParams], Awaitable[ModelResponse]] = _inner,
                 _c: MiddlewareContext | None = _ctx,
             ) -> ModelResponse:
@@ -633,7 +650,7 @@ async def _generate_action_turn(
             async def run_next(
                 params: ModelHookParams,
                 *,
-                _mw: BaseMiddleware = _mw,
+                _mw: MiddlewareDef = _mw,
                 _inner: Callable[[ModelHookParams], Awaitable[ModelResponse]] = _inner,
                 _c: MiddlewareContext | None = mw_ctx,
             ) -> ModelResponse:

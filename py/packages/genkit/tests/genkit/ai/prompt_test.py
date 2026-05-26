@@ -39,7 +39,8 @@ from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig
 from genkit._core._typing import Part, Role, TextPart, ToolChoice
-from genkit.middleware import BaseMiddleware, MiddlewareContext, MiddlewareDesc, ModelHookParams, middleware_plugin
+from genkit.middleware import BaseMiddleware, MiddlewareContext, ModelHookParams, middleware_plugin
+from genkit.plugin_api import new_middleware
 
 
 class _PreMiddleware(BaseMiddleware):
@@ -884,8 +885,8 @@ async def test_load_prompt_with_use_middleware() -> None:
         model='echoModel',
         plugins=[
             middleware_plugin([
-                MiddlewareDesc(cls=_PreMiddleware, name='pre_mw'),
-                MiddlewareDesc(cls=_PostMiddleware, name='post_mw'),
+                new_middleware(_PreMiddleware, name='pre_mw'),
+                new_middleware(_PostMiddleware, name='post_mw'),
             ])
         ],
     )
@@ -953,6 +954,7 @@ async def test_load_prompt_with_use_middleware_metadata() -> None:
             MiddlewareRef(name='mw1'),
             MiddlewareRef(name='mw2', config={'foo': 'bar'}),
         ]
+        assert with_meta._metadata is not None
         prompt_md = with_meta._metadata['prompt']  # pyright: ignore[reportPrivateUsage]
         assert prompt_md['use'] == [
             {'name': 'mw1'},

@@ -44,7 +44,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from genkit import Genkit
 from genkit._core._action import ActionKind
@@ -316,7 +316,7 @@ async def test_run_action_streaming_primitive_types(
 
 # Real-registry tests for the /api/values?type=middleware endpoint. The other
 # endpoint tests above use a MagicMock registry, but here we want to exercise
-# the actual MiddlewareDesc serialization path the Dev UI consumes — mocking
+# the actual GenerateMiddleware serialization path the Dev UI consumes — mocking
 # would defeat the point.
 
 
@@ -331,16 +331,19 @@ async def _registry_asgi_client(registry: Registry) -> AsyncClient:
 async def test_values_middleware_includes_derived_config_schema() -> None:
     """The Dev UI's /api/values?type=middleware response carries each middleware's configSchema.
 
-    The schema is derived from the middleware class's pydantic fields by ``MiddlewareDesc(cls=...)``.
+    The schema is derived from the middleware class's pydantic fields by ``GenerateMiddleware(cls=...)``.
     """
 
     ai = Genkit()
 
-    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
-    class _Fallback(BaseMiddleware):
+    class _FallbackConfig(BaseModel):
         models: list[str] = Field(default_factory=list)
         statuses: list[str] = Field(default_factory=list)
         isolate_config: bool = False
+
+    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
+    class _Fallback(BaseMiddleware[_FallbackConfig]):
+        pass
 
     client = await _registry_asgi_client(ai.registry)
     try:

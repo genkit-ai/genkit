@@ -96,7 +96,7 @@ from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import (
     BaseMiddleware,
-    MiddlewareDesc,
+    GenerateMiddleware,
     _validate_middleware_key_segment,
 )
 from genkit._core._model import Document
@@ -287,12 +287,12 @@ class Genkit:
         *,
         name: str,
         description: str | None = None,
-    ) -> MiddlewareDesc:
+    ) -> GenerateMiddleware:
         """Register a middleware class on this app's registry under ``name``."""
         res = _validate_middleware_key_segment(name)
         if res.errored:
             raise ValueError(f'middleware name {res.error_message}')
-        desc = MiddlewareDesc(cls=cls, name=name, description=description)
+        desc = GenerateMiddleware(cls=cls, name=name, description=description)
         self.registry.register_value('middleware', name, desc)
         return desc
 

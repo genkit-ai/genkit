@@ -175,8 +175,8 @@ class GenkitError(GenkitModel):
     data: Data | None = None
 
 
-class MiddlewareDescData(GenkitModel):
-    """Model for middlewaredescdata data."""
+class MiddlewareDesc(GenkitModel):
+    """Model for middlewaredesc data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
