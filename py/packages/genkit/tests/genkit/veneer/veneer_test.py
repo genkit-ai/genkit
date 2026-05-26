@@ -53,7 +53,7 @@ from genkit._core._typing import (
     ToolResponse,
     ToolResponsePart,
 )
-from genkit.middleware import BaseMiddleware, MiddlewareContext, ModelHookParams
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
 # type SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
 SetupFixture = tuple[Genkit, EchoModel, ProgrammableModel]
@@ -1011,7 +1011,9 @@ async def test_generate_with_middleware() -> None:
 
     @ai.middleware(name='pre_mw')
     class PreMiddleware(BaseMiddleware):
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
+        async def wrap_model(
+            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
                 ModelHookParams(
@@ -1020,14 +1022,14 @@ async def test_generate_with_middleware() -> None:
                             Message(role=Role.USER, content=[Part(root=TextPart(text=f'PRE {txt}'))]),
                         ],
                     ),
-                    on_chunk=params.on_chunk,
-                    context=params.context,
                 )
             )
 
     @ai.middleware(name='post_mw')
     class PostMiddleware(BaseMiddleware):
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
+        async def wrap_model(
+            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        ) -> ModelResponse:
             resp: ModelResponse = await next_fn(params)
             assert resp.message is not None
             txt = text_from_message(resp.message)
@@ -1064,7 +1066,9 @@ async def test_generate_passes_through_current_action_context() -> None:
 
     @ai.middleware(name='inject_ctx')
     class InjectContextMiddleware(BaseMiddleware):
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
+        async def wrap_model(
+            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
                 ModelHookParams(
@@ -1072,12 +1076,10 @@ async def test_generate_passes_through_current_action_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part(root=TextPart(text=f'{txt} {params.context}'))],
+                                content=[Part(root=TextPart(text=f'{txt} {ctx.custom_context}'))],
                             ),
                         ],
                     ),
-                    on_chunk=params.on_chunk,
-                    context=params.context,
                 )
             )
 
@@ -1103,7 +1105,9 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
 
     @ai.middleware(name='inject_ctx')
     class InjectContextMiddleware(BaseMiddleware):
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
+        async def wrap_model(
+            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
                 ModelHookParams(
@@ -1111,12 +1115,10 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part(root=TextPart(text=f'{txt} {params.context}'))],
+                                content=[Part(root=TextPart(text=f'{txt} {ctx.custom_context}'))],
                             ),
                         ],
                     ),
-                    on_chunk=params.on_chunk,
-                    context=params.context,
                 )
             )
 
@@ -1142,7 +1144,9 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
     define_echo_model(ai)
 
     class InjectContextMiddleware(BaseMiddleware):
-        async def wrap_model(self, params: ModelHookParams, next_fn: Callable, ctx: MiddlewareContext) -> ModelResponse:
+        async def wrap_model(
+            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
                 ModelHookParams(
@@ -1150,12 +1154,10 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part(root=TextPart(text=f'{txt} {params.context}'))],
+                                content=[Part(root=TextPart(text=f'{txt} {ctx.custom_context}'))],
                             ),
                         ],
                     ),
-                    on_chunk=params.on_chunk,
-                    context=params.context,
                 )
             )
 

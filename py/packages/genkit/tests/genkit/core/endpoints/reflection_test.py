@@ -356,7 +356,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
         config_schema = entry['configSchema']
         assert config_schema['type'] == 'object'
         # Author-defined fields show up; framework-injected ones (registry,
-        # enqueue_parts) must not leak into the form.
+        # custom_context / on_chunk) must not leak into the form.
         assert set(config_schema['properties'].keys()) == {'models', 'statuses', 'isolate_config'}
     finally:
         await client.aclose()

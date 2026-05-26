@@ -51,7 +51,7 @@ from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
     GenerateMiddleware,
-    MiddlewareContext,
+    GenerateMiddlewareContext,
     MiddlewareDef,
     ModelHookParams,
     MultipartToolResponse,
@@ -170,19 +170,18 @@ class _GenerateMiddlewarePipeline:
     """Holds the middleware chain and the shared context for a single generate call."""
 
     middleware: list[MiddlewareDef]
-    ctx: MiddlewareContext
+    ctx: GenerateMiddlewareContext
 
 
 def _prepare_middleware(
     middleware: list[BaseMiddleware],
     *,
-    registry: Registry,
-    enqueue_parts: Callable[[list[Part]], None],
+    ctx: GenerateMiddlewareContext,
 ) -> _GenerateMiddlewarePipeline:
-    """Return per-call middleware defs and one shared ``MiddlewareContext``."""
+    """Return per-call middleware defs sharing one ``GenerateMiddlewareContext``."""
     return _GenerateMiddlewarePipeline(
         middleware=[_copy_middleware_instance(mw) for mw in middleware],
-        ctx=MiddlewareContext(registry=registry, enqueue_parts=enqueue_parts),
+        ctx=ctx,
     )
 
 
@@ -190,7 +189,7 @@ async def _chain_tool_middleware(
     middleware: list[MiddlewareDef],
     params: ToolHookParams,
     next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
-    ctx: MiddlewareContext,
+    ctx: GenerateMiddlewareContext,
 ) -> MultipartToolResponse:
     """Run the tool middleware chain and return the tool response."""
     runner: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = next_fn
@@ -204,7 +203,7 @@ async def _chain_tool_middleware(
             *,
             _m: MiddlewareDef = _mw,
             _i: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = _inner,
-            _c: MiddlewareContext = _ctx,
+            _c: GenerateMiddlewareContext = _ctx,
         ) -> MultipartToolResponse:
             return await _m.wrap_tool(p, _i, _c)
 
@@ -409,7 +408,7 @@ def define_generate_action(registry: Registry) -> None:
             registry=registry,
             raw_request=input,
             on_chunk=on_chunk,
-            context=ctx.context,
+            context=dict(ctx.context),
         )
 
     _ = registry.register_action(
@@ -466,21 +465,15 @@ async def generate_with_request(
     raw_request = raw_request.model_copy()
     registry = registry if registry.is_child else registry.new_child()
     middleware = resolve_middleware_from_use(registry, raw_request.use)
-    queue: list[Message] = []
-
-    def enqueue_parts(parts: list[Part]) -> None:
-        if queue and queue[-1].role == Role.USER:
-            queue[-1] = Message(role=Role.USER, content=list(queue[-1].content) + list(parts))
-        else:
-            queue.append(Message(role=Role.USER, content=list(parts)))
+    run_ctx = GenerateMiddlewareContext(
+        registry=registry,
+        custom_context=dict(context or {}),
+        on_chunk=on_chunk,
+    )
 
     mw_pipeline: _GenerateMiddlewarePipeline | None = None
     if middleware:
-        mw_pipeline = _prepare_middleware(
-            middleware,
-            registry=registry,
-            enqueue_parts=enqueue_parts,
-        )
+        mw_pipeline = _prepare_middleware(middleware, ctx=run_ctx)
         mw_tools: list[Action[Any, Any, Never]] = []
         for mw in mw_pipeline.middleware:
             contributed = mw.tools(mw_pipeline.ctx)
@@ -497,32 +490,29 @@ async def generate_with_request(
                     existing.append(name)
             raw_request = raw_request.model_copy()
             raw_request.tools = existing
+    else:
+        mw_pipeline = _GenerateMiddlewarePipeline(middleware=[], ctx=run_ctx)
 
     return await _generate_action_turn(
         registry=registry,
         raw_request=raw_request,
         mw_pipeline=mw_pipeline,
-        on_chunk=on_chunk,
         message_index=message_index,
         current_turn=current_turn,
-        context=context,
-        queue=queue,
     )
 
 
 async def _generate_action_turn(
     registry: Registry,
     raw_request: GenerateActionOptions,
-    mw_pipeline: _GenerateMiddlewarePipeline | None,
-    on_chunk: Callable[[ModelResponseChunk], None] | None,
+    mw_pipeline: _GenerateMiddlewarePipeline,
     message_index: int,
     current_turn: int,
-    context: dict[str, Any] | None,
-    queue: list[Message],
 ) -> ModelResponse:
     """Run one model call plus tool resolution, then recurse for the next turn."""
-    middleware = mw_pipeline.middleware if mw_pipeline else []
-    mw_ctx = mw_pipeline.ctx if mw_pipeline else None
+    middleware = mw_pipeline.middleware
+    run_ctx = mw_pipeline.ctx
+    on_chunk = run_ctx.on_chunk
     tools_in = raw_request.tools
     if tools_in:
         raw_request = raw_request.model_copy()
@@ -614,16 +604,15 @@ async def _generate_action_turn(
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
-            _ctx = mw_ctx
+            _ctx = run_ctx
 
             async def run_next(
                 p: GenerateHookParams,
                 *,
                 _m: MiddlewareDef = _mw,
                 _i: Callable[[GenerateHookParams], Awaitable[ModelResponse]] = _inner,
-                _c: MiddlewareContext | None = _ctx,
+                _c: GenerateMiddlewareContext = _ctx,
             ) -> ModelResponse:
-                assert _c is not None
                 return await _m.wrap_generate(p, _i, _c)
 
             runner = run_next
@@ -637,8 +626,8 @@ async def _generate_action_turn(
             return (
                 await model.run(
                     input=params.request,
-                    context=params.context,
-                    on_chunk=params.on_chunk,
+                    context=run_ctx.custom_context,
+                    on_chunk=run_ctx.on_chunk,
                 )
             ).response
 
@@ -652,20 +641,18 @@ async def _generate_action_turn(
                 *,
                 _mw: MiddlewareDef = _mw,
                 _inner: Callable[[ModelHookParams], Awaitable[ModelResponse]] = _inner,
-                _c: MiddlewareContext | None = mw_ctx,
+                _c: GenerateMiddlewareContext = run_ctx,
             ) -> ModelResponse:
-                assert _c is not None
                 return await _mw.wrap_model(params, _inner, _c)
 
             runner = cast(Callable[[ModelHookParams], Awaitable[ModelResponse]], run_next)
 
-        return await runner(
-            ModelHookParams(
-                request=req,
-                on_chunk=chunk_callback,
-                context=context or {},
-            )
-        )
+        previous_on_chunk = run_ctx.replace_on_chunk(chunk_callback) if chunk_callback else None
+        try:
+            return await runner(ModelHookParams(request=req))
+        finally:
+            if chunk_callback is not None:
+                run_ctx.replace_on_chunk(previous_on_chunk)
 
     # if resolving the 'resume' option above generated a tool message, stream it.
     if resumed_tool_message and on_chunk:
@@ -682,33 +669,6 @@ async def _generate_action_turn(
         # Pick up whatever wrap_generate middleware put on params.request — replacement
         # or in-place mutation. Without this re-sync, those changes get silently dropped.
         request = _params.request
-        # Drain anything middleware queued during the previous turn's tool
-        # calls and inject it as additional USER messages before the model
-        # runs.  This is how a tool-side middleware (e.g. Filesystem read_file)
-        # can make extra context — file contents, error notes, etc. — visible
-        # to the model on the very next turn without forging a tool response.
-        if queue:
-            queued = list(queue)
-            queue.clear()
-            if on_chunk:
-                # Emit each queued message at the current index and advance once
-                # per message.  We bypass `make_chunk` here because its role
-                # tracker treats every USER chunk as a new message and would
-                # double-count the role flip from MODEL to USER.
-                for msg in queued:
-                    msg_role = cast(Role, msg.role)
-                    chunk = ModelResponseChunk(
-                        role=msg_role,
-                        content=msg.content,
-                        index=message_index,
-                        previous_chunks=list(prev_chunks),
-                    )
-                    prev_chunks.append(chunk)
-                    on_chunk(chunk)
-                    message_index += 1
-                    chunk_role = msg_role
-            request = request.model_copy()
-            request.messages = [*request.messages, *queued]
 
         model_response = await dispatch_model(
             request,
@@ -824,9 +784,6 @@ async def _generate_action_turn(
             mw_pipeline=mw_pipeline,
             current_turn=current_turn + 1,
             message_index=message_index + 1,
-            on_chunk=on_chunk,
-            context=context,
-            queue=queue,
         )
 
     generate_params = GenerateHookParams(
@@ -834,7 +791,6 @@ async def _generate_action_turn(
         request=request,
         iteration=current_turn,
         message_index=message_index,
-        on_chunk=on_chunk,
     )
     return await dispatch_generate(generate_params, run_one_iteration)
 

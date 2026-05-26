@@ -21,7 +21,7 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -121,7 +121,7 @@ class GenerateHookParams(BaseModel):
     """Params passed to the ``wrap_generate`` hook.
 
     Covers one full iteration of the tool loop: a model call plus optional tool
-    resolution. ``message_index`` and ``on_chunk`` support streaming.
+    resolution. ``message_index`` tracks streaming position for this turn.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
@@ -130,7 +130,6 @@ class GenerateHookParams(BaseModel):
     request: ModelRequest
     iteration: int
     message_index: int = 0
-    on_chunk: Callable[[ModelResponseChunk], None] | None = None
 
 
 class ModelHookParams(BaseModel):
@@ -139,8 +138,6 @@ class ModelHookParams(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
 
     request: ModelRequest
-    on_chunk: Callable[[ModelResponseChunk], None] | None = None
-    context: dict[str, object] = Field(default_factory=dict)
 
 
 class ToolHookParams(BaseModel):
@@ -152,21 +149,39 @@ class ToolHookParams(BaseModel):
     tool: Action
 
 
-@dataclass(frozen=True)
-class MiddlewareContext:
-    """Per-``generate()`` services shared by every middleware in ``use=[...]``.
+@dataclass
+class GenerateMiddlewareContext:
+    """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
-    ``registry`` is the call-scoped child registry (resolve tools, register
-    call-local actions). ``enqueue_parts`` queues extra user message parts for
-    the next turn.
-
-    Frozen so middleware cannot rebind ``ctx.registry`` or ``ctx.enqueue_parts``
-    mid-call; registering on the registry or calling ``enqueue_parts`` is still
-    allowed.
+    Holds the call-scoped registry, caller-provided metadata (``custom_context``),
+    and streaming hooks for the whole generate invocation. Hook ``params`` carry
+    per-turn request data only.
     """
 
     registry: RegistryLike
-    enqueue_parts: Callable[[list[Part]], None]
+    custom_context: dict[str, object] = field(default_factory=dict)
+    on_chunk: Callable[[ModelResponseChunk], None] | None = None
+    abort_signal: Any | None = None
+    telemetry_labels: dict[str, str] | None = None
+
+    @property
+    def is_streaming(self) -> bool:
+        """True when the caller registered a streaming callback for this generate."""
+        return self.on_chunk is not None
+
+    def send_chunk(self, chunk: ModelResponseChunk) -> None:
+        """Stream a chunk to the client when ``on_chunk`` is set."""
+        if self.on_chunk is not None:
+            self.on_chunk(chunk)
+
+    def replace_on_chunk(
+        self,
+        on_chunk: Callable[[ModelResponseChunk], None] | None,
+    ) -> Callable[[ModelResponseChunk], None] | None:
+        """Swap the streaming callback; returns the previous callback."""
+        previous = self.on_chunk
+        self.on_chunk = on_chunk
+        return previous
 
 
 class BaseMiddleware(Generic[TConfig]):
@@ -245,7 +260,7 @@ class BaseMiddleware(Generic[TConfig]):
         else:
             self.config = self.Config(**kwargs)  # type: ignore[assignment]
 
-    def tools(self, ctx: MiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         """Return additional tools to expose to the model for this generate call."""
         return []
 
@@ -253,7 +268,7 @@ class BaseMiddleware(Generic[TConfig]):
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
         return await next_fn(params)
@@ -262,7 +277,7 @@ class BaseMiddleware(Generic[TConfig]):
         self,
         params: ModelHookParams,
         next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Wrap each model API call."""
         return await next_fn(params)
@@ -271,7 +286,7 @@ class BaseMiddleware(Generic[TConfig]):
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> MultipartToolResponse:
         """Wrap each tool execution.
 
@@ -294,7 +309,7 @@ class MiddlewareDef(Protocol):
     against this protocol so it only calls hooks, not constructors or config.
     """
 
-    def tools(self, ctx: MiddlewareContext) -> list[Action]:
+    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
         """Return additional tools to expose to the model for this generate call."""
         ...
 
@@ -302,7 +317,7 @@ class MiddlewareDef(Protocol):
         self,
         params: GenerateHookParams,
         next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
         ...
@@ -311,7 +326,7 @@ class MiddlewareDef(Protocol):
         self,
         params: ModelHookParams,
         next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> ModelResponse:
         """Wrap each model API call."""
         ...
@@ -320,7 +335,7 @@ class MiddlewareDef(Protocol):
         self,
         params: ToolHookParams,
         next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
-        ctx: MiddlewareContext,
+        ctx: GenerateMiddlewareContext,
     ) -> MultipartToolResponse:
         """Wrap each tool execution."""
         ...

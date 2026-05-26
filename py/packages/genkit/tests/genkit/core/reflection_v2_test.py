@@ -333,7 +333,7 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
         config_schema = entry['configSchema']
         assert config_schema['type'] == 'object'
         # Author-defined fields show up; framework-injected ones (registry,
-        # enqueue_parts) must not leak into the form.
+        # custom_context / on_chunk) must not leak into the form.
         props = config_schema['properties']
         assert set(props.keys()) == {'models', 'statuses', 'isolate_config'}
         assert props['models']['type'] == 'array'

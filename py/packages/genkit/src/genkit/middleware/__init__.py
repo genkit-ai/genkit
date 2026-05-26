@@ -26,7 +26,7 @@ with ``@ai.middleware``:
 
     @ai.middleware(name='logging')
     class LoggingMiddleware(BaseMiddleware):
-        async def wrap_generate(self, params, next_fn, ctx):
+        async def wrap_generate(self, params, next_fn, ctx: GenerateMiddlewareContext):
             print('before')
             result = await next_fn(params)
             print('after')
@@ -67,7 +67,7 @@ from genkit._core._middleware import (
     BaseMiddleware,
     GenerateHookParams,
     GenerateMiddleware,
-    MiddlewareContext,
+    GenerateMiddlewareContext,
     ModelHookParams,
     MultipartToolResponse,
     ToolHookParams,
@@ -77,8 +77,8 @@ from genkit._core._plugin import middleware_plugin
 __all__ = [
     'BaseMiddleware',
     'GenerateHookParams',
-    'MiddlewareContext',
     'GenerateMiddleware',
+    'GenerateMiddlewareContext',
     'ModelHookParams',
     'MultipartToolResponse',
     'ToolHookParams',
