@@ -789,7 +789,12 @@ export function loadPromptFolderRecursively(
     const fileName = dirEnt.name;
     if (dirEnt.isFile() && fileName.endsWith('.prompt')) {
       if (fileName.startsWith('_')) {
-        const partialName = fileName.substring(1, fileName.length - 7);
+        const partialBaseName = fileName.substring(1, fileName.length - 7);
+        // Include subdirectory in the partial name to prevent naming conflicts,
+        // matching how executable prompts are namespaced.
+        const partialName = subDir
+          ? `${subDir.replace(/\\/g, '/')}/${partialBaseName}`
+          : partialBaseName;
         definePartial(
           registry,
           partialName,
