@@ -34,7 +34,7 @@ import { SPAN_TYPE_ATTR, runInNewSpan } from '@genkit-ai/core/tracing';
 import { Message as DpMessage, PromptFunction } from 'dotprompt';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import type Handlebars from 'handlebars';
-import { basename, join, resolve } from 'path';
+import { basename, join, resolve, sep } from 'path';
 import type { DocumentData } from './document.js';
 import {
   generate,
@@ -793,7 +793,7 @@ export function loadPromptFolderRecursively(
         // Include subdirectory in the partial name to prevent naming conflicts,
         // matching how executable prompts are namespaced.
         const partialName = subDir
-          ? `${subDir.replace(/\\/g, '/')}/${partialBaseName}`
+          ? `${subDir.split(sep).join('/')}/${partialBaseName}`
           : partialBaseName;
         definePartial(
           registry,
