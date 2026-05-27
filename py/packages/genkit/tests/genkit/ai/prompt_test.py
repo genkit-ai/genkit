@@ -20,7 +20,7 @@
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
@@ -969,3 +969,27 @@ async def test_load_prompt_with_use_middleware_metadata() -> None:
             {'name': 'mw1'},
             {'name': 'mw2', 'config': {'foo': 'bar'}},
         ]
+        assert prompt_md['toolDefs'] == []
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_metadata_tool_defs_empty_array() -> None:
+    """Dev UI listActions rejects null toolDefs on prompt metadata."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'no_tools.prompt').write_text('---\nmodel: echoModel\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        no_tools = await prompt(ai.registry, 'no_tools')
+        prompt_action = no_tools._prompt_action  # pyright: ignore[reportPrivateUsage]
+        assert prompt_action is not None
+        action_md = cast(dict[str, Any], prompt_action.metadata)
+        for leaked in ('name', 'variant', 'model', 'tools', 'description', 'version', 'toolDefs'):
+            assert leaked not in action_md
+        assert action_md['type'] == 'prompt'
+        prompt_md = cast(dict[str, Any], action_md['prompt'])
+        assert prompt_md['toolDefs'] == []
+        assert prompt_md['name'] == 'no_tools'

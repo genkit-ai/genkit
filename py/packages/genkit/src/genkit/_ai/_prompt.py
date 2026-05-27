@@ -1184,10 +1184,12 @@ def _transform_prompt_metadata(
             for ref in parsed_use
         ]
 
+    # The Dev UI expects an array here; dotprompt leaves it null when no tools are set.
+    if prompt_block.get('toolDefs') is None:
+        prompt_block['toolDefs'] = []
+
     # Build metadata structure
-    metadata = {
-        **md,
-        **(md.get('metadata', {}) if isinstance(md.get('metadata'), dict) else {}),
+    metadata: dict[str, Any] = {
         'type': 'prompt',
         'prompt': prompt_block,
     }
