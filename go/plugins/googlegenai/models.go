@@ -54,12 +54,11 @@ var (
 	}
 
 	// VirtualTryOnSupports describes model capabilities for the virtual try-on
-	// image editing models. Unlike regular Imagen models these accept a system
-	// role (used to carry the person/product image part metadata).
+	// image editing models.
 	VirtualTryOnSupports = ai.ModelSupports{
 		Multiturn:  false,
 		Tools:      false,
-		SystemRole: true,
+		SystemRole: false,
 		Media:      true,
 		Output:     []string{"media"},
 	}
