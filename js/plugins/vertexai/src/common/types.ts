@@ -16,7 +16,7 @@
 
 import type { ModelReference } from 'genkit';
 import type { GoogleAuthOptions } from 'google-auth-library';
-import type { GeminiConfigSchema } from '../gemini';
+import type { GeminiConfigSchema } from '../gemini.js';
 
 /** Common options for Vertex AI plugin configuration */
 export interface CommonPluginOptions {

@@ -441,6 +441,7 @@ describe('generate', () => {
               outputSchema: {
                 $schema: 'http://json-schema.org/draft-07/schema#',
               },
+              key: '/tool/testTool',
             },
           ],
         }
@@ -650,6 +651,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/dynamicTestTool1',
           },
           {
             description: 'description 2',
@@ -658,6 +660,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/dynamicTestTool2',
           },
           {
             description: 'description',
@@ -674,6 +677,7 @@ describe('generate', () => {
               additionalProperties: true,
               type: 'object',
             },
+            key: '/tool.v2/dynamicMultipartTool',
           },
         ],
       });
@@ -1279,6 +1283,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/interruptingTool',
           },
           {
             description: 'description',
@@ -1289,6 +1294,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/simpleTool',
           },
           {
             description: 'description',
@@ -1299,6 +1305,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/resumableTool',
           },
           {
             description: 'description',
@@ -1309,6 +1316,7 @@ describe('generate', () => {
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/dynamicInterrupt',
           },
         ],
       });
@@ -1504,13 +1512,12 @@ describe('generate', () => {
 
   describe('long running', () => {
     let ai: GenkitBeta;
-    let pm: ProgrammableModel;
 
     beforeEach(() => {
       ai = genkit({
         model: 'programmableModel',
       });
-      pm = defineProgrammableModel(ai);
+      defineProgrammableModel(ai);
     });
 
     it('starts the operation', async () => {

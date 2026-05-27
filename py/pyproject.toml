@@ -21,6 +21,7 @@ dependencies = [
   "genkit",
   "genkit-plugin-anthropic",
   "genkit-plugin-compat-oai",
+  "genkit-plugin-django",
   "genkit-plugin-fastapi",
   "genkit-plugin-flask",
   "genkit-plugin-google-cloud",
@@ -148,6 +149,7 @@ override-dependencies = ["werkzeug>=3.1.6"]
 # Samples (alphabetical by package name from pyproject.toml)
 basic-flows          = { workspace = true }
 context              = { workspace = true }
+django-hello         = { workspace = true }
 dynamic-tools        = { workspace = true }
 evaluators           = { workspace = true }
 fastapi-bugbot       = { workspace = true }
@@ -167,6 +169,7 @@ genkit = { workspace = true }
 # Plugins (alphabetical)
 genkit-plugin-anthropic             = { workspace = true }
 genkit-plugin-compat-oai            = { workspace = true }
+genkit-plugin-django                = { workspace = true }
 genkit-plugin-fastapi               = { workspace = true }
 genkit-plugin-flask                 = { workspace = true }
 genkit-plugin-google-cloud          = { workspace = true }
@@ -387,6 +390,7 @@ root = [
   # Plugins
   "plugins/anthropic/src",
   "plugins/compat-oai/src",
+  "plugins/django/src",
   "plugins/flask/src",
   "plugins/google-cloud/src",
   "plugins/google-genai/src",

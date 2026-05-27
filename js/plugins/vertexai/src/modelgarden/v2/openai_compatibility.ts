@@ -41,7 +41,7 @@ import type {
   ChatCompletionTool,
   CompletionChoice,
 } from 'openai/resources/index.mjs';
-import { checkModelName } from './utils';
+import { checkModelName } from './utils.js';
 
 /**
  * See https://platform.openai.com/docs/api-reference/chat/create.

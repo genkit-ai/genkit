@@ -50,9 +50,9 @@ class SimpleCache {
   setValue(value: DapValue) {
     const dapId = this.dap?.__action?.name;
     if (dapId) {
-      Object.values(value).forEach((actionList) => {
+      Object.entries(value).forEach(([actionType, actionList]) => {
         actionList?.forEach((action) => {
-          action.__action.key = `/dynamic-action-provider/${dapId}:${action.__action.actionType}/${action.__action.name}`;
+          action.__action.key = `/dynamic-action-provider/${dapId}:${actionType}/${action.__action.name}`;
         });
       });
     }
