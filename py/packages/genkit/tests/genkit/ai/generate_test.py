@@ -1697,6 +1697,246 @@ async def test_parallel_tool_requests_one_interrupt_keeps_pending_output_for_oth
     assert c_root.metadata and c_root.metadata.get('pendingOutput') == 'c_ok'
 
 
+@pytest.mark.asyncio
+async def test_generate_and_model_middleware_execution_order() -> None:
+    """wrap_generate and wrap_model run in the correct nested order.
+
+    Matches JS: 'runs generate and model middleware in the correct order'.
+    Expected: generateBefore → modelBefore → modelExecution → modelAfter → generateAfter
+    """
+    execution_order: list[str] = []
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='response'))]),
+        )
+    )
+
+    @ai.middleware(name='order_mw')
+    class OrderMiddleware(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            execution_order.append('generateBefore')
+            resp = await next_fn(params, ctx)
+            execution_order.append('generateAfter')
+            return resp
+
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            execution_order.append('modelBefore')
+            resp = await next_fn(params, ctx)
+            execution_order.append('modelAfter')
+            return resp
+
+    # The programmable model appends to execution_order when called.
+    original_run = pm.responses.copy()
+    pm.responses.clear()
+
+    def model_side_effect(request: ModelRequest) -> ModelResponse:
+        execution_order.append('modelExecution')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='response'))]),
+        )
+
+    pm.response_cb = model_side_effect
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+            use=[MiddlewareRef(name='order_mw')],
+        ),
+    )
+
+    assert response.text == 'response'
+    assert execution_order == [
+        'generateBefore',
+        'modelBefore',
+        'modelExecution',
+        'modelAfter',
+        'generateAfter',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_model_tool_middleware_ordering_across_turns() -> None:
+    """All three hooks (generate, model, tool) fire in correct order across a two-turn tool flow.
+
+    Matches JS: 'runs tool middleware correctly'.
+    Turn 1: model returns a tool request → tool executes
+    Turn 2: model returns final text response
+    Expected order mirrors the JS assertion.
+    """
+    execution_order: list[str] = []
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    @ai.tool(name='orderTool')
+    async def order_tool() -> str:
+        execution_order.append('toolExecution')
+        return 'tool result'
+
+    turn = 0
+
+    def model_side_effect(request: ModelRequest) -> ModelResponse:
+        nonlocal turn
+        turn += 1
+        execution_order.append('modelExecution')
+        if turn == 1:
+            return ModelResponse(
+                message=Message(
+                    role=Role.MODEL,
+                    content=[
+                        Part(root=ToolRequestPart(tool_request=ToolRequest(name='orderTool', input={}, ref='r1')))
+                    ],
+                ),
+            )
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='final response'))]),
+        )
+
+    pm.response_cb = model_side_effect
+
+    # The middleware tracks a turn counter internally, matching JS's `turnCount`.
+    turn_counter: list[int] = [0]
+
+    @ai.middleware(name='full_order_mw')
+    class FullOrderMiddleware(BaseMiddleware):
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            turn_counter[0] += 1
+            t = turn_counter[0]
+            execution_order.append(f'generateBefore-{t}')
+            resp = await next_fn(params, ctx)
+            execution_order.append(f'generateAfter-{t}')
+            return resp
+
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            execution_order.append(f'modelBefore-{turn_counter[0]}')
+            resp = await next_fn(params, ctx)
+            execution_order.append(f'modelAfter-{turn_counter[0]}')
+            return resp
+
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            execution_order.append(f'toolBefore-{turn_counter[0]}')
+            resp = await next_fn(params, ctx)
+            execution_order.append(f'toolAfter-{turn_counter[0]}')
+            return resp
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[Message(role=Role.USER, content=[Part(TextPart(text='hi'))])],
+            tools=['orderTool'],
+            use=[MiddlewareRef(name='full_order_mw')],
+        ),
+    )
+
+    assert response.text == 'final response'
+    assert execution_order == [
+        'generateBefore-1',
+        'modelBefore-1',
+        'modelExecution',
+        'modelAfter-1',
+        'toolBefore-1',
+        'toolExecution',
+        'toolAfter-1',
+        'generateBefore-2',
+        'modelBefore-2',
+        'modelExecution',
+        'modelAfter-2',
+        'generateAfter-2',
+        'generateAfter-1',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_middleware_contributed_tool_resolvable_during_restart() -> None:
+    """Tools injected by middleware.tools() are resolvable during a resume/restart flow.
+
+    Matches JS: 'should resolve tools injected by middleware during restarts'.
+    Scenario: middleware contributes a tool, that tool gets interrupted, then
+    resume.restart can still find and execute it through the middleware pipeline.
+    """
+    ai = Genkit()
+
+    @ai.middleware(name='tool_injector_mw')
+    class ToolInjectorMiddleware(BaseMiddleware):
+        def tools(self, ctx: GenerateMiddlewareContext) -> list:
+            scratch = Registry()
+
+            async def injected_tool() -> str:
+                """A tool contributed by middleware."""
+                return 'injected_success'
+
+            return [define_tool(scratch, injected_tool, name='injectedTool').action()]
+
+    pm, _ = define_programmable_model(ai)
+
+    # The model will be called after restart — return a final response.
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='done after restart'))]),
+        )
+    )
+
+    # Simulate: model previously called injectedTool, it was interrupted,
+    # now we resume with restart.
+    interrupt_part = ToolRequestPart(
+        tool_request=ToolRequest(name='injectedTool', input={}, ref='r1'),
+        metadata={'interrupt': True},
+    )
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[
+                Message(role=Role.USER, content=[Part(TextPart(text='do it'))]),
+                Message(role=Role.MODEL, content=[Part(root=interrupt_part)]),
+            ],
+            use=[MiddlewareRef(name='tool_injector_mw')],
+            resume=Resume(
+                restart=[
+                    ToolRequestPart(
+                        tool_request=ToolRequest(name='injectedTool', input={}, ref='r1'),
+                    )
+                ],
+            ),
+        ),
+    )
+    assert response.text == 'done after restart'
+
+
 ##########################################################################
 # run tests from /tests/specs/generate.yaml
 ##########################################################################
