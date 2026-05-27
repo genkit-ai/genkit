@@ -54,8 +54,8 @@ import {
 } from '@genkit-ai/ai/session';
 
 import { type Operation, type z } from '@genkit-ai/core';
-import type { Formatter } from './formats';
-import { Genkit, type GenkitOptions } from './genkit';
+import type { Formatter } from './formats.js';
+import { Genkit, type GenkitOptions } from './genkit.js';
 
 export { FileSessionStore, InMemorySessionStore, SessionRunner };
 export type {
