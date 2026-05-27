@@ -1709,7 +1709,6 @@ async def test_generate_and_model_middleware_execution_order() -> None:
             return resp
 
     # The programmable model appends to execution_order when called.
-    original_run = pm.responses.copy()
     pm.responses.clear()
 
     def model_side_effect() -> ModelResponse:
