@@ -11,16 +11,18 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "basic-flows",
     "context",
+    "django-hello",
     "evaluators",
     "fastapi-bugbot",
     "flask-hello",
-    "basic-flows",
     "gemini-code-execution",
     "gemini-context-caching",
     "genkit",
     "genkit-plugin-anthropic",
     "genkit-plugin-compat-oai",
+    "genkit-plugin-django",
     "genkit-plugin-evaluators",
     "genkit-plugin-fastapi",
     "genkit-plugin-flask",
@@ -286,6 +288,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/89/76/a7f3e639b78601118
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/0b/8bdc52111c83e2dc2f97403dc87c0830b8989d9ae45732b34b686326fb2c/bandit-1.9.3-py3-none-any.whl", hash = "sha256:4745917c88d2246def79748bde5e08b9d5e9b92f877863d43fab70cd8814ce6a", size = 134451, upload-time = "2026-01-19T04:05:20.938Z" },
 ]
+
+[[package]]
+name = "basic-flows"
+version = "0.2.0"
+source = { editable = "samples/basic-flows" }
+dependencies = [
+    { name = "genkit" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "genkit", editable = "packages/genkit" }]
 
 [[package]]
 name = "beautifulsoup4"
@@ -1130,6 +1143,67 @@ wheels = [
 ]
 
 [[package]]
+name = "django"
+version = "5.2.14"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "asgiref", marker = "python_full_version < '3.12'" },
+    { name = "sqlparse", marker = "python_full_version < '3.12'" },
+    { name = "tzdata", marker = "python_full_version < '3.12' and sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/95/95f7faa0950867afaa0bef2460c6263afd6a2c78cc9434046ed28160b015/django-5.2.14.tar.gz", hash = "sha256:58a63ba841662e5c686b57ba1fec52ddd68c0b93bd96ac3029d55728f00bf8a2", size = 10895118, upload-time = "2026-05-05T13:57:31.104Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/44/f172870cf87aa25afef48fb72adba89ee8b77fcab6f3b23d240b923f1528/django-5.2.14-py3-none-any.whl", hash = "sha256:6f712143bd3064310d1f50fac859c3e9a274bdcfc9595339853be7779297fc76", size = 8311320, upload-time = "2026-05-05T13:57:25.795Z" },
+]
+
+[[package]]
+name = "django"
+version = "6.0.5"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version == '3.13.*'",
+    "python_full_version == '3.12.*'",
+]
+dependencies = [
+    { name = "asgiref", marker = "python_full_version >= '3.12'" },
+    { name = "sqlparse", marker = "python_full_version >= '3.12'" },
+    { name = "tzdata", marker = "python_full_version >= '3.12' and sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/f1/bf85f0d29ef76abf901f193fe8fef4769d3da7794197832bc30151c071d8/django-6.0.5.tar.gz", hash = "sha256:bc6d6872e98a2864c836e42edd644b362db311147dd5aa8d5b82ba7a032f5269", size = 10924131, upload-time = "2026-05-05T13:54:39.329Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/5b/1328f8b84fce040c404f76822bf8c57d254e368e8cbd8bd67ec2b26d75f5/django-6.0.5-py3-none-any.whl", hash = "sha256:9d58a7cb49244e74c8e161d5e403a46d6209f1009ba40f5a66d6aa0d0786a8f0", size = 8368680, upload-time = "2026-05-05T13:54:33.532Z" },
+]
+
+[[package]]
+name = "django-hello"
+version = "0.2.0"
+source = { editable = "samples/django-hello" }
+dependencies = [
+    { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "django", version = "6.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "genkit" },
+    { name = "genkit-plugin-django" },
+    { name = "genkit-plugin-google-genai" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "django", specifier = ">=4.2" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-plugin-django", editable = "plugins/django" },
+    { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
+
+[[package]]
 name = "dnspython"
 version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1382,17 +1456,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "flow-sample1"
-version = "0.2.0"
-source = { editable = "samples/flow-sample1" }
-dependencies = [
-    { name = "genkit" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "genkit", editable = "packages/genkit" }]
-
-[[package]]
 name = "fqdn"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1447,7 +1510,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
@@ -1527,7 +1590,7 @@ provides-extras = ["flask", "google-cloud", "google-genai", "ollama", "openai", 
 
 [[package]]
 name = "genkit-plugin-anthropic"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/anthropic" }
 dependencies = [
     { name = "anthropic" },
@@ -1542,7 +1605,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-compat-oai"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/compat-oai" }
 dependencies = [
     { name = "genkit" },
@@ -1558,8 +1621,26 @@ requires-dist = [
 ]
 
 [[package]]
+name = "genkit-plugin-django"
+version = "0.6.0"
+source = { editable = "plugins/django" }
+dependencies = [
+    { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "django", version = "6.0.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "genkit" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "django", specifier = ">=4.2" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+]
+
+[[package]]
 name = "genkit-plugin-evaluators"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/evaluators" }
 dependencies = [
     { name = "genkit" },
@@ -1574,7 +1655,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-fastapi"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/fastapi" }
 dependencies = [
     { name = "fastapi" },
@@ -1591,7 +1672,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-flask"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/flask" }
 dependencies = [
     { name = "flask" },
@@ -1610,7 +1691,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-google-cloud"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/google-cloud" }
 dependencies = [
     { name = "genkit" },
@@ -1631,7 +1712,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-google-genai"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/google-genai" }
 dependencies = [
     { name = "genkit" },
@@ -1652,7 +1733,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-ollama"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/ollama" }
 dependencies = [
     { name = "genkit" },
@@ -1669,7 +1750,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-plugin-vertex-ai"
-version = "0.5.2"
+version = "0.6.0"
 source = { editable = "plugins/vertex-ai" }
 dependencies = [
     { name = "anthropic" },
@@ -1705,6 +1786,7 @@ dependencies = [
     { name = "genkit" },
     { name = "genkit-plugin-anthropic" },
     { name = "genkit-plugin-compat-oai" },
+    { name = "genkit-plugin-django" },
     { name = "genkit-plugin-evaluators" },
     { name = "genkit-plugin-fastapi" },
     { name = "genkit-plugin-flask" },
@@ -1775,6 +1857,7 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-plugin-anthropic", editable = "plugins/anthropic" },
     { name = "genkit-plugin-compat-oai", editable = "plugins/compat-oai" },
+    { name = "genkit-plugin-django", editable = "plugins/django" },
     { name = "genkit-plugin-evaluators", editable = "plugins/evaluators" },
     { name = "genkit-plugin-fastapi", editable = "plugins/fastapi" },
     { name = "genkit-plugin-flask", editable = "plugins/flask" },
@@ -6067,6 +6150,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7b/ae/2d9c981590ed9999a0d91755b47fc74f74de286b0f5cee14c9269041e6c4/soupsieve-2.8.3.tar.gz", hash = "sha256:3267f1eeea4251fb42728b6dfb746edc9acaffc4a45b27e19450b676586e8349", size = 118627, upload-time = "2026-01-20T04:27:02.457Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/2c/1462b1d0a634697ae9e55b3cecdcb64788e8b7d63f54d923fcd0bb140aed/soupsieve-2.8.3-py3-none-any.whl", hash = "sha256:ed64f2ba4eebeab06cc4962affce381647455978ffc1e36bb79a545b91f45a95", size = 37016, upload-time = "2026-01-20T04:27:01.012Z" },
+]
+
+[[package]]
+name = "sqlparse"
+version = "0.5.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/76/437d71068094df0726366574cf3432a4ed754217b436eb7429415cf2d480/sqlparse-0.5.5.tar.gz", hash = "sha256:e20d4a9b0b8585fdf63b10d30066c7c94c5d7a7ec47c889a2d83a3caa93ff28e", size = 120815, upload-time = "2025-12-19T07:17:45.073Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/4b/359f28a903c13438ef59ebeee215fb25da53066db67b305c125f1c6d2a25/sqlparse-0.5.5-py3-none-any.whl", hash = "sha256:12a08b3bf3eec877c519589833aed092e2444e68240a3577e8e26148acc7b1ba", size = 46138, upload-time = "2025-12-19T07:17:46.573Z" },
 ]
 
 [[package]]

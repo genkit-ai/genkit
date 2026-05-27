@@ -15,7 +15,7 @@
  */
 
 import type { CachedContent, StartChatParams } from '@google-cloud/vertexai';
-import type { CachedContents } from '@google-cloud/vertexai/build/src/resources';
+import type { CachedContents } from '@google-cloud/vertexai/build/src/resources/index.js';
 import crypto from 'crypto';
 import { GenkitError, type MessageData, type z } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
@@ -23,12 +23,12 @@ import {
   CONTEXT_CACHE_SUPPORTED_MODELS,
   DEFAULT_TTL,
   INVALID_ARGUMENT_MESSAGES,
-} from './constants';
+} from './constants.js';
 import {
   cacheConfigSchema,
   type CacheConfig,
   type CacheConfigDetails,
-} from './types';
+} from './types.js';
 
 /**
  * Generates a SHA-256 hash to use as a cache key.

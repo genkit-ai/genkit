@@ -21,10 +21,10 @@ import {
   type GenerateMiddleware,
 } from 'genkit';
 import * as path from 'path';
-import { defineListFileTool } from './filesystem/list_files';
-import { defineReadFileTool } from './filesystem/read_file';
-import { defineSearchAndReplaceTool } from './filesystem/search_and_replace';
-import { defineWriteFileTool } from './filesystem/write_file';
+import { defineListFileTool } from './filesystem/list_files.js';
+import { defineReadFileTool } from './filesystem/read_file.js';
+import { defineSearchAndReplaceTool } from './filesystem/search_and_replace.js';
+import { defineWriteFileTool } from './filesystem/write_file.js';
 
 export const FilesystemOptionsSchema = z.object({
   rootDirectory: z
