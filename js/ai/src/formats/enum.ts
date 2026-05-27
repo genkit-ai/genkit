@@ -15,7 +15,7 @@
  */
 
 import { GenkitError } from '@genkit-ai/core';
-import type { Formatter } from './types';
+import type { Formatter } from './types.js';
 
 export const enumFormatter: Formatter<string, string> = {
   name: 'enum',

@@ -20,7 +20,7 @@ import {
   ImageGenerationCommonConfigSchema,
   ImageRequestBuilder,
   compatOaiImageModelRef,
-} from '../image';
+} from '../image.js';
 
 /** OpenAI image generation ModelRef helper, same as the OpenAI-compatible spec.
  * */

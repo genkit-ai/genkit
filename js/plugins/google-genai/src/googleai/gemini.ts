@@ -424,7 +424,7 @@ function commonRef(
         tools: true,
         toolChoice: true,
         systemRole: true,
-        constrained: 'no-tools',
+        constrained: 'all',
         output: ['text', 'json'],
       },
     },
@@ -441,7 +441,7 @@ const GENERIC_TTS_MODEL = commonRef(
       tools: false,
       toolChoice: false,
       systemRole: false,
-      constrained: 'no-tools',
+      constrained: 'all',
     },
   },
   GeminiTtsConfigSchema
@@ -455,7 +455,7 @@ const GENERIC_IMAGE_MODEL = commonRef(
       tools: true,
       toolChoice: true,
       systemRole: true,
-      constrained: 'no-tools',
+      constrained: 'all',
     },
   },
   GeminiImageConfigSchema
@@ -829,11 +829,9 @@ export function defineModel(
         };
       }
 
-      // Cannot use tools with JSON mode
       const jsonMode =
         request.output?.format === 'json' ||
-        (request.output?.contentType === 'application/json' &&
-          tools.length === 0);
+        request.output?.contentType === 'application/json';
 
       const generationConfig: GenerationConfig = {
         ...removeClientOptionOverrides(restOfConfigOptions),

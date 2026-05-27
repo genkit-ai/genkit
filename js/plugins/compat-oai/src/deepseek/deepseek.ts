@@ -20,7 +20,7 @@ import {
   ChatCompletionCommonConfigSchema,
   ModelRequestBuilder,
   compatOaiModelRef,
-} from '../model';
+} from '../model.js';
 
 /** DeepSeek Custom configuration schema. */
 export const DeepSeekChatCompletionConfigSchema =
