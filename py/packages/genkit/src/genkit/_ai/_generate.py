@@ -185,13 +185,13 @@ def _prepare_middleware(
     )
 
 
-async def _chain_tool_middleware(
+async def dispatch_tool(
     middleware: list[MiddlewareDef],
     params: ToolHookParams,
     next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
     ctx: GenerateMiddlewareContext,
 ) -> MultipartToolResponse:
-    """Run the tool middleware chain and return the tool response."""
+    """Chain wrap_tool middleware and call next_fn."""
     runner: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]] = next_fn
     for mw in reversed(middleware):
         _mw = mw
@@ -1113,7 +1113,7 @@ async def resolve_tool_requests(
 
         try:
             if mw_list and mw_pipeline is not None:
-                multipart = await _chain_tool_middleware(mw_list, params, base, mw_pipeline.ctx)
+                multipart = await dispatch_tool(mw_list, params, base, mw_pipeline.ctx)
             else:
                 multipart = await base(
                     params, mw_pipeline.ctx if mw_pipeline else GenerateMiddlewareContext(registry=registry)
@@ -1417,7 +1417,7 @@ async def _run_restart_through_middleware(
         )
 
     try:
-        multipart = await _chain_tool_middleware(mw_list, params, next_fn, mw_pipeline.ctx)
+        multipart = await dispatch_tool(mw_list, params, next_fn, mw_pipeline.ctx)
     except Exception as e:
         if _interrupt_from_tool_exc(e) is not None:
             # Re-interrupting during restart is a hard error — same as the legacy
