@@ -19,6 +19,8 @@ package modelgarden
 import (
 	"strings"
 	"testing"
+
+	"github.com/firebase/genkit/go/ai"
 )
 
 func TestResolveVertexMaasEnv_ExplicitArgsWin(t *testing.T) {
@@ -80,6 +82,33 @@ func TestResolveVertexMaasEnv_PanicsWithoutProject(t *testing.T) {
 		}
 	}()
 	resolveVertexMaasEnv("", "")
+}
+
+// TestAnthropicModels_DeprecatedAliases pins the backwards-compat surface:
+// the date-suffixed IDs that shipped before the undated rename must remain
+// in AnthropicModels and must be marked deprecated, so callers pinned to
+// those keys keep resolving and get a warning via model_middleware.
+func TestAnthropicModels_DeprecatedAliases(t *testing.T) {
+	aliases := []string{
+		"claude-opus-4@20250514",
+		"claude-sonnet-4@20250514",
+		"claude-3-7-sonnet@20250219",
+		"claude-3-5-sonnet-v2@20241022",
+		"claude-3-5-sonnet@20240620",
+		"claude-3-sonnet@20240229",
+		"claude-3-haiku@20240307",
+		"claude-3-opus@20240229",
+	}
+	for _, id := range aliases {
+		opts, ok := AnthropicModels[id]
+		if !ok {
+			t.Errorf("alias %q missing from AnthropicModels", id)
+			continue
+		}
+		if opts.Stage != ai.ModelStageDeprecated {
+			t.Errorf("alias %q stage = %q, want %q", id, opts.Stage, ai.ModelStageDeprecated)
+		}
+	}
 }
 
 func TestResolveVertexMaasEnv_PanicsWithoutLocation(t *testing.T) {

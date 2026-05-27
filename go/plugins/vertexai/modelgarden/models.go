@@ -135,6 +135,50 @@ var AnthropicModels = map[string]ai.ModelOptions{
 		Label:    "Claude 3 Opus",
 		Supports: &internal.Multimodal,
 	},
+
+	// Date-versioned aliases kept for backwards compatibility with callers
+	// pinned to the IDs that shipped before the undated rename. Vertex AI
+	// accepts both forms for the same underlying model.
+	"claude-opus-4@20250514": {
+		Label:    "Claude Opus 4",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-sonnet-4@20250514": {
+		Label:    "Claude Sonnet 4",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-3-7-sonnet@20250219": {
+		Label:    "Claude 3.7 Sonnet",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-3-5-sonnet-v2@20241022": {
+		Label:    "Claude 3.5 Sonnet",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-3-5-sonnet@20240620": {
+		Label:    "Claude 3.5 Sonnet",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-3-sonnet@20240229": {
+		Label:    "Claude 3 Sonnet",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-3-haiku@20240307": {
+		Label:    "Claude 3 Haiku",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"claude-3-opus@20240229": {
+		Label:    "Claude 3 Opus",
+		Supports: &internal.Multimodal,
+		Stage:    ai.ModelStageDeprecated,
+	},
 }
 
 // LlamaModels lists the Meta Llama models available through Vertex AI Model Garden
