@@ -489,7 +489,13 @@ export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   const { requestMetadata, ...toolConfig } = config;
 
   return tool<I, O>(
-    { ...toolConfig, metadata: { tool: { restartable: false } } },
+    {
+      ...toolConfig,
+      metadata: {
+        ...(toolConfig.metadata || {}),
+        tool: { ...toolConfig.metadata?.tool, restartable: false },
+      },
+    },
     async (input, { interrupt }) => {
       if (!config.requestMetadata) interrupt();
       else if (typeof config.requestMetadata === 'object')

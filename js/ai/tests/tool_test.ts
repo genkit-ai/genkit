@@ -99,18 +99,24 @@ describe('defineInterrupt', () => {
     );
   });
 
-  it('should set restartable to false in metadata for interrupts', () => {
+  it('should set restartable to false in metadata for interrupts and preserve other metadata', () => {
     const registered = defineInterrupt(registry, {
       name: 'registered',
       description: 'registered interrupt',
+      metadata: { custom: 'value', tool: { existing: 'prop' } },
     });
     assert.strictEqual(registered.__action.metadata.tool?.restartable, false);
+    assert.strictEqual(registered.__action.metadata.tool?.existing, 'prop');
+    assert.strictEqual(registered.__action.metadata.custom, 'value');
 
     const dynamic = interrupt({
       name: 'dynamic',
       description: 'dynamic interrupt',
+      metadata: { custom: 'value', tool: { existing: 'prop' } },
     });
     assert.strictEqual(dynamic.__action.metadata.tool?.restartable, false);
+    assert.strictEqual(dynamic.__action.metadata.tool?.existing, 'prop');
+    assert.strictEqual(dynamic.__action.metadata.custom, 'value');
   });
 
   it('should register the reply schema / json schema as the output schema of the tool', () => {
