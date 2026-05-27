@@ -200,7 +200,6 @@ async def _chain_tool_middleware(
         async def run_next(
             p: ToolHookParams,
             c: GenerateMiddlewareContext,
-            *,
             _m: MiddlewareDef = _mw,
             _i: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]] = _inner,
         ) -> MultipartToolResponse:
@@ -612,7 +611,6 @@ async def _generate_action_turn(
             async def run_next(
                 p: GenerateHookParams,
                 c: GenerateMiddlewareContext,
-                *,
                 _m: MiddlewareDef = _mw,
                 _i: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
             ) -> ModelResponse:
@@ -643,7 +641,6 @@ async def _generate_action_turn(
             async def run_next(
                 params: ModelHookParams,
                 c: GenerateMiddlewareContext,
-                *,
                 _mw: MiddlewareDef = _mw,
                 _inner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
             ) -> ModelResponse:
