@@ -620,20 +620,12 @@ async def _generate_action_turn(
         return await runner(params, ctx)
 
     async def dispatch_model(
-        req: ModelRequest,
-        chunk_callback: Callable[[ModelResponseChunk], None] | None,
+        params: ModelHookParams,
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        async def run_model(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
-            return (
-                await model.run(
-                    input=params.request,
-                    context=c.custom_context,
-                    on_chunk=c.on_chunk,
-                )
-            ).response
-
-        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = run_model
+        """Chain wrap_model middleware and call next_fn."""
+        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = next_fn
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
@@ -647,13 +639,7 @@ async def _generate_action_turn(
                 return await _mw.wrap_model(params, c, _inner)
 
             runner = cast(Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]], run_next)
-
-        previous_on_chunk = ctx.replace_on_chunk(chunk_callback) if chunk_callback else None
-        try:
-            return await runner(ModelHookParams(request=req), ctx)
-        finally:
-            if chunk_callback is not None:
-                ctx.replace_on_chunk(previous_on_chunk)
+        return await runner(params, ctx)
 
     # if resolving the 'resume' option above generated a tool message, stream it.
     if resumed_tool_message and run_ctx.on_chunk:
@@ -674,11 +660,26 @@ async def _generate_action_turn(
         # or in-place mutation. Without this re-sync, those changes get silently dropped.
         request = _params.request
 
-        model_response = await dispatch_model(
-            request,
-            wrap_chunks(_ctx) if _ctx.on_chunk else None,
-            _ctx,
-        )
+        async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+            return (
+                await model.run(
+                    input=params.request,
+                    context=c.custom_context,
+                    on_chunk=c.on_chunk,
+                )
+            ).response
+
+        chunk_callback = wrap_chunks(_ctx) if _ctx.on_chunk else None
+        previous_on_chunk = _ctx.replace_on_chunk(chunk_callback) if chunk_callback else None
+        try:
+            model_response = await dispatch_model(
+                ModelHookParams(request=request),
+                _ctx,
+                next_fn,
+            )
+        finally:
+            if chunk_callback is not None:
+                _ctx.replace_on_chunk(previous_on_chunk)
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
