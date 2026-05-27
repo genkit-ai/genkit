@@ -1108,14 +1108,14 @@ async def resolve_tool_requests(
     ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
         params = ToolHookParams(tool_request_part=trp, tool=tool)
 
-        async def base(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
+        async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
             return await _resolve_tool_request(p.tool, p.tool_request_part)
 
         try:
             if mw_list and mw_pipeline is not None:
-                multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, base)
+                multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
             else:
-                multipart = await base(
+                multipart = await next_fn(
                     params, mw_pipeline.ctx if mw_pipeline else GenerateMiddlewareContext(registry=registry)
                 )
             return (multipart, None)
