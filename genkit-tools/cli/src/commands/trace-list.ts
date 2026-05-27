@@ -47,9 +47,9 @@ export interface TraceListOptions {
 export const traceList = new Command('trace:list')
   .description('list traces')
   .option('-l, --limit <number>', 'limit the number of returned traces', '15')
-  .option('--status <status>', 'filter by trace status')
-  .option('--type <type>', 'filter by trace type')
-  .option('--name <name>', 'filter by trace name')
+  .option('--status <status>', 'filter by root span status')
+  .option('--type <type>', 'filter by root span type')
+  .option('--name <name>', 'filter by root span name')
   .option('--continuation-token <token>', 'continuation token for pagination')
   .action(async (options: TraceListOptions) => {
     const projectRoot = await findProjectRoot();
