@@ -40,7 +40,10 @@ export interface TraceListOptions {
   continuationToken?: string;
 }
 
-/** Command to list traces. */
+/**
+ * Command to list traces. By default, traces are returned in reverse
+ * chronological order.
+ */
 export const traceList = new Command('trace:list')
   .description('list traces')
   .option('-l, --limit <number>', 'limit the number of returned traces', '15')
