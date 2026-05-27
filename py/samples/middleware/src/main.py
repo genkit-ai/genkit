@@ -16,6 +16,8 @@
 
 """Middleware - inspect or modify requests before they reach the model."""
 
+from pathlib import Path
+
 import structlog
 from pydantic import BaseModel, Field
 
@@ -39,6 +41,7 @@ class PromptInput(BaseModel):
 ai = Genkit(
     plugins=[GoogleAI(), Middleware()],
     model='googleai/gemini-flash-latest',
+    prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 
 
@@ -92,6 +95,14 @@ async def request_modifier_demo(input: PromptInput) -> str:
         prompt=input.prompt,
         use=[ConciseReplyMiddleware(instruction='Answer in a single haiku.')],
     )
+    return response.text
+
+
+@ai.flow()
+async def middleware_prompt_demo(input: PromptInput) -> str:
+    """Run ``middleware_demo.prompt`` with plugin retry and ``concise_reply_mw``."""
+
+    response = await ai.prompt('middleware_demo')(input={'prompt': input.prompt})
     return response.text
 
 

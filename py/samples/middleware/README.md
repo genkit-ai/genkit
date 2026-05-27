@@ -14,4 +14,4 @@ To inspect the flows in Dev UI instead:
 genkit start -- uv run src/main.py
 ```
 
-Try `logging_demo` and `request_modifier_demo`.
+Try `logging_demo`, `request_modifier_demo`, and the `middleware_demo` prompt (also via `middleware_prompt_demo`).
