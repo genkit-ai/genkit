@@ -233,9 +233,15 @@ func generateVirtualTryOn(
 		return nil, fmt.Errorf("virtual try-on: marshaling request: %w", err)
 	}
 
+	// Vertex's global endpoint uses the bare aiplatform.googleapis.com host;
+	// only regional locations get a <region>- prefix.
+	host := location + "-aiplatform.googleapis.com"
+	if location == "global" {
+		host = "aiplatform.googleapis.com"
+	}
 	url := fmt.Sprintf(
-		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
-		location, cc.Project, location, model,
+		"https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
+		host, cc.Project, location, model,
 	)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
