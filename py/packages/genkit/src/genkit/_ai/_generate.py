@@ -516,7 +516,9 @@ async def _generate_action_turn(
     """Run one model call plus tool resolution, then recurse for the next turn."""
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
-    on_chunk = run_ctx.on_chunk
+    # Keep a snapshot of the *original* on_chunk to know whether the caller
+    # requested streaming at all (before middleware may replace it).
+    _caller_wants_streaming = run_ctx.on_chunk is not None
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
@@ -584,10 +586,12 @@ async def _generate_action_turn(
         """Return a callback that wraps chunks with the given role for streaming."""
         if role is None:
             role = Role.MODEL
+        # Capture the CURRENT on_chunk at call time (after middleware may have replaced it).
+        current_on_chunk = run_ctx.on_chunk
 
         def wrapper(chunk: ModelResponseChunk) -> None:
-            if on_chunk is not None:
-                on_chunk(make_chunk(role, chunk))
+            if current_on_chunk is not None:
+                current_on_chunk(make_chunk(role, chunk))
 
         return wrapper
 
@@ -655,7 +659,7 @@ async def _generate_action_turn(
                 run_ctx.replace_on_chunk(previous_on_chunk)
 
     # if resolving the 'resume' option above generated a tool message, stream it.
-    if resumed_tool_message and on_chunk:
+    if resumed_tool_message and _caller_wants_streaming:
         wrap_chunks(Role.TOOL)(
             ModelResponseChunk(
                 role=resumed_tool_message.role,
@@ -672,7 +676,7 @@ async def _generate_action_turn(
 
         model_response = await dispatch_model(
             request,
-            wrap_chunks() if on_chunk else None,
+            wrap_chunks() if run_ctx.on_chunk else None,
         )
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
@@ -758,8 +762,8 @@ async def _generate_action_turn(
             return interrupted_resp
 
         # If the loop will continue, stream out the tool response message...
-        if on_chunk and tool_msg:
-            on_chunk(
+        if run_ctx.on_chunk and tool_msg:
+            run_ctx.on_chunk(
                 make_chunk(
                     Role.TOOL,
                     ModelResponseChunk(
