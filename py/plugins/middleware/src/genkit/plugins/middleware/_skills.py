@@ -78,13 +78,19 @@ class Skills(BaseMiddleware[SkillsConfig]):
             content = path.read_text(encoding='utf-8').lstrip('\ufeff')
         except Exception:
             return '', ''
-        if not content.startswith('---\n'):
+        if content.startswith('---\r\n'):
+            start_idx = 5
+            end_marker = '\r\n---'
+        elif content.startswith('---\n'):
+            start_idx = 4
+            end_marker = '\n---'
+        else:
             return '', ''
-        end_idx = content.find('\n---', 4)
+        end_idx = content.find(end_marker, start_idx)
         if end_idx == -1:
             return '', ''
         try:
-            data = yaml.safe_load(content[4:end_idx])
+            data = yaml.safe_load(content[start_idx:end_idx])
             if not isinstance(data, dict):
                 return '', ''
             return data.get('name', ''), data.get('description', '')

@@ -105,6 +105,21 @@ You are an expert Python programmer.
         assert info['python-expert']['description'] == 'Expert Python programming assistance'
 
 
+def test_skills_parse_frontmatter_crlf() -> None:
+    """Frontmatter with CRLF line endings parses like LF (Windows-checked-out files)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        skill_dir = Path(tmpdir) / 'win-skill'
+        skill_dir.mkdir()
+        skill_file = skill_dir / 'SKILL.md'
+        skill_file.write_bytes(b'---\r\nname: win-skill\r\ndescription: Windows line endings\r\n---\r\nBody.\r\n')
+
+        skills = Skills(skill_paths=[tmpdir])
+        info = skills._scan_skills()
+
+        assert 'win-skill' in info
+        assert info['win-skill']['description'] == 'Windows line endings'
+
+
 def test_skills_parse_no_frontmatter() -> None:
     """Test that files without frontmatter use directory name; description is empty."""
     with tempfile.TemporaryDirectory() as tmpdir:

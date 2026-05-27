@@ -325,7 +325,7 @@ class PartConverter:
             # used on the outbound side, peel it off so the caller sees the
             # original tool output.
             output = part.function_response.response
-            if isinstance(output, dict) and 'name' in output and 'content' in output:
+            if isinstance(output, dict) and output.get('name') == part.function_response.name and 'content' in output:
                 output = output['content']
             return Part(
                 root=ToolResponsePart(
