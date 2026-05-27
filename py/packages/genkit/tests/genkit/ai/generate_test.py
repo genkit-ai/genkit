@@ -8,7 +8,7 @@
 import json
 import pathlib
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 import yaml
@@ -331,7 +331,10 @@ define_echo_model(ai)
 @ai.middleware(name='pre_mw')
 class PreMiddleware(BaseMiddleware):
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -341,16 +344,20 @@ class PreMiddleware(BaseMiddleware):
                         Message(role=Role.USER, content=[Part(TextPart(text=f'PRE {txt}'))]),
                     ],
                 ),
-            )
+            ),
+            ctx,
         )
 
 
 @ai.middleware(name='post_mw')
 class PostMiddleware(BaseMiddleware):
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        resp: ModelResponse = await next_fn(params)
+        resp: ModelResponse = await next_fn(params, ctx)
         assert resp.message is not None
         txt = text_from_message(resp.message)
         return ModelResponse(
@@ -398,7 +405,10 @@ class ConfiguredPrefixMiddleware(BaseMiddleware[_PrefixConfig]):
     """Inline middleware driven purely by a pydantic config field."""
 
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -408,7 +418,8 @@ class ConfiguredPrefixMiddleware(BaseMiddleware[_PrefixConfig]):
                         Message(role=Role.USER, content=[Part(TextPart(text=f'{self.config.prefix} {txt}'))]),
                     ],
                 ),
-            )
+            ),
+            ctx,
         )
 
 
@@ -466,7 +477,10 @@ async def test_ai_middleware_decorator_registers_on_the_app() -> None:
     @local_ai.middleware(name='live_prefix_mw')
     class LivePrefixMiddleware(BaseMiddleware[_PrefixConfig]):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -476,7 +490,8 @@ async def test_ai_middleware_decorator_registers_on_the_app() -> None:
                             Message(role=Role.USER, content=[Part(TextPart(text=f'{self.config.prefix} {txt}'))]),
                         ],
                     ),
-                )
+                ),
+                ctx,
             )
 
     response = await local_ai.generate(
@@ -713,16 +728,22 @@ async def test_generate_middleware_next_fn_args_optional() -> None:
 @ai.middleware(name='add_ctx')
 class AddContextMiddleware(BaseMiddleware):
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         ctx.custom_context['banana'] = True
-        return await next_fn(params)
+        return await next_fn(params, ctx)
 
 
 @ai.middleware(name='inject_ctx')
 class InjectContextMiddleware(BaseMiddleware):
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -735,7 +756,8 @@ class InjectContextMiddleware(BaseMiddleware):
                         ),
                     ],
                 ),
-            )
+            ),
+            ctx,
         )
 
 
@@ -778,7 +800,10 @@ async def test_generate_middleware_can_modify_stream() -> None:
     @ai.middleware(name='mod_stream_mw')
     class ModifyStreamMiddleware(BaseMiddleware):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             if ctx.on_chunk:
                 ctx.send_chunk(
@@ -800,7 +825,7 @@ async def test_generate_middleware_can_modify_stream() -> None:
                     )
 
             previous = ctx.replace_on_chunk(chunk_handler)
-            resp = await next_fn(params)
+            resp = await next_fn(params, ctx)
             ctx.replace_on_chunk(previous)
             if ctx.on_chunk:
                 ctx.send_chunk(
@@ -858,6 +883,127 @@ async def test_generate_middleware_can_modify_stream() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_interception_chains_across_model_and_generate_hooks() -> None:
+    """wrap_model can intercept streaming; wrap_generate can modify the response.
+
+    Matches JS behaviour ('can intercept and modify the stream from model and
+    generate interceptors'):
+    - wrap_generate installs gen_chunk_handler on ctx.on_chunk
+    - wrap_model installs model_chunk_handler on ctx.on_chunk (wrapping gen_chunk_handler)
+    - wrap_chunks() captures ctx.on_chunk *at call time* so it picks up the full chain
+    - Raw chunks flow: model → wrap_chunks → model_chunk_handler → gen_chunk_handler → caller
+    """
+    ai = Genkit()
+    chunk_intercepts: list[str] = []
+
+    @ai.middleware(name='chain_stream_mw')
+    class ChainStreamMiddleware(BaseMiddleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            downstream = ctx.on_chunk
+
+            def model_chunk_handler(chunk: ModelResponseChunk) -> None:
+                text = text_from_content(chunk.content)
+                chunk_intercepts.append(f'model_mw: {text}')
+                if downstream:
+                    downstream(
+                        ModelResponseChunk(
+                            role=Role.MODEL,
+                            content=[Part(TextPart(text=text.upper()))],
+                        )
+                    )
+
+            previous = ctx.replace_on_chunk(model_chunk_handler)
+            resp = await next_fn(params, ctx)
+            ctx.replace_on_chunk(previous)
+            return resp
+
+        async def wrap_generate(
+            self,
+            params: GenerateHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            downstream = ctx.on_chunk
+
+            def gen_chunk_handler(chunk: ModelResponseChunk) -> None:
+                text = text_from_content(chunk.content)
+                chunk_intercepts.append(f'gen_mw: {text}')
+                if downstream:
+                    downstream(
+                        ModelResponseChunk(
+                            role=Role.MODEL,
+                            content=[Part(TextPart(text=f'[{text}]'))],
+                        )
+                    )
+
+            previous = ctx.replace_on_chunk(gen_chunk_handler)
+            resp = await next_fn(params, ctx)
+            ctx.replace_on_chunk(previous)
+
+            # Also modify the final response text.
+            original_text = text_from_message(resp.message)
+            return ModelResponse(
+                finish_reason=resp.finish_reason,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(TextPart(text=f'modified_result: {original_text}'))],
+                ),
+            )
+
+    pm, _ = define_programmable_model(ai)
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='chunk1chunk2'))]),
+        )
+    )
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='chunk1'))]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='chunk2'))]),
+        ]
+    ]
+
+    final_chunks: list[str] = []
+
+    def collect(c: ModelResponseChunk) -> None:
+        final_chunks.append(text_from_content(c.content))
+
+    response = await generate_action(
+        ai.registry,
+        GenerateActionOptions(
+            model='programmableModel',
+            messages=[
+                Message(role=Role.USER, content=[Part(TextPart(text='test streaming mw'))]),
+            ],
+            use=[MiddlewareRef(name='chain_stream_mw')],
+        ),
+        on_chunk=collect,
+    )
+
+    # Both wrap_model AND wrap_generate chunk handlers are called in order.
+    assert chunk_intercepts == [
+        'model_mw: chunk1',
+        'gen_mw: CHUNK1',
+        'model_mw: chunk2',
+        'gen_mw: CHUNK2',
+    ]
+
+    # Chunks arrive at the caller with both transformations applied:
+    # wrap_model uppercases, then wrap_generate bracket-wraps.
+    assert final_chunks == ['[CHUNK1]', '[CHUNK2]']
+
+    # wrap_generate CAN still modify the final response — this works.
+    assert response.text == 'modified_result: chunk1chunk2'
+
+
+@pytest.mark.asyncio
 async def test_wrap_generate_called_per_turn() -> None:
     """wrap_generate is invoked for each turn of the generate loop.
 
@@ -874,21 +1020,21 @@ async def test_wrap_generate_called_per_turn() -> None:
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             iters_a.append(params.iteration)
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
     class TrackerB(BaseMiddleware):
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             iters_b.append(params.iteration)
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
     ai = Genkit(
         plugins=[
@@ -959,11 +1105,11 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             tool_names.append(params.tool_request_part.tool_request.name)
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
     ai = Genkit(
         plugins=[
@@ -1023,8 +1169,8 @@ async def test_middleware_wrap_tool_interrupt_handled_as_interrupt_not_crash() -
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             raise Interrupt({'blocked': True})
 
@@ -1158,8 +1304,8 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             # Resolve the tool ProviderMW just contributed — only works if
             # both middleware share the same per-call registry scope.
@@ -1176,7 +1322,7 @@ async def test_middleware_in_one_call_share_an_isolated_registry() -> None:
 
             leak = define_tool(scratch, leaky_tool, name='leaky_tool').action()
             ctx.registry.register_action_from_instance(leak)
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
     pm, _ = define_programmable_model(ai)
     pm.responses.append(
@@ -1228,8 +1374,8 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             if self._queued:
                 queued = list(self._queued)
@@ -1246,15 +1392,15 @@ async def test_queue_drain_streams_each_message_at_one_index() -> None:
                 request = params.request.model_copy()
                 request.messages = [*request.messages, *queued]
                 params = params.model_copy(update={'request': request})
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
-            result = await next_fn(params)
+            result = await next_fn(params, ctx)
             self._queued.append(Message(role=Role.USER, content=[Part(TextPart(text='extra-context'))]))
             return result
 
@@ -1317,11 +1463,11 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
             ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             invocations.append(params.tool.name)
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
     pm, _ = define_programmable_model(ai)
 

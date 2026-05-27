@@ -18,7 +18,7 @@
 """Tests for the action module."""
 
 import tempfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import ANY, MagicMock, patch
@@ -45,7 +45,10 @@ from genkit.plugin_api import new_middleware
 
 class _PreMiddleware(BaseMiddleware):
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -53,15 +56,19 @@ class _PreMiddleware(BaseMiddleware):
                 request=ModelRequest(
                     messages=[Message(role=Role.USER, content=[Part(TextPart(text=f'PRE {txt}'))])],
                 ),
-            )
+            ),
+            ctx,
         )
 
 
 class _PostMiddleware(BaseMiddleware):
     async def wrap_model(
-        self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        resp: ModelResponse = await next_fn(params)
+        resp: ModelResponse = await next_fn(params, ctx)
         assert resp.message is not None
         txt = text_from_message(resp.message)
         return ModelResponse(
