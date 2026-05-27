@@ -456,6 +456,7 @@ class ToolDefinition(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
+    key: str | None = None
     description: str = Field(...)
     input_schema: Any | dict[str, Any] | None = Field(
         default=None, description='Valid JSON Schema representing the input of the tool.'
