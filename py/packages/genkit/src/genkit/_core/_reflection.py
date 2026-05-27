@@ -191,10 +191,10 @@ def create_reflection_asgi_app(
             if type_param == 'middleware':
                 serialized: dict[str, Any] = {}
                 for key, val in raw_values.items():
-                    if isinstance(val, GenerateMiddleware):
-                        serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
-                    else:
-                        serialized[key] = val
+                    assert isinstance(val, GenerateMiddleware), (
+                        f'registry middleware/{key!r} must be GenerateMiddleware, got {type(val).__name__}'
+                    )
+                    serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized
             return JSONResponse(raw_values, headers={'x-genkit-version': version})
         except Exception:
