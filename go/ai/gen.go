@@ -523,6 +523,7 @@ type ToolDefinition struct {
 	Description string `json:"description,omitempty"`
 	// InputSchema is a valid JSON Schema representing the input parameters of the tool.
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	Key         string         `json:"key,omitempty"`
 	// Metadata contains additional information about this tool definition.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Name is the unique identifier for this tool.
