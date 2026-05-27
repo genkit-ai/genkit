@@ -515,7 +515,6 @@ async def _generate_action_turn(
     """Run one model call plus tool resolution, then recurse for the next turn."""
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
-    on_chunk = run_ctx.on_chunk
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
@@ -1119,7 +1118,9 @@ async def resolve_tool_requests(
             if mw_list and mw_pipeline is not None:
                 multipart = await _chain_tool_middleware(mw_list, params, base, mw_pipeline.ctx)
             else:
-                multipart = await base(params, mw_pipeline.ctx if mw_pipeline else GenerateMiddlewareContext(registry=registry))
+                multipart = await base(
+                    params, mw_pipeline.ctx if mw_pipeline else GenerateMiddlewareContext(registry=registry)
+                )
             return (multipart, None)
         except Exception as e:
             # Interrupts (raised by the tool body or by middleware) become a

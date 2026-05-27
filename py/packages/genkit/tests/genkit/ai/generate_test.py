@@ -8,7 +8,7 @@
 import json
 import pathlib
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -946,6 +946,7 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
             ctx.replace_on_chunk(previous)
 
             # Also modify the final response text.
+            assert resp.message is not None
             original_text = text_from_message(resp.message)
             return ModelResponse(
                 finish_reason=resp.finish_reason,
@@ -1740,7 +1741,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
             return resp
 
     # The programmable model appends to execution_order when called.
-    original_run = pm.responses.copy()
+    pm.responses.copy()
     pm.responses.clear()
 
     def model_side_effect(request: ModelRequest) -> ModelResponse:
