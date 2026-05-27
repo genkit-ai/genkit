@@ -20,7 +20,7 @@ import {
   ChatCompletionCommonConfigSchema,
   ModelRequestBuilder,
   compatOaiModelRef,
-} from '../model';
+} from '../model.js';
 
 /**
  * Language models that support text -> text, tool calling, structured output

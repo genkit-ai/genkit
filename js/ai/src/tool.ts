@@ -279,6 +279,10 @@ export function toToolDefinition(
     })!,
   };
 
+  if (tool.__action.key) {
+    out.key = tool.__action.key;
+  }
+
   if (originalName !== name) {
     out.metadata = { originalName };
   }

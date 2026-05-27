@@ -1,0 +1,19 @@
+[project]
+name = "django-hello"
+version = "0.2.0"
+requires-python = ">=3.10"
+dependencies = [
+  "django>=4.2",
+  "uvicorn",
+  "genkit",
+  "genkit-plugin-django",
+  "genkit-plugin-google-genai",
+  "pydantic",
+]
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["myproject", "recipes"]

@@ -570,7 +570,7 @@ export function action<
               },
               registry: actionFn.__registry,
               abortSignal: options?.abortSignal ?? makeNoopAbortSignal(),
-            } as ActionFnArg<z.infer<S>, z.infer<I>>);
+            } as ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>);
           // if context is explicitly passed in, we run action with the provided context,
           // otherwise we let upstream context carry through.
           const output = await runWithContext(options?.context, actFn);
@@ -720,7 +720,12 @@ export function defineBidiAction<
     input: ActionFnArg<z.infer<OS>, z.infer<IS>, z.infer<Init>>
   ) => AsyncGenerator<z.infer<OS>, z.infer<O>, void>
 ): BidiAction<IS, O, OS, Init> {
-  const act = bidiAction(config, fn);
+  const act = bidiAction(config, (input) => {
+    return (async function* () {
+      await registry.initializeAllPlugins();
+      return yield* fn(input);
+    })();
+  });
   registry.registerAction(config.actionType, act);
   return act;
 }
@@ -745,7 +750,6 @@ export function bidiAction<
 
     const outputGen = fn({
       ...options,
-      init: options.init,
       inputStream: stream,
     } as ActionFnArg<z.infer<OS>, z.infer<IS>, z.infer<Init>>);
 

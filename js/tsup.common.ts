@@ -15,25 +15,42 @@
  */
 
 import type { Plugin } from 'esbuild';
+import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 
 /**
- * Rewrites `export * from './foo.js'` to `export * from './foo.mjs'` in
- * ESM-format builds. With `bundle: false`, esbuild transpiles each source
- * file individually and preserves its import paths as-is, so the ESM
- * output of a wildcard re-export keeps pointing at the sibling CJS `.js`
- * file. Vite's SSR module runner (e.g. Angular SSR) cannot statically
- * expand `export *` through a CJS file, leaving named bindings (`z`,
- * `genkit`, …) undefined for consumers.
+ * Rewrites relative import/export paths to `.mjs` in ESM-format builds.
  *
- * Scope is intentionally narrow: only `export *` wildcard re-exports are
- * affected. Regular `import`/`import-from` statements keep their `.js`
- * targets so existing CJS-interop paths (which tolerate extensionless
- * `require`) continue to work for plugins whose source uses extensionless
- * relative imports.
+ * With `bundle: false`, esbuild transpiles each source file individually and
+ * preserves import paths as-is. This plugin ensures all relative paths in ESM
+ * output point at the `.mjs` files rather than the CJS `.js` siblings.
+ *
+ * Without this fix two classes of problems occur:
+ *
+ * 1. **Bundler failures** – Webpack (Next.js) injects `import.meta`-based HMR
+ *    code into every module; when the module is a CJS `.js` file reached from
+ *    an ESM entry the parse fails. Vite cannot statically expand `export *`
+ *    through CJS.
+ *
+ * 2. **Dual-instance / `instanceof` breakage** – If some paths point at `.js`
+ *    and others at `.mjs`, Node loads the same module twice (CJS + ESM).
+ *    Classes like `GenkitError` then have two distinct constructors and
+ *    `instanceof` checks fail across the boundary.
+ *
+ * The plugin handles two cases:
+ *
+ *   from './foo.js'    → from './foo.mjs'         (explicit .js extension)
+ *   import('./bar.js') → import('./bar.mjs')      (dynamic import with .js)
+ *   from '../util'     → from '../util/index.mjs' (bare directory import)
+ *
+ * Bare file imports (e.g. `from './error'`) are **not** supported and will
+ * cause a build error. All relative imports must use explicit `.js` extensions
+ * (TypeScript resolves `./error.js` → `./error.ts` with `moduleResolution:
+ * NodeNext`).
  */
-const rewriteWildcardReexportsForEsm: Plugin = {
-  name: 'rewrite-wildcard-reexports-for-esm',
+const rewriteRelativeImportsForEsm: Plugin = {
+  name: 'rewrite-relative-imports-for-esm',
   setup(build) {
     if (build.initialOptions.format !== 'esm') return;
     const loaders: Record<string, 'ts' | 'tsx' | 'js' | 'jsx'> = {
@@ -52,11 +69,52 @@ const rewriteWildcardReexportsForEsm: Plugin = {
         const ext = args.path.match(/\.([^.]+)$/)?.[1] ?? '';
         const loader = loaders[ext];
         if (!loader) return null;
+
         const source = await readFile(args.path, 'utf8');
+        const fileDir = dirname(args.path);
+        const errors: { text: string }[] = [];
+
+        // Single regex matches all relative paths in from/import clauses.
         const rewritten = source.replace(
-          /(export\s*\*\s*from\s*)(['"`])(\.\.?\/[^'"`]+?)\.js\2/g,
-          '$1$2$3.mjs$2'
+          /((?:from|import)\s*\(?\s*)(['"`])(\.\.?\/[^'"`]+?)\2/g,
+          (match, prefix, quote, importPath) => {
+            // Already .mjs — nothing to do
+            if (importPath.endsWith('.mjs')) return match;
+
+            // Explicit .js — rewrite to .mjs
+            if (importPath.endsWith('.js')) {
+              return `${prefix}${quote}${importPath.slice(0, -3)}.mjs${quote}`;
+            }
+
+            // Has some other extension (e.g. .json, .css) — leave as-is
+            const lastSegment = importPath.split('/').pop() || '';
+            if (lastSegment.includes('.')) return match;
+
+            // No extension — only directories are allowed (they get /index.mjs)
+            const resolved = resolve(fileDir, importPath);
+            try {
+              if (statSync(resolved).isDirectory()) {
+                return `${prefix}${quote}${importPath}/index.mjs${quote}`;
+              }
+            } catch {
+              // Not a directory
+            }
+
+            // Bare file import — this is not allowed. Use explicit .js extension.
+            errors.push({
+              text:
+                `Bare relative import "${importPath}" in ${args.path}. ` +
+                `Add an explicit .js extension (e.g. "${importPath}.js"). ` +
+                `TypeScript with moduleResolution:NodeNext resolves .js → .ts.`,
+            });
+            return match;
+          }
         );
+
+        if (errors.length > 0) {
+          return { errors };
+        }
+
         if (rewritten === source) return null;
         return { contents: rewritten, loader };
       }
@@ -74,7 +132,7 @@ export const defaultOptions = {
   entry: ['src/**/*.ts'],
   bundle: false,
   treeshake: false,
-  esbuildPlugins: [rewriteWildcardReexportsForEsm],
+  esbuildPlugins: [rewriteRelativeImportsForEsm],
 };
 
 /**

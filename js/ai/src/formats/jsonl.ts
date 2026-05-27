@@ -16,8 +16,8 @@
 
 import { GenkitError } from '@genkit-ai/core';
 import JSON5 from 'json5';
-import { extractJson } from '../extract';
-import type { Formatter } from './types';
+import { extractJson } from '../extract.js';
+import type { Formatter } from './types.js';
 
 function objectLines(text: string): string[] {
   return text
