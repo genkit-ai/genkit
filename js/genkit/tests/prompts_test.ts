@@ -1508,6 +1508,7 @@ describe('asTool', () => {
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
           },
+          key: '/prompt/toolPrompt',
         },
       ],
     });
@@ -1597,6 +1598,7 @@ describe('asTool', () => {
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
           },
+          key: '/prompt/agentA',
         },
       ],
     });
@@ -1717,6 +1719,7 @@ describe('asTool', () => {
           outputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
           },
+          key: '/prompt/toolPrompt',
         },
       ],
     });

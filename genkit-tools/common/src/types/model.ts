@@ -176,6 +176,7 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
  */
 export const ToolDefinitionSchema = z.object({
   name: z.string(),
+  key: z.string().optional(),
   description: z.string(),
   inputSchema: z
     .record(z.any())
