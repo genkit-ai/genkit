@@ -213,10 +213,12 @@ var MistralModels = map[string]ai.ModelOptions{
 		Label:    "Mistral Medium 3",
 		Supports: &internal.BasicText,
 	},
-	"mistral-ocr-2505": {
-		Label:    "Mistral OCR 2505",
-		Supports: &internal.BasicText,
-	},
+	// NOTE: mistral-ocr-2505 intentionally not registered here. Vertex's
+	// OCR endpoint expects {document:{type, document_url|document_base64}},
+	// not the OpenAI chat-completions {messages:[{content:[{type:image_url,...}]}]}
+	// schema that the mistralVertexTransport rewrites to. Routing it through
+	// this plugin would 400 at Vertex. OCR support needs its own request/
+	// response path — track as a follow-up.
 	"mistral-small-2503": {
 		Label:    "Mistral Small 2503",
 		Supports: &internal.BasicText,
