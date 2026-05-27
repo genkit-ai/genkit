@@ -154,10 +154,10 @@ func toVirtualTryOnRequest(input *ai.ModelRequest, cfg *VirtualTryOnConfig) (*vi
 	persons := extractMediaByType(input, PartMetadataTypePersonImage)
 	products := extractMediaByType(input, PartMetadataTypeProductImage)
 	if len(persons) == 0 {
-		return nil, fmt.Errorf("virtual try-on requires a media part with metadata.type=%q", PartMetadataTypePersonImage)
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("virtual try-on requires a media part with metadata.type=%q", PartMetadataTypePersonImage), nil)
 	}
 	if len(products) == 0 {
-		return nil, fmt.Errorf("virtual try-on requires at least one media part with metadata.type=%q", PartMetadataTypeProductImage)
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, fmt.Sprintf("virtual try-on requires at least one media part with metadata.type=%q", PartMetadataTypeProductImage), nil)
 	}
 
 	instance := virtualTryOnInstance{
@@ -171,6 +171,20 @@ func toVirtualTryOnRequest(input *ai.ModelRequest, cfg *VirtualTryOnConfig) (*vi
 		Instances:  []virtualTryOnInstance{instance},
 		Parameters: *cfg,
 	}, nil
+}
+
+// vertexPredictURL builds the Vertex AI :predict URL for a publisher google
+// model. The "global" location uses the bare aiplatform.googleapis.com host;
+// regional locations get a <region>- prefix.
+func vertexPredictURL(location, project, model string) string {
+	host := location + "-aiplatform.googleapis.com"
+	if location == "global" {
+		host = "aiplatform.googleapis.com"
+	}
+	return fmt.Sprintf(
+		"https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
+		host, project, location, model,
+	)
 }
 
 func translateVirtualTryOnResponse(resp *virtualTryOnPredictResponse, input *ai.ModelRequest) *ai.ModelResponse {
@@ -199,15 +213,15 @@ func generateVirtualTryOn(
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
 	if cb != nil {
-		return nil, fmt.Errorf("streaming mode not supported for virtual try-on")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "streaming mode not supported for virtual try-on", nil)
 	}
 
 	cc := client.ClientConfig()
 	if cc.Backend != genai.BackendVertexAI {
-		return nil, fmt.Errorf("virtual try-on is only available through the Vertex AI backend")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "virtual try-on is only available through the Vertex AI backend", nil)
 	}
 	if cc.HTTPClient == nil {
-		return nil, fmt.Errorf("virtual try-on: genai.Client has no HTTP client configured")
+		return nil, core.NewPublicError(core.FAILED_PRECONDITION, "virtual try-on: genai.Client has no HTTP client configured", nil)
 	}
 
 	cfg, err := virtualTryOnConfigFromRequest(input)
@@ -222,10 +236,10 @@ func generateVirtualTryOn(
 
 	location := cc.Location
 	if location == "" {
-		return nil, fmt.Errorf("virtual try-on requires a Vertex AI location")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "virtual try-on requires a Vertex AI location", nil)
 	}
 	if cc.Project == "" {
-		return nil, fmt.Errorf("virtual try-on requires a Vertex AI project id")
+		return nil, core.NewPublicError(core.INVALID_ARGUMENT, "virtual try-on requires a Vertex AI project id", nil)
 	}
 
 	body, err := json.Marshal(payload)
@@ -233,16 +247,7 @@ func generateVirtualTryOn(
 		return nil, fmt.Errorf("virtual try-on: marshaling request: %w", err)
 	}
 
-	// Vertex's global endpoint uses the bare aiplatform.googleapis.com host;
-	// only regional locations get a <region>- prefix.
-	host := location + "-aiplatform.googleapis.com"
-	if location == "global" {
-		host = "aiplatform.googleapis.com"
-	}
-	url := fmt.Sprintf(
-		"https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:predict",
-		host, cc.Project, location, model,
-	)
+	url := vertexPredictURL(location, cc.Project, model)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
