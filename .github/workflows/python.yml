@@ -36,10 +36,10 @@ jobs:
     name: Lint and Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.12"
@@ -72,7 +72,7 @@ jobs:
       matrix:
         checker: [ty, pyrefly, pyright]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -80,7 +80,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.12"
@@ -112,10 +112,10 @@ jobs:
     name: Security and Compliance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.12"
@@ -154,7 +154,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
       fail-fast: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -162,7 +162,7 @@ jobs:
           sudo apt-get install -y build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
 
       - name: Install uv and setup Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -188,10 +188,10 @@ jobs:
     if: ${{ always() && !failure() && !cancelled() }}
     needs: [lint-and-format, type-check, security-and-compliance, tests]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           python-version: "3.12"
@@ -221,7 +221,7 @@ jobs:
           done
 
       - name: Upload distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-distributions
           path: py/dist/
