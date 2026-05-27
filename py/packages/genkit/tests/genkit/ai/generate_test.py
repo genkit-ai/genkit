@@ -1711,7 +1711,7 @@ async def test_generate_and_model_middleware_execution_order() -> None:
     # The programmable model appends to execution_order when called.
     pm.responses.clear()
 
-    def model_side_effect() -> ModelResponse:
+    def model_side_effect(_request: ModelRequest) -> ModelResponse:
         execution_order.append('modelExecution')
         return ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -1758,7 +1758,7 @@ async def test_generate_model_tool_middleware_ordering_across_turns() -> None:
 
     turn = 0
 
-    def model_side_effect() -> ModelResponse:
+    def model_side_effect(_request: ModelRequest) -> ModelResponse:
         nonlocal turn
         turn += 1
         execution_order.append('modelExecution')
