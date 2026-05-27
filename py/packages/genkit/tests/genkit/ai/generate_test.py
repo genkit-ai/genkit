@@ -918,6 +918,7 @@ async def test_stream_interception_chains_across_model_and_generate_hooks() -> N
             ctx.replace_on_chunk(previous)
 
             # Also modify the final response text.
+            assert resp.message is not None
             original_text = text_from_message(resp.message)
             return ModelResponse(
                 finish_reason=resp.finish_reason,
