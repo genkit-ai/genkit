@@ -472,11 +472,7 @@ function fromGeminiInlineData(part: GeminiPart): Part {
 }
 
 function fromGeminiFileData(part: GeminiPart): Part {
-  if (
-    !part.fileData ||
-    !part.fileData.hasOwnProperty('mimeType') ||
-    !part.fileData.hasOwnProperty('fileUri')
-  ) {
+  if (!part.fileData || !part.fileData.fileUri) {
     throw new Error(
       'Invalid Gemini File Data Part: missing required properties'
     );
@@ -484,8 +480,8 @@ function fromGeminiFileData(part: GeminiPart): Part {
 
   return maybeAddThoughtSignatureAndMetadata(part, {
     media: {
-      url: part.fileData?.fileUri,
-      contentType: part.fileData?.mimeType,
+      url: part.fileData.fileUri,
+      ...(part.fileData.mimeType ? { contentType: part.fileData.mimeType } : {}),
     },
   });
 }

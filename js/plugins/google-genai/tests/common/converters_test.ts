@@ -988,6 +988,41 @@ describe('fromGeminiCandidate', () => {
       },
     },
     {
+      should: 'should transform gemini candidate (fileData without mimeType) correctly',
+      geminiCandidate: {
+        index: 0,
+        content: {
+          role: 'model',
+          parts: [
+            {
+              fileData: {
+                fileUri: 'gs://bucket/image.png',
+              },
+            },
+          ],
+        },
+      },
+      expectedOutput: {
+        index: 0,
+        message: {
+          role: 'model',
+          content: [
+            {
+              media: {
+                url: 'gs://bucket/image.png',
+              },
+            },
+          ],
+        },
+        finishReason: 'unknown',
+        finishMessage: undefined,
+        custom: {
+          citationMetadata: undefined,
+          safetyRatings: undefined,
+        },
+      },
+    },
+    {
       should: 'should transform gemini candidate (executableCode) correctly',
       geminiCandidate: {
         index: 0,
