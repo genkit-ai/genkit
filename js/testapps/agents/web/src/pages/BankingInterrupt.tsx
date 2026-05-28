@@ -14,219 +14,87 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-  ToolRequest,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitAgent } from '../genkit-react';
 
 // ---------------------------------------------------------------------------
-// Banking Interrupt — interrupt/approval workflow
+// Banking Interrupt — MIGRATED TO v2 HOOKS
 //
-// Demonstrates:
-//   • streamFlow() with server-side session store (uses snapshotId)
-//   • Detecting an interrupt: the result contains a toolRequest for
-//     'userApproval' instead of a final answer
-//   • Resuming after interrupt: send a toolResponse message with
-//     `init: { snapshotId }` to continue the flow
-//   • Inline approval dialog
+// Before: 358 LOC with stateRef + snapshotIdRef, manual `findInterrupt`
+// scanning `result.message.content`, hand-rolled `resume.respond` payload
+// construction, and a separate handler path for resumption.
+//
+// After: the v2 `interrupt` event surfaces through `useGenkitAgent` as
+// `pendingInterrupt`. Resuming is one call: `agent.respondToInterrupt(out)`.
+// No snapshotId routing, no content scanning, no separate code path.
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/bankingAgent';
 
-interface PendingInterrupt {
-  ref?: string;
-  action: string;
-  details: string;
-  snapshotId: string;
+interface ApprovalInput {
+  action?: string;
+  details?: string;
 }
 
 export default function BankingInterrupt() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [interrupt, setInterrupt] = useState<PendingInterrupt | null>(null);
+  const agent = useGenkitAgent({ url: ENDPOINT });
   const [feedback, setFeedback] = useState('');
 
-  // This agent uses a server-side store, so we track state for stateless
-  // fallback AND snapshotId for interrupt resumption.
-  const stateRef = useRef<SessionState | undefined>(undefined);
-  const snapshotIdRef = useRef<string | undefined>(undefined);
+  const handleSend = (text: string) => {
+    if (agent.phase === 'streaming') return;
+    agent.submit({ messages: [{ role: 'user', content: [{ text }] }] });
+  };
 
-  // ── Send a regular user message ──────────────────────────────────────
-  const handleSend = useCallback(
-    async (text: string) => {
-      if (loading || interrupt) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
-      setLoading(true);
-      setStreamingText('');
-
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      // Prefer state over snapshotId for multi-turn.
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : snapshotIdRef.current
-          ? { snapshotId: snapshotIdRef.current }
-          : {};
-
-      try {
-        const result = await streamAndCollect(input, init);
-        processResult(result);
-      } catch (err: any) {
-        setStreamingText('');
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading, interrupt]
-  );
-
-  // ── Respond to an interrupt (approve or deny) ────────────────────────
-  const handleInterruptResponse = useCallback(
-    async (approved: boolean) => {
-      if (!interrupt) return;
-      const currentInterrupt = interrupt;
-      setInterrupt(null);
-      setLoading(true);
-      setStreamingText('');
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'system',
-          text: `User ${approved ? 'approved ✅' : 'denied ❌'}: ${feedback || '(no feedback)'}`,
-        },
-      ]);
-
-      // ── Build the resume payload ──────────────────────────────
-      // To resume an interrupted flow, send a resume object containing a
-      // respond block that matches the interrupt's ref and provides the output.
-      const input: AgentInput = {
-        resume: {
-          respond: [
-            {
-              toolResponse: {
-                name: 'userApproval',
-                ref: currentInterrupt.ref,
-                output: {
-                  approved,
-                  feedback: feedback || undefined,
-                },
-              },
-            },
-          ],
-        },
-      };
-
-      // Resume from the snapshot where the flow was interrupted.
-      // The banking agent uses a server-side store, so snapshotId works.
-      const init = { snapshotId: currentInterrupt.snapshotId };
-
-      try {
-        const result = await streamAndCollect(input, init);
-        processResult(result);
-      } catch (err: any) {
-        setStreamingText('');
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error resuming: ${err.message}` },
-        ]);
-      } finally {
-        setLoading(false);
-        setFeedback('');
-      }
-    },
-    [interrupt, feedback]
-  );
-
-  // ── Shared: stream a request and collect chunks ──────────────────────
-  async function streamAndCollect(
-    input: AgentInput,
-    init: AgentInit
-  ): Promise<AgentOutput> {
-    const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-      url: ENDPOINT,
-      input,
-      init,
+  const handleApprove = () => {
+    agent.respondToInterrupt({
+      approved: true,
+      feedback: feedback || undefined,
     });
+    setFeedback('');
+  };
 
-    let accumulated = '';
-    for await (const chunk of response.stream) {
-      if (chunk?.modelChunk?.content) {
-        for (const part of chunk.modelChunk.content) {
-          if (part.text) {
-            accumulated += part.text;
-            setStreamingText(accumulated);
-          }
-        }
-      }
-    }
+  const handleDeny = () => {
+    agent.respondToInterrupt({
+      approved: false,
+      feedback: feedback || undefined,
+    });
+    setFeedback('');
+  };
 
-    const result = await response.output;
-    setStreamingText('');
+  const chatMessages = useMemo<ChatMessage[]>(() => {
+    return agent.messages.flatMap((m) =>
+      messageToChatRows(m as { role: string; content?: any[] })
+    );
+  }, [agent.messages]);
 
-    // Show the model's reply (or the accumulated stream text).
-    const replyText = extractText(result);
-    if (accumulated || replyText !== '(no result)') {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'model', text: replyText || accumulated },
-      ]);
-    }
-
-    return result;
-  }
-
-  // ── Process a result: update session tracking & detect interrupts ────
-  function processResult(result: AgentOutput) {
-    if (result?.state) stateRef.current = result.state;
-    if (result?.snapshotId) snapshotIdRef.current = result.snapshotId;
-
-    // Check if the result contains an interrupt (userApproval tool request).
-    const irpt = findInterrupt(result);
-    if (irpt && result.snapshotId) {
-      setInterrupt({ ...irpt, snapshotId: result.snapshotId });
-    }
-  }
+  const interrupt = agent.pendingInterrupt;
+  const interruptInput = (interrupt?.input ?? {}) as ApprovalInput;
 
   return (
     <div className="page-with-sidebar">
       <ChatUI
-        title="Banking Agent (Interrupt)"
-        description="Banking assistant that requests user approval before transfers."
+        title="Banking Agent (Interrupt) — v2"
+        description="Banking assistant that requests user approval before transfers. Now driven by useGenkitAgent + in-stream interrupt events."
         suggestions={[
           'Transfer $500 to my savings account.',
           'Send $200 to account ACME-1234.',
           'What is my account balance?',
         ]}
-        messages={messages}
-        streamingText={streamingText}
-        loading={loading}
+        messages={chatMessages}
+        streamingText={agent.streamingText}
+        loading={agent.phase === 'streaming'}
         onSend={handleSend}
-        inputDisabled={!!interrupt}>
-        {/* Inline approval dialog — shown when the agent pauses for approval */}
-        {interrupt && (
+        inputDisabled={!!interrupt}
+      >
+        {interrupt && interrupt.toolName === 'userApproval' && (
           <div className="interrupt-dialog">
             <h3>⚠️ Approval Required</h3>
             <p>
-              <strong>Action:</strong> {interrupt.action}
+              <strong>Action:</strong> {interruptInput.action ?? 'Unknown'}
             </p>
             <p>
-              <strong>Details:</strong> {interrupt.details}
+              <strong>Details:</strong> {interruptInput.details ?? '(none)'}
             </p>
             <textarea
               className="interrupt-feedback"
@@ -236,123 +104,86 @@ export default function BankingInterrupt() {
               rows={2}
             />
             <div className="interrupt-buttons">
-              <button
-                className="btn btn-approve"
-                onClick={() => handleInterruptResponse(true)}>
+              <button className="btn btn-approve" onClick={handleApprove}>
                 Approve
               </button>
-              <button
-                className="btn btn-deny"
-                onClick={() => handleInterruptResponse(false)}>
+              <button className="btn btn-deny" onClick={handleDeny}>
                 Deny
               </button>
             </div>
           </div>
         )}
+        {agent.error && (
+          <div className="message">
+            <div className="message-role">system</div>
+            <div className="message-text">Error: {agent.error.message}</div>
+          </div>
+        )}
       </ChatUI>
 
       <aside className="info-sidebar">
-        <h3>📋 How It Works</h3>
+        <h3>📋 v2 Interrupt Pattern</h3>
         <ol>
           <li>
-            User sends a request like <em>"Transfer $500 to savings"</em> via{' '}
-            <code>streamFlow()</code>.
+            User asks: "Transfer $500 to savings". The agent emits an{' '}
+            <code>interrupt</code> event on the stream when the{' '}
+            <code>userApproval</code> tool fires.
           </li>
           <li>
-            The model decides to call the <code>userApproval</code> tool.
-            Instead of a final answer, the result contains a{' '}
-            <code>toolRequest</code> with the action details.
+            <code>useGenkitAgent</code> surfaces it as <code>pendingInterrupt</code>{' '}
+            with addressable <code>toolCallId</code>, <code>toolName</code>,
+            and <code>input</code>.
           </li>
           <li>
-            The client detects the <code>toolRequest</code> and shows an inline
-            approval dialog — the flow is <strong>paused</strong>.
+            UI shows the approval dialog. User clicks Approve →{' '}
+            <code>agent.respondToInterrupt({'{ approved: true }'})</code>.
           </li>
           <li>
-            When the user approves or denies, the client sends a{' '}
-            <code>resume</code> payload with{' '}
-            <code>{'init: { snapshotId }'}</code> to <strong>resume</strong>{' '}
-            from the exact point where the flow paused.
-          </li>
-          <li>
-            The model processes the approval result and returns a final
-            confirmation or denial message.
+            The hook constructs the <code>resume.respond</code> payload with
+            the right ref, sends it back to the same agent URL, and
+            continues streaming the result.
           </li>
         </ol>
 
-        <h4>Key APIs</h4>
-        <pre>{`// Detect interrupt in result
-const msg = result.message;
-for (const p of msg.content) {
-  if (p.toolRequest?.name === 'userApproval') {
-    // Show approval dialog
-    // Save result.snapshotId
-  }
-}
+        <h4>Page code</h4>
+        <pre>{`const agent = useGenkitAgent({ url });
 
-// Resume after approval
-streamFlow({
-  url: '/api/bankingAgent',
-  input: {
-    resume: {
-      respond: [{
-        toolResponse: {
-          name: 'userApproval',
-          ref: interrupt.ref,
-          output: { approved: true },
-        },
-      }],
-    },
-  },
-  init: { snapshotId },
-});`}</pre>
+// Detection
+agent.pendingInterrupt
+  // { toolCallId, toolName, input, kind }
 
-        <h4>Interrupt Pattern</h4>
-        <p>
-          The interrupt pattern uses <strong>tool calls as control flow</strong>
-          . The <code>userApproval</code> tool never executes server-side — it
-          exists solely to pause the flow and hand control back to the client.
-          The client's <code>resume</code> payload resumes execution.
-        </p>
+// Resumption
+agent.respondToInterrupt(output);  // for defineInterrupt tools
+agent.restartInterrupt(metadata);  // for approval-gated tools
+
+// No snapshotId routing.
+// No findInterrupt() scanning.
+// No separate resume code path.`}</pre>
       </aside>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-    if (p.toolRequest) {
-      parts.push(
-        `[Tool Request: ${p.toolRequest.name}]\n${JSON.stringify(p.toolRequest.input, null, 2)}`
-      );
+function messageToChatRows(msg: { role: string; content?: any[] }): ChatMessage[] {
+  const rows: ChatMessage[] = [];
+  const textParts: string[] = [];
+  for (const p of msg.content ?? []) {
+    if (p.text) textParts.push(p.text);
+    if (p.toolRequest && p.toolRequest.name !== 'userApproval') {
+      rows.push({
+        role: 'tool',
+        text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+      });
+    }
+    if (p.toolResponse && p.toolResponse.name !== 'userApproval') {
+      rows.push({
+        role: 'tool',
+        text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+      });
     }
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
-}
-
-/** Check if the result contains an interrupt (userApproval tool request). */
-function findInterrupt(
-  result: AgentOutput
-): { ref?: string; action: string; details: string } | null {
-  const msg = result?.message;
-  if (!msg) return null;
-  for (const p of msg.content || []) {
-    if (p.toolRequest?.name === 'userApproval') {
-      const tr = p.toolRequest as ToolRequest;
-      return {
-        ref: tr.ref,
-        action: (tr.input as any)?.action || 'Unknown',
-        details: (tr.input as any)?.details || '',
-      };
-    }
+  if (textParts.length > 0) {
+    rows.unshift({ role: msg.role as ChatMessage['role'], text: textParts.join('') });
   }
-  return null;
+  return rows;
 }

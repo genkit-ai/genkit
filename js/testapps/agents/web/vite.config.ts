@@ -24,18 +24,20 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: process.env.GENKIT_PROXY_TARGET ?? 'http://localhost:3400',
         changeOrigin: true,
       },
     },
   },
   resolve: {
     alias: {
-      // Point directly at TS sources to avoid CJS/ESM interop issues
-      // with the built output in the monorepo.
+      // Point directly at TS sources to avoid CJS/ESM interop issues with
+      // the built output in the monorepo. Use the barrel `index.ts` so the
+      // v2 `walkAgentEvent` helper is also reachable alongside
+      // `streamFlow`/`runFlow`.
       'genkit/beta/client': path.resolve(
         __dirname,
-        '../../../genkit/src/client/client.ts'
+        '../../../genkit/src/client/index.ts'
       ),
       '@genkit-ai/core/async': path.resolve(
         __dirname,

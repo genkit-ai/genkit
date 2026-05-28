@@ -14,252 +14,104 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  Part,
-  SessionSnapshot,
-  SessionState,
-} from 'genkit/beta';
-import { runFlow, streamFlow } from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitAgent } from '../genkit-react';
 
 // ---------------------------------------------------------------------------
-// Weather Chat — multi-turn streaming chat with tool-calling + session restore
+// Weather Chat — MIGRATED TO v2 HOOKS
 //
-// Demonstrates:
-//   • streamFlow() for streaming responses
-//   • Multi-turn session via `init: { state }` round-tripping
-//   • Rendering streamed tool calls and tool responses in real time
-//   • Restoring a session from a snapshotId (URL-based session persistence)
-//   • Using the `/state` endpoint to fetch snapshot data on page load
+// Before: 345 LOC managing streamFlow, stateRef, snapshotIdRef, restoration,
+// chunk parsing, tool rendering, and URL updates by hand.
+//
+// After: ~130 LOC of UI. All wire-protocol concerns absorbed by
+// `useGenkitAgent`:
+//   - continuationId opaque-token round-tripping (no state/snapshotId fork)
+//   - URL-bookmark restoration via `resumeFromContinuation`
+//   - walkAgentEvent dispatch — text, tool calls, tool responses
+//   - committed message history + in-flight streaming text
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/weatherAgent';
-const STATE_ENDPOINT = '/api/weatherAgent/state';
 
 export default function WeatherChat() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [restoring, setRestoring] = useState(!!urlSnapshotId);
+  // Translate a snapshotId from the URL into a v2 continuation token.
+  const resumeFromContinuation = urlSnapshotId
+    ? `v1:${urlSnapshotId}`
+    : undefined;
 
-  // Session tracking
-  const stateRef = useRef<SessionState | undefined>(undefined);
-  const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
+  const agent = useGenkitAgent({
+    url: ENDPOINT,
+    resumeFromContinuation,
+  });
 
-  // ── Restore session from snapshotId on mount ───────────────────────
+  // Push the snapshot back to the URL when it changes, so the page is
+  // bookmarkable.
   useEffect(() => {
-    if (!urlSnapshotId) return;
-
-    let cancelled = false;
-
-    async function restore() {
-      try {
-        // Call the /state endpoint to fetch the snapshot data.
-        // The getSnapshotDataAction takes a snapshotId string as input
-        // and returns a SessionSnapshot with the full session state.
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: urlSnapshotId,
-        });
-
-        if (cancelled) return;
-
-        if (snapshot?.state?.messages) {
-          // Reconstruct chat messages from the session history.
-          const restored: ChatMessage[] = [];
-          for (const msg of snapshot.state.messages) {
-            const role = msg.role as ChatMessage['role'];
-            const textParts = (msg.content || [])
-              .filter((p: Part) => p.text)
-              .map((p: Part) => p.text);
-
-            if (textParts.length > 0) {
-              restored.push({ role, text: textParts.join('') });
-            }
-
-            // Also show tool calls/responses from history
-            for (const p of (msg.content as Part[]) || []) {
-              if (p.toolRequest) {
-                restored.push({
-                  role: 'tool',
-                  text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
-                });
-              }
-              if (p.toolResponse) {
-                restored.push({
-                  role: 'tool',
-                  text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
-                });
-              }
-            }
-          }
-          setMessages(restored);
-
-          // Use the snapshot's state for continuing the conversation.
-          // Since the weatherAgent uses a server store, we can use snapshotId.
-          snapshotIdRef.current = snapshot.snapshotId;
-          // Also keep the state for the `state` init path.
-          stateRef.current = snapshot.state;
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setMessages([
-            {
-              role: 'system',
-              text: `Failed to restore session: ${err.message}`,
-            },
-          ]);
-        }
-      } finally {
-        if (!cancelled) setRestoring(false);
-      }
-    }
-
-    restore();
-    return () => {
-      cancelled = true;
-    };
-  }, []); // Only run on mount
+    if (!agent.continuationId) return;
+    const sid = agent.continuationId.startsWith('v1:')
+      ? agent.continuationId.slice(3)
+      : null;
+    if (!sid) return;
+    if (sid === urlSnapshotId) return;
+    navigate(`/weather/${sid}`, { replace: true });
+  }, [agent.continuationId, urlSnapshotId, navigate]);
 
   const handleSend = useCallback(
-    async (text: string) => {
-      if (loading) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
-      setLoading(true);
-      setStreamingText('');
-
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      // Prefer state over snapshotId for multi-turn.
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : snapshotIdRef.current
-          ? { snapshotId: snapshotIdRef.current }
-          : {};
-
-      try {
-        // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
-
-        let accumulated = '';
-        for await (const chunk of response.stream) {
-          const c = chunk;
-          const mc = c?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
-              const tr = part.toolRequest;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `🔧 Calling ${tr.name}(${JSON.stringify(tr.input)})`,
-                },
-              ]);
-            } else if (part.toolResponse) {
-              const tr = part.toolResponse;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `✅ ${tr.name} → ${JSON.stringify(tr.output)}`,
-                },
-              ]);
-            }
-          }
-        }
-
-        // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
-        setStreamingText('');
-
-        // Save session state for the next turn.
-        if (result?.state) stateRef.current = result.state;
-
-        // Update the snapshotId and push it into the URL.
-        if (result?.snapshotId) {
-          snapshotIdRef.current = result.snapshotId;
-          // Update URL so the user can bookmark or hard-reload this session.
-          navigate(`/weather/${result.snapshotId}`, { replace: true });
-        }
-
-        const replyText = extractText(result);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'model', text: replyText || accumulated },
-        ]);
-      } catch (err: any) {
-        setStreamingText('');
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
-        ]);
-      } finally {
-        setLoading(false);
-      }
+    (text: string) => {
+      if (agent.phase === 'streaming') return;
+      agent.submit({ messages: [{ role: 'user', content: [{ text }] }] });
     },
-    [loading, navigate]
+    [agent]
   );
 
-  if (restoring) {
-    return (
-      <div className="page-with-sidebar">
-        <div className="chat-panel">
-          <div className="chat-header">
-            <h2>Weather Agent</h2>
-            <span className="chat-desc">Restoring session…</span>
-          </div>
-          <div className="chat-messages">
-            <div className="message">
-              <div className="message-role">system</div>
-              <div className="message-text loading">
-                Restoring session from snapshot {urlSnapshotId}…
-              </div>
-            </div>
-          </div>
-        </div>
-        <aside className="info-sidebar" />
-      </div>
+  // Project the hook's reactive state into the ChatUI's message format.
+  const chatMessages = useMemo<ChatMessage[]>(() => {
+    return agent.messages.flatMap((msg) =>
+      messageToChatRows(msg as { role: string; content?: any[] })
     );
-  }
+  }, [agent.messages]);
+
+  const inFlightRows = useMemo<ChatMessage[]>(() => {
+    const rows: ChatMessage[] = [];
+    for (const tc of agent.toolCalls) {
+      if (tc.state === 'call') {
+        rows.push({
+          role: 'tool',
+          text: `🔧 Calling ${tc.name}(${JSON.stringify(tc.input)})`,
+        });
+      } else if (tc.state === 'result') {
+        rows.push({
+          role: 'tool',
+          text: `✅ ${tc.name} → ${JSON.stringify(tc.output)}`,
+        });
+      } else {
+        rows.push({ role: 'tool', text: `❌ ${tc.name} failed` });
+      }
+    }
+    return rows;
+  }, [agent.toolCalls]);
 
   return (
     <div className="page-with-sidebar">
       <ChatUI
         title="Weather Agent"
-        description="Multi-turn chat with tool-calling. Ask about the weather in any city. Session persists in the URL."
+        description="Multi-turn chat with tool-calling. Migrated to useGenkitAgent (v2 events + continuationId)."
         suggestions={[
           'What is the weather like in London?',
           'Is it sunny in Tokyo right now?',
           'Compare the weather in Paris and New York.',
         ]}
-        messages={messages}
-        streamingText={streamingText}
-        loading={loading}
+        messages={[...chatMessages, ...inFlightRows]}
+        streamingText={agent.streamingText}
+        loading={agent.phase === 'streaming'}
         onSend={handleSend}
         headerAction={
-          snapshotIdRef.current ? (
+          agent.continuationId ? (
             <Link to="/weather" className="btn btn-new-session" reloadDocument>
               ✨ New Session
             </Link>
@@ -268,78 +120,67 @@ export default function WeatherChat() {
       />
 
       <aside className="info-sidebar">
-        <h3>📋 How It Works</h3>
+        <h3>📋 v2 Migration</h3>
         <ol>
           <li>
-            Client sends user message via <code>streamFlow()</code> — responses
-            arrive as they're generated.
+            <code>useGenkitAgent</code> owns the streamFlow connection, the
+            chunk dispatch, and the continuation-token round-trip.
           </li>
           <li>
-            The model can invoke <strong>tools</strong> (e.g.{' '}
-            <code>getWeather</code>). Tool calls and responses render inline in
-            the chat.
+            On mount, if a snapshotId is in the URL, the hook calls{' '}
+            <code>/state</code> and rehydrates messages + custom state +
+            artifacts.
           </li>
           <li>
-            Each response returns a <code>state</code> object and a{' '}
-            <code>snapshotId</code>. The state is sent back on the next turn via{' '}
-            <code>{'init: { state }'}</code> for multi-turn context.
+            On every turn, the hook walks the v2 <code>event</code> field on
+            each chunk (via <code>walkAgentEvent</code>) and surfaces{' '}
+            <code>streamingText</code>, <code>toolCalls</code>,{' '}
+            <code>pendingInterrupt</code>, etc. as reactive React state.
           </li>
           <li>
-            The <code>snapshotId</code> is pushed into the URL, so you can
-            bookmark or share the session link.
-          </li>
-          <li>
-            On page load with a <code>:snapshotId</code> in the URL, the client
-            calls the <code>/state</code> endpoint to restore the full
-            conversation history.
+            The single opaque <code>continuationId</code> replaces the
+            state-vs-snapshotId fork from v1.
           </li>
         </ol>
 
-        <h4>Key APIs</h4>
-        <pre>{`// Streaming multi-turn
-const response = streamFlow({
+        <h4>Page code</h4>
+        <pre>{`const agent = useGenkitAgent({
   url: '/api/weatherAgent',
-  input: { messages: [...] },
-  init: { state },
+  resumeFromContinuation,
 });
 
-for await (const chunk of response.stream) {
-  // chunk.modelChunk.content[]
-  // → .text, .toolRequest, .toolResponse
-}
-
-const result = await response.output;
-// result.state → send back next turn
-// result.snapshotId → push to URL
-
-// Restore session
-runFlow({
-  url: '/api/weatherAgent/state',
-  input: snapshotId,
-});`}</pre>
-
-        <h4>Session Persistence</h4>
-        <p>
-          This demo uses a <strong>server-side session store</strong>. The{' '}
-          <code>snapshotId</code> is a key into the store — the full message
-          history lives on the server. The client also receives{' '}
-          <code>state</code> for stateless round-tripping as a fallback.
-        </p>
+agent.submit({ messages: [...] });
+agent.streamingText;       // live tokens
+agent.toolCalls;           // tool lifecycle
+agent.messages;            // committed
+agent.continuationId;      // bookmark this
+agent.pendingInterrupt;    // user input needed
+agent.respondToInterrupt(out);`}</pre>
       </aside>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: pull displayable text out of an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
+function messageToChatRows(msg: { role: string; content?: any[] }): ChatMessage[] {
+  const rows: ChatMessage[] = [];
+  const textParts: string[] = [];
+  for (const p of msg.content ?? []) {
+    if (p.text) textParts.push(p.text);
+    if (p.toolRequest) {
+      rows.push({
+        role: 'tool',
+        text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+      });
+    }
+    if (p.toolResponse) {
+      rows.push({
+        role: 'tool',
+        text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+      });
+    }
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
+  if (textParts.length > 0) {
+    rows.unshift({ role: msg.role as ChatMessage['role'], text: textParts.join('') });
+  }
+  return rows;
 }
