@@ -131,11 +131,14 @@ export {
 export { dynamicTool, tool } from '@genkit-ai/ai/tool';
 export {
   GENKIT_CLIENT_HEADER,
+  GENKIT_UI_METADATA,
+  GENKIT_UI_WIDGETS,
   GENKIT_VERSION,
   GenkitError,
   OperationSchema,
   ReflectionServer,
   StatusCodes,
+  StatusNameSchema,
   StatusSchema,
   UserFacingError,
   annotateSchema,
@@ -160,6 +163,7 @@ export {
   type FlowFn,
   type FlowSideChannel,
   type GenkitRuntimeConfig,
+  type GenkitUiWidget,
   type JSONSchema,
   type JSONSchema7,
   type Middleware,

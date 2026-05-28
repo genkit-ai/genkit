@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-import { ActionMetadata, GenkitError, modelActionMetadata, z } from 'genkit';
+import {
+  ActionMetadata,
+  GENKIT_UI_METADATA,
+  GENKIT_UI_WIDGETS,
+  GenkitError,
+  annotateSchema,
+  modelActionMetadata,
+  z,
+} from 'genkit';
 import {
   CandidateData,
   GenerationCommonConfigDescriptions,
@@ -154,13 +162,16 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
       'Overrides the plugin-configured or default apiVersion, if specified.'
     )
     .optional(),
-  safetySettings: z
-    .array(SafetySettingsSchema)
-    .describe(
-      'Adjust how likely you are to see responses that could be harmful. ' +
-        'Content is blocked based on the probability that it is harmful.'
-    )
-    .optional(),
+  safetySettings: annotateSchema(
+    z
+      .array(SafetySettingsSchema)
+      .describe(
+        'Adjust how likely you are to see responses that could be harmful. ' +
+          'Content is blocked based on the probability that it is harmful.'
+      )
+      .optional(),
+    { [GENKIT_UI_METADATA.WIDGET]: GENKIT_UI_WIDGETS.SAFETY_SETTINGS }
+  ),
   codeExecution: z
     .union([z.boolean(), z.object({}).strict()])
     .describe('Enables the model to generate and run code.')

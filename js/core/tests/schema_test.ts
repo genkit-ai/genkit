@@ -19,6 +19,7 @@ import * as assert from 'assert';
 import { afterEach, describe, it, mock } from 'node:test';
 
 import { setGenkitRuntimeConfig } from '../src/config.js';
+import { GENKIT_UI_METADATA } from '../src/metadata.js';
 import {
   ValidationError,
   annotateSchema,
@@ -169,23 +170,23 @@ describe('toJsonSchema', () => {
 describe('annotateSchema()', () => {
   it('should merge annotations into the JSON schema', () => {
     const schema = annotateSchema(z.string(), {
-      'x-genkit-data-source': 'my-action',
+      [GENKIT_UI_METADATA.DATA_SOURCE]: 'my-action',
     });
 
     const json = toJsonSchema({ schema });
-    assert.strictEqual(json['x-genkit-data-source'], 'my-action');
+    assert.strictEqual(json[GENKIT_UI_METADATA.DATA_SOURCE], 'my-action');
   });
 
   it('should merge annotations for nested fields', () => {
     const schema = z.object({
       field: annotateSchema(z.string(), {
-        'x-genkit-data-source': 'nested-action',
+        [GENKIT_UI_METADATA.DATA_SOURCE]: 'nested-action',
       }),
     });
 
     const json = toJsonSchema({ schema });
     assert.strictEqual(
-      json.properties.field['x-genkit-data-source'],
+      json.properties.field[GENKIT_UI_METADATA.DATA_SOURCE],
       'nested-action'
     );
   });
@@ -193,24 +194,27 @@ describe('annotateSchema()', () => {
   it('should merge annotations for array items', () => {
     const schema = z.array(
       annotateSchema(z.string(), {
-        'x-genkit-data-source': 'array-action',
+        [GENKIT_UI_METADATA.DATA_SOURCE]: 'array-action',
       })
     );
 
     const json = toJsonSchema({ schema });
-    assert.strictEqual(json.items['x-genkit-data-source'], 'array-action');
+    assert.strictEqual(
+      json.items[GENKIT_UI_METADATA.DATA_SOURCE],
+      'array-action'
+    );
   });
 
   it('should merge annotations for optional fields', () => {
     const schema = z.object({
       field: annotateSchema(z.string(), {
-        'x-genkit-data-source': 'optional-action',
+        [GENKIT_UI_METADATA.DATA_SOURCE]: 'optional-action',
       }).optional(),
     });
 
     const json = toJsonSchema({ schema });
     assert.strictEqual(
-      json.properties.field['x-genkit-data-source'],
+      json.properties.field[GENKIT_UI_METADATA.DATA_SOURCE],
       'optional-action'
     );
   });

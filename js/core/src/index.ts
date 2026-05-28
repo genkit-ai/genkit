@@ -65,6 +65,7 @@ export {
 } from './dynamic-action-provider.js';
 export {
   GenkitError,
+  StatusNameSchema,
   UnstableApiError,
   UserFacingError,
   assertUnstable,
@@ -82,6 +83,11 @@ export {
   type FlowFn,
   type FlowSideChannel,
 } from './flow.js';
+export {
+  GENKIT_UI_METADATA,
+  GENKIT_UI_WIDGETS,
+  type GenkitUiWidget,
+} from './metadata.js';
 export * from './plugin.js';
 export * from './reflection.js';
 export {
