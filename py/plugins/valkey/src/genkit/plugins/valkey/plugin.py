@@ -250,6 +250,8 @@ class Valkey(Plugin):
         plugin = self
 
         async def index_fn(req: IndexerRequest) -> IndexerResponse:
+            if not req.documents:
+                return IndexerResponse()
             embedder_action = await plugin._resolve_embedder(cfg)
 
             embed_response = (
@@ -297,7 +299,11 @@ class Valkey(Plugin):
                     for mf in cfg.metadata_fields:
                         val = doc.metadata.get(mf.name)
                         if val is not None:
-                            if mf.field_type == MetadataFieldType.NUMERIC and isinstance(val, (int, float)):
+                            if mf.field_type == MetadataFieldType.NUMERIC:
+                                if not isinstance(val, (int, float)):
+                                    raise ValueError(
+                                        f'valkey: NUMERIC field {mf.name!r} received non-numeric value: {type(val).__name__}'
+                                    )
                                 if isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf')):
                                     raise ValueError(
                                         f'valkey: NUMERIC field {mf.name!r} received non-finite float {val!r}'

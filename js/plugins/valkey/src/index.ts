@@ -228,6 +228,7 @@ function configureValkeyIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
     embedderOptions?: z.infer<EmbedderCustomOptions>;
     prefix: string;
     client: GlideClient;
+    dimension: number;
     metadataFields: ValkeyMetadataField[];
   }
 ) {
@@ -237,6 +238,7 @@ function configureValkeyIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
     embedderOptions,
     prefix,
     client,
+    dimension,
     metadataFields,
   } = params;
 
@@ -246,6 +248,9 @@ function configureValkeyIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
       configSchema: ValkeyIndexerOptionsSchema,
     },
     async (docs) => {
+      if (docs.length === 0) {
+        return;
+      }
       // Resolve the embedder action once, then batch all documents in a single
       // call. This avoids N round-trips to the embedder service.
       const embedderAction = await resolveEmbedderAction(ai, embedder);
@@ -254,6 +259,19 @@ function configureValkeyIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
         options: embedderOptions,
       });
       const allEmbeddings = response.embeddings;
+      if (allEmbeddings.length !== docs.length) {
+        throw new Error(
+          `valkey: embedder returned ${allEmbeddings.length} embeddings for ${docs.length} docs`
+        );
+      }
+
+      for (let i = 0; i < allEmbeddings.length; i++) {
+        if (allEmbeddings[i].embedding.length !== dimension) {
+          throw new Error(
+            `valkey: embedder returned ${allEmbeddings[i].embedding.length}-dim vector, expected ${dimension}`
+          );
+        }
+      }
 
       // Collect all hset entries, then chunk into batches of INDEX_BATCH_SIZE
       // to avoid unbounded pipeline sizes that could cause OOM or timeouts.

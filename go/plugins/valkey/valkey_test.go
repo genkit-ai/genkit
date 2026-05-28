@@ -170,10 +170,20 @@ func TestMetadataValueToString(t *testing.T) {
 		{"label", MetadataFieldTypeTag, "label"},
 		{float64(7.0), MetadataFieldTypeTag, "7"},
 	} {
-		got := metadataValueToString(tc.val, tc.fieldType)
+		got, err := metadataValueToString(tc.val, tc.fieldType)
+		if err != nil {
+			t.Errorf("metadataValueToString(%v, %v): unexpected error: %v", tc.val, tc.fieldType, err)
+			continue
+		}
 		if got != tc.want {
 			t.Errorf("metadataValueToString(%v, %v): got %q, want %q", tc.val, tc.fieldType, got, tc.want)
 		}
+	}
+
+	// Verify that non-numeric types return an error for NUMERIC fields.
+	_, err := metadataValueToString("not-a-number", MetadataFieldTypeNumeric)
+	if err == nil {
+		t.Error("metadataValueToString(string, NUMERIC): expected error, got nil")
 	}
 }
 

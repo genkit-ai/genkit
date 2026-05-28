@@ -221,13 +221,17 @@ func IsDefinedRetriever(g *genkit.Genkit, name string) bool {
 
 func (v *Valkey) newDocstore(ctx context.Context, cfg Config) (*Docstore, error) {
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	if !v.initted {
+		v.mu.Unlock()
 		return nil, errors.New("valkey.Init not called")
 	}
 	if v.initErr != nil {
-		return nil, v.initErr
+		err := v.initErr
+		v.mu.Unlock()
+		return nil, err
 	}
+	client := v.client
+	v.mu.Unlock()
 	if cfg.IndexName == "" {
 		return nil, errors.New("valkey: IndexName required")
 	}
@@ -248,12 +252,12 @@ func (v *Valkey) newDocstore(ctx context.Context, cfg Config) (*Docstore, error)
 		metric = constants.DistanceMetricCosine
 	}
 
-	if err := ensureIndex(ctx, v.client, cfg.IndexName, cfg.Dimension, prefix, metric, cfg.MetadataFields); err != nil {
+	if err := ensureIndex(ctx, client, cfg.IndexName, cfg.Dimension, prefix, metric, cfg.MetadataFields); err != nil {
 		return nil, fmt.Errorf("valkey: failed to ensure index: %w", err)
 	}
 
 	return &Docstore{
-		Client:          v.client,
+		Client:          client,
 		IndexName:       cfg.IndexName,
 		Prefix:          prefix,
 		Dimension:       cfg.Dimension,
@@ -377,7 +381,11 @@ func (ds *Docstore) Index(ctx context.Context, docs []*ai.Document) error {
 		if doc.Metadata != nil {
 			for _, mf := range ds.MetadataFields {
 				if val, ok := doc.Metadata[mf.Name]; ok {
-					fields[mf.Name] = metadataValueToString(val, mf.Type)
+					strVal, err := metadataValueToString(val, mf.Type)
+					if err != nil {
+						return err
+					}
+					fields[mf.Name] = strVal
 				}
 			}
 		}
@@ -566,20 +574,22 @@ func validateFilter(filter string) error {
 // metadataValueToString converts a metadata value to a string suitable for
 // storage in a Valkey HASH field. Numeric fields are formatted to preserve
 // parseability as 64-bit floats.
-func metadataValueToString(val any, fieldType MetadataFieldType) string {
+func metadataValueToString(val any, fieldType MetadataFieldType) (string, error) {
 	if fieldType == MetadataFieldTypeNumeric {
 		switch v := val.(type) {
 		case float64:
-			return fmt.Sprintf("%g", v)
+			return fmt.Sprintf("%g", v), nil
 		case float32:
-			return fmt.Sprintf("%g", v)
+			return fmt.Sprintf("%g", v), nil
 		case int:
-			return fmt.Sprintf("%d", v)
+			return fmt.Sprintf("%d", v), nil
 		case int64:
-			return fmt.Sprintf("%d", v)
+			return fmt.Sprintf("%d", v), nil
 		case json.Number:
-			return v.String()
+			return v.String(), nil
+		default:
+			return "", fmt.Errorf("valkey: NUMERIC field received non-numeric value: %T", val)
 		}
 	}
-	return fmt.Sprintf("%v", val)
+	return fmt.Sprintf("%v", val), nil
 }
