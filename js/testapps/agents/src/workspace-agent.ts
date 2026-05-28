@@ -15,55 +15,36 @@
  */
 
 /**
- * Workspace Builder — artifact production via defineAgent
+ * Workspace Builder — artifact production via the `artifacts` middleware
  *
  * Demonstrates:
- *   • Using `defineAgent` with a tool that emits artifacts
- *   • `ai.currentSession().addArtifacts()` from inside a tool handler
- *   • Artifacts are automatically returned in `result.artifacts`
- *   • No need for `defineCustomAgent` — the standard agent API handles
- *     model calls, tool dispatch, streaming, and message management
+ *   • Using the `artifacts()` middleware to give the model `write_artifact`
+ *     and `read_artifact` tools automatically
+ *   • No custom tool definition needed — the middleware handles everything
+ *   • Artifacts are automatically returned in `result.artifacts` and
+ *     streamed via `artifact` chunks
+ *   • Artifacts are deduplicated by name (writing the same name replaces it)
  */
 
+import { artifacts } from '@genkit-ai/middleware';
 import { z } from 'genkit';
 import { ai } from './genkit.js';
 
 // ---------------------------------------------------------------------------
-// Tool — emits a generated code file as an artifact
-// ---------------------------------------------------------------------------
-
-const emitArtifact = ai.defineTool(
-  {
-    name: 'emitArtifact',
-    description:
-      'Call this tool to emit a generated code file to the user workspace.',
-    inputSchema: z.object({ name: z.string(), content: z.string() }),
-    outputSchema: z.object({ status: z.string() }),
-  },
-  async (input) => {
-    const artifact = {
-      name: input.name,
-      parts: [{ text: input.content }],
-    };
-    ai.currentSession().addArtifacts([artifact]);
-    return { status: `Artifact ${input.name} emitted successfully.` };
-  }
-);
-
-// ---------------------------------------------------------------------------
-// Agent — uses defineAgent (the standard shortcut API)
+// Agent — uses defineAgent with the artifacts middleware
 // ---------------------------------------------------------------------------
 
 export const workspaceAgent = ai.defineAgent({
   name: 'workspaceAgent',
-  system: `You are a helpful code generation assistant. When the user asks you to create a file, use the emitArtifact tool to produce it.
+  system: `You are a helpful code generation assistant. When the user asks you to create a file, use the write_artifact tool to produce it.
 
 Rules:
-- Use the emitArtifact tool to create files. Pass the filename as "name" and the full file content as "content".
+- Use the write_artifact tool to create files. Pass the filename as "name" and the full file content as "content".
 - You can create multiple files in a single turn if requested.
-- After emitting artifacts, briefly confirm what you created.
-- If the user asks you to modify a previously created file, emit a new artifact with the same name and updated content.`,
-  tools: [emitArtifact],
+- After writing artifacts, briefly confirm what you created.
+- If the user asks you to modify a previously created file, use read_artifact to view the current content, then write_artifact with the same name and updated content.
+- You can use read_artifact to review any previously created files.`,
+  use: [artifacts()],
 });
 
 // ---------------------------------------------------------------------------

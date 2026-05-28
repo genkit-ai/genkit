@@ -37,9 +37,13 @@
  *   - Explicit description overrides via config
  *   - `maxDelegations` guard rail to prevent runaway loops
  *   - `historyLength` to forward conversation context to sub-agents
+ *   - `artifactStrategy: 'session'` to merge sub-agent artifacts into the
+ *     parent session with invocation ID namespacing
+ *   - `artifacts({ readonly: true })` to give the orchestrator read access
+ *     to sub-agent artifacts via `read_artifact` tool
  */
 
-import { agents, retry } from '@genkit-ai/middleware';
+import { agents, artifacts, retry } from '@genkit-ai/middleware';
 import { z } from 'genkit';
 import { ai, defaultModel } from './genkit.js';
 
@@ -54,11 +58,15 @@ export const researcher = ai.defineAgent({
   model: defaultModel,
   config: {
     tools: [{ googleSearch: {} }],
+    toolConfig: {
+      includeServerSideToolInvocations: true,
+    },
   },
-  system:
-    'You are a thorough research assistant. When asked a question, use the getWebResults tool to find information, then provide a clear, well-sourced answer.',
+  system: `You are a thorough research assistant. When asked a question, use the getWebResults tool to find information, then provide a clear, well-sourced answer.
+    
+    When you produce research results, use the write_artifact tool to save it as a named artifact. This makes your research easily accessible to the orchestrator and other agents.`,
   maxTurns: 10,
-  use: [retry()],
+  use: [retry(), artifacts()],
 });
 
 // ---------------------------------------------------------------------------
@@ -69,17 +77,23 @@ export const coder = ai.defineAgent({
   name: 'coder',
   description: 'An expert programmer that writes clean, well-commented code.',
   maxTurns: 10,
-  system:
-    'You are an expert programmer. When asked to write code, provide clean, well-commented code with explanations. Use TypeScript by default unless asked otherwise.',
-  use: [retry()],
+  system: `You are an expert programmer. When asked to write code, provide clean, well-commented code with explanations. Use TypeScript by default unless asked otherwise.
+
+When you produce code, use the write_artifact tool to save it as a named file artifact. This makes your code easily accessible to the orchestrator and other agents.`,
+  use: [
+    // The coder sub-agent can write artifacts (code files) directly
+    artifacts(),
+    retry(),
+  ],
 });
 
 // ---------------------------------------------------------------------------
 // Main Orchestrator Agent — delegates to sub-agents
 //
-// Note: the system prompt no longer needs to describe the sub-agents — the
-// middleware auto-discovers descriptions from the agent registry and injects
-// them into the system prompt automatically.
+// Uses `artifactStrategy: 'session'` so sub-agent artifacts are merged
+// into the orchestrator's session. The `artifacts({ readonly: true })`
+// middleware gives the orchestrator a `read_artifact` tool to inspect
+// the code/research produced by sub-agents.
 // ---------------------------------------------------------------------------
 
 export const orchestratorAgent = ai.defineAgent({
@@ -88,7 +102,10 @@ export const orchestratorAgent = ai.defineAgent({
 
 Analyze the user's request and delegate to the appropriate sub-agent.
 If the request requires both research AND code, call them sequentially.
-After receiving sub-agent responses, synthesize a final answer for the user.`,
+After receiving sub-agent responses, synthesize a final answer for the user.
+
+When sub-agents produce artifacts (code files, research reports, etc.),
+you can use the read_artifact tool to review their content before responding.`,
   use: [
     agents({
       agents: [
@@ -98,12 +115,18 @@ After receiving sub-agent responses, synthesize a final answer for the user.`,
         {
           name: 'coder',
           description:
-            'Writes, debugs, and explains code. Use for any programming tasks.',
+            'Writes, debugs, and explains code. Produces code artifacts. Use for any programming tasks.',
         },
       ],
       maxDelegations: 5,
       historyLength: 4,
+      // Sub-agent artifacts are merged into the session (namespaced by
+      // invocation ID). The orchestrator uses read_artifact to access them.
+      artifactStrategy: 'session',
     }),
+    // Read-only access to artifacts — the orchestrator can review
+    // sub-agent work products but doesn't produce its own artifacts.
+    artifacts({ readonly: true }),
     retry(),
   ],
 });
