@@ -481,7 +481,9 @@ function fromGeminiFileData(part: GeminiPart): Part {
   return maybeAddThoughtSignatureAndMetadata(part, {
     media: {
       url: part.fileData.fileUri,
-      ...(part.fileData.mimeType ? { contentType: part.fileData.mimeType } : {}),
+      ...(part.fileData.mimeType
+        ? { contentType: part.fileData.mimeType }
+        : {}),
     },
   });
 }

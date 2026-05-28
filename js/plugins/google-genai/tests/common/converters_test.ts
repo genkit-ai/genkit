@@ -988,7 +988,8 @@ describe('fromGeminiCandidate', () => {
       },
     },
     {
-      should: 'should transform gemini candidate (fileData without mimeType) correctly',
+      should:
+        'should transform gemini candidate (fileData without mimeType) correctly',
       geminiCandidate: {
         index: 0,
         content: {
