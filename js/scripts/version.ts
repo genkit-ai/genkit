@@ -35,8 +35,8 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { join, relative, resolve } from 'path';
 import { parseArgs } from 'util';
 
 // ---------------------------------------------------------------------------
@@ -81,9 +81,7 @@ interface Package {
 // ---------------------------------------------------------------------------
 
 function parseSemVer(version: string): SemVer {
-  const match = version.match(
-    /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/
-  );
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/);
   if (!match) throw new Error(`Invalid semver: ${version}`);
   return {
     major: parseInt(match[1]),
@@ -103,6 +101,7 @@ function isPreRelease(v: SemVer): boolean {
 }
 
 function bumpSemVer(v: SemVer, bump: BumpType): SemVer {
+  if (bump === BumpType.none) return v;
   if (v.major === 0) {
     // 0.x.y: major → minor, minor/patch → patch
     if (bump === BumpType.major)
@@ -137,8 +136,7 @@ function parseConventionalCommit(message: string): ConventionalCommit {
     return {
       type: match[1],
       scope: match[2] ?? null,
-      isBreaking:
-        match[3] === '!' || message.includes('BREAKING CHANGE'),
+      isBreaking: match[3] === '!' || message.includes('BREAKING CHANGE'),
       message: match[4],
     };
   }
@@ -166,9 +164,13 @@ function commitBumpType(commit: ConventionalCommit): BumpType {
 // Git helpers
 // ---------------------------------------------------------------------------
 
-function exec(cmd: string): string {
+function exec(cmd: string, options?: { cwd?: string }): string {
   try {
-    return execSync(cmd, { encoding: 'utf-8' }).trim();
+    return execSync(cmd, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      ...options,
+    }).trim();
   } catch {
     return '';
   }
@@ -182,7 +184,7 @@ function tagExists(tagName: string): boolean {
 function getLatestTag(packageName: string): string | null {
   // Try the standard tag format: <name>@<version>
   const result = exec(
-    `git describe --tags --match "${packageName}@*" --abbrev=0 2>/dev/null`
+    `git describe --tags --match "${packageName}@*" --abbrev=0`
   );
   return result || null;
 }
@@ -203,7 +205,7 @@ function discoverPackages(jsRoot: string): Package[] {
   const packages: Package[] = [];
 
   // Use pnpm to list workspace packages
-  const pnpmOutput = exec(`cd "${jsRoot}" && pnpm ls -r --depth -1 --json 2>/dev/null`);
+  const pnpmOutput = exec('pnpm ls -r --depth -1 --json', { cwd: jsRoot });
   if (!pnpmOutput) {
     // Fallback: manually find package.json files in known locations
     return discoverPackagesManual(jsRoot, repoRoot);
@@ -226,10 +228,7 @@ function discoverPackages(jsRoot: string): Package[] {
   return packages;
 }
 
-function discoverPackagesManual(
-  jsRoot: string,
-  repoRoot: string
-): Package[] {
+function discoverPackagesManual(jsRoot: string, repoRoot: string): Package[] {
   const packages: Package[] = [];
   const dirs = [
     join(jsRoot, 'core'),
@@ -240,13 +239,10 @@ function discoverPackagesManual(
   // Add plugins
   const pluginsDir = join(jsRoot, 'plugins');
   if (existsSync(pluginsDir)) {
-    const pluginEntries = execSync(`ls -d "${pluginsDir}"/*/`, {
-      encoding: 'utf-8',
-    })
-      .trim()
-      .split('\n')
-      .filter(Boolean);
-    dirs.push(...pluginEntries.map((d) => d.replace(/\/$/, '')));
+    const pluginEntries = readdirSync(pluginsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(pluginsDir, entry.name));
+    dirs.push(...pluginEntries);
   }
 
   for (const dir of dirs) {
@@ -259,13 +255,10 @@ function discoverPackagesManual(
   return packages;
 }
 
-function loadPackage(
-  pkgJsonPath: string,
-  repoRoot: string
-): Package | null {
+function loadPackage(pkgJsonPath: string, repoRoot: string): Package | null {
   const raw = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
   const pkgDir = resolve(pkgJsonPath, '..');
-  const relPath = pkgDir.replace(repoRoot + '/', '');
+  const relPath = relative(repoRoot, pkgDir).replace(/\\/g, '/');
 
   return {
     name: raw.name,
@@ -522,10 +515,10 @@ function applyBumps(
     console.log(`Bumping ${pkgName} to ${versionStr}...`);
 
     // Use npm version to update package.json (no git tag/commit)
-    execSync(
-      `cd "${pkg.path}" && npm version "${versionStr}" --no-git-tag-version`,
-      { stdio: 'pipe' }
-    );
+    execSync(`npm version "${versionStr}" --no-git-tag-version`, {
+      cwd: pkg.path,
+      stdio: 'pipe',
+    });
     modified.add(pkgName);
 
     // Generate changelog
@@ -578,9 +571,7 @@ function createCommitAndTags(
   }
 
   console.log('Creating git commit...');
-  const commitResult = exec(
-    'git commit -m "chore(release): publish packages"'
-  );
+  const commitResult = exec('git commit -m "chore(release): publish packages"');
   if (!commitResult) {
     console.log('Warning: Failed to create git commit (nothing to commit?).');
     return;
@@ -601,9 +592,7 @@ function createCommitAndTags(
       continue;
     }
 
-    exec(
-      `git tag -a "${tag}" -m "Release ${tag}"`
-    );
+    exec(`git tag -a "${tag}" -m "Release ${tag}"`);
     console.log(`  Created annotated tag ${tag}`);
   }
 }
@@ -613,7 +602,8 @@ function createCommitAndTags(
 // ---------------------------------------------------------------------------
 
 function printUsage() {
-  console.log(`
+  console.log(
+    `
 Usage: npx tsx js/scripts/version.ts [options]
 
 Automatically bump JS package versions based on conventional commits.
@@ -625,7 +615,8 @@ Options:
   --no-commit    Skip creating a git commit (default: commit)
   --no-tags      Skip creating git tags (default: tags)
   -h, --help     Print this usage information
-`.trim());
+`.trim()
+  );
 }
 
 function main() {
