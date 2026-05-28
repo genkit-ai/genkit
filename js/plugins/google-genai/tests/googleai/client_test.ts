@@ -200,6 +200,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
       });
     });
 
@@ -312,6 +313,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
       // Should not trace by default
@@ -420,6 +422,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
       sinon.assert.notCalled(runInNewSpanSpy);
@@ -600,6 +603,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(defaultRequest),
       });
     });
@@ -842,6 +846,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
     });
@@ -898,6 +903,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
     });
@@ -944,6 +950,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
       });
     });
 

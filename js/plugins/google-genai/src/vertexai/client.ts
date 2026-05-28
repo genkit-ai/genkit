@@ -377,6 +377,7 @@ async function getFetchOptions(params: {
   const fetchOptions: RequestInit = {
     method: params.method,
     headers: await getHeaders(params.clientOptions),
+    redirect: 'manual',
   };
   if (params.body) {
     fetchOptions.body = params.body;
