@@ -552,7 +552,7 @@ describe('toGeminiMessage', () => {
     );
   });
 
-  it('should throw on media part missing contentType for non-data URL', () => {
+  it('should not throw on media part missing contentType for non-data URL', () => {
     const inputMessage = {
       role: 'user',
       content: [
@@ -563,10 +563,16 @@ describe('toGeminiMessage', () => {
         } as any,
       ],
     };
-    assert.throws(
-      () => toGeminiMessage(inputMessage as MessageData),
-      /Must supply a (`)?contentType(`)? when sending File URIs to Gemini/
-    );
+    assert.deepStrictEqual(toGeminiMessage(inputMessage as MessageData), {
+      role: 'user',
+      parts: [
+        {
+          fileData: {
+            fileUri: 'gs://bucket/file',
+          },
+        },
+      ],
+    });
   });
 });
 

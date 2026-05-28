@@ -472,7 +472,6 @@ const KNOWN_GEMINI_MODELS = {
   'gemini-flash-lite-latest': commonRef('gemini-flash-lite-latest'),
   'gemini-3.5-flash': commonRef('gemini-3.5-flash'),
   'gemini-3.1-flash-lite': commonRef('gemini-3.1-flash-lite'),
-  'gemini-3.1-flash-lite-preview': commonRef('gemini-3.1-flash-lite-preview'),
   'gemini-3.1-pro-preview-customtools': commonRef(
     'gemini-3.1-pro-preview-customtools'
   ),
@@ -516,6 +515,16 @@ export function isTTSModelName(value: string): value is TTSModelName {
 }
 
 const KNOWN_IMAGE_MODELS = {
+  'gemini-3.1-flash-image': commonRef(
+    'gemini-3.1-flash-image',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
+  'gemini-3-pro-image': commonRef(
+    'gemini-3-pro-image',
+    { ...GENERIC_IMAGE_MODEL.info },
+    GeminiImageConfigSchema
+  ),
   'gemini-3.1-flash-image-preview': commonRef(
     'gemini-3.1-flash-image-preview',
     { ...GENERIC_IMAGE_MODEL.info },
