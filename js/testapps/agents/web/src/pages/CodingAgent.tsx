@@ -882,4 +882,3 @@ function formatToolResponse(name: string, output: any): ToolMsg {
       return { text: `✅ ${name}`, detail: truncate(outputStr, 400) };
   }
 }
-

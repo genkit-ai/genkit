@@ -375,195 +375,192 @@ export function useGenkitAgent<S = unknown>(
     }
   }, []);
 
-  const internalSubmit = useCallback(
-    (input: AgentInputBody) => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
+  const internalSubmit = useCallback((input: AgentInputBody) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-      if (input.messages?.length) {
-        setMessages((prev) => [...prev, ...(input.messages as AgentMessage[])]);
-      }
+    if (input.messages?.length) {
+      setMessages((prev) => [...prev, ...(input.messages as AgentMessage[])]);
+    }
 
-      setStreamingText('');
-      setStreamingReasoning('');
-      setToolCalls([]);
-      setStatusLabel(null);
-      setProgress(null);
-      setError(null);
-      setPendingInterrupt(null);
-      setPhase('streaming');
+    setStreamingText('');
+    setStreamingReasoning('');
+    setToolCalls([]);
+    setStatusLabel(null);
+    setProgress(null);
+    setError(null);
+    setPendingInterrupt(null);
+    setPhase('streaming');
 
-      const init: AgentInitBody = continuationRef.current
-        ? { continuationId: continuationRef.current }
-        : {};
+    const init: AgentInitBody = continuationRef.current
+      ? { continuationId: continuationRef.current }
+      : {};
 
-      const opts = optsRef.current;
-      const { output: outputPromise, stream } = streamFlow<
-        AgentOutputBody<S>,
-        AgentEvent,
-        AgentInitBody
-      >({
-        url: opts.url,
-        input,
-        init,
-        headers: opts.headers,
-        abortSignal: controller.signal,
-      });
+    const opts = optsRef.current;
+    const { output: outputPromise, stream } = streamFlow<
+      AgentOutputBody<S>,
+      AgentEvent,
+      AgentInitBody
+    >({
+      url: opts.url,
+      input,
+      init,
+      headers: opts.headers,
+      abortSignal: controller.signal,
+    });
 
-      (async () => {
-        let interruptDetected: PendingInterrupt | null = null;
-        let detachedDuringStream = false;
-        try {
-          for await (const event of stream) {
-            walkAgentEvent(event, {
-              onText: (delta) => setStreamingText((prev) => prev + delta),
-              onReasoning: (delta) =>
-                setStreamingReasoning((prev) => prev + delta),
-              onToolRequest: ({ toolCallId, toolName, input }) => {
-                setToolCalls((prev) => {
-                  const next = prev.slice();
-                  const idx = next.findIndex((tc) => tc.id === toolCallId);
-                  if (idx === -1) {
-                    next.push({
-                      id: toolCallId,
-                      name: toolName,
-                      input,
-                      state: 'call',
-                    });
-                  } else {
-                    next[idx] = { ...next[idx], input };
-                  }
-                  return next;
-                });
-              },
-              onToolResponse: ({ toolCallId, toolName, output }) => {
-                setToolCalls((prev) => {
-                  const next = prev.slice();
-                  const idx = next.findIndex((tc) => tc.id === toolCallId);
-                  // Don't overwrite an 'error' state — a `tool-error`
-                  // event arriving alongside the same toolResponse must
-                  // win (it carries the structured error metadata).
-                  if (idx === -1) {
-                    next.push({
-                      id: toolCallId,
-                      name: toolName,
-                      input: undefined,
-                      output,
-                      state: 'result',
-                    });
-                  } else if (next[idx].state !== 'error') {
-                    next[idx] = { ...next[idx], output, state: 'result' };
-                  } else {
-                    next[idx] = { ...next[idx], output };
-                  }
-                  return next;
-                });
-              },
-              onToolError: ({ toolCallId, toolName, errorText, errorCode }) => {
-                setToolCalls((prev) => {
-                  const next = prev.slice();
-                  const idx = next.findIndex((tc) => tc.id === toolCallId);
-                  if (idx === -1) {
-                    next.push({
-                      id: toolCallId,
-                      name: toolName,
-                      input: undefined,
-                      state: 'error',
-                      errorText,
-                      errorCode,
-                    });
-                  } else {
-                    next[idx] = {
-                      ...next[idx],
-                      state: 'error',
-                      errorText,
-                      errorCode,
-                    };
-                  }
-                  return next;
-                });
-              },
-              onStatus: (s) => setStatusLabel(s.label),
-              onProgress: (p) => setProgress(p),
-              onPhase: (p) => setStatusLabel(p),
-              onArtifact: (artifact) => {
-                setArtifacts((prev) => [...prev, artifact]);
-              },
-              onInterrupt: (irpt) => {
-                interruptDetected = irpt;
-              },
-              onDetached: ({ continuationId: cid }) => {
-                detachedDuringStream = true;
-                if (cid) setContinuationId(cid);
-              },
-              onTurnEnd: ({ continuationId: cid }) => {
-                if (cid) setContinuationId(cid);
-              },
-            });
-            if (detachedDuringStream) break;
-          }
-
-          const result = await outputPromise;
-
-          if (result?.continuationId) {
-            setContinuationId(result.continuationId);
-          }
-          if (result?.message) {
-            setMessages((prev) => [...prev, result.message as AgentMessage]);
-          }
-          if (result?.state?.custom !== undefined) {
-            setCustomState(result.state.custom as S);
-          }
-          if (Array.isArray(result?.state?.messages)) {
-            setMessages(result.state.messages as AgentMessage[]);
-          }
-          if (Array.isArray(result?.state?.artifacts)) {
-            setArtifacts(result.state.artifacts as any[]);
-          }
-          if (Array.isArray(result?.artifacts)) {
-            setArtifacts((prev) =>
-              mergeArtifacts(prev, result.artifacts as any[])
-            );
-          }
-
-          // Clear the in-flight buffers — the canonical, post-commit
-          // form of all three lives in `messages` now. Leaving them
-          // populated would render duplicates: `streamingText` would
-          // re-emit the model's text below the committed message, and
-          // `toolCalls` would re-emit each tool invocation alongside its
-          // already-persisted tool request/response in `messages`.
-          // Consumers that want to show in-flight tool activity should
-          // gate on `phase === 'streaming'`.
-          setStreamingText('');
-          setStreamingReasoning('');
-          setToolCalls([]);
-
-          if (detachedDuringStream || input.detach) {
-            setPhase('background');
-            const sid = result?.continuationId
-              ? extractSnapshotId(result.continuationId)
-              : null;
-            if (sid) startBackgroundPoll(sid);
-            return;
-          }
-
-          if (interruptDetected) {
-            setPendingInterrupt(interruptDetected);
-            setPhase('awaiting-interrupt');
-            return;
-          }
-
-          setPhase('done');
-        } catch (err) {
-          if (controller.signal.aborted) return;
-          setError(err instanceof Error ? err : new Error(String(err)));
-          setPhase('error');
+    (async () => {
+      let interruptDetected: PendingInterrupt | null = null;
+      let detachedDuringStream = false;
+      try {
+        for await (const event of stream) {
+          walkAgentEvent(event, {
+            onText: (delta) => setStreamingText((prev) => prev + delta),
+            onReasoning: (delta) =>
+              setStreamingReasoning((prev) => prev + delta),
+            onToolRequest: ({ toolCallId, toolName, input }) => {
+              setToolCalls((prev) => {
+                const next = prev.slice();
+                const idx = next.findIndex((tc) => tc.id === toolCallId);
+                if (idx === -1) {
+                  next.push({
+                    id: toolCallId,
+                    name: toolName,
+                    input,
+                    state: 'call',
+                  });
+                } else {
+                  next[idx] = { ...next[idx], input };
+                }
+                return next;
+              });
+            },
+            onToolResponse: ({ toolCallId, toolName, output }) => {
+              setToolCalls((prev) => {
+                const next = prev.slice();
+                const idx = next.findIndex((tc) => tc.id === toolCallId);
+                // Don't overwrite an 'error' state — a `tool-error`
+                // event arriving alongside the same toolResponse must
+                // win (it carries the structured error metadata).
+                if (idx === -1) {
+                  next.push({
+                    id: toolCallId,
+                    name: toolName,
+                    input: undefined,
+                    output,
+                    state: 'result',
+                  });
+                } else if (next[idx].state !== 'error') {
+                  next[idx] = { ...next[idx], output, state: 'result' };
+                } else {
+                  next[idx] = { ...next[idx], output };
+                }
+                return next;
+              });
+            },
+            onToolError: ({ toolCallId, toolName, errorText, errorCode }) => {
+              setToolCalls((prev) => {
+                const next = prev.slice();
+                const idx = next.findIndex((tc) => tc.id === toolCallId);
+                if (idx === -1) {
+                  next.push({
+                    id: toolCallId,
+                    name: toolName,
+                    input: undefined,
+                    state: 'error',
+                    errorText,
+                    errorCode,
+                  });
+                } else {
+                  next[idx] = {
+                    ...next[idx],
+                    state: 'error',
+                    errorText,
+                    errorCode,
+                  };
+                }
+                return next;
+              });
+            },
+            onStatus: (s) => setStatusLabel(s.label),
+            onProgress: (p) => setProgress(p),
+            onPhase: (p) => setStatusLabel(p),
+            onArtifact: (artifact) => {
+              setArtifacts((prev) => [...prev, artifact]);
+            },
+            onInterrupt: (irpt) => {
+              interruptDetected = irpt;
+            },
+            onDetached: ({ continuationId: cid }) => {
+              detachedDuringStream = true;
+              if (cid) setContinuationId(cid);
+            },
+            onTurnEnd: ({ continuationId: cid }) => {
+              if (cid) setContinuationId(cid);
+            },
+          });
+          if (detachedDuringStream) break;
         }
-      })();
-    },
-    []
-  );
+
+        const result = await outputPromise;
+
+        if (result?.continuationId) {
+          setContinuationId(result.continuationId);
+        }
+        if (result?.message) {
+          setMessages((prev) => [...prev, result.message as AgentMessage]);
+        }
+        if (result?.state?.custom !== undefined) {
+          setCustomState(result.state.custom as S);
+        }
+        if (Array.isArray(result?.state?.messages)) {
+          setMessages(result.state.messages as AgentMessage[]);
+        }
+        if (Array.isArray(result?.state?.artifacts)) {
+          setArtifacts(result.state.artifacts as any[]);
+        }
+        if (Array.isArray(result?.artifacts)) {
+          setArtifacts((prev) =>
+            mergeArtifacts(prev, result.artifacts as any[])
+          );
+        }
+
+        // Clear the in-flight buffers — the canonical, post-commit
+        // form of all three lives in `messages` now. Leaving them
+        // populated would render duplicates: `streamingText` would
+        // re-emit the model's text below the committed message, and
+        // `toolCalls` would re-emit each tool invocation alongside its
+        // already-persisted tool request/response in `messages`.
+        // Consumers that want to show in-flight tool activity should
+        // gate on `phase === 'streaming'`.
+        setStreamingText('');
+        setStreamingReasoning('');
+        setToolCalls([]);
+
+        if (detachedDuringStream || input.detach) {
+          setPhase('background');
+          const sid = result?.continuationId
+            ? extractSnapshotId(result.continuationId)
+            : null;
+          if (sid) startBackgroundPoll(sid);
+          return;
+        }
+
+        if (interruptDetected) {
+          setPendingInterrupt(interruptDetected);
+          setPhase('awaiting-interrupt');
+          return;
+        }
+
+        setPhase('done');
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+        setPhase('error');
+      }
+    })();
+  }, []);
 
   const submit = useCallback(
     (input: AgentInputBody) => internalSubmit(input),
@@ -577,42 +574,48 @@ export function useGenkitAgent<S = unknown>(
   const pendingInterruptRef = useRef<PendingInterrupt | null>(null);
   pendingInterruptRef.current = pendingInterrupt;
 
-  const respondToInterrupt = useCallback((output: unknown) => {
-    const pi = pendingInterruptRef.current;
-    if (!pi) return;
-    internalSubmit({
-      resume: {
-        respond: [
-          {
-            toolResponse: {
-              name: pi.toolName,
-              ref: pi.toolCallId,
-              output,
+  const respondToInterrupt = useCallback(
+    (output: unknown) => {
+      const pi = pendingInterruptRef.current;
+      if (!pi) return;
+      internalSubmit({
+        resume: {
+          respond: [
+            {
+              toolResponse: {
+                name: pi.toolName,
+                ref: pi.toolCallId,
+                output,
+              },
             },
-          },
-        ],
-      },
-    });
-  }, [internalSubmit]);
+          ],
+        },
+      });
+    },
+    [internalSubmit]
+  );
 
-  const restartInterrupt = useCallback((metadata?: unknown) => {
-    const pi = pendingInterruptRef.current;
-    if (!pi) return;
-    internalSubmit({
-      resume: {
-        restart: [
-          {
-            toolRequest: {
-              name: pi.toolName,
-              ref: pi.toolCallId,
-              input: pi.input,
+  const restartInterrupt = useCallback(
+    (metadata?: unknown) => {
+      const pi = pendingInterruptRef.current;
+      if (!pi) return;
+      internalSubmit({
+        resume: {
+          restart: [
+            {
+              toolRequest: {
+                name: pi.toolName,
+                ref: pi.toolCallId,
+                input: pi.input,
+              },
+              metadata,
             },
-            metadata,
-          },
-        ],
-      },
-    });
-  }, [internalSubmit]);
+          ],
+        },
+      });
+    },
+    [internalSubmit]
+  );
 
   useEffect(
     () => () => {
