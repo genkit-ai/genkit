@@ -47,7 +47,15 @@ export interface UseGenkitRunFlowResult<I = unknown, O = unknown> {
 export function useGenkitRunFlow<I = unknown, O = unknown>(
   options: UseGenkitRunFlowOptions
 ): UseGenkitRunFlowResult<I, O> {
-  const { url, headers } = options;
+  // Latest-options ref: `run` reads `url`/`headers` from here instead of
+  // closing over them, so its identity stays stable for the hook's
+  // lifetime. Consumers can include `run` in `useEffect` /
+  // `useCallback` dep arrays without worrying about whether the parent
+  // memoized the options object — a missed memo previously caused an
+  // 81k-error re-render loop in CodingAgent.
+  const optsRef = useRef(options);
+  optsRef.current = options;
+
   const [data, setData] = useState<O | null>(null);
   const [status, setStatus] = useState<RunFlowStatus>('idle');
   const [error, setError] = useState<Error | null>(null);
@@ -61,42 +69,41 @@ export function useGenkitRunFlow<I = unknown, O = unknown>(
     setError(null);
   }, []);
 
-  const run = useCallback(
-    async (input: I): Promise<O> => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      setStatus('pending');
-      setError(null);
-      try {
-        const result = await runFlow<O>({
-          url,
-          input,
-          headers,
-          abortSignal: controller.signal,
-        });
-        if (!controller.signal.aborted) {
-          setData(result);
-          setStatus('done');
-        }
-        return result;
-      } catch (e) {
-        if (!controller.signal.aborted) {
-          const err = e instanceof Error ? e : new Error(String(e));
-          setError(err);
-          setStatus('error');
-        }
-        throw e;
+  const run = useCallback(async (input: I): Promise<O> => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setStatus('pending');
+    setError(null);
+    try {
+      const opts = optsRef.current;
+      const result = await runFlow<O>({
+        url: opts.url,
+        input,
+        headers: opts.headers,
+        abortSignal: controller.signal,
+      });
+      if (!controller.signal.aborted) {
+        setData(result);
+        setStatus('done');
       }
-    },
-    [url, headers]
-  );
+      return result;
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        setStatus('error');
+      }
+      throw e;
+    }
+  }, []);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
   // Memoize so the returned object reference is stable across renders
-  // when nothing changes — important when the consumer puts this in a
-  // dependency array of a useEffect or useCallback.
+  // when nothing changes. `run` and `reset` now have permanent identity
+  // (empty deps + latest-options ref), so consumers can safely depend
+  // on them directly without destructuring through the wrapper.
   return useMemo(
     () => ({ data, status, error, run, reset }),
     [data, status, error, run, reset]

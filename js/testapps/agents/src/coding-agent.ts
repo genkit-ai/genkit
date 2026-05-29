@@ -372,8 +372,17 @@ export const listWorkspaceFiles = ai.defineFlow(
     outputSchema: z.object({ files: z.array(WorkspaceFileSchema) }),
   },
   async () => {
-    const files = await walkDirectory(WORKSPACE_DIR, WORKSPACE_DIR);
-    return { files };
+    // The workspace dir is created lazily the first time the agent
+    // writes a file. Treat "doesn't exist yet" as "no files yet"
+    // instead of 500 — the web app polls this endpoint on every page
+    // load, and a fresh checkout should not throw.
+    try {
+      const files = await walkDirectory(WORKSPACE_DIR, WORKSPACE_DIR);
+      return { files };
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return { files: [] };
+      throw e;
+    }
   }
 );
 

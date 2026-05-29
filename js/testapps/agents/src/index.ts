@@ -173,7 +173,9 @@ app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
 app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
 app.post('/api/testTripPlannerAgent', expressHandler(testTripPlannerAgent));
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
+// Default to 3400 so the web app's Vite proxy (which targets 3400 unless
+// `GENKIT_PROXY_TARGET` is set) reaches us without extra configuration.
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3400;
 app.listen(PORT, () => {
   console.log(`\n🚀 Express server running on http://localhost:${PORT}`);
   console.log(

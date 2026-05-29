@@ -45,11 +45,12 @@ import { useGenkitAgent, useGenkitRunFlow } from '../genkit-react';
 //   • Streaming reasoning/thinking content
 // ---------------------------------------------------------------------------
 
-const API_BASE = 'http://localhost:8080';
-const ENDPOINT = `${API_BASE}/api/codingAgent`;
-const STATE_ENDPOINT = `${API_BASE}/api/codingAgent/state`;
-const WORKSPACE_FILES_ENDPOINT = `${API_BASE}/api/workspace/files`;
-const WORKSPACE_FILE_ENDPOINT = `${API_BASE}/api/workspace/file`;
+// Use relative paths so the Vite dev server's `/api` proxy handles
+// routing to the backend (matches every other page in this testapp).
+const ENDPOINT = '/api/codingAgent';
+const STATE_ENDPOINT = '/api/codingAgent/state';
+const WORKSPACE_FILES_ENDPOINT = '/api/workspace/files';
+const WORKSPACE_FILE_ENDPOINT = '/api/workspace/file';
 
 // ---------------------------------------------------------------------------
 // Types

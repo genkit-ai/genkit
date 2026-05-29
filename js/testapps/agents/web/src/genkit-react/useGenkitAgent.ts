@@ -178,8 +178,15 @@ interface AgentInitBody {
 export function useGenkitAgent<S = unknown>(
   options: UseGenkitAgentOptions
 ): UseGenkitAgentResult<S> {
-  const { url, headers } = options;
-  const stateUrl = options.stateUrl ?? `${url}/state`;
+  // Latest-options ref: every action callback reads from this instead of
+  // closing over `url`/`headers`/etc. The callbacks then declare empty
+  // dependency arrays, giving them stable identity for the whole hook
+  // lifetime. Consumers can put them in `useEffect`/`useCallback`
+  // dependency lists without thinking about whether the parent memoized
+  // the option object.
+  const optsRef = useRef(options);
+  optsRef.current = options;
+
   // Accept either a full continuation token or a raw snapshotId; coerce
   // to a continuation token internally.
   const resumeFromContinuation = options.resumeFromContinuation
@@ -253,9 +260,11 @@ export function useGenkitAgent<S = unknown>(
       try {
         const sid = extractSnapshotId(resumeFromContinuation);
         if (!sid) return;
+        const opts = optsRef.current;
         const snapshot = await runFlow<any, AgentInitBody>({
-          url: stateUrl,
+          url: opts.stateUrl ?? `${opts.url}/state`,
           input: sid,
+          headers: opts.headers,
         });
         if (cancelled) return;
         const state = snapshot?.state ?? {};
@@ -288,9 +297,11 @@ export function useGenkitAgent<S = unknown>(
       pollTimeoutRef.current = null;
       if (gen !== pollGenRef.current) return; // superseded — drop silently.
       try {
+        const opts = optsRef.current;
         const snap = await runFlow<any, AgentInitBody>({
-          url: stateUrl,
+          url: opts.stateUrl ?? `${opts.url}/state`,
           input: snapshotId,
+          headers: opts.headers,
         });
         if (gen !== pollGenRef.current) return;
         const state = snap?.state ?? {};
@@ -335,8 +346,6 @@ export function useGenkitAgent<S = unknown>(
     setPendingInterrupt(null);
   }, []);
 
-  const abortUrl = options.abortUrl ?? `${url}/abort`;
-
   const abort = useCallback(async (): Promise<void> => {
     // Cancel any in-flight fetch (foreground stream) and stop local polling.
     abortRef.current?.abort();
@@ -350,17 +359,18 @@ export function useGenkitAgent<S = unknown>(
     // gives up. Silently swallow network errors; the user-visible state is
     // already 'idle'.
     if (wasBackground && sidForAbort) {
+      const opts = optsRef.current;
       try {
         await runFlow({
-          url: abortUrl,
+          url: opts.abortUrl ?? `${opts.url}/abort`,
           input: sidForAbort,
-          headers,
+          headers: opts.headers,
         });
       } catch (_) {
         // ignore — local state already cleared
       }
     }
-  }, [abortUrl, headers]);
+  }, []);
 
   const internalSubmit = useCallback(
     (input: AgentInputBody) => {
@@ -385,15 +395,16 @@ export function useGenkitAgent<S = unknown>(
         ? { continuationId: continuationRef.current }
         : {};
 
+      const opts = optsRef.current;
       const { output: outputPromise, stream } = streamFlow<
         AgentOutputBody<S>,
         AgentEvent,
         AgentInitBody
       >({
-        url,
+        url: opts.url,
         input,
         init,
-        headers,
+        headers: opts.headers,
         abortSignal: controller.signal,
       });
 
@@ -484,12 +495,17 @@ export function useGenkitAgent<S = unknown>(
             );
           }
 
-          // Clear the in-flight streaming buffers — the final message has
-          // been committed to `messages` above. Leaving them populated
-          // would render the same text twice (once as the committed
-          // message, once as the live streaming line).
+          // Clear the in-flight buffers — the canonical, post-commit
+          // form of all three lives in `messages` now. Leaving them
+          // populated would render duplicates: `streamingText` would
+          // re-emit the model's text below the committed message, and
+          // `toolCalls` would re-emit each tool invocation alongside its
+          // already-persisted tool request/response in `messages`.
+          // Consumers that want to show in-flight tool activity should
+          // gate on `phase === 'streaming'`.
           setStreamingText('');
           setStreamingReasoning('');
+          setToolCalls([]);
 
           if (detachedDuringStream || input.detach) {
             setPhase('background');
@@ -514,7 +530,7 @@ export function useGenkitAgent<S = unknown>(
         }
       })();
     },
-    [url, headers]
+    []
   );
 
   const submit = useCallback(
@@ -522,46 +538,49 @@ export function useGenkitAgent<S = unknown>(
     [internalSubmit]
   );
 
-  const respondToInterrupt = useCallback(
-    (output: unknown) => {
-      if (!pendingInterrupt) return;
-      internalSubmit({
-        resume: {
-          respond: [
-            {
-              toolResponse: {
-                name: pendingInterrupt.toolName,
-                ref: pendingInterrupt.toolCallId,
-                output,
-              },
-            },
-          ],
-        },
-      });
-    },
-    [pendingInterrupt, internalSubmit]
-  );
+  // Latest-pendingInterrupt ref so the respond/restart helpers can stay
+  // stable across renders. Without this, every interrupt arrival would
+  // recreate these callbacks and invalidate any consumer that includes
+  // them in a useEffect/useCallback dep array.
+  const pendingInterruptRef = useRef<PendingInterrupt | null>(null);
+  pendingInterruptRef.current = pendingInterrupt;
 
-  const restartInterrupt = useCallback(
-    (metadata?: unknown) => {
-      if (!pendingInterrupt) return;
-      internalSubmit({
-        resume: {
-          restart: [
-            {
-              toolRequest: {
-                name: pendingInterrupt.toolName,
-                ref: pendingInterrupt.toolCallId,
-                input: pendingInterrupt.input,
-              },
-              metadata,
+  const respondToInterrupt = useCallback((output: unknown) => {
+    const pi = pendingInterruptRef.current;
+    if (!pi) return;
+    internalSubmit({
+      resume: {
+        respond: [
+          {
+            toolResponse: {
+              name: pi.toolName,
+              ref: pi.toolCallId,
+              output,
             },
-          ],
-        },
-      });
-    },
-    [pendingInterrupt, internalSubmit]
-  );
+          },
+        ],
+      },
+    });
+  }, [internalSubmit]);
+
+  const restartInterrupt = useCallback((metadata?: unknown) => {
+    const pi = pendingInterruptRef.current;
+    if (!pi) return;
+    internalSubmit({
+      resume: {
+        restart: [
+          {
+            toolRequest: {
+              name: pi.toolName,
+              ref: pi.toolCallId,
+              input: pi.input,
+            },
+            metadata,
+          },
+        ],
+      },
+    });
+  }, [internalSubmit]);
 
   useEffect(
     () => () => {
@@ -585,12 +604,13 @@ export function useGenkitAgent<S = unknown>(
       const init: AgentInitBody = continuationRef.current
         ? { continuationId: continuationRef.current }
         : {};
+      const opts = optsRef.current;
       const calls = Array.from({ length: count }, () =>
         runFlow<AgentOutputBody<S>, AgentInitBody>({
-          url,
+          url: opts.url,
           input,
           init,
-          headers,
+          headers: opts.headers,
         })
       );
       const outputs = await Promise.all(calls);
@@ -603,7 +623,7 @@ export function useGenkitAgent<S = unknown>(
         state: o?.state,
       }));
     },
-    [url, headers]
+    []
   );
 
   // Advance to a chosen variant / snapshot. Fetches the snapshot's state
@@ -617,10 +637,11 @@ export function useGenkitAgent<S = unknown>(
       setContinuationId(token);
       if (!sid) return;
       try {
+        const opts = optsRef.current;
         const snapshot = await runFlow<any, AgentInitBody>({
-          url: stateUrl,
+          url: opts.stateUrl ?? `${opts.url}/state`,
           input: sid,
-          headers,
+          headers: opts.headers,
         });
         const state = snapshot?.state ?? {};
         if (Array.isArray(state.messages)) setMessages(state.messages);
@@ -631,7 +652,7 @@ export function useGenkitAgent<S = unknown>(
         setError(e instanceof Error ? e : new Error(String(e)));
       }
     },
-    [stateUrl, headers]
+    []
   );
 
   return useMemo<UseGenkitAgentResult<S>>(
