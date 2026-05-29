@@ -169,16 +169,16 @@ export function continuationToSnapshotId(token?: string): string | undefined {
 }
 
 /**
- * Detect whether a toolResponse part represents a tool execution failure.
- * The runtime uses this to surface a typed `tool-error` event alongside
- * the model-chunk that already carries the response.
+ * Detect whether a toolResponse part represents a tool execution
+ * failure. The runtime uses this to surface a typed `tool-error` event
+ * alongside the model-chunk that carries the response.
  *
- * Recognized signals (in priority order):
- *   1. `metadata.toolError` — explicit marker set by middleware that
- *      catches thrown tool errors (e.g. the filesystem middleware).
- *   2. Output is an object with `{ error: ... }` or `{ status: 'error', ... }`.
- *   3. Output is a string starting with `Tool '<name>' failed:` — the
- *      format produced by stock genkit middleware.
+ * Detection is a single signal: `metadata.toolError`. Middleware that
+ * catches a tool throw and returns an error-shaped response must set
+ * this flag so the runtime can recognize it without inspecting the
+ * `output` payload. The stock `filesystem` middleware sets it;
+ * third-party middleware authors that want their failures to surface
+ * as `tool-error` events should follow suit.
  *
  * Returns the extracted error info, or null if the response is a success.
  */
@@ -187,35 +187,17 @@ function detectToolError(tr: {
   output?: unknown;
   metadata?: Record<string, unknown>;
 }): { errorText: string; errorCode?: string; details?: unknown } | null {
-  if (tr.metadata?.toolError) {
-    const m = tr.metadata.toolError as
-      | { message?: string; code?: string; details?: unknown }
-      | true;
-    if (m === true) {
-      return { errorText: tr.name + ' failed' };
-    }
-    return {
-      errorText: m.message ?? tr.name + ' failed',
-      ...(m.code && { errorCode: m.code }),
-      ...(m.details !== undefined && { details: m.details }),
-    };
+  const flag = tr.metadata?.toolError;
+  if (!flag) return null;
+  if (flag === true) {
+    return { errorText: `${tr.name} failed` };
   }
-  const out = tr.output;
-  if (out && typeof out === 'object') {
-    const o = out as Record<string, unknown>;
-    if (typeof o.error === 'string') {
-      return { errorText: o.error };
-    }
-    if (o.status === 'error' && typeof o.message === 'string') {
-      return { errorText: o.message };
-    }
-  }
-  if (typeof out === 'string' && out.startsWith(`Tool '${tr.name}' failed:`)) {
-    return {
-      errorText: out.slice(`Tool '${tr.name}' failed:`.length).trim(),
-    };
-  }
-  return null;
+  const m = flag as { message?: string; code?: string; details?: unknown };
+  return {
+    errorText: m.message ?? `${tr.name} failed`,
+    ...(m.code && { errorCode: m.code }),
+    ...(m.details !== undefined && { details: m.details }),
+  };
 }
 
 /**
@@ -308,27 +290,11 @@ export const AgentStreamChunkSchema = z.discriminatedUnion('type', [
     type: z.literal('phase'),
     phase: z.string(),
   }),
-  // Artifact lifecycle. `artifact-emitted` covers the one-shot case;
-  // `artifact-start`/`artifact-delta`/`artifact-complete` cover streaming
-  // (schema reserved; runtime emits `artifact-emitted` for now).
+  // One-shot artifact emission. Streaming-artifact variants (start /
+  // delta / complete) will be added when the runtime needs them.
   z.object({
     type: z.literal('artifact-emitted'),
     artifact: ArtifactSchema,
-  }),
-  z.object({
-    type: z.literal('artifact-start'),
-    id: z.string(),
-    name: z.string(),
-    mediaType: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('artifact-delta'),
-    id: z.string(),
-    delta: z.any(),
-  }),
-  z.object({
-    type: z.literal('artifact-complete'),
-    id: z.string(),
   }),
   // Snapshot/continuation lifecycle.
   z.object({
@@ -1277,7 +1243,14 @@ export function definePromptAgent<State = unknown>(
         for (const part of chunk?.content ?? []) {
           const tr = part?.toolResponse;
           if (!tr) continue;
-          const detected = detectToolError(tr);
+          // `metadata.toolError` lives on the *part*, not on the
+          // toolResponse value — middleware that catches a tool throw
+          // sets it on the returned envelope. Pass both to the detector.
+          const detected = detectToolError({
+            name: tr.name,
+            output: tr.output,
+            metadata: part.metadata as Record<string, unknown> | undefined,
+          });
           if (!detected) continue;
           sendChunk({
             type: 'tool-error',

@@ -229,19 +229,13 @@ export class AgentSession<S = unknown> {
   }
 
   /**
-   * Returns true if any listeners are currently subscribed. Adapters
-   * use this to gate disposal in environments (like React StrictMode)
-   * that synthetically mount/unmount/remount a component: a
-   * cleanup-then-remount sequence transiently drops to zero subscribers
-   * before the new mount re-subscribes.
-   */
-  hasActiveSubscribers(): boolean {
-    return this.listeners.size > 0;
-  }
-
-  /**
    * Release all resources (in-flight requests, timers, subscribers).
    * After dispose, no further state updates are emitted. Idempotent.
+   *
+   * Adapters generally don't need to call this — long-running internals
+   * (background poll) self-terminate when `listeners.size === 0`, and
+   * GC handles the rest. Use it when you want explicit cleanup (tests,
+   * teardown of long-lived sessions).
    */
   dispose(): void {
     if (this.disposed) return;
@@ -387,18 +381,14 @@ export class AgentSession<S = unknown> {
     });
     if (!sid) return;
     try {
-      const snapshot = await runFlow<any, AgentInitBody>({
-        url: this.options.stateUrl ?? `${this.options.url}/state`,
-        input: sid,
-        headers: this.options.headers,
-      });
+      const status = await this.applySnapshot(sid);
       if (this.disposed) return;
-      const state = snapshot?.state ?? {};
-      const patch: Partial<AgentSessionState<S>> = { phase: 'done' };
-      if (Array.isArray(state.messages)) patch.messages = state.messages;
-      if (Array.isArray(state.artifacts)) patch.artifacts = state.artifacts;
-      if (state.custom !== undefined) patch.customState = state.custom as S;
-      this.mutate(patch);
+      // continueFrom is foreground: a 'pending' snapshot still ends here,
+      // since we explicitly want to "land at" this point, not subscribe
+      // to its background continuation.
+      if (!status && this.state.phase !== 'error') {
+        this.mutate({ phase: 'done' });
+      }
     } catch (e) {
       if (this.disposed) return;
       this.mutate({
@@ -429,29 +419,54 @@ export class AgentSession<S = unknown> {
     this.pollGen += 1;
   }
 
+  /**
+   * Fetch `/state` for the given snapshotId and apply the result to
+   * session state. Returns the snapshot's terminal status so the caller
+   * can decide whether to keep polling. Sets `phase` to `'done'` on
+   * `'done'`, to `'error'` on `'failed'` / `'aborted'`, and otherwise
+   * leaves the phase untouched (the caller controls foreground vs.
+   * background semantics).
+   */
+  private async applySnapshot(
+    snapshotId: string
+  ): Promise<'pending' | 'done' | 'failed' | 'aborted' | undefined> {
+    const snap = await runFlow<any, AgentInitBody>({
+      url: this.options.stateUrl ?? `${this.options.url}/state`,
+      input: snapshotId,
+      headers: this.options.headers,
+    });
+    if (this.disposed) return undefined;
+    const state = snap?.state ?? {};
+    const patch: Partial<AgentSessionState<S>> = {};
+    if (Array.isArray(state.messages)) patch.messages = state.messages;
+    if (Array.isArray(state.artifacts)) patch.artifacts = state.artifacts;
+    if (state.custom !== undefined) patch.customState = state.custom as S;
+    if (snap?.status === 'done') {
+      patch.phase = 'done';
+    } else if (snap?.status === 'failed' || snap?.status === 'aborted') {
+      patch.phase = 'error';
+      patch.error = new Error(snap.error?.message ?? 'background run failed');
+    }
+    this.mutate(patch);
+    return snap?.status;
+  }
+
   private async rehydrate(token: string): Promise<void> {
     if (this.rehydrated.has(token)) return;
     try {
       const sid = extractSnapshotId(token);
       if (!sid) return;
-      const snapshot = await runFlow<any, AgentInitBody>({
-        url: this.options.stateUrl ?? `${this.options.url}/state`,
-        input: sid,
-        headers: this.options.headers,
-      });
+      const status = await this.applySnapshot(sid);
       if (this.disposed) return;
-      const state = snapshot?.state ?? {};
-      const patch: Partial<AgentSessionState<S>> = {};
-      if (Array.isArray(state.messages)) patch.messages = state.messages;
-      if (Array.isArray(state.artifacts)) patch.artifacts = state.artifacts;
-      if (state.custom !== undefined) patch.customState = state.custom as S;
-      if (snapshot?.status === 'pending') {
-        patch.phase = 'background';
-        this.mutate(patch);
+      if (status === 'pending') {
+        // Resumed mid-background run — switch to polling phase.
+        this.mutate({ phase: 'background' });
         this.startBackgroundPoll(sid);
-      } else {
-        patch.phase = 'done';
-        this.mutate(patch);
+      } else if (!status || status === 'done') {
+        // No status (foreground turn) or already done — sit at 'done'
+        // unless applySnapshot already set 'error'.
+        if (this.state.phase !== 'error')
+          this.mutate({ phase: 'done' });
       }
       this.rehydrated.add(token);
     } catch (e) {
@@ -468,32 +483,16 @@ export class AgentSession<S = unknown> {
     const tick = async () => {
       this.pollTimeout = null;
       if (gen !== this.pollGen || this.disposed) return;
+      // Self-terminate when no one's listening — adapters that unmounted
+      // their component don't need us to keep hitting the network. The
+      // poll resumes on a subsequent submit() / continueFrom().
+      if (this.listeners.size === 0) return;
       try {
-        const snap = await runFlow<any, AgentInitBody>({
-          url: this.options.stateUrl ?? `${this.options.url}/state`,
-          input: snapshotId,
-          headers: this.options.headers,
-        });
+        const status = await this.applySnapshot(snapshotId);
         if (gen !== this.pollGen || this.disposed) return;
-        const state = snap?.state ?? {};
-        const patch: Partial<AgentSessionState<S>> = {};
-        if (Array.isArray(state.messages)) patch.messages = state.messages;
-        if (Array.isArray(state.artifacts)) patch.artifacts = state.artifacts;
-        if (state.custom !== undefined) patch.customState = state.custom as S;
-        if (snap?.status === 'done') {
-          patch.phase = 'done';
-          this.mutate(patch);
+        if (status === 'done' || status === 'failed' || status === 'aborted') {
           return;
         }
-        if (snap?.status === 'failed' || snap?.status === 'aborted') {
-          patch.phase = 'error';
-          patch.error = new Error(
-            snap.error?.message ?? 'background run failed'
-          );
-          this.mutate(patch);
-          return;
-        }
-        this.mutate(patch);
         this.pollTimeout = setTimeout(tick, 2000);
       } catch (e) {
         if (gen !== this.pollGen || this.disposed) return;

@@ -17,12 +17,12 @@
 /**
  * `useGenkitAgent` — React adapter for `AgentSession`.
  *
- * The hook itself is a thin shim: `useSyncExternalStore` to surface the
- * session's state, plus the session's action methods passed through with
- * permanently stable identity. All conversation logic — chunk dispatch,
- * continuation round-trip, interrupt detection, background polling,
- * snapshot rehydration — lives in `AgentSession` from
- * `genkit/beta/client`, framework-agnostic.
+ * Thin shim over `AgentSession` from `genkit/beta/client`:
+ * `useSyncExternalStore` for state, bound methods for actions. The
+ * session's long-running internals (background poll, in-flight stream)
+ * self-terminate when no listeners remain, so the adapter doesn't need
+ * a dispose hook — the lazy init via `useRef` works under React
+ * StrictMode without any teardown gymnastics.
  */
 import {
   AgentSession,
@@ -36,7 +36,7 @@ import {
   type ToolCall,
   type ToolCallState,
 } from 'genkit/beta/client';
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useSyncExternalStore } from 'react';
 
 export type {
   AgentInputBody,
@@ -67,25 +67,25 @@ export interface UseGenkitAgentResult<S = unknown>
 export function useGenkitAgent<S = unknown>(
   options: UseGenkitAgentOptions
 ): UseGenkitAgentResult<S> {
-  // One session instance for the component's lifetime. Constructed
-  // lazily so the resume effect (if any) fires at mount time.
+  // One session per component instance. `useRef` keeps it stable across
+  // re-renders and StrictMode's double-mount cycle.
   const sessionRef = useRef<AgentSession<S> | null>(null);
   if (sessionRef.current === null) {
     sessionRef.current = new AgentSession<S>(options);
   }
   const session = sessionRef.current;
 
-  // Keep the session's options pointed at the latest values from the
-  // parent component (matches the latest-options ref pattern that lets
-  // adapters re-render freely without recreating callbacks).
+  // Latest-options ref pattern: the session reads `url` / `headers` /
+  // etc. from here on every request, so consumers can re-render freely
+  // without re-creating any callbacks.
   session.setOptions(options);
 
   const subscribe = useMemo(() => session.subscribe.bind(session), [session]);
   const getSnapshot = useMemo(() => session.getState.bind(session), [session]);
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  // Action methods are bound to the session instance so their identity is
-  // stable for the hook's lifetime — safe to depend on directly.
+  // Methods are bound to the session instance — permanently stable
+  // identity, safe to depend on directly.
   const actions = useMemo(
     () => ({
       submit: session.submit.bind(session),
@@ -99,30 +99,5 @@ export function useGenkitAgent<S = unknown>(
     [session]
   );
 
-  // Dispose on real unmount. We don't tear down on the StrictMode
-  // remount cycle — the session has a single lifetime tied to the
-  // component instance, and the lazy init via `useRef` means we'd
-  // otherwise dispose a freshly-built session before the user could
-  // interact with it. `useSyncExternalStore` already unsubscribes its
-  // own listener on remount, so a brief "no listeners attached" gap
-  // does not leak.
-  useEffect(() => {
-    return () => {
-      // Defer to a microtask so that an immediate StrictMode remount
-      // can claim the session before disposal fires.
-      const s = session;
-      Promise.resolve().then(() => {
-        // Only dispose if no later mount re-claimed this ref. We track
-        // claims via a counter on the session.
-        if (s === sessionRef.current && !s.hasActiveSubscribers()) {
-          s.dispose();
-        }
-      });
-    };
-  }, [session]);
-
-  return useMemo(
-    () => ({ ...state, ...actions }),
-    [state, actions]
-  );
+  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
 }

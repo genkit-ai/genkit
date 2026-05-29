@@ -119,14 +119,17 @@ export const filesystem: GenerateMiddleware<typeof FilesystemOptionsSchema> =
               // see what went wrong and retry.  This is provider-agnostic
               // (Anthropic requires a proper tool response after every tool
               // call — injecting a user-role message breaks its protocol).
+              //
+              // `metadata.toolError` marks this response so the agent
+              // runtime can surface a typed `tool-error` event alongside.
+              const message = e.message || String(e);
               return {
                 toolResponse: {
                   name: req.toolRequest.name,
                   ref: req.toolRequest.ref,
-                  output: `Tool '${req.toolRequest.name}' failed: ${
-                    e.message || String(e)
-                  }`,
+                  output: `Tool '${req.toolRequest.name}' failed: ${message}`,
                 },
+                metadata: { toolError: { message } },
               };
             }
             throw e;

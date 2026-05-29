@@ -29,9 +29,6 @@ export type AgentEvent =
   | { type: 'progress'; label?: string; current: number; total: number }
   | { type: 'phase'; phase: string }
   | { type: 'artifact-emitted'; artifact: any }
-  | { type: 'artifact-start'; id: string; name: string; mediaType?: string }
-  | { type: 'artifact-delta'; id: string; delta: any }
-  | { type: 'artifact-complete'; id: string }
   | { type: 'snapshot'; snapshotId: string; continuationId: string }
   | {
       type: 'interrupt';
@@ -184,10 +181,7 @@ export function walkAgentEvent(
       handlers.onPhase?.(event.phase);
       return;
     case 'artifact-emitted':
-    case 'artifact-start':
-    case 'artifact-delta':
-    case 'artifact-complete':
-      handlers.onArtifact?.('artifact' in event ? event.artifact : event);
+      handlers.onArtifact?.(event.artifact);
       return;
     case 'snapshot':
       handlers.onSnapshot?.({
