@@ -41,6 +41,9 @@ export interface ToolCall<I = unknown, O = unknown> {
   input: I;
   output?: O;
   state: ToolCallState;
+  /** Populated when `state === 'error'`. */
+  errorText?: string;
+  errorCode?: string;
 }
 
 export interface AgentMessage {
@@ -438,6 +441,9 @@ export function useGenkitAgent<S = unknown>(
                 setToolCalls((prev) => {
                   const next = prev.slice();
                   const idx = next.findIndex((tc) => tc.id === toolCallId);
+                  // Don't overwrite an 'error' state — a `tool-error`
+                  // event arriving alongside the same toolResponse must
+                  // win (it carries the structured error metadata).
                   if (idx === -1) {
                     next.push({
                       id: toolCallId,
@@ -446,8 +452,34 @@ export function useGenkitAgent<S = unknown>(
                       output,
                       state: 'result',
                     });
-                  } else {
+                  } else if (next[idx].state !== 'error') {
                     next[idx] = { ...next[idx], output, state: 'result' };
+                  } else {
+                    next[idx] = { ...next[idx], output };
+                  }
+                  return next;
+                });
+              },
+              onToolError: ({ toolCallId, toolName, errorText, errorCode }) => {
+                setToolCalls((prev) => {
+                  const next = prev.slice();
+                  const idx = next.findIndex((tc) => tc.id === toolCallId);
+                  if (idx === -1) {
+                    next.push({
+                      id: toolCallId,
+                      name: toolName,
+                      input: undefined,
+                      state: 'error',
+                      errorText,
+                      errorCode,
+                    });
+                  } else {
+                    next[idx] = {
+                      ...next[idx],
+                      state: 'error',
+                      errorText,
+                      errorCode,
+                    };
                   }
                   return next;
                 });

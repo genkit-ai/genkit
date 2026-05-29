@@ -169,6 +169,56 @@ export function continuationToSnapshotId(token?: string): string | undefined {
 }
 
 /**
+ * Detect whether a toolResponse part represents a tool execution failure.
+ * The runtime uses this to surface a typed `tool-error` event alongside
+ * the model-chunk that already carries the response.
+ *
+ * Recognized signals (in priority order):
+ *   1. `metadata.toolError` — explicit marker set by middleware that
+ *      catches thrown tool errors (e.g. the filesystem middleware).
+ *   2. Output is an object with `{ error: ... }` or `{ status: 'error', ... }`.
+ *   3. Output is a string starting with `Tool '<name>' failed:` — the
+ *      format produced by stock genkit middleware.
+ *
+ * Returns the extracted error info, or null if the response is a success.
+ */
+function detectToolError(tr: {
+  name: string;
+  output?: unknown;
+  metadata?: Record<string, unknown>;
+}): { errorText: string; errorCode?: string; details?: unknown } | null {
+  if (tr.metadata?.toolError) {
+    const m = tr.metadata.toolError as
+      | { message?: string; code?: string; details?: unknown }
+      | true;
+    if (m === true) {
+      return { errorText: tr.name + ' failed' };
+    }
+    return {
+      errorText: m.message ?? tr.name + ' failed',
+      ...(m.code && { errorCode: m.code }),
+      ...(m.details !== undefined && { details: m.details }),
+    };
+  }
+  const out = tr.output;
+  if (out && typeof out === 'object') {
+    const o = out as Record<string, unknown>;
+    if (typeof o.error === 'string') {
+      return { errorText: o.error };
+    }
+    if (o.status === 'error' && typeof o.message === 'string') {
+      return { errorText: o.message };
+    }
+  }
+  if (typeof out === 'string' && out.startsWith(`Tool '${tr.name}' failed:`)) {
+    return {
+      errorText: out.slice(`Tool '${tr.name}' failed:`.length).trim(),
+    };
+  }
+  return null;
+}
+
+/**
  * Schema for agent input messages and commands.
  */
 export const AgentInputSchema = z.object({
@@ -294,6 +344,20 @@ export const AgentStreamChunkSchema = z.discriminatedUnion('type', [
     input: z.unknown(),
     kind: z.enum(['respond', 'restart']),
     metadata: z.unknown().optional(),
+  }),
+  // Tool execution failure — addressable counterpart to `interrupt`. Fires
+  // when a tool's handler threw (or returned an error-shaped output) and
+  // the runtime caught it. The error is still surfaced to the model via
+  // a toolResponse so the conversation can continue; this event lets the
+  // client mark the corresponding in-flight tool call as failed without
+  // string-matching the toolResponse output.
+  z.object({
+    type: z.literal('tool-error'),
+    toolCallId: z.string(),
+    toolName: z.string(),
+    errorText: z.string(),
+    errorCode: z.string().optional(),
+    details: z.unknown().optional(),
   }),
   // Background-execution transition.
   z.object({
@@ -1204,6 +1268,28 @@ export function definePromptAgent<State = unknown>(
 
       for await (const chunk of result.stream) {
         sendChunk({ type: 'model-chunk', chunk });
+        // Tool-error detection: when a tool's handler throws (or returns
+        // an error-shaped output via middleware), the runtime packages
+        // it as a toolResponse so the model can react and recover. The
+        // chunk still flows through, but the client also gets a typed,
+        // addressable `tool-error` event so it can mark the matching
+        // in-flight tool call as failed without string-matching outputs.
+        for (const part of chunk?.content ?? []) {
+          const tr = part?.toolResponse;
+          if (!tr) continue;
+          const detected = detectToolError(tr);
+          if (!detected) continue;
+          sendChunk({
+            type: 'tool-error',
+            toolCallId: tr.ref ?? tr.name,
+            toolName: tr.name,
+            errorText: detected.errorText,
+            ...(detected.errorCode && { errorCode: detected.errorCode }),
+            ...(detected.details !== undefined && {
+              details: detected.details,
+            }),
+          });
+        }
       }
 
       const res = await result.response;

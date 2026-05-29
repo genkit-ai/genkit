@@ -41,6 +41,14 @@ export type AgentEvent =
       kind: 'respond' | 'restart';
       metadata?: unknown;
     }
+  | {
+      type: 'tool-error';
+      toolCallId: string;
+      toolName: string;
+      errorText: string;
+      errorCode?: string;
+      details?: unknown;
+    }
   | { type: 'detached'; snapshotId: string; continuationId: string }
   | { type: 'turn-end'; snapshotId?: string; continuationId?: string }
   | { type: 'error'; errorText: string };
@@ -104,6 +112,13 @@ export interface AgentEventHandlers {
     input: unknown;
     kind: 'respond' | 'restart';
     metadata?: unknown;
+  }) => void;
+  onToolError?: (err: {
+    toolCallId: string;
+    toolName: string;
+    errorText: string;
+    errorCode?: string;
+    details?: unknown;
   }) => void;
   onDetached?: (detached: {
     snapshotId: string;
@@ -187,6 +202,15 @@ export function walkAgentEvent(
         input: event.input,
         kind: event.kind,
         metadata: event.metadata,
+      });
+      return;
+    case 'tool-error':
+      handlers.onToolError?.({
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        errorText: event.errorText,
+        errorCode: event.errorCode,
+        details: event.details,
       });
       return;
     case 'detached':
