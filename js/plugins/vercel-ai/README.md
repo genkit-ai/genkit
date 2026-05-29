@@ -20,6 +20,7 @@ npm install @genkit-ai/vercel-ai
 | Package | Required |
 | ------- | -------- |
 | `genkit` | ✅ |
+| `ai` | `^6.0.0` — provides `ChatTransport`, `UIMessage`, etc. |
 | `@ai-sdk/react` | For the `useChat` hook on the client |
 
 ## Quick start
@@ -30,13 +31,13 @@ npm install @genkit-ai/vercel-ai
 // app/api/chat/weather/route.ts  (Next.js App Router example)
 import { appRoute } from '@genkit-ai/next';
 import { genkit } from 'genkit/beta';
-import { googleAI } from '@genkit-ai/google-ai';
+import { googleAI } from '@genkit-ai/google-genai';
 
 const ai = genkit({ plugins: [googleAI()] });
 
 const weatherAgent = ai.defineAgent({
   name: 'weatherAgent',
-  model: 'googleai/gemini-2.5-flash',
+  model: 'googleai/gemini-flash-latest',
   tools: [/* your tools here */],
 });
 
@@ -75,7 +76,11 @@ export default function Chat() {
     <div>
       {messages.map((m) => (
         <div key={m.id}>
-          <strong>{m.role}:</strong> {m.content}
+          <strong>{m.role}:</strong>{' '}
+          {m.parts
+            .filter((p) => p.type === 'text')
+            .map((p) => p.text)
+            .join('')}
         </div>
       ))}
       <form onSubmit={handleSubmit}>
@@ -174,7 +179,7 @@ human-in-the-loop approval flows — all powered by AI SDK Elements.
 
 | Import path | Environment | Contents |
 | ----------- | ----------- | -------- |
-| `@genkit-ai/vercel-ai` | Server / shared | Mapping utilities (`mapUIMessageToGenkit`, `mapGenkitMessageToUI`, etc.) |
+| `@genkit-ai/vercel-ai` | Server / shared | Mapping utilities (`mapUIMessageToGenkit`, `mapUIPartToGenkit`, etc.) and re-exported `UIMessage` type |
 | `@genkit-ai/vercel-ai/client` | Browser / client | `GenkitChatTransport` class |
 
 The `/client` entry point is browser-safe and has no Node.js dependencies.
@@ -219,17 +224,18 @@ const transport = new GenkitChatTransport({
 
 ### Mapping utilities
 
-The root entry point (`@genkit-ai/vercel-ai`) exports bidirectional mapping
-functions between Vercel AI SDK `UIMessage` types and Genkit `MessageData`:
+The root entry point (`@genkit-ai/vercel-ai`) exports mapping functions
+between Vercel AI SDK `UIMessage` types and Genkit `MessageData`, plus
+helper functions used by the transport:
 
 | Function | Direction | Description |
 | -------- | --------- | ----------- |
 | `mapUIMessageToGenkit(msg)` | UI → Genkit | Convert a Vercel `UIMessage` to a Genkit `MessageData` |
-| `mapGenkitMessageToUI(msg, id?)` | Genkit → UI | Convert a Genkit `MessageData` to a Vercel `UIMessage` |
 | `mapUIPartToGenkit(part)` | UI → Genkit | Convert a single `UIMessagePart` to Genkit `Part[]` |
-| `mapGenkitPartToUI(part)` | Genkit → UI | Convert a single Genkit `Part` to a `UIMessagePart` |
 | `extractResolvedToolResults(msgs)` | — | Extract resolved tool invocation results from the message array |
 | `findLastUserMessage(msgs)` | — | Find the last user message in a `UIMessage[]` |
+
+The `UIMessage` type is also re-exported from the `ai` package for convenience.
 
 ## Features
 
@@ -244,7 +250,7 @@ functions between Vercel AI SDK `UIMessage` types and Genkit `MessageData`:
 ## Requirements
 
 - Genkit `>=1.0.0`
-- Vercel AI SDK `>=4.0.0` (for `useChat` with `ChatTransport`)
+- Vercel AI SDK `>=6.0.0` (for `useChat` with `ChatTransport`)
 - Node.js `>=20` (server-side)
 
 ## License
