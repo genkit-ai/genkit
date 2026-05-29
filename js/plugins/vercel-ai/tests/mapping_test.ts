@@ -125,7 +125,7 @@ describe('mapUIPartToGenkit', () => {
         type: 'reasoning',
         text: '',
       } as UIMessage['parts'][number]),
-      [{ reasoning: '' }]
+      []
     );
   });
 
@@ -289,6 +289,31 @@ describe('extractResolvedToolResults', () => {
       },
     ];
     assert.strictEqual(extractResolvedToolResults(messages).length, 0);
+  });
+
+  it('extracts dynamic-tool parts (with explicit toolName)', () => {
+    const messages: UIMessage[] = [
+      {
+        id: '1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'dynamic-tool',
+            toolName: 'userApproval',
+            toolCallId: 'dyn-1',
+            state: 'output-available',
+            input: { action: 'transfer' },
+            output: { approved: true },
+          } as unknown as UIMessage['parts'][number],
+        ],
+      },
+    ];
+    const results = extractResolvedToolResults(messages);
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0].toolCallId, 'dyn-1');
+    assert.strictEqual(results[0].toolName, 'userApproval');
+    assert.deepStrictEqual(results[0].input, { action: 'transfer' });
+    assert.deepStrictEqual(results[0].result, { approved: true });
   });
 });
 

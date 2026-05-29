@@ -19,6 +19,7 @@
 import { useChat } from '@ai-sdk/react';
 import {
   GenkitChatTransport,
+  LocalStorageSnapshotStore,
   restartInterrupt,
 } from '@genkit-ai/vercel-ai/client';
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
@@ -111,9 +112,18 @@ const agents: Record<
 function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
   const agent = agents[agentKey];
 
+  // Persist per-chat snapshot state in localStorage (namespaced per agent) so
+  // multi-turn continuity survives a page reload. Without a `store`, the
+  // transport defaults to an in-memory store and history resets on refresh.
   const transport = useMemo(
-    () => new GenkitChatTransport({ url: agent.endpoint }),
-    [agent.endpoint]
+    () =>
+      new GenkitChatTransport({
+        url: agent.endpoint,
+        store: new LocalStorageSnapshotStore({
+          prefix: `genkit-vercel-ai:${agentKey}:`,
+        }),
+      }),
+    [agent.endpoint, agentKey]
   );
 
   // `addToolResult` records the user's resolution of an interrupted tool;

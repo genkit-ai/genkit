@@ -55,8 +55,13 @@ export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
   if (part.type === 'reasoning') {
     // Map AI SDK reasoning parts to Genkit reasoning parts so the model's
     // thinking is preserved across turns (e.g. when replaying history).
+    // Empty reasoning is dropped to avoid emitting stray, contentless
+    // reasoning blocks (mirrors the streaming side in client.ts, which also
+    // skips `reasoning === ''`).
     const reasoning = (part as { text?: unknown }).text;
-    return typeof reasoning === 'string' ? [{ reasoning }] : [];
+    return typeof reasoning === 'string' && reasoning !== ''
+      ? [{ reasoning }]
+      : [];
   }
 
   if (part.type === 'file') {
@@ -210,8 +215,9 @@ export interface ResolvedToolResult {
 /**
  * Extracts resolved tool invocations from a UIMessage array.
  *
- * Supports the v6 per-tool format (`type === 'tool-<toolName>'`,
- * `state === 'output-available'`).
+ * Supports the v6 per-tool format (`type === 'tool-<toolName>'`) as well as
+ * dynamic tools (`type === 'dynamic-tool'`, with an explicit `toolName`),
+ * matching `state === 'output-available'`.
  *
  * Scans **all** messages (most-recent first) and returns every resolved tool
  * result, de-duplicated by `toolCallId` (keeping the most recent). The
@@ -237,9 +243,14 @@ export function extractResolvedToolResults(
       // (e.g. `type: 'tool-userApproval'`) and does NOT have a separate
       // `toolName` property.  We derive the name from `type` when
       // `toolName` is not explicitly present.
+      // Also handle dynamic tools (`type: 'dynamic-tool'`, which carry an
+      // explicit `toolName`) for parity with `mapUIPartToGenkit` — otherwise
+      // an interrupt surfaced as a dynamic tool could never be resolved.
       const p = part as unknown as Record<string, unknown>;
+      const isTool =
+        part.type === 'dynamic-tool' || part.type.startsWith('tool-');
       if (
-        part.type.startsWith('tool-') &&
+        isTool &&
         typeof p.toolCallId === 'string' &&
         p.toolCallId &&
         !seen.has(p.toolCallId) &&
@@ -249,7 +260,9 @@ export function extractResolvedToolResults(
         const toolName =
           typeof p.toolName === 'string' && p.toolName
             ? p.toolName
-            : part.type.slice('tool-'.length);
+            : part.type.startsWith('tool-')
+              ? part.type.slice('tool-'.length)
+              : 'unknown';
         seen.add(p.toolCallId);
         results.push({
           toolCallId: p.toolCallId,

@@ -1287,6 +1287,65 @@ describe('GenkitChatTransport e2e', () => {
     );
   });
 
+  // ── Test: Regenerate on the very first turn (no previous snapshot) ────
+
+  it('should regenerate the first turn from scratch when there is no previous snapshot', async () => {
+    let callCount = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    modelHandler = async (req, sendChunk) => {
+      callCount++;
+      capturedRequests.push(JSON.parse(JSON.stringify(req)));
+      const userMsgs = req.messages.filter((m) => m.role === 'user');
+      const lastText = userMsgs[userMsgs.length - 1]?.content[0]?.text ?? '';
+
+      sendChunk({ content: [{ text: `answer-${callCount}` }] });
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: `answer to "${lastText}" (#${callCount})` }],
+        },
+        finishReason: 'stop',
+      };
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+    });
+
+    // Regenerate as the *first* interaction for this chat: there is no stored
+    // snapshot, so `previousSnapshotId` is undefined. The transport must fall
+    // back to a fresh run from the last user message rather than crashing or
+    // trying to resume from a nonexistent snapshot.
+    const regenStream = await transport.sendMessages({
+      trigger: 'regenerate-message',
+      chatId: 'chat-regen-first',
+      messageId: undefined,
+      messages: [makeUIMessage('user', 'only message')],
+      abortSignal: undefined,
+    });
+    const regenChunks = await collectChunks(regenStream);
+
+    // No errors, and a normal streamed answer.
+    assert.strictEqual(chunksOfType(regenChunks, 'error').length, 0);
+    const deltas = chunksOfType(regenChunks, 'text-delta');
+    assert.strictEqual(deltas.length, 1);
+    assert.strictEqual(deltas[0].delta, 'answer-1');
+    assert.strictEqual(callCount, 1);
+
+    // The model should have seen the last user message (fresh run).
+    const req = capturedRequests[0];
+    const userMsgs = req.messages.filter((m) => m.role === 'user');
+    assert.strictEqual(
+      userMsgs[userMsgs.length - 1]?.content[0]?.text,
+      'only message'
+    );
+
+    // Stream envelope complete.
+    assert.strictEqual(chunkTypes(regenChunks)[0], 'start');
+    assert.strictEqual(chunkTypes(regenChunks).at(-1), 'finish');
+  });
+
   // ── Test: Custom SnapshotStore is used for persistence ───────────────
 
   it('should use a custom SnapshotStore for snapshot persistence', async () => {

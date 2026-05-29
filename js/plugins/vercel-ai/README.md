@@ -258,6 +258,13 @@ When the UI triggers a regeneration (the AI SDK sends
 the snapshot taken *before* it — so the final assistant message is produced
 again from the prior conversation state instead of appending a new turn.
 
+> **First turn:** regenerating the very first assistant response has no
+> earlier snapshot to resume from. In that case the transport falls back to a
+> **fresh run** from the last user message (no resume payload), which produces
+> a new answer to the same prompt — the expected "regenerate the first answer"
+> behavior.
+
+
 #### How it works
 
 1. **Sends messages** via Genkit's `streamFlow` client — a browser-safe HTTP

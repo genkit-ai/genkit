@@ -40,6 +40,32 @@ export {
 } from './store.js';
 export type { ChatTransport, UIMessage, UIMessageChunk };
 
+/**
+ * Derives a human-readable error message from an unknown thrown value,
+ * preserving as much context as possible.
+ *
+ * `streamFlow` throws `Error`s whose `.message` already embeds the HTTP status
+ * and any Genkit error status/message/details, so those are returned verbatim.
+ * Non-Error throwables are stringified (JSON when possible) instead of being
+ * collapsed to a generic label, so detail isn't silently lost.
+ */
+function errorTextFromUnknown(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || 'Agent execution failed';
+  }
+  if (typeof err === 'string') {
+    return err || 'Agent execution failed';
+  }
+  if (err === undefined || err === null) {
+    return 'Agent execution failed';
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // GenkitChatTransport
 // ---------------------------------------------------------------------------
@@ -167,6 +193,12 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
     // For a regeneration, resume from the snapshot *before* the last turn so
     // the final response is produced again from the prior state. Otherwise
     // continue from the current snapshot.
+    //
+    // First-turn edge case: regenerating the very first assistant turn has no
+    // `previousSnapshotId` (it's `undefined`). In that case `snapshotId` is
+    // undefined, so below we skip the resume path and fall back to re-running
+    // from the last user message with an empty `init` — i.e. a fresh run from
+    // scratch, which is the correct "regenerate the first answer" behavior.
     const snapshotId = isRegenerate
       ? chatSnapshot.previousSnapshotId
       : chatSnapshot.snapshotId;
@@ -296,17 +328,29 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
         const emittedToolInputs = new Set<string>();
         // Deterministic fallback for tool calls that arrive without a `ref`.
         // The model may omit refs, in which case the request and its matching
-        // response must still share the same `toolCallId`. We assign one id
-        // per tool name (in arrival order) so the response can correlate.
-        const refByToolName = new Map<string, string>();
-        const correlateToolCallId = (name: string, ref?: string): string => {
-          if (ref) return ref;
-          let id = refByToolName.get(name);
-          if (!id) {
-            id = crypto.randomUUID();
-            refByToolName.set(name, id);
-          }
+        // response must still share the same `toolCallId`.
+        //
+        // We pair each ref-less response with the *oldest* unmatched ref-less
+        // request for the same tool name (FIFO by arrival order). Allocating a
+        // fresh id per request — rather than reusing one id per tool name —
+        // means two ref-less calls to the *same* tool in one turn don't share
+        // an id and cross-wire each other's request/response. (In practice
+        // Genkit tool requests carry refs, so this is a safety net.)
+        const pendingRefByToolName = new Map<string, string[]>();
+        const correlateRequestId = (name: string): string => {
+          const id = crypto.randomUUID();
+          const queue = pendingRefByToolName.get(name) ?? [];
+          queue.push(id);
+          pendingRefByToolName.set(name, queue);
           return id;
+        };
+        const correlateResponseId = (name: string): string => {
+          const queue = pendingRefByToolName.get(name);
+          if (queue && queue.length > 0) {
+            return queue.shift()!;
+          }
+          // No matching request seen (shouldn't happen) — mint a new id.
+          return crypto.randomUUID();
         };
 
         const enqueue = (chunk: UIMessageChunk) => {
@@ -402,7 +446,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
               // Tool request (tool call from model)
               if (part.toolRequest) {
                 const tr = part.toolRequest;
-                const toolCallId = correlateToolCallId(tr.name, tr.ref);
+                const toolCallId = tr.ref ?? correlateRequestId(tr.name);
                 if (!emittedToolInputs.has(toolCallId)) {
                   emittedToolInputs.add(toolCallId);
                   closeReasoningBlock();
@@ -425,7 +469,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
               // Tool response (tool executed by agent)
               if (part.toolResponse) {
                 const tr = part.toolResponse;
-                const toolCallId = correlateToolCallId(tr.name, tr.ref);
+                const toolCallId = tr.ref ?? correlateResponseId(tr.name);
 
                 // Skip interrupt responses the client already supplied — it
                 // has the result and re-emitting would confuse the UI SDK.
@@ -528,10 +572,15 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
             enqueue({ type: 'abort', reason: 'Request was aborted' });
           } else {
             ensureStarted();
+            // `streamFlow` throws plain `Error`s whose message already embeds
+            // the HTTP status and any Genkit error status/message/details
+            // (e.g. `"Server returned: 500: ..."` or `"<status>: <message>\n
+            // <details>"`), so `err.message` preserves that context. For
+            // non-Error throwables, stringify rather than collapsing to a
+            // generic label so detail isn't lost.
             enqueue({
               type: 'error',
-              errorText:
-                err instanceof Error ? err.message : 'Agent execution failed',
+              errorText: errorTextFromUnknown(err),
             });
           }
         } finally {

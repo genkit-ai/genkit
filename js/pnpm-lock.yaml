@@ -2240,9 +2240,6 @@ importers:
       react-dom:
         specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
-      shadcn:
-        specifier: ^4.8.2
-        version: 4.8.2(@cfworker/json-schema@4.1.1)(@types/node@20.19.37)(typescript@5.9.3)
       shiki:
         specifier: ^4.1.0
         version: 4.1.0
@@ -2277,6 +2274,9 @@ importers:
       eslint-config-next:
         specifier: 16.2.6
         version: 16.2.6(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)
+      shadcn:
+        specifier: ^4.8.2
+        version: 4.8.2(@cfworker/json-schema@4.1.1)(@types/node@20.19.37)(typescript@5.9.3)
       tailwindcss:
         specifier: ^4
         version: 4.3.0
