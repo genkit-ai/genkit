@@ -34,8 +34,8 @@ export const testWeatherAgentStateless = ai.defineFlow(
   {
     name: 'testWeatherAgentStateless',
     inputSchema: z.object({
-      /** Continuation token from a previous turn; omit on first call. */
-      continuationId: z.string().optional(),
+      /** Structured continuation from a previous turn; omit on first call. */
+      continuation: z.any().optional(),
       text: z.string().default('What is the weather in Tokyo?'),
     }),
     outputSchema: z.any(),
@@ -46,14 +46,12 @@ export const testWeatherAgentStateless = ai.defineFlow(
         messages: [{ role: 'user' as const, content: [{ text: input.text }] }],
       },
       {
-        init: input.continuationId
-          ? { continuationId: input.continuationId }
-          : {},
+        init: input.continuation ? { continuation: input.continuation } : {},
         onChunk: sendChunk,
       }
     );
     return {
-      continuationId: res.result.continuationId,
+      continuation: res.result.continuation,
       message: res.result.message,
     };
   }

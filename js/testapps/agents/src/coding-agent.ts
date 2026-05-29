@@ -284,7 +284,7 @@ export const testCodingAgent = ai.defineFlow(
         const firstOption = interrupt.input?.options?.[0] || 'Yes';
         sendChunk({
           type: 'status',
-          label: `Auto-answering ask_user: "${firstOption}"`,
+          status: { label: `Auto-answering ask_user: "${firstOption}"` },
         });
 
         result = await codingAgent.run(
@@ -303,7 +303,7 @@ export const testCodingAgent = ai.defineFlow(
             },
           },
           {
-            init: { continuationId: result.result.continuationId },
+            init: { continuation: result.result.continuation },
             onChunk: sendChunk,
           }
         );
@@ -312,7 +312,7 @@ export const testCodingAgent = ai.defineFlow(
         // approval metadata (write_file, search_and_replace, run_shell).
         sendChunk({
           type: 'status',
-          label: `Auto-approving tool: ${interrupt.name}`,
+          status: { label: `Auto-approving tool: ${interrupt.name}` },
         });
 
         result = await codingAgent.run(
@@ -331,7 +331,7 @@ export const testCodingAgent = ai.defineFlow(
             },
           },
           {
-            init: { continuationId: result.result.continuationId },
+            init: { continuation: result.result.continuation },
             onChunk: sendChunk,
           }
         );

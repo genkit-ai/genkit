@@ -19,17 +19,14 @@ import {
   GenerateResponseData,
   GenerationCommonConfigSchema,
   SessionRunner,
-  continuationToSnapshotId,
-  decodeContinuation,
   defineAgent,
   defineCustomAgent,
   defineInterrupt,
   definePromptAgent,
   defineResource,
-  encodeSnapshotContinuation,
-  encodeStateContinuation,
   generateOperation,
   type AgentConfig,
+  type AgentContinuation,
   type AgentFn,
   type AgentStreamChunk,
   type InterruptConfig,
@@ -61,16 +58,9 @@ import { type Operation, type z } from '@genkit-ai/core';
 import type { Formatter } from './formats.js';
 import { Genkit, type GenkitOptions } from './genkit.js';
 
-export {
-  FileSessionStore,
-  InMemorySessionStore,
-  SessionRunner,
-  continuationToSnapshotId,
-  decodeContinuation,
-  encodeSnapshotContinuation,
-  encodeStateContinuation,
-};
+export { FileSessionStore, InMemorySessionStore, SessionRunner };
 export type {
+  AgentContinuation,
   AgentFn,
   AgentStreamChunk,
   GenkitOptions as GenkitBetaOptions,

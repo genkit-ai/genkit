@@ -48,9 +48,9 @@ import { injectGenkitAgent } from '../genkit-angular';
           The session is polling the snapshot endpoint internally;
           messages update reactively as the snapshot evolves.
         </p>
-        <p><code>continuationId: {{ state().continuationId }}</code></p>
-        @if (state().statusLabel) {
-          <p>Status: {{ state().statusLabel }}</p>
+        <p><code>snapshotId: {{ state().snapshotId }}</code></p>
+        @if (state().status?.label) {
+          <p>Status: {{ state().status?.label }}</p>
         }
         <button class="abort" (click)="agent.abort()">✋ Abort</button>
       </div>
@@ -101,7 +101,9 @@ import { injectGenkitAgent } from '../genkit-angular';
 export class BackgroundAgentComponent {
   readonly topic = signal('');
 
-  readonly agent = injectGenkitAgent({ url: '/api/backgroundAgent' });
+  readonly agent = injectGenkitAgent<unknown, { label: string }>({
+    url: '/api/backgroundAgent',
+  });
   readonly state = this.agent.state;
 
   // Pull the final report text out of the agent's messages.

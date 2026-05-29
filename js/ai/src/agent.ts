@@ -64,19 +64,44 @@ import {
 } from './session.js';
 
 /**
+ * Continuation — the structured, self-describing round-trip token.
+ *
+ * Carried inline on `AgentInit`, `AgentOutput`, and the `snapshot` /
+ * `detached` / `turn-end` events. Storage mode is on the wire via the
+ * `kind` discriminator; clients don't have to know whether the agent is
+ * server-stored or stateless to round-trip the next turn.
+ *
+ *   `{ kind: 'snapshot', snapshotId }`       — server-stored agents
+ *   `{ kind: 'state',    state }`            — stateless / client-managed
+ *
+ * The `snapshot` variant is a small server-side handle suitable for URL
+ * routes, polling, and branching. The `state` variant carries the full
+ * structured session state inline (no base64) and is potentially large.
+ */
+export const ContinuationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('snapshot'), snapshotId: z.string() }),
+  z.object({ kind: z.literal('state'), state: SessionStateSchema }),
+]);
+
+/** Discriminated continuation handed back to the next turn. */
+export type AgentContinuation<S = unknown> =
+  | { kind: 'snapshot'; snapshotId: string }
+  | { kind: 'state'; state: SessionState<S> };
+
+/**
  * Schema for initializing an agent turn.
  *
- * **Clients** pass `continuationId` — an opaque token from a prior turn's
- * `output.continuationId`. **Server-side direct callers** (tests,
- * sub-agent middleware, `agent.run()` invocations) may pass `snapshotId`
- * directly as a convenience for stored agents. The two are equivalent;
- * if both are supplied, `continuationId` wins.
+ * **Clients** pass back the `continuation` from the prior turn's
+ * `output.continuation`. **Server-side direct callers** (tests, sub-agent
+ * middleware, `agent.run()` invocations) may pass `snapshotId` directly
+ * as a convenience for stored agents. If both are supplied, `continuation`
+ * wins.
  */
 export const AgentInitSchema = z.object({
-  continuationId: z.string().optional(),
+  continuation: ContinuationSchema.optional(),
   /**
    * Server-side convenience: raw snapshotId for stored agents. Clients
-   * should round-trip `continuationId` instead, which works regardless of
+   * should round-trip `continuation` instead, which works regardless of
    * whether the underlying agent is stored or stateless.
    */
   snapshotId: z.string().optional(),
@@ -86,86 +111,16 @@ export const AgentInitSchema = z.object({
  * Initialization options for an agent turn.
  */
 export interface AgentInit<S = unknown> {
-  /** Opaque continuation token from a prior turn's `output.continuationId`. */
-  continuationId?: string;
+  /** Structured continuation from a prior turn's `output.continuation`. */
+  continuation?: AgentContinuation<S>;
   /** Server-side convenience: raw snapshotId for stored agents. */
   snapshotId?: string;
   /** @internal — seeded by the runtime. */
   newSnapshotId?: string;
-  /** @internal — populated server-side after continuationId decode. */
+  /** @internal — populated server-side after continuation resolution. */
   _decodedState?: SessionState<S>;
-  /** @internal — populated server-side after continuationId decode. */
+  /** @internal — populated server-side after continuation resolution. */
   _decodedSnapshotId?: string;
-}
-
-/**
- * Continuation token format. The token is opaque to clients; the server
- * uses the prefix to pick the decode path:
- *
- *   `snap:<snapshotId>`             — server-stored agents
- *   `state:<base64(JSON(state))>`   — client-stored agents
- *
- * The prefix is a discriminator, not a version. If the format evolves, the
- * server detects the new shape at decode time.
- */
-const CONT_SNAP_PREFIX = 'snap:';
-const CONT_STATE_PREFIX = 'state:';
-
-/** Encode a snapshotId as a continuation token. */
-export function encodeSnapshotContinuation(snapshotId: string): string {
-  return CONT_SNAP_PREFIX + snapshotId;
-}
-
-/** Encode a client-side state blob as a continuation token. */
-export function encodeStateContinuation(state: unknown): string {
-  const json = JSON.stringify(state);
-  if (typeof Buffer !== 'undefined') {
-    return CONT_STATE_PREFIX + Buffer.from(json, 'utf8').toString('base64');
-  }
-  return CONT_STATE_PREFIX + btoa(unescape(encodeURIComponent(json)));
-}
-
-/**
- * Decode a continuation token into either a snapshotId or a state blob.
- * Returns null if the token is malformed.
- */
-export function decodeContinuation(
-  token: string
-):
-  | { kind: 'snapshot'; snapshotId: string }
-  | { kind: 'state'; state: unknown }
-  | null {
-  if (token.startsWith(CONT_SNAP_PREFIX)) {
-    return {
-      kind: 'snapshot',
-      snapshotId: token.slice(CONT_SNAP_PREFIX.length),
-    };
-  }
-  if (token.startsWith(CONT_STATE_PREFIX)) {
-    try {
-      const b64 = token.slice(CONT_STATE_PREFIX.length);
-      const json =
-        typeof Buffer !== 'undefined'
-          ? Buffer.from(b64, 'base64').toString('utf8')
-          : decodeURIComponent(escape(atob(b64)));
-      return { kind: 'state', state: JSON.parse(json) };
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-/**
- * Server-internal convenience: extract the snapshotId from a snap-token,
- * or return undefined if the token is state-shaped or malformed. Useful
- * for code that needs to call `agent.getSnapshotData(...)` or compose
- * filesystem paths from a continuationId received from a client.
- */
-export function continuationToSnapshotId(token?: string): string | undefined {
-  if (!token) return undefined;
-  const decoded = decodeContinuation(token);
-  return decoded?.kind === 'snapshot' ? decoded.snapshotId : undefined;
 }
 
 /**
@@ -242,26 +197,6 @@ export type TurnEnd = z.infer<typeof TurnEndSchema>;
 // streaming artifacts) extend the union without competing for field
 // namespace.
 
-/** Typed status events with a consistent shape across all agents. */
-export const StatusEventSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('status'),
-    label: z.string(),
-    key: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('progress'),
-    label: z.string().optional(),
-    current: z.number(),
-    total: z.number(),
-  }),
-  z.object({
-    type: z.literal('phase'),
-    phase: z.string(),
-  }),
-]);
-export type StatusEvent = z.infer<typeof StatusEventSchema>;
-
 /**
  * Discriminated union of every event an agent may emit during a turn.
  *
@@ -274,24 +209,14 @@ export const AgentStreamChunkSchema = z.discriminatedUnion('type', [
     type: z.literal('model-chunk'),
     chunk: ModelResponseChunkSchema,
   }),
-  // Agent-emitted status, progress, or phase updates.
+  // Application-defined status payload. The shape of `status` is
+  // intentionally not standardized — agents and their clients agree on
+  // their own structure (typed via the client's `<TStatus>` generic).
   z.object({
     type: z.literal('status'),
-    label: z.string(),
-    key: z.string().optional(),
+    status: z.any(),
   }),
-  z.object({
-    type: z.literal('progress'),
-    label: z.string().optional(),
-    current: z.number(),
-    total: z.number(),
-  }),
-  z.object({
-    type: z.literal('phase'),
-    phase: z.string(),
-  }),
-  // One-shot artifact emission. Streaming-artifact variants (start /
-  // delta / complete) will be added when the runtime needs them.
+  // One-shot artifact emission.
   z.object({
     type: z.literal('artifact-emitted'),
     artifact: ArtifactSchema,
@@ -300,7 +225,7 @@ export const AgentStreamChunkSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('snapshot'),
     snapshotId: z.string(),
-    continuationId: z.string(),
+    continuation: ContinuationSchema,
   }),
   // Interrupts — explicit in-stream event with addressable refs.
   z.object({
@@ -329,13 +254,13 @@ export const AgentStreamChunkSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('detached'),
     snapshotId: z.string(),
-    continuationId: z.string(),
+    continuation: ContinuationSchema,
   }),
   // Turn boundary — last event emitted for a foreground turn.
   z.object({
     type: z.literal('turn-end'),
     snapshotId: z.string().optional(),
-    continuationId: z.string().optional(),
+    continuation: ContinuationSchema.optional(),
   }),
   // Terminal error.
   z.object({
@@ -373,15 +298,16 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
  */
 export const AgentOutputSchema = z.object({
   /**
-   * Opaque continuation token to round-trip on the next turn. **Clients**
-   * pass back as `init.continuationId`. Always populated.
+   * Structured continuation to round-trip on the next turn. **Clients**
+   * pass back as `init.continuation`. Always populated.
    */
-  continuationId: z.string().optional(),
+  continuation: ContinuationSchema.optional(),
   /**
    * Server-side convenience: raw snapshotId for stored agents. Populated
-   * alongside `continuationId`. Useful for direct `.getSnapshotData(...)`
-   * calls, filesystem-snapshot inspection, sub-agent middleware, and URL
-   * bookmarks. **Clients** should round-trip `continuationId`, not this.
+   * alongside `continuation` when `continuation.kind === 'snapshot'`.
+   * Useful for direct `.getSnapshotData(...)` calls, filesystem-snapshot
+   * inspection, sub-agent middleware, and URL bookmarks. **Clients**
+   * should round-trip `continuation`, not this.
    */
   snapshotId: z.string().optional(),
   /** The model's final message for this turn. */
@@ -394,7 +320,7 @@ export const AgentOutputSchema = z.object({
   /**
    * Read-only snapshot of session state. Includes `messages` (full
    * conversation history) and `custom` (typed custom state). Clients
-   * should not send this back — round-trip the `continuationId` instead.
+   * should not send this back — round-trip the `continuation` instead.
    */
   state: SessionStateSchema.optional(),
 });
@@ -403,8 +329,8 @@ export const AgentOutputSchema = z.object({
  * Output returned at turn completion.
  */
 export interface AgentOutput<S = unknown> {
-  /** Opaque continuation token; clients pass back as `init.continuationId`. */
-  continuationId?: string;
+  /** Structured continuation; clients pass back as `init.continuation`. */
+  continuation?: AgentContinuation<S>;
   /** Server-side convenience: raw snapshotId for stored agents. */
   snapshotId?: string;
   message?: MessageData;
@@ -760,27 +686,20 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       const store = config.store || new InMemorySessionStore<State>();
 
       // Resolve init into the right internal handle. Three valid inputs:
-      //   1. `continuationId` (client-facing) — opaque token; decode it
+      //   1. `continuation` (client-facing) — structured discriminator
       //   2. `snapshotId` (server-internal convenience) — used directly
       //   3. neither — fresh session
-      // If both v2 and snapshotId are supplied, continuationId wins.
-      if (init?.continuationId) {
-        const decoded = decodeContinuation(init.continuationId);
-        if (!decoded) {
-          // Reject malformed tokens loudly rather than silently dropping
-          // state. A typo'd / corrupted continuationId starting a fresh
-          // session would mask real bugs in the caller.
-          throw new GenkitError({
-            status: 'INVALID_ARGUMENT',
-            message: `init.continuationId is malformed: ${init.continuationId.slice(0, 40)}...`,
-          });
-        }
-        if (decoded.kind === 'snapshot') {
-          init = { ...init, _decodedSnapshotId: decoded.snapshotId };
+      // If both are supplied, `continuation` wins.
+      if (init?.continuation) {
+        if (init.continuation.kind === 'snapshot') {
+          init = {
+            ...init,
+            _decodedSnapshotId: init.continuation.snapshotId,
+          };
         } else {
           init = {
             ...init,
-            _decodedState: decoded.state as SessionState<State>,
+            _decodedState: init.continuation.state as SessionState<State>,
           };
         }
       } else if (init?.snapshotId) {
@@ -903,7 +822,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
             arg.sendChunk({
               type: 'detached',
               snapshotId,
-              continuationId: encodeSnapshotContinuation(snapshotId),
+              continuation: { kind: 'snapshot', snapshotId },
             });
           } catch (_) {
             // Stream may already be closed; that's fine.
@@ -933,7 +852,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
               ...(config.store &&
                 snapshotId && {
                   snapshotId,
-                  continuationId: encodeSnapshotContinuation(snapshotId),
+                  continuation: { kind: 'snapshot', snapshotId },
                 }),
             });
           }
@@ -983,8 +902,11 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
       if (outcome === 'detached') {
         return {
-          continuationId: encodeSnapshotContinuation(detachedSnapshotId!),
-          // Server-side convenience field populated alongside continuationId.
+          continuation: {
+            kind: 'snapshot' as const,
+            snapshotId: detachedSnapshotId!,
+          },
+          // Server-side convenience field populated alongside continuation.
           snapshotId: detachedSnapshotId!,
           state: toClientState(session.getState()),
         };
@@ -993,19 +915,20 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       const { result, finalSnapshotId } = outcome;
       const clientState = toClientState(session.getState());
 
-      // Continuation token: snapshotId for stored agents, encoded state
-      // blob for stateless. Clients round-trip the opaque continuationId;
-      // server-internal callers may use snapshotId directly.
-      const continuationId = config.store
+      // Structured continuation: `{ kind: 'snapshot', snapshotId }` for
+      // stored agents, `{ kind: 'state', state }` for stateless. Clients
+      // round-trip the whole continuation; server-internal callers may
+      // use snapshotId directly when available.
+      const continuation: AgentContinuation<State> | undefined = config.store
         ? finalSnapshotId
-          ? encodeSnapshotContinuation(finalSnapshotId)
+          ? { kind: 'snapshot', snapshotId: finalSnapshotId }
           : undefined
         : clientState
-          ? encodeStateContinuation(clientState)
+          ? { kind: 'state', state: clientState as SessionState<State> }
           : undefined;
 
       return {
-        ...(continuationId && { continuationId }),
+        ...(continuation && { continuation }),
         ...(config.store && finalSnapshotId && { snapshotId: finalSnapshotId }),
         ...(result.artifacts?.length && { artifacts: result.artifacts }),
         ...(result.message && { message: result.message }),
@@ -1032,25 +955,18 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     registry,
     {
       name: config.name,
-      description: `Gets snapshot data for ${config.name}. Accepts a raw snapshotId (server-internal callers) or a continuationId (clients).`,
+      description: `Gets snapshot data for ${config.name}. Input is a raw snapshotId — the structured continuation lives in agent init, not on this endpoint.`,
       actionType: 'agent-snapshot',
       inputSchema: z.string(),
       outputSchema: z.any(),
     },
-    async (token) => {
+    async (snapshotId) => {
       if (!config.store) {
         throw new GenkitError({
           status: 'FAILED_PRECONDITION',
           message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      // Accept either a raw snapshotId (server-internal) or a continuationId
-      // (clients). Decode the continuation token if it has the snap: prefix;
-      // otherwise treat as a raw snapshotId for backwards compatibility with
-      // any direct API caller that already has one.
-      const snapshotId = token.startsWith(CONT_SNAP_PREFIX)
-        ? token.slice(CONT_SNAP_PREFIX.length)
-        : token;
       const snapshot = await config.store.getSnapshot(snapshotId, {
         context: getContext(),
       });

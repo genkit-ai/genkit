@@ -40,7 +40,9 @@ const ENDPOINT = '/api/backgroundAgent';
 
 export default function BackgroundAgent() {
   const [topic, setTopic] = useState('');
-  const agent = useGenkitAgent({ url: ENDPOINT });
+  // Status shape emitted by the backgroundAgent server: `{ label }`.
+  type BackgroundStatus = { label: string };
+  const agent = useGenkitAgent<unknown, BackgroundStatus>({ url: ENDPOINT });
 
   const handleSubmit = () => {
     if (
@@ -143,11 +145,11 @@ export default function BackgroundAgent() {
               reactively as the snapshot evolves.
             </p>
             <div className="background-meta">
-              <code>continuationId: {agent.continuationId}</code>
+              <code>snapshotId: {agent.snapshotId}</code>
             </div>
-            {agent.statusLabel && (
+            {agent.status?.label && (
               <div className="background-meta">
-                <span>Status: {agent.statusLabel}</span>
+                <span>Status: {agent.status.label}</span>
               </div>
             )}
             <button className="btn btn-deny" onClick={handleAbort}>

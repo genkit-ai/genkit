@@ -17,15 +17,18 @@
 import { DestroyRef, Signal, inject, signal } from '@angular/core';
 import {
   AgentSession,
+  type AgentContinuation,
   type AgentInputBody,
   type AgentSessionOptions,
   type AgentSessionState,
   type AgentVariant,
 } from 'genkit/beta/client';
 
-export interface GenkitAgentHandle<S = unknown> {
+export type { AgentContinuation } from 'genkit/beta/client';
+
+export interface GenkitAgentHandle<S = unknown, TStatus = unknown> {
   /** Reactive state — read in templates with `state().messages`, etc. */
-  state: Signal<AgentSessionState<S>>;
+  state: Signal<AgentSessionState<S, TStatus>>;
   submit: (input: AgentInputBody) => void;
   abort: () => Promise<void>;
   reset: () => void;
@@ -35,7 +38,9 @@ export interface GenkitAgentHandle<S = unknown> {
     input: AgentInputBody,
     count?: number
   ) => Promise<AgentVariant<S>[]>;
-  continueFrom: (continuationOrSnapshotId: string) => Promise<void>;
+  continueFrom: (
+    continuationOrSnapshotId: AgentContinuation | string
+  ) => Promise<void>;
 }
 
 /**
@@ -57,11 +62,11 @@ export interface GenkitAgentHandle<S = unknown> {
  * }
  * ```
  */
-export function injectGenkitAgent<S = unknown>(
+export function injectGenkitAgent<S = unknown, TStatus = unknown>(
   options: AgentSessionOptions
-): GenkitAgentHandle<S> {
-  const session = new AgentSession<S>(options);
-  const state = signal<AgentSessionState<S>>(session.getState());
+): GenkitAgentHandle<S, TStatus> {
+  const session = new AgentSession<S, TStatus>(options);
+  const state = signal<AgentSessionState<S, TStatus>>(session.getState());
   const unsubscribe = session.subscribe(() => state.set(session.getState()));
   inject(DestroyRef).onDestroy(() => {
     unsubscribe();

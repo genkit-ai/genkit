@@ -27,8 +27,19 @@ interface ResearchState {
   subAnswers: SubAnswer[];
 }
 
+/**
+ * Status shape emitted by the research agent. The protocol-level `status`
+ * event is application-defined; each agent picks its own structure. This
+ * one carries either a plain label or a labelled progress counter.
+ */
+type ResearchStatus = {
+  label: string;
+  current?: number;
+  total?: number;
+};
+
 export default function ResearchAgent() {
-  const agent = useGenkitAgent<ResearchState>({ url: ENDPOINT });
+  const agent = useGenkitAgent<ResearchState, ResearchStatus>({ url: ENDPOINT });
 
   const handleSend = (text: string) => {
     if (agent.phase === 'streaming') return;
@@ -41,9 +52,11 @@ export default function ResearchAgent() {
   );
 
   const research = agent.customState;
-  const statusLine = agent.progress
-    ? `${agent.progress.label ?? 'Working'} (${agent.progress.current}/${agent.progress.total})`
-    : agent.statusLabel;
+  const status = agent.status;
+  const statusLine =
+    status && status.current !== undefined && status.total !== undefined
+      ? `${status.label} (${status.current}/${status.total})`
+      : (status?.label ?? null);
 
   return (
     <div className="research-layout">

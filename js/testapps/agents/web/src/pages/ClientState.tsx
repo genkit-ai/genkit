@@ -13,8 +13,9 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 import { useGenkitAgent } from '../genkit-react';
 
 // Client-managed state — same as WeatherChat but the server has no store.
-// With v2 continuationId, the client just round-trips one opaque token;
-// it doesn't have to know whether the server is stored or stateless.
+// The structured `continuation` field carries the full state inline as
+// `{ kind: 'state', state: ... }` on every turn. The client round-trips
+// the same object back — no encoding, no decoding, no `kind` to guess.
 
 const ENDPOINT = '/api/weatherAgentStateless';
 
@@ -31,18 +32,18 @@ export default function ClientState() {
     [agent.messages]
   );
 
-  // For the state inspector: decode the continuation token to show the
-  // raw client-side state blob being round-tripped.
-  const stateDisplay = agent.continuationId
-    ? (decodeStateBlob(agent.continuationId) ??
-      '(server-stored agent — no state blob)')
+  // Show the structured continuation as-is. No decoding step.
+  const stateDisplay = agent.continuation
+    ? agent.continuation.kind === 'state'
+      ? JSON.stringify(agent.continuation.state, null, 2)
+      : '(server-stored agent — no state blob)'
     : '(no state yet — first turn will create it)';
 
   return (
     <div className="client-state-layout">
       <ChatUI
         title="Client-Managed Weather Chat — v2"
-        description="Stateless agent. The v2 continuationId encodes the state blob client-side. Round-trip is one opaque string."
+        description="Stateless agent. The structured continuation carries the full state inline as `{ kind: 'state', state: ... }`. Round-trip is one object."
         suggestions={[
           'What is the weather like in London?',
           'Is it sunny in Tokyo right now?',
@@ -53,13 +54,14 @@ export default function ClientState() {
         onSend={handleSend}
       />
       <aside className="state-inspector">
-        <h3>📦 continuationId (client-owned)</h3>
+        <h3>📦 continuation (client-owned)</h3>
         <p className="state-inspector-hint">
-          One opaque token round-trips on every turn via{' '}
-          <code>init.continuationId</code>. For this agent (no server store),
-          it's a base64-encoded state blob (<code>state:...</code> prefix). For
-          server-stored agents, the same field holds a snapshotId (
-          <code>snap:...</code>). Clients don't have to know which.
+          One structured object round-trips on every turn via{' '}
+          <code>init.continuation</code>. For this agent (no server store),
+          it's <code>{`{ kind: 'state', state: {...} }`}</code> with the full
+          session inline. For server-stored agents, it's{' '}
+          <code>{`{ kind: 'snapshot', snapshotId }`}</code>. Clients don't have
+          to know which.
         </p>
         <pre className="state-inspector-json">{stateDisplay}</pre>
       </aside>
@@ -91,13 +93,3 @@ function messageToChatRows(msg: any): ChatMessage[] {
   return rows;
 }
 
-function decodeStateBlob(continuationId: string): string | null {
-  const STATE_PREFIX = 'state:';
-  if (!continuationId.startsWith(STATE_PREFIX)) return null;
-  try {
-    const json = atob(continuationId.slice(STATE_PREFIX.length));
-    return JSON.stringify(JSON.parse(json), null, 2);
-  } catch {
-    return null;
-  }
-}

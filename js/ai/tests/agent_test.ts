@@ -355,10 +355,10 @@ describe('Agent', () => {
       assert.strictEqual(agent.__action.metadata?.agent?.abortable, true);
     });
 
-    it('should round-trip continuationId for client-managed agents (no store)', async () => {
-      // v2: clients round-trip an opaque continuationId; init.state is not
-      // a thing anymore. For client-stored agents the token is a
-      // base64-encoded state blob, transparent to clients.
+    it('should round-trip continuation for client-managed agents (no store)', async () => {
+      // Clients round-trip the structured `continuation` object. For
+      // stateless agents the server returns `{ kind: 'state', state }`
+      // carrying the full session inline; the client just hands it back.
       const registry = new Registry();
 
       const flow = defineCustomAgent<unknown, { foo: string }>(
@@ -385,15 +385,20 @@ describe('Agent', () => {
       }
       const output1 = await session1.output;
       assert.ok(
-        output1.continuationId,
-        'first turn should return continuationId'
+        output1.continuation,
+        'first turn should return continuation'
+      );
+      assert.strictEqual(
+        output1.continuation!.kind,
+        'state',
+        'stateless agent should return a state-kind continuation'
       );
       assert.ok(output1.state, 'first turn should expose read-only state');
       assert.strictEqual((output1.state!.custom as any).foo, 'seeded');
 
-      // Turn 2: round-trip the token; server decodes the state blob.
+      // Turn 2: round-trip the continuation; server reads the inline state.
       const session2 = flow.streamBidi({
-        continuationId: output1.continuationId,
+        continuation: output1.continuation,
       });
       session2.send({
         messages: [{ role: 'user', content: [{ text: 'second' }] }],
@@ -589,10 +594,10 @@ describe('Agent', () => {
       const firstSessionId = output1.state!.sessionId!;
       assert.ok(firstSessionId, 'First turn should have sessionId');
 
-      // Turn 2: round-trip the opaque continuationId (works for both
+      // Turn 2: round-trip the structured continuation (works for both
       // server-stored and client-stored agents).
       const session2 = flow.streamBidi({
-        continuationId: output1.continuationId,
+        continuation: output1.continuation,
       });
       session2.send({
         messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }],
@@ -2303,9 +2308,9 @@ describe('Agent', () => {
         ],
       });
 
-      // Invocation 2: seed with continuationId from invocation 1
+      // Invocation 2: seed with continuation from invocation 1
       const result2 = await runAgent(agent, pm, {
-        init: { continuationId: result1.output.continuationId },
+        init: { continuation: result1.output.continuation },
         inputs: [
           { messages: [{ role: 'user', content: [{ text: 'second' }] }] },
         ],

@@ -80,7 +80,7 @@ export const researchAgent = ai.defineCustomAgent(
       // ── Step 1: Decompose the question ────────────────────────────────
       sendChunk({
         type: 'status',
-        label: 'Decomposing question into sub-topics…',
+        status: { label: 'Decomposing question into sub-topics…' },
       });
 
       const decompose = await ai.generate({
@@ -106,10 +106,12 @@ User question: "${userText}"`,
       for (let i = 0; i < subQuestions.length; i++) {
         const q = subQuestions[i];
         sendChunk({
-          type: 'progress',
-          label: `Researching: ${q}`,
-          current: i + 1,
-          total: subQuestions.length,
+          type: 'status',
+          status: {
+            label: `Researching: ${q}`,
+            current: i + 1,
+            total: subQuestions.length,
+          },
         });
 
         const research = await ai.generate({
@@ -128,7 +130,10 @@ Question: ${q}`,
       }));
 
       // ── Step 3: Synthesize final response ─────────────────────────────
-      sendChunk({ type: 'status', label: 'Synthesizing final response…' });
+      sendChunk({
+        type: 'status',
+        status: { label: 'Synthesizing final response…' },
+      });
 
       const researchContext = subAnswers
         .map(
@@ -160,7 +165,7 @@ Write a clear, cohesive response that integrates all the research findings. Don'
         sess.addMessages([lastMessage]);
       }
 
-      sendChunk({ type: 'status', label: 'Done' });
+      sendChunk({ type: 'status', status: { label: 'Done' } });
     });
 
     return {

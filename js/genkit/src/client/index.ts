@@ -41,6 +41,7 @@
  */
 export {
   walkAgentEvent,
+  type AgentContinuation,
   type AgentEvent,
   type AgentEventHandlers,
   type ModelChunkData,
@@ -58,8 +59,3 @@ export {
   type ToolCallState,
 } from './agent-session.js';
 export { runFlow, streamFlow } from './client.js';
-export {
-  continuationToSnapshotId,
-  encodeSnapshotContinuation,
-  encodeStateContinuation,
-} from './continuation.js';

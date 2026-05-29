@@ -40,8 +40,10 @@
  * ```
  */
 import { runFlow, streamFlow } from './client.js';
-import type { AgentEvent } from './agent-events.js';
+import type { AgentContinuation, AgentEvent } from './agent-events.js';
 import { walkAgentEvent } from './agent-events.js';
+
+export type { AgentContinuation } from './agent-events.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -92,12 +94,16 @@ export interface AgentSessionOptions {
   stateUrl?: string;
   abortUrl?: string;
   /**
-   * If provided, the session immediately fetches the snapshot and
-   * rehydrates state. Accepts either a continuationId (opaque,
-   * preferred) or a raw snapshotId (convenient when the value came from
-   * a URL route param).
+   * If provided, the session immediately fetches the snapshot's state
+   * and rehydrates from it. Accepts the structured continuation handed
+   * back by a prior turn.
    */
-  resumeFromContinuation?: string;
+  resumeFromContinuation?: AgentContinuation;
+  /**
+   * Convenience for URL-route restoration where only a raw snapshotId
+   * is in the route (the common case). Equivalent to passing
+   * `resumeFromContinuation: { kind: 'snapshot', snapshotId }`.
+   */
   resumeFromSnapshotId?: string;
   headers?: Record<string, string>;
 }
@@ -117,8 +123,8 @@ export interface AgentInputBody {
 }
 
 export interface AgentVariant<S = unknown> {
-  /** Continuation token for this branch — pass to `continueFrom` to pick it. */
-  continuationId: string | undefined;
+  /** Structured continuation for this branch — pass to `continueFrom` to pick it. */
+  continuation: AgentContinuation | undefined;
   /** Raw snapshotId convenience (server-stored agents only). */
   snapshotId: string | undefined;
   /** Final assistant message for this branch. */
@@ -128,36 +134,42 @@ export interface AgentVariant<S = unknown> {
     | undefined;
 }
 
-export interface AgentSessionState<S = unknown> {
+export interface AgentSessionState<S = unknown, TStatus = unknown> {
   messages: AgentMessage[];
   artifacts: unknown[];
   customState: S | undefined;
   streamingText: string;
   streamingReasoning: string;
   toolCalls: ToolCall[];
-  statusLabel: string | null;
-  progress: { current: number; total: number; label?: string } | null;
+  /**
+   * Latest application-defined status payload, as emitted by the agent
+   * via `sendChunk({ type: 'status', status })`. Shape is per-agent;
+   * consumers narrow it through the session's `<TStatus>` generic.
+   */
+  status: TStatus | null;
   phase: AgentPhase;
   error: Error | null;
-  /** Opaque token; round-tripping is automatic, exposed for debugging/URL. */
-  continuationId: string | undefined;
+  /** Structured continuation; round-tripped automatically, exposed for debugging. */
+  continuation: AgentContinuation | undefined;
   /**
-   * Derived snapshotId for server-stored agents (extracted from the
-   * continuation token). Undefined when the underlying agent is stateless.
+   * Derived snapshotId for server-stored agents (extracted from
+   * `continuation` when `kind === 'snapshot'`). Undefined when the
+   * underlying agent is stateless. Useful for URL bookmarks.
    */
   snapshotId: string | undefined;
   pendingInterrupt: PendingInterrupt | null;
 }
 
 interface AgentOutputBody<S = unknown> {
-  continuationId?: string;
+  continuation?: AgentContinuation;
+  snapshotId?: string;
   message?: AgentMessage;
   artifacts?: unknown[];
   state?: { messages?: AgentMessage[]; custom?: S; artifacts?: unknown[] };
 }
 
 interface AgentInitBody {
-  continuationId?: string;
+  continuation?: AgentContinuation;
 }
 
 type Listener = () => void;
@@ -166,9 +178,9 @@ type Listener = () => void;
 // Session class
 // ---------------------------------------------------------------------------
 
-export class AgentSession<S = unknown> {
+export class AgentSession<S = unknown, TStatus = unknown> {
   private options: AgentSessionOptions;
-  private state: AgentSessionState<S>;
+  private state: AgentSessionState<S, TStatus>;
   private listeners = new Set<Listener>();
 
   private abortController: AbortController | null = null;
@@ -178,15 +190,15 @@ export class AgentSession<S = unknown> {
   // Generation token bumped on every reset/abort so an in-flight poll cycle
   // started before the reset stops calling notify().
   private pollGen = 0;
-  // Continuations we've already rehydrated this session — avoids re-fetching
+  // SnapshotIds we've already rehydrated this session — avoids re-fetching
   // the snapshot every time the URL pushes a new id mid-conversation.
   private rehydrated = new Set<string>();
   private disposed = false;
 
   constructor(options: AgentSessionOptions) {
     this.options = options;
-    const initial = normalizeResumeToken(options);
-    this.state = makeInitialState<S>(initial);
+    const initial = normalizeResumeContinuation(options);
+    this.state = makeInitialState<S, TStatus>(initial);
     if (initial) {
       void this.rehydrate(initial);
     }
@@ -213,7 +225,7 @@ export class AgentSession<S = unknown> {
    * calls until the next mutation — safe to use with React's
    * `useSyncExternalStore`, Solid's `from()`, etc.
    */
-  getState(): AgentSessionState<S> {
+  getState(): AgentSessionState<S, TStatus> {
     return this.state;
   }
 
@@ -294,7 +306,7 @@ export class AgentSession<S = unknown> {
     this.abortController = null;
     this.clearActivePoll();
     this.rehydrated = new Set();
-    this.state = makeInitialState<S>(undefined);
+    this.state = makeInitialState<S, TStatus>(undefined);
     this.notify();
   }
 
@@ -342,8 +354,8 @@ export class AgentSession<S = unknown> {
     input: AgentInputBody,
     count = 2
   ): Promise<AgentVariant<S>[]> {
-    const init: AgentInitBody = this.state.continuationId
-      ? { continuationId: this.state.continuationId }
+    const init: AgentInitBody = this.state.continuation
+      ? { continuation: this.state.continuation }
       : {};
     const calls = Array.from({ length: count }, () =>
       runFlow<AgentOutputBody<S>, AgentInitBody>({
@@ -355,33 +367,49 @@ export class AgentSession<S = unknown> {
     );
     const outputs = await Promise.all(calls);
     return outputs.map((o) => ({
-      continuationId: o?.continuationId,
-      snapshotId: o?.continuationId
-        ? (extractSnapshotId(o.continuationId) ?? undefined)
-        : undefined,
+      continuation: o?.continuation,
+      snapshotId: o?.snapshotId ?? snapshotIdFromContinuation(o?.continuation),
       message: o?.message,
       state: o?.state,
     }));
   }
 
   /**
-   * Advance the session to a specific continuation or snapshot. Fetches
-   * the snapshot's state and rehydrates `messages` / `customState` /
-   * `artifacts`.
+   * Advance the session to a specific continuation or snapshot. Accepts
+   * the structured continuation (from a `runVariants` result) or a raw
+   * snapshotId for URL-bookmark convenience. Fetches the snapshot's
+   * state and rehydrates `messages` / `customState` / `artifacts`.
    */
-  async continueFrom(continuationOrSnapshotId: string): Promise<void> {
+  async continueFrom(
+    continuationOrSnapshotId: AgentContinuation | string
+  ): Promise<void> {
     if (this.disposed) return;
-    const token = continuationOrSnapshotId.startsWith(SNAP_PREFIX)
-      ? continuationOrSnapshotId
-      : toContinuationToken(continuationOrSnapshotId);
-    const sid = extractSnapshotId(token);
+    const continuation: AgentContinuation =
+      typeof continuationOrSnapshotId === 'string'
+        ? { kind: 'snapshot', snapshotId: continuationOrSnapshotId }
+        : continuationOrSnapshotId;
+    const sid = snapshotIdFromContinuation(continuation);
     this.mutate({
-      continuationId: token,
-      snapshotId: sid ?? undefined,
+      continuation,
+      snapshotId: sid,
     });
-    if (!sid) return;
+    // For 'state' continuations there's nothing to fetch — the state is
+    // already inline. Land at 'done' and let the next submit() use it.
+    if (continuation.kind === 'state') {
+      const state = continuation.state as {
+        messages?: AgentMessage[];
+        artifacts?: unknown[];
+        custom?: S;
+      } | undefined;
+      const patch: Partial<AgentSessionState<S, TStatus>> = { phase: 'done' };
+      if (Array.isArray(state?.messages)) patch.messages = state!.messages;
+      if (Array.isArray(state?.artifacts)) patch.artifacts = state!.artifacts;
+      if (state?.custom !== undefined) patch.customState = state.custom as S;
+      this.mutate(patch);
+      return;
+    }
     try {
-      const status = await this.applySnapshot(sid);
+      const status = await this.applySnapshot(sid!);
       if (this.disposed) return;
       // continueFrom is foreground: a 'pending' snapshot still ends here,
       // since we explicitly want to "land at" this point, not subscribe
@@ -401,7 +429,7 @@ export class AgentSession<S = unknown> {
   // Internals
   // -------------------------------------------------------------------------
 
-  private mutate(patch: Partial<AgentSessionState<S>>): void {
+  private mutate(patch: Partial<AgentSessionState<S, TStatus>>): void {
     this.state = { ...this.state, ...patch };
     this.notify();
   }
@@ -437,7 +465,7 @@ export class AgentSession<S = unknown> {
     });
     if (this.disposed) return undefined;
     const state = snap?.state ?? {};
-    const patch: Partial<AgentSessionState<S>> = {};
+    const patch: Partial<AgentSessionState<S, TStatus>> = {};
     if (Array.isArray(state.messages)) patch.messages = state.messages;
     if (Array.isArray(state.artifacts)) patch.artifacts = state.artifacts;
     if (state.custom !== undefined) patch.customState = state.custom as S;
@@ -451,11 +479,26 @@ export class AgentSession<S = unknown> {
     return snap?.status;
   }
 
-  private async rehydrate(token: string): Promise<void> {
-    if (this.rehydrated.has(token)) return;
+  private async rehydrate(continuation: AgentContinuation): Promise<void> {
+    // `state`-kind rehydration is inline — no fetch needed. The state is
+    // already in the continuation; copy it into session state and land
+    // at 'done'.
+    if (continuation.kind === 'state') {
+      const state = continuation.state as {
+        messages?: AgentMessage[];
+        artifacts?: unknown[];
+        custom?: S;
+      } | undefined;
+      const patch: Partial<AgentSessionState<S, TStatus>> = { phase: 'done' };
+      if (Array.isArray(state?.messages)) patch.messages = state!.messages;
+      if (Array.isArray(state?.artifacts)) patch.artifacts = state!.artifacts;
+      if (state?.custom !== undefined) patch.customState = state.custom as S;
+      this.mutate(patch);
+      return;
+    }
+    const sid = continuation.snapshotId;
+    if (this.rehydrated.has(sid)) return;
     try {
-      const sid = extractSnapshotId(token);
-      if (!sid) return;
       const status = await this.applySnapshot(sid);
       if (this.disposed) return;
       if (status === 'pending') {
@@ -465,16 +508,15 @@ export class AgentSession<S = unknown> {
       } else if (!status || status === 'done') {
         // No status (foreground turn) or already done — sit at 'done'
         // unless applySnapshot already set 'error'.
-        if (this.state.phase !== 'error')
-          this.mutate({ phase: 'done' });
+        if (this.state.phase !== 'error') this.mutate({ phase: 'done' });
       }
-      this.rehydrated.add(token);
+      this.rehydrated.add(sid);
     } catch (e) {
       if (this.disposed) return;
       this.mutate({
         error: e instanceof Error ? e : new Error(String(e)),
       });
-      this.rehydrated.add(token);
+      this.rehydrated.add(sid);
     }
   }
 
@@ -519,15 +561,14 @@ export class AgentSession<S = unknown> {
       streamingText: '',
       streamingReasoning: '',
       toolCalls: [],
-      statusLabel: null,
-      progress: null,
+      status: null,
       error: null,
       pendingInterrupt: null,
       phase: 'streaming',
     });
 
-    const init: AgentInitBody = this.state.continuationId
-      ? { continuationId: this.state.continuationId }
+    const init: AgentInitBody = this.state.continuation
+      ? { continuation: this.state.continuation }
       : {};
 
     const { output: outputPromise, stream } = streamFlow<
@@ -587,16 +628,7 @@ export class AgentSession<S = unknown> {
                 ),
               });
             },
-            onStatus: (s) => this.mutate({ statusLabel: s.label }),
-            onProgress: (p) =>
-              this.mutate({
-                progress: {
-                  current: p.current,
-                  total: p.total,
-                  label: p.label,
-                },
-              }),
-            onPhase: (p) => this.mutate({ statusLabel: p }),
+            onStatus: (s) => this.mutate({ status: s as TStatus }),
             onArtifact: (artifact) => {
               this.mutate({
                 artifacts: [...this.state.artifacts, artifact],
@@ -605,20 +637,22 @@ export class AgentSession<S = unknown> {
             onInterrupt: (irpt) => {
               interruptDetected = irpt;
             },
-            onDetached: ({ continuationId: cid }) => {
+            onDetached: ({ continuation, snapshotId: sid }) => {
               detachedDuringStream = true;
-              if (cid) {
+              if (continuation) {
                 this.mutate({
-                  continuationId: cid,
-                  snapshotId: extractSnapshotId(cid) ?? undefined,
+                  continuation,
+                  snapshotId:
+                    sid ?? snapshotIdFromContinuation(continuation),
                 });
               }
             },
-            onTurnEnd: ({ continuationId: cid }) => {
-              if (cid) {
+            onTurnEnd: ({ continuation, snapshotId: sid }) => {
+              if (continuation) {
                 this.mutate({
-                  continuationId: cid,
-                  snapshotId: extractSnapshotId(cid) ?? undefined,
+                  continuation,
+                  snapshotId:
+                    sid ?? snapshotIdFromContinuation(continuation),
                 });
               }
             },
@@ -628,11 +662,11 @@ export class AgentSession<S = unknown> {
 
         const result = await outputPromise;
 
-        const patch: Partial<AgentSessionState<S>> = {};
-        if (result?.continuationId) {
-          patch.continuationId = result.continuationId;
+        const patch: Partial<AgentSessionState<S, TStatus>> = {};
+        if (result?.continuation) {
+          patch.continuation = result.continuation;
           patch.snapshotId =
-            extractSnapshotId(result.continuationId) ?? undefined;
+            result.snapshotId ?? snapshotIdFromContinuation(result.continuation);
         }
         let nextMessages = this.state.messages;
         let nextArtifacts = this.state.artifacts;
@@ -667,9 +701,7 @@ export class AgentSession<S = unknown> {
         if (detachedDuringStream || input.detach) {
           patch.phase = 'background';
           this.mutate(patch);
-          const sid = result?.continuationId
-            ? extractSnapshotId(result.continuationId)
-            : null;
+          const sid = snapshotIdFromContinuation(result?.continuation);
           if (sid) this.startBackgroundPoll(sid);
           return;
         }
@@ -698,9 +730,9 @@ export class AgentSession<S = unknown> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeInitialState<S>(
-  resumeFromContinuation: string | undefined
-): AgentSessionState<S> {
+function makeInitialState<S, TStatus>(
+  resumeFromContinuation: AgentContinuation | undefined
+): AgentSessionState<S, TStatus> {
   return {
     messages: [],
     artifacts: [],
@@ -708,22 +740,21 @@ function makeInitialState<S>(
     streamingText: '',
     streamingReasoning: '',
     toolCalls: [],
-    statusLabel: null,
-    progress: null,
+    status: null,
     phase: 'idle',
     error: null,
-    continuationId: resumeFromContinuation,
-    snapshotId: resumeFromContinuation
-      ? (extractSnapshotId(resumeFromContinuation) ?? undefined)
-      : undefined,
+    continuation: resumeFromContinuation,
+    snapshotId: snapshotIdFromContinuation(resumeFromContinuation),
     pendingInterrupt: null,
   };
 }
 
-function normalizeResumeToken(opts: AgentSessionOptions): string | undefined {
+function normalizeResumeContinuation(
+  opts: AgentSessionOptions
+): AgentContinuation | undefined {
   if (opts.resumeFromContinuation) return opts.resumeFromContinuation;
   if (opts.resumeFromSnapshotId)
-    return toContinuationToken(opts.resumeFromSnapshotId);
+    return { kind: 'snapshot', snapshotId: opts.resumeFromSnapshotId };
   return undefined;
 }
 
@@ -814,16 +845,13 @@ function mergeArtifacts(a: unknown[], b: unknown[]): unknown[] {
   ];
 }
 
-/** Continuation token format — mirrors `genkit/beta`'s prefixes. */
-const SNAP_PREFIX = 'snap:';
-
-function extractSnapshotId(continuationId?: string): string | null {
-  if (!continuationId) return null;
-  if (continuationId.startsWith(SNAP_PREFIX))
-    return continuationId.slice(SNAP_PREFIX.length);
-  return null;
-}
-
-function toContinuationToken(snapshotId: string): string {
-  return SNAP_PREFIX + snapshotId;
+/**
+ * Convenience: pull the `snapshotId` out of a structured continuation,
+ * or undefined if the continuation is `state`-kind / absent.
+ */
+function snapshotIdFromContinuation(
+  continuation: AgentContinuation | undefined
+): string | undefined {
+  if (!continuation) return undefined;
+  return continuation.kind === 'snapshot' ? continuation.snapshotId : undefined;
 }

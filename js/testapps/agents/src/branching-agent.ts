@@ -49,7 +49,7 @@ export const demonstrateBranching = ai.defineFlow(
       { init: {} }
     );
 
-    const branchPoint = turn1.result.continuationId;
+    const branchPoint = turn1.result.continuation;
 
     const turn2A = await branchingAgent.run(
       {
@@ -57,7 +57,7 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'My name is Bob.' }] },
         ],
       },
-      { init: { continuationId: branchPoint } }
+      { init: { continuation: branchPoint } }
     );
 
     const turn3A = await branchingAgent.run(
@@ -66,7 +66,7 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'What is my name?' }] },
         ],
       },
-      { init: { continuationId: turn2A.result.continuationId } }
+      { init: { continuation: turn2A.result.continuation } }
     );
 
     // Branch B forks from the same branchPoint as branch A.
@@ -76,7 +76,7 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'My name is John.' }] },
         ],
       },
-      { init: { continuationId: branchPoint } }
+      { init: { continuation: branchPoint } }
     );
 
     const turn3B = await branchingAgent.run(
@@ -85,7 +85,7 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'What is my name?' }] },
         ],
       },
-      { init: { continuationId: turn2B.result.continuationId } }
+      { init: { continuation: turn2B.result.continuation } }
     );
 
     return {

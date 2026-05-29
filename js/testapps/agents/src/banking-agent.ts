@@ -97,9 +97,9 @@ export const testBankingAgent = ai.defineFlow(
         },
       };
 
-      // Reattach to the interrupted flow using the continuation token.
+      // Reattach to the interrupted flow using the structured continuation.
       session = bankingAgent.streamBidi({
-        continuationId: output.continuationId,
+        continuation: output.continuation,
       });
 
       // Send the approval back to the flow using resume.respond.

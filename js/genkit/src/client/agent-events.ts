@@ -23,13 +23,28 @@
  * `@genkit-ai/ai`. Kept inlined here so client-only callers don't pull in
  * the AI package.
  */
+/**
+ * Structured continuation handed back to the next turn.
+ *
+ *   `{ kind: 'snapshot', snapshotId }` — server-stored agents (small handle)
+ *   `{ kind: 'state',    state }`      — client-managed agents (inline state)
+ *
+ * Clients round-trip whichever the server returns. The `snapshot` variant
+ * is URL-fit; the `state` variant is not.
+ */
+export type AgentContinuation =
+  | { kind: 'snapshot'; snapshotId: string }
+  | { kind: 'state'; state: unknown };
+
 export type AgentEvent =
   | { type: 'model-chunk'; chunk: ModelChunkData }
-  | { type: 'status'; label: string; key?: string }
-  | { type: 'progress'; label?: string; current: number; total: number }
-  | { type: 'phase'; phase: string }
+  | { type: 'status'; status: unknown }
   | { type: 'artifact-emitted'; artifact: any }
-  | { type: 'snapshot'; snapshotId: string; continuationId: string }
+  | {
+      type: 'snapshot';
+      snapshotId: string;
+      continuation: AgentContinuation;
+    }
   | {
       type: 'interrupt';
       toolCallId: string;
@@ -46,8 +61,16 @@ export type AgentEvent =
       errorCode?: string;
       details?: unknown;
     }
-  | { type: 'detached'; snapshotId: string; continuationId: string }
-  | { type: 'turn-end'; snapshotId?: string; continuationId?: string }
+  | {
+      type: 'detached';
+      snapshotId: string;
+      continuation: AgentContinuation;
+    }
+  | {
+      type: 'turn-end';
+      snapshotId?: string;
+      continuation?: AgentContinuation;
+    }
   | { type: 'error'; errorText: string };
 
 /**
@@ -91,17 +114,16 @@ export interface AgentEventHandlers {
     toolName: string;
     output: unknown;
   }) => void;
-  onStatus?: (status: { label: string; key?: string }) => void;
-  onProgress?: (progress: {
-    label?: string;
-    current: number;
-    total: number;
-  }) => void;
-  onPhase?: (phase: string) => void;
+  /**
+   * Application-defined status payload. Shape is per-agent; consumers
+   * narrow it through their own type parameter (e.g. the React hook's
+   * `<TStatus>` generic).
+   */
+  onStatus?: (status: unknown) => void;
   onArtifact?: (artifact: unknown) => void;
   onSnapshot?: (snapshot: {
     snapshotId: string;
-    continuationId: string;
+    continuation: AgentContinuation;
   }) => void;
   onInterrupt?: (interrupt: {
     toolCallId: string;
@@ -119,9 +141,12 @@ export interface AgentEventHandlers {
   }) => void;
   onDetached?: (detached: {
     snapshotId: string;
-    continuationId: string;
+    continuation: AgentContinuation;
   }) => void;
-  onTurnEnd?: (turn: { snapshotId?: string; continuationId?: string }) => void;
+  onTurnEnd?: (turn: {
+    snapshotId?: string;
+    continuation?: AgentContinuation;
+  }) => void;
   onError?: (error: { errorText: string }) => void;
 }
 
@@ -168,17 +193,7 @@ export function walkAgentEvent(
       return;
     }
     case 'status':
-      handlers.onStatus?.({ label: event.label, key: event.key });
-      return;
-    case 'progress':
-      handlers.onProgress?.({
-        label: event.label,
-        current: event.current,
-        total: event.total,
-      });
-      return;
-    case 'phase':
-      handlers.onPhase?.(event.phase);
+      handlers.onStatus?.(event.status);
       return;
     case 'artifact-emitted':
       handlers.onArtifact?.(event.artifact);
@@ -186,7 +201,7 @@ export function walkAgentEvent(
     case 'snapshot':
       handlers.onSnapshot?.({
         snapshotId: event.snapshotId,
-        continuationId: event.continuationId,
+        continuation: event.continuation,
       });
       return;
     case 'interrupt':
@@ -210,13 +225,13 @@ export function walkAgentEvent(
     case 'detached':
       handlers.onDetached?.({
         snapshotId: event.snapshotId,
-        continuationId: event.continuationId,
+        continuation: event.continuation,
       });
       return;
     case 'turn-end':
       handlers.onTurnEnd?.({
         snapshotId: event.snapshotId,
-        continuationId: event.continuationId,
+        continuation: event.continuation,
       });
       return;
     case 'error':

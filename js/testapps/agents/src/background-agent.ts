@@ -15,7 +15,7 @@
  */
 
 import { z } from 'genkit';
-import { InMemorySessionStore, continuationToSnapshotId } from 'genkit/beta';
+import { InMemorySessionStore } from 'genkit/beta';
 import { ai } from './genkit.js';
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,9 @@ export const testBackgroundAgent = ai.defineFlow(
     });
 
     const output = await session.output;
-    const snapshotId = continuationToSnapshotId(output.continuationId)!;
+    // Server-stored agent: `output.snapshotId` is populated alongside
+    // `output.continuation`. Use it directly for poll/abort calls.
+    const snapshotId = output.snapshotId!;
 
     // Poll until done, failed, or aborted
     let snapshot: any;

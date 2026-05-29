@@ -26,6 +26,7 @@
  */
 import {
   AgentSession,
+  type AgentContinuation,
   type AgentInputBody,
   type AgentMessage,
   type AgentPhase,
@@ -39,6 +40,7 @@ import {
 import { useMemo, useRef, useSyncExternalStore } from 'react';
 
 export type {
+  AgentContinuation,
   AgentInputBody,
   AgentMessage,
   AgentPhase,
@@ -50,8 +52,8 @@ export type {
 
 export type UseGenkitAgentOptions = AgentSessionOptions;
 
-export interface UseGenkitAgentResult<S = unknown>
-  extends AgentSessionState<S> {
+export interface UseGenkitAgentResult<S = unknown, TStatus = unknown>
+  extends AgentSessionState<S, TStatus> {
   submit: (input: AgentInputBody) => void;
   abort: () => Promise<void>;
   reset: () => void;
@@ -61,17 +63,19 @@ export interface UseGenkitAgentResult<S = unknown>
     input: AgentInputBody,
     count?: number
   ) => Promise<AgentVariant<S>[]>;
-  continueFrom: (continuationOrSnapshotId: string) => Promise<void>;
+  continueFrom: (
+    continuationOrSnapshotId: AgentContinuation | string
+  ) => Promise<void>;
 }
 
-export function useGenkitAgent<S = unknown>(
+export function useGenkitAgent<S = unknown, TStatus = unknown>(
   options: UseGenkitAgentOptions
-): UseGenkitAgentResult<S> {
+): UseGenkitAgentResult<S, TStatus> {
   // One session per component instance. `useRef` keeps it stable across
   // re-renders and StrictMode's double-mount cycle.
-  const sessionRef = useRef<AgentSession<S> | null>(null);
+  const sessionRef = useRef<AgentSession<S, TStatus> | null>(null);
   if (sessionRef.current === null) {
-    sessionRef.current = new AgentSession<S>(options);
+    sessionRef.current = new AgentSession<S, TStatus>(options);
   }
   const session = sessionRef.current;
 
