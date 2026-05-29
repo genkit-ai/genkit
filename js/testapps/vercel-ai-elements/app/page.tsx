@@ -17,10 +17,12 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { GenkitChatTransport } from '@genkit-ai/vercel-ai/client';
-import type { UIMessage } from 'ai';
+import {
+  GenkitChatTransport,
+  restartInterrupt,
+} from '@genkit-ai/vercel-ai/client';
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
 import { useCallback, useMemo, useState } from 'react';
-import { flushSync } from 'react-dom';
 
 import {
   Conversation,
@@ -114,8 +116,14 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
     [agent.endpoint]
   );
 
-  const { messages, status, sendMessage, setMessages } = useChat({
+  // `addToolResult` records the user's resolution of an interrupted tool;
+  // `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls`
+  // tells useChat to automatically re-submit (resume) once every pending
+  // tool call has a result. These are AI SDK v6 native HITL primitives — no
+  // manual setMessages/flushSync/phantom-message dance required.
+  const { messages, status, sendMessage, addToolResult } = useChat({
     transport,
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
   });
 
   const handleSubmit = useCallback(
@@ -126,58 +134,38 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
   );
 
   /**
-   * Handle interrupt resolution — when the user approves or rejects an
-   * interrupt, we update the tool part's output and state, then re-send
-   * the messages so the backend can resume.
-   *
-   * We use `flushSync` to ensure React commits the `setMessages` update
-   * synchronously before `sendMessage` reads the messages array. This
-   * avoids a race condition that would occur with `setTimeout`.
-   *
-   * Note: `sendMessage({ text: '' })` appends a phantom empty-text user
-   * message to the conversation. The transport ignores this for resume
-   * payloads — it detects the resolved tool results in the assistant
-   * message and sends a resume request instead.
+   * Resolve a `userApproval` interrupt by supplying the tool's output. The
+   * Genkit agent resumes with the user's decision as the tool response.
    */
-  const handleInterruptResolve = useCallback(
-    (
-      messageId: string,
-      toolCallId: string,
-      toolName: string,
-      approved: boolean
-    ) => {
-      flushSync(() => {
-        setMessages((prev: UIMessage[]) =>
-          prev.map((msg) => {
-            if (msg.id !== messageId) return msg;
-            return {
-              ...msg,
-              parts: msg.parts.map((part) => {
-                const tp = part as unknown as ToolPartLike;
-                if (
-                  part.type === `tool-${toolName}` &&
-                  tp.toolCallId === toolCallId
-                ) {
-                  return {
-                    ...part,
-                    state: 'output-available' as const,
-                    output: {
-                      approved,
-                      feedback: approved ? 'User approved' : 'User rejected',
-                    },
-                  } as typeof part;
-                }
-                return part;
-              }),
-            };
-          })
-        );
+  const handleApproval = useCallback(
+    (toolName: string, toolCallId: string, approved: boolean) => {
+      addToolResult({
+        tool: toolName,
+        toolCallId,
+        output: {
+          approved,
+          feedback: approved ? 'User approved' : 'User rejected',
+        },
       });
-
-      // State is now flushed — safe to trigger resume immediately.
-      sendMessage({ text: '' });
     },
-    [setMessages, sendMessage]
+    [addToolResult]
+  );
+
+  /**
+   * Resolve a restartable interrupt by asking the agent to *re-run* the tool
+   * (rather than supplying a final output). `restartInterrupt()` produces a
+   * marker the Genkit transport turns into a `resume.restart`; any metadata
+   * passed here arrives as the tool's `resumed` argument server-side.
+   */
+  const handleRestart = useCallback(
+    (toolName: string, toolCallId: string) => {
+      addToolResult({
+        tool: toolName,
+        toolCallId,
+        output: restartInterrupt({ confirmedAt: new Date().toISOString() }),
+      });
+    },
+    [addToolResult]
   );
 
   return (
@@ -209,9 +197,15 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
                       const derivedToolName =
                         toolPart.toolName ||
                         part.type.split('-').slice(1).join('-');
-                      const isInterrupt =
-                        derivedToolName === 'userApproval' &&
-                        toolPart.state === 'input-available';
+                      // An interrupt is a tool call that's paused awaiting
+                      // user input (state `input-available`, no output yet).
+                      const isInterrupt = toolPart.state === 'input-available';
+                      // `userApproval` is resolved by supplying a response;
+                      // `getExchangeRate` is resolved by *restarting* the tool.
+                      const isApproval = derivedToolName === 'userApproval';
+                      const isRestartable =
+                        derivedToolName === 'getExchangeRate';
+                      const toolCallId = toolPart.toolCallId ?? '';
 
                       return (
                         <Tool key={i}>
@@ -222,8 +216,8 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
                           <ToolContent>
                             <ToolInput input={toolPart.input} />
 
-                            {/* Interrupt: show approve/reject buttons */}
-                            {isInterrupt && (
+                            {/* Approval interrupt: approve / reject buttons */}
+                            {isInterrupt && isApproval && (
                               <div className="space-y-3">
                                 <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm dark:border-yellow-800 dark:bg-yellow-950">
                                   <p className="font-medium text-yellow-800 dark:text-yellow-200">
@@ -239,10 +233,9 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
                                     type="button"
                                     className="rounded-md border px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted"
                                     onClick={() =>
-                                      handleInterruptResolve(
-                                        message.id,
-                                        toolPart.toolCallId ?? '',
+                                      handleApproval(
                                         derivedToolName,
+                                        toolCallId,
                                         false
                                       )
                                     }>
@@ -252,14 +245,40 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
                                     type="button"
                                     className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
                                     onClick={() =>
-                                      handleInterruptResolve(
-                                        message.id,
-                                        toolPart.toolCallId ?? '',
+                                      handleApproval(
                                         derivedToolName,
+                                        toolCallId,
                                         true
                                       )
                                     }>
                                     Approve
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Restartable interrupt: re-run the tool */}
+                            {isInterrupt && isRestartable && (
+                              <div className="space-y-3">
+                                <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm dark:border-blue-800 dark:bg-blue-950">
+                                  <p className="font-medium text-blue-800 dark:text-blue-200">
+                                    Confirm to continue
+                                  </p>
+                                  <p className="mt-1 text-blue-700 dark:text-blue-300">
+                                    Look up the live exchange rate for{' '}
+                                    {String(toolPart.input?.fromCurrency ?? '')}{' '}
+                                    → {String(toolPart.input?.toCurrency ?? '')}
+                                    ?
+                                  </p>
+                                </div>
+                                <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                                    onClick={() =>
+                                      handleRestart(derivedToolName, toolCallId)
+                                    }>
+                                    Look up rate
                                   </button>
                                 </div>
                               </div>

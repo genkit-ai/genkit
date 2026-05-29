@@ -21,16 +21,21 @@ import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 import type { AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import {
+  asRestartInterrupt,
   extractResolvedToolResults,
   findLastUserMessage,
   mapUIMessageToGenkit,
 } from './mapping.js';
+import type { PendingInterrupt } from './store.js';
 import { InMemorySnapshotStore, type SnapshotStore } from './store.js';
 
+export { restartInterrupt } from './mapping.js';
+export type { ResolvedToolResult, RestartInterruptOutput } from './mapping.js';
 export {
   InMemorySnapshotStore,
   LocalStorageSnapshotStore,
   type ChatSnapshot,
+  type PendingInterrupt,
   type SnapshotStore,
 } from './store.js';
 export type { ChatTransport, UIMessage, UIMessageChunk };
@@ -166,29 +171,71 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
       ? chatSnapshot.previousSnapshotId
       : chatSnapshot.snapshotId;
     const wasInterrupted = chatSnapshot.interrupted ?? false;
+    const pendingInterrupts = chatSnapshot.pendingInterrupts ?? [];
 
     // Detect whether this is an interrupt resume or a normal message.
     // Regeneration never resumes an interrupt — it replays a completed turn.
-    const resolvedTools =
+    //
+    // We only treat resolved tool results as interrupt resolutions when their
+    // `toolCallId` matches a tool request the agent actually paused on. This
+    // prevents an auto-executed tool's output (also `output-available`) from
+    // being misclassified as an interrupt response. If we have no specific
+    // pending refs (older snapshots), fall back to all resolved results.
+    const pendingIds = new Set(pendingInterrupts.map((p) => p.toolCallId));
+    const allResolved =
       wasInterrupted && !isRegenerate
         ? extractResolvedToolResults(messages)
         : [];
+    const resolvedTools =
+      pendingIds.size > 0
+        ? allResolved.filter((tr) => pendingIds.has(tr.toolCallId))
+        : allResolved;
     const isResume = resolvedTools.length > 0 && !!snapshotId;
 
     // Build AgentInput + AgentInit.
     let agentInput: Record<string, unknown>;
     let init: Record<string, unknown>;
 
+    // Tool call ids that were resolved with a user-supplied *response* (not a
+    // restart). Their outputs are already on the client, so the transport
+    // suppresses re-emitting them. Restarted tools, by contrast, re-execute
+    // server-side and produce a *fresh* output that the client must receive.
+    const respondedInterruptIds = new Set<string>();
+
     if (isResume) {
-      agentInput = {
-        resume: {
-          respond: resolvedTools.map((tr) => ({
+      // Split resolutions into restarts (re-run the tool) and responds
+      // (user-supplied output). A single resume turn can carry both.
+      const respond: Array<Record<string, unknown>> = [];
+      const restart: Array<Record<string, unknown>> = [];
+      for (const tr of resolvedTools) {
+        const asRestart = asRestartInterrupt(tr.result);
+        if (asRestart) {
+          // A restart re-runs the tool with the *original* input (the server
+          // validates it matches the interrupted request exactly) and passes
+          // any metadata through as the tool's `resumed` value.
+          restart.push({
+            toolRequest: {
+              name: tr.toolName,
+              ref: tr.toolCallId,
+              input: tr.input,
+            },
+            metadata: { resumed: asRestart.metadata ?? true },
+          });
+        } else {
+          respondedInterruptIds.add(tr.toolCallId);
+          respond.push({
             toolResponse: {
               name: tr.toolName,
               ref: tr.toolCallId,
               output: tr.result,
             },
-          })),
+          });
+        }
+      }
+      agentInput = {
+        resume: {
+          ...(respond.length > 0 && { respond }),
+          ...(restart.length > 0 && { restart }),
         },
       };
       init = { snapshotId };
@@ -226,11 +273,6 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
       headers: this.resolveHeaders(headers),
       abortSignal,
     });
-
-    // Track resolved interrupt tool IDs so we don't re-emit their outputs.
-    const resolvedInterruptIds = new Set(
-      resolvedTools.map((tr) => tr.toolCallId)
-    );
 
     // References captured by the ReadableStream closure.
     const store = this.store;
@@ -385,9 +427,11 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
                 const tr = part.toolResponse;
                 const toolCallId = correlateToolCallId(tr.name, tr.ref);
 
-                // Skip resolved interrupt responses — the client already has
-                // the result and re-emitting would confuse the UI SDK.
-                if (!resolvedInterruptIds.has(toolCallId)) {
+                // Skip interrupt responses the client already supplied — it
+                // has the result and re-emitting would confuse the UI SDK.
+                // Restarted tools are NOT skipped: they re-execute server-side
+                // and produce a fresh output the client must receive.
+                if (!respondedInterruptIds.has(toolCallId)) {
                   enqueue({
                     type: 'tool-output-available',
                     toolCallId,
@@ -426,21 +470,26 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
           const output = await response.output;
 
           // Detect interrupts — if the last message has unresolved tool
-          // requests, the agent was interrupted.
-          let wasAgentInterrupted = false;
+          // requests, the agent was interrupted. Capture the specific pending
+          // tool requests (ref + name) so the next turn can build a precise
+          // resume payload and ignore unrelated tool outputs in the history.
+          const newPendingInterrupts: PendingInterrupt[] = [];
           const lastMsg = output?.message;
           if (lastMsg?.content) {
-            const pendingToolCalls = lastMsg.content.filter(
-              (p) =>
-                p.toolRequest &&
-                !lastMsg.content.some(
-                  (r) => r.toolResponse?.ref === p.toolRequest?.ref
-                )
-            );
-            if (pendingToolCalls.length > 0) {
-              wasAgentInterrupted = true;
+            for (const p of lastMsg.content) {
+              const ref = p.toolRequest?.ref;
+              const isResolved = lastMsg.content.some(
+                (r) => r.toolResponse?.ref === p.toolRequest?.ref
+              );
+              if (p.toolRequest && ref && !isResolved) {
+                newPendingInterrupts.push({
+                  toolCallId: ref,
+                  toolName: p.toolRequest.name,
+                });
+              }
             }
           }
+          const wasAgentInterrupted = newPendingInterrupts.length > 0;
 
           // Persist snapshot bookkeeping for the next turn. On a normal turn
           // the prior `snapshotId` becomes `previousSnapshotId` so a later
@@ -454,6 +503,9 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
                 ? chatSnapshot.previousSnapshotId
                 : chatSnapshot.snapshotId,
               interrupted: wasAgentInterrupted,
+              pendingInterrupts: wasAgentInterrupted
+                ? newPendingInterrupts
+                : [],
             });
           } else {
             // No new snapshot (e.g. interrupt without a fresh id) — preserve
@@ -461,6 +513,9 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
             await store.set(chatId, {
               ...chatSnapshot,
               interrupted: wasAgentInterrupted,
+              pendingInterrupts: wasAgentInterrupted
+                ? newPendingInterrupts
+                : [],
             });
           }
         } catch (err: unknown) {

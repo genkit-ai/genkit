@@ -125,8 +125,87 @@ export function mapUIMessageToGenkit(msg: UIMessage): MessageData {
 }
 
 // ---------------------------------------------------------------------------
+// Interrupt restart support
+// ---------------------------------------------------------------------------
+
+/**
+ * Marker placed on a tool output to signal that the user chose to *restart*
+ * (re-run) an interrupted tool rather than supply a final response.
+ *
+ * `Symbol.for` is intentionally avoided because tool outputs are serialized to
+ * JSON before reaching the transport; a string marker survives that round-trip.
+ */
+const RESTART_MARKER = '__genkitVercelAiRestart__';
+
+/**
+ * The serialized shape produced by {@link restartInterrupt}.
+ */
+export interface RestartInterruptOutput {
+  [RESTART_MARKER]: true;
+  /**
+   * Optional metadata surfaced to the tool as its `resumed` argument when it
+   * re-runs server-side. Defaults to `true` when omitted.
+   */
+  metadata?: unknown;
+}
+
+/**
+ * Builds a tool output that instructs the Genkit agent to **restart** (re-run)
+ * an interrupted tool instead of accepting a user-supplied response.
+ *
+ * Pass the result to the AI SDK's `addToolResult` as the tool `output`:
+ *
+ * ```tsx
+ * addToolResult({
+ *   tool: 'userApproval',
+ *   toolCallId,
+ *   output: restartInterrupt({ note: 'user revised the request' }),
+ * });
+ * ```
+ *
+ * The transport detects this marker and emits a `resume.restart` entry (with
+ * the original tool input, which the server requires to match exactly) instead
+ * of a `resume.respond` entry. Any `metadata` is passed through to the tool as
+ * its `resumed` value.
+ */
+export function restartInterrupt(metadata?: unknown): RestartInterruptOutput {
+  return metadata === undefined
+    ? { [RESTART_MARKER]: true }
+    : { [RESTART_MARKER]: true, metadata };
+}
+
+/**
+ * Returns the restart payload if `output` was produced by
+ * {@link restartInterrupt}, otherwise `undefined`.
+ */
+export function asRestartInterrupt(
+  output: unknown
+): RestartInterruptOutput | undefined {
+  if (
+    output &&
+    typeof output === 'object' &&
+    (output as Record<string, unknown>)[RESTART_MARKER] === true
+  ) {
+    return output as RestartInterruptOutput;
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * A resolved tool invocation extracted from the frontend message history.
+ */
+export interface ResolvedToolResult {
+  toolCallId: string;
+  toolName: string;
+  /** The original tool input (needed to build a `resume.restart`). */
+  input: unknown;
+  /** The user-supplied output (or a {@link restartInterrupt} marker). */
+  result: unknown;
+}
 
 /**
  * Extracts resolved tool invocations from a UIMessage array.
@@ -134,21 +213,22 @@ export function mapUIMessageToGenkit(msg: UIMessage): MessageData {
  * Supports the v6 per-tool format (`type === 'tool-<toolName>'`,
  * `state === 'output-available'`).
  *
- * Used to detect interrupt resume submissions from the frontend.
+ * Scans **all** messages (most-recent first) and returns every resolved tool
+ * result, de-duplicated by `toolCallId` (keeping the most recent). The
+ * transport then filters these against the set of pending interrupts so only
+ * the relevant resolutions are sent back as a resume payload — this avoids
+ * misclassifying an auto-executed tool's output as an interrupt response.
  */
 export function extractResolvedToolResults(
   messages: UIMessage[]
-): Array<{ toolCallId: string; toolName: string; result: unknown }> {
-  // Walk backwards to find the last assistant message.
+): ResolvedToolResult[] {
+  const seen = new Set<string>();
+  const results: ResolvedToolResult[] = [];
+
+  // Walk backwards so the most recent resolution for a given toolCallId wins.
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== 'assistant') continue;
-
-    const results: Array<{
-      toolCallId: string;
-      toolName: string;
-      result: unknown;
-    }> = [];
 
     for (const part of msg.parts) {
       // v6 per-tool format: { type: 'tool-<name>', toolCallId,
@@ -162,6 +242,7 @@ export function extractResolvedToolResults(
         part.type.startsWith('tool-') &&
         typeof p.toolCallId === 'string' &&
         p.toolCallId &&
+        !seen.has(p.toolCallId) &&
         p.state === 'output-available' &&
         p.output !== undefined
       ) {
@@ -169,18 +250,18 @@ export function extractResolvedToolResults(
           typeof p.toolName === 'string' && p.toolName
             ? p.toolName
             : part.type.slice('tool-'.length);
+        seen.add(p.toolCallId);
         results.push({
-          toolCallId: p.toolCallId as string,
+          toolCallId: p.toolCallId,
           toolName,
+          input: p.input,
           result: p.output,
         });
       }
     }
-
-    if (results.length > 0) return results;
   }
 
-  return [];
+  return results;
 }
 
 /**

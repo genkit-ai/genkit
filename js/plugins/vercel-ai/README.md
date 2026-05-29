@@ -271,9 +271,65 @@ again from the prior conversation state instead of appending a new turn.
    server-side snapshot without any additional state management.
 4. **Handles interrupts** — when an agent pauses for human input (via
    `defineInterrupt`), the transport detects the pending tool request and
-   sets an internal interrupted flag. On the next `sendMessages` call with
-   resolved tool results, it automatically sends a resume payload instead
-   of a new message.
+   records it. On the next `sendMessages` call with resolved tool results,
+   it automatically sends a `resume` payload instead of a new message.
+
+### Interrupts (human-in-the-loop)
+
+Genkit agents can **pause** mid-run to ask a human for input via
+`defineInterrupt` (or a tool that calls `interrupt()`). When this happens,
+the transport surfaces the paused tool call to `useChat` as a tool part in
+the `input-available` state. There are two ways to resolve it:
+
+1. **Respond** — supply the tool's output directly (the human's decision
+   _is_ the result). This is what a `defineInterrupt` tool expects.
+2. **Restart** — ask the agent to **re-run** the tool server-side, optionally
+   attaching metadata. Useful for tools that `interrupt()` until confirmed and
+   then compute a real result on resume (their `resumed` argument is set).
+
+Both are driven by the AI SDK's native HITL primitives — `addToolResult` plus
+`sendAutomaticallyWhen` — so no manual `setMessages`/`flushSync` is needed:
+
+```tsx
+import { useChat } from '@ai-sdk/react';
+import {
+  GenkitChatTransport,
+  restartInterrupt,
+} from '@genkit-ai/vercel-ai/client';
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
+
+const { messages, addToolResult } = useChat({
+  transport: new GenkitChatTransport({ url: '/api/chat/banking' }),
+  // Auto-resume once every paused tool call has a result.
+  sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+});
+
+// 1. Respond: provide the tool output (resume.respond).
+addToolResult({
+  tool: 'userApproval',
+  toolCallId,
+  output: { approved: true, feedback: 'Looks good' },
+});
+
+// 2. Restart: re-run the tool (resume.restart). The metadata becomes the
+//    tool's `resumed` argument server-side.
+addToolResult({
+  tool: 'getExchangeRate',
+  toolCallId,
+  output: restartInterrupt({ confirmedAt: Date.now() }),
+});
+```
+
+> **Note:** Genkit interrupts map to the AI SDK's `addToolResult` flow, **not**
+> the tool-_approval_ flow (`needsApproval` / `addToolApprovalResponse`). A
+> Genkit interrupt never executes server-side on its own — the value you pass
+> to `addToolResult` _is_ the resolution. Use `restartInterrupt()` when you
+> want the agent to re-run the tool instead of accepting a supplied output.
+
+See the full working example in
+[`js/testapps/vercel-ai-elements`](../../testapps/vercel-ai-elements), which
+demonstrates both the approval (`userApproval`) and restart (`getExchangeRate`)
+flows.
 
 ### Mapping utilities
 

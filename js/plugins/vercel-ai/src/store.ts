@@ -27,6 +27,17 @@
 // store (e.g. {@link LocalStorageSnapshotStore}) to survive reloads.
 
 /**
+ * Identifies a single tool request that the agent paused on (an interrupt)
+ * and is awaiting client resolution for.
+ */
+export interface PendingInterrupt {
+  /** The tool call id (`ref`) of the interrupted tool request. */
+  toolCallId: string;
+  /** The name of the interrupted tool. */
+  toolName: string;
+}
+
+/**
  * Per-chat snapshot bookkeeping tracked by the transport.
  */
 export interface ChatSnapshot {
@@ -40,6 +51,13 @@ export interface ChatSnapshot {
   previousSnapshotId?: string;
   /** Whether the chat is currently paused on an interrupt. */
   interrupted?: boolean;
+  /**
+   * The specific tool requests the agent is currently paused on. The transport
+   * uses these refs to build a precise `resume` payload on the next turn —
+   * sending back *only* the resolved interrupt results and ignoring unrelated
+   * (e.g. auto-executed) tool outputs in the message history.
+   */
+  pendingInterrupts?: PendingInterrupt[];
 }
 
 /**

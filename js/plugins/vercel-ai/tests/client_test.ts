@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   GenkitChatTransport,
   InMemorySnapshotStore,
+  restartInterrupt,
   type ChatSnapshot,
   type SnapshotStore,
   type UIMessageChunk,
@@ -130,12 +131,36 @@ describe('GenkitChatTransport e2e', () => {
       async (input) => ({ temp: 72, condition: 'sunny' })
     );
 
+    // ── Restartable tool ───────────────────────────────────────────────
+    // Interrupts on its first call (asking the user to proceed); once the
+    // user opts to *restart* it, the tool re-runs and — because it is now
+    // `resumed` — returns a real result instead of interrupting again. The
+    // `resumed` metadata supplied by the client is echoed back so tests can
+    // assert it was threaded through.
+    ai.defineTool(
+      {
+        name: 'riskyAction',
+        description: 'Performs an action that must be confirmed via restart',
+        inputSchema: z.object({ target: z.string() }),
+        outputSchema: z.object({
+          done: z.boolean(),
+          resumedWith: z.any().optional(),
+        }),
+      },
+      async (input, { interrupt, resumed }) => {
+        if (!resumed) {
+          interrupt();
+        }
+        return { done: true, resumedWith: resumed };
+      }
+    );
+
     // ── Agent (server-managed with store) ──────────────────────────────
     const store = new InMemorySessionStore();
     const agent = ai.defineAgent({
       name: 'testAgent',
       model: 'programmableModel',
-      tools: [confirmAction, 'getWeather'],
+      tools: [confirmAction, 'getWeather', 'riskyAction'],
       store,
     });
 
@@ -1313,5 +1338,319 @@ describe('GenkitChatTransport e2e', () => {
     // And the snapshot should be retrievable for the next turn.
     const persisted = await store.get('chat-custom-store');
     assert.ok(persisted?.snapshotId, 'Snapshot should be retrievable');
+  });
+
+  // ── Test: Persisted pendingInterrupts identify the paused tool ────────
+
+  it('should persist pendingInterrupts describing the paused tool', async () => {
+    modelHandler = async (_req) => {
+      // Model requests the interrupt tool — the agent pauses on it.
+      return {
+        message: {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'confirmAction',
+                input: { action: 'wire transfer' },
+                ref: 'pending-ref-1',
+              },
+            },
+          ],
+        },
+        finishReason: 'stop',
+      };
+    };
+
+    const inner = new InMemorySnapshotStore();
+    const store: SnapshotStore = {
+      get: (chatId) => inner.get(chatId),
+      set: (chatId, snapshot) => inner.set(chatId, snapshot),
+      delete: (chatId) => inner.delete(chatId),
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+      store,
+    });
+
+    await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-pending',
+        messageId: undefined,
+        messages: [makeUIMessage('user', 'Wire some money')],
+        abortSignal: undefined,
+      })
+    );
+
+    const snapshot = await store.get('chat-pending');
+    assert.strictEqual(
+      snapshot?.interrupted,
+      true,
+      'Chat should be flagged interrupted'
+    );
+    assert.ok(
+      snapshot?.pendingInterrupts,
+      'pendingInterrupts should be persisted'
+    );
+    assert.strictEqual(snapshot!.pendingInterrupts!.length, 1);
+    assert.deepStrictEqual(snapshot!.pendingInterrupts![0], {
+      toolCallId: 'pending-ref-1',
+      toolName: 'confirmAction',
+    });
+  });
+
+  // ── Test: Interrupt → restart re-runs the tool server-side ───────────
+  //
+  // Unlike a plain interrupt response (where the user *supplies* the tool
+  // output), a restart instructs the agent to re-execute the interrupted
+  // tool. The transport detects the `restartInterrupt()` marker and emits a
+  // `resume.restart` entry carrying the original input + metadata.
+
+  it('should restart an interrupted tool via restartInterrupt()', async () => {
+    let callCount = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    modelHandler = async (req, sendChunk) => {
+      callCount++;
+      capturedRequests.push(JSON.parse(JSON.stringify(req)));
+
+      if (callCount === 1) {
+        // Model asks to run the restartable tool, which interrupts.
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'riskyAction',
+                  input: { target: 'prod-db' },
+                  ref: 'risky-ref-1',
+                },
+              },
+            ],
+          },
+          finishReason: 'stop',
+        };
+      }
+
+      // After the tool re-runs (restart) the model produces final text.
+      sendChunk({ content: [{ text: 'Action completed.' }] });
+      return {
+        message: { role: 'model', content: [{ text: 'Action completed.' }] },
+        finishReason: 'stop',
+      };
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+    });
+
+    // ── Phase 1: triggers the interrupt ──────────────────────────────
+    const chunks1 = await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-restart',
+        messageId: undefined,
+        messages: [makeUIMessage('user', 'Run the risky action')],
+        abortSignal: undefined,
+      })
+    );
+    assert.strictEqual(chunksOfType(chunks1, 'error').length, 0);
+    assert.strictEqual(chunksOfType(chunks1, 'tool-input-start').length, 1);
+    assert.strictEqual(
+      chunksOfType(chunks1, 'tool-output-available').length,
+      0,
+      'Interrupt should not produce a tool output'
+    );
+
+    // ── Phase 2: resolve via restart ─────────────────────────────────
+    // The user opts to restart the tool with some metadata. The output
+    // carries the restart marker via restartInterrupt().
+    const messagesForRestart: UIMessage[] = [
+      makeUIMessage('user', 'Run the risky action'),
+      {
+        id: 'assistant-restart-1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-riskyAction',
+            toolCallId: 'risky-ref-1',
+            state: 'output-available',
+            input: { target: 'prod-db' },
+            output: restartInterrupt({ confirmedBy: 'user' }),
+          } as UIMessage['parts'][number],
+        ],
+      },
+    ];
+
+    const chunks2 = await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-restart',
+        messageId: undefined,
+        messages: messagesForRestart,
+        abortSignal: undefined,
+      })
+    );
+
+    assert.strictEqual(chunksOfType(chunks2, 'error').length, 0);
+
+    // The restarted tool re-runs server-side and produces a real output.
+    const toolOutputs = chunksOfType(chunks2, 'tool-output-available');
+    assert.strictEqual(
+      toolOutputs.length,
+      1,
+      'Restarted tool should produce a real output'
+    );
+    assert.strictEqual((toolOutputs[0].output as any).done, true);
+    // The metadata supplied to restartInterrupt() is threaded to `resumed`.
+    assert.deepStrictEqual((toolOutputs[0].output as any).resumedWith, {
+      confirmedBy: 'user',
+    });
+
+    // The model then produced its final text.
+    const textDeltas2 = chunksOfType(chunks2, 'text-delta');
+    assert.strictEqual(textDeltas2.length, 1);
+    assert.strictEqual(textDeltas2[0].delta, 'Action completed.');
+
+    assert.strictEqual(callCount, 2);
+  });
+
+  // ── Test: Precise filtering ignores auto-executed tool outputs ───────
+  //
+  // When an assistant turn contains BOTH a real interrupt and an unrelated
+  // (already auto-executed) tool output, the resume must send back only the
+  // interrupt's resolution — not the auto-executed tool's output.
+
+  it('should only resume the pending interrupt, ignoring auto-executed tool outputs', async () => {
+    let callCount = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    modelHandler = async (req, sendChunk) => {
+      callCount++;
+      capturedRequests.push(JSON.parse(JSON.stringify(req)));
+
+      if (callCount === 1) {
+        // The model asks to run getWeather (auto-executed) AND confirmAction
+        // (an interrupt). Only confirmAction pauses the agent.
+        const toolContent = [
+          {
+            toolRequest: {
+              name: 'getWeather',
+              input: { city: 'Paris' },
+              ref: 'weather-ref',
+            },
+          },
+        ];
+        sendChunk({ content: toolContent });
+        return {
+          message: { role: 'model', content: toolContent },
+          finishReason: 'stop',
+        };
+      }
+
+      if (callCount === 2) {
+        // After getWeather runs, the model now triggers the interrupt.
+        return {
+          message: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  name: 'confirmAction',
+                  input: { action: 'book trip' },
+                  ref: 'confirm-ref',
+                },
+              },
+            ],
+          },
+          finishReason: 'stop',
+        };
+      }
+
+      // After resume, final reply.
+      sendChunk({ content: [{ text: 'All set.' }] });
+      return {
+        message: { role: 'model', content: [{ text: 'All set.' }] },
+        finishReason: 'stop',
+      };
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+    });
+
+    // Phase 1: produces an auto-executed getWeather output AND an interrupt.
+    await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-precise',
+        messageId: undefined,
+        messages: [makeUIMessage('user', 'Book a trip to Paris')],
+        abortSignal: undefined,
+      })
+    );
+
+    // Phase 2: resume. The history carries the resolved interrupt AND the
+    // already-resolved getWeather output. Only the interrupt should resume.
+    const messagesForResume: UIMessage[] = [
+      makeUIMessage('user', 'Book a trip to Paris'),
+      {
+        id: 'assistant-mixed-1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-getWeather',
+            toolCallId: 'weather-ref',
+            state: 'output-available',
+            input: { city: 'Paris' },
+            output: { temp: 72, condition: 'sunny' },
+          } as UIMessage['parts'][number],
+          {
+            type: 'tool-confirmAction',
+            toolCallId: 'confirm-ref',
+            state: 'output-available',
+            input: { action: 'book trip' },
+            output: { confirmed: true },
+          } as UIMessage['parts'][number],
+        ],
+      },
+    ];
+
+    const chunks = await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-precise',
+        messageId: undefined,
+        messages: messagesForResume,
+        abortSignal: undefined,
+      })
+    );
+
+    assert.strictEqual(chunksOfType(chunks, 'error').length, 0);
+    const textDeltas = chunksOfType(chunks, 'text-delta');
+    assert.strictEqual(textDeltas.length, 1);
+    assert.strictEqual(textDeltas[0].delta, 'All set.');
+
+    // The resume request (3rd model call) should carry exactly ONE tool
+    // response (the interrupt), not the auto-executed getWeather output.
+    const resumeReq = capturedRequests[2];
+    const toolMsgs = resumeReq.messages.filter((m: any) => m.role === 'tool');
+    const allToolResponses = toolMsgs.flatMap((m: any) =>
+      m.content.filter((p: any) => p.toolResponse)
+    );
+    const confirmResponses = allToolResponses.filter(
+      (p: any) => p.toolResponse?.name === 'confirmAction'
+    );
+    assert.strictEqual(
+      confirmResponses.length,
+      1,
+      'Should resume the confirmAction interrupt exactly once'
+    );
+    assert.deepStrictEqual(confirmResponses[0].toolResponse?.output, {
+      confirmed: true,
+    });
   });
 });

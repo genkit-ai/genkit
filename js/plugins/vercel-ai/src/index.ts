@@ -21,11 +21,15 @@ export {
   findLastUserMessage,
   mapUIMessageToGenkit,
   mapUIPartToGenkit,
+  restartInterrupt,
+  type ResolvedToolResult,
+  type RestartInterruptOutput,
 } from './mapping.js';
 
 export {
   InMemorySnapshotStore,
   LocalStorageSnapshotStore,
   type ChatSnapshot,
+  type PendingInterrupt,
   type SnapshotStore,
 } from './store.js';
