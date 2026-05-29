@@ -39,27 +39,16 @@ export default function WeatherChat() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  // Translate a snapshotId from the URL into a v2 continuation token.
-  const resumeFromContinuation = urlSnapshotId
-    ? `v1:${urlSnapshotId}`
-    : undefined;
-
   const agent = useGenkitAgent({
     url: ENDPOINT,
-    resumeFromContinuation,
+    resumeFromSnapshotId: urlSnapshotId,
   });
 
-  // Push the snapshot back to the URL when it changes, so the page is
-  // bookmarkable.
+  // Push the snapshot back to the URL when it changes (bookmarkable).
   useEffect(() => {
-    if (!agent.continuationId) return;
-    const sid = agent.continuationId.startsWith('v1:')
-      ? agent.continuationId.slice(3)
-      : null;
-    if (!sid) return;
-    if (sid === urlSnapshotId) return;
-    navigate(`/weather/${sid}`, { replace: true });
-  }, [agent.continuationId, urlSnapshotId, navigate]);
+    if (!agent.snapshotId || agent.snapshotId === urlSnapshotId) return;
+    navigate(`/weather/${agent.snapshotId}`, { replace: true });
+  }, [agent.snapshotId, urlSnapshotId, navigate]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -111,7 +100,7 @@ export default function WeatherChat() {
         loading={agent.phase === 'streaming'}
         onSend={handleSend}
         headerAction={
-          agent.continuationId ? (
+          agent.snapshotId ? (
             <Link to="/weather" className="btn btn-new-session" reloadDocument>
               ✨ New Session
             </Link>
@@ -161,7 +150,10 @@ agent.respondToInterrupt(out);`}</pre>
   );
 }
 
-function messageToChatRows(msg: { role: string; content?: any[] }): ChatMessage[] {
+function messageToChatRows(msg: {
+  role: string;
+  content?: any[];
+}): ChatMessage[] {
   const rows: ChatMessage[] = [];
   const textParts: string[] = [];
   for (const p of msg.content ?? []) {
@@ -180,7 +172,10 @@ function messageToChatRows(msg: { role: string; content?: any[] }): ChatMessage[
     }
   }
   if (textParts.length > 0) {
-    rows.unshift({ role: msg.role as ChatMessage['role'], text: textParts.join('') });
+    rows.unshift({
+      role: msg.role as ChatMessage['role'],
+      text: textParts.join(''),
+    });
   }
   return rows;
 }

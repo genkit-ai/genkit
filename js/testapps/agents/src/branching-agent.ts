@@ -49,7 +49,7 @@ export const demonstrateBranching = ai.defineFlow(
       { init: {} }
     );
 
-    const snapshot1 = turn1.result.snapshotId;
+    const branchPoint = turn1.result.continuationId;
 
     const turn2A = await branchingAgent.run(
       {
@@ -57,10 +57,8 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'My name is Bob.' }] },
         ],
       },
-      { init: { snapshotId: snapshot1 } }
+      { init: { continuationId: branchPoint } }
     );
-
-    const snapshot2A = turn2A.result.snapshotId;
 
     const turn3A = await branchingAgent.run(
       {
@@ -68,19 +66,18 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'What is my name?' }] },
         ],
       },
-      { init: { snapshotId: snapshot2A } }
+      { init: { continuationId: turn2A.result.continuationId } }
     );
 
+    // Branch B forks from the same branchPoint as branch A.
     const turn2B = await branchingAgent.run(
       {
         messages: [
           { role: 'user' as const, content: [{ text: 'My name is John.' }] },
         ],
       },
-      { init: { snapshotId: snapshot1 } }
+      { init: { continuationId: branchPoint } }
     );
-
-    const snapshot2B = turn2B.result.snapshotId;
 
     const turn3B = await branchingAgent.run(
       {
@@ -88,11 +85,11 @@ export const demonstrateBranching = ai.defineFlow(
           { role: 'user' as const, content: [{ text: 'What is my name?' }] },
         ],
       },
-      { init: { snapshotId: snapshot2B } }
+      { init: { continuationId: turn2B.result.continuationId } }
     );
 
     return {
-      snapshotUsedForBranching: snapshot1,
+      branchPoint,
       branchAResponse: turn3A.result.message?.content
         ?.map((c) => c.text || '')
         .join(''),

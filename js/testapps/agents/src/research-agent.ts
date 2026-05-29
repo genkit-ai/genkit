@@ -78,7 +78,10 @@ export const researchAgent = ai.defineCustomAgent(
           : '';
 
       // ── Step 1: Decompose the question ────────────────────────────────
-      sendChunk({ type: 'status', label: 'Decomposing question into sub-topics…' });
+      sendChunk({
+        type: 'status',
+        label: 'Decomposing question into sub-topics…',
+      });
 
       const decompose = await ai.generate({
         model: liteModel,

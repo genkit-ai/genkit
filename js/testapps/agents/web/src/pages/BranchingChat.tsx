@@ -21,7 +21,11 @@ import type {
   Part,
   SessionSnapshot,
 } from 'genkit/beta';
-import { runFlow } from 'genkit/beta/client';
+import {
+  continuationToSnapshotId,
+  encodeSnapshotContinuation,
+  runFlow,
+} from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
@@ -67,7 +71,7 @@ export default function BranchingChat() {
   // raw runFlow path (not the hook) because it issues two parallel calls
   // from the same point — outside the single-stream model the hook owns.
   const continuationRef = useRef<string | undefined>(
-    urlSnapshotId ? `v1:${urlSnapshotId}` : undefined
+    urlSnapshotId ? encodeSnapshotContinuation(urlSnapshotId) : undefined
   );
 
   // ── Restore session from snapshotId on mount ───────────────────────
@@ -99,7 +103,7 @@ export default function BranchingChat() {
           }
           setMessages(restored);
           const sid = snapshot.snapshotId ?? urlSnapshotId;
-          if (sid) continuationRef.current = `v1:${sid}`;
+          if (sid) continuationRef.current = encodeSnapshotContinuation(sid);
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -178,7 +182,7 @@ export default function BranchingChat() {
       if (!variants) return;
 
       const chosen = variants[which];
-      continuationRef.current = `v1:${chosen.snapshotId}`;
+      continuationRef.current = encodeSnapshotContinuation(chosen.snapshotId);
 
       navigate(`/branching/${chosen.snapshotId}`, { replace: true });
 
@@ -189,8 +193,7 @@ export default function BranchingChat() {
   );
 
   function extractSnapshot(continuationId?: string): string | null {
-    if (!continuationId) return null;
-    return continuationId.startsWith('v1:') ? continuationId.slice(3) : null;
+    return continuationToSnapshotId(continuationId) ?? null;
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

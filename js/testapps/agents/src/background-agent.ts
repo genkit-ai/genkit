@@ -15,7 +15,7 @@
  */
 
 import { z } from 'genkit';
-import { InMemorySessionStore } from 'genkit/beta';
+import { InMemorySessionStore, continuationToSnapshotId } from 'genkit/beta';
 import { ai } from './genkit.js';
 
 // ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ export const testBackgroundAgent = ai.defineFlow(
     });
 
     const output = await session.output;
-    const snapshotId = output.snapshotId!;
+    const snapshotId = continuationToSnapshotId(output.continuationId)!;
 
     // Poll until done, failed, or aborted
     let snapshot: any;

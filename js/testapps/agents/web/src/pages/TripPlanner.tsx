@@ -22,17 +22,15 @@ export default function TripPlanner() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  const resumeFromContinuation = urlSnapshotId ? `v1:${urlSnapshotId}` : undefined;
-  const agent = useGenkitAgent({ url: ENDPOINT, resumeFromContinuation });
+  const agent = useGenkitAgent({
+    url: ENDPOINT,
+    resumeFromSnapshotId: urlSnapshotId,
+  });
 
   useEffect(() => {
-    if (!agent.continuationId) return;
-    const sid = agent.continuationId.startsWith('v1:')
-      ? agent.continuationId.slice(3)
-      : null;
-    if (!sid || sid === urlSnapshotId) return;
-    navigate(`/trip-planner/${sid}`, { replace: true });
-  }, [agent.continuationId, urlSnapshotId, navigate]);
+    if (!agent.snapshotId || agent.snapshotId === urlSnapshotId) return;
+    navigate(`/trip-planner/${agent.snapshotId}`, { replace: true });
+  }, [agent.snapshotId, urlSnapshotId, navigate]);
 
   const handleSend = (text: string) => {
     if (agent.phase === 'streaming') return;
@@ -59,8 +57,11 @@ export default function TripPlanner() {
         loading={agent.phase === 'streaming'}
         onSend={handleSend}
         headerAction={
-          agent.continuationId ? (
-            <Link to="/trip-planner" className="btn btn-new-session" reloadDocument>
+          agent.snapshotId ? (
+            <Link
+              to="/trip-planner"
+              className="btn btn-new-session"
+              reloadDocument>
               ✨ New Session
             </Link>
           ) : null

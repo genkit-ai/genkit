@@ -85,8 +85,7 @@ export default function BankingInterrupt() {
         streamingText={agent.streamingText}
         loading={agent.phase === 'streaming'}
         onSend={handleSend}
-        inputDisabled={!!interrupt}
-      >
+        inputDisabled={!!interrupt}>
         {interrupt && interrupt.toolName === 'userApproval' && (
           <div className="interrupt-dialog">
             <h3>⚠️ Approval Required</h3>
@@ -130,18 +129,19 @@ export default function BankingInterrupt() {
             <code>userApproval</code> tool fires.
           </li>
           <li>
-            <code>useGenkitAgent</code> surfaces it as <code>pendingInterrupt</code>{' '}
-            with addressable <code>toolCallId</code>, <code>toolName</code>,
-            and <code>input</code>.
+            <code>useGenkitAgent</code> surfaces it as{' '}
+            <code>pendingInterrupt</code> with addressable{' '}
+            <code>toolCallId</code>, <code>toolName</code>, and{' '}
+            <code>input</code>.
           </li>
           <li>
             UI shows the approval dialog. User clicks Approve →{' '}
             <code>agent.respondToInterrupt({'{ approved: true }'})</code>.
           </li>
           <li>
-            The hook constructs the <code>resume.respond</code> payload with
-            the right ref, sends it back to the same agent URL, and
-            continues streaming the result.
+            The hook constructs the <code>resume.respond</code> payload with the
+            right ref, sends it back to the same agent URL, and continues
+            streaming the result.
           </li>
         </ol>
 
@@ -164,7 +164,10 @@ agent.restartInterrupt(metadata);  // for approval-gated tools
   );
 }
 
-function messageToChatRows(msg: { role: string; content?: any[] }): ChatMessage[] {
+function messageToChatRows(msg: {
+  role: string;
+  content?: any[];
+}): ChatMessage[] {
   const rows: ChatMessage[] = [];
   const textParts: string[] = [];
   for (const p of msg.content ?? []) {
@@ -183,7 +186,10 @@ function messageToChatRows(msg: { role: string; content?: any[] }): ChatMessage[
     }
   }
   if (textParts.length > 0) {
-    rows.unshift({ role: msg.role as ChatMessage['role'], text: textParts.join('') });
+    rows.unshift({
+      role: msg.role as ChatMessage['role'],
+      text: textParts.join(''),
+    });
   }
   return rows;
 }

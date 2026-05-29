@@ -16,7 +16,7 @@
 
 import * as fs from 'fs';
 import { z } from 'genkit';
-import { FileSessionStore } from 'genkit/beta';
+import { FileSessionStore, continuationToSnapshotId } from 'genkit/beta';
 import * as path from 'path';
 import { ai, liteModel } from './genkit.js';
 
@@ -55,16 +55,17 @@ export const testFileStoreAgent = ai.defineFlow(
       {}
     );
 
-    const snapshotId1 = turn1.result.snapshotId!;
+    const continuation1 = turn1.result.continuationId!;
+    const snapshotId1 = continuationToSnapshotId(continuation1);
 
-    // Now simulate Turn 2 by resuming from the written File snapshot
+    // Resume from the previous turn using the opaque continuation token.
     const turn2 = await fileStoreAgent.run(
       {
         messages: [
           { role: 'user', content: [{ text: 'What did I study today?' }] },
         ],
       },
-      { init: { snapshotId: snapshotId1 } }
+      { init: { continuationId: continuation1 } }
     );
 
     return {
@@ -99,32 +100,33 @@ export const testFileStoreChainPruningAgent = ai.defineFlow(
       },
       {}
     );
-    const snap1 = turn1.result.snapshotId!;
+    const cont1 = turn1.result.continuationId!;
+    const snap1 = continuationToSnapshotId(cont1)!;
 
-    // Run Turn 2
     const turn2 = await pruningAgent.run(
       {
         messages: [{ role: 'user', content: [{ text: 'Turn 2' }] }],
       },
-      { init: { snapshotId: snap1 } }
+      { init: { continuationId: cont1 } }
     );
-    const snap2 = turn2.result.snapshotId!;
+    const cont2 = turn2.result.continuationId!;
+    const snap2 = continuationToSnapshotId(cont2)!;
 
-    // Run Turn 3
     const turn3 = await pruningAgent.run(
       {
         messages: [{ role: 'user', content: [{ text: 'Turn 3' }] }],
       },
-      { init: { snapshotId: snap2 } }
+      { init: { continuationId: cont2 } }
     );
-    const snap3 = turn3.result.snapshotId!;
+    const cont3 = turn3.result.continuationId!;
+    const snap3 = continuationToSnapshotId(cont3)!;
 
     // Run Turn 4 (Snap 1 should be deleted here since max chain length is 3)
     const turn4 = await pruningAgent.run(
       {
         messages: [{ role: 'user', content: [{ text: 'Turn 4' }] }],
       },
-      { init: { snapshotId: snap3 } }
+      { init: { continuationId: cont3 } }
     );
 
     // Snapshots are stored under <dirPath>/global/<snapshotId>.json
@@ -132,9 +134,8 @@ export const testFileStoreChainPruningAgent = ai.defineFlow(
     const snap1Exists = fs.existsSync(path.join(snapshotDir, `${snap1}.json`));
     const snap2Exists = fs.existsSync(path.join(snapshotDir, `${snap2}.json`));
     const snap3Exists = fs.existsSync(path.join(snapshotDir, `${snap3}.json`));
-    const snap4Exists = fs.existsSync(
-      path.join(snapshotDir, `${turn4.result.snapshotId}.json`)
-    );
+    const snap4 = continuationToSnapshotId(turn4.result.continuationId);
+    const snap4Exists = fs.existsSync(path.join(snapshotDir, `${snap4}.json`));
 
     return {
       snap1Exists,

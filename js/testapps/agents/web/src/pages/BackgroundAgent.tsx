@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
+import { runFlow } from 'genkit/beta/client';
 import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
-import { runFlow } from 'genkit/beta/client';
 import { useGenkitAgent } from '../genkit-react';
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,12 @@ export default function BackgroundAgent() {
   const agent = useGenkitAgent({ url: ENDPOINT });
 
   const handleSubmit = () => {
-    if (!topic.trim() || agent.phase === 'streaming' || agent.phase === 'background') return;
+    if (
+      !topic.trim() ||
+      agent.phase === 'streaming' ||
+      agent.phase === 'background'
+    )
+      return;
     agent.submit({
       messages: [{ role: 'user', content: [{ text: topic.trim() }] }],
       detach: true,
@@ -53,13 +58,9 @@ export default function BackgroundAgent() {
   };
 
   const handleAbort = async () => {
-    if (!agent.continuationId) return;
-    const sid = agent.continuationId.startsWith('v1:')
-      ? agent.continuationId.slice(3)
-      : null;
-    if (!sid) return;
+    if (!agent.snapshotId) return;
     try {
-      await runFlow({ url: ABORT_ENDPOINT, input: sid });
+      await runFlow({ url: ABORT_ENDPOINT, input: agent.snapshotId });
     } catch (e) {
       // Visible via agent.error if polling picks it up; ignore here.
     }
@@ -82,12 +83,16 @@ export default function BackgroundAgent() {
       .join('');
   }, [agent.messages]);
 
-  const snapshotId = agent.continuationId?.startsWith('v1:')
-    ? agent.continuationId.slice(3)
-    : agent.continuationId;
+  const snapshotId = agent.snapshotId;
 
   // Map hook phase to the legacy status names this UI used.
-  const status: 'idle' | 'submitting' | 'pending' | 'done' | 'failed' | 'aborted' =
+  const status:
+    | 'idle'
+    | 'submitting'
+    | 'pending'
+    | 'done'
+    | 'failed'
+    | 'aborted' =
     agent.phase === 'idle'
       ? 'idle'
       : agent.phase === 'streaming'
@@ -128,8 +133,7 @@ export default function BackgroundAgent() {
             <button
               className="btn btn-send"
               onClick={handleSubmit}
-              disabled={!topic.trim() || status === 'submitting'}
-            >
+              disabled={!topic.trim() || status === 'submitting'}>
               {status === 'submitting'
                 ? 'Submitting…'
                 : '🚀 Generate Report (Background)'}
@@ -185,7 +189,9 @@ export default function BackgroundAgent() {
                 Try Again
               </button>
             </div>
-            {agent.error && <p className="background-error">{agent.error.message}</p>}
+            {agent.error && (
+              <p className="background-error">{agent.error.message}</p>
+            )}
           </div>
         )}
       </div>
@@ -210,8 +216,8 @@ export default function BackgroundAgent() {
           </li>
           <li>
             When the snapshot reports <code>status: 'done'</code>, the hook
-            transitions to <code>phase: 'done'</code> with the final
-            messages already in state. The UI renders the report from{' '}
+            transitions to <code>phase: 'done'</code> with the final messages
+            already in state. The UI renders the report from{' '}
             <code>agent.messages</code>.
           </li>
         </ol>

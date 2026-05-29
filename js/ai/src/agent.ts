@@ -94,27 +94,25 @@ export interface AgentInit<S = unknown> {
 }
 
 /**
- * Continuation token format. For server-stored agents this is the snapshotId.
- * For client-stored agents this is a base64-encoded JSON state blob with a
- * version prefix so we can evolve the format.
+ * Continuation token format. The token is opaque to clients; the server
+ * uses the prefix to pick the decode path:
  *
- * Format: `v1:<snapshotId>` | `v1s:<base64(JSON(state))>`
+ *   `snap:<snapshotId>`             — server-stored agents
+ *   `state:<base64(JSON(state))>`   — client-stored agents
+ *
+ * The prefix is a discriminator, not a version. If the format evolves, the
+ * server detects the new shape at decode time.
  */
-const CONT_SNAP_PREFIX = 'v1:';
-const CONT_STATE_PREFIX = 'v1s:';
+const CONT_SNAP_PREFIX = 'snap:';
+const CONT_STATE_PREFIX = 'state:';
 
-/**
- * Encode a snapshotId as a continuation token.
- */
+/** Encode a snapshotId as a continuation token. */
 export function encodeSnapshotContinuation(snapshotId: string): string {
   return CONT_SNAP_PREFIX + snapshotId;
 }
 
-/**
- * Encode a client-side state blob as a continuation token.
- */
+/** Encode a client-side state blob as a continuation token. */
 export function encodeStateContinuation(state: unknown): string {
-  // Base64 encode (URL-safe-ish; not crypto, just opaque-ish)
   const json = JSON.stringify(state);
   if (typeof Buffer !== 'undefined') {
     return CONT_STATE_PREFIX + Buffer.from(json, 'utf8').toString('base64');
@@ -128,9 +126,15 @@ export function encodeStateContinuation(state: unknown): string {
  */
 export function decodeContinuation(
   token: string
-): { kind: 'snapshot'; snapshotId: string } | { kind: 'state'; state: unknown } | null {
+):
+  | { kind: 'snapshot'; snapshotId: string }
+  | { kind: 'state'; state: unknown }
+  | null {
   if (token.startsWith(CONT_SNAP_PREFIX)) {
-    return { kind: 'snapshot', snapshotId: token.slice(CONT_SNAP_PREFIX.length) };
+    return {
+      kind: 'snapshot',
+      snapshotId: token.slice(CONT_SNAP_PREFIX.length),
+    };
   }
   if (token.startsWith(CONT_STATE_PREFIX)) {
     try {
@@ -145,6 +149,18 @@ export function decodeContinuation(
     }
   }
   return null;
+}
+
+/**
+ * Server-internal convenience: extract the snapshotId from a snap-token,
+ * or return undefined if the token is state-shaped or malformed. Useful
+ * for code that needs to call `agent.getSnapshotData(...)` or compose
+ * filesystem paths from a continuationId received from a client.
+ */
+export function continuationToSnapshotId(token?: string): string | undefined {
+  if (!token) return undefined;
+  const decoded = decodeContinuation(token);
+  return decoded?.kind === 'snapshot' ? decoded.snapshotId : undefined;
 }
 
 /**
@@ -863,10 +879,11 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           if (!runner.isDetached) {
             arg.sendChunk({
               type: 'turn-end',
-              ...(config.store && snapshotId && {
-                snapshotId,
-                continuationId: encodeSnapshotContinuation(snapshotId),
-              }),
+              ...(config.store &&
+                snapshotId && {
+                  snapshotId,
+                  continuationId: encodeSnapshotContinuation(snapshotId),
+                }),
             });
           }
         },
@@ -963,18 +980,25 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     registry,
     {
       name: config.name,
-      description: `Gets snapshot data for ${config.name} by snapshotId`,
+      description: `Gets snapshot data for ${config.name}. Accepts a raw snapshotId (server-internal callers) or a continuationId (clients).`,
       actionType: 'agent-snapshot',
       inputSchema: z.string(),
-      outputSchema: z.any(), // SessionSnapshot Schema
+      outputSchema: z.any(),
     },
-    async (snapshotId) => {
+    async (token) => {
       if (!config.store) {
         throw new GenkitError({
           status: 'FAILED_PRECONDITION',
           message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
+      // Accept either a raw snapshotId (server-internal) or a continuationId
+      // (clients). Decode the continuation token if it has the snap: prefix;
+      // otherwise treat as a raw snapshotId for backwards compatibility with
+      // any direct API caller that already has one.
+      const snapshotId = token.startsWith(CONT_SNAP_PREFIX)
+        ? token.slice(CONT_SNAP_PREFIX.length)
+        : token;
       const snapshot = await config.store.getSnapshot(snapshotId, {
         context: getContext(),
       });

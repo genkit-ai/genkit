@@ -65,7 +65,10 @@ export default function WorkspaceBuilder() {
             <div key={i} className="artifact">
               <div className="artifact-name">{a.name}</div>
               <pre className="artifact-content">
-                {a.parts?.filter((p) => p.text).map((p) => p.text).join('\n')}
+                {a.parts
+                  ?.filter((p) => p.text)
+                  .map((p) => p.text)
+                  .join('\n')}
               </pre>
             </div>
           ))

@@ -1,11 +1,27 @@
 /**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
  * Generic React hook over `streamFlow`. Makes no assumptions about chunk
  * shape — works with any flow's `streamSchema`. For agents specifically,
  * use `useGenkitAgent` which derives `text`, `toolCalls`, `interrupts`,
  * `phase`, etc. on top of this.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
 import { streamFlow } from 'genkit/beta/client';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type StreamStatus = 'idle' | 'streaming' | 'done' | 'error';
 
@@ -14,7 +30,12 @@ export interface UseGenkitStreamOptions {
   headers?: Record<string, string>;
 }
 
-export interface UseGenkitStreamResult<I = unknown, O = unknown, S = unknown, Init = unknown> {
+export interface UseGenkitStreamResult<
+  I = unknown,
+  O = unknown,
+  S = unknown,
+  Init = unknown,
+> {
   output: O | null;
   chunks: S[];
   status: StreamStatus;
@@ -24,9 +45,12 @@ export interface UseGenkitStreamResult<I = unknown, O = unknown, S = unknown, In
   reset: () => void;
 }
 
-export function useGenkitStream<I = unknown, O = unknown, S = unknown, Init = unknown>(
-  options: UseGenkitStreamOptions
-): UseGenkitStreamResult<I, O, S, Init> {
+export function useGenkitStream<
+  I = unknown,
+  O = unknown,
+  S = unknown,
+  Init = unknown,
+>(options: UseGenkitStreamOptions): UseGenkitStreamResult<I, O, S, Init> {
   const { url, headers } = options;
   const [output, setOutput] = useState<O | null>(null);
   const [chunks, setChunks] = useState<S[]>([]);

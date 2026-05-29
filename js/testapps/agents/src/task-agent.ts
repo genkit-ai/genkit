@@ -195,13 +195,9 @@ export const testTaskAgent = ai.defineFlow(
         messages: [{ role: 'user' as const, content: [{ text }] }],
       },
       {
-        init: {
-          state: {
-            custom: { tasks: [], nextId: 1 } as TaskState,
-            messages: [],
-            artifacts: [],
-          },
-        },
+        // Tools self-initialize their custom state shape on first turn;
+        // no need to pre-seed it from the client.
+        init: {},
         onChunk: sendChunk,
       }
     );

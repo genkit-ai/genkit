@@ -34,7 +34,8 @@ export default function ClientState() {
   // For the state inspector: decode the continuation token to show the
   // raw client-side state blob being round-tripped.
   const stateDisplay = agent.continuationId
-    ? decodeStateBlob(agent.continuationId) ?? '(server-stored agent — no state blob)'
+    ? (decodeStateBlob(agent.continuationId) ??
+      '(server-stored agent — no state blob)')
     : '(no state yet — first turn will create it)';
 
   return (
@@ -56,9 +57,9 @@ export default function ClientState() {
         <p className="state-inspector-hint">
           One opaque token round-trips on every turn via{' '}
           <code>init.continuationId</code>. For this agent (no server store),
-          it's a base64-encoded state blob (<code>v1s:...</code> prefix). For
+          it's a base64-encoded state blob (<code>state:...</code> prefix). For
           server-stored agents, the same field holds a snapshotId (
-          <code>v1:...</code>). Clients don't have to know which.
+          <code>snap:...</code>). Clients don't have to know which.
         </p>
         <pre className="state-inspector-json">{stateDisplay}</pre>
       </aside>
@@ -91,10 +92,10 @@ function messageToChatRows(msg: any): ChatMessage[] {
 }
 
 function decodeStateBlob(continuationId: string): string | null {
-  if (!continuationId.startsWith('v1s:')) return null;
+  const STATE_PREFIX = 'state:';
+  if (!continuationId.startsWith(STATE_PREFIX)) return null;
   try {
-    const b64 = continuationId.slice(4);
-    const json = atob(b64);
+    const json = atob(continuationId.slice(STATE_PREFIX.length));
     return JSON.stringify(JSON.parse(json), null, 2);
   } catch {
     return null;

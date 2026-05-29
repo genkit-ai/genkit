@@ -1,4 +1,20 @@
 /**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
  * `useGenkitAgent` — the headline React hook for the Agents API.
  *
  * Absorbs what every page in the original testapp manually wires:
@@ -14,9 +30,9 @@
  *   - Custom state (typed via the agent's stateSchema)
  *   - Artifact collection
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { streamFlow, runFlow, walkAgentEvent } from 'genkit/beta/client';
 import type { AgentEvent } from 'genkit/beta/client';
+import { runFlow, streamFlow, walkAgentEvent } from 'genkit/beta/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export type ToolCallState = 'call' | 'result' | 'error';
 export interface ToolCall<I = unknown, O = unknown> {
@@ -57,8 +73,14 @@ export interface UseGenkitAgentOptions {
   url: string;
   stateUrl?: string;
   abortUrl?: string;
-  /** If provided on mount, hook fetches the snapshot and rehydrates state. */
+  /**
+   * If provided on mount, hook fetches the snapshot and rehydrates state.
+   * Accepts either a continuationId (opaque, preferred) or a raw snapshotId
+   * (convenient when the value came from a URL route param).
+   */
   resumeFromContinuation?: string;
+  /** Alias for `resumeFromContinuation` when you have a raw snapshotId from the URL. */
+  resumeFromSnapshotId?: string;
   headers?: Record<string, string>;
 }
 
@@ -73,7 +95,15 @@ export interface UseGenkitAgentResult<S = unknown> {
   progress: { current: number; total: number; label?: string } | null;
   phase: AgentPhase;
   error: Error | null;
+  /** Opaque token to round-trip; round-tripping is automatic, this is only exposed for debugging. */
   continuationId: string | undefined;
+  /**
+   * Derived snapshotId for server-stored agents (extracted from the
+   * continuation token). Useful for URL bookmarks and for direct calls to
+   * `/state` / `/abort` endpoints. Undefined when the underlying agent is
+   * stateless (`state:` token).
+   */
+  snapshotId: string | undefined;
   pendingInterrupt: PendingInterrupt | null;
   respondToInterrupt: (output: unknown) => void;
   restartInterrupt: (metadata?: unknown) => void;
@@ -110,8 +140,15 @@ interface AgentInitBody {
 export function useGenkitAgent<S = unknown>(
   options: UseGenkitAgentOptions
 ): UseGenkitAgentResult<S> {
-  const { url, resumeFromContinuation, headers } = options;
+  const { url, headers } = options;
   const stateUrl = options.stateUrl ?? `${url}/state`;
+  // Accept either a full continuation token or a raw snapshotId; coerce
+  // to a continuation token internally.
+  const resumeFromContinuation = options.resumeFromContinuation
+    ? options.resumeFromContinuation
+    : options.resumeFromSnapshotId
+      ? toContinuationToken(options.resumeFromSnapshotId)
+      : undefined;
 
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [artifacts, setArtifacts] = useState<any[]>([]);
@@ -120,9 +157,11 @@ export function useGenkitAgent<S = unknown>(
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
-  const [progress, setProgress] = useState<
-    { current: number; total: number; label?: string } | null
-  >(null);
+  const [progress, setProgress] = useState<{
+    current: number;
+    total: number;
+    label?: string;
+  } | null>(null);
   const [phase, setPhase] = useState<AgentPhase>('idle');
   const [error, setError] = useState<Error | null>(null);
 
@@ -132,9 +171,8 @@ export function useGenkitAgent<S = unknown>(
   const continuationRef = useRef<string | undefined>(resumeFromContinuation);
   continuationRef.current = continuationId;
 
-  const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(
-    null
-  );
+  const [pendingInterrupt, setPendingInterrupt] =
+    useState<PendingInterrupt | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -341,7 +379,9 @@ export function useGenkitAgent<S = unknown>(
             setArtifacts(result.state.artifacts as any[]);
           }
           if (Array.isArray(result?.artifacts)) {
-            setArtifacts((prev) => mergeArtifacts(prev, result.artifacts as any[]));
+            setArtifacts((prev) =>
+              mergeArtifacts(prev, result.artifacts as any[])
+            );
           }
 
           if (detachedDuringStream || input.detach) {
@@ -418,6 +458,11 @@ export function useGenkitAgent<S = unknown>(
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  const snapshotId = useMemo(
+    () => extractSnapshotId(continuationId) ?? undefined,
+    [continuationId]
+  );
+
   return useMemo<UseGenkitAgentResult<S>>(
     () => ({
       messages,
@@ -431,6 +476,7 @@ export function useGenkitAgent<S = unknown>(
       phase,
       error,
       continuationId,
+      snapshotId,
       pendingInterrupt,
       respondToInterrupt,
       restartInterrupt,
@@ -450,6 +496,7 @@ export function useGenkitAgent<S = unknown>(
       phase,
       error,
       continuationId,
+      snapshotId,
       pendingInterrupt,
       respondToInterrupt,
       restartInterrupt,
@@ -465,7 +512,16 @@ function mergeArtifacts(a: any[], b: any[]): any[] {
   return [...a, ...b.filter((x) => !x?.name || !seen.has(x.name))];
 }
 
-function extractSnapshotId(continuationId: string): string | null {
-  if (continuationId.startsWith('v1:')) return continuationId.slice(3);
+/** Continuation token format — mirrors `genkit/beta`'s prefixes. */
+const SNAP_PREFIX = 'snap:';
+
+function extractSnapshotId(continuationId?: string): string | null {
+  if (!continuationId) return null;
+  if (continuationId.startsWith(SNAP_PREFIX))
+    return continuationId.slice(SNAP_PREFIX.length);
   return null;
+}
+
+function toContinuationToken(snapshotId: string): string {
+  return SNAP_PREFIX + snapshotId;
 }

@@ -24,7 +24,12 @@ import type {
   SessionState,
   ToolRequest,
 } from 'genkit/beta';
-import { runFlow, streamFlow } from 'genkit/beta/client';
+import {
+  continuationToSnapshotId,
+  encodeSnapshotContinuation,
+  runFlow,
+  streamFlow,
+} from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
@@ -296,7 +301,7 @@ export default function CodingAgent() {
       // v2: round-trip the opaque continuationId. Server decodes it into
       // the right internal handle (snapshotId for this server-stored agent).
       const init: AgentInit = snapshotIdRef.current
-        ? { continuationId: `v1:${snapshotIdRef.current}` }
+        ? { continuationId: encodeSnapshotContinuation(snapshotIdRef.current) }
         : {};
 
       try {
@@ -338,7 +343,7 @@ export default function CodingAgent() {
       ]);
 
       const init: AgentInit = {
-        continuationId: `v1:${currentApproval.snapshotId}`,
+        continuationId: encodeSnapshotContinuation(currentApproval.snapshotId),
       };
       let input: AgentInput;
 
@@ -502,7 +507,7 @@ export default function CodingAgent() {
       ]);
 
       const init: AgentInit = {
-        continuationId: `v1:${currentQuestion.snapshotId}`,
+        continuationId: encodeSnapshotContinuation(currentQuestion.snapshotId),
       };
 
       // Use the respond pattern — send the tool response via resume.respond.
@@ -542,11 +547,9 @@ export default function CodingAgent() {
   // ── Process a result: update session tracking & detect interrupts ────
   function processResult(result: AgentOutput) {
     if (result?.state) stateRef.current = result.state;
-    // v2: decode the continuationId to extract the snapshotId for URL +
+    // Decode the continuationId to extract the snapshotId for URL +
     // interrupt routing. The opaque token comes back on every turn.
-    const sid = result?.continuationId?.startsWith('v1:')
-      ? result.continuationId.slice(3)
-      : undefined;
+    const sid = continuationToSnapshotId(result?.continuationId);
     if (sid) {
       snapshotIdRef.current = sid;
       navigate(`/coding-agent/${sid}`, { replace: true });

@@ -39,10 +39,15 @@
  *
  * @module beta/client
  */
-export { runFlow, streamFlow } from './client.js';
 export {
   walkAgentEvent,
   type AgentEvent,
   type AgentEventHandlers,
   type ModelChunkData,
 } from './agent-events.js';
+export { runFlow, streamFlow } from './client.js';
+export {
+  continuationToSnapshotId,
+  encodeSnapshotContinuation,
+  encodeStateContinuation,
+} from './continuation.js';

@@ -6,22 +6,14 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 /**
- * Client-managed state weather agent — same as the regular weather agent but
- * with NO server-side store. The client owns the session state blob and must
- * echo it back on every subsequent turn via `init: { state }`.
- *
- * This demonstrates that tool-calling and multi-turn work just fine without
- * a server store — the session history lives in the state blob that the
- * client round-trips.
+ * Client-managed-state weather agent. No server-side store: the session
+ * state lives inside the opaque `continuationId` token that the client
+ * round-trips on every turn. Tool calling and multi-turn work the same as
+ * the server-stored variant — clients don't have to know which mode the
+ * server uses.
  */
 
 import { z } from 'genkit';
@@ -30,22 +22,20 @@ import { ai } from './genkit.js';
 // Reuse the same getWeather tool from weather-agent.
 import { getWeather } from './weather-agent.js';
 
-// No store — client-managed state!
 export const weatherAgentStateless = ai.defineAgent({
   name: 'weatherAgentStateless',
   system:
     'You are a helpful weather assistant. Use the getWeather tool to look up weather. Be concise.',
   tools: [getWeather],
-  // No `store` property → stateless. The client must round-trip the `state` blob.
+  // No `store` → stateless. The continuationId encodes the session state.
 });
 
 export const testWeatherAgentStateless = ai.defineFlow(
   {
     name: 'testWeatherAgentStateless',
     inputSchema: z.object({
-      // `state` is the full SessionState returned from a prior turn; omit on
-      // first call. The client owns this blob and must echo it back each turn.
-      state: z.any().optional(),
+      /** Continuation token from a previous turn; omit on first call. */
+      continuationId: z.string().optional(),
       text: z.string().default('What is the weather in Tokyo?'),
     }),
     outputSchema: z.any(),
@@ -56,16 +46,14 @@ export const testWeatherAgentStateless = ai.defineFlow(
         messages: [{ role: 'user' as const, content: [{ text: input.text }] }],
       },
       {
-        init: {
-          // Resume from the state returned by the previous turn, or start fresh.
-          state: input.state,
-        },
+        init: input.continuationId
+          ? { continuationId: input.continuationId }
+          : {},
         onChunk: sendChunk,
       }
     );
-    // Return the updated state so the caller can pass it back on the next turn.
     return {
-      state: res.result.state,
+      continuationId: res.result.continuationId,
       message: res.result.message,
     };
   }

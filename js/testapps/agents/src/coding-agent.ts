@@ -282,7 +282,10 @@ export const testCodingAgent = ai.defineFlow(
         // Respond pattern: provide the tool output directly via resume.respond.
         // The tool never re-executes — we supply the answer as a ToolResponsePart.
         const firstOption = interrupt.input?.options?.[0] || 'Yes';
-        sendChunk({ status: `Auto-answering ask_user: "${firstOption}"` });
+        sendChunk({
+          type: 'status',
+          label: `Auto-answering ask_user: "${firstOption}"`,
+        });
 
         result = await codingAgent.run(
           {
@@ -300,14 +303,17 @@ export const testCodingAgent = ai.defineFlow(
             },
           },
           {
-            init: { snapshotId: result.result.snapshotId },
+            init: { continuationId: result.result.continuationId },
             onChunk: sendChunk,
           }
         );
       } else {
         // Restart pattern: use resume.restart to re-execute the tool with
         // approval metadata (write_file, search_and_replace, run_shell).
-        sendChunk({ status: `Auto-approving tool: ${interrupt.name}` });
+        sendChunk({
+          type: 'status',
+          label: `Auto-approving tool: ${interrupt.name}`,
+        });
 
         result = await codingAgent.run(
           {
@@ -325,7 +331,7 @@ export const testCodingAgent = ai.defineFlow(
             },
           },
           {
-            init: { snapshotId: result.result.snapshotId },
+            init: { continuationId: result.result.continuationId },
             onChunk: sendChunk,
           }
         );

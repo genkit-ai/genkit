@@ -34,7 +34,9 @@ export default function SubAgentChat() {
   const inFlight = useMemo<ChatMessage[]>(() => {
     return agent.toolCalls.map((tc) => {
       const inp = tc.input as { agent?: string; task?: string } | undefined;
-      const out = tc.output as { response?: string; agentName?: string } | undefined;
+      const out = tc.output as
+        | { response?: string; agentName?: string }
+        | undefined;
       if (tc.name === 'call_agent') {
         if (tc.state === 'call' && inp?.agent) {
           return {
@@ -50,8 +52,14 @@ export default function SubAgentChat() {
         }
       }
       return tc.state === 'result'
-        ? { role: 'tool' as const, text: `✅ ${tc.name} → ${JSON.stringify(tc.output)}` }
-        : { role: 'tool' as const, text: `🔧 ${tc.name}(${JSON.stringify(tc.input)})` };
+        ? {
+            role: 'tool' as const,
+            text: `✅ ${tc.name} → ${JSON.stringify(tc.output)}`,
+          }
+        : {
+            role: 'tool' as const,
+            text: `🔧 ${tc.name}(${JSON.stringify(tc.input)})`,
+          };
     });
   }, [agent.toolCalls]);
 
@@ -81,10 +89,10 @@ export default function SubAgentChat() {
           labels for the UI.
         </p>
         <p>
-          A future iteration would emit a distinct{' '}
-          <code>sub-agent-start</code> / <code>sub-agent-event</code> /{' '}
-          <code>sub-agent-end</code> event type so sub-agent activity could be
-          rendered with full nesting (status updates, intermediate artifacts).
+          A future iteration would emit a distinct <code>sub-agent-start</code>{' '}
+          / <code>sub-agent-event</code> / <code>sub-agent-end</code> event type
+          so sub-agent activity could be rendered with full nesting (status
+          updates, intermediate artifacts).
         </p>
       </aside>
     </div>
@@ -97,7 +105,9 @@ function messageToChatRows(msg: any): ChatMessage[] {
   for (const p of msg.content ?? []) {
     if (p.text) textParts.push(p.text);
     if (p.toolRequest) {
-      const inp = p.toolRequest.input as { agent?: string; task?: string } | undefined;
+      const inp = p.toolRequest.input as
+        | { agent?: string; task?: string }
+        | undefined;
       const label =
         p.toolRequest.name === 'call_agent' && inp?.agent
           ? `🤝 Delegated to "${inp.agent}": ${inp.task ?? ''}`

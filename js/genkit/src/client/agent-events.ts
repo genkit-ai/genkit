@@ -55,7 +55,12 @@ export interface ModelChunkData {
   content?: Array<{
     text?: string;
     reasoning?: string;
-    toolRequest?: { name: string; input?: unknown; ref?: string; partial?: boolean };
+    toolRequest?: {
+      name: string;
+      input?: unknown;
+      ref?: string;
+      partial?: boolean;
+    };
     toolResponse?: { name: string; output?: unknown; ref?: string };
     [k: string]: unknown;
   }>;
@@ -104,10 +109,7 @@ export interface AgentEventHandlers {
     snapshotId: string;
     continuationId: string;
   }) => void;
-  onTurnEnd?: (turn: {
-    snapshotId?: string;
-    continuationId?: string;
-  }) => void;
+  onTurnEnd?: (turn: { snapshotId?: string; continuationId?: string }) => void;
   onError?: (error: { errorText: string }) => void;
 }
 
@@ -167,9 +169,7 @@ export function walkAgentEvent(
     case 'artifact-start':
     case 'artifact-delta':
     case 'artifact-complete':
-      handlers.onArtifact?.(
-        'artifact' in event ? event.artifact : event
-      );
+      handlers.onArtifact?.('artifact' in event ? event.artifact : event);
       return;
     case 'snapshot':
       handlers.onSnapshot?.({

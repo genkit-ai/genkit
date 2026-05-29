@@ -59,8 +59,7 @@ export default function ResearchAgent() {
         streamingText={agent.streamingText}
         loading={agent.phase === 'streaming'}
         onSend={handleSend}
-        renderMarkdown
-      >
+        renderMarkdown>
         {statusLine && (
           <div className="research-status-bar">
             <span className="research-status-dot" />

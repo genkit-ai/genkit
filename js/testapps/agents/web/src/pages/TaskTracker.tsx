@@ -92,9 +92,10 @@ export default function TaskTracker() {
               {tasks.map((task) => (
                 <li
                   key={task.id}
-                  className={`task-item ${task.done ? 'task-done' : ''}`}
-                >
-                  <span className="task-checkbox">{task.done ? '✅' : '⬜'}</span>
+                  className={`task-item ${task.done ? 'task-done' : ''}`}>
+                  <span className="task-checkbox">
+                    {task.done ? '✅' : '⬜'}
+                  </span>
                   <span className="task-title">
                     #{task.id}: {task.title}
                   </span>
