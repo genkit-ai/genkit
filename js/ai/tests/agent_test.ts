@@ -355,15 +355,19 @@ describe('Agent', () => {
       assert.strictEqual(agent.__action.metadata?.agent?.abortable, true);
     });
 
-    it('should reject init.state for server-managed agents (store is set)', async () => {
+    it('should round-trip continuationId for client-managed agents (no store)', async () => {
+      // v2: clients round-trip an opaque continuationId; init.state is not
+      // a thing anymore. For client-stored agents the token is a
+      // base64-encoded state blob, transparent to clients.
       const registry = new Registry();
-      const store = new InMemorySessionStore<{ foo: string }>();
 
       const flow = defineCustomAgent<unknown, { foo: string }>(
         registry,
-        { name: 'rejectInitStateTest', store },
+        { name: 'continuationRoundtripTest' },
         async (sess) => {
-          await sess.run(async () => {});
+          await sess.run(async () => {
+            sess.updateCustom(() => ({ foo: 'seeded' }) as { foo: string });
+          });
           return {
             artifacts: [],
             message: { role: 'model', content: [{ text: 'done' }] },
@@ -371,75 +375,42 @@ describe('Agent', () => {
         }
       );
 
-      // Pass init.state — should throw FAILED_PRECONDITION for server-managed agents
-      const session = flow.streamBidi({
-        state: {
-          custom: { foo: 'should-be-rejected' },
-          messages: [{ role: 'user', content: [{ text: 'stale history' }] }],
-          artifacts: [],
-        },
+      // Turn 1: fresh session.
+      const session1 = flow.streamBidi({});
+      session1.send({
+        messages: [{ role: 'user', content: [{ text: 'first' }] }],
       });
-      session.send({
-        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
-      });
-      session.close();
-
-      try {
-        for await (const _ of session.stream) {
-        }
-        await session.output;
-        assert.fail('Expected FAILED_PRECONDITION error');
-      } catch (e: any) {
-        assert.ok(
-          e.message.includes("Cannot send 'state' to agent"),
-          `Expected FAILED_PRECONDITION error, got: ${e.message}`
-        );
-        assert.strictEqual(e.status, 'FAILED_PRECONDITION');
+      session1.close();
+      for await (const _ of session1.stream) {
       }
-    });
-
-    it('should use init.state for client-managed agents (no store)', async () => {
-      const registry = new Registry();
-
-      const flow = defineCustomAgent<unknown, { foo: string }>(
-        registry,
-        { name: 'useInitStateTest' },
-        async (sess) => {
-          await sess.run(async () => {});
-          return {
-            artifacts: [],
-            message: { role: 'model', content: [{ text: 'done' }] },
-          };
-        }
+      const output1 = await session1.output;
+      assert.ok(
+        output1.continuationId,
+        'first turn should return continuationId'
       );
+      assert.ok(output1.state, 'first turn should expose read-only state');
+      assert.strictEqual((output1.state!.custom as any).foo, 'seeded');
 
-      // Pass init.state — it should be used because no store is set
-      const session = flow.streamBidi({
-        state: {
-          custom: { foo: 'seeded' },
-          messages: [{ role: 'user', content: [{ text: 'prior msg' }] }],
-          artifacts: [],
-        },
+      // Turn 2: round-trip the token; server decodes the state blob.
+      const session2 = flow.streamBidi({
+        continuationId: output1.continuationId,
       });
-      session.send({
-        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      session2.send({
+        messages: [{ role: 'user', content: [{ text: 'second' }] }],
       });
-      session.close();
-
-      for await (const _ of session.stream) {
+      session2.close();
+      for await (const _ of session2.stream) {
       }
-      const output = await session.output;
+      const output2 = await session2.output;
 
-      // State should include the seeded state plus the new message
-      assert.ok(output.state);
-      assert.strictEqual((output.state!.custom as any).foo, 'seeded');
-      // Messages: 1 from init.state + 1 from input
-      assert.strictEqual(output.state!.messages!.length, 2);
-      assert.strictEqual(
-        output.state!.messages![0].content[0].text,
-        'prior msg'
-      );
-      assert.strictEqual(output.state!.messages![1].content[0].text, 'hello');
+      // Custom state preserved across the continuation.
+      assert.ok(output2.state);
+      assert.strictEqual((output2.state!.custom as any).foo, 'seeded');
+      // Messages: 1 from turn 1 (user) + 1 from turn 2 (user) = 2 — the
+      // custom agent under test doesn't add model messages to history.
+      assert.strictEqual(output2.state!.messages!.length, 2);
+      assert.strictEqual(output2.state!.messages![0].content[0].text, 'first');
+      assert.strictEqual(output2.state!.messages![1].content[0].text, 'second');
     });
 
     it('should set server stateManagement and abortable=false when store lacks onSnapshotStateChange', () => {
@@ -618,8 +589,11 @@ describe('Agent', () => {
       const firstSessionId = output1.state!.sessionId!;
       assert.ok(firstSessionId, 'First turn should have sessionId');
 
-      // Turn 2: pass state back (client-managed)
-      const session2 = flow.streamBidi({ state: output1.state });
+      // Turn 2: round-trip the opaque continuationId (works for both
+      // server-stored and client-stored agents).
+      const session2 = flow.streamBidi({
+        continuationId: output1.continuationId,
+      });
       session2.send({
         messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }],
       });
@@ -1214,8 +1188,9 @@ describe('Agent', () => {
         chunks.push(chunk);
       }
 
-      // Two turns must have completed.
-      const turnEndChunks = chunks.filter((c) => c.turnEnd !== undefined);
+      // Two turns must have completed. v2 chunk shape: discriminated union
+      // keyed on `type`.
+      const turnEndChunks = chunks.filter((c) => c.type === 'turn-end');
       assert.strictEqual(turnEndChunks.length, 2);
 
       const output = await session.output;
@@ -1231,7 +1206,7 @@ describe('Agent', () => {
       );
 
       // Model chunks must have been emitted for both turns.
-      const modelChunks = chunks.filter((c) => c.modelChunk !== undefined);
+      const modelChunks = chunks.filter((c) => c.type === 'model-chunk');
       assert.ok(
         modelChunks.length >= 2,
         'Expected model chunks from both turns'
@@ -2328,9 +2303,9 @@ describe('Agent', () => {
         ],
       });
 
-      // Invocation 2: seed with state from invocation 1
+      // Invocation 2: seed with continuationId from invocation 1
       const result2 = await runAgent(agent, pm, {
-        init: { state: result1.output.state },
+        init: { continuationId: result1.output.continuationId },
         inputs: [
           { messages: [{ role: 'user', content: [{ text: 'second' }] }] },
         ],

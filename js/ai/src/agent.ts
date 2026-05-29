@@ -66,26 +66,31 @@ import {
 /**
  * Schema for initializing an agent turn.
  *
- * Clients pass back the opaque `continuationId` from the previous turn's
- * output. The server decodes it into whichever underlying mechanism the
- * agent uses (snapshotId for stored agents, state blob for stateless).
- * Clients don't need to know — and don't need to choose between two
- * mutually-exclusive fields like in v1.
+ * **Clients** pass `continuationId` — an opaque token from a prior turn's
+ * `output.continuationId`. **Server-side direct callers** (tests,
+ * sub-agent middleware, `agent.run()` invocations) may pass `snapshotId`
+ * directly as a convenience for stored agents. The two are equivalent;
+ * if both are supplied, `continuationId` wins.
  */
 export const AgentInitSchema = z.object({
   continuationId: z.string().optional(),
+  /**
+   * Server-side convenience: raw snapshotId for stored agents. Clients
+   * should round-trip `continuationId` instead, which works regardless of
+   * whether the underlying agent is stored or stateless.
+   */
+  snapshotId: z.string().optional(),
 });
 
 /**
  * Initialization options for an agent turn.
- *
- * `newSnapshotId` is an internal-only field used by the runtime to seed the
- * snapshot id for a turn; it's not part of the public client surface.
  */
 export interface AgentInit<S = unknown> {
   /** Opaque continuation token from a prior turn's `output.continuationId`. */
   continuationId?: string;
-  /** @internal — seeded by the runtime, not by external clients. */
+  /** Server-side convenience: raw snapshotId for stored agents. */
+  snapshotId?: string;
+  /** @internal — seeded by the runtime. */
   newSnapshotId?: string;
   /** @internal — populated server-side after continuationId decode. */
   _decodedState?: SessionState<S>;
@@ -338,13 +343,18 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
  */
 export const AgentOutputSchema = z.object({
   /**
-   * Opaque continuation token to round-trip on the next turn. Pass back as
-   * `init.continuationId`. Always populated.
+   * Opaque continuation token to round-trip on the next turn. **Clients**
+   * pass back as `init.continuationId`. Always populated.
    */
   continuationId: z.string().optional(),
   /**
-   * The model's final message for this turn.
+   * Server-side convenience: raw snapshotId for stored agents. Populated
+   * alongside `continuationId`. Useful for direct `.getSnapshotData(...)`
+   * calls, filesystem-snapshot inspection, sub-agent middleware, and URL
+   * bookmarks. **Clients** should round-trip `continuationId`, not this.
    */
+  snapshotId: z.string().optional(),
+  /** The model's final message for this turn. */
   message: MessageSchema.optional(),
   /**
    * Artifacts produced during this turn. Also surfaced via `artifact-*`
@@ -352,10 +362,9 @@ export const AgentOutputSchema = z.object({
    */
   artifacts: z.array(ArtifactSchema).optional(),
   /**
-   * Read-only snapshot of session state for the client. Includes
-   * `messages` (full conversation history) and `custom` (typed custom
-   * state). Clients should not send this back — round-trip the
-   * `continuationId` instead.
+   * Read-only snapshot of session state. Includes `messages` (full
+   * conversation history) and `custom` (typed custom state). Clients
+   * should not send this back — round-trip the `continuationId` instead.
    */
   state: SessionStateSchema.optional(),
 });
@@ -364,8 +373,10 @@ export const AgentOutputSchema = z.object({
  * Output returned at turn completion.
  */
 export interface AgentOutput<S = unknown> {
-  /** Opaque continuation token; pass back as `init.continuationId`. */
+  /** Opaque continuation token; clients pass back as `init.continuationId`. */
   continuationId?: string;
+  /** Server-side convenience: raw snapshotId for stored agents. */
+  snapshotId?: string;
   message?: MessageData;
   artifacts?: Artifact[];
   /** Read-only session state snapshot (messages, custom, artifacts). */
@@ -718,10 +729,11 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       let init = arg.init;
       const store = config.store || new InMemorySessionStore<State>();
 
-      // Decode the opaque `continuationId` into the right internal handle.
-      // For server-stored agents the decoded value is a snapshotId; for
-      // stateless agents it's the previous turn's state blob. Clients
-      // never need to know which.
+      // Resolve init into the right internal handle. Three valid inputs:
+      //   1. `continuationId` (client-facing) — opaque token; decode it
+      //   2. `snapshotId` (server-internal convenience) — used directly
+      //   3. neither — fresh session
+      // If both v2 and snapshotId are supplied, continuationId wins.
       if (init?.continuationId) {
         const decoded = decodeContinuation(init.continuationId);
         if (decoded?.kind === 'snapshot') {
@@ -734,6 +746,8 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         }
         // If the token is malformed we silently start fresh; the next
         // response carries a fresh continuationId so the client recovers.
+      } else if (init?.snapshotId) {
+        init = { ...init, _decodedSnapshotId: init.snapshotId };
       }
 
       let session: Session<State>;
@@ -933,8 +947,8 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       if (outcome === 'detached') {
         return {
           continuationId: encodeSnapshotContinuation(detachedSnapshotId!),
-          // Read-only state snapshot so the client can render the in-flight
-          // session immediately (messages so far, current custom state).
+          // Server-side convenience field populated alongside continuationId.
+          snapshotId: detachedSnapshotId!,
           state: toClientState(session.getState()),
         };
       }
@@ -943,8 +957,8 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       const clientState = toClientState(session.getState());
 
       // Continuation token: snapshotId for stored agents, encoded state
-      // blob for stateless. Either way the client just round-trips one
-      // opaque string on `init.continuationId`.
+      // blob for stateless. Clients round-trip the opaque continuationId;
+      // server-internal callers may use snapshotId directly.
       const continuationId = config.store
         ? finalSnapshotId
           ? encodeSnapshotContinuation(finalSnapshotId)
@@ -955,6 +969,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
       return {
         ...(continuationId && { continuationId }),
+        ...(config.store && finalSnapshotId && { snapshotId: finalSnapshotId }),
         ...(result.artifacts?.length && { artifacts: result.artifacts }),
         ...(result.message && { message: result.message }),
         ...(clientState && { state: clientState }),
