@@ -49,5 +49,7 @@ export function encodeStateContinuation(state: unknown): string {
  */
 export function continuationToSnapshotId(token?: string): string | undefined {
   if (!token) return undefined;
-  return token.startsWith(SNAP_PREFIX) ? token.slice(SNAP_PREFIX.length) : undefined;
+  return token.startsWith(SNAP_PREFIX)
+    ? token.slice(SNAP_PREFIX.length)
+    : undefined;
 }
