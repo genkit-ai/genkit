@@ -45,6 +45,18 @@ export {
   type AgentEventHandlers,
   type ModelChunkData,
 } from './agent-events.js';
+export {
+  AgentSession,
+  type AgentInputBody,
+  type AgentMessage,
+  type AgentPhase,
+  type AgentSessionOptions,
+  type AgentSessionState,
+  type AgentVariant,
+  type PendingInterrupt,
+  type ToolCall,
+  type ToolCallState,
+} from './agent-session.js';
 export { runFlow, streamFlow } from './client.js';
 export {
   continuationToSnapshotId,

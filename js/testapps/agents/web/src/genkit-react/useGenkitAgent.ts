@@ -15,744 +15,114 @@
  */
 
 /**
- * `useGenkitAgent` — the headline React hook for the Agents API.
+ * `useGenkitAgent` — React adapter for `AgentSession`.
  *
- * Absorbs what every page in the original testapp manually wires:
- *
- *   - `for await (const chunk of response.stream)` + dispatch on chunk.type
- *   - Continuation-token round-trip (no state vs snapshotId fork)
- *   - Mid-stream streaming text accumulation, separate from committed history
- *   - Tool call lifecycle (call → result → error)
- *   - Interrupt detection (in-stream `interrupt` events) + resumption helpers
- *   - Foreground → background phase transition (detached event), same hook
- *     continues to render in the background phase via polling
- *   - URL-bookmark restoration via `resumeFromContinuation`
- *   - Custom state (typed via the agent's stateSchema)
- *   - Artifact collection
+ * The hook itself is a thin shim: `useSyncExternalStore` to surface the
+ * session's state, plus the session's action methods passed through with
+ * permanently stable identity. All conversation logic — chunk dispatch,
+ * continuation round-trip, interrupt detection, background polling,
+ * snapshot rehydration — lives in `AgentSession` from
+ * `genkit/beta/client`, framework-agnostic.
  */
-import type { AgentEvent } from 'genkit/beta/client';
-import { runFlow, streamFlow, walkAgentEvent } from 'genkit/beta/client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AgentSession,
+  type AgentInputBody,
+  type AgentMessage,
+  type AgentPhase,
+  type AgentSessionOptions,
+  type AgentSessionState,
+  type AgentVariant,
+  type PendingInterrupt,
+  type ToolCall,
+  type ToolCallState,
+} from 'genkit/beta/client';
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 
-export type ToolCallState = 'call' | 'result' | 'error';
-export interface ToolCall<I = unknown, O = unknown> {
-  id: string;
-  name: string;
-  input: I;
-  output?: O;
-  state: ToolCallState;
-  /** Populated when `state === 'error'`. */
-  errorText?: string;
-  errorCode?: string;
-}
+export type {
+  AgentInputBody,
+  AgentMessage,
+  AgentPhase,
+  AgentVariant,
+  PendingInterrupt,
+  ToolCall,
+  ToolCallState,
+};
 
-export interface AgentMessage {
-  role: 'user' | 'model' | 'tool' | 'system' | string;
-  content: Array<{
-    text?: string;
-    toolRequest?: { name: string; input?: unknown; ref?: string };
-    toolResponse?: { name: string; output?: unknown; ref?: string };
-    [k: string]: unknown;
-  }>;
-}
+export type UseGenkitAgentOptions = AgentSessionOptions;
 
-export interface PendingInterrupt {
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-  kind: 'respond' | 'restart';
-  metadata?: unknown;
-}
-
-export type AgentPhase =
-  | 'idle'
-  | 'streaming'
-  | 'background'
-  | 'awaiting-interrupt'
-  | 'done'
-  | 'error';
-
-export interface UseGenkitAgentOptions {
-  url: string;
-  stateUrl?: string;
-  abortUrl?: string;
-  /**
-   * If provided on mount, hook fetches the snapshot and rehydrates state.
-   * Accepts either a continuationId (opaque, preferred) or a raw snapshotId
-   * (convenient when the value came from a URL route param).
-   */
-  resumeFromContinuation?: string;
-  /** Alias for `resumeFromContinuation` when you have a raw snapshotId from the URL. */
-  resumeFromSnapshotId?: string;
-  headers?: Record<string, string>;
-}
-
-export interface AgentVariant<S = unknown> {
-  /** Continuation token for this branch — pass to `continueFrom` to pick it. */
-  continuationId: string | undefined;
-  /** Raw snapshotId convenience (server-stored agents only). */
-  snapshotId: string | undefined;
-  /** Final assistant message for this branch. */
-  message: AgentMessage | undefined;
-  /** Read-only state snapshot for this branch. */
-  state:
-    | { messages?: AgentMessage[]; custom?: S; artifacts?: any[] }
-    | undefined;
-}
-
-export interface UseGenkitAgentResult<S = unknown> {
-  messages: AgentMessage[];
-  artifacts: any[];
-  customState: S | undefined;
-  streamingText: string;
-  streamingReasoning: string;
-  toolCalls: ToolCall[];
-  statusLabel: string | null;
-  progress: { current: number; total: number; label?: string } | null;
-  phase: AgentPhase;
-  error: Error | null;
-  /** Opaque token to round-trip; round-tripping is automatic, this is only exposed for debugging. */
-  continuationId: string | undefined;
-  /**
-   * Derived snapshotId for server-stored agents (extracted from the
-   * continuation token). Useful for URL bookmarks and for direct calls to
-   * `/state` / `/abort` endpoints. Undefined when the underlying agent is
-   * stateless (`state:` token).
-   */
-  snapshotId: string | undefined;
-  pendingInterrupt: PendingInterrupt | null;
-  respondToInterrupt: (output: unknown) => void;
-  restartInterrupt: (metadata?: unknown) => void;
+export interface UseGenkitAgentResult<S = unknown>
+  extends AgentSessionState<S> {
   submit: (input: AgentInputBody) => void;
-  /**
-   * Cancel the current turn. In the foreground phase, aborts the streaming
-   * connection. In the background phase, **also calls the server's abort
-   * endpoint** (`{url}/abort`) so the background work actually stops, then
-   * clears the local poll. Idempotent if there's nothing in flight.
-   */
   abort: () => Promise<void>;
   reset: () => void;
-
-  /**
-   * Run the same turn N times in parallel from the current continuation
-   * point, returning all variants. Useful for "pick your variant" UIs.
-   * The agent state is unchanged by this call — pick a variant with
-   * `continueFrom(variant.continuationId)` to advance.
-   */
+  respondToInterrupt: (output: unknown) => void;
+  restartInterrupt: (metadata?: unknown) => void;
   runVariants: (
     input: AgentInputBody,
     count?: number
   ) => Promise<AgentVariant<S>[]>;
-
-  /**
-   * Advance the agent to a specific continuation/snapshot (e.g. one of the
-   * variants returned by `runVariants`, or a snapshotId from a URL).
-   * Re-fetches the snapshot's state via the `/state` endpoint and updates
-   * `messages` / `customState` / `artifacts` accordingly.
-   */
   continueFrom: (continuationOrSnapshotId: string) => Promise<void>;
-}
-
-export interface AgentInputBody {
-  messages?: AgentMessage[];
-  resume?: {
-    respond?: Array<{
-      toolResponse: { name: string; output?: unknown; ref?: string };
-    }>;
-    restart?: Array<{
-      toolRequest: { name: string; input?: unknown; ref?: string };
-      metadata?: unknown;
-    }>;
-  };
-  detach?: boolean;
-}
-
-interface AgentOutputBody<S = unknown> {
-  continuationId?: string;
-  message?: AgentMessage;
-  artifacts?: any[];
-  state?: { messages?: AgentMessage[]; custom?: S; artifacts?: any[] };
-}
-
-interface AgentInitBody {
-  continuationId?: string;
 }
 
 export function useGenkitAgent<S = unknown>(
   options: UseGenkitAgentOptions
 ): UseGenkitAgentResult<S> {
-  // Latest-options ref: every action callback reads from this instead of
-  // closing over `url`/`headers`/etc. The callbacks then declare empty
-  // dependency arrays, giving them stable identity for the whole hook
-  // lifetime. Consumers can put them in `useEffect`/`useCallback`
-  // dependency lists without thinking about whether the parent memoized
-  // the option object.
-  const optsRef = useRef(options);
-  optsRef.current = options;
-
-  // Accept either a full continuation token or a raw snapshotId; coerce
-  // to a continuation token internally.
-  const resumeFromContinuation = options.resumeFromContinuation
-    ? options.resumeFromContinuation
-    : options.resumeFromSnapshotId
-      ? toContinuationToken(options.resumeFromSnapshotId)
-      : undefined;
-
-  const [messages, setMessages] = useState<AgentMessage[]>([]);
-  const [artifacts, setArtifacts] = useState<any[]>([]);
-  const [customState, setCustomState] = useState<S | undefined>(undefined);
-  const [streamingText, setStreamingText] = useState('');
-  const [streamingReasoning, setStreamingReasoning] = useState('');
-  const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
-  const [statusLabel, setStatusLabel] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{
-    current: number;
-    total: number;
-    label?: string;
-  } | null>(null);
-  const [phase, setPhase] = useState<AgentPhase>('idle');
-  const [error, setError] = useState<Error | null>(null);
-
-  const [continuationId, setContinuationId] = useState<string | undefined>(
-    resumeFromContinuation
-  );
-  const continuationRef = useRef<string | undefined>(resumeFromContinuation);
-  continuationRef.current = continuationId;
-
-  // Live refs for the abort() closure, which needs current phase + snapshotId
-  // without re-creating itself on every render.
-  const phaseRef = useRef<AgentPhase>('idle');
-  phaseRef.current = phase;
-  const snapshotIdRef = useRef<string | undefined>(undefined);
-
-  const [pendingInterrupt, setPendingInterrupt] =
-    useState<PendingInterrupt | null>(null);
-
-  const abortRef = useRef<AbortController | null>(null);
-  // Active background-poll timeout. Cleared on reset/abort/unmount so we
-  // don't leak timers or call setState on an unmounted hook.
-  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Generation token bumped on every reset/abort so an in-flight poll cycle
-  // started before the reset stops calling setState.
-  const pollGenRef = useRef(0);
-  // Continuations we've already rehydrated this mount — avoids re-fetching
-  // the snapshot every time the URL pushes a new id mid-conversation.
-  const rehydratedRef = useRef<Set<string>>(new Set());
-
-  function clearActivePoll() {
-    if (pollTimeoutRef.current) {
-      clearTimeout(pollTimeoutRef.current);
-      pollTimeoutRef.current = null;
-    }
-    pollGenRef.current += 1;
+  // One session instance for the component's lifetime. Constructed
+  // lazily so the resume effect (if any) fires at mount time.
+  const sessionRef = useRef<AgentSession<S> | null>(null);
+  if (sessionRef.current === null) {
+    sessionRef.current = new AgentSession<S>(options);
   }
+  const session = sessionRef.current;
 
-  // Resume from snapshot on mount (or when a new external `resumeFrom*`
-  // arrives). Skips when we've already rehydrated this exact token —
-  // important because `agent.snapshotId` driving a URL push would
-  // otherwise feed back into this effect and re-fetch.
-  useEffect(() => {
-    if (!resumeFromContinuation) return;
-    if (rehydratedRef.current.has(resumeFromContinuation)) return;
-    // Note: we don't mark `rehydratedRef` until AFTER the fetch commits.
-    // Under React StrictMode the first effect run is canceled and cleaned
-    // up before the async work resolves; marking it preemptively would
-    // make the second run think it's already done and skip the fetch.
-    let cancelled = false;
-    (async () => {
-      try {
-        const sid = extractSnapshotId(resumeFromContinuation);
-        if (!sid) return;
-        const opts = optsRef.current;
-        const snapshot = await runFlow<any, AgentInitBody>({
-          url: opts.stateUrl ?? `${opts.url}/state`,
-          input: sid,
-          headers: opts.headers,
-        });
-        if (cancelled) return;
-        const state = snapshot?.state ?? {};
-        if (Array.isArray(state.messages)) setMessages(state.messages);
-        if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
-        if (state.custom !== undefined) setCustomState(state.custom as S);
-        if (snapshot?.status === 'pending') {
-          setPhase('background');
-          startBackgroundPoll(sid);
-        } else {
-          setPhase('done');
-        }
-        rehydratedRef.current.add(resumeFromContinuation);
-      } catch (e) {
-        if (cancelled) return;
-        setError(e instanceof Error ? e : new Error(String(e)));
-        rehydratedRef.current.add(resumeFromContinuation);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeFromContinuation]);
+  // Keep the session's options pointed at the latest values from the
+  // parent component (matches the latest-options ref pattern that lets
+  // adapters re-render freely without recreating callbacks).
+  session.setOptions(options);
 
-  function startBackgroundPoll(snapshotId: string) {
-    // Capture the current generation; if reset/abort fires we'll bail.
-    const gen = pollGenRef.current;
-    const tick = async () => {
-      pollTimeoutRef.current = null;
-      if (gen !== pollGenRef.current) return; // superseded — drop silently.
-      try {
-        const opts = optsRef.current;
-        const snap = await runFlow<any, AgentInitBody>({
-          url: opts.stateUrl ?? `${opts.url}/state`,
-          input: snapshotId,
-          headers: opts.headers,
-        });
-        if (gen !== pollGenRef.current) return;
-        const state = snap?.state ?? {};
-        if (Array.isArray(state.messages)) setMessages(state.messages);
-        if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
-        if (state.custom !== undefined) setCustomState(state.custom as S);
-        if (snap?.status === 'done') {
-          setPhase('done');
-          return;
-        }
-        if (snap?.status === 'failed' || snap?.status === 'aborted') {
-          setPhase('error');
-          setError(new Error(snap.error?.message ?? 'background run failed'));
-          return;
-        }
-        pollTimeoutRef.current = setTimeout(tick, 2000);
-      } catch (e) {
-        if (gen !== pollGenRef.current) return;
-        setError(e instanceof Error ? e : new Error(String(e)));
-        setPhase('error');
-      }
-    };
-    pollTimeoutRef.current = setTimeout(tick, 1000);
-  }
+  const subscribe = useMemo(() => session.subscribe.bind(session), [session]);
+  const getSnapshot = useMemo(() => session.getState.bind(session), [session]);
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  const reset = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    clearActivePoll();
-    rehydratedRef.current = new Set();
-    setMessages([]);
-    setArtifacts([]);
-    setCustomState(undefined);
-    setStreamingText('');
-    setStreamingReasoning('');
-    setToolCalls([]);
-    setStatusLabel(null);
-    setProgress(null);
-    setPhase('idle');
-    setError(null);
-    setContinuationId(undefined);
-    setPendingInterrupt(null);
-  }, []);
-
-  const abort = useCallback(async (): Promise<void> => {
-    // Cancel any in-flight fetch (foreground stream) and stop local polling.
-    abortRef.current?.abort();
-    abortRef.current = null;
-    const wasBackground = phaseRef.current === 'background';
-    const sidForAbort = wasBackground ? snapshotIdRef.current : undefined;
-    clearActivePoll();
-    setPhase((p) => (p === 'streaming' || p === 'background' ? 'idle' : p));
-    // Tell the server to stop the background work too — without this the
-    // background run keeps consuming model/tool budget after the client
-    // gives up. Silently swallow network errors; the user-visible state is
-    // already 'idle'.
-    if (wasBackground && sidForAbort) {
-      const opts = optsRef.current;
-      try {
-        await runFlow({
-          url: opts.abortUrl ?? `${opts.url}/abort`,
-          input: sidForAbort,
-          headers: opts.headers,
-        });
-      } catch (_) {
-        // ignore — local state already cleared
-      }
-    }
-  }, []);
-
-  const internalSubmit = useCallback((input: AgentInputBody) => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    if (input.messages?.length) {
-      setMessages((prev) => [...prev, ...(input.messages as AgentMessage[])]);
-    }
-
-    setStreamingText('');
-    setStreamingReasoning('');
-    setToolCalls([]);
-    setStatusLabel(null);
-    setProgress(null);
-    setError(null);
-    setPendingInterrupt(null);
-    setPhase('streaming');
-
-    const init: AgentInitBody = continuationRef.current
-      ? { continuationId: continuationRef.current }
-      : {};
-
-    const opts = optsRef.current;
-    const { output: outputPromise, stream } = streamFlow<
-      AgentOutputBody<S>,
-      AgentEvent,
-      AgentInitBody
-    >({
-      url: opts.url,
-      input,
-      init,
-      headers: opts.headers,
-      abortSignal: controller.signal,
-    });
-
-    (async () => {
-      let interruptDetected: PendingInterrupt | null = null;
-      let detachedDuringStream = false;
-      try {
-        for await (const event of stream) {
-          walkAgentEvent(event, {
-            onText: (delta) => setStreamingText((prev) => prev + delta),
-            onReasoning: (delta) =>
-              setStreamingReasoning((prev) => prev + delta),
-            onToolRequest: ({ toolCallId, toolName, input }) => {
-              setToolCalls((prev) => {
-                const next = prev.slice();
-                const idx = next.findIndex((tc) => tc.id === toolCallId);
-                if (idx === -1) {
-                  next.push({
-                    id: toolCallId,
-                    name: toolName,
-                    input,
-                    state: 'call',
-                  });
-                } else {
-                  next[idx] = { ...next[idx], input };
-                }
-                return next;
-              });
-            },
-            onToolResponse: ({ toolCallId, toolName, output }) => {
-              setToolCalls((prev) => {
-                const next = prev.slice();
-                const idx = next.findIndex((tc) => tc.id === toolCallId);
-                // Don't overwrite an 'error' state — a `tool-error`
-                // event arriving alongside the same toolResponse must
-                // win (it carries the structured error metadata).
-                if (idx === -1) {
-                  next.push({
-                    id: toolCallId,
-                    name: toolName,
-                    input: undefined,
-                    output,
-                    state: 'result',
-                  });
-                } else if (next[idx].state !== 'error') {
-                  next[idx] = { ...next[idx], output, state: 'result' };
-                } else {
-                  next[idx] = { ...next[idx], output };
-                }
-                return next;
-              });
-            },
-            onToolError: ({ toolCallId, toolName, errorText, errorCode }) => {
-              setToolCalls((prev) => {
-                const next = prev.slice();
-                const idx = next.findIndex((tc) => tc.id === toolCallId);
-                if (idx === -1) {
-                  next.push({
-                    id: toolCallId,
-                    name: toolName,
-                    input: undefined,
-                    state: 'error',
-                    errorText,
-                    errorCode,
-                  });
-                } else {
-                  next[idx] = {
-                    ...next[idx],
-                    state: 'error',
-                    errorText,
-                    errorCode,
-                  };
-                }
-                return next;
-              });
-            },
-            onStatus: (s) => setStatusLabel(s.label),
-            onProgress: (p) => setProgress(p),
-            onPhase: (p) => setStatusLabel(p),
-            onArtifact: (artifact) => {
-              setArtifacts((prev) => [...prev, artifact]);
-            },
-            onInterrupt: (irpt) => {
-              interruptDetected = irpt;
-            },
-            onDetached: ({ continuationId: cid }) => {
-              detachedDuringStream = true;
-              if (cid) setContinuationId(cid);
-            },
-            onTurnEnd: ({ continuationId: cid }) => {
-              if (cid) setContinuationId(cid);
-            },
-          });
-          if (detachedDuringStream) break;
-        }
-
-        const result = await outputPromise;
-
-        if (result?.continuationId) {
-          setContinuationId(result.continuationId);
-        }
-        if (result?.message) {
-          setMessages((prev) => [...prev, result.message as AgentMessage]);
-        }
-        if (result?.state?.custom !== undefined) {
-          setCustomState(result.state.custom as S);
-        }
-        if (Array.isArray(result?.state?.messages)) {
-          setMessages(result.state.messages as AgentMessage[]);
-        }
-        if (Array.isArray(result?.state?.artifacts)) {
-          setArtifacts(result.state.artifacts as any[]);
-        }
-        if (Array.isArray(result?.artifacts)) {
-          setArtifacts((prev) =>
-            mergeArtifacts(prev, result.artifacts as any[])
-          );
-        }
-
-        // Clear the in-flight buffers — the canonical, post-commit
-        // form of all three lives in `messages` now. Leaving them
-        // populated would render duplicates: `streamingText` would
-        // re-emit the model's text below the committed message, and
-        // `toolCalls` would re-emit each tool invocation alongside its
-        // already-persisted tool request/response in `messages`.
-        // Consumers that want to show in-flight tool activity should
-        // gate on `phase === 'streaming'`.
-        setStreamingText('');
-        setStreamingReasoning('');
-        setToolCalls([]);
-
-        if (detachedDuringStream || input.detach) {
-          setPhase('background');
-          const sid = result?.continuationId
-            ? extractSnapshotId(result.continuationId)
-            : null;
-          if (sid) startBackgroundPoll(sid);
-          return;
-        }
-
-        if (interruptDetected) {
-          setPendingInterrupt(interruptDetected);
-          setPhase('awaiting-interrupt');
-          return;
-        }
-
-        setPhase('done');
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err : new Error(String(err)));
-        setPhase('error');
-      }
-    })();
-  }, []);
-
-  const submit = useCallback(
-    (input: AgentInputBody) => internalSubmit(input),
-    [internalSubmit]
-  );
-
-  // Latest-pendingInterrupt ref so the respond/restart helpers can stay
-  // stable across renders. Without this, every interrupt arrival would
-  // recreate these callbacks and invalidate any consumer that includes
-  // them in a useEffect/useCallback dep array.
-  const pendingInterruptRef = useRef<PendingInterrupt | null>(null);
-  pendingInterruptRef.current = pendingInterrupt;
-
-  const respondToInterrupt = useCallback(
-    (output: unknown) => {
-      const pi = pendingInterruptRef.current;
-      if (!pi) return;
-      internalSubmit({
-        resume: {
-          respond: [
-            {
-              toolResponse: {
-                name: pi.toolName,
-                ref: pi.toolCallId,
-                output,
-              },
-            },
-          ],
-        },
-      });
-    },
-    [internalSubmit]
-  );
-
-  const restartInterrupt = useCallback(
-    (metadata?: unknown) => {
-      const pi = pendingInterruptRef.current;
-      if (!pi) return;
-      internalSubmit({
-        resume: {
-          restart: [
-            {
-              toolRequest: {
-                name: pi.toolName,
-                ref: pi.toolCallId,
-                input: pi.input,
-              },
-              metadata,
-            },
-          ],
-        },
-      });
-    },
-    [internalSubmit]
-  );
-
-  useEffect(
-    () => () => {
-      abortRef.current?.abort();
-      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
-    },
-    []
-  );
-
-  const snapshotId = useMemo(
-    () => extractSnapshotId(continuationId) ?? undefined,
-    [continuationId]
-  );
-  snapshotIdRef.current = snapshotId;
-
-  // Run the same turn N times in parallel from the current continuation.
-  // Used for branching UIs ("pick your variant"). Doesn't mutate the
-  // hook's state — caller chooses one and calls `continueFrom`.
-  const runVariants = useCallback(
-    async (input: AgentInputBody, count = 2): Promise<AgentVariant<S>[]> => {
-      const init: AgentInitBody = continuationRef.current
-        ? { continuationId: continuationRef.current }
-        : {};
-      const opts = optsRef.current;
-      const calls = Array.from({ length: count }, () =>
-        runFlow<AgentOutputBody<S>, AgentInitBody>({
-          url: opts.url,
-          input,
-          init,
-          headers: opts.headers,
-        })
-      );
-      const outputs = await Promise.all(calls);
-      return outputs.map((o) => ({
-        continuationId: o?.continuationId,
-        snapshotId: o?.continuationId
-          ? (extractSnapshotId(o.continuationId) ?? undefined)
-          : undefined,
-        message: o?.message,
-        state: o?.state,
-      }));
-    },
-    []
-  );
-
-  // Advance to a chosen variant / snapshot. Fetches the snapshot's state
-  // from `/state` and rehydrates messages / customState / artifacts.
-  const continueFrom = useCallback(
-    async (continuationOrSnapshotId: string): Promise<void> => {
-      const token = continuationOrSnapshotId.startsWith(SNAP_PREFIX)
-        ? continuationOrSnapshotId
-        : toContinuationToken(continuationOrSnapshotId);
-      const sid = extractSnapshotId(token);
-      setContinuationId(token);
-      if (!sid) return;
-      try {
-        const opts = optsRef.current;
-        const snapshot = await runFlow<any, AgentInitBody>({
-          url: opts.stateUrl ?? `${opts.url}/state`,
-          input: sid,
-          headers: opts.headers,
-        });
-        const state = snapshot?.state ?? {};
-        if (Array.isArray(state.messages)) setMessages(state.messages);
-        if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
-        if (state.custom !== undefined) setCustomState(state.custom as S);
-        setPhase('done');
-      } catch (e) {
-        setError(e instanceof Error ? e : new Error(String(e)));
-      }
-    },
-    []
-  );
-
-  return useMemo<UseGenkitAgentResult<S>>(
+  // Action methods are bound to the session instance so their identity is
+  // stable for the hook's lifetime — safe to depend on directly.
+  const actions = useMemo(
     () => ({
-      messages,
-      artifacts,
-      customState,
-      streamingText,
-      streamingReasoning,
-      toolCalls,
-      statusLabel,
-      progress,
-      phase,
-      error,
-      continuationId,
-      snapshotId,
-      pendingInterrupt,
-      respondToInterrupt,
-      restartInterrupt,
-      submit,
-      abort,
-      reset,
-      runVariants,
-      continueFrom,
+      submit: session.submit.bind(session),
+      abort: session.abort.bind(session),
+      reset: session.reset.bind(session),
+      respondToInterrupt: session.respondToInterrupt.bind(session),
+      restartInterrupt: session.restartInterrupt.bind(session),
+      runVariants: session.runVariants.bind(session),
+      continueFrom: session.continueFrom.bind(session),
     }),
-    [
-      messages,
-      artifacts,
-      customState,
-      streamingText,
-      streamingReasoning,
-      toolCalls,
-      statusLabel,
-      progress,
-      phase,
-      error,
-      continuationId,
-      snapshotId,
-      pendingInterrupt,
-      respondToInterrupt,
-      restartInterrupt,
-      submit,
-      abort,
-      reset,
-      runVariants,
-      continueFrom,
-    ]
+    [session]
   );
-}
 
-function mergeArtifacts(a: any[], b: any[]): any[] {
-  const seen = new Set(a.map((x) => x?.name).filter(Boolean));
-  return [...a, ...b.filter((x) => !x?.name || !seen.has(x.name))];
-}
+  // Dispose on real unmount. We don't tear down on the StrictMode
+  // remount cycle — the session has a single lifetime tied to the
+  // component instance, and the lazy init via `useRef` means we'd
+  // otherwise dispose a freshly-built session before the user could
+  // interact with it. `useSyncExternalStore` already unsubscribes its
+  // own listener on remount, so a brief "no listeners attached" gap
+  // does not leak.
+  useEffect(() => {
+    return () => {
+      // Defer to a microtask so that an immediate StrictMode remount
+      // can claim the session before disposal fires.
+      const s = session;
+      Promise.resolve().then(() => {
+        // Only dispose if no later mount re-claimed this ref. We track
+        // claims via a counter on the session.
+        if (s === sessionRef.current && !s.hasActiveSubscribers()) {
+          s.dispose();
+        }
+      });
+    };
+  }, [session]);
 
-/** Continuation token format — mirrors `genkit/beta`'s prefixes. */
-const SNAP_PREFIX = 'snap:';
-
-function extractSnapshotId(continuationId?: string): string | null {
-  if (!continuationId) return null;
-  if (continuationId.startsWith(SNAP_PREFIX))
-    return continuationId.slice(SNAP_PREFIX.length);
-  return null;
-}
-
-function toContinuationToken(snapshotId: string): string {
-  return SNAP_PREFIX + snapshotId;
+  return useMemo(
+    () => ({ ...state, ...actions }),
+    [state, actions]
+  );
 }
