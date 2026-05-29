@@ -14,16 +14,15 @@
  * limitations under the License.
  */
 
-import type { ChatTransport, UIMessageChunk } from 'ai';
+import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 import { streamFlow } from 'genkit/beta/client';
 import {
   extractResolvedToolResults,
   findLastUserMessage,
   mapUIMessageToGenkit,
-  type UIMessage,
 } from './mapping.js';
 
-export type { ChatTransport, UIMessageChunk };
+export type { ChatTransport, UIMessage, UIMessageChunk };
 
 // ---------------------------------------------------------------------------
 // Agent wire-format types
@@ -109,7 +108,7 @@ export interface GenkitChatTransportConfig {
  * });
  * ```
  */
-export class GenkitChatTransport {
+export class GenkitChatTransport implements ChatTransport<UIMessage> {
   private readonly url: string;
   private readonly headersConfig?:
     | Record<string, string>

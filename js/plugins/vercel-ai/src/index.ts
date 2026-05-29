@@ -14,13 +14,11 @@
  * limitations under the License.
  */
 
+export type { UIMessage } from 'ai';
+
 export {
   extractResolvedToolResults,
   findLastUserMessage,
-  mapGenkitMessageToUI,
-  mapGenkitPartToUI,
   mapUIMessageToGenkit,
   mapUIPartToGenkit,
-  type UIMessage,
-  type UIMessagePart,
 } from './mapping.js';

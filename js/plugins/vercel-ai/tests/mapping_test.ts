@@ -14,16 +14,14 @@
  * limitations under the License.
  */
 
+import type { UIMessage } from 'ai';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   extractResolvedToolResults,
   findLastUserMessage,
-  mapGenkitMessageToUI,
-  mapGenkitPartToUI,
   mapUIMessageToGenkit,
   mapUIPartToGenkit,
-  type UIMessage,
 } from '../src/mapping.js';
 
 // ---------------------------------------------------------------------------
@@ -36,16 +34,13 @@ describe('mapUIPartToGenkit', () => {
     assert.deepStrictEqual(result, [{ text: 'hello' }]);
   });
 
-  it('maps tool-invocation (call state)', () => {
+  it('maps v6 tool part (input-available state)', () => {
     const result = mapUIPartToGenkit({
-      type: 'tool-invocation',
-      toolInvocation: {
-        toolCallId: 'call-1',
-        toolName: 'getWeather',
-        args: { location: 'London' },
-        state: 'call',
-      },
-    });
+      type: 'tool-getWeather',
+      toolCallId: 'call-1',
+      state: 'input-available',
+      input: { location: 'London' },
+    } as UIMessage['parts'][number]);
     assert.deepStrictEqual(result, [
       {
         toolRequest: {
@@ -57,17 +52,14 @@ describe('mapUIPartToGenkit', () => {
     ]);
   });
 
-  it('maps tool-invocation (result state) to request + response', () => {
+  it('maps v6 tool part (output-available state) to request + response', () => {
     const result = mapUIPartToGenkit({
-      type: 'tool-invocation',
-      toolInvocation: {
-        toolCallId: 'call-2',
-        toolName: 'getWeather',
-        args: { location: 'Paris' },
-        state: 'result',
-        result: { weather: 'sunny' },
-      },
-    });
+      type: 'tool-getWeather',
+      toolCallId: 'call-2',
+      state: 'output-available',
+      input: { location: 'Paris' },
+      output: { weather: 'sunny' },
+    } as UIMessage['parts'][number]);
     assert.strictEqual(result.length, 2);
     assert.deepStrictEqual(result[0], {
       toolRequest: {
@@ -85,6 +77,25 @@ describe('mapUIPartToGenkit', () => {
     });
   });
 
+  it('maps dynamic-tool part', () => {
+    const result = mapUIPartToGenkit({
+      type: 'dynamic-tool',
+      toolName: 'myTool',
+      toolCallId: 'dc-1',
+      state: 'input-available',
+      input: { x: 1 },
+    } as UIMessage['parts'][number]);
+    assert.deepStrictEqual(result, [
+      {
+        toolRequest: {
+          ref: 'dc-1',
+          name: 'myTool',
+          input: { x: 1 },
+        },
+      },
+    ]);
+  });
+
   it('maps file parts', () => {
     const result = mapUIPartToGenkit({
       type: 'file',
@@ -99,9 +110,14 @@ describe('mapUIPartToGenkit', () => {
   });
 
   it('returns empty for unsupported types', () => {
-    assert.deepStrictEqual(mapUIPartToGenkit({ type: 'reasoning' }), []);
-    assert.deepStrictEqual(mapUIPartToGenkit({ type: 'step-start' }), []);
-    assert.deepStrictEqual(mapUIPartToGenkit({ type: 'source-url' }), []);
+    assert.deepStrictEqual(
+      mapUIPartToGenkit({ type: 'reasoning', text: '' } as UIMessage['parts'][number]),
+      []
+    );
+    assert.deepStrictEqual(
+      mapUIPartToGenkit({ type: 'step-start' } as UIMessage['parts'][number]),
+      []
+    );
   });
 });
 
@@ -110,7 +126,6 @@ describe('mapUIMessageToGenkit', () => {
     const msg: UIMessage = {
       id: 'msg-1',
       role: 'user',
-      content: '',
       parts: [{ type: 'text', text: 'Hello' }],
     };
     const result = mapUIMessageToGenkit(msg);
@@ -122,82 +137,20 @@ describe('mapUIMessageToGenkit', () => {
     const msg: UIMessage = {
       id: 'msg-2',
       role: 'assistant',
-      content: 'Hi there',
       parts: [{ type: 'text', text: 'Hi there' }],
     };
     const result = mapUIMessageToGenkit(msg);
     assert.strictEqual(result.role, 'model');
   });
 
-  it('falls back to content string when parts is empty', () => {
+  it('returns empty content when parts is empty', () => {
     const msg: UIMessage = {
       id: 'msg-3',
       role: 'user',
-      content: 'Legacy content',
       parts: [],
     };
     const result = mapUIMessageToGenkit(msg);
-    assert.deepStrictEqual(result.content, [{ text: 'Legacy content' }]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Genkit → UIMessage
-// ---------------------------------------------------------------------------
-
-describe('mapGenkitPartToUI', () => {
-  it('maps text', () => {
-    assert.deepStrictEqual(mapGenkitPartToUI({ text: 'hello' }), {
-      type: 'text',
-      text: 'hello',
-    });
-  });
-
-  it('maps toolRequest', () => {
-    const result = mapGenkitPartToUI({
-      toolRequest: { ref: 'c1', name: 'myTool', input: { x: 1 } },
-    });
-    assert.strictEqual(result?.type, 'tool-invocation');
-    assert.strictEqual(result?.toolInvocation?.toolCallId, 'c1');
-    assert.strictEqual(result?.toolInvocation?.toolName, 'myTool');
-    assert.strictEqual(result?.toolInvocation?.state, 'call');
-  });
-
-  it('maps toolResponse', () => {
-    const result = mapGenkitPartToUI({
-      toolResponse: { ref: 'c1', name: 'myTool', output: { y: 2 } },
-    });
-    assert.strictEqual(result?.type, 'tool-invocation');
-    assert.strictEqual(result?.toolInvocation?.state, 'result');
-    assert.deepStrictEqual(result?.toolInvocation?.result, { y: 2 });
-  });
-
-  it('maps media', () => {
-    const result = mapGenkitPartToUI({
-      media: { url: 'https://a.com/b.png', contentType: 'image/png' },
-    });
-    assert.deepStrictEqual(result, {
-      type: 'file',
-      url: 'https://a.com/b.png',
-      mediaType: 'image/png',
-    });
-  });
-
-  it('returns null for data/custom parts', () => {
-    assert.strictEqual(mapGenkitPartToUI({ data: { foo: 1 } }), null);
-  });
-});
-
-describe('mapGenkitMessageToUI', () => {
-  it('maps model message to assistant', () => {
-    const result = mapGenkitMessageToUI(
-      { role: 'model', content: [{ text: 'Hi' }] },
-      'test-id'
-    );
-    assert.strictEqual(result.role, 'assistant');
-    assert.strictEqual(result.id, 'test-id');
-    assert.strictEqual(result.content, 'Hi');
-    assert.strictEqual(result.parts.length, 1);
+    assert.deepStrictEqual(result.content, []);
   });
 });
 
@@ -208,22 +161,18 @@ describe('mapGenkitMessageToUI', () => {
 describe('extractResolvedToolResults', () => {
   it('extracts results from the last assistant message', () => {
     const messages: UIMessage[] = [
-      { id: '1', role: 'user', content: 'do it', parts: [] },
+      { id: '1', role: 'user', parts: [{ type: 'text', text: 'do it' }] },
       {
         id: '2',
         role: 'assistant',
-        content: '',
         parts: [
           {
-            type: 'tool-invocation',
-            toolInvocation: {
-              toolCallId: 'call-x',
-              toolName: 'approve',
-              args: { action: 'transfer' },
-              state: 'result',
-              result: { approved: true },
-            },
-          },
+            type: 'tool-approve',
+            toolCallId: 'call-x',
+            state: 'output-available',
+            input: { action: 'transfer' },
+            output: { approved: true },
+          } as UIMessage['parts'][number],
         ],
       },
     ];
@@ -236,27 +185,23 @@ describe('extractResolvedToolResults', () => {
 
   it('returns empty when no results', () => {
     const messages: UIMessage[] = [
-      { id: '1', role: 'user', content: 'hi', parts: [] },
+      { id: '1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
     ];
     assert.strictEqual(extractResolvedToolResults(messages).length, 0);
   });
 
-  it('ignores unresolved tool invocations', () => {
+  it('ignores tool parts without output-available state', () => {
     const messages: UIMessage[] = [
       {
         id: '2',
         role: 'assistant',
-        content: '',
         parts: [
           {
-            type: 'tool-invocation',
-            toolInvocation: {
-              toolCallId: 'call-y',
-              toolName: 'approve',
-              args: {},
-              state: 'call',
-            },
-          },
+            type: 'tool-approve',
+            toolCallId: 'call-y',
+            state: 'input-available',
+            input: {},
+          } as UIMessage['parts'][number],
         ],
       },
     ];
@@ -268,7 +213,6 @@ describe('extractResolvedToolResults', () => {
       {
         id: '1',
         role: 'assistant',
-        content: '',
         parts: [
           {
             type: 'tool-userApproval',
@@ -292,7 +236,6 @@ describe('extractResolvedToolResults', () => {
       {
         id: '1',
         role: 'assistant',
-        content: '',
         parts: [
           {
             type: 'tool-userApproval',
@@ -300,7 +243,7 @@ describe('extractResolvedToolResults', () => {
             // No toolName property — SDK v6 ToolUIPart doesn't have one
             state: 'output-available',
             output: { approved: false, feedback: 'User rejected' },
-          } as unknown as UIMessage['parts'][number],
+          } as UIMessage['parts'][number],
         ],
       },
     ];
@@ -319,14 +262,13 @@ describe('extractResolvedToolResults', () => {
       {
         id: '1',
         role: 'assistant',
-        content: '',
         parts: [
           {
             type: 'tool-getWeather',
             toolCallId: 'tc-3',
             state: 'input-available',
             input: { location: 'NYC' },
-          } as unknown as UIMessage['parts'][number],
+          } as UIMessage['parts'][number],
         ],
       },
     ];
@@ -337,9 +279,13 @@ describe('extractResolvedToolResults', () => {
 describe('findLastUserMessage', () => {
   it('finds the last user message', () => {
     const messages: UIMessage[] = [
-      { id: '1', role: 'user', content: 'first', parts: [] },
-      { id: '2', role: 'assistant', content: 'reply', parts: [] },
-      { id: '3', role: 'user', content: 'second', parts: [] },
+      { id: '1', role: 'user', parts: [{ type: 'text', text: 'first' }] },
+      {
+        id: '2',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'reply' }],
+      },
+      { id: '3', role: 'user', parts: [{ type: 'text', text: 'second' }] },
     ];
     const result = findLastUserMessage(messages);
     assert.strictEqual(result?.id, '3');
@@ -347,7 +293,7 @@ describe('findLastUserMessage', () => {
 
   it('returns undefined when no user messages', () => {
     const messages: UIMessage[] = [
-      { id: '1', role: 'assistant', content: 'hi', parts: [] },
+      { id: '1', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] },
     ];
     assert.strictEqual(findLastUserMessage(messages), undefined);
   });

@@ -14,45 +14,8 @@
  * limitations under the License.
  */
 
+import type { UIMessage } from 'ai';
 import type { MessageData, Part } from 'genkit';
-
-// ---------------------------------------------------------------------------
-// Vercel AI SDK types — defined locally to avoid a hard dependency on the
-// `ai` package.  These mirror the wire format used by `useChat`.
-// ---------------------------------------------------------------------------
-
-/**
- * A single part within a Vercel AI SDK UIMessage.
- */
-export interface UIMessagePart {
-  type: string;
-  /** Present when type === 'text'. */
-  text?: string;
-  /** Present when type === 'tool-invocation'. */
-  toolInvocation?: {
-    toolCallId: string;
-    toolName: string;
-    args: unknown;
-    state: 'call' | 'partial-call' | 'result';
-    result?: unknown;
-  };
-  /** Present when type === 'file'. */
-  mediaType?: string;
-  /** Present when type === 'file'. */
-  url?: string;
-}
-
-/**
- * Vercel AI SDK UIMessage — the wire format used by `useChat`.
- */
-export interface UIMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'data';
-  /** @deprecated Removed in AI SDK v6; kept optional for backward compat. */
-  content?: string;
-  parts: UIMessagePart[];
-  createdAt?: string | Date;
-}
 
 // ---------------------------------------------------------------------------
 // UIMessage → Genkit
@@ -69,46 +32,24 @@ function mapRole(role: UIMessage['role']): MessageData['role'] {
       return 'user';
     case 'system':
       return 'system';
-    default:
-      return 'user';
   }
 }
 
 /**
- * Maps a single UIMessagePart to zero or more Genkit Parts.
+ * Maps a single Vercel AI SDK v6 UIMessagePart to zero or more Genkit Parts.
  *
- * A `tool-invocation` with state `result` produces both a `toolRequest`
+ * Handles `text`, `file`, and tool parts (both `ToolUIPart` with
+ * `type: 'tool-<name>'` and `DynamicToolUIPart` with `type: 'dynamic-tool'`).
+ *
+ * A tool part with state `output-available` produces both a `toolRequest`
  * and a `toolResponse` part (matching Genkit's conversation model).
  */
-export function mapUIPartToGenkit(part: UIMessagePart): Part[] {
-  if (part.type === 'text' && part.text !== undefined) {
+export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
+  if (part.type === 'text') {
     return [{ text: part.text }];
   }
 
-  if (part.type === 'tool-invocation' && part.toolInvocation) {
-    const ti = part.toolInvocation;
-    const parts: Part[] = [
-      {
-        toolRequest: {
-          ref: ti.toolCallId,
-          name: ti.toolName,
-          input: ti.args,
-        },
-      },
-    ];
-    if (ti.state === 'result' && ti.result !== undefined) {
-      parts.push({
-        toolResponse: {
-          ref: ti.toolCallId,
-          name: ti.toolName,
-          output: ti.result,
-        },
-      });
-    }
-    return parts;
-  }
-
-  if (part.type === 'file' && part.url) {
+  if (part.type === 'file') {
     return [
       {
         media: {
@@ -117,6 +58,48 @@ export function mapUIPartToGenkit(part: UIMessagePart): Part[] {
         },
       },
     ];
+  }
+
+  // Handle v6 tool parts:
+  //   ToolUIPart:    type: 'tool-<name>', toolCallId, state, input?, output?
+  //   DynamicToolUIPart: type: 'dynamic-tool', toolName, toolCallId, state, input?, output?
+  //
+  // Use runtime property checks via Record cast since TypeScript can't
+  // narrow on prefix match for template literal types.
+  if (part.type === 'dynamic-tool' || part.type.startsWith('tool-')) {
+    const p = part as unknown as Record<string, unknown>;
+    const toolCallId =
+      typeof p.toolCallId === 'string'
+        ? p.toolCallId
+        : crypto.randomUUID();
+    const toolName =
+      typeof p.toolName === 'string' && p.toolName
+        ? p.toolName
+        : part.type.startsWith('tool-')
+          ? part.type.slice('tool-'.length)
+          : 'unknown';
+
+    const parts: Part[] = [
+      {
+        toolRequest: {
+          ref: toolCallId,
+          name: toolName,
+          input: p.input,
+        },
+      },
+    ];
+
+    if (p.state === 'output-available' && p.output !== undefined) {
+      parts.push({
+        toolResponse: {
+          ref: toolCallId,
+          name: toolName,
+          output: p.output,
+        },
+      });
+    }
+
+    return parts;
   }
 
   // Unsupported part types (reasoning, source-*, step-start, data-*) are
@@ -129,96 +112,8 @@ export function mapUIPartToGenkit(part: UIMessagePart): Part[] {
  */
 export function mapUIMessageToGenkit(msg: UIMessage): MessageData {
   const role = mapRole(msg.role);
-
-  // Prefer structured `parts` when available; fall back to `content` string.
-  let genkitParts: Part[];
-  if (msg.parts && msg.parts.length > 0) {
-    genkitParts = msg.parts.flatMap(mapUIPartToGenkit);
-  } else if (msg.content) {
-    genkitParts = [{ text: msg.content }];
-  } else {
-    genkitParts = [];
-  }
-
+  const genkitParts: Part[] = msg.parts.flatMap(mapUIPartToGenkit);
   return { role, content: genkitParts };
-}
-
-// ---------------------------------------------------------------------------
-// Genkit → UIMessage (for state reconstruction)
-// ---------------------------------------------------------------------------
-
-/**
- * Maps a Genkit Part to a UIMessagePart.
- */
-export function mapGenkitPartToUI(part: Part): UIMessagePart | null {
-  if ('text' in part && part.text !== undefined) {
-    return { type: 'text', text: part.text };
-  }
-
-  if ('toolRequest' in part && part.toolRequest) {
-    return {
-      type: 'tool-invocation',
-      toolInvocation: {
-        toolCallId: part.toolRequest.ref || crypto.randomUUID(),
-        toolName: part.toolRequest.name,
-        args: part.toolRequest.input,
-        state: 'call',
-      },
-    };
-  }
-
-  if ('toolResponse' in part && part.toolResponse) {
-    // Tool responses in Genkit are separate parts; map them as resolved
-    // tool invocations.
-    return {
-      type: 'tool-invocation',
-      toolInvocation: {
-        toolCallId: part.toolResponse.ref || crypto.randomUUID(),
-        toolName: part.toolResponse.name,
-        args: {},
-        state: 'result',
-        result: part.toolResponse.output,
-      },
-    };
-  }
-
-  if ('media' in part && part.media) {
-    return {
-      type: 'file',
-      url: part.media.url,
-      mediaType: part.media.contentType,
-    };
-  }
-
-  return null;
-}
-
-/**
- * Maps a Genkit MessageData to a Vercel AI SDK UIMessage.
- */
-export function mapGenkitMessageToUI(msg: MessageData, id?: string): UIMessage {
-  const role =
-    msg.role === 'model'
-      ? 'assistant'
-      : msg.role === 'system'
-        ? 'system'
-        : 'user';
-
-  const parts: UIMessagePart[] = (msg.content || [])
-    .map(mapGenkitPartToUI)
-    .filter((p): p is UIMessagePart => p !== null);
-
-  const textContent = parts
-    .filter((p) => p.type === 'text')
-    .map((p) => p.text || '')
-    .join('');
-
-  return {
-    id: id || crypto.randomUUID(),
-    role,
-    content: textContent,
-    parts,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -228,9 +123,8 @@ export function mapGenkitMessageToUI(msg: MessageData, id?: string): UIMessage {
 /**
  * Extracts resolved tool invocations from a UIMessage array.
  *
- * Supports both the classic format (`type === 'tool-invocation'`,
- * `state === 'result'`) and the v6 per-tool format
- * (`type === 'tool-<toolName>'`, `state === 'output-available'`).
+ * Supports the v6 per-tool format (`type === 'tool-<toolName>'`,
+ * `state === 'output-available'`).
  *
  * Used to detect interrupt resume submissions from the frontend.
  */
@@ -248,21 +142,7 @@ export function extractResolvedToolResults(
       result: unknown;
     }> = [];
 
-    for (const part of msg.parts || []) {
-      // Classic format: { type: 'tool-invocation', toolInvocation: { state: 'result', ... } }
-      if (
-        part.type === 'tool-invocation' &&
-        part.toolInvocation?.state === 'result' &&
-        part.toolInvocation.result !== undefined
-      ) {
-        results.push({
-          toolCallId: part.toolInvocation.toolCallId,
-          toolName: part.toolInvocation.toolName,
-          result: part.toolInvocation.result,
-        });
-        continue;
-      }
-
+    for (const part of msg.parts) {
       // v6 per-tool format: { type: 'tool-<name>', toolCallId,
       //   state: 'output-available', output: ... }
       // In SDK v6, ToolUIPart encodes the tool name in the `type` field
@@ -272,7 +152,6 @@ export function extractResolvedToolResults(
       const p = part as unknown as Record<string, unknown>;
       if (
         part.type.startsWith('tool-') &&
-        part.type !== 'tool-invocation' &&
         typeof p.toolCallId === 'string' &&
         p.toolCallId &&
         p.state === 'output-available' &&
