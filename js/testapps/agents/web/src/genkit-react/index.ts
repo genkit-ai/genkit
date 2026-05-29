@@ -26,9 +26,17 @@ export type {
   AgentInputBody,
   AgentMessage,
   AgentPhase,
+  AgentVariant,
   PendingInterrupt,
   ToolCall,
   ToolCallState,
   UseGenkitAgentOptions,
   UseGenkitAgentResult,
 } from './useGenkitAgent.js';
+
+export { useGenkitRunFlow } from './useGenkitRunFlow.js';
+export type {
+  RunFlowStatus,
+  UseGenkitRunFlowOptions,
+  UseGenkitRunFlowResult,
+} from './useGenkitRunFlow.js';

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { runFlow } from 'genkit/beta/client';
 import { useMemo, useState } from 'react';
 import Markdown from 'react-markdown';
 import { useGenkitAgent } from '../genkit-react';
@@ -38,7 +37,6 @@ import { useGenkitAgent } from '../genkit-react';
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/backgroundAgent';
-const ABORT_ENDPOINT = '/api/backgroundAgent/abort';
 
 export default function BackgroundAgent() {
   const [topic, setTopic] = useState('');
@@ -57,15 +55,10 @@ export default function BackgroundAgent() {
     });
   };
 
-  const handleAbort = async () => {
-    if (!agent.snapshotId) return;
-    try {
-      await runFlow({ url: ABORT_ENDPOINT, input: agent.snapshotId });
-    } catch (e) {
-      // Visible via agent.error if polling picks it up; ignore here.
-    }
-    agent.abort();
-  };
+  // `agent.abort()` now handles both the client-side poll cleanup AND the
+  // server-side `/abort` call when the agent is in the background phase.
+  // The page no longer needs to import `runFlow` for this.
+  const handleAbort = () => agent.abort();
 
   const handleReset = () => {
     agent.reset();

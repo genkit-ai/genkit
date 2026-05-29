@@ -84,6 +84,19 @@ export interface UseGenkitAgentOptions {
   headers?: Record<string, string>;
 }
 
+export interface AgentVariant<S = unknown> {
+  /** Continuation token for this branch — pass to `continueFrom` to pick it. */
+  continuationId: string | undefined;
+  /** Raw snapshotId convenience (server-stored agents only). */
+  snapshotId: string | undefined;
+  /** Final assistant message for this branch. */
+  message: AgentMessage | undefined;
+  /** Read-only state snapshot for this branch. */
+  state:
+    | { messages?: AgentMessage[]; custom?: S; artifacts?: any[] }
+    | undefined;
+}
+
 export interface UseGenkitAgentResult<S = unknown> {
   messages: AgentMessage[];
   artifacts: any[];
@@ -108,8 +121,33 @@ export interface UseGenkitAgentResult<S = unknown> {
   respondToInterrupt: (output: unknown) => void;
   restartInterrupt: (metadata?: unknown) => void;
   submit: (input: AgentInputBody) => void;
-  abort: () => void;
+  /**
+   * Cancel the current turn. In the foreground phase, aborts the streaming
+   * connection. In the background phase, **also calls the server's abort
+   * endpoint** (`{url}/abort`) so the background work actually stops, then
+   * clears the local poll. Idempotent if there's nothing in flight.
+   */
+  abort: () => Promise<void>;
   reset: () => void;
+
+  /**
+   * Run the same turn N times in parallel from the current continuation
+   * point, returning all variants. Useful for "pick your variant" UIs.
+   * The agent state is unchanged by this call — pick a variant with
+   * `continueFrom(variant.continuationId)` to advance.
+   */
+  runVariants: (
+    input: AgentInputBody,
+    count?: number
+  ) => Promise<AgentVariant<S>[]>;
+
+  /**
+   * Advance the agent to a specific continuation/snapshot (e.g. one of the
+   * variants returned by `runVariants`, or a snapshotId from a URL).
+   * Re-fetches the snapshot's state via the `/state` endpoint and updates
+   * `messages` / `customState` / `artifacts` accordingly.
+   */
+  continueFrom: (continuationOrSnapshotId: string) => Promise<void>;
 }
 
 export interface AgentInputBody {
@@ -170,6 +208,12 @@ export function useGenkitAgent<S = unknown>(
   );
   const continuationRef = useRef<string | undefined>(resumeFromContinuation);
   continuationRef.current = continuationId;
+
+  // Live refs for the abort() closure, which needs current phase + snapshotId
+  // without re-creating itself on every render.
+  const phaseRef = useRef<AgentPhase>('idle');
+  phaseRef.current = phase;
+  const snapshotIdRef = useRef<string | undefined>(undefined);
 
   const [pendingInterrupt, setPendingInterrupt] =
     useState<PendingInterrupt | null>(null);
@@ -286,12 +330,32 @@ export function useGenkitAgent<S = unknown>(
     setPendingInterrupt(null);
   }, []);
 
-  const abort = useCallback(() => {
+  const abortUrl = options.abortUrl ?? `${url}/abort`;
+
+  const abort = useCallback(async (): Promise<void> => {
+    // Cancel any in-flight fetch (foreground stream) and stop local polling.
     abortRef.current?.abort();
     abortRef.current = null;
+    const wasBackground = phaseRef.current === 'background';
+    const sidForAbort = wasBackground ? snapshotIdRef.current : undefined;
     clearActivePoll();
-    setPhase((p) => (p === 'streaming' ? 'idle' : p));
-  }, []);
+    setPhase((p) => (p === 'streaming' || p === 'background' ? 'idle' : p));
+    // Tell the server to stop the background work too — without this the
+    // background run keeps consuming model/tool budget after the client
+    // gives up. Silently swallow network errors; the user-visible state is
+    // already 'idle'.
+    if (wasBackground && sidForAbort) {
+      try {
+        await runFlow({
+          url: abortUrl,
+          input: sidForAbort,
+          headers,
+        });
+      } catch (_) {
+        // ignore — local state already cleared
+      }
+    }
+  }, [abortUrl, headers]);
 
   const internalSubmit = useCallback(
     (input: AgentInputBody) => {
@@ -499,6 +563,64 @@ export function useGenkitAgent<S = unknown>(
     () => extractSnapshotId(continuationId) ?? undefined,
     [continuationId]
   );
+  snapshotIdRef.current = snapshotId;
+
+  // Run the same turn N times in parallel from the current continuation.
+  // Used for branching UIs ("pick your variant"). Doesn't mutate the
+  // hook's state — caller chooses one and calls `continueFrom`.
+  const runVariants = useCallback(
+    async (input: AgentInputBody, count = 2): Promise<AgentVariant<S>[]> => {
+      const init: AgentInitBody = continuationRef.current
+        ? { continuationId: continuationRef.current }
+        : {};
+      const calls = Array.from({ length: count }, () =>
+        runFlow<AgentOutputBody<S>, AgentInitBody>({
+          url,
+          input,
+          init,
+          headers,
+        })
+      );
+      const outputs = await Promise.all(calls);
+      return outputs.map((o) => ({
+        continuationId: o?.continuationId,
+        snapshotId: o?.continuationId
+          ? (extractSnapshotId(o.continuationId) ?? undefined)
+          : undefined,
+        message: o?.message,
+        state: o?.state,
+      }));
+    },
+    [url, headers]
+  );
+
+  // Advance to a chosen variant / snapshot. Fetches the snapshot's state
+  // from `/state` and rehydrates messages / customState / artifacts.
+  const continueFrom = useCallback(
+    async (continuationOrSnapshotId: string): Promise<void> => {
+      const token = continuationOrSnapshotId.startsWith(SNAP_PREFIX)
+        ? continuationOrSnapshotId
+        : toContinuationToken(continuationOrSnapshotId);
+      const sid = extractSnapshotId(token);
+      setContinuationId(token);
+      if (!sid) return;
+      try {
+        const snapshot = await runFlow<any, AgentInitBody>({
+          url: stateUrl,
+          input: sid,
+          headers,
+        });
+        const state = snapshot?.state ?? {};
+        if (Array.isArray(state.messages)) setMessages(state.messages);
+        if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
+        if (state.custom !== undefined) setCustomState(state.custom as S);
+        setPhase('done');
+      } catch (e) {
+        setError(e instanceof Error ? e : new Error(String(e)));
+      }
+    },
+    [stateUrl, headers]
+  );
 
   return useMemo<UseGenkitAgentResult<S>>(
     () => ({
@@ -520,6 +642,8 @@ export function useGenkitAgent<S = unknown>(
       submit,
       abort,
       reset,
+      runVariants,
+      continueFrom,
     }),
     [
       messages,
@@ -540,6 +664,8 @@ export function useGenkitAgent<S = unknown>(
       submit,
       abort,
       reset,
+      runVariants,
+      continueFrom,
     ]
   );
 }

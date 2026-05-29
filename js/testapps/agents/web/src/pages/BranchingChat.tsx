@@ -14,187 +14,72 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  Part,
-  SessionSnapshot,
-} from 'genkit/beta';
-import {
-  continuationToSnapshotId,
-  encodeSnapshotContinuation,
-  runFlow,
-} from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useGenkitAgent, type AgentVariant } from '../genkit-react';
 
 // ---------------------------------------------------------------------------
 // Branching Chat — "Pick Your Variant" UI
 //
-// Demonstrates:
-//   • Session branching via snapshotId — forking a conversation into
-//     two independent timelines from the same checkpoint
-//   • Parallel `runFlow()` calls from the same snapshotId
-//   • The user picks which variant to continue from, selecting a branch
-//   • Abandoned branches remain in the store (immutable snapshots)
-//   • URL-based session persistence + restore on reload
+// Demonstrates the v2 hook's branching API: `agent.runVariants(input, n)`
+// fires N parallel runs from the same continuation, returning all variants.
+// `agent.continueFrom(snapshotId)` advances the agent to a chosen branch.
+// No raw `runFlow` imports needed — the hook covers parallel branching,
+// snapshot restoration, and continuation round-tripping.
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/branchingAgent';
-const STATE_ENDPOINT = '/api/branchingAgent/state';
-
-/** A settled chat message (user or chosen model response). */
-interface ChatMessage {
-  role: 'user' | 'model';
-  text: string;
-}
-
-/** A pair of variant responses waiting for user selection. */
-interface VariantPair {
-  a: { text: string; snapshotId: string };
-  b: { text: string; snapshotId: string };
-}
 
 export default function BranchingChat() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
   const navigate = useNavigate();
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const agent = useGenkitAgent({
+    url: ENDPOINT,
+    resumeFromSnapshotId: urlSnapshotId,
+  });
+
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [variants, setVariants] = useState<VariantPair | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [restoring, setRestoring] = useState(!!urlSnapshotId);
+  const [variants, setVariants] = useState<AgentVariant[] | null>(null);
+  const [pendingUserText, setPendingUserText] = useState<string | null>(null);
 
-  // The continuationId of the current branch point. Branching keeps the
-  // raw runFlow path (not the hook) because it issues two parallel calls
-  // from the same point — outside the single-stream model the hook owns.
-  const continuationRef = useRef<string | undefined>(
-    urlSnapshotId ? encodeSnapshotContinuation(urlSnapshotId) : undefined
-  );
-
-  // ── Restore session from snapshotId on mount ───────────────────────
+  // Bookmark the chosen branch into the URL whenever the agent advances.
   useEffect(() => {
-    if (!urlSnapshotId) return;
+    if (!agent.snapshotId || agent.snapshotId === urlSnapshotId) return;
+    navigate(`/branching/${agent.snapshotId}`, { replace: true });
+  }, [agent.snapshotId, urlSnapshotId, navigate]);
 
-    let cancelled = false;
-
-    async function restore() {
-      try {
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: urlSnapshotId,
-        });
-
-        if (cancelled) return;
-
-        if (snapshot?.state?.messages) {
-          const restored: ChatMessage[] = [];
-          for (const msg of snapshot.state.messages) {
-            const role = msg.role as ChatMessage['role'];
-            if (role !== 'user' && role !== 'model') continue;
-            const textParts = (msg.content || [])
-              .filter((p: Part) => p.text)
-              .map((p: Part) => p.text);
-            if (textParts.length > 0) {
-              restored.push({ role, text: textParts.join('') });
-            }
-          }
-          setMessages(restored);
-          const sid = snapshot.snapshotId ?? urlSnapshotId;
-          if (sid) continuationRef.current = encodeSnapshotContinuation(sid);
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(`Failed to restore session: ${err.message}`);
-        }
-      } finally {
-        if (!cancelled) setRestoring(false);
-      }
-    }
-
-    restore();
-    return () => {
-      cancelled = true;
-    };
-  }, []); // Only run on mount
-
-  // ── Send a message and generate two variants ─────────────────────────
   const handleSend = useCallback(
     async (text: string) => {
       if (loading || variants) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
       setInput('');
       setLoading(true);
-      setError(null);
-      setVariants(null);
-
-      const msgInput: AgentInput = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
-      };
-
-      // Both calls branch from the same continuationId (or fresh session).
-      const init: AgentInit = continuationRef.current
-        ? { continuationId: continuationRef.current }
-        : {};
-
+      setPendingUserText(text);
       try {
-        const [resultA, resultB] = await Promise.all([
-          runFlow<AgentOutput, AgentInit>({
-            url: ENDPOINT,
-            input: msgInput,
-            init,
-          }),
-          runFlow<AgentOutput, AgentInit>({
-            url: ENDPOINT,
-            input: msgInput,
-            init,
-          }),
-        ]);
-
-        const textA = extractText(resultA);
-        const textB = extractText(resultB);
-
-        setVariants({
-          a: {
-            text: textA,
-            snapshotId: extractSnapshot(resultA?.continuationId) ?? '',
-          },
-          b: {
-            text: textB,
-            snapshotId: extractSnapshot(resultB?.continuationId) ?? '',
-          },
-        });
-      } catch (err: any) {
-        setError(err.message);
+        const v = await agent.runVariants(
+          { messages: [{ role: 'user', content: [{ text }] }] },
+          2
+        );
+        setVariants(v);
       } finally {
         setLoading(false);
       }
     },
-    [loading, variants]
+    [agent, loading, variants]
   );
 
-  // ── User picks a variant ─────────────────────────────────────────────
   const handlePick = useCallback(
-    (which: 'a' | 'b') => {
+    async (which: number) => {
       if (!variants) return;
-
       const chosen = variants[which];
-      continuationRef.current = encodeSnapshotContinuation(chosen.snapshotId);
-
-      navigate(`/branching/${chosen.snapshotId}`, { replace: true });
-
-      setMessages((prev) => [...prev, { role: 'model', text: chosen.text }]);
+      if (!chosen.snapshotId) return;
+      await agent.continueFrom(chosen.snapshotId);
       setVariants(null);
+      setPendingUserText(null);
     },
-    [variants, navigate]
+    [agent, variants]
   );
-
-  function extractSnapshot(continuationId?: string): string | null {
-    return continuationToSnapshotId(continuationId) ?? null;
-  }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -203,27 +88,24 @@ export default function BranchingChat() {
     }
   };
 
-  if (restoring) {
-    return (
-      <div className="page-with-sidebar">
-        <div className="chat-panel">
-          <div className="chat-header">
-            <h2>🔀 Branching Chat</h2>
-            <span className="chat-desc">Restoring session…</span>
-          </div>
-          <div className="chat-messages">
-            <div className="message">
-              <div className="message-role">system</div>
-              <div className="message-text loading">
-                Restoring session from snapshot {urlSnapshotId}…
-              </div>
-            </div>
-          </div>
-        </div>
-        <aside className="info-sidebar" />
-      </div>
-    );
-  }
+  // Render the conversation from the hook's committed `messages` plus the
+  // in-flight user message (which lives outside the agent state until a
+  // variant is picked).
+  const renderedMessages = useMemo(() => {
+    const rows: Array<{ role: string; text: string }> = [];
+    for (const m of agent.messages) {
+      const text =
+        m.content
+          ?.map((p: any) => p.text)
+          .filter(Boolean)
+          .join('') ?? '';
+      if (text) rows.push({ role: m.role, text });
+    }
+    if (pendingUserText) {
+      rows.push({ role: 'user', text: pendingUserText });
+    }
+    return rows;
+  }, [agent.messages, pendingUserText]);
 
   return (
     <div className="page-with-sidebar">
@@ -231,7 +113,7 @@ export default function BranchingChat() {
         <div className="chat-header">
           <div className="chat-header-top">
             <h2>🔀 Branching Chat</h2>
-            {continuationRef.current && (
+            {agent.snapshotId && (
               <Link
                 to="/branching"
                 className="btn btn-new-session"
@@ -246,16 +128,15 @@ export default function BranchingChat() {
           </span>
         </div>
 
-        {/* ── Message list ──────────────────────────────────────────── */}
         <div className="chat-messages">
-          {messages.length === 0 && !loading && !variants && (
+          {renderedMessages.length === 0 && !loading && !variants && (
             <div className="chat-empty">
               Send a message to start. Each response will show two variants —
               pick your favorite to choose which branch to follow.
             </div>
           )}
 
-          {messages.map((msg, i) => (
+          {renderedMessages.map((msg, i) => (
             <div
               key={i}
               className={`message ${msg.role === 'user' ? 'message-user' : ''}`}>
@@ -266,7 +147,6 @@ export default function BranchingChat() {
             </div>
           ))}
 
-          {/* ── Variant picker ────────────────────────────────────── */}
           {loading && (
             <div className="variant-loading">
               <div className="variant-loading-icon">🔀</div>
@@ -280,33 +160,30 @@ export default function BranchingChat() {
                 Pick a variant to continue:
               </div>
               <div className="variant-cards">
-                <button
-                  className="variant-card"
-                  onClick={() => handlePick('a')}>
-                  <div className="variant-card-badge">A</div>
-                  <div className="variant-card-text">{variants.a.text}</div>
-                  <div className="variant-card-action">Use this ✓</div>
-                </button>
-                <button
-                  className="variant-card"
-                  onClick={() => handlePick('b')}>
-                  <div className="variant-card-badge">B</div>
-                  <div className="variant-card-text">{variants.b.text}</div>
-                  <div className="variant-card-action">Use this ✓</div>
-                </button>
+                {variants.map((v, i) => (
+                  <button
+                    key={i}
+                    className="variant-card"
+                    onClick={() => handlePick(i)}>
+                    <div className="variant-card-badge">
+                      {String.fromCharCode(65 + i)}
+                    </div>
+                    <div className="variant-card-text">{variantText(v)}</div>
+                    <div className="variant-card-action">Use this ✓</div>
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {error && (
+          {agent.error && (
             <div className="message message-system">
               <div className="message-role">system</div>
-              <div className="message-text">Error: {error}</div>
+              <div className="message-text">Error: {agent.error.message}</div>
             </div>
           )}
         </div>
 
-        {/* ── Input ───────────────────────────────────────────────── */}
         <div className="chat-input-area">
           <input
             className="chat-input"
@@ -328,72 +205,53 @@ export default function BranchingChat() {
         </div>
       </div>
 
-      {/* ── Info sidebar ──────────────────────────────────────────────── */}
       <aside className="info-sidebar">
-        <h3>📋 How It Works</h3>
+        <h3>📋 v2 Branching API</h3>
         <ol>
           <li>
-            User sends a message. The client fires <strong>two parallel</strong>{' '}
-            <code>runFlow()</code> calls, both with the same{' '}
-            <code>{'init: { snapshotId }'}</code>.
+            <code>agent.runVariants(input, 2)</code> fires two parallel runs
+            from the current continuation. Returns an{' '}
+            <code>AgentVariant[]</code> with each branch's{' '}
+            <code>continuationId</code>, <code>message</code>, and{' '}
+            <code>state</code>.
           </li>
           <li>
-            Each call creates an <strong>independent branch</strong> from the
-            same conversation checkpoint. The LLM's non-determinism produces
-            different responses.
-          </li>
-          <li>Both variants are displayed side-by-side. The user picks one.</li>
-          <li>
-            The chosen variant's <code>snapshotId</code> becomes the new branch
-            point for the next turn and is pushed into the URL for persistence.
+            User picks one → <code>agent.continueFrom(variant.snapshotId)</code>{' '}
+            advances the hook to that branch (fetches its <code>/state</code> +
+            updates <code>messages</code>/<code>customState</code>/
+            <code>artifacts</code> reactively).
           </li>
           <li>
-            On reload, the client calls <code>/state</code> with the URL's
-            snapshotId to restore the conversation history.
+            Discarded variants stay in the store as immutable snapshots — the
+            user could revisit them via their URL.
           </li>
         </ol>
 
-        <h4>Key Concept</h4>
-        <p>
-          A <code>snapshotId</code> is an <strong>immutable checkpoint</strong>.
-          You can branch from it as many times as you want — each branch creates
-          a new, independent snapshot. This is like Git: the original commit
-          doesn't change when you create branches from it.
-        </p>
+        <h4>Page code</h4>
+        <pre>{`const agent = useGenkitAgent({
+  url: '/api/branchingAgent',
+  resumeFromSnapshotId: urlSnapshotId,
+});
 
-        <h4>Key APIs</h4>
-        <pre>{`// Branch: two calls from same snapshot
-const [a, b] = await Promise.all([
-  runFlow({
-    url: '/api/branchingAgent',
-    input: { messages: [...] },
-    init: { snapshotId },
-  }),
-  runFlow({
-    url: '/api/branchingAgent',
-    input: { messages: [...] },
-    init: { snapshotId },
-  }),
-]);
+// Generate variants
+const variants = await agent.runVariants(
+  { messages: [...] },
+  2
+);
 
-// a.snapshotId !== b.snapshotId
-// Both branch from the same point
-// Pick one to continue from`}</pre>
+// Pick one
+await agent.continueFrom(variants[i].snapshotId);`}</pre>
       </aside>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
+function variantText(v: AgentVariant): string {
+  if (!v.message) return '(no message)';
+  return (
+    v.message.content
+      ?.map((p: any) => p.text)
+      .filter(Boolean)
+      .join('') || JSON.stringify(v.message, null, 2)
+  );
 }

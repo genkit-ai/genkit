@@ -27,12 +27,12 @@ import type {
 import {
   continuationToSnapshotId,
   encodeSnapshotContinuation,
-  runFlow,
   streamFlow,
 } from 'genkit/beta/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitRunFlow } from '../genkit-react';
 
 // ---------------------------------------------------------------------------
 // Coding Agent — AI coding assistant with filesystem access
@@ -126,17 +126,30 @@ export default function CodingAgent() {
   const stateRef = useRef<SessionState | undefined>(undefined);
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
-  // ── Fetch workspace file tree via runFlow() ────────────────────────────
+  // Sibling endpoint hooks — no raw `runFlow` imports needed.
+  const filesFlow = useGenkitRunFlow<void, { files: WorkspaceFile[] }>({
+    url: WORKSPACE_FILES_ENDPOINT,
+  });
+  const fileFlow = useGenkitRunFlow<string, { path: string; content: string }>({
+    url: WORKSPACE_FILE_ENDPOINT,
+  });
+  const snapshotFlow = useGenkitRunFlow<string, SessionSnapshot>({
+    url: STATE_ENDPOINT,
+  });
+
+  // ── Fetch workspace file tree ──────────────────────────────────────────
+  // Depend on the stable `.run` reference, not the full hook result —
+  // otherwise the inevitable re-render after `setFiles` would recreate
+  // `refreshFiles`, re-firing the useEffect and looping forever.
+  const filesRun = filesFlow.run;
   const refreshFiles = useCallback(async () => {
     try {
-      const data = await runFlow<{ files: WorkspaceFile[] }>({
-        url: WORKSPACE_FILES_ENDPOINT,
-      });
+      const data = await filesRun();
       setFiles(data.files || []);
     } catch {
       // ignore — workspace may not exist yet
     }
-  }, []);
+  }, [filesRun]);
 
   // Load files on mount and after each agent response
   useEffect(() => {
@@ -151,13 +164,8 @@ export default function CodingAgent() {
 
     async function restore() {
       try {
-        // Call the /state endpoint to fetch the snapshot data.
-        // getSnapshotDataAction takes a snapshotId string as input
-        // and returns a SessionSnapshot with the full message history.
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: urlSnapshotId,
-        });
+        // Fetch the session snapshot via the `/state` endpoint.
+        const snapshot = await snapshotFlow.run(urlSnapshotId!);
 
         if (cancelled) return;
 
@@ -267,22 +275,23 @@ export default function CodingAgent() {
     };
   }, []); // Only run on mount
 
-  // ── Fetch a single file's content via runFlow() ────────────────────────
-  const viewFile = useCallback(async (filePath: string) => {
-    setSelectedFile(filePath);
-    setFileLoading(true);
-    try {
-      const data = await runFlow<{ path: string; content: string }>({
-        url: WORKSPACE_FILE_ENDPOINT,
-        input: filePath,
-      });
-      setFileContent(data.content || '');
-    } catch {
-      setFileContent('(failed to load file)');
-    } finally {
-      setFileLoading(false);
-    }
-  }, []);
+  // ── Fetch a single file's content ──────────────────────────────────────
+  const fileRun = fileFlow.run;
+  const viewFile = useCallback(
+    async (filePath: string) => {
+      setSelectedFile(filePath);
+      setFileLoading(true);
+      try {
+        const data = await fileRun(filePath);
+        setFileContent(data.content || '');
+      } catch {
+        setFileContent('(failed to load file)');
+      } finally {
+        setFileLoading(false);
+      }
+    },
+    [fileRun]
+  );
 
   // ── Send a regular user message ──────────────────────────────────────
   const handleSend = useCallback(
