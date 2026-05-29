@@ -27,8 +27,8 @@ import type {
 import getPort from 'get-port';
 import type * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import type { UIMessage } from 'ai';
 import { GenkitChatTransport, type UIMessageChunk } from '../src/client.js';
-import type { UIMessage } from '../src/mapping.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,7 +57,6 @@ function makeUIMessage(
   return {
     id: `msg-${crypto.randomUUID()}`,
     role,
-    content: text,
     parts: parts ?? [{ type: 'text', text }],
   };
 }
@@ -478,24 +477,20 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(chunkTypes(chunks1)[0], 'start');
     assert.strictEqual(chunkTypes(chunks1).at(-1), 'finish');
 
-    // ── Phase 2: Resume with resolved tool results ───────────────────
+    // ── Phase 2: Resume with resolved tool results (v6 format) ───────
     const messagesForResume: UIMessage[] = [
       makeUIMessage('user', 'Delete my account'),
       {
         id: 'assistant-msg-1',
         role: 'assistant',
-        content: '',
         parts: [
           {
-            type: 'tool-invocation',
-            toolInvocation: {
-              toolCallId: 'interrupt-ref-1',
-              toolName: 'confirmAction',
-              args: { action: 'delete account' },
-              state: 'result',
-              result: { confirmed: true },
-            },
-          },
+            type: 'tool-confirmAction',
+            toolCallId: 'interrupt-ref-1',
+            state: 'output-available',
+            input: { action: 'delete account' },
+            output: { confirmed: true },
+          } as UIMessage['parts'][number],
         ],
       },
     ];
@@ -618,7 +613,6 @@ describe('GenkitChatTransport e2e', () => {
       {
         id: 'assistant-msg-v6',
         role: 'assistant',
-        content: '',
         parts: [
           // v6 per-tool format: no `toolInvocation` wrapper, no `toolName`
           {
@@ -628,7 +622,7 @@ describe('GenkitChatTransport e2e', () => {
             state: 'output-available',
             input: { action: 'transfer funds' },
             output: { confirmed: true },
-          } as unknown as UIMessage['parts'][number],
+          } as UIMessage['parts'][number],
         ],
       },
       makeUIMessage('user', ''), // phantom empty message from sendMessage({ text: '' })
