@@ -15,13 +15,16 @@
  */
 
 import type { UIMessage } from 'ai';
+import type { MessageData } from 'genkit';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
   extractResolvedToolResults,
   findLastUserMessage,
+  mapGenkitMessageToUI,
   mapUIMessageToGenkit,
   mapUIPartToGenkit,
+  messagesFromSnapshot,
 } from '../src/mapping.js';
 
 // ---------------------------------------------------------------------------
@@ -134,6 +137,44 @@ describe('mapUIPartToGenkit', () => {
       mapUIPartToGenkit({ type: 'step-start' } as UIMessage['parts'][number]),
       []
     );
+  });
+
+  it('preserves part metadata on text parts (UI → Genkit)', () => {
+    const result = mapUIPartToGenkit({
+      type: 'text',
+      text: 'hello',
+      metadata: { foo: 'bar' },
+    } as unknown as UIMessage['parts'][number]);
+    assert.deepStrictEqual(result, [
+      { text: 'hello', metadata: { foo: 'bar' } },
+    ]);
+  });
+
+  it('preserves part metadata on tool parts (request + response)', () => {
+    const result = mapUIPartToGenkit({
+      type: 'tool-getWeather',
+      toolCallId: 'call-9',
+      state: 'output-available',
+      input: { location: 'Paris' },
+      output: { weather: 'sunny' },
+      metadata: { filesystemMiddlewareTool: true },
+    } as unknown as UIMessage['parts'][number]);
+    assert.strictEqual(result.length, 2);
+    assert.deepStrictEqual(result[0].metadata, {
+      filesystemMiddlewareTool: true,
+    });
+    assert.deepStrictEqual(result[1].metadata, {
+      filesystemMiddlewareTool: true,
+    });
+  });
+
+  it('ignores non-object metadata', () => {
+    const result = mapUIPartToGenkit({
+      type: 'text',
+      text: 'hello',
+      metadata: 'not-an-object',
+    } as unknown as UIMessage['parts'][number]);
+    assert.deepStrictEqual(result, [{ text: 'hello' }]);
   });
 });
 
@@ -337,5 +378,248 @@ describe('findLastUserMessage', () => {
       { id: '1', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] },
     ];
     assert.strictEqual(findLastUserMessage(messages), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Genkit → UIMessage (session restore)
+// ---------------------------------------------------------------------------
+
+describe('mapGenkitMessageToUI', () => {
+  it('maps a model text message to an assistant UIMessage', () => {
+    const msg: MessageData = {
+      role: 'model',
+      content: [{ text: 'Hello there' }],
+    };
+    const ui = mapGenkitMessageToUI(msg, undefined, 'm-1');
+    assert.strictEqual(ui.id, 'm-1');
+    assert.strictEqual(ui.role, 'assistant');
+    assert.deepStrictEqual(ui.parts, [{ type: 'text', text: 'Hello there' }]);
+  });
+
+  it('maps a user message', () => {
+    const ui = mapGenkitMessageToUI(
+      { role: 'user', content: [{ text: 'hi' }] },
+      undefined,
+      'm-2'
+    );
+    assert.strictEqual(ui.role, 'user');
+    assert.deepStrictEqual(ui.parts, [{ type: 'text', text: 'hi' }]);
+  });
+
+  it('maps reasoning and media parts', () => {
+    const ui = mapGenkitMessageToUI(
+      {
+        role: 'model',
+        content: [
+          { reasoning: 'thinking' },
+          {
+            media: {
+              url: 'data:image/png;base64,xxx',
+              contentType: 'image/png',
+            },
+          },
+        ],
+      },
+      undefined,
+      'm-3'
+    );
+    assert.deepStrictEqual(ui.parts, [
+      { type: 'reasoning', text: 'thinking' },
+      {
+        type: 'file',
+        url: 'data:image/png;base64,xxx',
+        mediaType: 'image/png',
+      },
+    ]);
+  });
+
+  it('drops empty reasoning parts', () => {
+    const ui = mapGenkitMessageToUI(
+      { role: 'model', content: [{ reasoning: '' }, { text: 'answer' }] },
+      undefined,
+      'm-4'
+    );
+    assert.deepStrictEqual(ui.parts, [{ type: 'text', text: 'answer' }]);
+  });
+
+  it('emits an unresolved tool request as input-available', () => {
+    const ui = mapGenkitMessageToUI(
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              ref: 'r-1',
+              name: 'getWeather',
+              input: { city: 'NYC' },
+            },
+          },
+        ],
+      },
+      undefined,
+      'm-5'
+    );
+    assert.deepStrictEqual(ui.parts, [
+      {
+        type: 'tool-getWeather',
+        toolCallId: 'r-1',
+        input: { city: 'NYC' },
+        state: 'input-available',
+      },
+    ]);
+  });
+
+  it('pairs a tool request with its response into output-available', () => {
+    const responses = new Map<string, unknown>([['r-2', { temp: 72 }]]);
+    const ui = mapGenkitMessageToUI(
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              ref: 'r-2',
+              name: 'getWeather',
+              input: { city: 'NYC' },
+            },
+          },
+        ],
+      },
+      responses,
+      'm-6'
+    );
+    assert.deepStrictEqual(ui.parts, [
+      {
+        type: 'tool-getWeather',
+        toolCallId: 'r-2',
+        input: { city: 'NYC' },
+        state: 'output-available',
+        output: { temp: 72 },
+      },
+    ]);
+  });
+
+  it('preserves part metadata (Genkit → UI)', () => {
+    const ui = mapGenkitMessageToUI(
+      {
+        role: 'model',
+        content: [{ text: 'hi', metadata: { foo: 'bar' } }],
+      },
+      undefined,
+      'm-7'
+    );
+    assert.deepStrictEqual(ui.parts, [
+      { type: 'text', text: 'hi', metadata: { foo: 'bar' } },
+    ]);
+  });
+});
+
+describe('messagesFromSnapshot', () => {
+  it('maps a simple user/model conversation', () => {
+    const messages: MessageData[] = [
+      { role: 'user', content: [{ text: 'hello' }] },
+      { role: 'model', content: [{ text: 'hi there' }] },
+    ];
+    const ui = messagesFromSnapshot(messages);
+    assert.strictEqual(ui.length, 2);
+    assert.strictEqual(ui[0].role, 'user');
+    assert.strictEqual(ui[1].role, 'assistant');
+    assert.deepStrictEqual(ui[1].parts, [{ type: 'text', text: 'hi there' }]);
+  });
+
+  it('merges tool responses (in separate tool messages) into request parts', () => {
+    const messages: MessageData[] = [
+      { role: 'user', content: [{ text: 'weather?' }] },
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              ref: 'r-1',
+              name: 'getWeather',
+              input: { city: 'NYC' },
+            },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              ref: 'r-1',
+              name: 'getWeather',
+              output: { temp: 72 },
+            },
+          },
+        ],
+      },
+      { role: 'model', content: [{ text: 'It is 72F.' }] },
+    ];
+    const ui = messagesFromSnapshot(messages);
+    // tool-role message is omitted; its response is merged into the request.
+    assert.strictEqual(ui.length, 3);
+    assert.strictEqual(ui[0].role, 'user');
+    assert.deepStrictEqual(ui[1].parts, [
+      {
+        type: 'tool-getWeather',
+        toolCallId: 'r-1',
+        input: { city: 'NYC' },
+        state: 'output-available',
+        output: { temp: 72 },
+      },
+    ]);
+    assert.deepStrictEqual(ui[2].parts, [{ type: 'text', text: 'It is 72F.' }]);
+  });
+
+  it('emits an unresolved interrupt as input-available', () => {
+    const messages: MessageData[] = [
+      { role: 'user', content: [{ text: 'transfer $100' }] },
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              ref: 'r-9',
+              name: 'userApproval',
+              input: { amount: 100 },
+            },
+          },
+        ],
+      },
+    ];
+    const ui = messagesFromSnapshot(messages);
+    assert.strictEqual(ui.length, 2);
+    assert.deepStrictEqual(ui[1].parts, [
+      {
+        type: 'tool-userApproval',
+        toolCallId: 'r-9',
+        input: { amount: 100 },
+        state: 'input-available',
+      },
+    ]);
+  });
+
+  it('skips messages that produce no renderable parts', () => {
+    const messages: MessageData[] = [
+      { role: 'user', content: [{ text: 'hi' }] },
+      // A tool-only message becomes empty after merging — and is skipped.
+      {
+        role: 'tool',
+        content: [{ toolResponse: { ref: 'x', name: 'foo', output: {} } }],
+      },
+    ];
+    const ui = messagesFromSnapshot(messages);
+    assert.strictEqual(ui.length, 1);
+    assert.strictEqual(ui[0].role, 'user');
+  });
+
+  it('assigns stable, unique ids', () => {
+    const ui = messagesFromSnapshot([
+      { role: 'user', content: [{ text: 'a' }] },
+      { role: 'model', content: [{ text: 'b' }] },
+    ]);
+    assert.strictEqual(ui[0].id, 'restored-0');
+    assert.strictEqual(ui[1].id, 'restored-1');
   });
 });

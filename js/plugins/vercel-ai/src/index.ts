@@ -19,8 +19,10 @@ export type { UIMessage } from 'ai';
 export {
   extractResolvedToolResults,
   findLastUserMessage,
+  mapGenkitMessageToUI,
   mapUIMessageToGenkit,
   mapUIPartToGenkit,
+  messagesFromSnapshot,
   restartInterrupt,
   type ResolvedToolResult,
   type RestartInterruptOutput,

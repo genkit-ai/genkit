@@ -29,8 +29,13 @@ import {
 import type { PendingInterrupt } from './store.js';
 import { InMemorySnapshotStore, type SnapshotStore } from './store.js';
 
-export { restartInterrupt } from './mapping.js';
+export {
+  mapGenkitMessageToUI,
+  messagesFromSnapshot,
+  restartInterrupt,
+} from './mapping.js';
 export type { ResolvedToolResult, RestartInterruptOutput } from './mapping.js';
+
 export {
   InMemorySnapshotStore,
   LocalStorageSnapshotStore,
@@ -143,6 +148,39 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
    */
   async clearChat(chatId: string): Promise<void> {
     await this.store.delete(chatId);
+  }
+
+  /**
+   * Restores a chat's server-side continuity so the *next* turn resumes from a
+   * previously captured Genkit `snapshotId`.
+   *
+   * Use this together with {@link messagesFromSnapshot} to rehydrate a
+   * conversation after a page reload: load the snapshot from your server (e.g.
+   * via a Genkit `/state` flow), seed `useChat` with the mapped messages, and
+   * call this method so the transport continues from the correct snapshot.
+   *
+   * @example
+   * ```ts
+   * import { messagesFromSnapshot } from '@genkit-ai/vercel-ai';
+   *
+   * const snapshot = await runFlow({ url: '/api/chat/weather/state', input: id });
+   * await transport.restoreChat(chatId, snapshot.snapshotId);
+   * // pass messagesFromSnapshot(snapshot.state.messages) to useChat({ messages })
+   * ```
+   *
+   * @param chatId The chat to restore (must match the `id` used by `useChat`).
+   * @param snapshotId The Genkit snapshot id to resume the next turn from.
+   */
+  async restoreChat(chatId: string, snapshotId: string): Promise<void> {
+    const existing = (await this.store.get(chatId)) ?? {};
+    await this.store.set(chatId, {
+      ...existing,
+      snapshotId,
+      // A restored snapshot is the new baseline; clear the previous-turn
+      // pointer so a `regenerate-message` doesn't try to resume from a stale
+      // (pre-restore) snapshot.
+      previousSnapshotId: undefined,
+    });
   }
 
   private resolveHeaders(

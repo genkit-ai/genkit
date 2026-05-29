@@ -39,6 +39,38 @@ function mapRole(role: UIMessage['role']): MessageData['role'] {
 }
 
 /**
+ * Maps a Genkit role to a Vercel AI SDK role.
+ */
+function mapGenkitRole(role: MessageData['role']): UIMessage['role'] {
+  switch (role) {
+    case 'model':
+      return 'assistant';
+    case 'system':
+      return 'system';
+    case 'user':
+    default:
+      return 'user';
+  }
+}
+
+/**
+ * Extracts a plain-object `metadata` value from an AI SDK UI part, if present.
+ *
+ * AI SDK part types don't all formally declare a `metadata` field, but the
+ * transport (and middleware-aware UIs) may attach one. We read it defensively
+ * so Genkit part metadata survives a UI → Genkit round-trip.
+ */
+function extractPartMetadata(
+  part: unknown
+): Record<string, unknown> | undefined {
+  const md = (part as { metadata?: unknown } | null)?.metadata;
+  if (md && typeof md === 'object' && !Array.isArray(md)) {
+    return md as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+/**
  * Maps a single Vercel AI SDK v6 UIMessagePart to zero or more Genkit Parts.
  *
  * Handles `text`, `file`, and tool parts (both `ToolUIPart` with
@@ -48,8 +80,15 @@ function mapRole(role: UIMessage['role']): MessageData['role'] {
  * and a `toolResponse` part (matching Genkit's conversation model).
  */
 export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
+  // Genkit part metadata that may have been attached to the UI part (e.g. by
+  // a middleware-aware UI or a previous Genkit → UI mapping). Preserved so it
+  // survives a UI → Genkit round-trip.
+  const metadata = extractPartMetadata(part);
+  const withMetadata = <T extends Part>(p: T): T =>
+    metadata ? ({ ...p, metadata } as T) : p;
+
   if (part.type === 'text') {
-    return [{ text: part.text }];
+    return [withMetadata({ text: part.text })];
   }
 
   if (part.type === 'reasoning') {
@@ -60,18 +99,18 @@ export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
     // skips `reasoning === ''`).
     const reasoning = (part as { text?: unknown }).text;
     return typeof reasoning === 'string' && reasoning !== ''
-      ? [{ reasoning }]
+      ? [withMetadata({ reasoning })]
       : [];
   }
 
   if (part.type === 'file') {
     return [
-      {
+      withMetadata({
         media: {
           url: part.url,
           contentType: part.mediaType,
         },
-      },
+      }),
     ];
   }
 
@@ -93,23 +132,25 @@ export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
           : 'unknown';
 
     const parts: Part[] = [
-      {
+      withMetadata({
         toolRequest: {
           ref: toolCallId,
           name: toolName,
           input: p.input,
         },
-      },
+      }),
     ];
 
     if (p.state === 'output-available' && p.output !== undefined) {
-      parts.push({
-        toolResponse: {
-          ref: toolCallId,
-          name: toolName,
-          output: p.output,
-        },
-      });
+      parts.push(
+        withMetadata({
+          toolResponse: {
+            ref: toolCallId,
+            name: toolName,
+            output: p.output,
+          },
+        })
+      );
     }
 
     return parts;
@@ -127,6 +168,155 @@ export function mapUIMessageToGenkit(msg: UIMessage): MessageData {
   const role = mapRole(msg.role);
   const genkitParts: Part[] = msg.parts.flatMap(mapUIPartToGenkit);
   return { role, content: genkitParts };
+}
+
+// ---------------------------------------------------------------------------
+// Genkit → UIMessage (session restore)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a single Genkit {@link Part} to zero or more AI SDK UI parts.
+ *
+ * `toolResponse` outputs live in separate (`tool`-role) Genkit messages, so a
+ * `toolRequest` is paired with its response via `responsesByRef` to produce a
+ * single AI SDK tool part: `output-available` when the response is known, or
+ * `input-available` when it is still pending (e.g. an unresolved interrupt).
+ *
+ * Standalone `toolResponse` parts are skipped here — they're merged into the
+ * matching request's tool part instead of producing a separate one.
+ */
+function mapGenkitPartToUI(
+  part: Part,
+  responsesByRef?: Map<string, unknown>
+): UIMessage['parts'] {
+  // Preserve Genkit part metadata on the UI part so it survives a
+  // Genkit → UI → Genkit round-trip (read back by extractPartMetadata).
+  const metadata =
+    part.metadata && typeof part.metadata === 'object'
+      ? (part.metadata as Record<string, unknown>)
+      : undefined;
+  const withMetadata = (
+    p: Record<string, unknown>
+  ): UIMessage['parts'][number] =>
+    (metadata ? { ...p, metadata } : p) as UIMessage['parts'][number];
+
+  if (typeof part.text === 'string') {
+    return [withMetadata({ type: 'text', text: part.text })];
+  }
+
+  if (typeof part.reasoning === 'string') {
+    return part.reasoning !== ''
+      ? [withMetadata({ type: 'reasoning', text: part.reasoning })]
+      : [];
+  }
+
+  if (part.media) {
+    return [
+      withMetadata({
+        type: 'file',
+        url: part.media.url,
+        mediaType: part.media.contentType,
+      }),
+    ];
+  }
+
+  if (part.toolRequest) {
+    const tr = part.toolRequest;
+    const toolCallId = tr.ref ?? crypto.randomUUID();
+    const base: Record<string, unknown> = {
+      type: `tool-${tr.name}`,
+      toolCallId,
+      input: tr.input,
+    };
+    if (responsesByRef?.has(toolCallId)) {
+      return [
+        withMetadata({
+          ...base,
+          state: 'output-available',
+          output: responsesByRef.get(toolCallId),
+        }),
+      ];
+    }
+    return [withMetadata({ ...base, state: 'input-available' })];
+  }
+
+  // Standalone toolResponse (paired with a request above) or any other part
+  // type without a direct UI equivalent is skipped.
+  return [];
+}
+
+/**
+ * Maps a single Genkit {@link MessageData} to an AI SDK {@link UIMessage}.
+ *
+ * Pass `responsesByRef` (built across the whole conversation) so each
+ * `toolRequest` can be paired with the `toolResponse` that resolved it, even
+ * though they live in different messages. When omitted, all tool parts are
+ * emitted in the `input-available` state.
+ */
+export function mapGenkitMessageToUI(
+  msg: MessageData,
+  responsesByRef?: Map<string, unknown>,
+  id?: string
+): UIMessage {
+  const parts = (msg.content ?? []).flatMap((part) =>
+    mapGenkitPartToUI(part, responsesByRef)
+  );
+  return {
+    id: id ?? `restored-${crypto.randomUUID()}`,
+    role: mapGenkitRole(msg.role),
+    parts,
+  };
+}
+
+/**
+ * Converts the `messages` of a Genkit `SessionSnapshot` (an array of
+ * {@link MessageData}) into AI SDK {@link UIMessage}s suitable for seeding
+ * `useChat` (via its `messages` option or `setMessages`) to rehydrate a
+ * previous conversation after a reload.
+ *
+ * Tool requests and their responses (which Genkit stores in separate
+ * `model`/`tool` messages) are merged into single AI SDK tool parts, so the
+ * UI renders each tool call as one element with both its input and output.
+ * `tool`-role messages are therefore omitted from the result. Unresolved tool
+ * requests (e.g. a pending interrupt) are emitted in the `input-available`
+ * state.
+ *
+ * To also resume the *next* turn from the restored snapshot, seed the
+ * transport with {@link GenkitChatTransport.restoreChat} using the snapshot's
+ * `snapshotId`.
+ *
+ * @example
+ * ```ts
+ * const snapshot = await runFlow({ url: '/api/chat/weather/state', input: snapshotId });
+ * const messages = messagesFromSnapshot(snapshot.state.messages);
+ * await transport.restoreChat(chatId, snapshot.snapshotId);
+ * // pass `messages` to useChat({ messages })
+ * ```
+ */
+export function messagesFromSnapshot(messages: MessageData[]): UIMessage[] {
+  // Collect every tool response by ref so a request in one message can be
+  // paired with its response in another (Genkit stores them separately).
+  const responsesByRef = new Map<string, unknown>();
+  for (const msg of messages) {
+    for (const part of msg.content ?? []) {
+      if (part.toolResponse?.ref) {
+        responsesByRef.set(part.toolResponse.ref, part.toolResponse.output);
+      }
+    }
+  }
+
+  const result: UIMessage[] = [];
+  let index = 0;
+  for (const msg of messages) {
+    // tool-role messages only carry responses, which are merged into the
+    // matching request's tool part — skip them.
+    if (msg.role === 'tool') continue;
+    const ui = mapGenkitMessageToUI(msg, responsesByRef, `restored-${index}`);
+    index++;
+    // Drop messages that produced no renderable parts.
+    if (ui.parts.length > 0) result.push(ui);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

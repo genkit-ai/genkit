@@ -251,7 +251,59 @@ class MyStore implements SnapshotStore {
 }
 ```
 
+#### Restoring a conversation after a reload
+
+The transport tracks the *server-side* `snapshotId` so the next turn resumes
+from the right place — but it does **not** persist the rendered messages
+(`useChat` owns those). To fully rehydrate a previous conversation (e.g. after
+a hard reload, or when re-opening a saved chat), you need to do two things:
+
+1. Rebuild the visible messages for `useChat` from a Genkit `SessionSnapshot`.
+2. Seed the transport so the *next* turn resumes from that snapshot.
+
+Use `messagesFromSnapshot` for (1) and `transport.restoreChat` for (2):
+
+```tsx
+import { useChat } from '@ai-sdk/react';
+import { GenkitChatTransport } from '@genkit-ai/vercel-ai/client';
+import { messagesFromSnapshot } from '@genkit-ai/vercel-ai';
+import { runFlow } from 'genkit/beta/client';
+import { useEffect, useMemo, useState } from 'react';
+
+const chatId = 'my-chat';
+
+export default function RestoredChat({ snapshotId }: { snapshotId: string }) {
+  const transport = useMemo(() => new GenkitChatTransport({ url: '/api/chat/weather' }), []);
+  const [initialMessages, setInitialMessages] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      // Load the snapshot from a Genkit `/state` flow (returns a SessionSnapshot).
+      const snapshot = await runFlow({ url: '/api/chat/weather/state', input: snapshotId });
+      // 1. Rebuild the visible message list.
+      setInitialMessages(messagesFromSnapshot(snapshot.state.messages));
+      // 2. Seed the transport so the next turn resumes from this snapshot.
+      await transport.restoreChat(chatId, snapshot.snapshotId);
+    })();
+  }, [snapshotId, transport]);
+
+  const { messages, sendMessage } = useChat({ id: chatId, transport, messages: initialMessages });
+  // ...render messages, send new turns — continuity is preserved.
+}
+```
+
+`messagesFromSnapshot` merges Genkit's separate tool request / tool response
+messages into single AI SDK tool parts (so each tool call renders as one
+element), maps `reasoning` and `media` parts, preserves part `metadata`, and
+emits any unresolved tool request (e.g. a pending interrupt) in the
+`input-available` state so the UI can still resolve it.
+
+> **Tip:** pass the same `id` to `useChat` that you pass to
+> `transport.restoreChat` so the snapshot and the rendered messages stay in
+> sync.
+
 #### Regenerating a response
+
 
 When the UI triggers a regeneration (the AI SDK sends
 `trigger: 'regenerate-message'`), the transport re-runs the **last turn** from
@@ -348,8 +400,15 @@ helper functions used by the transport:
 | -------- | --------- | ----------- |
 | `mapUIMessageToGenkit(msg)` | UI → Genkit | Convert a Vercel `UIMessage` to a Genkit `MessageData` |
 | `mapUIPartToGenkit(part)` | UI → Genkit | Convert a single `UIMessagePart` to Genkit `Part[]` |
+| `messagesFromSnapshot(msgs)` | Genkit → UI | Convert a `SessionSnapshot`'s `state.messages` into `UIMessage[]` for rehydrating `useChat` (pairs tool requests/responses, preserves metadata) |
+| `mapGenkitMessageToUI(msg)` | Genkit → UI | Convert a single Genkit `MessageData` into a `UIMessage` |
 | `extractResolvedToolResults(msgs)` | — | Extract resolved tool invocation results from the message array |
 | `findLastUserMessage(msgs)` | — | Find the last user message in a `UIMessage[]` |
+
+Tool/part metadata is preserved in both directions: `mapUIPartToGenkit`
+carries a UI part's `metadata` onto the Genkit part, and `messagesFromSnapshot`
+carries a Genkit part's `metadata` back onto the UI part.
+
 
 The `UIMessage` type is also re-exported from the `ai` package for convenience.
 
