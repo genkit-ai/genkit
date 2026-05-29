@@ -175,10 +175,32 @@ export function useGenkitAgent<S = unknown>(
     useState<PendingInterrupt | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  // Active background-poll timeout. Cleared on reset/abort/unmount so we
+  // don't leak timers or call setState on an unmounted hook.
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Generation token bumped on every reset/abort so an in-flight poll cycle
+  // started before the reset stops calling setState.
+  const pollGenRef = useRef(0);
+  // Continuations we've already rehydrated this mount — avoids re-fetching
+  // the snapshot every time the URL pushes a new id mid-conversation.
+  const rehydratedRef = useRef<Set<string>>(new Set());
 
-  // Resume from snapshot on mount if requested.
+  function clearActivePoll() {
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    pollGenRef.current += 1;
+  }
+
+  // Resume from snapshot on mount (or when a new external `resumeFrom*`
+  // arrives). Skips when we've already rehydrated this exact token —
+  // important because `agent.snapshotId` driving a URL push would
+  // otherwise feed back into this effect and re-fetch.
   useEffect(() => {
     if (!resumeFromContinuation) return;
+    if (rehydratedRef.current.has(resumeFromContinuation)) return;
+    rehydratedRef.current.add(resumeFromContinuation);
     let cancelled = false;
     (async () => {
       try {
@@ -211,12 +233,17 @@ export function useGenkitAgent<S = unknown>(
   }, [resumeFromContinuation]);
 
   function startBackgroundPoll(snapshotId: string) {
+    // Capture the current generation; if reset/abort fires we'll bail.
+    const gen = pollGenRef.current;
     const tick = async () => {
+      pollTimeoutRef.current = null;
+      if (gen !== pollGenRef.current) return; // superseded — drop silently.
       try {
         const snap = await runFlow<any, AgentInitBody>({
           url: stateUrl,
           input: snapshotId,
         });
+        if (gen !== pollGenRef.current) return;
         const state = snap?.state ?? {};
         if (Array.isArray(state.messages)) setMessages(state.messages);
         if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
@@ -230,18 +257,21 @@ export function useGenkitAgent<S = unknown>(
           setError(new Error(snap.error?.message ?? 'background run failed'));
           return;
         }
-        setTimeout(tick, 2000);
+        pollTimeoutRef.current = setTimeout(tick, 2000);
       } catch (e) {
+        if (gen !== pollGenRef.current) return;
         setError(e instanceof Error ? e : new Error(String(e)));
         setPhase('error');
       }
     };
-    setTimeout(tick, 1000);
+    pollTimeoutRef.current = setTimeout(tick, 1000);
   }
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    clearActivePoll();
+    rehydratedRef.current = new Set();
     setMessages([]);
     setArtifacts([]);
     setCustomState(undefined);
@@ -259,6 +289,7 @@ export function useGenkitAgent<S = unknown>(
   const abort = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    clearActivePoll();
     setPhase((p) => (p === 'streaming' ? 'idle' : p));
   }, []);
 
@@ -456,7 +487,13 @@ export function useGenkitAgent<S = unknown>(
     [pendingInterrupt, internalSubmit]
   );
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      if (pollTimeoutRef.current) clearTimeout(pollTimeoutRef.current);
+    },
+    []
+  );
 
   const snapshotId = useMemo(
     () => extractSnapshotId(continuationId) ?? undefined,

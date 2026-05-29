@@ -736,16 +736,23 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       // If both v2 and snapshotId are supplied, continuationId wins.
       if (init?.continuationId) {
         const decoded = decodeContinuation(init.continuationId);
-        if (decoded?.kind === 'snapshot') {
+        if (!decoded) {
+          // Reject malformed tokens loudly rather than silently dropping
+          // state. A typo'd / corrupted continuationId starting a fresh
+          // session would mask real bugs in the caller.
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: `init.continuationId is malformed: ${init.continuationId.slice(0, 40)}...`,
+          });
+        }
+        if (decoded.kind === 'snapshot') {
           init = { ...init, _decodedSnapshotId: decoded.snapshotId };
-        } else if (decoded?.kind === 'state') {
+        } else {
           init = {
             ...init,
             _decodedState: decoded.state as SessionState<State>,
           };
         }
-        // If the token is malformed we silently start fresh; the next
-        // response carries a fresh continuationId so the client recovers.
       } else if (init?.snapshotId) {
         init = { ...init, _decodedSnapshotId: init.snapshotId };
       }

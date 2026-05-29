@@ -128,6 +128,9 @@ export function walkAgentEvent(
     case 'model-chunk': {
       handlers.onModelChunk?.(event.chunk);
       for (const part of event.chunk.content ?? []) {
+        // Defensive: model adapters have occasionally emitted holes in
+        // content arrays. Skip rather than crashing the whole stream.
+        if (!part) continue;
         if (typeof part.text === 'string' && part.text.length > 0) {
           handlers.onText?.(part.text);
         }
