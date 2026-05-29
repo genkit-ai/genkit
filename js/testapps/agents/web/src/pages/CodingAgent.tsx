@@ -293,10 +293,10 @@ export default function CodingAgent() {
         messages: [{ role: 'user', content: [{ text }] }],
       };
 
-      // The coding agent uses a server-managed FileSessionStore,
-      // so we always use snapshotId (not client-side state).
+      // v2: round-trip the opaque continuationId. Server decodes it into
+      // the right internal handle (snapshotId for this server-stored agent).
       const init: AgentInit = snapshotIdRef.current
-        ? { snapshotId: snapshotIdRef.current }
+        ? { continuationId: `v1:${snapshotIdRef.current}` }
         : {};
 
       try {
@@ -337,7 +337,9 @@ export default function CodingAgent() {
         },
       ]);
 
-      const init: AgentInit = { snapshotId: currentApproval.snapshotId };
+      const init: AgentInit = {
+        continuationId: `v1:${currentApproval.snapshotId}`,
+      };
       let input: AgentInput;
 
       if (approved) {
@@ -414,9 +416,9 @@ export default function CodingAgent() {
 
     let accumulated = '';
     let accumulatedReasoning = '';
-    for await (const chunk of response.stream) {
-      const mc = chunk?.modelChunk;
-      if (!mc) continue;
+    for await (const event of response.stream) {
+      if (event.type !== 'model-chunk') continue;
+      const mc = event.chunk;
 
       for (const part of mc.content || []) {
         const p = part as PartWithMetadata;
@@ -499,7 +501,9 @@ export default function CodingAgent() {
         { role: 'system', text: `💬 Answer: ${answer}` },
       ]);
 
-      const init: AgentInit = { snapshotId: currentQuestion.snapshotId };
+      const init: AgentInit = {
+        continuationId: `v1:${currentQuestion.snapshotId}`,
+      };
 
       // Use the respond pattern — send the tool response via resume.respond.
       // The tool never executes; we provide the output directly.
@@ -538,30 +542,31 @@ export default function CodingAgent() {
   // ── Process a result: update session tracking & detect interrupts ────
   function processResult(result: AgentOutput) {
     if (result?.state) stateRef.current = result.state;
-    if (result?.snapshotId) {
-      snapshotIdRef.current = result.snapshotId;
-      // Push snapshotId into the URL so the user can bookmark or reload.
-      navigate(`/coding-agent/${result.snapshotId}`, { replace: true });
+    // v2: decode the continuationId to extract the snapshotId for URL +
+    // interrupt routing. The opaque token comes back on every turn.
+    const sid = result?.continuationId?.startsWith('v1:')
+      ? result.continuationId.slice(3)
+      : undefined;
+    if (sid) {
+      snapshotIdRef.current = sid;
+      navigate(`/coding-agent/${sid}`, { replace: true });
     }
 
-    // Check for interrupts
     const interrupt = findToolInterrupt(result);
-    if (interrupt && result.snapshotId) {
+    if (interrupt && sid) {
       if (interrupt.name === 'ask_user') {
-        // ask_user interrupt — show question dialog
         setQuestion({
           question: interrupt.input?.question || 'What would you like to do?',
           options: interrupt.input?.options || [],
           ref: interrupt.ref,
-          snapshotId: result.snapshotId,
+          snapshotId: sid,
         });
       } else {
-        // Tool approval interrupt (write_file, search_and_replace, run_shell)
         setApproval({
           toolName: interrupt.name,
           ref: interrupt.ref,
           input: interrupt.input,
-          snapshotId: result.snapshotId,
+          snapshotId: sid,
         });
       }
     }

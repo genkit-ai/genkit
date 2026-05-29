@@ -44,6 +44,5 @@ export {
   walkAgentEvent,
   type AgentEvent,
   type AgentEventHandlers,
-  type AgentStreamChunkV2,
   type ModelChunkData,
 } from './agent-events.js';

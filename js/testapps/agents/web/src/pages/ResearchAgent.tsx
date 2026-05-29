@@ -6,39 +6,15 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitAgent } from '../genkit-react';
 
-// ---------------------------------------------------------------------------
-// Research Agent — Multi-Step Orchestration (defineCustomAgent)
-//
-// Demonstrates capabilities that REQUIRE defineCustomAgent:
-//   • Multi-step orchestration — multiple sequential model calls
-//   • Custom status streaming — sendChunk({ status }) for progress updates
-//   • Multiple models — fast model for decomposition, main model for research
-//   • Direct session control — manually managing messages and custom state
-//
-// The backend:
-//   1. Decomposes the question into 2–3 sub-questions (fast model)
-//   2. Researches each sub-question (main model, with status updates)
-//   3. Synthesizes all sub-answers into a final response (streamed)
-// ---------------------------------------------------------------------------
+// Research Agent — defineCustomAgent multi-step orchestration. v2 typed
+// status/progress events drive the status bar; `agent.customState` carries
+// the structured research state for the sidebar.
 
 const ENDPOINT = '/api/researchAgent';
 
@@ -46,174 +22,81 @@ interface SubAnswer {
   question: string;
   answer: string;
 }
-
 interface ResearchState {
   subQuestions: string[];
   subAnswers: SubAnswer[];
 }
 
 export default function ResearchAgent() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [statusText, setStatusText] = useState<string | null>(null);
+  const agent = useGenkitAgent<ResearchState>({ url: ENDPOINT });
 
-  // Research state — extracted from result.state.custom each turn
-  const [researchState, setResearchState] = useState<ResearchState | null>(
-    null
+  const handleSend = (text: string) => {
+    if (agent.phase === 'streaming') return;
+    agent.submit({ messages: [{ role: 'user', content: [{ text }] }] });
+  };
+
+  const chatMessages = useMemo<ChatMessage[]>(
+    () => agent.messages.flatMap(messageToChatRows),
+    [agent.messages]
   );
 
-  // Session state — round-tripped to the server each turn
-  const stateRef = useRef<SessionState | undefined>(undefined);
-
-  const handleSend = useCallback(
-    async (text: string) => {
-      if (loading) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
-      setLoading(true);
-      setStreamingText('');
-      setStatusText(null);
-      setResearchState(null);
-
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {
-            state: {
-              custom: { subQuestions: [], subAnswers: [] } as ResearchState,
-              messages: [],
-              artifacts: [],
-            },
-          };
-
-      try {
-        // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
-
-        let accumulated = '';
-        for await (const chunk of response.stream) {
-          // ── Status chunks — progress indicators from the orchestrator ──
-          if (chunk?.status) {
-            setStatusText(chunk.status as string);
-          }
-
-          // ── Model text chunks — the final synthesis ────────────────────
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            }
-          }
-        }
-
-        // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
-        setStreamingText('');
-        setStatusText(null);
-
-        // Save session state for the next turn.
-        if (result?.state) {
-          stateRef.current = result.state;
-
-          // Extract the research state for the sidebar.
-          const custom = result.state.custom as ResearchState | undefined;
-          if (custom) {
-            setResearchState(custom);
-          }
-        }
-
-        const replyText = extractText(result);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'model', text: replyText || accumulated },
-        ]);
-      } catch (err: any) {
-        setStreamingText('');
-        setStatusText(null);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading]
-  );
+  const research = agent.customState;
+  const statusLine = agent.progress
+    ? `${agent.progress.label ?? 'Working'} (${agent.progress.current}/${agent.progress.total})`
+    : agent.statusLabel;
 
   return (
     <div className="research-layout">
       <ChatUI
-        title="Research Agent"
-        description="Multi-step research via defineCustomAgent."
+        title="Research Agent — v2"
+        description="Multi-step research via defineCustomAgent. Status/progress events drive the indicator below."
         suggestions={[
           'What are the impacts of AI on education?',
           'Compare solar and wind energy.',
           'Explain the pros and cons of remote work.',
         ]}
-        messages={messages}
-        streamingText={streamingText}
-        loading={loading}
+        messages={chatMessages}
+        streamingText={agent.streamingText}
+        loading={agent.phase === 'streaming'}
         onSend={handleSend}
-        renderMarkdown>
-        {/* Status indicator — shows orchestration progress */}
-        {statusText && (
+        renderMarkdown
+      >
+        {statusLine && (
           <div className="research-status-bar">
             <span className="research-status-dot" />
-            {statusText}
+            {statusLine}
           </div>
         )}
       </ChatUI>
 
-      {/* Research Process Panel — shows the decomposition and sub-answers */}
       <aside className="research-sidebar">
         <h3>🔬 Research Process</h3>
         <p className="research-sidebar-hint">
-          Shows the multi-step orchestration: decomposition → research →
-          synthesis. This is only possible with <code>defineCustomAgent</code>.
+          Custom-agent flow: decompose → research → synthesize. Typed status
+          events (<code>{`{ type: 'progress', current, total, label }`}</code>)
+          drive the indicator above.
         </p>
 
-        {!researchState ? (
+        {!research ? (
           <div className="research-empty">
             Ask a question to see the research process unfold.
           </div>
         ) : (
           <>
-            {/* Sub-questions */}
             <div className="research-section">
               <h4>📋 Sub-Questions</h4>
-              <p className="research-section-hint">
-                Generated by a fast model (<code>gemini-flash-lite</code>)
-              </p>
               <ol className="research-questions">
-                {researchState.subQuestions.map((q, i) => (
+                {research.subQuestions.map((q, i) => (
                   <li key={i} className="research-question">
                     {q}
                   </li>
                 ))}
               </ol>
             </div>
-
-            {/* Sub-answers */}
-            {researchState.subAnswers.length > 0 && (
+            {research.subAnswers.length > 0 && (
               <div className="research-section">
                 <h4>📝 Research Findings</h4>
-                <p className="research-section-hint">
-                  Each answered by the main model (<code>gemini-flash</code>)
-                </p>
-                {researchState.subAnswers.map((sa, i) => (
+                {research.subAnswers.map((sa, i) => (
                   <details key={i} className="research-answer" open={i === 0}>
                     <summary className="research-answer-q">
                       {i + 1}. {sa.question}
@@ -227,58 +110,28 @@ export default function ResearchAgent() {
         )}
 
         <hr className="research-divider" />
-
-        <h4>📋 How It Works</h4>
-        <ol className="research-howto">
-          <li>
-            Uses <code>defineCustomAgent</code> for full control of the handler
-            — orchestrating multiple model calls.
-          </li>
-          <li>
-            <strong>Step 1:</strong> Fast model decomposes the question →{' '}
-            <code>sendChunk({'{ status }'})</code>
-          </li>
-          <li>
-            <strong>Step 2:</strong> Main model researches each sub-question →{' '}
-            status updates per sub-question
-          </li>
-          <li>
-            <strong>Step 3:</strong> Main model synthesizes a final response →{' '}
-            <code>sendChunk({'{ modelChunk }'})</code>
-          </li>
-          <li>
-            Research state stored in <code>session.custom</code> via{' '}
-            <code>session.updateCustom()</code>.
-          </li>
-        </ol>
-
-        <h4>Why defineCustomAgent?</h4>
-        <pre className="research-code">{`// Can't do this with defineAgent:
-// 1. Multiple sequential model calls
-const decompose = await ai.generate({ model: 'fast', ... });
-const research = await ai.generate({ model: 'main', ... });
-const synthesis = ai.generateStream({ model: 'main', ... });
-
-// 2. Custom status streaming between steps
-sendChunk({ status: 'Researching...' });
-
-// 3. Direct session & message management
-sess.addMessages([response.message]);`}</pre>
+        <h4>Server emission</h4>
+        <pre className="research-code">{`// Typed status events — first-class contract
+sendChunk({ type: 'status', label: 'Decomposing…' });
+sendChunk({
+  type: 'progress',
+  label: 'Researching',
+  current: i + 1, total: n,
+});
+sendChunk({ type: 'model-chunk', chunk });`}</pre>
       </aside>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract displayable text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
+function messageToChatRows(msg: any): ChatMessage[] {
+  const rows: ChatMessage[] = [];
+  const textParts: string[] = [];
+  for (const p of msg.content ?? []) {
+    if (p.text) textParts.push(p.text);
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
+  if (textParts.length > 0) {
+    rows.push({ role: msg.role, text: textParts.join('') });
+  }
+  return rows;
 }

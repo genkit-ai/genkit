@@ -10,18 +10,18 @@
  */
 
 /**
- * Client-side helpers for consuming the v2 Agent event stream.
+ * Client-side helpers for consuming the agent event stream.
  *
- * The server emits a tagged-union `event` field on each `AgentStreamChunk`
- * (in addition to the legacy fields). This module provides a typed visitor
- * so consumers can `switch (event.type)` without duplicating the dispatch
- * across every UI.
+ * Each chunk emitted by `streamFlow` against an agent endpoint is a tagged
+ * discriminated union — `walkAgentEvent` dispatches it to typed handlers
+ * so consumers don't open-code `switch (chunk.type) { ... }`.
  */
 
 /**
  * The union of events an agent may emit during a turn. Mirrors the
- * `AgentEventSchema` defined server-side in `@genkit-ai/ai`. Kept inlined
- * here so client-only callers don't pull in the AI package.
+ * `AgentStreamChunkSchema` discriminated union defined server-side in
+ * `@genkit-ai/ai`. Kept inlined here so client-only callers don't pull in
+ * the AI package.
  */
 export type AgentEvent =
   | { type: 'model-chunk'; chunk: ModelChunkData }
@@ -63,19 +63,7 @@ export interface ModelChunkData {
 }
 
 /**
- * Shape of a v2 chunk from `streamFlow`. Both legacy fields and `event` are
- * populated by the server during the migration window.
- */
-export interface AgentStreamChunkV2 {
-  modelChunk?: ModelChunkData;
-  status?: unknown;
-  artifact?: unknown;
-  turnEnd?: { snapshotId?: string };
-  event?: AgentEvent;
-}
-
-/**
- * Handlers for the v2 event union. All optional — unhandled events are
+ * Handlers for the agent event union. All optional — unhandled events are
  * silently dropped.
  */
 export interface AgentEventHandlers {
@@ -124,25 +112,16 @@ export interface AgentEventHandlers {
 }
 
 /**
- * Walk a single chunk and dispatch its event to the provided handlers.
+ * Dispatch a single agent event to the provided handlers.
  *
- * For chunks that contain a `model-chunk` event, the `onModelChunk` handler
- * fires (raw), AND the content parts are further dispatched to `onText`,
- * `onReasoning`, `onToolRequest`, `onToolResponse`. Use whichever is more
- * convenient for your UI.
- *
- * For backwards compatibility: if a chunk has the legacy fields but no v2
- * `event` field, this synthesizes the equivalent event on the fly.
+ * For `model-chunk` events, `onModelChunk` fires (raw), AND the content
+ * parts are further dispatched to `onText` / `onReasoning` /
+ * `onToolRequest` / `onToolResponse`. Use whichever is more convenient.
  */
 export function walkAgentEvent(
-  chunk: AgentStreamChunkV2,
+  event: AgentEvent,
   handlers: AgentEventHandlers
 ): void {
-  // Prefer the explicit v2 event; fall back to synthesizing from legacy fields
-  // for older servers.
-  const event = chunk.event ?? synthesizeEvent(chunk);
-  if (!event) return;
-
   switch (event.type) {
     case 'model-chunk': {
       handlers.onModelChunk?.(event.chunk);
@@ -223,28 +202,4 @@ export function walkAgentEvent(
       handlers.onError?.({ errorText: event.errorText });
       return;
   }
-}
-
-function synthesizeEvent(chunk: AgentStreamChunkV2): AgentEvent | undefined {
-  if (chunk.modelChunk) {
-    return { type: 'model-chunk', chunk: chunk.modelChunk };
-  }
-  if (chunk.artifact) {
-    return { type: 'artifact-emitted', artifact: chunk.artifact };
-  }
-  if (chunk.turnEnd) {
-    return {
-      type: 'turn-end',
-      snapshotId: chunk.turnEnd.snapshotId,
-    };
-  }
-  if (chunk.status !== undefined && chunk.status !== null) {
-    const s = chunk.status as { label?: string; key?: string };
-    return {
-      type: 'status',
-      label: typeof s === 'string' ? s : (s?.label ?? JSON.stringify(s)),
-      key: s?.key,
-    };
-  }
-  return undefined;
 }

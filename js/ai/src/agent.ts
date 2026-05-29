@@ -66,33 +66,31 @@ import {
 /**
  * Schema for initializing an agent turn.
  *
- * Clients may pass either:
- *   - `continuationId` (v2, recommended): an opaque token returned by the
- *     server on the previous turn. Works for both server-stored and
- *     client-stored agents — the client doesn't need to know which.
- *   - `snapshotId` (v1, server-stored agents): identifies a persisted
- *     session snapshot to continue from.
- *   - `state` (v1, client-stored agents): the full state blob from the
- *     previous turn's response.
- *
- * If both v2 and v1 fields are supplied, `continuationId` wins. The server
- * decodes it into whichever underlying mechanism the agent uses.
+ * Clients pass back the opaque `continuationId` from the previous turn's
+ * output. The server decodes it into whichever underlying mechanism the
+ * agent uses (snapshotId for stored agents, state blob for stateless).
+ * Clients don't need to know — and don't need to choose between two
+ * mutually-exclusive fields like in v1.
  */
 export const AgentInitSchema = z.object({
   continuationId: z.string().optional(),
-  snapshotId: z.string().optional(),
-  state: SessionStateSchema.optional(),
 });
 
 /**
  * Initialization options for an agent turn.
+ *
+ * `newSnapshotId` is an internal-only field used by the runtime to seed the
+ * snapshot id for a turn; it's not part of the public client surface.
  */
 export interface AgentInit<S = unknown> {
-  /** v2: opaque continuation token from a prior turn's `output.continuationId`. */
+  /** Opaque continuation token from a prior turn's `output.continuationId`. */
   continuationId?: string;
-  snapshotId?: string;
+  /** @internal — seeded by the runtime, not by external clients. */
   newSnapshotId?: string;
-  state?: SessionState<S>;
+  /** @internal — populated server-side after continuationId decode. */
+  _decodedState?: SessionState<S>;
+  /** @internal — populated server-side after continuationId decode. */
+  _decodedSnapshotId?: string;
 }
 
 /**
@@ -182,19 +180,14 @@ export const TurnEndSchema = z.object({
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
 // ---------------------------------------------------------------------------
-// AgentEvent — v2 discriminated event stream
+// AgentEvent — discriminated event stream
 // ---------------------------------------------------------------------------
 //
-// The legacy `AgentStreamChunk` shape uses optional fields to communicate
-// what kind of payload arrived (`modelChunk` vs `status` vs `artifact` vs
-// `turnEnd`). v2 chunks additionally carry a typed discriminated union in
-// the `event` field. New consumers should dispatch on `event.type`; legacy
-// consumers can keep reading the legacy fields. Both are emitted in parallel
-// for the migration window.
-//
-// Why a tagged union: new event types (interrupts, detach, sub-agent
-// delegation, streaming artifacts) can be added without competing for field
-// namespace, and consumers get exhaustive `switch (event.type)` dispatch.
+// The agent stream is a tagged discriminated union. Every chunk carries a
+// `type` discriminator, so consumers can `switch (chunk.type) { ... }`
+// exhaustively. New event types (interrupts, detach, sub-agent delegation,
+// streaming artifacts) extend the union without competing for field
+// namespace.
 
 /** Typed status events with a consistent shape across all agents. */
 export const StatusEventSchema = z.discriminatedUnion('type', [
@@ -220,9 +213,9 @@ export type StatusEvent = z.infer<typeof StatusEventSchema>;
  * Discriminated union of every event an agent may emit during a turn.
  *
  * Generic agent UIs can render every event type. Specialized UIs can
- * exhaustively switch on `event.type`.
+ * exhaustively switch on `chunk.type`.
  */
-export const AgentEventSchema = z.discriminatedUnion('type', [
+export const AgentStreamChunkSchema = z.discriminatedUnion('type', [
   // Model-generated content (text, reasoning, tool requests).
   z.object({
     type: z.literal('model-chunk'),
@@ -244,9 +237,9 @@ export const AgentEventSchema = z.discriminatedUnion('type', [
     type: z.literal('phase'),
     phase: z.string(),
   }),
-  // Artifact lifecycle. `artifact-emitted` covers the existing one-shot case;
-  // `artifact-start`/`artifact-delta`/`artifact-complete` cover the streaming
-  // case (not yet wired in this prototype but reserved by the schema).
+  // Artifact lifecycle. `artifact-emitted` covers the one-shot case;
+  // `artifact-start`/`artifact-delta`/`artifact-complete` cover streaming
+  // (schema reserved; runtime emits `artifact-emitted` for now).
   z.object({
     type: z.literal('artifact-emitted'),
     artifact: ArtifactSchema,
@@ -287,9 +280,7 @@ export const AgentEventSchema = z.discriminatedUnion('type', [
     snapshotId: z.string(),
     continuationId: z.string(),
   }),
-  // Turn boundary — last event emitted before the connection completes for
-  // a foreground turn; for background turns, emitted on the background
-  // stream (consumed via `subscribeAgent`).
+  // Turn boundary — last event emitted for a foreground turn.
   z.object({
     type: z.literal('turn-end'),
     snapshotId: z.string().optional(),
@@ -301,31 +292,17 @@ export const AgentEventSchema = z.discriminatedUnion('type', [
     errorText: z.string(),
   }),
 ]);
+
+/** Backwards-compatible alias — was the wrapper schema, now is the union. */
+export const AgentEventSchema = AgentStreamChunkSchema;
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
 
 /**
- * Schema for stream chunks emitted during agent execution.
- *
- * Legacy fields (`modelChunk`, `status`, `artifact`, `turnEnd`) are still
- * populated for backwards compatibility. v2 consumers should read `event`.
+ * Streamed chunk emitted during agent execution. The `Stream` type
+ * parameter is reserved for future use (typing custom data-* events);
+ * the public discriminated union is fixed across agents.
  */
-export const AgentStreamChunkSchema = z.object({
-  modelChunk: ModelResponseChunkSchema.optional(),
-  status: z.any().optional(),
-  artifact: ArtifactSchema.optional(),
-  turnEnd: TurnEndSchema.optional(),
-  /** v2: typed discriminated event. Populated alongside the legacy fields. */
-  event: AgentEventSchema.optional(),
-});
-
-/**
- * Streamed chunk emitted during agent execution.
- * The `Stream` parameter types the `status` field for custom status payloads.
- */
-export type AgentStreamChunk<Stream = unknown> = Omit<
-  z.infer<typeof AgentStreamChunkSchema>,
-  'status'
-> & { status?: Stream };
+export type AgentStreamChunk<_Stream = unknown> = AgentEvent;
 
 /**
  * Schema for final results of an agent execution.
@@ -345,26 +322,37 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
  */
 export const AgentOutputSchema = z.object({
   /**
-   * v2: opaque continuation token to round-trip on the next turn. Pass back
-   * as `init.continuationId`. Always populated; works regardless of whether
-   * the agent is server-stored or client-stored.
+   * Opaque continuation token to round-trip on the next turn. Pass back as
+   * `init.continuationId`. Always populated.
    */
   continuationId: z.string().optional(),
-  snapshotId: z.string().optional(),
-  state: SessionStateSchema.optional(),
+  /**
+   * The model's final message for this turn.
+   */
   message: MessageSchema.optional(),
+  /**
+   * Artifacts produced during this turn. Also surfaced via `artifact-*`
+   * events on the stream; this is the cumulative snapshot.
+   */
   artifacts: z.array(ArtifactSchema).optional(),
+  /**
+   * Read-only snapshot of session state for the client. Includes
+   * `messages` (full conversation history) and `custom` (typed custom
+   * state). Clients should not send this back — round-trip the
+   * `continuationId` instead.
+   */
+  state: SessionStateSchema.optional(),
 });
 
 /**
  * Output returned at turn completion.
  */
 export interface AgentOutput<S = unknown> {
-  /** v2: opaque continuation token; pass back as `init.continuationId`. */
+  /** Opaque continuation token; pass back as `init.continuationId`. */
   continuationId?: string;
-  artifacts?: Artifact[];
   message?: MessageData;
-  snapshotId?: string;
+  artifacts?: Artifact[];
+  /** Read-only session state snapshot (messages, custom, artifacts). */
   state?: SessionState<S>;
 }
 
@@ -714,69 +702,45 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       let init = arg.init;
       const store = config.store || new InMemorySessionStore<State>();
 
-      // v2: if the client sent a `continuationId`, decode it into the
-      // appropriate v1 field and let the existing logic handle it. The
-      // server knows whether it has a store; the client doesn't have to.
+      // Decode the opaque `continuationId` into the right internal handle.
+      // For server-stored agents the decoded value is a snapshotId; for
+      // stateless agents it's the previous turn's state blob. Clients
+      // never need to know which.
       if (init?.continuationId) {
         const decoded = decodeContinuation(init.continuationId);
         if (decoded?.kind === 'snapshot') {
-          init = { ...init, snapshotId: decoded.snapshotId };
+          init = { ...init, _decodedSnapshotId: decoded.snapshotId };
         } else if (decoded?.kind === 'state') {
           init = {
             ...init,
-            state: decoded.state as z.infer<typeof SessionStateSchema>,
+            _decodedState: decoded.state as SessionState<State>,
           };
         }
-        // If the token is malformed we ignore it and start fresh; the
-        // client probably has stale state and will get a fresh continuation
-        // token back on this turn.
-      }
-
-      // v1 legacy validation: only enforced when the client did NOT use the
-      // v2 continuationId path. Mixing client-store with server-store agents
-      // via v1 fields is still a foot-gun for legacy callers; v2 callers
-      // never trip this.
-      if (!init?.continuationId) {
-        if (init?.snapshotId && !config.store) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message:
-              `Cannot use 'snapshotId' with agent '${config.name}': this agent ` +
-              `has no store configured (client-managed state). Send 'state' or 'continuationId' instead.`,
-          });
-        }
-        if (init?.state && config.store) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message:
-              `Cannot send 'state' to agent '${config.name}': this agent uses ` +
-              `a server-managed store. Send 'snapshotId' or 'continuationId' instead.`,
-          });
-        }
-      } else {
-        // With v2, silently ignore the wrong-kind field after decoding —
-        // the decoded value wins.
+        // If the token is malformed we silently start fresh; the next
+        // response carries a fresh continuationId so the client recovers.
       }
 
       let session: Session<State>;
-
       let snapshot: SessionSnapshot<State> | undefined;
 
-      if (init?.snapshotId && config.store) {
-        snapshot = await store.getSnapshot(init.snapshotId, {
+      if (init?._decodedSnapshotId && config.store) {
+        snapshot = await store.getSnapshot(init._decodedSnapshotId, {
           context: getContext(),
         });
         if (!snapshot) {
-          throw new Error(`Snapshot ${init.snapshotId} not found`);
+          throw new Error(`Snapshot ${init._decodedSnapshotId} not found`);
         }
         validateCustomState(
           snapshot.state?.custom,
-          `snapshot ${init.snapshotId}`
+          `snapshot ${init._decodedSnapshotId}`
         );
         session = new Session<State>(snapshot.state as SessionState<State>);
-      } else if (init?.state && !config.store) {
-        validateCustomState(init.state.custom, 'client-supplied init.state');
-        session = new Session<State>(init.state as SessionState<State>);
+      } else if (init?._decodedState && !config.store) {
+        validateCustomState(
+          init._decodedState.custom,
+          'client-supplied continuation state'
+        );
+        session = new Session<State>(init._decodedState as SessionState<State>);
       } else {
         session = new Session<State>({
           custom: {} as State,
@@ -861,80 +825,6 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         }
       })();
 
-      // v2: derive the AgentEvent for a legacy chunk shape. This lets us
-      // dual-emit (legacy fields AND `event`) without touching every
-      // sendChunk call site. New consumers read `event`; old ones keep
-      // reading the legacy fields.
-      const withEvent = (chunk: AgentStreamChunk<Stream>): AgentStreamChunk => {
-        if (chunk.event) return chunk as AgentStreamChunk;
-        let event: AgentEvent | undefined;
-        if (chunk.modelChunk) {
-          // Detect tool-only chunks emitted at interrupt time (role='tool'
-          // with toolRequest parts) and surface them as `interrupt` events
-          // with addressable refs.
-          const toolReqs = (chunk.modelChunk.content || []).filter(
-            (p) => p.toolRequest
-          );
-          if (
-            chunk.modelChunk.role === 'tool' &&
-            toolReqs.length > 0 &&
-            toolReqs.every((p) => p.toolRequest)
-          ) {
-            // For the first tool request we generate one interrupt event;
-            // additional ones still ride the modelChunk legacy path. In
-            // practice agents interrupt one tool at a time.
-            const tr = toolReqs[0].toolRequest!;
-            event = {
-              type: 'interrupt',
-              toolCallId: tr.ref ?? tr.name,
-              toolName: tr.name,
-              input: tr.input,
-              kind: 'respond',
-            };
-          } else {
-            event = { type: 'model-chunk', chunk: chunk.modelChunk };
-          }
-        } else if (chunk.artifact) {
-          event = { type: 'artifact-emitted', artifact: chunk.artifact };
-        } else if (chunk.turnEnd) {
-          event = {
-            type: 'turn-end',
-            ...(chunk.turnEnd.snapshotId && {
-              snapshotId: chunk.turnEnd.snapshotId,
-              continuationId: encodeSnapshotContinuation(chunk.turnEnd.snapshotId),
-            }),
-          };
-        } else if (chunk.status !== undefined && chunk.status !== null) {
-          // Best-effort interpretation of a custom-shaped status payload.
-          // Typed agents that emit StatusEvent-shaped objects pass through;
-          // free-form agents get wrapped as a labeled status string.
-          const s: any = chunk.status;
-          if (typeof s === 'object' && s.type === 'progress') {
-            event = {
-              type: 'progress',
-              label: s.label,
-              current: s.current,
-              total: s.total,
-            };
-          } else if (typeof s === 'object' && s.type === 'phase') {
-            event = { type: 'phase', phase: s.phase };
-          } else if (typeof s === 'object' && s.type === 'status' && s.label) {
-            event = { type: 'status', label: s.label, key: s.key };
-          } else {
-            event = {
-              type: 'status',
-              label:
-                typeof s === 'string'
-                  ? s
-                  : typeof s === 'object' && s?.label
-                    ? s.label
-                    : JSON.stringify(s),
-            };
-          }
-        }
-        return event ? { ...chunk, event } : (chunk as AgentStreamChunk);
-      };
-
       runner = new SessionRunner<State>(session, runnerInputChannel, {
         store,
         snapshotCallback: config.snapshotCallback,
@@ -942,15 +832,11 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         newSnapshotId: init?.newSnapshotId,
         onDetach: (snapshotId) => {
           detachedSnapshotId = snapshotId;
-          // v2: emit an explicit `detached` event before the stream closes
-          // so client hooks know to transition to background phase.
           try {
             arg.sendChunk({
-              event: {
-                type: 'detached',
-                snapshotId,
-                continuationId: encodeSnapshotContinuation(snapshotId),
-              },
+              type: 'detached',
+              snapshotId,
+              continuationId: encodeSnapshotContinuation(snapshotId),
             });
           } catch (_) {
             // Stream may already be closed; that's fine.
@@ -975,27 +861,30 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
         onEndTurn: (snapshotId) => {
           if (!runner.isDetached) {
-            arg.sendChunk(
-              withEvent({
-                turnEnd: { ...(config.store && { snapshotId }) },
-              })
-            );
+            arg.sendChunk({
+              type: 'turn-end',
+              ...(config.store && snapshotId && {
+                snapshotId,
+                continuationId: encodeSnapshotContinuation(snapshotId),
+              }),
+            });
           }
         },
       });
 
       const sendArtifactChunk = (a: Artifact) => {
         if (!runner.isDetached) {
-          arg.sendChunk(withEvent({ artifact: a }));
+          arg.sendChunk({ type: 'artifact-emitted', artifact: a });
         }
       };
       session.on('artifactAdded', sendArtifactChunk);
       session.on('artifactUpdated', sendArtifactChunk);
 
+      // The chunk emitter passed to user code (e.g. defineCustomAgent's
+      // body). Accepts any AgentEvent. Suppresses emission once detached.
       const sendChunk = (chunk: AgentStreamChunk<Stream>) => {
-        if (!runner.isDetached) {
-          arg.sendChunk(withEvent(chunk));
-        }
+        if (runner.isDetached) return;
+        arg.sendChunk(chunk as AgentEvent);
       };
 
       const flowPromise = (async () => {
@@ -1026,21 +915,19 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
       if (outcome === 'detached') {
         return {
-          snapshotId: detachedSnapshotId!,
-          // v2: always emit a continuationId; clients round-trip this one
-          // opaque token regardless of server-vs-client storage.
           continuationId: encodeSnapshotContinuation(detachedSnapshotId!),
-          ...(!config.store && { state: toClientState(session.getState()) }),
+          // Read-only state snapshot so the client can render the in-flight
+          // session immediately (messages so far, current custom state).
+          state: toClientState(session.getState()),
         };
       }
 
       const { result, finalSnapshotId } = outcome;
+      const clientState = toClientState(session.getState());
 
-      // v2: derive continuationId from whichever underlying mechanism this
-      // agent uses. Server-stored: snapshotId. Client-stored: encoded state.
-      const clientState = !config.store
-        ? toClientState(session.getState())
-        : undefined;
+      // Continuation token: snapshotId for stored agents, encoded state
+      // blob for stateless. Either way the client just round-trips one
+      // opaque string on `init.continuationId`.
       const continuationId = config.store
         ? finalSnapshotId
           ? encodeSnapshotContinuation(finalSnapshotId)
@@ -1053,8 +940,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         ...(continuationId && { continuationId }),
         ...(result.artifacts?.length && { artifacts: result.artifacts }),
         ...(result.message && { message: result.message }),
-        ...(config.store && { snapshotId: finalSnapshotId }),
-        ...(!config.store && { state: clientState }),
+        ...(clientState && { state: clientState }),
       };
     }
   );
@@ -1271,7 +1157,7 @@ export function definePromptAgent<State = unknown>(
       const result = generateStream(registry, { ...genOpts, abortSignal });
 
       for await (const chunk of result.stream) {
-        sendChunk({ modelChunk: chunk });
+        sendChunk({ type: 'model-chunk', chunk });
       }
 
       const res = await result.response;
@@ -1295,12 +1181,20 @@ export function definePromptAgent<State = unknown>(
       if (res.finishReason === 'interrupted') {
         const parts =
           res.message?.content?.filter((p) => !!p.toolRequest) || [];
-        if (parts.length > 0) {
+        // Emit one `interrupt` event per pending tool request. The client
+        // sees these in-stream with addressable refs and can resume each
+        // individually via `resume.respond` / `resume.restart`.
+        for (const p of parts) {
+          const tr = p.toolRequest!;
           sendChunk({
-            modelChunk: {
-              role: 'tool',
-              content: parts,
-            },
+            type: 'interrupt',
+            toolCallId: tr.ref ?? tr.name,
+            toolName: tr.name,
+            input: tr.input,
+            kind: 'respond',
+            ...(p.metadata?.interrupt !== undefined && {
+              metadata: p.metadata.interrupt,
+            }),
           });
         }
       }

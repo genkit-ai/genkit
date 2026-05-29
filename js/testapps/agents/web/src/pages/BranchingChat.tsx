@@ -63,8 +63,12 @@ export default function BranchingChat() {
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
 
-  // The snapshotId of the current branch point.
-  const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
+  // The continuationId of the current branch point. Branching keeps the
+  // raw runFlow path (not the hook) because it issues two parallel calls
+  // from the same point — outside the single-stream model the hook owns.
+  const continuationRef = useRef<string | undefined>(
+    urlSnapshotId ? `v1:${urlSnapshotId}` : undefined
+  );
 
   // ── Restore session from snapshotId on mount ───────────────────────
   useEffect(() => {
@@ -94,7 +98,8 @@ export default function BranchingChat() {
             }
           }
           setMessages(restored);
-          snapshotIdRef.current = snapshot.snapshotId ?? urlSnapshotId;
+          const sid = snapshot.snapshotId ?? urlSnapshotId;
+          if (sid) continuationRef.current = `v1:${sid}`;
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -126,13 +131,12 @@ export default function BranchingChat() {
         messages: [{ role: 'user' as const, content: [{ text }] }],
       };
 
-      // Both calls branch from the same snapshotId (or fresh session).
-      const init: AgentInit = snapshotIdRef.current
-        ? { snapshotId: snapshotIdRef.current }
+      // Both calls branch from the same continuationId (or fresh session).
+      const init: AgentInit = continuationRef.current
+        ? { continuationId: continuationRef.current }
         : {};
 
       try {
-        // Fire two requests in parallel from the same branch point.
         const [resultA, resultB] = await Promise.all([
           runFlow<AgentOutput, AgentInit>({
             url: ENDPOINT,
@@ -150,8 +154,14 @@ export default function BranchingChat() {
         const textB = extractText(resultB);
 
         setVariants({
-          a: { text: textA, snapshotId: resultA?.snapshotId ?? '' },
-          b: { text: textB, snapshotId: resultB?.snapshotId ?? '' },
+          a: {
+            text: textA,
+            snapshotId: extractSnapshot(resultA?.continuationId) ?? '',
+          },
+          b: {
+            text: textB,
+            snapshotId: extractSnapshot(resultB?.continuationId) ?? '',
+          },
         });
       } catch (err: any) {
         setError(err.message);
@@ -168,9 +178,8 @@ export default function BranchingChat() {
       if (!variants) return;
 
       const chosen = variants[which];
-      snapshotIdRef.current = chosen.snapshotId;
+      continuationRef.current = `v1:${chosen.snapshotId}`;
 
-      // Push the chosen snapshotId into the URL for persistence.
       navigate(`/branching/${chosen.snapshotId}`, { replace: true });
 
       setMessages((prev) => [...prev, { role: 'model', text: chosen.text }]);
@@ -178,6 +187,11 @@ export default function BranchingChat() {
     },
     [variants, navigate]
   );
+
+  function extractSnapshot(continuationId?: string): string | null {
+    if (!continuationId) return null;
+    return continuationId.startsWith('v1:') ? continuationId.slice(3) : null;
+  }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -214,7 +228,7 @@ export default function BranchingChat() {
         <div className="chat-header">
           <div className="chat-header-top">
             <h2>🔀 Branching Chat</h2>
-            {snapshotIdRef.current && (
+            {continuationRef.current && (
               <Link
                 to="/branching"
                 className="btn btn-new-session"

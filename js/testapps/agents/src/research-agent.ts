@@ -78,7 +78,7 @@ export const researchAgent = ai.defineCustomAgent(
           : '';
 
       // ── Step 1: Decompose the question ────────────────────────────────
-      sendChunk({ status: 'Decomposing question into sub-topics…' });
+      sendChunk({ type: 'status', label: 'Decomposing question into sub-topics…' });
 
       const decompose = await ai.generate({
         model: liteModel,
@@ -103,7 +103,10 @@ User question: "${userText}"`,
       for (let i = 0; i < subQuestions.length; i++) {
         const q = subQuestions[i];
         sendChunk({
-          status: `Researching (${i + 1}/${subQuestions.length}): ${q}`,
+          type: 'progress',
+          label: `Researching: ${q}`,
+          current: i + 1,
+          total: subQuestions.length,
         });
 
         const research = await ai.generate({
@@ -122,7 +125,7 @@ Question: ${q}`,
       }));
 
       // ── Step 3: Synthesize final response ─────────────────────────────
-      sendChunk({ status: 'Synthesizing final response…' });
+      sendChunk({ type: 'status', label: 'Synthesizing final response…' });
 
       const researchContext = subAnswers
         .map(
@@ -143,7 +146,7 @@ Write a clear, cohesive response that integrates all the research findings. Don'
 
       // Stream the final synthesis to the client
       for await (const chunk of synthesisStream.stream) {
-        sendChunk({ modelChunk: chunk });
+        sendChunk({ type: 'model-chunk', chunk });
       }
 
       const synthesisResponse = await synthesisStream.response;
@@ -154,7 +157,7 @@ Write a clear, cohesive response that integrates all the research findings. Don'
         sess.addMessages([lastMessage]);
       }
 
-      sendChunk({ status: 'Done' });
+      sendChunk({ type: 'status', label: 'Done' });
     });
 
     return {
@@ -186,13 +189,9 @@ export const testResearchAgent = ai.defineFlow(
         messages: [{ role: 'user', content: [{ text }] }],
       },
       {
-        init: {
-          state: {
-            custom: { subQuestions: [], subAnswers: [] } as ResearchState,
-            messages: [],
-            artifacts: [],
-          },
-        },
+        // v2: client-stored agents start with an empty session by default;
+        // no need to pre-seed custom state from the client side.
+        init: {},
         onChunk: sendChunk,
       }
     );

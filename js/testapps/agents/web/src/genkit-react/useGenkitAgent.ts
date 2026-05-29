@@ -1,28 +1,23 @@
 /**
- * `useGenkitAgent` — the headline React hook for the v2 Agents API.
+ * `useGenkitAgent` — the headline React hook for the Agents API.
  *
- * Subsumes what every page in the original testapp manually wires:
+ * Absorbs what every page in the original testapp manually wires:
  *
- *   - `for await (const chunk of response.stream)` + `walkAgentEvent` dispatch
- *   - `stateRef` / `snapshotIdRef` round-tripping (replaced with single
- *     opaque `continuationId`)
+ *   - `for await (const chunk of response.stream)` + dispatch on chunk.type
+ *   - Continuation-token round-trip (no state vs snapshotId fork)
  *   - Mid-stream streaming text accumulation, separate from committed history
  *   - Tool call lifecycle (call → result → error)
- *   - Interrupt detection (now in-stream) and resumption helpers
- *   - Foreground → background transition (detached event), with the same
- *     hook continuing to render in the background phase
+ *   - Interrupt detection (in-stream `interrupt` events) + resumption helpers
+ *   - Foreground → background phase transition (detached event), same hook
+ *     continues to render in the background phase via polling
+ *   - URL-bookmark restoration via `resumeFromContinuation`
  *   - Custom state (typed via the agent's stateSchema)
  *   - Artifact collection
- *
- * Returned reactive fields cover the common cases; the `chunks` escape hatch
- * is there for anything custom.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { streamFlow, runFlow, walkAgentEvent } from 'genkit/beta/client';
-import type { AgentEvent, AgentStreamChunkV2 } from 'genkit/beta/client';
+import type { AgentEvent } from 'genkit/beta/client';
 
-// Re-exported convenience type covering both Genkit-native shape and what
-// the hook builds on top.
 export type ToolCallState = 'call' | 'result' | 'error';
 export interface ToolCall<I = unknown, O = unknown> {
   id: string;
@@ -52,34 +47,25 @@ export interface PendingInterrupt {
 
 export type AgentPhase =
   | 'idle'
-  | 'streaming' // foreground turn in progress
-  | 'background' // detached, server is running, may be live-streaming via subscribe
+  | 'streaming'
+  | 'background'
   | 'awaiting-interrupt'
   | 'done'
   | 'error';
 
 export interface UseGenkitAgentOptions {
-  /** Base URL for the agent. The /state path is derived for snapshot reads. */
   url: string;
-  /** Optional separate URL for the snapshot data action. Defaults to `${url}/state`. */
   stateUrl?: string;
-  /** Optional separate URL for the abort action. Defaults to `${url}/abort`. */
   abortUrl?: string;
-  /**
-   * If provided on mount, the hook fetches the snapshot and rehydrates
-   * messages/state/artifacts from it. Useful for URL bookmarks.
-   */
+  /** If provided on mount, hook fetches the snapshot and rehydrates state. */
   resumeFromContinuation?: string;
   headers?: Record<string, string>;
 }
 
 export interface UseGenkitAgentResult<S = unknown> {
-  // History
   messages: AgentMessage[];
   artifacts: any[];
   customState: S | undefined;
-
-  // Streaming-turn state
   streamingText: string;
   streamingReasoning: string;
   toolCalls: ToolCall[];
@@ -87,22 +73,15 @@ export interface UseGenkitAgentResult<S = unknown> {
   progress: { current: number; total: number; label?: string } | null;
   phase: AgentPhase;
   error: Error | null;
-
-  // Continuation
   continuationId: string | undefined;
-
-  // Interrupts
   pendingInterrupt: PendingInterrupt | null;
   respondToInterrupt: (output: unknown) => void;
   restartInterrupt: (metadata?: unknown) => void;
-
-  // Standard control
   submit: (input: AgentInputBody) => void;
   abort: () => void;
   reset: () => void;
 }
 
-// Same shape the v2 agent server accepts.
 export interface AgentInputBody {
   messages?: AgentMessage[];
   resume?: {
@@ -119,10 +98,9 @@ export interface AgentInputBody {
 
 interface AgentOutputBody<S = unknown> {
   continuationId?: string;
-  snapshotId?: string;
-  state?: { messages?: AgentMessage[]; custom?: S; artifacts?: any[] };
   message?: AgentMessage;
   artifacts?: any[];
+  state?: { messages?: AgentMessage[]; custom?: S; artifacts?: any[] };
 }
 
 interface AgentInitBody {
@@ -135,12 +113,9 @@ export function useGenkitAgent<S = unknown>(
   const { url, resumeFromContinuation, headers } = options;
   const stateUrl = options.stateUrl ?? `${url}/state`;
 
-  // History (committed)
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [customState, setCustomState] = useState<S | undefined>(undefined);
-
-  // In-flight turn
   const [streamingText, setStreamingText] = useState('');
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
@@ -151,7 +126,6 @@ export function useGenkitAgent<S = unknown>(
   const [phase, setPhase] = useState<AgentPhase>('idle');
   const [error, setError] = useState<Error | null>(null);
 
-  // Continuation token round-tripped on every turn
   const [continuationId, setContinuationId] = useState<string | undefined>(
     resumeFromContinuation
   );
@@ -170,29 +144,22 @@ export function useGenkitAgent<S = unknown>(
     let cancelled = false;
     (async () => {
       try {
-        // The state endpoint accepts a snapshotId string. We decode the
-        // continuation token client-side to extract it; if it's not a
-        // snapshot-shaped token (i.e. client-managed state), we skip the
-        // remote fetch and just rehydrate from the embedded state.
         const sid = extractSnapshotId(resumeFromContinuation);
-        if (sid) {
-          const snapshot = await runFlow<any, AgentInitBody>({
-            url: stateUrl,
-            input: sid,
-          });
-          if (cancelled) return;
-          const state = snapshot?.state ?? {};
-          if (Array.isArray(state.messages)) setMessages(state.messages);
-          if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
-          if (state.custom !== undefined) setCustomState(state.custom as S);
-          // If still running, we'd auto-resubscribe here. For prototype
-          // scope: surface the snapshot status and let the consumer decide.
-          if (snapshot?.status === 'pending') {
-            setPhase('background');
-            startBackgroundPoll(sid);
-          } else {
-            setPhase('done');
-          }
+        if (!sid) return;
+        const snapshot = await runFlow<any, AgentInitBody>({
+          url: stateUrl,
+          input: sid,
+        });
+        if (cancelled) return;
+        const state = snapshot?.state ?? {};
+        if (Array.isArray(state.messages)) setMessages(state.messages);
+        if (Array.isArray(state.artifacts)) setArtifacts(state.artifacts);
+        if (state.custom !== undefined) setCustomState(state.custom as S);
+        if (snapshot?.status === 'pending') {
+          setPhase('background');
+          startBackgroundPoll(sid);
+        } else {
+          setPhase('done');
         }
       } catch (e) {
         if (cancelled) return;
@@ -206,8 +173,6 @@ export function useGenkitAgent<S = unknown>(
   }, [resumeFromContinuation]);
 
   function startBackgroundPoll(snapshotId: string) {
-    // Minimal polling implementation for prototype. Production would prefer
-    // subscribeAgent via StreamManager.
     const tick = async () => {
       try {
         const snap = await runFlow<any, AgentInitBody>({
@@ -265,8 +230,6 @@ export function useGenkitAgent<S = unknown>(
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Optimistically append the user-supplied messages so the UI updates
-      // before the first server chunk arrives.
       if (input.messages?.length) {
         setMessages((prev) => [...prev, ...(input.messages as AgentMessage[])]);
       }
@@ -286,7 +249,7 @@ export function useGenkitAgent<S = unknown>(
 
       const { output: outputPromise, stream } = streamFlow<
         AgentOutputBody<S>,
-        AgentStreamChunkV2,
+        AgentEvent,
         AgentInitBody
       >({
         url,
@@ -298,10 +261,10 @@ export function useGenkitAgent<S = unknown>(
 
       (async () => {
         let interruptDetected: PendingInterrupt | null = null;
+        let detachedDuringStream = false;
         try {
-          for await (const chunk of stream) {
-            let detached = false;
-            walkAgentEvent(chunk, {
+          for await (const event of stream) {
+            walkAgentEvent(event, {
               onText: (delta) => setStreamingText((prev) => prev + delta),
               onReasoning: (delta) =>
                 setStreamingReasoning((prev) => prev + delta),
@@ -342,36 +305,36 @@ export function useGenkitAgent<S = unknown>(
               },
               onStatus: (s) => setStatusLabel(s.label),
               onProgress: (p) => setProgress(p),
+              onPhase: (p) => setStatusLabel(p),
               onArtifact: (artifact) => {
                 setArtifacts((prev) => [...prev, artifact]);
               },
               onInterrupt: (irpt) => {
                 interruptDetected = irpt;
               },
-              onDetached: () => {
-                detached = true;
+              onDetached: ({ continuationId: cid }) => {
+                detachedDuringStream = true;
+                if (cid) setContinuationId(cid);
+              },
+              onTurnEnd: ({ continuationId: cid }) => {
+                if (cid) setContinuationId(cid);
               },
             });
-            if (detached) break;
+            if (detachedDuringStream) break;
           }
 
           const result = await outputPromise;
 
-          // Update continuation token for next turn.
           if (result?.continuationId) {
             setContinuationId(result.continuationId);
           }
-
-          // Commit the final assistant message into history.
           if (result?.message) {
             setMessages((prev) => [...prev, result.message as AgentMessage]);
           }
-          // Pull custom state from state.custom if present.
           if (result?.state?.custom !== undefined) {
             setCustomState(result.state.custom as S);
           }
           if (Array.isArray(result?.state?.messages)) {
-            // Server-managed agents: replace history with server's truth.
             setMessages(result.state.messages as AgentMessage[]);
           }
           if (Array.isArray(result?.state?.artifacts)) {
@@ -381,18 +344,15 @@ export function useGenkitAgent<S = unknown>(
             setArtifacts((prev) => mergeArtifacts(prev, result.artifacts as any[]));
           }
 
-          // If the server reported detached during streaming OR returned a
-          // snapshotId with no completion, transition to background phase.
-          if (
-            (result?.snapshotId && phaseRefIs('background', input.detach)) ||
-            input.detach
-          ) {
+          if (detachedDuringStream || input.detach) {
             setPhase('background');
-            if (result?.snapshotId) startBackgroundPoll(result.snapshotId);
+            const sid = result?.continuationId
+              ? extractSnapshotId(result.continuationId)
+              : null;
+            if (sid) startBackgroundPoll(sid);
             return;
           }
 
-          // Interrupt routing — set pendingInterrupt for the consumer.
           if (interruptDetected) {
             setPendingInterrupt(interruptDetected);
             setPhase('awaiting-interrupt');
@@ -409,13 +369,6 @@ export function useGenkitAgent<S = unknown>(
     },
     [url, headers]
   );
-
-  // We don't actually have access to a phase ref to look at "are we already
-  // in background"; the input.detach is the load-bearing signal. Helper to
-  // make that clear.
-  function phaseRefIs(_p: AgentPhase, detach?: boolean): boolean {
-    return !!detach;
-  }
 
   const submit = useCallback(
     (input: AgentInputBody) => internalSubmit(input),

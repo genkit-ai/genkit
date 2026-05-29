@@ -6,136 +6,54 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitAgent } from '../genkit-react';
 
-// ---------------------------------------------------------------------------
-// Workspace Builder — artifacts alongside chat
-//
-// Demonstrates:
-//   • streamFlow() with artifact production
-//   • Reading `result.artifacts` from the agent response
-//   • Multi-turn session via `init: { state }` round-tripping
-//   • Displaying generated code artifacts in a side panel
-// ---------------------------------------------------------------------------
+// Workspace Builder — artifacts demonstration. `agent.artifacts` is a
+// reactive array fed both by `artifact-emitted` events during streaming and
+// by `result.state.artifacts` at turn end.
 
 const ENDPOINT = '/api/workspaceAgent';
 
-interface Artifact {
+interface ArtifactDisplay {
   name?: string;
   parts: Array<{ text?: string }>;
 }
 
 export default function WorkspaceBuilder() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const agent = useGenkitAgent({ url: ENDPOINT });
 
-  // Session state — returned by the server, sent back on the next turn.
-  const stateRef = useRef<SessionState | undefined>(undefined);
+  const handleSend = (text: string) => {
+    if (agent.phase === 'streaming') return;
+    agent.submit({ messages: [{ role: 'user', content: [{ text }] }] });
+  };
 
-  const handleSend = useCallback(
-    async (text: string) => {
-      if (loading) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
-      setLoading(true);
-      setStreamingText('');
-
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {};
-
-      try {
-        // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
-
-        let accumulated = '';
-        for await (const chunk of response.stream) {
-          if (chunk?.modelChunk?.content) {
-            for (const part of chunk.modelChunk.content) {
-              if (part.text) {
-                accumulated += part.text;
-                setStreamingText(accumulated);
-              }
-            }
-          }
-        }
-
-        // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
-        setStreamingText('');
-
-        // Save session state for the next turn.
-        if (result?.state) stateRef.current = result.state;
-
-        // Update artifacts — the workspace agent returns an `artifacts`
-        // array in the result whenever the emitArtifact tool was called.
-        if (result?.artifacts) {
-          setArtifacts(result.artifacts);
-        }
-
-        const replyText = extractText(result);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'model', text: replyText || accumulated },
-        ]);
-      } catch (err: any) {
-        setStreamingText('');
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading]
+  const chatMessages = useMemo<ChatMessage[]>(
+    () => agent.messages.flatMap(messageToChatRows),
+    [agent.messages]
   );
+
+  const artifacts = agent.artifacts as ArtifactDisplay[];
 
   return (
     <div className="workspace-layout">
       <ChatUI
-        title="Workspace Builder"
-        description="Generates code artifacts via an emitArtifact tool."
+        title="Workspace Builder — v2"
+        description="Generates code artifacts. The v2 hook surfaces them as a reactive `agent.artifacts` array."
         suggestions={[
           'Write poem.txt with a poem about AI.',
           'Create hello.py with a Python hello world script.',
           'Generate a README.md for a todo app project.',
         ]}
-        messages={messages}
-        streamingText={streamingText}
-        loading={loading}
+        messages={chatMessages}
+        streamingText={agent.streamingText}
+        loading={agent.phase === 'streaming'}
         onSend={handleSend}
       />
 
-      {/* Artifacts panel — shows generated files */}
       <aside className="artifacts-sidebar">
         <h3>🛠️ Artifacts</h3>
         {artifacts.length === 0 ? (
@@ -147,10 +65,7 @@ export default function WorkspaceBuilder() {
             <div key={i} className="artifact">
               <div className="artifact-name">{a.name}</div>
               <pre className="artifact-content">
-                {a.parts
-                  ?.filter((p) => p.text)
-                  .map((p) => p.text)
-                  .join('\n')}
+                {a.parts?.filter((p) => p.text).map((p) => p.text).join('\n')}
               </pre>
             </div>
           ))
@@ -160,13 +75,26 @@ export default function WorkspaceBuilder() {
   );
 }
 
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
+function messageToChatRows(msg: any): ChatMessage[] {
+  const rows: ChatMessage[] = [];
+  const textParts: string[] = [];
+  for (const p of msg.content ?? []) {
+    if (p.text) textParts.push(p.text);
+    if (p.toolRequest) {
+      rows.push({
+        role: 'tool',
+        text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+      });
+    }
+    if (p.toolResponse) {
+      rows.push({
+        role: 'tool',
+        text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+      });
+    }
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
+  if (textParts.length > 0) {
+    rows.unshift({ role: msg.role, text: textParts.join('') });
+  }
+  return rows;
 }

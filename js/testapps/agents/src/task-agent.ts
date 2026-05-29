@@ -74,7 +74,12 @@ const addTask = ai.defineTool(
     const session = ai.currentSession<TaskState>();
     let newTask!: TaskItem;
     session.updateCustom((state) => {
-      const s = state || { tasks: [], nextId: 1 };
+      // Self-heal: previously the client pre-seeded the custom state shape.
+      // With v2 continuationId, first-turn state is an empty object — tools
+      // must initialize their own structure on demand.
+      const s: TaskState = state?.tasks
+        ? (state as TaskState)
+        : { tasks: [], nextId: 1 };
       newTask = { id: s.nextId, title: input.title, done: false };
       s.tasks.push(newTask);
       s.nextId++;
@@ -108,7 +113,9 @@ const toggleTask = ai.defineTool(
     const session = ai.currentSession<TaskState>();
     let result: { success: boolean; task?: TaskItem; error?: string };
     session.updateCustom((state) => {
-      const s = state || { tasks: [], nextId: 1 };
+      const s: TaskState = state?.tasks
+        ? (state as TaskState)
+        : { tasks: [], nextId: 1 };
       const task = s.tasks.find((t) => t.id === input.id);
       if (task) {
         task.done = !task.done;
@@ -138,7 +145,9 @@ const removeTask = ai.defineTool(
     const session = ai.currentSession<TaskState>();
     let result: { success: boolean; error?: string };
     session.updateCustom((state) => {
-      const s = state || { tasks: [], nextId: 1 };
+      const s: TaskState = state?.tasks
+        ? (state as TaskState)
+        : { tasks: [], nextId: 1 };
       const idx = s.tasks.findIndex((t) => t.id === input.id);
       if (idx >= 0) {
         s.tasks.splice(idx, 1);

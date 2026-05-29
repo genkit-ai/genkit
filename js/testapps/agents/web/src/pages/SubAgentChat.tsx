@@ -6,234 +6,117 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitAgent } from '../genkit-react';
 
-// ---------------------------------------------------------------------------
-// Sub-Agent Delegation — orchestrator delegates to researcher & coder
-//
-// Demonstrates:
-//   • The `agents` middleware for sub-agent delegation
-//   • streamFlow() for streaming orchestrator responses
-//   • Inline rendering of `call_agent` tool calls showing delegation
-//   • Multi-turn session via state round-tripping
-//   • Markdown rendering for code-heavy responses
-// ---------------------------------------------------------------------------
+// Sub-agent orchestration. The `call_agent` tool calls render with special
+// labels so the user can see delegation in flight.
 
 const ENDPOINT = '/api/orchestratorAgent';
 
 export default function SubAgentChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loading, setLoading] = useState(false);
+  const agent = useGenkitAgent({ url: ENDPOINT });
 
-  // Session tracking
-  const stateRef = useRef<AgentOutput['state']>(undefined);
+  const handleSend = (text: string) => {
+    if (agent.phase === 'streaming') return;
+    agent.submit({ messages: [{ role: 'user', content: [{ text }] }] });
+  };
 
-  const handleSend = useCallback(
-    async (text: string) => {
-      if (loading) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
-      setLoading(true);
-      setStreamingText('');
-
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {};
-
-      try {
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
-
-        let accumulated = '';
-        for await (const chunk of response.stream) {
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
-              const tr = part.toolRequest;
-              // Format call_agent delegations nicely
-              const inp = tr.input as
-                | { agent?: string; task?: string }
-                | undefined;
-              const label =
-                tr.name === 'call_agent' && inp?.agent
-                  ? `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`
-                  : `🔧 ${tr.name}(${JSON.stringify(tr.input)})`;
-              setMessages((prev) => [...prev, { role: 'tool', text: label }]);
-            } else if (part.toolResponse) {
-              const tr = part.toolResponse;
-              // Format call_agent responses nicely
-              const out = tr.output as
-                | { response?: string; agentName?: string }
-                | undefined;
-              const label =
-                tr.name === 'call_agent' && out?.agentName
-                  ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`
-                  : `✅ ${tr.name} → ${JSON.stringify(tr.output)}`;
-              setMessages((prev) => [...prev, { role: 'tool', text: label }]);
-            }
-          }
-        }
-
-        const result = await response.output;
-        setStreamingText('');
-
-        if (result?.state) stateRef.current = result.state;
-
-        const replyText = extractText(result);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'model', text: replyText || accumulated },
-        ]);
-      } catch (err: unknown) {
-        setStreamingText('');
-        const errMsg = err instanceof Error ? err.message : String(err);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${errMsg}` },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading]
+  const chatMessages = useMemo<ChatMessage[]>(
+    () => agent.messages.flatMap(messageToChatRows),
+    [agent.messages]
   );
+
+  // In-flight tool calls also get rendered with delegation labels.
+  const inFlight = useMemo<ChatMessage[]>(() => {
+    return agent.toolCalls.map((tc) => {
+      const inp = tc.input as { agent?: string; task?: string } | undefined;
+      const out = tc.output as { response?: string; agentName?: string } | undefined;
+      if (tc.name === 'call_agent') {
+        if (tc.state === 'call' && inp?.agent) {
+          return {
+            role: 'tool' as const,
+            text: `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`,
+          };
+        }
+        if (tc.state === 'result' && out?.agentName) {
+          return {
+            role: 'tool' as const,
+            text: `✅ "${out.agentName}" responded: ${out.response ?? ''}`,
+          };
+        }
+      }
+      return tc.state === 'result'
+        ? { role: 'tool' as const, text: `✅ ${tc.name} → ${JSON.stringify(tc.output)}` }
+        : { role: 'tool' as const, text: `🔧 ${tc.name}(${JSON.stringify(tc.input)})` };
+    });
+  }, [agent.toolCalls]);
 
   return (
     <div className="page-with-sidebar">
       <ChatUI
-        title="Sub-Agent Orchestrator"
-        description="An orchestrator that delegates research tasks to a researcher agent and coding tasks to a coder agent."
+        title="Sub-Agent Orchestrator — v2"
+        description="Orchestrator delegating to researcher and coder sub-agents."
         suggestions={[
           'Research the history of the Internet.',
           'Write a Python function to calculate Fibonacci numbers.',
           'Explain quantum computing in simple terms.',
         ]}
-        messages={messages}
-        streamingText={streamingText}
-        loading={loading}
+        messages={[...chatMessages, ...inFlight]}
+        streamingText={agent.streamingText}
+        loading={agent.phase === 'streaming'}
         onSend={handleSend}
         renderMarkdown
       />
 
       <aside className="info-sidebar">
-        <h3>🤝 How It Works</h3>
-        <ol>
-          <li>
-            The <strong>orchestrator</strong> agent has two sub-agents wired via
-            the <code>agents</code> middleware: <strong>researcher</strong> and{' '}
-            <strong>coder</strong>.
-          </li>
-          <li>
-            The middleware injects a <code>call_agent</code> tool that the
-            orchestrator model can invoke to delegate tasks.
-          </li>
-          <li>
-            When the model calls <code>call_agent</code>, the middleware
-            intercepts it, runs the sub-agent via its <code>.run()</code>{' '}
-            method, and returns the sub-agent's response as the tool result.
-          </li>
-          <li>
-            The orchestrator synthesizes sub-agent responses into a final answer
-            for the user.
-          </li>
-        </ol>
-
-        <h4>Try It</h4>
-        <ul>
-          <li>
-            <em>"Research the best sorting algorithms"</em> → delegates to
-            researcher
-          </li>
-          <li>
-            <em>"Write a quicksort in TypeScript"</em> → delegates to coder
-          </li>
-          <li>
-            <em>
-              "Research sorting algorithms then write a TypeScript quicksort"
-            </em>{' '}
-            → delegates to both sequentially
-          </li>
-        </ul>
-
-        <h4>Key APIs</h4>
-        <pre>{`// Define sub-agents
-const researcher = ai.defineAgent({
-  name: 'researcher',
-  model: '...',
-  system: '...',
-  tools: [getWebResults],
-});
-
-const coder = ai.defineAgent({
-  name: 'coder',
-  model: '...',
-  system: '...',
-});
-
-// Wire into orchestrator via middleware
-const orchestrator = ai.defineAgent({
-  name: 'orchestrator',
-  model: '...',
-  system: '...',
-  use: [
-    agents({
-      agents: ['researcher', 'coder'],
-    }),
-  ],
-});`}</pre>
-
-        <h4>Architecture</h4>
+        <h3>🤝 v2 Sub-Agent Delegation</h3>
         <p>
-          The <code>agents</code> middleware from{' '}
-          <code>@genkit-ai/middleware</code> resolves sub-agents from the
-          registry (<code>/agent/name</code>), calls their <code>.run()</code>{' '}
-          method with the delegated task, and extracts the text response.
-          Interrupts from sub-agents propagate up automatically.
+          The orchestrator's <code>call_agent</code> tool surfaces as a regular
+          tool request through the v2 event stream. The hook exposes it via{' '}
+          <code>agent.toolCalls</code>; this page formats it with delegation
+          labels for the UI.
+        </p>
+        <p>
+          A future iteration would emit a distinct{' '}
+          <code>sub-agent-start</code> / <code>sub-agent-event</code> /{' '}
+          <code>sub-agent-end</code> event type so sub-agent activity could be
+          rendered with full nesting (status updates, intermediate artifacts).
         </p>
       </aside>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: pull displayable text out of an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
+function messageToChatRows(msg: any): ChatMessage[] {
+  const rows: ChatMessage[] = [];
+  const textParts: string[] = [];
+  for (const p of msg.content ?? []) {
+    if (p.text) textParts.push(p.text);
+    if (p.toolRequest) {
+      const inp = p.toolRequest.input as { agent?: string; task?: string } | undefined;
+      const label =
+        p.toolRequest.name === 'call_agent' && inp?.agent
+          ? `🤝 Delegated to "${inp.agent}": ${inp.task ?? ''}`
+          : `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`;
+      rows.push({ role: 'tool', text: label });
+    }
+    if (p.toolResponse) {
+      const out = p.toolResponse.output as
+        | { response?: string; agentName?: string }
+        | undefined;
+      const label =
+        p.toolResponse.name === 'call_agent' && out?.agentName
+          ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`
+          : `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`;
+      rows.push({ role: 'tool', text: label });
+    }
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
+  if (textParts.length > 0) {
+    rows.unshift({ role: msg.role, text: textParts.join('') });
+  }
+  return rows;
 }

@@ -6,165 +6,59 @@
  * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+import { useGenkitAgent } from '../genkit-react';
 
-// ---------------------------------------------------------------------------
-// Client-Managed State — weather chat with NO server store
-//
-// Demonstrates:
-//   • streamFlow() with client-managed state (no server-side store)
-//   • The client owns the `state` blob: receive it from the server,
-//     store it locally, and send it back on every subsequent turn
-//   • Tool calling works identically to the server-stored variant
-//   • A "State Inspector" panel shows the raw state JSON so you can
-//     see exactly what's being round-tripped (including message history)
-//
-// Compare with WeatherChat — same UX, but here the server is fully
-// stateless. All session state lives in the blob the client round-trips.
-// ---------------------------------------------------------------------------
+// Client-managed state — same as WeatherChat but the server has no store.
+// With v2 continuationId, the client just round-trips one opaque token;
+// it doesn't have to know whether the server is stored or stateless.
 
 const ENDPOINT = '/api/weatherAgentStateless';
 
 export default function ClientState() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [loading, setLoading] = useState(false);
+  const agent = useGenkitAgent({ url: ENDPOINT });
 
-  // The client owns this state blob. It's returned by the server on every
-  // turn and must be sent back on the next turn via `init: { state }`.
-  const [stateDisplay, setStateDisplay] = useState<string>(
-    '(no state yet — first turn will create it)'
+  const handleSend = (text: string) => {
+    if (agent.phase === 'streaming') return;
+    agent.submit({ messages: [{ role: 'user', content: [{ text }] }] });
+  };
+
+  const chatMessages = useMemo<ChatMessage[]>(
+    () => agent.messages.flatMap(messageToChatRows),
+    [agent.messages]
   );
-  const stateRef = useRef<SessionState | undefined>(undefined);
 
-  const handleSend = useCallback(
-    async (text: string) => {
-      if (loading) return;
-
-      setMessages((prev) => [...prev, { role: 'user', text }]);
-      setLoading(true);
-      setStreamingText('');
-
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      // On the first turn, `init` is empty (no prior state).
-      // On subsequent turns, we send back the state blob from the last turn.
-      // This is the KEY difference from server-stored flows — we always
-      // send `state`, never `snapshotId`.
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {};
-
-      try {
-        // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
-
-        let accumulated = '';
-        for await (const chunk of response.stream) {
-          const c = chunk;
-          const mc = c?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
-              const tr = part.toolRequest;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `🔧 Calling ${tr.name}(${JSON.stringify(tr.input)})`,
-                },
-              ]);
-            } else if (part.toolResponse) {
-              const tr = part.toolResponse;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `✅ ${tr.name} → ${JSON.stringify(tr.output)}`,
-                },
-              ]);
-            }
-          }
-        }
-
-        // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
-        setStreamingText('');
-
-        // Store the state blob for the next turn.
-        if (result?.state) {
-          stateRef.current = result.state;
-          setStateDisplay(JSON.stringify(result.state, null, 2));
-        }
-
-        const replyText = extractText(result);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'model', text: replyText || accumulated },
-        ]);
-      } catch (err: any) {
-        setStreamingText('');
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
-        ]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading]
-  );
+  // For the state inspector: decode the continuation token to show the
+  // raw client-side state blob being round-tripped.
+  const stateDisplay = agent.continuationId
+    ? decodeStateBlob(agent.continuationId) ?? '(server-stored agent — no state blob)'
+    : '(no state yet — first turn will create it)';
 
   return (
     <div className="client-state-layout">
       <ChatUI
-        title="Client-Managed Weather Chat"
-        description="Same weather agent, but NO server store. The client round-trips the full session state."
+        title="Client-Managed Weather Chat — v2"
+        description="Stateless agent. The v2 continuationId encodes the state blob client-side. Round-trip is one opaque string."
         suggestions={[
           'What is the weather like in London?',
           'Is it sunny in Tokyo right now?',
         ]}
-        messages={messages}
-        streamingText={streamingText}
-        loading={loading}
+        messages={chatMessages}
+        streamingText={agent.streamingText}
+        loading={agent.phase === 'streaming'}
         onSend={handleSend}
       />
-      {/* State Inspector — shows the raw state JSON being round-tripped */}
       <aside className="state-inspector">
-        <h3>📦 Session State (client-owned)</h3>
+        <h3>📦 continuationId (client-owned)</h3>
         <p className="state-inspector-hint">
-          This is the raw <code>state</code> blob returned by the server. It
-          contains the full message history, custom data, and artifacts. The
-          client stores it and sends it back on every subsequent turn via{' '}
-          <code>init: {'{ state }'}</code>.
+          One opaque token round-trips on every turn via{' '}
+          <code>init.continuationId</code>. For this agent (no server store),
+          it's a base64-encoded state blob (<code>v1s:...</code> prefix). For
+          server-stored agents, the same field holds a snapshotId (
+          <code>v1:...</code>). Clients don't have to know which.
         </p>
         <pre className="state-inspector-json">{stateDisplay}</pre>
       </aside>
@@ -172,13 +66,37 @@ export default function ClientState() {
   );
 }
 
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
+function messageToChatRows(msg: any): ChatMessage[] {
+  const rows: ChatMessage[] = [];
+  const textParts: string[] = [];
+  for (const p of msg.content ?? []) {
+    if (p.text) textParts.push(p.text);
+    if (p.toolRequest) {
+      rows.push({
+        role: 'tool',
+        text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+      });
+    }
+    if (p.toolResponse) {
+      rows.push({
+        role: 'tool',
+        text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+      });
+    }
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
+  if (textParts.length > 0) {
+    rows.unshift({ role: msg.role, text: textParts.join('') });
+  }
+  return rows;
+}
+
+function decodeStateBlob(continuationId: string): string | null {
+  if (!continuationId.startsWith('v1s:')) return null;
+  try {
+    const b64 = continuationId.slice(4);
+    const json = atob(b64);
+    return JSON.stringify(JSON.parse(json), null, 2);
+  } catch {
+    return null;
+  }
 }
