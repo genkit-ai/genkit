@@ -32,6 +32,9 @@ function mapRole(role: UIMessage['role']): MessageData['role'] {
       return 'user';
     case 'system':
       return 'system';
+    default:
+      // Unknown roles fall back to 'user' so content is not silently dropped.
+      return 'user';
   }
 }
 
@@ -47,6 +50,13 @@ function mapRole(role: UIMessage['role']): MessageData['role'] {
 export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
   if (part.type === 'text') {
     return [{ text: part.text }];
+  }
+
+  if (part.type === 'reasoning') {
+    // Map AI SDK reasoning parts to Genkit reasoning parts so the model's
+    // thinking is preserved across turns (e.g. when replaying history).
+    const reasoning = (part as { text?: unknown }).text;
+    return typeof reasoning === 'string' ? [{ reasoning }] : [];
   }
 
   if (part.type === 'file') {
@@ -69,9 +79,7 @@ export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
   if (part.type === 'dynamic-tool' || part.type.startsWith('tool-')) {
     const p = part as unknown as Record<string, unknown>;
     const toolCallId =
-      typeof p.toolCallId === 'string'
-        ? p.toolCallId
-        : crypto.randomUUID();
+      typeof p.toolCallId === 'string' ? p.toolCallId : crypto.randomUUID();
     const toolName =
       typeof p.toolName === 'string' && p.toolName
         ? p.toolName
@@ -102,8 +110,8 @@ export function mapUIPartToGenkit(part: UIMessage['parts'][number]): Part[] {
     return parts;
   }
 
-  // Unsupported part types (reasoning, source-*, step-start, data-*) are
-  // silently skipped — they don't have a direct Genkit equivalent.
+  // Unsupported part types (source-*, step-start, data-*) are silently
+  // skipped — they don't have a direct Genkit equivalent.
   return [];
 }
 

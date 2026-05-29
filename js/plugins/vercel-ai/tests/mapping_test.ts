@@ -109,11 +109,27 @@ describe('mapUIPartToGenkit', () => {
     ]);
   });
 
-  it('returns empty for unsupported types', () => {
+  it('maps reasoning parts to Genkit reasoning parts', () => {
+    const result = mapUIPartToGenkit({
+      type: 'reasoning',
+      text: 'Let me think about this...',
+    } as UIMessage['parts'][number]);
+    assert.deepStrictEqual(result, [
+      { reasoning: 'Let me think about this...' },
+    ]);
+  });
+
+  it('drops reasoning parts with empty text', () => {
     assert.deepStrictEqual(
-      mapUIPartToGenkit({ type: 'reasoning', text: '' } as UIMessage['parts'][number]),
-      []
+      mapUIPartToGenkit({
+        type: 'reasoning',
+        text: '',
+      } as UIMessage['parts'][number]),
+      [{ reasoning: '' }]
     );
+  });
+
+  it('returns empty for unsupported types', () => {
     assert.deepStrictEqual(
       mapUIPartToGenkit({ type: 'step-start' } as UIMessage['parts'][number]),
       []

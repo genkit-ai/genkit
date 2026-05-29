@@ -17,11 +17,15 @@ npm install @genkit-ai/vercel-ai
 
 ### Peer dependencies
 
-| Package | Required |
-| ------- | -------- |
-| `genkit` | ✅ |
-| `ai` | `^6.0.0` — provides `ChatTransport`, `UIMessage`, etc. |
-| `@ai-sdk/react` | For the `useChat` hook on the client |
+| Package | Required | Notes |
+| ------- | -------- | ----- |
+| `genkit` | ✅ | `>=1.0.0` — the agent API used by this transport lives in the `genkit/beta` subpath. |
+| `ai` | ✅ | `^6.0.0` — provides `ChatTransport`, `UIMessage`, etc. |
+| `@ai-sdk/react` | Client only | `^3.0.0` — only needed where you call the `useChat` hook (browser). |
+
+> **Note:** `@ai-sdk/react` is not a declared peer dependency of this package
+> because the server-side entry point does not require it. Install it
+> yourself in any project that uses `useChat`.
 
 ## Quick start
 
@@ -249,8 +253,10 @@ The `UIMessage` type is also re-exported from the `ai` package for convenience.
 
 ## Requirements
 
-- Genkit `>=1.0.0`
+- Genkit `>=1.0.0` — the agent API (`defineAgent`, `streamFlow`) used by this
+  transport is exposed via the `genkit/beta` subpath of the main `1.x` package.
 - Vercel AI SDK `>=6.0.0` (for `useChat` with `ChatTransport`)
+- `@ai-sdk/react` `>=3.0.0` (client-side, for the `useChat` hook)
 - Node.js `>=20` (server-side)
 
 ## License

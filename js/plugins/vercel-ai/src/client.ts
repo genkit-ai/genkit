@@ -15,6 +15,10 @@
  */
 
 import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
+// Type-only imports are erased at compile time, so importing from `genkit`
+// keeps this module browser-safe (no Node-only runtime code is pulled in)
+// while staying in sync with the canonical agent protocol types.
+import type { AgentOutput, AgentStreamChunk } from 'genkit/beta';
 import { streamFlow } from 'genkit/beta/client';
 import {
   extractResolvedToolResults,
@@ -23,46 +27,6 @@ import {
 } from './mapping.js';
 
 export type { ChatTransport, UIMessage, UIMessageChunk };
-
-// ---------------------------------------------------------------------------
-// Agent wire-format types
-//
-// These mirror the server-side AgentStreamChunk / AgentOutput types from
-// genkit/ai/src/agent.ts.  Defined locally so this module stays browser-safe
-// without importing server-only code.
-//
-// Derived from genkit@1.x agent protocol.
-// ---------------------------------------------------------------------------
-
-/** A single content part within a model message (wire format). */
-interface ContentPart {
-  text?: string;
-  toolRequest?: { name: string; input: unknown; ref?: string };
-  toolResponse?: { name: string; output: unknown; ref?: string };
-  media?: { url: string; contentType?: string };
-}
-
-/** Wire format for model response chunks streamed during agent execution. */
-interface ModelChunkWire {
-  content: ContentPart[];
-}
-
-/** Wire format for agent stream chunks (mirrors `AgentStreamChunk`). */
-interface AgentStreamChunkWire {
-  modelChunk?: ModelChunkWire;
-  turnEnd?: { snapshotId?: string };
-  status?: unknown;
-  artifact?: unknown;
-}
-
-/** Wire format for agent output returned after the stream completes. */
-interface AgentOutputWire {
-  snapshotId?: string;
-  message?: { role: string; content: ContentPart[] };
-  state?: unknown;
-  artifacts?: unknown[];
-}
-
 
 // ---------------------------------------------------------------------------
 // GenkitChatTransport
@@ -229,12 +193,12 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
     }
 
     // Call streamFlow — Genkit's native streaming protocol.
-    const response = streamFlow<AgentOutputWire, AgentStreamChunkWire>({
+    const response = streamFlow<AgentOutput, AgentStreamChunk>({
       url: this.url,
       input: agentInput,
       init,
       headers: this.resolveHeaders(headers),
-      abortSignal: abortSignal ?? undefined,
+      abortSignal,
     });
 
     // Track resolved interrupt tool IDs so we don't re-emit their outputs.
@@ -260,8 +224,23 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
         // Streaming state machine.
         let started = false;
         let textBlockId: string | null = null;
+        let reasoningBlockId: string | null = null;
         let inStep = false;
         const emittedToolInputs = new Set<string>();
+        // Deterministic fallback for tool calls that arrive without a `ref`.
+        // The model may omit refs, in which case the request and its matching
+        // response must still share the same `toolCallId`. We assign one id
+        // per tool name (in arrival order) so the response can correlate.
+        const refByToolName = new Map<string, string>();
+        const correlateToolCallId = (name: string, ref?: string): string => {
+          if (ref) return ref;
+          let id = refByToolName.get(name);
+          if (!id) {
+            id = crypto.randomUUID();
+            refByToolName.set(name, id);
+          }
+          return id;
+        };
 
         const enqueue = (chunk: UIMessageChunk) => {
           try {
@@ -295,6 +274,13 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
           }
         };
 
+        const closeReasoningBlock = () => {
+          if (reasoningBlockId) {
+            enqueue({ type: 'reasoning-end', id: reasoningBlockId });
+            reasoningBlockId = null;
+          }
+        };
+
         const closeStep = () => {
           if (inStep) {
             enqueue({ type: 'finish-step' });
@@ -313,8 +299,27 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
             ensureStarted();
 
             for (const part of mc.content) {
+              // Reasoning delta (model's "thinking"). Genkit reasoning parts
+              // use the `reasoning` field; map them to AI SDK reasoning chunks
+              // so they can be surfaced separately from the final answer.
+              if (typeof part.reasoning === 'string' && part.reasoning !== '') {
+                ensureStep();
+                if (!reasoningBlockId) {
+                  reasoningBlockId = `reasoning-${crypto.randomUUID()}`;
+                  enqueue({ type: 'reasoning-start', id: reasoningBlockId });
+                }
+                enqueue({
+                  type: 'reasoning-delta',
+                  id: reasoningBlockId,
+                  delta: part.reasoning,
+                });
+              }
+
               // Text delta
               if (part.text !== undefined && part.text !== '') {
+                // Reasoning precedes the answer; close any open reasoning
+                // block before streaming visible text.
+                closeReasoningBlock();
                 ensureStep();
                 if (!textBlockId) {
                   textBlockId = `text-${crypto.randomUUID()}`;
@@ -330,9 +335,10 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
               // Tool request (tool call from model)
               if (part.toolRequest) {
                 const tr = part.toolRequest;
-                const toolCallId = tr.ref || crypto.randomUUID();
+                const toolCallId = correlateToolCallId(tr.name, tr.ref);
                 if (!emittedToolInputs.has(toolCallId)) {
                   emittedToolInputs.add(toolCallId);
+                  closeReasoningBlock();
                   closeTextBlock();
                   ensureStep();
                   enqueue({
@@ -352,7 +358,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
               // Tool response (tool executed by agent)
               if (part.toolResponse) {
                 const tr = part.toolResponse;
-                const toolCallId = tr.ref || crypto.randomUUID();
+                const toolCallId = correlateToolCallId(tr.name, tr.ref);
 
                 // Skip resolved interrupt responses — the client already has
                 // the result and re-emitting would confuse the UI SDK.
@@ -369,6 +375,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
 
             // Handle turn end signals.
             if (chunk?.turnEnd) {
+              closeReasoningBlock();
               closeTextBlock();
               closeStep();
             }
@@ -377,6 +384,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
           // If aborted, emit an abort chunk and skip output processing.
           if (aborted) {
             ensureStarted();
+            closeReasoningBlock();
             closeTextBlock();
             closeStep();
             enqueue({ type: 'abort', reason: 'Request was aborted' });
@@ -416,11 +424,9 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
           interrupted.set(chatId, wasAgentInterrupted);
         } catch (err: unknown) {
           // If the error is an AbortError, treat it as an abort, not an error.
-          if (
-            err instanceof DOMException &&
-            err.name === 'AbortError'
-          ) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
             ensureStarted();
+            closeReasoningBlock();
             closeTextBlock();
             closeStep();
             enqueue({ type: 'abort', reason: 'Request was aborted' });
@@ -429,12 +435,11 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
             enqueue({
               type: 'error',
               errorText:
-                err instanceof Error
-                  ? err.message
-                  : 'Agent execution failed',
+                err instanceof Error ? err.message : 'Agent execution failed',
             });
           }
         } finally {
+          closeReasoningBlock();
           closeTextBlock();
           closeStep();
           ensureStarted();

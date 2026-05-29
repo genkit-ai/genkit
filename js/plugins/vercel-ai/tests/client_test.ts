@@ -15,6 +15,7 @@
  */
 
 import { expressHandler } from '@genkit-ai/express';
+import type { UIMessage } from 'ai';
 import * as assert from 'assert';
 import express from 'express';
 import { z } from 'genkit';
@@ -27,7 +28,6 @@ import type {
 import getPort from 'get-port';
 import type * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { UIMessage } from 'ai';
 import { GenkitChatTransport, type UIMessageChunk } from '../src/client.js';
 
 // ---------------------------------------------------------------------------
@@ -88,7 +88,13 @@ describe('GenkitChatTransport e2e', () => {
     sendChunk: (chunk: GenerateResponseChunkData) => void
   ) => Promise<GenerateResponseData>;
 
+  // Captures the HTTP headers of the most recent request to the agent
+  // endpoint so tests can assert that the transport forwarded them.
+  let lastRequestHeaders: http.IncomingHttpHeaders = {};
+
   beforeEach(async () => {
+    lastRequestHeaders = {};
+
     const ai = genkit({});
 
     // ── Programmable model ──────────────────────────────────────────────
@@ -130,6 +136,11 @@ describe('GenkitChatTransport e2e', () => {
     // ── Express server ─────────────────────────────────────────────────
     const app = express();
     app.use(express.json());
+    // Capture request headers so tests can assert the transport forwards them.
+    app.use((req, _res, next) => {
+      lastRequestHeaders = req.headers;
+      next();
+    });
     port = await getPort();
     app.post('/testAgent', expressHandler(agent as any));
     server = app.listen(port);
@@ -208,6 +219,77 @@ describe('GenkitChatTransport e2e', () => {
     assert.ok(firstDeltaIdx < textEndIdx, 'text-delta before text-end');
     assert.ok(textEndIdx < finishStepIdx, 'text-end before finish-step');
     assert.ok(finishStepIdx < finishIdx, 'finish-step before finish');
+  });
+
+  // ── Test: Reasoning streaming ───────────────────────────────────────
+
+  it('should stream reasoning parts as reasoning chunks', async () => {
+    modelHandler = async (_req, sendChunk) => {
+      // Model emits reasoning ("thinking") before the visible answer.
+      sendChunk({
+        content: [{ reasoning: 'First, I consider the options. ' }],
+      });
+      sendChunk({ content: [{ reasoning: 'Then I decide.' }] });
+      sendChunk({ content: [{ text: 'The answer is 42.' }] });
+      return {
+        message: { role: 'model', content: [{ text: 'The answer is 42.' }] },
+        finishReason: 'stop',
+      };
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+    });
+
+    const stream = await transport.sendMessages({
+      trigger: 'submit-message',
+      chatId: 'chat-reasoning',
+      messageId: undefined,
+      messages: [makeUIMessage('user', 'What is the answer?')],
+      abortSignal: undefined,
+    });
+
+    const chunks = await collectChunks(stream);
+    const types = chunkTypes(chunks);
+
+    // No errors
+    assert.strictEqual(chunksOfType(chunks, 'error').length, 0);
+
+    // Exactly one reasoning block: reasoning-start, reasoning-delta(s), reasoning-end
+    const reasoningStarts = chunksOfType(chunks, 'reasoning-start');
+    const reasoningEnds = chunksOfType(chunks, 'reasoning-end');
+    assert.strictEqual(
+      reasoningStarts.length,
+      1,
+      'Exactly one reasoning-start'
+    );
+    assert.strictEqual(reasoningEnds.length, 1, 'Exactly one reasoning-end');
+    assert.strictEqual(reasoningStarts[0].id, reasoningEnds[0].id);
+
+    // Reasoning deltas carry the streamed thinking content
+    const reasoningDeltas = chunksOfType(chunks, 'reasoning-delta');
+    assert.strictEqual(reasoningDeltas.length, 2, 'Two reasoning-delta chunks');
+    assert.strictEqual(
+      reasoningDeltas[0].delta,
+      'First, I consider the options. '
+    );
+    assert.strictEqual(reasoningDeltas[1].delta, 'Then I decide.');
+    for (const rd of reasoningDeltas) {
+      assert.strictEqual(rd.id, reasoningStarts[0].id);
+    }
+
+    // Visible answer is still streamed as text
+    const textDeltas = chunksOfType(chunks, 'text-delta');
+    assert.strictEqual(textDeltas.length, 1);
+    assert.strictEqual(textDeltas[0].delta, 'The answer is 42.');
+
+    // Ordering: reasoning block fully closes before the text block opens
+    const reasoningEndIdx = types.indexOf('reasoning-end');
+    const textStartIdx = types.indexOf('text-start');
+    assert.ok(
+      reasoningEndIdx < textStartIdx,
+      'reasoning-end before text-start'
+    );
   });
 
   // ── Test: Multi-turn conversation with snapshotId ───────────────────
@@ -347,19 +429,31 @@ describe('GenkitChatTransport e2e', () => {
 
     // ── Tool input assertions ──────────────────────────────────────────
     const toolInputStarts = chunksOfType(chunks, 'tool-input-start');
-    assert.strictEqual(toolInputStarts.length, 1, 'Exactly one tool-input-start');
+    assert.strictEqual(
+      toolInputStarts.length,
+      1,
+      'Exactly one tool-input-start'
+    );
     assert.strictEqual(toolInputStarts[0].toolName, 'getWeather');
     assert.strictEqual(toolInputStarts[0].toolCallId, 'tool-call-1');
 
     const toolInputAvails = chunksOfType(chunks, 'tool-input-available');
-    assert.strictEqual(toolInputAvails.length, 1, 'Exactly one tool-input-available');
+    assert.strictEqual(
+      toolInputAvails.length,
+      1,
+      'Exactly one tool-input-available'
+    );
     assert.strictEqual(toolInputAvails[0].toolName, 'getWeather');
     assert.strictEqual(toolInputAvails[0].toolCallId, 'tool-call-1');
     assert.deepStrictEqual(toolInputAvails[0].input, { city: 'London' });
 
     // ── Tool output assertions ─────────────────────────────────────────
     const toolOutputs = chunksOfType(chunks, 'tool-output-available');
-    assert.strictEqual(toolOutputs.length, 1, 'Exactly one tool-output-available');
+    assert.strictEqual(
+      toolOutputs.length,
+      1,
+      'Exactly one tool-output-available'
+    );
     assert.strictEqual(toolOutputs[0].toolCallId, 'tool-call-1');
     assert.deepStrictEqual(toolOutputs[0].output, {
       temp: 72,
@@ -384,7 +478,10 @@ describe('GenkitChatTransport e2e', () => {
     // Second model request should contain the tool response in its messages
     const req2 = capturedRequests[1];
     const toolMsgs = req2.messages.filter((m: any) => m.role === 'tool');
-    assert.ok(toolMsgs.length >= 1, 'Second model call should see tool response');
+    assert.ok(
+      toolMsgs.length >= 1,
+      'Second model call should see tool response'
+    );
   });
 
   // ── Test: Interrupt and resume ──────────────────────────────────────
@@ -710,8 +807,16 @@ describe('GenkitChatTransport e2e', () => {
 
     // Error stream uses the standard envelope: start → error → finish
     assert.strictEqual(types[0], 'start', 'Error stream starts with start');
-    assert.strictEqual(types[types.length - 1], 'finish', 'Error stream ends with finish');
-    assert.strictEqual(chunks.length, 3, 'Error stream emits start + error + finish');
+    assert.strictEqual(
+      types[types.length - 1],
+      'finish',
+      'Error stream ends with finish'
+    );
+    assert.strictEqual(
+      chunks.length,
+      3,
+      'Error stream emits start + error + finish'
+    );
 
     // Should have exactly one error chunk
     const errorChunks = chunksOfType(chunks, 'error');
@@ -759,6 +864,13 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(deltas1.length, 1);
     assert.strictEqual(deltas1[0].delta, 'header-ok');
 
+    // The server must have actually received the static header.
+    assert.strictEqual(
+      lastRequestHeaders['x-custom'],
+      'static',
+      'Server should receive the static X-Custom header'
+    );
+
     // Dynamic headers (function)
     const transport2 = new GenkitChatTransport({
       url: `http://localhost:${port}/testAgent`,
@@ -778,6 +890,13 @@ describe('GenkitChatTransport e2e', () => {
     const deltas2 = chunksOfType(chunks2, 'text-delta');
     assert.strictEqual(deltas2.length, 1);
     assert.strictEqual(deltas2[0].delta, 'header-ok');
+
+    // The server must have actually received the dynamic header.
+    assert.strictEqual(
+      lastRequestHeaders['x-dynamic'],
+      'token-123',
+      'Server should receive the dynamic X-Dynamic header'
+    );
   });
 
   // ── Test: Different chatIds get independent snapshotIds ──────────────
@@ -1035,9 +1154,7 @@ describe('GenkitChatTransport e2e', () => {
 
     // Verify the model received both text and media parts
     assert.strictEqual(capturedRequests.length, 1);
-    const userMsg = capturedRequests[0].messages.find(
-      (m) => m.role === 'user'
-    );
+    const userMsg = capturedRequests[0].messages.find((m) => m.role === 'user');
     assert.ok(userMsg, 'Model should receive a user message');
 
     // Should have a text part
@@ -1047,9 +1164,6 @@ describe('GenkitChatTransport e2e', () => {
     // Should have a media part
     const mediaParts = userMsg!.content.filter((p: any) => p.media);
     assert.ok(mediaParts.length >= 1, 'Should have at least one media part');
-    assert.strictEqual(
-      (mediaParts[0] as any).media.contentType,
-      'image/png'
-    );
+    assert.strictEqual((mediaParts[0] as any).media.contentType, 'image/png');
   });
 });

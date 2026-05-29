@@ -17,6 +17,4 @@
 import { bankingAgent } from '@/lib/agents';
 import { appRoute } from '@genkit-ai/next';
 
-// Agent is a BidiAction; appRoute expects Action — the cast is safe because
-// appRoute only calls .run() which Agent also implements.
 export const POST = appRoute(bankingAgent);
