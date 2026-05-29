@@ -28,7 +28,13 @@ import type {
 import getPort from 'get-port';
 import type * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { GenkitChatTransport, type UIMessageChunk } from '../src/client.js';
+import {
+  GenkitChatTransport,
+  InMemorySnapshotStore,
+  type ChatSnapshot,
+  type SnapshotStore,
+  type UIMessageChunk,
+} from '../src/client.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1165,5 +1171,147 @@ describe('GenkitChatTransport e2e', () => {
     const mediaParts = userMsg!.content.filter((p: any) => p.media);
     assert.ok(mediaParts.length >= 1, 'Should have at least one media part');
     assert.strictEqual((mediaParts[0] as any).media.contentType, 'image/png');
+  });
+
+  // ── Test: Regenerate reruns from the previous snapshot ───────────────
+
+  it('should regenerate the last turn from the previous snapshot', async () => {
+    let callCount = 0;
+    const capturedRequests: GenerateRequest[] = [];
+
+    modelHandler = async (req, sendChunk) => {
+      callCount++;
+      capturedRequests.push(JSON.parse(JSON.stringify(req)));
+      const userMsgs = req.messages.filter((m) => m.role === 'user');
+      const lastText = userMsgs[userMsgs.length - 1]?.content[0]?.text ?? '';
+
+      sendChunk({ content: [{ text: `answer-${callCount}` }] });
+      return {
+        message: {
+          role: 'model',
+          content: [{ text: `answer to "${lastText}" (#${callCount})` }],
+        },
+        finishReason: 'stop',
+      };
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+    });
+
+    // Turn 1
+    await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-regen',
+        messageId: undefined,
+        messages: [makeUIMessage('user', 'first')],
+        abortSignal: undefined,
+      })
+    );
+
+    // Turn 2 — a real assistant answer we will later regenerate.
+    await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-regen',
+        messageId: undefined,
+        messages: [
+          makeUIMessage('user', 'first'),
+          makeUIMessage('assistant', 'answer to "first" (#1)'),
+          makeUIMessage('user', 'second'),
+        ],
+        abortSignal: undefined,
+      })
+    );
+    assert.strictEqual(callCount, 2);
+
+    // Regenerate turn 2: should re-run from the snapshot taken after turn 1,
+    // so the model sees the "first" history but NOT a duplicated "second".
+    const regenStream = await transport.sendMessages({
+      trigger: 'regenerate-message',
+      chatId: 'chat-regen',
+      messageId: undefined,
+      messages: [
+        makeUIMessage('user', 'first'),
+        makeUIMessage('assistant', 'answer to "first" (#1)'),
+        makeUIMessage('user', 'second'),
+      ],
+      abortSignal: undefined,
+    });
+    const regenChunks = await collectChunks(regenStream);
+
+    assert.strictEqual(chunksOfType(regenChunks, 'error').length, 0);
+    const regenDeltas = chunksOfType(regenChunks, 'text-delta');
+    assert.strictEqual(regenDeltas.length, 1);
+    assert.strictEqual(regenDeltas[0].delta, 'answer-3');
+    assert.strictEqual(callCount, 3);
+
+    // The regeneration request should resume from the post-turn-1 snapshot:
+    // it includes the original "first" exchange and a single "second" user
+    // turn (sent fresh), but not the turn-2 assistant reply.
+    const regenReq = capturedRequests[2];
+    const regenUserMsgs = regenReq.messages.filter((m) => m.role === 'user');
+    const secondCount = regenUserMsgs.filter(
+      (m) => m.content[0]?.text === 'second'
+    ).length;
+    assert.strictEqual(
+      secondCount,
+      1,
+      `Regeneration should include "second" exactly once, got ${secondCount}`
+    );
+  });
+
+  // ── Test: Custom SnapshotStore is used for persistence ───────────────
+
+  it('should use a custom SnapshotStore for snapshot persistence', async () => {
+    modelHandler = async (_req, sendChunk) => {
+      sendChunk({ content: [{ text: 'stored' }] });
+      return {
+        message: { role: 'model', content: [{ text: 'stored' }] },
+        finishReason: 'stop',
+      };
+    };
+
+    // Recording store wrapper to observe reads/writes.
+    const inner = new InMemorySnapshotStore();
+    const sets: Array<{ chatId: string; snapshot: ChatSnapshot }> = [];
+    const store: SnapshotStore = {
+      get: (chatId) => inner.get(chatId),
+      set: (chatId, snapshot) => {
+        sets.push({ chatId, snapshot });
+        inner.set(chatId, snapshot);
+      },
+      delete: (chatId) => inner.delete(chatId),
+    };
+
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+      store,
+    });
+
+    await collectChunks(
+      await transport.sendMessages({
+        trigger: 'submit-message',
+        chatId: 'chat-custom-store',
+        messageId: undefined,
+        messages: [makeUIMessage('user', 'hi')],
+        abortSignal: undefined,
+      })
+    );
+
+    // The transport must have persisted a snapshot via the custom store.
+    assert.ok(sets.length >= 1, 'Custom store should receive at least one set');
+    const last = sets[sets.length - 1];
+    assert.strictEqual(last.chatId, 'chat-custom-store');
+    assert.ok(
+      typeof last.snapshot.snapshotId === 'string' &&
+        last.snapshot.snapshotId.length > 0,
+      'Persisted snapshot should carry a snapshotId'
+    );
+
+    // And the snapshot should be retrievable for the next turn.
+    const persisted = await store.get('chat-custom-store');
+    assert.ok(persisted?.snapshotId, 'Snapshot should be retrievable');
   });
 });

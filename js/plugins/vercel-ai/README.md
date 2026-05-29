@@ -208,6 +208,55 @@ const transport = new GenkitChatTransport({
 | ------ | ---- | ----------- |
 | `url` | `string` | **Required.** URL of the Genkit agent endpoint. |
 | `headers` | `Record<string, string> \| () => Record<string, string>` | Optional HTTP headers to include on every request. Accepts a static object or a function for dynamic values (e.g. auth tokens). |
+| `store` | `SnapshotStore` | Optional storage for per-chat snapshot state. Defaults to `InMemorySnapshotStore` (lost on reload). Use `LocalStorageSnapshotStore` to persist multi-turn continuity across reloads, or supply your own. |
+
+#### Persisting conversations across reloads
+
+The transport tracks each chat's server-side `snapshotId` so multi-turn
+conversations resume from the correct state. By default this lives in memory
+and is lost on a full page reload. Provide a persistent `store` to keep it:
+
+```ts
+import {
+  GenkitChatTransport,
+  LocalStorageSnapshotStore,
+} from '@genkit-ai/vercel-ai/client';
+
+const transport = new GenkitChatTransport({
+  url: '/api/chat/weather',
+  store: new LocalStorageSnapshotStore(), // survives page reloads
+});
+```
+
+Implement the `SnapshotStore` interface (`get`/`set`/`delete`, all
+async-capable) to back snapshots with any storage you like (IndexedDB, a
+remote API, etc.):
+
+```ts
+import type {
+  ChatSnapshot,
+  SnapshotStore,
+} from '@genkit-ai/vercel-ai/client';
+
+class MyStore implements SnapshotStore {
+  async get(chatId: string): Promise<ChatSnapshot | undefined> {
+    /* ... */
+  }
+  async set(chatId: string, snapshot: ChatSnapshot): Promise<void> {
+    /* ... */
+  }
+  async delete(chatId: string): Promise<void> {
+    /* ... */
+  }
+}
+```
+
+#### Regenerating a response
+
+When the UI triggers a regeneration (the AI SDK sends
+`trigger: 'regenerate-message'`), the transport re-runs the **last turn** from
+the snapshot taken *before* it — so the final assistant message is produced
+again from the prior conversation state instead of appending a new turn.
 
 #### How it works
 

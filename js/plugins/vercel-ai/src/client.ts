@@ -25,7 +25,14 @@ import {
   findLastUserMessage,
   mapUIMessageToGenkit,
 } from './mapping.js';
+import { InMemorySnapshotStore, type SnapshotStore } from './store.js';
 
+export {
+  InMemorySnapshotStore,
+  LocalStorageSnapshotStore,
+  type ChatSnapshot,
+  type SnapshotStore,
+} from './store.js';
 export type { ChatTransport, UIMessage, UIMessageChunk };
 
 // ---------------------------------------------------------------------------
@@ -45,6 +52,16 @@ export interface GenkitChatTransportConfig {
    * dynamic auth tokens).
    */
   headers?: Record<string, string> | (() => Record<string, string>);
+
+  /**
+   * Storage for per-chat snapshot state (snapshot ids + interrupt flag).
+   *
+   * Defaults to {@link InMemorySnapshotStore}, which keeps state for the
+   * lifetime of the transport instance and loses it on page reload. Pass
+   * {@link LocalStorageSnapshotStore} (or a custom {@link SnapshotStore}) to
+   * persist multi-turn continuity across reloads.
+   */
+  store?: SnapshotStore;
 }
 
 /**
@@ -56,9 +73,9 @@ export interface GenkitChatTransportConfig {
  * `ChatSessionStore`.
  *
  * **Lifecycle:** A single transport instance can manage multiple independent
- * chats (each identified by `chatId`). Internal state per chat is lightweight
- * (two string-keyed Map entries). Call {@link clearChat} to release state for
- * a chat that is no longer needed.
+ * chats (each identified by `chatId`). Per-chat snapshot state is held in a
+ * pluggable {@link SnapshotStore} (in-memory by default). Call
+ * {@link clearChat} to release state for a chat that is no longer needed.
  *
  * @example
  * ```tsx
@@ -78,14 +95,13 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
     | Record<string, string>
     | (() => Record<string, string>);
 
-  /** Client-side chatId → snapshotId mapping. */
-  private snapshots = new Map<string, string>();
-  /** Tracks whether a chat is in an interrupted state. */
-  private interrupted = new Map<string, boolean>();
+  /** Pluggable per-chat snapshot state (snapshot ids + interrupt flag). */
+  private readonly store: SnapshotStore;
 
   constructor(config: GenkitChatTransportConfig) {
     this.url = config.url;
     this.headersConfig = config.headers;
+    this.store = config.store ?? new InMemorySnapshotStore();
   }
 
   /**
@@ -94,9 +110,8 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
    * Call this when a chat is discarded (e.g. the user closes a tab or
    * navigates away) to avoid holding stale snapshot references.
    */
-  clearChat(chatId: string): void {
-    this.snapshots.delete(chatId);
-    this.interrupted.delete(chatId);
+  async clearChat(chatId: string): Promise<void> {
+    await this.store.delete(chatId);
   }
 
   private resolveHeaders(
@@ -120,12 +135,13 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
     return { ...base, ...extraRecord };
   }
 
-  // Note: The `trigger` parameter accepts both 'submit-message' and
-  // 'regenerate-message'. Currently both are handled identically — the
-  // agent is stateful (snapshot-based), so a regeneration simply produces
-  // a new response from the same conversation state. A future version may
-  // add specific regeneration behavior (e.g. rewinding one turn).
+  // The `trigger` parameter is either 'submit-message' (a new user turn) or
+  // 'regenerate-message' (re-run the last assistant response). Because the
+  // agent is stateful (snapshot-based), regeneration re-runs from the
+  // *previous* snapshot — the conversation state from before the last turn —
+  // so the final turn is produced again instead of appending a new one.
   async sendMessages({
+    trigger,
     chatId,
     messages,
     abortSignal,
@@ -140,13 +156,23 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
     body?: object;
     metadata?: unknown;
   }): Promise<ReadableStream<UIMessageChunk>> {
-    const snapshotId = this.snapshots.get(chatId);
-    const wasInterrupted = this.interrupted.get(chatId) ?? false;
+    const chatSnapshot = (await this.store.get(chatId)) ?? {};
+    const isRegenerate = trigger === 'regenerate-message';
+
+    // For a regeneration, resume from the snapshot *before* the last turn so
+    // the final response is produced again from the prior state. Otherwise
+    // continue from the current snapshot.
+    const snapshotId = isRegenerate
+      ? chatSnapshot.previousSnapshotId
+      : chatSnapshot.snapshotId;
+    const wasInterrupted = chatSnapshot.interrupted ?? false;
 
     // Detect whether this is an interrupt resume or a normal message.
-    const resolvedTools = wasInterrupted
-      ? extractResolvedToolResults(messages)
-      : [];
+    // Regeneration never resumes an interrupt — it replays a completed turn.
+    const resolvedTools =
+      wasInterrupted && !isRegenerate
+        ? extractResolvedToolResults(messages)
+        : [];
     const isResume = resolvedTools.length > 0 && !!snapshotId;
 
     // Build AgentInput + AgentInit.
@@ -207,8 +233,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
     );
 
     // References captured by the ReadableStream closure.
-    const snapshots = this.snapshots;
-    const interrupted = this.interrupted;
+    const store = this.store;
 
     // Track whether the stream was aborted so we can emit a clean abort chunk.
     let aborted = false;
@@ -400,11 +425,6 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
           // Wait for final output.
           const output = await response.output;
 
-          // Update client-side chatId → snapshotId mapping.
-          if (output?.snapshotId) {
-            snapshots.set(chatId, output.snapshotId);
-          }
-
           // Detect interrupts — if the last message has unresolved tool
           // requests, the agent was interrupted.
           let wasAgentInterrupted = false;
@@ -421,7 +441,28 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
               wasAgentInterrupted = true;
             }
           }
-          interrupted.set(chatId, wasAgentInterrupted);
+
+          // Persist snapshot bookkeeping for the next turn. On a normal turn
+          // the prior `snapshotId` becomes `previousSnapshotId` so a later
+          // `regenerate-message` can re-run from before this turn. On a
+          // regeneration we replace the current snapshot but keep the same
+          // `previousSnapshotId` so it stays repeatable.
+          if (output?.snapshotId) {
+            await store.set(chatId, {
+              snapshotId: output.snapshotId,
+              previousSnapshotId: isRegenerate
+                ? chatSnapshot.previousSnapshotId
+                : chatSnapshot.snapshotId,
+              interrupted: wasAgentInterrupted,
+            });
+          } else {
+            // No new snapshot (e.g. interrupt without a fresh id) — preserve
+            // existing snapshot ids but update the interrupt flag.
+            await store.set(chatId, {
+              ...chatSnapshot,
+              interrupted: wasAgentInterrupted,
+            });
+          }
         } catch (err: unknown) {
           // If the error is an AbortError, treat it as an abort, not an error.
           if (err instanceof DOMException && err.name === 'AbortError') {

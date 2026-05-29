@@ -22,3 +22,10 @@ export {
   mapUIMessageToGenkit,
   mapUIPartToGenkit,
 } from './mapping.js';
+
+export {
+  InMemorySnapshotStore,
+  LocalStorageSnapshotStore,
+  type ChatSnapshot,
+  type SnapshotStore,
+} from './store.js';
