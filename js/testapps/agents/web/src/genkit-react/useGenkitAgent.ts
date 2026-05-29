@@ -244,7 +244,10 @@ export function useGenkitAgent<S = unknown>(
   useEffect(() => {
     if (!resumeFromContinuation) return;
     if (rehydratedRef.current.has(resumeFromContinuation)) return;
-    rehydratedRef.current.add(resumeFromContinuation);
+    // Note: we don't mark `rehydratedRef` until AFTER the fetch commits.
+    // Under React StrictMode the first effect run is canceled and cleaned
+    // up before the async work resolves; marking it preemptively would
+    // make the second run think it's already done and skip the fetch.
     let cancelled = false;
     (async () => {
       try {
@@ -265,9 +268,11 @@ export function useGenkitAgent<S = unknown>(
         } else {
           setPhase('done');
         }
+        rehydratedRef.current.add(resumeFromContinuation);
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e : new Error(String(e)));
+        rehydratedRef.current.add(resumeFromContinuation);
       }
     })();
     return () => {
@@ -478,6 +483,13 @@ export function useGenkitAgent<S = unknown>(
               mergeArtifacts(prev, result.artifacts as any[])
             );
           }
+
+          // Clear the in-flight streaming buffers — the final message has
+          // been committed to `messages` above. Leaving them populated
+          // would render the same text twice (once as the committed
+          // message, once as the live streaming line).
+          setStreamingText('');
+          setStreamingReasoning('');
 
           if (detachedDuringStream || input.detach) {
             setPhase('background');
