@@ -1179,6 +1179,12 @@ importers:
         version: link:../../plugins/middleware
       '@genkit-ai/vertexai':
         specifier: workspace:*
+        version: link:../../plugins/vertexai
+      express:
+        specifier: ^4.20.0
+        version: 4.22.1
+      genkit:
+        specifier: workspace:*
         version: link:../../genkit
     devDependencies:
       '@types/express':
