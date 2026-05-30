@@ -472,7 +472,7 @@ ai.defineFlow('gemini-image-editing', async (_) => {
 // Nano banana pro config
 ai.defineFlow('nano-banana-pro', async (_) => {
   const { media } = await ai.generate({
-    model: vertexAI.model('gemini-3-pro-image-preview'),
+    model: vertexAI.model('gemini-3-pro-image'),
     prompt: 'Generate a picture of a sunset in the mountains by a lake',
     config: {
       imageConfig: {
@@ -487,7 +487,7 @@ ai.defineFlow('nano-banana-pro', async (_) => {
 
 ai.defineFlow('nano-banana-2', async (_) => {
   const { media } = await ai.generate({
-    model: vertexAI.model('gemini-3.1-flash-image-preview'),
+    model: vertexAI.model('gemini-3.1-flash-image'),
     prompt:
       'Generate an image of the CN Tower. Use words to show the current date, time and weather on the image.',
     config: {

@@ -446,13 +446,13 @@ export function isGeminiModelName(value?: string): value is GeminiModelName {
 }
 
 export const KNOWN_IMAGE_MODELS = {
-  'gemini-3.1-flash-image-preview': commonRef(
-    'gemini-3.1-flash-image-preview',
+  'gemini-3.1-flash-image': commonRef(
+    'gemini-3.1-flash-image',
     { ...GENERIC_IMAGE_MODEL.info },
     GeminiImageConfigSchema
   ),
-  'gemini-3-pro-image-preview': commonRef(
-    'gemini-3-pro-image-preview',
+  'gemini-3-pro-image': commonRef(
+    'gemini-3-pro-image',
     { ...GENERIC_IMAGE_MODEL.info },
     GeminiImageConfigSchema
   ),
