@@ -41,7 +41,9 @@ func imagerFunc(client *bedrockruntime.Client, modelID string) ai.ModelFunc {
 		switch {
 		case strings.HasPrefix(modelID, "amazon.titan-image-"), strings.HasPrefix(modelID, "amazon.nova-canvas-"):
 			images, err = imageTitanLike(ctx, client, modelID, prompt)
-		case strings.HasPrefix(modelID, "stability."), strings.HasPrefix(modelID, "stable-"):
+		case isModernStabilityModel(modelID):
+			images, err = imageModernStability(ctx, client, modelID, prompt)
+		case strings.HasPrefix(modelID, "stability.stable-diffusion-xl-"), strings.HasPrefix(modelID, "stable-"):
 			images, err = imageStableDiffusion(ctx, client, modelID, prompt)
 		default:
 			return nil, fmt.Errorf("bedrock: unrecognised image model %q", modelID)
@@ -59,6 +61,11 @@ func imagerFunc(client *bedrockruntime.Client, modelID string) ai.ModelFunc {
 			Request:      req,
 		}, nil
 	}
+}
+
+func isModernStabilityModel(modelID string) bool {
+	return strings.HasPrefix(modelID, "stability.sd3-") ||
+		strings.HasPrefix(modelID, "stability.stable-image-")
 }
 
 // promptOf extracts the text prompt from the last user message in req.
@@ -176,4 +183,34 @@ func imageStableDiffusion(ctx context.Context, client *bedrockruntime.Client, mo
 		return nil, fmt.Errorf("bedrock: %s returned empty artifacts", modelID)
 	}
 	return images, nil
+}
+
+// Current Stability image services on Bedrock (SD3/SD3.5, Stable Image Core,
+// Stable Image Ultra) use a prompt/images payload rather than the legacy
+// Stable Diffusion XL text_prompts/artifacts payload.
+type modernStabilityReq struct {
+	Prompt       string `json:"prompt"`
+	OutputFormat string `json:"output_format,omitempty"`
+}
+
+type modernStabilityResp struct {
+	Images        []string  `json:"images"`
+	FinishReasons []*string `json:"finish_reasons,omitempty"`
+}
+
+func imageModernStability(ctx context.Context, client *bedrockruntime.Client, modelID, prompt string) ([]string, error) {
+	in := modernStabilityReq{Prompt: prompt, OutputFormat: "png"}
+	var resp modernStabilityResp
+	if err := invokeJSON(ctx, client, modelID, in, &resp); err != nil {
+		return nil, err
+	}
+	for _, reason := range resp.FinishReasons {
+		if reason != nil && *reason != "" {
+			return nil, fmt.Errorf("bedrock: %s: %s", modelID, *reason)
+		}
+	}
+	if len(resp.Images) == 0 {
+		return nil, fmt.Errorf("bedrock: %s returned no images", modelID)
+	}
+	return resp.Images, nil
 }

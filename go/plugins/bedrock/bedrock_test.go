@@ -368,6 +368,61 @@ func TestDecodeMediaPayload(t *testing.T) {
 	}
 }
 
+func TestTitanEmbedPayload_TextModelRequiresText(t *testing.T) {
+	body, err := titanEmbedPayload("amazon.titan-embed-text-v2:0", ai.DocumentFromText("hello", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body.InputText != "hello" {
+		t.Errorf("InputText = %q, want hello", body.InputText)
+	}
+	if body.InputImage != "" {
+		t.Errorf("InputImage = %q, want empty", body.InputImage)
+	}
+
+	_, err = titanEmbedPayload("amazon.titan-embed-text-v2:0", &ai.Document{
+		Content: []*ai.Part{ai.NewMediaPart("image/png", "data:image/png;base64,aGVsbG8=")},
+	})
+	if err == nil {
+		t.Fatal("expected text-only Titan embedder to reject image-only input")
+	}
+}
+
+func TestTitanEmbedPayload_ImageModelAcceptsImage(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString([]byte("fake png"))
+	body, err := titanEmbedPayload("amazon.titan-embed-image-v1", &ai.Document{
+		Content: []*ai.Part{
+			ai.NewTextPart("caption"),
+			ai.NewMediaPart("image/png", "data:image/png;base64,"+encoded),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body.InputText != "caption" {
+		t.Errorf("InputText = %q, want caption", body.InputText)
+	}
+	if body.InputImage != encoded {
+		t.Errorf("InputImage = %q, want %q", body.InputImage, encoded)
+	}
+}
+
+func TestIsModernStabilityModel(t *testing.T) {
+	for _, modelID := range []string{
+		"stability.sd3-large-v1:0",
+		"stability.sd3-5-large-v1:0",
+		"stability.stable-image-core-v1:0",
+		"stability.stable-image-ultra-v1:0",
+	} {
+		if !isModernStabilityModel(modelID) {
+			t.Errorf("isModernStabilityModel(%q) = false, want true", modelID)
+		}
+	}
+	if isModernStabilityModel("stability.stable-diffusion-xl-v1") {
+		t.Error("Stable Diffusion XL should use the legacy text_prompts payload")
+	}
+}
+
 func TestBlocksToParts_StreamReassembly(t *testing.T) {
 	// Synthesise an out-of-order pair of blocks: text at index 0, tool at 1.
 	blocks := map[int32]*streamBlock{}

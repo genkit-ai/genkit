@@ -125,7 +125,8 @@ resp, _ := genkit.Generate(ctx, g,
 Routes on model-ID prefix:
 
 - `amazon.titan-image-*`, `amazon.nova-canvas-*` — Titan-style `taskType: TEXT_IMAGE` payload.
-- `stability.*`, `stable-*` — Stable Diffusion `text_prompts: [...]` payload.
+- `stability.sd3-*`, `stability.stable-image-*` — current Stability `prompt` / `images` payload.
+- `stability.stable-diffusion-xl-*`, `stable-*` — legacy Stable Diffusion `text_prompts` / `artifacts` payload.
 
 Defaults are 1024×1024 PNG; tune via `AdditionalModelRequestFields` on Converse-backed models or wait for v2 of this plugin for an image-specific config struct.
 

@@ -18,6 +18,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,30 +49,72 @@ func embedderFunc(client *bedrockruntime.Client, modelID string) ai.EmbedderFunc
 	}
 }
 
-// embedTitan submits one InvokeModel call per input document. Titan embedders
-// accept a single text per call and return a single vector.
+// embedTitan submits one InvokeModel call per input document. Titan text
+// embedders accept text; Titan multimodal embedders accept text, image, or
+// both, and all return a single vector.
 type titanEmbedReq struct {
-	InputText string `json:"inputText"`
+	InputText       string           `json:"inputText,omitempty"`
+	InputImage      string           `json:"inputImage,omitempty"`
+	EmbeddingConfig map[string]int32 `json:"embeddingConfig,omitempty"`
 }
 
 type titanEmbedResp struct {
 	Embedding []float32 `json:"embedding"`
+	Message   string    `json:"message,omitempty"`
 }
 
 func embedTitan(ctx context.Context, client *bedrockruntime.Client, modelID string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 	out := &ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(req.Input))}
 	for i, doc := range req.Input {
-		text := docText(doc)
-		if text == "" {
-			return nil, fmt.Errorf("bedrock: titan embedder: document %d has no text", i)
+		body, err := titanEmbedPayload(modelID, doc)
+		if err != nil {
+			return nil, fmt.Errorf("bedrock: titan embedder: document %d: %w", i, err)
 		}
 		var resp titanEmbedResp
-		if err := invokeJSON(ctx, client, modelID, titanEmbedReq{InputText: text}, &resp); err != nil {
+		if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
 			return nil, err
+		}
+		if resp.Message != "" {
+			return nil, fmt.Errorf("bedrock: titan embedder: %s", resp.Message)
 		}
 		out.Embeddings = append(out.Embeddings, &ai.Embedding{Embedding: resp.Embedding})
 	}
 	return out, nil
+}
+
+func titanEmbedPayload(modelID string, doc *ai.Document) (titanEmbedReq, error) {
+	text := docText(doc)
+	if strings.Contains(modelID, "titan-embed-image") {
+		image, err := docImageBase64(doc)
+		if err != nil {
+			return titanEmbedReq{}, err
+		}
+		if text == "" && image == "" {
+			return titanEmbedReq{}, errors.New("no text or image content")
+		}
+		return titanEmbedReq{InputText: text, InputImage: image}, nil
+	}
+	if text == "" {
+		return titanEmbedReq{}, errors.New("no text content")
+	}
+	return titanEmbedReq{InputText: text}, nil
+}
+
+func docImageBase64(d *ai.Document) (string, error) {
+	if d == nil {
+		return "", nil
+	}
+	for _, p := range d.Content {
+		if p == nil || !p.IsMedia() || !strings.HasPrefix(strings.ToLower(p.ContentType), "image/") {
+			continue
+		}
+		b, err := decodeMediaPayload(p.Text)
+		if err != nil {
+			return "", err
+		}
+		return base64.StdEncoding.EncodeToString(b), nil
+	}
+	return "", nil
 }
 
 // embedCohere batches every input document into a single InvokeModel call.
@@ -118,7 +161,7 @@ func docText(d *ai.Document) string {
 	}
 	var sb strings.Builder
 	for _, p := range d.Content {
-		if p.Text != "" {
+		if p != nil && p.Kind == ai.PartText && p.Text != "" {
 			sb.WriteString(p.Text)
 		}
 	}
