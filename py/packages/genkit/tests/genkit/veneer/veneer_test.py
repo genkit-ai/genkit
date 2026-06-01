@@ -6,7 +6,7 @@
 """Tests for the action module."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -1012,7 +1012,10 @@ async def test_generate_with_middleware() -> None:
     @ai.middleware(name='pre_mw')
     class PreMiddleware(BaseMiddleware):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1022,15 +1025,19 @@ async def test_generate_with_middleware() -> None:
                             Message(role=Role.USER, content=[Part(root=TextPart(text=f'PRE {txt}'))]),
                         ],
                     ),
-                )
+                ),
+                ctx,
             )
 
     @ai.middleware(name='post_mw')
     class PostMiddleware(BaseMiddleware):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            resp: ModelResponse = await next_fn(params)
+            resp: ModelResponse = await next_fn(params, ctx)
             assert resp.message is not None
             txt = text_from_message(resp.message)
             return ModelResponse(
@@ -1067,7 +1074,10 @@ async def test_generate_passes_through_current_action_context() -> None:
     @ai.middleware(name='inject_ctx')
     class InjectContextMiddleware(BaseMiddleware):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1080,7 +1090,8 @@ async def test_generate_passes_through_current_action_context() -> None:
                             ),
                         ],
                     ),
-                )
+                ),
+                ctx,
             )
 
     async def action_fn() -> ModelResponse:
@@ -1106,7 +1117,10 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
     @ai.middleware(name='inject_ctx')
     class InjectContextMiddleware(BaseMiddleware):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1119,7 +1133,8 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
                             ),
                         ],
                     ),
-                )
+                ),
+                ctx,
             )
 
     async def action_fn() -> ModelResponse:
@@ -1145,7 +1160,10 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
 
     class InjectContextMiddleware(BaseMiddleware):
         async def wrap_model(
-            self, params: ModelHookParams, next_fn: Callable, ctx: GenerateMiddlewareContext
+            self,
+            params: ModelHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1158,7 +1176,8 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
                             ),
                         ],
                     ),
-                )
+                ),
+                ctx,
             )
 
     async def action_fn() -> ModelResponse:

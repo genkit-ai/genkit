@@ -185,30 +185,28 @@ def _prepare_middleware(
     )
 
 
-async def _chain_tool_middleware(
+async def dispatch_tool(
     middleware: list[MiddlewareDef],
     params: ToolHookParams,
-    next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
     ctx: GenerateMiddlewareContext,
+    next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
 ) -> MultipartToolResponse:
-    """Run the tool middleware chain and return the tool response."""
-    runner: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = next_fn
+    """Chain wrap_tool middleware and call next_fn."""
+    runner: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]] = next_fn
     for mw in reversed(middleware):
         _mw = mw
         _inner = runner
-        _ctx = ctx
 
         async def run_next(
             p: ToolHookParams,
-            *,
+            c: GenerateMiddlewareContext,
             _m: MiddlewareDef = _mw,
-            _i: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]] = _inner,
-            _c: GenerateMiddlewareContext = _ctx,
+            _i: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]] = _inner,
         ) -> MultipartToolResponse:
-            return await _m.wrap_tool(p, _i, _c)
+            return await _m.wrap_tool(p, c, _i)
 
         runner = run_next
-    return await runner(params)
+    return await runner(params, ctx)
 
 
 async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> list[str]:
@@ -516,7 +514,6 @@ async def _generate_action_turn(
     """Run one model call plus tool resolution, then recurse for the next turn."""
     middleware = mw_pipeline.middleware
     run_ctx = mw_pipeline.ctx
-    on_chunk = run_ctx.on_chunk
 
     model, tools, format_def = await resolve_parameters(registry, raw_request)
 
@@ -580,14 +577,19 @@ async def _generate_action_turn(
             chunk_parser=chunk_parser if formatter else None,
         )
 
-    def wrap_chunks(role: Role | None = None) -> Callable[[ModelResponseChunk], None]:
+    def wrap_chunks(
+        ctx: GenerateMiddlewareContext,
+        role: Role | None = None,
+    ) -> Callable[[ModelResponseChunk], None]:
         """Return a callback that wraps chunks with the given role for streaming."""
         if role is None:
             role = Role.MODEL
 
+        downstream_on_chunk = ctx.on_chunk
+
         def wrapper(chunk: ModelResponseChunk) -> None:
-            if on_chunk is not None:
-                on_chunk(make_chunk(role, chunk))
+            if downstream_on_chunk is not None:
+                downstream_on_chunk(make_chunk(role, chunk))
 
         return wrapper
 
@@ -597,83 +599,87 @@ async def _generate_action_turn(
 
     async def dispatch_generate(
         params: GenerateHookParams,
-        next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Chain wrap_generate middleware and call next_fn."""
-        runner: Callable[[GenerateHookParams], Awaitable[ModelResponse]] = next_fn
+        runner: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = next_fn
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
-            _ctx = run_ctx
 
             async def run_next(
                 p: GenerateHookParams,
-                *,
+                c: GenerateMiddlewareContext,
                 _m: MiddlewareDef = _mw,
-                _i: Callable[[GenerateHookParams], Awaitable[ModelResponse]] = _inner,
-                _c: GenerateMiddlewareContext = _ctx,
+                _i: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
             ) -> ModelResponse:
-                return await _m.wrap_generate(p, _i, _c)
+                return await _m.wrap_generate(p, c, _i)
 
             runner = run_next
-        return await runner(params)
+        return await runner(params, ctx)
 
     async def dispatch_model(
-        req: ModelRequest,
-        chunk_callback: Callable[[ModelResponseChunk], None] | None,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        async def run_model(params: ModelHookParams) -> ModelResponse:
-            return (
-                await model.run(
-                    input=params.request,
-                    context=run_ctx.custom_context,
-                    on_chunk=run_ctx.on_chunk,
-                )
-            ).response
-
-        runner: Callable[[ModelHookParams], Awaitable[ModelResponse]] = run_model
+        """Chain wrap_model middleware and call next_fn."""
+        runner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = next_fn
         for mw in reversed(middleware):
             _mw = mw
             _inner = runner
 
             async def run_next(
                 params: ModelHookParams,
-                *,
+                c: GenerateMiddlewareContext,
                 _mw: MiddlewareDef = _mw,
-                _inner: Callable[[ModelHookParams], Awaitable[ModelResponse]] = _inner,
-                _c: GenerateMiddlewareContext = run_ctx,
+                _inner: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]] = _inner,
             ) -> ModelResponse:
-                return await _mw.wrap_model(params, _inner, _c)
+                return await _mw.wrap_model(params, c, _inner)
 
-            runner = cast(Callable[[ModelHookParams], Awaitable[ModelResponse]], run_next)
-
-        previous_on_chunk = run_ctx.replace_on_chunk(chunk_callback) if chunk_callback else None
-        try:
-            return await runner(ModelHookParams(request=req))
-        finally:
-            if chunk_callback is not None:
-                run_ctx.replace_on_chunk(previous_on_chunk)
+            runner = cast(Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]], run_next)
+        return await runner(params, ctx)
 
     # if resolving the 'resume' option above generated a tool message, stream it.
-    if resumed_tool_message and on_chunk:
-        wrap_chunks(Role.TOOL)(
+    if resumed_tool_message and run_ctx.on_chunk:
+        wrap_chunks(run_ctx, Role.TOOL)(
             ModelResponseChunk(
                 role=resumed_tool_message.role,
                 content=resumed_tool_message.content,
             )
         )
 
-    async def run_one_iteration(_params: GenerateHookParams) -> ModelResponse:
+    async def run_one_iteration(
+        _params: GenerateHookParams,
+        _ctx: GenerateMiddlewareContext,
+    ) -> ModelResponse:
         """Execute one turn of the generate loop (model call + optional tool resolution)."""
         nonlocal request, message_index, chunk_role
         # Pick up whatever wrap_generate middleware put on params.request — replacement
         # or in-place mutation. Without this re-sync, those changes get silently dropped.
         request = _params.request
 
-        model_response = await dispatch_model(
-            request,
-            wrap_chunks() if on_chunk else None,
-        )
+        async def next_fn(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+            return (
+                await model.run(
+                    input=params.request,
+                    context=c.custom_context,
+                    on_chunk=c.on_chunk,
+                )
+            ).response
+
+        chunk_callback = wrap_chunks(_ctx) if _ctx.on_chunk else None
+        previous_on_chunk = _ctx.replace_on_chunk(chunk_callback) if chunk_callback else None
+        try:
+            model_response = await dispatch_model(
+                ModelHookParams(request=request),
+                _ctx,
+                next_fn,
+            )
+        finally:
+            if chunk_callback is not None:
+                _ctx.replace_on_chunk(previous_on_chunk)
 
         def message_parser(msg: Message) -> Any:  # noqa: ANN401
             if formatter is None:
@@ -758,8 +764,8 @@ async def _generate_action_turn(
             return interrupted_resp
 
         # If the loop will continue, stream out the tool response message...
-        if on_chunk and tool_msg:
-            on_chunk(
+        if _ctx.on_chunk and tool_msg:
+            _ctx.on_chunk(
                 make_chunk(
                     Role.TOOL,
                     ModelResponseChunk(
@@ -792,7 +798,7 @@ async def _generate_action_turn(
         iteration=current_turn,
         message_index=message_index,
     )
-    return await dispatch_generate(generate_params, run_one_iteration)
+    return await dispatch_generate(generate_params, run_ctx, run_one_iteration)
 
 
 def apply_format(
@@ -1103,14 +1109,16 @@ async def resolve_tool_requests(
     ) -> tuple[MultipartToolResponse | None, ToolRequestPart | None]:
         params = ToolHookParams(tool_request_part=trp, tool=tool)
 
-        async def base(p: ToolHookParams) -> MultipartToolResponse:
+        async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
             return await _resolve_tool_request(p.tool, p.tool_request_part)
 
         try:
             if mw_list and mw_pipeline is not None:
-                multipart = await _chain_tool_middleware(mw_list, params, base, mw_pipeline.ctx)
+                multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
             else:
-                multipart = await base(params)
+                multipart = await next_fn(
+                    params, mw_pipeline.ctx if mw_pipeline else GenerateMiddlewareContext(registry=registry)
+                )
             return (multipart, None)
         except Exception as e:
             # Interrupts (raised by the tool body or by middleware) become a
@@ -1402,7 +1410,7 @@ async def _run_restart_through_middleware(
         tool=tool,
     )
 
-    async def next_fn(p: ToolHookParams) -> MultipartToolResponse:
+    async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
         executed = await run_tool_after_restart(p.tool, restart_trp)
         return MultipartToolResponse(
             output=executed.tool_response.output,
@@ -1410,7 +1418,7 @@ async def _run_restart_through_middleware(
         )
 
     try:
-        multipart = await _chain_tool_middleware(mw_list, params, next_fn, mw_pipeline.ctx)
+        multipart = await dispatch_tool(mw_list, params, mw_pipeline.ctx, next_fn)
     except Exception as e:
         if _interrupt_from_tool_exc(e) is not None:
             # Re-interrupting during restart is a hard error — same as the legacy

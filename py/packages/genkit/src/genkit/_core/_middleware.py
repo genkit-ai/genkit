@@ -267,26 +267,26 @@ class BaseMiddleware(Generic[TConfig]):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
-        return await next_fn(params)
+        return await next_fn(params, ctx)
 
     async def wrap_model(
         self,
         params: ModelHookParams,
-        next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each model API call."""
-        return await next_fn(params)
+        return await next_fn(params, ctx)
 
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Wrap each tool execution.
 
@@ -294,7 +294,7 @@ class BaseMiddleware(Generic[TConfig]):
         tool's result.  Raise `Interrupt(metadata)` to halt this tool call
         and surface an interrupt to the caller.
         """
-        return await next_fn(params)
+        return await next_fn(params, ctx)
 
 
 def _copy_middleware_instance(impl: BaseMiddleware[Any]) -> BaseMiddleware[Any]:
@@ -316,8 +316,8 @@ class MiddlewareDef(Protocol):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
         ...
@@ -325,8 +325,8 @@ class MiddlewareDef(Protocol):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each model API call."""
         ...
@@ -334,8 +334,8 @@ class MiddlewareDef(Protocol):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Wrap each tool execution."""
         ...
