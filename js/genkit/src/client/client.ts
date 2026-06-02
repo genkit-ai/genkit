@@ -130,34 +130,38 @@ async function __flowRunEnvelope({
   var decoder = new TextDecoder();
 
   let buffer = '';
-  while (true) {
-    const result = await reader.read();
-    const decodedValue = decoder.decode(result.value);
-    if (decodedValue) {
-      buffer += decodedValue;
-    }
-    // If buffer includes the delimiter that means we are still receiving chunks.
-    while (buffer.includes(__flowStreamDelimiter)) {
-      const chunk = JSON.parse(
-        buffer
-          .substring(0, buffer.indexOf(__flowStreamDelimiter))
-          .substring('data: '.length)
-      );
-      if (chunk.hasOwnProperty('message')) {
-        sendChunk(chunk.message);
-      } else if (chunk.hasOwnProperty('result')) {
-        return chunk.result;
-      } else if (chunk.hasOwnProperty('error')) {
-        throw new Error(
-          `${chunk.error.status}: ${chunk.error.message}\n${chunk.error.details}`
-        );
-      } else {
-        throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
+  try {
+    while (true) {
+      const result = await reader.read();
+      const decodedValue = decoder.decode(result.value);
+      if (decodedValue) {
+        buffer += decodedValue;
       }
-      buffer = buffer.substring(
-        buffer.indexOf(__flowStreamDelimiter) + __flowStreamDelimiter.length
-      );
+      // If buffer includes the delimiter that means we are still receiving chunks.
+      while (buffer.includes(__flowStreamDelimiter)) {
+        const chunk = JSON.parse(
+          buffer
+            .substring(0, buffer.indexOf(__flowStreamDelimiter))
+            .substring('data: '.length)
+        );
+        if (chunk.hasOwnProperty('message')) {
+          sendChunk(chunk.message);
+        } else if (chunk.hasOwnProperty('result')) {
+          return chunk.result;
+        } else if (chunk.hasOwnProperty('error')) {
+          throw new Error(
+            `${chunk.error.status}: ${chunk.error.message}\n${chunk.error.details}`
+          );
+        } else {
+          throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
+        }
+        buffer = buffer.substring(
+          buffer.indexOf(__flowStreamDelimiter) + __flowStreamDelimiter.length
+        );
+      }
     }
+  } finally {
+    reader.releaseLock();
   }
   throw new Error('stream did not terminate correctly');
 }

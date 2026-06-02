@@ -464,16 +464,20 @@ export function action<
       output: invocationPromise,
       stream: (async function* () {
         const reader = chunkStream.getReader();
-        while (true) {
-          const chunk = await reader.read();
-          if (chunk.value) {
-            yield chunk.value;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.value) {
+              yield chunk.value;
+            }
+            if (chunk.done) {
+              break;
+            }
           }
-          if (chunk.done) {
-            break;
-          }
+          return await invocationPromise;
+        } finally {
+          reader.releaseLock();
         }
-        return await invocationPromise;
       })(),
     };
   };
