@@ -46,7 +46,7 @@ async def test_retry_success_on_first_attempt(ctx: GenerateMiddlewareContext) ->
 @pytest.mark.asyncio
 async def test_retry_on_retryable_error(ctx: GenerateMiddlewareContext) -> None:
     """Test that retryable errors trigger retry."""
-    retry = Retry(max_retries=2, initial_delay_ms=10, jitter=False)
+    retry = Retry(max_retries=2, initial_delay_ms=10, no_jitter=True)
 
     call_count = 0
 
@@ -65,7 +65,7 @@ async def test_retry_on_retryable_error(ctx: GenerateMiddlewareContext) -> None:
 @pytest.mark.asyncio
 async def test_retry_exhausted(ctx: GenerateMiddlewareContext) -> None:
     """Test that errors are raised after max retries."""
-    retry = Retry(max_retries=1, initial_delay_ms=10, jitter=False)
+    retry = Retry(max_retries=1, initial_delay_ms=10, no_jitter=True)
 
     async def next_fn(params) -> NoReturn:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
@@ -105,7 +105,7 @@ def test_retry_rejects_negative_max_retries() -> None:
 @pytest.mark.asyncio
 async def test_retry_non_genkit_error(ctx: GenerateMiddlewareContext) -> None:
     """Test that non-GenkitError exceptions are retried."""
-    retry = Retry(max_retries=2, initial_delay_ms=10, jitter=False)
+    retry = Retry(max_retries=2, initial_delay_ms=10, no_jitter=True)
 
     call_count = 0
 

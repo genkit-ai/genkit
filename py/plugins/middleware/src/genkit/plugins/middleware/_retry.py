@@ -46,7 +46,7 @@ class RetryConfig(BaseModel):
     initial_delay_ms: int = 1000
     max_delay_ms: int = 60000
     backoff_factor: float = 2.0
-    jitter: bool = True
+    no_jitter: bool = False
 
 
 class Retry(BaseMiddleware[RetryConfig]):
@@ -72,7 +72,7 @@ class Retry(BaseMiddleware[RetryConfig]):
                     raise
 
                 delay_ms = current_delay_ms
-                if self.config.jitter:
+                if not self.config.no_jitter:
                     delay_ms += 1000.0 * math.pow(2, attempt) * random.random()
                 delay_ms = min(delay_ms, self.config.max_delay_ms)
 

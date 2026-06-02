@@ -55,7 +55,7 @@ retry = Retry(
     initial_delay_ms=1000,
     max_delay_ms=60000,
     backoff_factor=2.0,
-    jitter=True,  # set False for deterministic backoff (tests)
+    no_jitter=False,  # set True for deterministic backoff (tests)
 )
 
 response = await ai.generate(
