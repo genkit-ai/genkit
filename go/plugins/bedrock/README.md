@@ -5,7 +5,8 @@ First-party Genkit plugin for Amazon Bedrock, covering:
 - **Text generation** via the [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html) — Claude 3/3.5/3.7/4, Nova micro/lite/pro/premier, Llama 3.x + 4, Mistral, AI21 Jamba, Cohere Command R/R+, DeepSeek r1, Writer Palmyra.
 - **Streaming** via `ConverseStream` with full tool-use re-assembly.
 - **Tool calling** with `auto` / `any` / specific-tool choice.
-- **Embedders** via `InvokeModel` — Titan (`amazon.titan-embed-text-*`, `amazon.titan-embed-image-v1`) and Cohere (`cohere.embed-english-v3`, `cohere.embed-multilingual-v3`).
+- **Embedders** via `InvokeModel` — Titan text + image (`amazon.titan-embed-text-*`, `amazon.titan-embed-image-v1`), Cohere text + image (`cohere.embed-english-v3`, `cohere.embed-multilingual-v3`, `cohere.embed-v4:0`), and Amazon Nova multimodal (`amazon.nova-2-multimodal-embeddings-v1:0`).
+- **Reranking** via `bedrock.Rerank` — Cohere Rerank (`cohere.rerank-v3-5:0`).
 - **Image generation** via `InvokeModel` — Titan Image, Nova Canvas, Stability Stable Diffusion.
 
 ```go
@@ -106,10 +107,33 @@ emb, _ := bedrock.DefineEmbedder(g, "amazon.titan-embed-text-v2:0", nil)
 resp, _ := genkit.Embed(ctx, g, ai.WithEmbedder(emb), ai.WithTextDocs("hello"))
 ```
 
-Titan and Cohere have different JSON wire shapes; the plugin routes on model-ID prefix:
+Each family has a different JSON wire shape; the plugin routes on model-ID prefix:
 
-- `amazon.titan-embed-*` — per-call input/embedding, single-text only.
-- `cohere.embed-*` — batched `texts: []` input, returns parallel embeddings.
+- `amazon.titan-embed-text-*` — one call per document, single text input.
+- `amazon.titan-embed-image-v1` — one call per document, text and/or image input.
+- `cohere.embed-*` — text-only requests are batched into a single `texts: []` call; when any document carries image media, the plugin issues one `images: []` call per document (Cohere accepts a single input type per call). Image documents take precedence over accompanying text.
+- `amazon.nova-*-multimodal-embeddings-*` — one `SINGLE_EMBEDDING` call per document; image input takes precedence over text. Uses `embeddingPurpose: GENERIC_INDEX` and the model's default dimension.
+
+Image documents are matched by `image/*` media parts (`png`/`jpeg`/`gif`/`webp`).
+
+## Reranking
+
+```go
+import "github.com/firebase/genkit/go/ai"
+
+resp, _ := bedrock.Rerank(ctx, g, "cohere.rerank-v3-5:0", &ai.RerankerRequest{
+    Query:     ai.DocumentFromText("Which city is the capital of the US?", nil),
+    Documents: []*ai.Document{
+        ai.DocumentFromText("Carson City is the capital of Nevada.", nil),
+        ai.DocumentFromText("Washington, D.C. is the capital of the United States.", nil),
+    },
+    Options: &bedrock.RerankOptions{TopN: 2},
+})
+// resp.Documents are ordered by descending relevance; each carries
+// Metadata.Score (0..1) from the reranker.
+```
+
+`Rerank` is a standalone call rather than a registered Genkit reranker action — the Go framework does not yet expose a first-class reranker primitive. It reuses the already-initialised plugin on `g` for credentials. `Options` accepts a `*bedrock.RerankOptions`; `TopN <= 0` returns all documents ranked.
 
 ## Image generation
 
@@ -149,6 +173,9 @@ Bedrock requires a minimum of ~1024 cacheable tokens; small inputs silently bypa
 - No streaming for embedders or image generation.
 - No model auto-discovery; foundation-model IDs come from a hand-curated list. Caller can register any model ID via `DefineModel`.
 - Image gen returns one 1024×1024 PNG. Larger fan-out / size tuning is a v2 feature.
+- `Rerank` is a standalone function, not a registered `ai.Reranker` action (the Go framework has no reranker primitive yet). Only Cohere Rerank's text path is wired.
+- Nova multimodal embedders cover synchronous text + image only — audio, video, segmented (async) embeddings, and non-default `embeddingPurpose`/`embeddingDimension` are not yet exposed.
+- Embedders embed a single modality per document (image takes precedence over text); no combined text+image vectors.
 
 ## Live testing
 

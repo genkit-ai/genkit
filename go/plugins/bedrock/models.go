@@ -138,14 +138,32 @@ func defaultModelOptions(modelID string) *ai.ModelOptions {
 }
 
 // defaultEmbedderOptions returns minimal capability metadata for an embedder.
-// Titan image embedders accept image input; everything else is text-only.
+// Multimodal embedders (Titan image, Nova multimodal, Cohere Embed v4) accept
+// image input in addition to text; everything else is text-only.
 func defaultEmbedderOptions(name string) *ai.EmbedderOptions {
 	input := []string{"text"}
-	if strings.Contains(name, "titan-embed-image") {
+	if embedderAcceptsImage(name) {
 		input = append(input, "image")
 	}
 	return &ai.EmbedderOptions{
 		Label:    "Bedrock - " + name,
 		Supports: &ai.EmbedderSupports{Input: input},
+	}
+}
+
+// embedderAcceptsImage reports whether an embedder model ID is one of the
+// multimodal families that accept image input. Cohere Embed v3 image support
+// also works at the wire level but isn't advertised here because the same v3
+// model IDs serve text-only callers.
+func embedderAcceptsImage(name string) bool {
+	switch {
+	case strings.Contains(name, "titan-embed-image"):
+		return true
+	case strings.Contains(name, "multimodal-embed"):
+		return true
+	case strings.Contains(name, "cohere.embed-v4"):
+		return true
+	default:
+		return false
 	}
 }

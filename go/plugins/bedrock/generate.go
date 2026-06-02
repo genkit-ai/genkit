@@ -333,14 +333,14 @@ func decodeMediaPayload(s string) ([]byte, error) {
 }
 
 func imageFormatFor(mime string) types.ImageFormat {
-	switch mime {
-	case "image/png":
+	switch imageFormatString(mime) {
+	case "png":
 		return types.ImageFormatPng
-	case "image/jpeg", "image/jpg":
+	case "jpeg":
 		return types.ImageFormatJpeg
-	case "image/gif":
+	case "gif":
 		return types.ImageFormatGif
-	case "image/webp":
+	case "webp":
 		return types.ImageFormatWebp
 	}
 	return ""

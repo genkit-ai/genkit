@@ -16,8 +16,9 @@
 
 // Package bedrock provides a Genkit plugin for Amazon Bedrock — text
 // generation (Claude, Nova, Llama, Mistral, AI21, Cohere Command, DeepSeek,
-// Writer Palmyra) via the Converse API, embedders via InvokeModel (Titan +
-// Cohere), and image generation via InvokeModel (Titan Image, Nova Canvas,
+// Writer Palmyra) via the Converse API, embedders via InvokeModel (Titan text +
+// image, Cohere text + image, Nova multimodal), reranking via [Rerank] (Cohere
+// Rerank), and image generation via InvokeModel (Titan Image, Nova Canvas,
 // Stable Diffusion).
 //
 // The plugin uses the standard AWS credential chain via
@@ -155,11 +156,18 @@ func DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model
 }
 
 // DefineEmbedder registers a Bedrock embedder by model ID. Supported models
-// are Titan ("amazon.titan-embed-text-v1", "v2:0", "amazon.titan-embed-image-v1")
-// and Cohere ("cohere.embed-english-v3", "cohere.embed-multilingual-v3"). The
-// JSON wire shape is inferred from the model-ID prefix.
+// are Titan ("amazon.titan-embed-text-v1", "v2:0", "amazon.titan-embed-image-v1"),
+// Cohere ("cohere.embed-english-v3", "cohere.embed-multilingual-v3", with image
+// input via the Cohere multimodal embedders), and Amazon Nova multimodal
+// ("amazon.nova-2-multimodal-embeddings-v1:0"). The JSON wire shape is inferred
+// from the model-ID prefix.
 //
-// If opts is nil, a minimal EmbedderOptions{Supports: text} is used.
+// Documents carrying image media are embedded as images; Nova and per-document
+// Cohere image requests issue one InvokeModel call per document, while
+// text-only Cohere requests are batched into a single call.
+//
+// If opts is nil, capability metadata is derived from the model ID
+// (multimodal model IDs advertise image input; everything else is text-only).
 func DefineEmbedder(g *genkit.Genkit, name string, opts *ai.EmbedderOptions) (ai.Embedder, error) {
 	p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
 	if p == nil {
