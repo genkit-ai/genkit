@@ -476,7 +476,8 @@ export function action<
           }
           return await invocationPromise;
         } finally {
-          reader.releaseLock();
+          // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+          reader.cancel().catch(() => {});
         }
       })(),
     };

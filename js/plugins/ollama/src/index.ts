@@ -313,7 +313,8 @@ function defineOllamaModel(
             textResponse += message.content[0].text;
           }
         } finally {
-          reader.releaseLock();
+          // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+          reader.cancel().catch(() => {});
         }
         message = {
           role: 'model',
