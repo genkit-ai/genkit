@@ -221,6 +221,22 @@ def extract_action_args_and_types(
     return action_args, arg_types
 
 
+def _first_action_arg_has_default(input_spec: inspect.FullArgSpec, n_action_args: int) -> bool:
+    """Return True if the action's first user-facing arg has a Python default.
+
+    Lets `@ai.flow() async def f(name: str = 'world')` be called as `await f()`
+    without forcing the caller to pass `None` explicitly. The default makes the
+    input semantically optional from the function's perspective; we honour that
+    when dispatching.
+    """
+    if n_action_args == 0:
+        return False
+    # FullArgSpec.defaults applies to the *trailing* positional args, so the
+    # first positional has a default iff defaults covers every positional arg.
+    defaults = input_spec.defaults or ()
+    return len(defaults) >= n_action_args
+
+
 # =============================================================================
 # Action key utilities
 # =============================================================================
@@ -384,6 +400,10 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         # Raw user fn; tracing/dispatch handled by _run_with_telemetry / _invoke.
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._n_action_args: int = len(action_args)
+        self._action_arg_names: list[str] = action_args
+        # When True, calling the action without an input is legal because the
+        # wrapped function will fall back to its own Python-level default.
+        self._first_arg_optional: bool = _first_action_arg_has_default(input_spec, len(action_args))
         self._initialize_io_schemas(action_args, arg_types, resolved_annotations, input_spec)
 
     @property
@@ -463,8 +483,13 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         Raises:
             GenkitError: If input validation fails (INVALID_ARGUMENT status).
         """
+        # Skip validation when the caller passed nothing AND the wrapped
+        # function declares a Python default for its first arg — that's the
+        # signal that "no input" is a legitimate way to invoke this action.
+        skip_validation = input is None and self._first_arg_optional
+
         # Validate input if we have a schema
-        if self._input_type is not None:
+        if self._input_type is not None and not skip_validation:
             try:
                 input = self._input_type.validate_python(input)
             except ValidationError as e:
@@ -618,12 +643,23 @@ class Action(Generic[InputT, OutputT, ChunkT]):
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
         """Dispatch ``self._fn`` based on its declared arity (0/1/2 args)."""
+        # When the caller passed no input and the function's first arg has a
+        # Python default, dispatch *without* the input so the default applies.
+        # The 2-arg form passes ctx by keyword (using the user's actual
+        # parameter name) so the defaulted first arg isn't accidentally
+        # supplanted by a positional.
+        omit_input = input is None and self._first_arg_optional
         match self._n_action_args:
             case 0:
                 return await self._fn()
             case 1:
+                if omit_input:
+                    return await self._fn()
                 return await self._fn(input)
             case 2:
+                if omit_input:
+                    ctx_param_name = self._action_arg_names[1]
+                    return await self._fn(**{ctx_param_name: ctx})
                 return await self._fn(input, ctx)
             case _:
                 raise ValueError('action fn must have 0-2 args')
