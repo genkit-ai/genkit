@@ -638,6 +638,7 @@ async function renderUserPrompt<
   promptCache: PromptCache,
   renderOptions: PromptGenerateOptions<O, CustomOptions> | undefined
 ) {
+  if (renderOptions?.resume) return;
   if (typeof options.prompt === 'function') {
     messages.push({
       role: 'user',
