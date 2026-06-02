@@ -54,7 +54,6 @@ from genkit._core._middleware import (
     GenerateMiddlewareContext,
     MiddlewareDef,
     ModelHookParams,
-    MultipartToolResponse,
     ToolHookParams,
     _copy_middleware_instance,
     middleware_class_index,
@@ -68,6 +67,7 @@ from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     FinishReason,
     MiddlewareRef,
+    MultipartToolResponse,
     Part,
     Role,
     TextPart,
@@ -1143,7 +1143,8 @@ async def resolve_tool_requests(
                     ref=tool_req_root.tool_request.ref,
                     output=multipart_resp.output,
                     content=[p.model_dump() for p in multipart_resp.content] if multipart_resp.content else None,
-                )
+                ),
+                metadata=multipart_resp.metadata,
             )
             revised_model_message.content[idx] = _to_pending_response(tool_req_root, tool_response_part)
             response_parts.append(Part(root=tool_response_part))
@@ -1436,7 +1437,8 @@ async def _run_restart_through_middleware(
             ref=restart_trp.tool_request.ref,
             output=multipart.output,
             content=[p.model_dump() for p in multipart.content] if multipart.content else None,
-        )
+        ),
+        metadata=multipart.metadata,
     )
 
 

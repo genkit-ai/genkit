@@ -69,10 +69,10 @@ from genkit._core._middleware import (
     GenerateMiddleware,
     GenerateMiddlewareContext,
     ModelHookParams,
-    MultipartToolResponse,
     ToolHookParams,
 )
 from genkit._core._plugin import middleware_plugin
+from genkit._core._typing import MultipartToolResponse
 
 __all__ = [
     'BaseMiddleware',

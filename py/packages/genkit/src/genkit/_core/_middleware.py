@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from genkit._core._action import Action
 from genkit._core._logger import get_logger
@@ -35,7 +35,7 @@ from genkit._core._model import (
     ModelResponseChunk,
 )
 from genkit._core._protocols import RegistryLike
-from genkit._core._typing import MiddlewareDesc, Part, ToolRequestPart
+from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, ToolRequestPart
 
 logger = get_logger(__name__)
 
@@ -89,32 +89,6 @@ class _EmptyMiddlewareConfig(BaseModel):
 
 
 TConfig = TypeVar('TConfig', bound=BaseModel)
-
-
-class MultipartToolResponse(BaseModel):
-    """A tool result with optional rich content attachments.
-
-    Return from ``wrap_tool`` to send structured output alongside extra
-    parts — images, file contents, error details — that the model can
-    reason about.
-
-    The engine serializes both fields into a single ``ToolResponsePart`` on
-    the wire: ``output`` becomes ``ToolResponse.output`` and ``content``
-    becomes ``ToolResponse.content``. Packing them together preserves the
-    LLM's one-response-per-call contract while still letting middleware
-    attach rich context.
-
-    Fields:
-        output: Structured result returned to the model. May be ``None``
-            when the tool only produces rich content parts.
-        content: Extra ``Part`` objects (images, files, metadata) bundled
-            alongside ``output`` in the same ``ToolResponsePart``.
-    """
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
-
-    output: Any = None
-    content: list[Part] = Field(default_factory=list)
 
 
 class GenerateHookParams(BaseModel):
