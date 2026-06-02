@@ -63,9 +63,3 @@ export const GENKIT_UI_WIDGETS = {
   /** A widget for configuring LLM model safety settings. */
   SAFETY_SETTINGS: 'safety-settings',
 } as const;
-
-/**
- * Union type of standard Genkit UI widget names.
- */
-export type GenkitUiWidget =
-  (typeof GENKIT_UI_WIDGETS)[keyof typeof GENKIT_UI_WIDGETS];
