@@ -40,6 +40,9 @@ type streamBlock struct {
 	// reasoningSignature carries the signature announced by a reasoning
 	// delta, when the provider emits one.
 	reasoningSignature string
+	// redactedReasoning carries encrypted reasoning bytes that Bedrock may
+	// emit for safety reasons.
+	redactedReasoning []byte
 	// toolID, toolName carry the metadata announced at ContentBlockStart.
 	toolID   string
 	toolName string
@@ -91,30 +94,15 @@ func generateStream(ctx context.Context, client *bedrockruntime.Client, in *bedr
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
 			idx := indexOf(e.Value.ContentBlockIndex)
 			b := getOrInit(blocks, idx)
-			switch d := e.Value.Delta.(type) {
-			case *types.ContentBlockDeltaMemberText:
-				b.text.WriteString(d.Value)
-				if cb != nil {
-					if cberr := cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(d.Value)}}); cberr != nil {
-						return nil, cberr
-					}
-				}
-			case *types.ContentBlockDeltaMemberToolUse:
-				// Tool input arrives as concatenable JSON fragments.
-				b.isTool = true
-				b.toolInput.WriteString(aws.ToString(d.Value.Input))
-			case *types.ContentBlockDeltaMemberReasoningContent:
-				part := appendReasoningDelta(b, d.Value)
-				if part != nil && cb != nil {
-					if cberr := cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{part}}); cberr != nil {
-						return nil, cberr
-					}
-				}
+			if err := appendContentBlockDelta(ctx, b, e.Value.Delta, cb); err != nil {
+				return nil, err
 			}
 
 		case *types.ConverseStreamOutputMemberContentBlockStop:
-			// No-op; we read accumulated state at MessageStop instead so we
-			// surface tool calls only once their JSON is fully assembled.
+			idx := indexOf(e.Value.ContentBlockIndex)
+			if err := emitToolBlockStop(ctx, idx, blocks[idx], cb); err != nil {
+				return nil, err
+			}
 
 		case *types.ConverseStreamOutputMemberMessageStop:
 			stopReason = e.Value.StopReason
@@ -154,39 +142,90 @@ func blocksToParts(blocks map[int32]*streamBlock) ([]*ai.Part, error) {
 	for _, i := range idxs {
 		b := blocks[i]
 		if b.isTool {
-			input, err := decodeToolInput(b.toolInput.String())
+			part, err := toolBlockToPart(i, b)
 			if err != nil {
-				return nil, fmt.Errorf("bedrock: stream tool block %d: %w", i, err)
+				return nil, err
 			}
-			parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
-				Ref:   b.toolID,
-				Name:  b.toolName,
-				Input: input,
-			}))
+			parts = append(parts, part)
 			continue
 		}
 		if b.text.Len() > 0 {
 			parts = append(parts, ai.NewTextPart(b.text.String()))
 		}
 		if b.reasoning.Len() > 0 {
-			parts = append(parts, ai.NewReasoningPart(b.reasoning.String(), []byte(b.reasoningSignature)))
+			parts = append(parts, newBedrockReasoningPart(b.reasoning.String(), b.reasoningSignature, b.redactedReasoning))
+		} else if len(b.redactedReasoning) > 0 {
+			parts = append(parts, newBedrockReasoningPart("", b.reasoningSignature, b.redactedReasoning))
 		}
 	}
 	return parts, nil
 }
 
-func appendReasoningDelta(b *streamBlock, delta types.ReasoningContentBlockDelta) *ai.Part {
+func emitToolBlockStop(ctx context.Context, idx int32, b *streamBlock, cb ai.ModelStreamCallback) error {
+	if b == nil || !b.isTool || cb == nil {
+		return nil
+	}
+	part, err := toolBlockToPart(idx, b)
+	if err != nil {
+		return err
+	}
+	return cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{part}})
+}
+
+func toolBlockToPart(idx int32, b *streamBlock) (*ai.Part, error) {
+	input, err := decodeToolInput(b.toolInput.String())
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: stream tool block %d: %w", idx, err)
+	}
+	return ai.NewToolRequestPart(&ai.ToolRequest{
+		Ref:   b.toolID,
+		Name:  b.toolName,
+		Input: input,
+	}), nil
+}
+
+func appendContentBlockDelta(ctx context.Context, b *streamBlock, delta types.ContentBlockDelta, cb ai.ModelStreamCallback) error {
+	switch d := delta.(type) {
+	case *types.ContentBlockDeltaMemberText:
+		b.text.WriteString(d.Value)
+		if cb != nil {
+			if err := cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart(d.Value)}}); err != nil {
+				return err
+			}
+		}
+	case *types.ContentBlockDeltaMemberToolUse:
+		// Tool input arrives as concatenable JSON fragments.
+		b.isTool = true
+		b.toolInput.WriteString(aws.ToString(d.Value.Input))
+	case *types.ContentBlockDeltaMemberReasoningContent:
+		part, err := appendReasoningDelta(b, d.Value)
+		if err != nil {
+			return err
+		}
+		if part != nil && cb != nil {
+			if err := cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{part}}); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("bedrock: unhandled stream content delta variant %T", delta)
+	}
+	return nil
+}
+
+func appendReasoningDelta(b *streamBlock, delta types.ReasoningContentBlockDelta) (*ai.Part, error) {
 	switch d := delta.(type) {
 	case *types.ReasoningContentBlockDeltaMemberText:
 		b.reasoning.WriteString(d.Value)
-		return ai.NewReasoningPart(d.Value, nil)
+		return newBedrockReasoningPart(d.Value, "", nil), nil
 	case *types.ReasoningContentBlockDeltaMemberSignature:
 		b.reasoningSignature = d.Value
 	case *types.ReasoningContentBlockDeltaMemberRedactedContent:
-		// Redacted reasoning is intentionally not surfaced as text. Bedrock
-		// may still use it internally for safety and quality.
+		b.redactedReasoning = append(b.redactedReasoning, d.Value...)
+	default:
+		return nil, fmt.Errorf("bedrock: unhandled stream reasoning delta variant %T", delta)
 	}
-	return nil
+	return nil, nil
 }
 
 // decodeToolInput parses the concatenated JSON fragments of a tool-use block.

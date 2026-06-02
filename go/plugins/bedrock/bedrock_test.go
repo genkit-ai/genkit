@@ -17,6 +17,7 @@
 package bedrock
 
 import (
+	"context"
 	"encoding/base64"
 	"testing"
 
@@ -91,6 +92,108 @@ func TestPartsToContentBlocks_SkipsReasoning(t *testing.T) {
 		if text.Value == "internal monologue from a prior model turn" {
 			t.Errorf("reasoning text leaked into block %d", i)
 		}
+	}
+}
+
+func TestPartsToContentBlocks_RoundTripsBedrockReasoning(t *testing.T) {
+	reasoning := newBedrockReasoningPart("signed thought", "sig", nil)
+	redacted := ai.NewReasoningPart("", nil)
+	redacted.Metadata[redactedReasoningMetadataKey] = base64.StdEncoding.EncodeToString([]byte("encrypted"))
+
+	blocks, err := partsToContentBlocks([]*ai.Part{reasoning, redacted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2", len(blocks))
+	}
+
+	textBlock, ok := blocks[0].(*types.ContentBlockMemberReasoningContent)
+	if !ok {
+		t.Fatalf("blocks[0] = %T, want reasoning content", blocks[0])
+	}
+	reasoningText, ok := textBlock.Value.(*types.ReasoningContentBlockMemberReasoningText)
+	if !ok {
+		t.Fatalf("blocks[0].Value = %T, want reasoning text", textBlock.Value)
+	}
+	if aws.ToString(reasoningText.Value.Text) != "signed thought" {
+		t.Errorf("reasoning text = %q", aws.ToString(reasoningText.Value.Text))
+	}
+	if aws.ToString(reasoningText.Value.Signature) != "sig" {
+		t.Errorf("signature = %q, want sig", aws.ToString(reasoningText.Value.Signature))
+	}
+
+	redactedBlock, ok := blocks[1].(*types.ContentBlockMemberReasoningContent)
+	if !ok {
+		t.Fatalf("blocks[1] = %T, want reasoning content", blocks[1])
+	}
+	redactedContent, ok := redactedBlock.Value.(*types.ReasoningContentBlockMemberRedactedContent)
+	if !ok {
+		t.Fatalf("blocks[1].Value = %T, want redacted content", redactedBlock.Value)
+	}
+	if string(redactedContent.Value) != "encrypted" {
+		t.Errorf("redacted value = %q, want encrypted", string(redactedContent.Value))
+	}
+}
+
+func TestPartsToContentBlocks_DoesNotRoundTripGenericReasoningSignature(t *testing.T) {
+	reasoning := ai.NewReasoningPart("signed elsewhere", []byte("foreign-sig"))
+	blocks, err := partsToContentBlocks([]*ai.Part{reasoning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 0 {
+		t.Fatalf("len(blocks) = %d, want 0", len(blocks))
+	}
+}
+
+func TestContentBlocksToParts_ReasoningSignatureAndRedacted(t *testing.T) {
+	redacted := []byte("encrypted")
+	parts, err := contentBlocksToParts([]types.ContentBlock{
+		&types.ContentBlockMemberReasoningContent{
+			Value: &types.ReasoningContentBlockMemberReasoningText{
+				Value: types.ReasoningTextBlock{
+					Text:      aws.String("thinking"),
+					Signature: aws.String("sig"),
+				},
+			},
+		},
+		&types.ContentBlockMemberReasoningContent{
+			Value: &types.ReasoningContentBlockMemberRedactedContent{Value: redacted},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("len(parts) = %d, want 2", len(parts))
+	}
+	if !parts[0].IsReasoning() || parts[0].Text != "thinking" {
+		t.Fatalf("parts[0] = %+v, want reasoning text", parts[0])
+	}
+	gotSig, ok := parts[0].Metadata["signature"].([]byte)
+	if !ok {
+		t.Fatalf("signature metadata = %T, want []byte", parts[0].Metadata["signature"])
+	}
+	if string(gotSig) != "sig" {
+		t.Errorf("signature = %q, want sig", string(gotSig))
+	}
+	gotBedrockSig, ok := parts[0].Metadata[reasoningSignatureMetadataKey].([]byte)
+	if !ok {
+		t.Fatalf("bedrock signature metadata = %T, want []byte", parts[0].Metadata[reasoningSignatureMetadataKey])
+	}
+	if string(gotBedrockSig) != "sig" {
+		t.Errorf("bedrock signature = %q, want sig", string(gotBedrockSig))
+	}
+	if !parts[1].IsReasoning() {
+		t.Fatalf("parts[1] should be reasoning, got kind %v", parts[1].Kind)
+	}
+	gotRedacted, ok := parts[1].Metadata[redactedReasoningMetadataKey].([]byte)
+	if !ok {
+		t.Fatalf("redacted metadata = %T, want []byte", parts[1].Metadata[redactedReasoningMetadataKey])
+	}
+	if string(gotRedacted) != string(redacted) {
+		t.Errorf("redacted metadata = %q, want %q", string(gotRedacted), string(redacted))
 	}
 }
 
@@ -462,7 +565,10 @@ func TestBlocksToParts_StreamReassembly(t *testing.T) {
 
 func TestAppendReasoningDelta(t *testing.T) {
 	block := &streamBlock{}
-	part := appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberText{Value: "thinking"})
+	part, err := appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberText{Value: "thinking"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if part == nil {
 		t.Fatal("appendReasoningDelta returned nil for text delta")
 	}
@@ -476,18 +582,121 @@ func TestAppendReasoningDelta(t *testing.T) {
 		t.Errorf("block reasoning = %q, want thinking", got)
 	}
 
-	part = appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberSignature{Value: "sig"})
+	part, err = appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberSignature{Value: "sig"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if part != nil {
 		t.Fatalf("signature delta returned part %v, want nil", part)
 	}
 	if block.reasoningSignature != "sig" {
 		t.Errorf("signature = %q, want sig", block.reasoningSignature)
 	}
+
+	part, err = appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberRedactedContent{Value: []byte("encrypted")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if part != nil {
+		t.Fatalf("redacted delta returned part %v, want nil", part)
+	}
+	if string(block.redactedReasoning) != "encrypted" {
+		t.Errorf("redacted reasoning = %q, want encrypted", string(block.redactedReasoning))
+	}
+}
+
+func TestAppendReasoningDelta_UnknownErrors(t *testing.T) {
+	_, err := appendReasoningDelta(&streamBlock{}, &types.UnknownUnionMember{Tag: "future_reasoning_delta"})
+	if err == nil {
+		t.Fatal("expected error for unknown reasoning delta")
+	}
+}
+
+func TestAppendContentBlockDelta_UnsupportedErrors(t *testing.T) {
+	err := appendContentBlockDelta(t.Context(), &streamBlock{}, &types.ContentBlockDeltaMemberCitation{}, nil)
+	if err == nil {
+		t.Fatal("expected error for unsupported citation delta")
+	}
+}
+
+func TestToolBlockToPart_ParsesCompleteInput(t *testing.T) {
+	block := &streamBlock{
+		toolID:   "call_1",
+		toolName: "get_weather",
+	}
+	block.toolInput.WriteString(`{"location":"NYC"}`)
+
+	part, err := toolBlockToPart(2, block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !part.IsToolRequest() {
+		t.Fatalf("part should be a tool request, got kind %v", part.Kind)
+	}
+	if part.ToolRequest.Ref != "call_1" {
+		t.Errorf("ref = %q, want call_1", part.ToolRequest.Ref)
+	}
+	if part.ToolRequest.Name != "get_weather" {
+		t.Errorf("name = %q, want get_weather", part.ToolRequest.Name)
+	}
+	input, ok := part.ToolRequest.Input.(map[string]any)
+	if !ok {
+		t.Fatalf("input = %T, want map[string]any", part.ToolRequest.Input)
+	}
+	if input["location"] != "NYC" {
+		t.Errorf("location = %v, want NYC", input["location"])
+	}
+}
+
+func TestToolBlockToPart_MalformedInputErrors(t *testing.T) {
+	block := &streamBlock{toolID: "call_1", toolName: "get_weather"}
+	block.toolInput.WriteString("{not valid")
+	if _, err := toolBlockToPart(2, block); err == nil {
+		t.Fatal("expected malformed tool JSON to error")
+	}
+}
+
+func TestEmitToolBlockStop_CallbackReceivesToolRequest(t *testing.T) {
+	block := &streamBlock{
+		isTool:   true,
+		toolID:   "call_1",
+		toolName: "get_weather",
+	}
+	block.toolInput.WriteString(`{"location":"NYC"}`)
+
+	var got *ai.ModelResponseChunk
+	err := emitToolBlockStop(t.Context(), 2, block, func(ctx context.Context, c *ai.ModelResponseChunk) error {
+		got = c
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("callback was not called")
+	}
+	if len(got.Content) != 1 || !got.Content[0].IsToolRequest() {
+		t.Fatalf("callback content = %+v, want one tool request", got.Content)
+	}
+	if got.Content[0].ToolRequest.Name != "get_weather" {
+		t.Errorf("tool name = %q, want get_weather", got.Content[0].ToolRequest.Name)
+	}
+}
+
+func TestEmitToolBlockStop_MalformedInputErrors(t *testing.T) {
+	block := &streamBlock{isTool: true, toolID: "call_1", toolName: "get_weather"}
+	block.toolInput.WriteString("{not valid")
+	if err := emitToolBlockStop(t.Context(), 2, block, func(ctx context.Context, c *ai.ModelResponseChunk) error {
+		t.Fatal("callback should not be called")
+		return nil
+	}); err == nil {
+		t.Fatal("expected malformed tool JSON to error")
+	}
 }
 
 func TestBlocksToParts_StreamReasoningReassembly(t *testing.T) {
 	blocks := map[int32]*streamBlock{}
-	blocks[0] = &streamBlock{reasoningSignature: "sig"}
+	blocks[0] = &streamBlock{reasoningSignature: "sig", redactedReasoning: []byte("encrypted")}
 	blocks[0].reasoning.WriteString("First thought. ")
 	blocks[0].reasoning.WriteString("Second thought.")
 	blocks[1] = &streamBlock{}
@@ -512,6 +721,20 @@ func TestBlocksToParts_StreamReasoningReassembly(t *testing.T) {
 	}
 	if string(gotSig) != "sig" {
 		t.Errorf("signature = %q, want sig", string(gotSig))
+	}
+	gotBedrockSig, ok := parts[0].Metadata[reasoningSignatureMetadataKey].([]byte)
+	if !ok {
+		t.Fatalf("bedrock signature metadata = %T, want []byte", parts[0].Metadata[reasoningSignatureMetadataKey])
+	}
+	if string(gotBedrockSig) != "sig" {
+		t.Errorf("bedrock signature = %q, want sig", string(gotBedrockSig))
+	}
+	gotRedacted, ok := parts[0].Metadata[redactedReasoningMetadataKey].([]byte)
+	if !ok {
+		t.Fatalf("redacted metadata = %T, want []byte", parts[0].Metadata[redactedReasoningMetadataKey])
+	}
+	if string(gotRedacted) != "encrypted" {
+		t.Errorf("redacted metadata = %q, want encrypted", string(gotRedacted))
 	}
 	if parts[1].Text != "Final answer." {
 		t.Errorf("text = %q, want Final answer.", parts[1].Text)

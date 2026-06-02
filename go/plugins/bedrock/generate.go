@@ -238,17 +238,36 @@ func partsToContentBlocks(parts []*ai.Part) ([]types.ContentBlock, error) {
 			}
 			blocks = append(blocks, block)
 		case p.Kind == ai.PartReasoning:
-			// Don't leak prior reasoning back to the model as plain text.
-			// Bedrock's Converse API expects reasoning to round-trip via its
-			// own ReasoningContentBlock variant; v1 of this plugin doesn't
-			// send reasoning back across turns and the model has its CoT
-			// internally anyway.
-			continue
+			blocks = append(blocks, reasoningPartToContentBlocks(p)...)
 		case p.Text != "":
 			blocks = append(blocks, &types.ContentBlockMemberText{Value: p.Text})
 		}
 	}
 	return blocks, nil
+}
+
+func reasoningPartToContentBlocks(p *ai.Part) []types.ContentBlock {
+	var blocks []types.ContentBlock
+	redacted := metadataBytes(p.Metadata, redactedReasoningMetadataKey)
+	if len(redacted) > 0 {
+		blocks = append(blocks, &types.ContentBlockMemberReasoningContent{
+			Value: &types.ReasoningContentBlockMemberRedactedContent{Value: redacted},
+		})
+	}
+
+	signature := metadataBytes(p.Metadata, reasoningSignatureMetadataKey)
+	if p.Text != "" && len(signature) > 0 {
+		sig := string(signature)
+		blocks = append(blocks, &types.ContentBlockMemberReasoningContent{
+			Value: &types.ReasoningContentBlockMemberReasoningText{
+				Value: types.ReasoningTextBlock{
+					Text:      aws.String(p.Text),
+					Signature: aws.String(sig),
+				},
+			},
+		})
+	}
+	return blocks
 }
 
 // toolResponseText renders a tool's output value as a plain string, since the
@@ -427,9 +446,12 @@ func contentBlocksToParts(blocks []types.ContentBlock) ([]*ai.Part, error) {
 				Input: input,
 			}))
 		case *types.ContentBlockMemberReasoningContent:
-			// Reasoning blocks are surfaced as reasoning parts when text is present.
-			if rc, ok := v.Value.(*types.ReasoningContentBlockMemberReasoningText); ok && rc.Value.Text != nil {
-				out = append(out, ai.NewReasoningPart(aws.ToString(rc.Value.Text), nil))
+			part, err := reasoningBlockToPart(v.Value)
+			if err != nil {
+				return nil, err
+			}
+			if part != nil {
+				out = append(out, part)
 			}
 		default:
 			// Other variants (image, document, audio, video, etc.) aren't
@@ -439,6 +461,23 @@ func contentBlocksToParts(blocks []types.ContentBlock) ([]*ai.Part, error) {
 		}
 	}
 	return out, nil
+}
+
+func reasoningBlockToPart(block types.ReasoningContentBlock) (*ai.Part, error) {
+	switch rc := block.(type) {
+	case *types.ReasoningContentBlockMemberReasoningText:
+		if rc.Value.Text == nil && rc.Value.Signature == nil {
+			return nil, nil
+		}
+		return newBedrockReasoningPart(aws.ToString(rc.Value.Text), aws.ToString(rc.Value.Signature), nil), nil
+	case *types.ReasoningContentBlockMemberRedactedContent:
+		if len(rc.Value) == 0 {
+			return nil, nil
+		}
+		return newBedrockReasoningPart("", "", rc.Value), nil
+	default:
+		return nil, fmt.Errorf("bedrock: unhandled reasoning content variant %T", block)
+	}
 }
 
 func unwrapToolInput(d document.Interface) (any, error) {

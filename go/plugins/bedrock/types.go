@@ -17,6 +17,8 @@
 package bedrock
 
 import (
+	"encoding/base64"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 )
@@ -61,6 +63,8 @@ const (
 )
 
 const cachePointMetadataKey = "bedrockCachePoint"
+const reasoningSignatureMetadataKey = "bedrockReasoningSignature"
+const redactedReasoningMetadataKey = "bedrockRedactedContent"
 
 // NewCachePointPart returns an [ai.Part] that becomes a Bedrock cache point
 // marker in the Converse request. Insert it between content blocks (typically
@@ -86,6 +90,39 @@ func isCachePoint(p *ai.Part) bool {
 	}
 	b, _ := v.(bool)
 	return b
+}
+
+func newBedrockReasoningPart(text, signature string, redacted []byte) *ai.Part {
+	var sig []byte
+	if signature != "" {
+		sig = []byte(signature)
+	}
+	p := ai.NewReasoningPart(text, sig)
+	if len(sig) > 0 {
+		p.Metadata[reasoningSignatureMetadataKey] = sig
+	}
+	if len(redacted) > 0 {
+		p.Metadata[redactedReasoningMetadataKey] = redacted
+	}
+	return p
+}
+
+func metadataBytes(metadata map[string]any, key string) []byte {
+	if metadata == nil {
+		return nil
+	}
+	switch v := metadata[key].(type) {
+	case []byte:
+		return v
+	case string:
+		b, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil
+		}
+		return b
+	default:
+		return nil
+	}
 }
 
 // configSchema returns the JSON schema for [Config], used as the per-call
