@@ -13,11 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import type { Document, EmbedderAction, Genkit } from 'genkit';
+import type { Document, EmbedderAction } from 'genkit';
+import { embedder } from 'genkit/plugin';
 import type { EmbedRequest, EmbedResponse } from 'ollama';
+import { DEFAULT_OLLAMA_SERVER_ADDRESS } from './constants.js';
 import type { DefineOllamaEmbeddingParams, RequestHeaders } from './types.js';
+import { OllamaEmbedderConfigSchema } from './types.js';
 
-async function toOllamaEmbedRequest(
+export async function toOllamaEmbedRequest(
   modelName: string,
   dimensions: number,
   documents: Document[],
@@ -59,13 +62,18 @@ async function toOllamaEmbedRequest(
   };
 }
 
-export function defineOllamaEmbedder(
-  ai: Genkit,
-  { name, modelName, dimensions, options }: DefineOllamaEmbeddingParams
-): EmbedderAction<any> {
-  return ai.defineEmbedder(
+export function defineOllamaEmbedder({
+  name,
+  modelName,
+  dimensions,
+  options,
+}: DefineOllamaEmbeddingParams): EmbedderAction<
+  typeof OllamaEmbedderConfigSchema
+> {
+  return embedder(
     {
       name: `ollama/${name}`,
+      configSchema: OllamaEmbedderConfigSchema,
       info: {
         label: 'Ollama Embedding - ' + name,
         dimensions,
@@ -75,9 +83,11 @@ export function defineOllamaEmbedder(
         },
       },
     },
-    async (input, config) => {
-      const serverAddress = config?.serverAddress || options.serverAddress;
-
+    async ({ input, options: requestOptions }, config) => {
+      const serverAddress =
+        requestOptions?.serverAddress ||
+        options.serverAddress ||
+        DEFAULT_OLLAMA_SERVER_ADDRESS;
       const { url, requestPayload, headers } = await toOllamaEmbedRequest(
         modelName,
         dimensions,
