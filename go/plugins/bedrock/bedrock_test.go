@@ -460,6 +460,64 @@ func TestBlocksToParts_StreamReassembly(t *testing.T) {
 	}
 }
 
+func TestAppendReasoningDelta(t *testing.T) {
+	block := &streamBlock{}
+	part := appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberText{Value: "thinking"})
+	if part == nil {
+		t.Fatal("appendReasoningDelta returned nil for text delta")
+	}
+	if !part.IsReasoning() {
+		t.Fatalf("part kind = %v, want reasoning", part.Kind)
+	}
+	if part.Text != "thinking" {
+		t.Errorf("part.Text = %q, want thinking", part.Text)
+	}
+	if got := block.reasoning.String(); got != "thinking" {
+		t.Errorf("block reasoning = %q, want thinking", got)
+	}
+
+	part = appendReasoningDelta(block, &types.ReasoningContentBlockDeltaMemberSignature{Value: "sig"})
+	if part != nil {
+		t.Fatalf("signature delta returned part %v, want nil", part)
+	}
+	if block.reasoningSignature != "sig" {
+		t.Errorf("signature = %q, want sig", block.reasoningSignature)
+	}
+}
+
+func TestBlocksToParts_StreamReasoningReassembly(t *testing.T) {
+	blocks := map[int32]*streamBlock{}
+	blocks[0] = &streamBlock{reasoningSignature: "sig"}
+	blocks[0].reasoning.WriteString("First thought. ")
+	blocks[0].reasoning.WriteString("Second thought.")
+	blocks[1] = &streamBlock{}
+	blocks[1].text.WriteString("Final answer.")
+
+	parts, err := blocksToParts(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("len(parts) = %d, want 2", len(parts))
+	}
+	if !parts[0].IsReasoning() {
+		t.Fatalf("parts[0] should be reasoning, got kind %v", parts[0].Kind)
+	}
+	if parts[0].Text != "First thought. Second thought." {
+		t.Errorf("reasoning = %q", parts[0].Text)
+	}
+	gotSig, ok := parts[0].Metadata["signature"].([]byte)
+	if !ok {
+		t.Fatalf("signature metadata = %T, want []byte", parts[0].Metadata["signature"])
+	}
+	if string(gotSig) != "sig" {
+		t.Errorf("signature = %q, want sig", string(gotSig))
+	}
+	if parts[1].Text != "Final answer." {
+		t.Errorf("text = %q, want Final answer.", parts[1].Text)
+	}
+}
+
 func TestDecodeToolInput_EmptyAndMalformed(t *testing.T) {
 	v, err := decodeToolInput("")
 	if err != nil || v != nil {

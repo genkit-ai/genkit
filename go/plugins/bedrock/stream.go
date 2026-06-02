@@ -35,6 +35,11 @@ import (
 type streamBlock struct {
 	// text holds plain-text deltas concatenated in order.
 	text strings.Builder
+	// reasoning holds extended-thinking deltas concatenated in order.
+	reasoning strings.Builder
+	// reasoningSignature carries the signature announced by a reasoning
+	// delta, when the provider emits one.
+	reasoningSignature string
 	// toolID, toolName carry the metadata announced at ContentBlockStart.
 	toolID   string
 	toolName string
@@ -98,6 +103,13 @@ func generateStream(ctx context.Context, client *bedrockruntime.Client, in *bedr
 				// Tool input arrives as concatenable JSON fragments.
 				b.isTool = true
 				b.toolInput.WriteString(aws.ToString(d.Value.Input))
+			case *types.ContentBlockDeltaMemberReasoningContent:
+				part := appendReasoningDelta(b, d.Value)
+				if part != nil && cb != nil {
+					if cberr := cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{part}}); cberr != nil {
+						return nil, cberr
+					}
+				}
 			}
 
 		case *types.ConverseStreamOutputMemberContentBlockStop:
@@ -156,8 +168,25 @@ func blocksToParts(blocks map[int32]*streamBlock) ([]*ai.Part, error) {
 		if b.text.Len() > 0 {
 			parts = append(parts, ai.NewTextPart(b.text.String()))
 		}
+		if b.reasoning.Len() > 0 {
+			parts = append(parts, ai.NewReasoningPart(b.reasoning.String(), []byte(b.reasoningSignature)))
+		}
 	}
 	return parts, nil
+}
+
+func appendReasoningDelta(b *streamBlock, delta types.ReasoningContentBlockDelta) *ai.Part {
+	switch d := delta.(type) {
+	case *types.ReasoningContentBlockDeltaMemberText:
+		b.reasoning.WriteString(d.Value)
+		return ai.NewReasoningPart(d.Value, nil)
+	case *types.ReasoningContentBlockDeltaMemberSignature:
+		b.reasoningSignature = d.Value
+	case *types.ReasoningContentBlockDeltaMemberRedactedContent:
+		// Redacted reasoning is intentionally not surfaced as text. Bedrock
+		// may still use it internally for safety and quality.
+	}
+	return nil
 }
 
 // decodeToolInput parses the concatenated JSON fragments of a tool-use block.
