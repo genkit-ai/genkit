@@ -15,9 +15,10 @@
  */
 
 import * as assert from 'assert';
-import { genkit } from 'genkit/beta';
+import { genkit, Session } from 'genkit/beta';
 import { describe, it } from 'node:test';
 import { agents } from '../src/agents.js';
+import { artifacts } from '../src/artifacts.js';
 
 describe('agents middleware', () => {
   it('injects per-agent delegation tools and system prompt', async () => {
@@ -467,5 +468,349 @@ describe('agents middleware', () => {
         pluginConfig: undefined,
       });
     }, /at least one agent/);
+  });
+
+  it('inline artifactStrategy includes artifact content in tool result', async () => {
+    const ai = genkit({});
+    const session = new Session({ sessionId: 'test-inline-artifacts' });
+
+    // Sub-agent model: calls write_artifact, then responds.
+    let subTurn = 0;
+    const subModel = ai.defineModel(
+      { name: 'sub-inline-' + Math.random() },
+      async () => {
+        subTurn++;
+        if (subTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'write_artifact',
+                    input: {
+                      name: 'result.md',
+                      content: '# Research Results\nSome findings.',
+                    },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'Here are my research results.' }],
+          },
+        };
+      }
+    );
+
+    ai.defineAgent({
+      name: 'inlineResearcher',
+      model: subModel,
+      system: 'You are a researcher.',
+      use: [artifacts()],
+    });
+
+    // Main model: delegates to inlineResearcher, then produces final text.
+    let mainTurn = 0;
+    let capturedToolOutput: any;
+    const mainModel = ai.defineModel(
+      { name: 'main-inline-' + Math.random() },
+      async (req) => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_inlineResearcher',
+                    input: { task: 'Research something.' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        // Capture tool output from the delegation result.
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        if (toolMsg) {
+          const toolResp = toolMsg.content.find((p: any) => p.toolResponse);
+          capturedToolOutput = toolResp?.toolResponse?.output;
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'Synthesis complete.' }],
+          },
+        };
+      }
+    );
+
+    await session.run(async () => {
+      await ai.generate({
+        model: mainModel,
+        prompt: 'Research and summarize',
+        use: [
+          agents({
+            agents: ['inlineResearcher'],
+            artifactStrategy: 'inline',
+          }),
+        ],
+      });
+    });
+
+    // Verify tool output contains artifact with content (inline strategy).
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.ok(capturedToolOutput.artifacts, 'Should have artifacts in output');
+    assert.ok(
+      capturedToolOutput.artifacts.length > 0,
+      'Should have at least one artifact'
+    );
+
+    const artifact = capturedToolOutput.artifacts[0];
+    assert.ok(
+      artifact.name.includes('inlineResearcher'),
+      'Artifact name should be namespaced with agent name'
+    );
+    assert.ok(artifact.name.includes('result.md'), 'Should contain original name');
+    assert.ok(
+      artifact.content.includes('Research Results'),
+      'Inline strategy should include content in tool result'
+    );
+
+    // Verify artifacts were also merged into parent session.
+    const sessionArtifacts = session.getArtifacts();
+    assert.ok(
+      sessionArtifacts.length > 0,
+      'Session should have merged artifacts'
+    );
+    assert.ok(
+      sessionArtifacts[0].metadata?.source === 'inlineResearcher',
+      'Merged artifact should have source metadata'
+    );
+  });
+
+  it('session artifactStrategy includes only names in tool result', async () => {
+    const ai = genkit({});
+    const session = new Session({ sessionId: 'test-session-artifacts' });
+
+    // Sub-agent model: writes artifact then responds.
+    let subTurn = 0;
+    const subModel = ai.defineModel(
+      { name: 'sub-session-' + Math.random() },
+      async () => {
+        subTurn++;
+        if (subTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'write_artifact',
+                    input: {
+                      name: 'code.ts',
+                      content: 'console.log("hello world")',
+                    },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'Here is the code.' }],
+          },
+        };
+      }
+    );
+
+    ai.defineAgent({
+      name: 'sessionCoder',
+      model: subModel,
+      system: 'You write code.',
+      use: [artifacts()],
+    });
+
+    let mainTurn = 0;
+    let capturedToolOutput: any;
+    const mainModel = ai.defineModel(
+      { name: 'main-session-' + Math.random() },
+      async (req) => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_sessionCoder',
+                    input: { task: 'Write hello world.' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        if (toolMsg) {
+          const toolResp = toolMsg.content.find((p: any) => p.toolResponse);
+          capturedToolOutput = toolResp?.toolResponse?.output;
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'Done.' }],
+          },
+        };
+      }
+    );
+
+    await session.run(async () => {
+      await ai.generate({
+        model: mainModel,
+        prompt: 'Write some code',
+        use: [
+          agents({
+            agents: ['sessionCoder'],
+            artifactStrategy: 'session',
+          }),
+        ],
+      });
+    });
+
+    // Verify tool output has artifact name but NOT content (session strategy).
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.ok(capturedToolOutput.artifacts, 'Should have artifacts in output');
+    assert.ok(
+      capturedToolOutput.artifacts.length > 0,
+      'Should have at least one artifact'
+    );
+
+    const artifact = capturedToolOutput.artifacts[0];
+    assert.ok(
+      artifact.name.includes('sessionCoder'),
+      'Artifact name should be namespaced with agent name'
+    );
+    assert.ok(artifact.name.includes('code.ts'), 'Should contain original name');
+    // Session strategy should NOT have content in the tool result.
+    assert.strictEqual(
+      artifact.content,
+      undefined,
+      'Session strategy should not include content in tool result'
+    );
+
+    // Verify artifacts were merged into parent session.
+    const sessionArtifacts = session.getArtifacts();
+    assert.ok(
+      sessionArtifacts.length > 0,
+      'Session should have merged artifacts'
+    );
+    assert.ok(
+      sessionArtifacts[0].metadata?.invocationId,
+      'Merged artifact should have invocationId metadata'
+    );
+  });
+
+  it('artifact names are namespaced with invocation ID pattern', async () => {
+    const ai = genkit({});
+    const session = new Session({ sessionId: 'test-namespace' });
+
+    // Sub-agent writes an artifact.
+    let subTurn = 0;
+    const subModel = ai.defineModel(
+      { name: 'sub-ns-' + Math.random() },
+      async () => {
+        subTurn++;
+        if (subTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'write_artifact',
+                    input: { name: 'output.txt', content: 'hello' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'done' }],
+          },
+        };
+      }
+    );
+
+    ai.defineAgent({
+      name: 'nsAgent',
+      model: subModel,
+      system: 'You produce output.',
+      use: [artifacts()],
+    });
+
+    let mainTurn = 0;
+    const mainModel = ai.defineModel(
+      { name: 'main-ns-' + Math.random() },
+      async () => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_nsAgent',
+                    input: { task: 'produce output' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'ok' }],
+          },
+        };
+      }
+    );
+
+    await session.run(async () => {
+      await ai.generate({
+        model: mainModel,
+        prompt: 'test namespace',
+        use: [agents({ agents: ['nsAgent'] })],
+      });
+    });
+
+    // Verify the artifact name follows the pattern: {agentName}_{random4}/{artifactName}
+    const sessionArtifacts = session.getArtifacts();
+    assert.ok(
+      sessionArtifacts.length > 0,
+      'Should have merged artifacts in session'
+    );
+
+    const name = sessionArtifacts[0].name!;
+    // Pattern: nsAgent_{4chars}/output.txt
+    const namePattern = /^nsAgent_[a-z0-9]{4}\/output\.txt$/;
+    assert.ok(
+      namePattern.test(name),
+      `Artifact name "${name}" should match pattern nsAgent_XXXX/output.txt`
+    );
   });
 });
