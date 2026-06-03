@@ -19,6 +19,7 @@ package bedrock
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -72,8 +73,10 @@ func TestMapStopReason(t *testing.T) {
 
 func TestPartsToContentBlocks_SkipsReasoning(t *testing.T) {
 	parts := []*ai.Part{
+		nil,
 		ai.NewTextPart("question"),
 		ai.NewReasoningPart("internal monologue from a prior model turn", nil),
+		nil,
 		ai.NewTextPart("more question"),
 	}
 	blocks, err := partsToContentBlocks(parts)
@@ -240,6 +243,19 @@ func TestDocumentFormatFor(t *testing.T) {
 	}
 }
 
+func TestPromptOfSkipsNilMessages(t *testing.T) {
+	req := &ai.ModelRequest{Messages: []*ai.Message{
+		{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("first")}},
+		nil,
+		{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("model")}},
+		nil,
+		{Role: ai.RoleUser, Content: []*ai.Part{nil, ai.NewTextPart("last")}},
+	}}
+	if got := promptOf(req); got != "last" {
+		t.Errorf("promptOf() = %q, want %q", got, "last")
+	}
+}
+
 func TestMediaToBlock_ImageBytes(t *testing.T) {
 	payload := []byte{0xff, 0xd8, 0xff, 0xe0}
 	p := ai.NewMediaPart("image/jpeg", "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(payload))
@@ -273,7 +289,9 @@ func TestMediaToBlock_UnsupportedMIME(t *testing.T) {
 
 func TestConvertMessages_SystemAndUser(t *testing.T) {
 	msgs := []*ai.Message{
-		{Role: ai.RoleSystem, Content: []*ai.Part{ai.NewTextPart("you are helpful")}},
+		nil,
+		{Role: ai.RoleSystem, Content: []*ai.Part{nil, ai.NewTextPart("you are helpful")}},
+		nil,
 		{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hi")}},
 	}
 	system, conv, err := convertMessages(msgs)
@@ -341,6 +359,12 @@ func TestConvertTools(t *testing.T) {
 	}
 }
 
+func TestConvertTools_NilToolErrors(t *testing.T) {
+	if _, err := convertTools([]*ai.ToolDefinition{nil}); err == nil {
+		t.Fatal("expected error for nil tool definition")
+	}
+}
+
 func TestConvertToolChoice_Auto(t *testing.T) {
 	choice, err := convertToolChoice("", []*ai.ToolDefinition{{Name: "a"}})
 	if err != nil {
@@ -362,7 +386,7 @@ func TestConvertToolChoice_Any(t *testing.T) {
 }
 
 func TestConvertToolChoice_SpecificTool(t *testing.T) {
-	choice, err := convertToolChoice("foo", []*ai.ToolDefinition{{Name: "foo"}, {Name: "bar"}})
+	choice, err := convertToolChoice("foo", []*ai.ToolDefinition{nil, {Name: "foo"}, {Name: "bar"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,6 +445,13 @@ func TestConfigFromRequest_UnknownType(t *testing.T) {
 	}
 }
 
+func TestConfigFromRequest_NilRequest(t *testing.T) {
+	_, err := configFromRequest(nil)
+	if err == nil {
+		t.Fatal("expected error for nil request")
+	}
+}
+
 func TestDefaultModelOptions_KnownAndUnknown(t *testing.T) {
 	known := defaultModelOptions("anthropic.claude-3-5-sonnet-20241022-v2:0")
 	if !known.Supports.Media {
@@ -438,6 +469,13 @@ func TestDefaultModelOptions_KnownAndUnknown(t *testing.T) {
 	unknown := defaultModelOptions("vendor.future-model-v0")
 	if !unknown.Supports.Multiturn {
 		t.Error("unknown model should default to multiturn=true")
+	}
+}
+
+func TestEmbedderFunc_NilRequest(t *testing.T) {
+	_, err := embedderFunc(nil, "amazon.titan-embed-text-v2:0")(t.Context(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil embed request")
 	}
 }
 
@@ -464,6 +502,10 @@ func TestDecodeMediaPayload(t *testing.T) {
 	// non-base64 data URL is rejected
 	if _, err := decodeMediaPayload("data:text/plain,foo"); err == nil {
 		t.Error("expected error for non-base64 data URL")
+	}
+	// remote URLs are rejected with a clear error
+	if _, err := decodeMediaPayload("https://example.com/image.png"); err == nil || !strings.Contains(err.Error(), "remote URLs are not supported") {
+		t.Errorf("expected remote URL error, got %v", err)
 	}
 	// empty payload
 	if _, err := decodeMediaPayload(""); err == nil {

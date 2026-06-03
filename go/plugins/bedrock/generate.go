@@ -134,6 +134,9 @@ func cfgToolChoice(cfg *Config) string {
 // map[string]any from JSON-deserialised resumed flows) into a *Config.
 // Returns (nil, nil) when no config is provided.
 func configFromRequest(req *ai.ModelRequest) (*Config, error) {
+	if req == nil {
+		return nil, errors.New("bedrock: request required")
+	}
 	if req.Config == nil {
 		return nil, nil
 	}
@@ -164,8 +167,14 @@ func convertMessages(msgs []*ai.Message) ([]types.SystemContentBlock, []types.Me
 	var system []types.SystemContentBlock
 	var conv []types.Message
 	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
 		if m.Role == ai.RoleSystem {
 			for _, p := range m.Content {
+				if p == nil {
+					continue
+				}
 				if isCachePoint(p) {
 					system = append(system, &types.SystemContentBlockMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
 					continue
@@ -207,6 +216,9 @@ func convertRole(r ai.Role) (types.ConversationRole, error) {
 func partsToContentBlocks(parts []*ai.Part) ([]types.ContentBlock, error) {
 	var blocks []types.ContentBlock
 	for _, p := range parts {
+		if p == nil {
+			continue
+		}
 		switch {
 		case isCachePoint(p):
 			blocks = append(blocks, &types.ContentBlockMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
@@ -324,6 +336,8 @@ func decodeMediaPayload(s string) ([]byte, error) {
 		s = s[i+len(";base64,"):]
 	} else if strings.HasPrefix(s, "data:") {
 		return nil, errors.New("bedrock: data URL must be base64-encoded (use ';base64,' prefix)")
+	} else if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+		return nil, errors.New("bedrock: remote URLs are not supported; use a data URL or base64-encoded data")
 	}
 	b, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
@@ -374,6 +388,9 @@ func documentFormatFor(mime string) types.DocumentFormat {
 func convertTools(tools []*ai.ToolDefinition) ([]types.Tool, error) {
 	out := make([]types.Tool, 0, len(tools))
 	for _, t := range tools {
+		if t == nil {
+			return nil, errors.New("bedrock: tool definition required")
+		}
 		if t.Name == "" {
 			return nil, errors.New("bedrock: tool name required")
 		}
@@ -401,7 +418,7 @@ func convertToolChoice(choice string, tools []*ai.ToolDefinition) (types.ToolCho
 		return &types.ToolChoiceMemberAny{Value: types.AnyToolChoice{}}, nil
 	default:
 		for _, t := range tools {
-			if t.Name == choice {
+			if t != nil && t.Name == choice {
 				return &types.ToolChoiceMemberTool{Value: types.SpecificToolChoice{Name: aws.String(choice)}}, nil
 			}
 		}

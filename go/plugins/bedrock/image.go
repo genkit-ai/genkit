@@ -75,12 +75,12 @@ func promptOf(req *ai.ModelRequest) string {
 	}
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		m := req.Messages[i]
-		if m.Role != ai.RoleUser {
+		if m == nil || m.Role != ai.RoleUser {
 			continue
 		}
 		var sb strings.Builder
 		for _, p := range m.Content {
-			if p.Text != "" {
+			if p != nil && p.Text != "" {
 				sb.WriteString(p.Text)
 			}
 		}
@@ -205,7 +205,7 @@ func imageModernStability(ctx context.Context, client *bedrockruntime.Client, mo
 		return nil, err
 	}
 	for _, reason := range resp.FinishReasons {
-		if reason != nil && *reason != "" {
+		if reason != nil && *reason != "SUCCESS" && *reason != "" {
 			return nil, fmt.Errorf("bedrock: %s: %s", modelID, *reason)
 		}
 	}

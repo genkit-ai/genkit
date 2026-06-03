@@ -35,6 +35,9 @@ import (
 // is opaque []byte and the JSON shape is provider-specific.
 func embedderFunc(client *bedrockruntime.Client, modelID string) ai.EmbedderFunc {
 	return func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+		if req == nil {
+			return nil, errors.New("bedrock: embed request required")
+		}
 		if len(req.Input) == 0 {
 			return &ai.EmbedResponse{}, nil
 		}
