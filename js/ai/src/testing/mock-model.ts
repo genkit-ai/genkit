@@ -127,7 +127,7 @@ function toResponseData(response: MockResponse): GenerateResponseData {
   }
   for (const tool of obj.toolRequests ?? []) {
     content.push({
-      toolRequest: { name: tool.name, input: tool.input ?? {}, ref: tool.ref },
+      toolRequest: { name: tool.name, input: tool.input, ref: tool.ref },
     });
   }
   return {
@@ -194,7 +194,7 @@ export function mockModel(
   ) as MockModel;
 
   Object.defineProperties(model, {
-    requests: { get: () => requests },
+    requests: { get: () => [...requests] },
     lastRequest: { get: () => requests[requests.length - 1] },
     lastMessage: {
       get: () => {
