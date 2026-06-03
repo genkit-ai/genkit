@@ -1,6 +1,6 @@
 # RFC: [JS] First-class testing module (`genkit/testing`)
 
-> **Status:** Draft — internal review on `invertase/genkit-private`, destined for a public RFC PR to `genkit-ai/genkit` (`docs/js-testing-module-rfc.md`) once agreed.
+> **Status:** Draft — open for discussion.
 > **Service:** Managed DX. **Author:** Invertase. **Date:** 2026-06-02.
 
 ## Summary
@@ -129,7 +129,7 @@ mockModel(ai, {
 });
 
 // Inspection:
-model.lastMessage;        // final message of the last request, as a genkit
+model.lastMessage;        // final message of the last request, as a Genkit
                           //   Message — read it with `.text` / `.media` /
                           //   `.toolRequests`, exactly like a response
 model.lastRequest;        // the full resolved request the model received
