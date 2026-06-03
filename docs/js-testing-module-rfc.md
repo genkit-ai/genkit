@@ -110,16 +110,20 @@ import { mockModel, echoModel } from 'genkit/testing';
 
 const ai = genkit({});
 
-// Drive each call's response, inspect each call's input.
+// Drive each call's response, inspect each call's input. `respond` may return
+// a string, a `{ text | toolRequests | content }` object (auto-wrapped into a
+// full GenerateResponseData envelope for you), or a complete
+// GenerateResponseData — pick the lightest shape the test needs.
 const model = mockModel(ai, {
   respond: (req) => ({ text: 'hello world' }),
 });
 
-// Streaming and tool-call shapes are first-class:
+// Streaming and tool-call shapes are first-class. `sendChunk` takes a string
+// shorthand (or a full GenerateResponseChunkData if you need media/custom parts):
 mockModel(ai, {
   respond: (req, { sendChunk }) => {
-    sendChunk({ text: 'hel' });
-    sendChunk({ text: 'lo' });
+    sendChunk('hel');
+    sendChunk('lo');
     return { text: 'hello' };
   },
 });
@@ -129,9 +133,9 @@ mockModel(ai, {
 });
 
 // Inspection:
-model.lastMessage;        // final message of the last request, as a Genkit
-                          //   Message — read it with `.text` / `.media` /
-                          //   `.toolRequests`, exactly like a response
+model.lastMessage;        // final message of the last *request* (the input
+                          //   prompt, not the response), as a Genkit Message —
+                          //   read it with `.text` / `.media` / `.toolRequests`
 model.lastRequest;        // the full resolved request the model received
 model.requests;           // every call this run
 ```
@@ -234,6 +238,9 @@ A dedicated fake model avoids all three by construction: it owns its own streami
 3. Ship inspection helpers now, or the models first?
 4. Record/replay of real provider responses — in scope later, or never?
 5. Ship the zero-config `autoModel` (cf. Pydantic `TestModel`) in v1, or start with `echoModel` + `mockModel` only?
+6. Mock-by-name / registry override: code under test often references models by string (`ai.generate({ model: 'googleai/...' })`) rather than passing a reference. Should `mockModel` register itself under a given name and shadow an existing registered model to support these non-DI patterns?
+7. Global guard API: what mechanism for the "no real calls" switch — env var (e.g. `GENKIT_ALLOW_MODEL_REQUESTS=false`), or a programmatic call on the `genkit` instance / testing module?
+8. Inspection naming + lifecycle: `lastMessage` reads the request (input) — rename to `lastRequestMessage` to avoid confusion with the response? And should the mock expose `reset()` to clear `requests` between tests that reuse one instance?
 
 ## Rollout
 
