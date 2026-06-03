@@ -167,9 +167,10 @@ func imageFormatString(contentType string) string {
 // document because Cohere accepts only a single input type (texts OR images)
 // per call.
 type cohereEmbedReq struct {
-	Texts     []string `json:"texts,omitempty"`
-	Images    []string `json:"images,omitempty"`
-	InputType string   `json:"input_type"`
+	Texts          []string `json:"texts,omitempty"`
+	Images         []string `json:"images,omitempty"`
+	InputType      string   `json:"input_type"`
+	EmbeddingTypes []string `json:"embedding_types,omitempty"`
 }
 
 // cohereEmbeddings tolerates both Cohere response shapes: the legacy
@@ -207,6 +208,8 @@ type cohereEmbedResp struct {
 
 const cohereInputTypeDefault = "search_document"
 const cohereInputTypeImage = "image"
+const cohereEmbeddingTypeInt8 = "int8"
+const cohereEmbeddingTypeFloat = "float"
 
 func embedCohere(ctx context.Context, client *bedrockruntime.Client, modelID string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 	if cohereHasImage(req) {
@@ -274,7 +277,11 @@ func cohereEmbedPayload(doc *ai.Document) (cohereEmbedReq, error) {
 		if err != nil {
 			return cohereEmbedReq{}, err
 		}
-		return cohereEmbedReq{Images: []string{uri}, InputType: cohereInputTypeImage}, nil
+		return cohereEmbedReq{
+			Images:         []string{uri},
+			InputType:      cohereInputTypeImage,
+			EmbeddingTypes: []string{cohereEmbeddingTypeInt8, cohereEmbeddingTypeFloat},
+		}, nil
 	}
 	t := docText(doc)
 	if t == "" {

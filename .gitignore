@@ -68,5 +68,7 @@ next-env.d.ts
 .nox/
 .tox/
 
+.env
+
 # Code Coverage
 js/plugins/compat-oai/coverage/

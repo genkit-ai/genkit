@@ -27,11 +27,17 @@ import (
 )
 
 var (
-	testRegion        = flag.String("test-bedrock-region", "", "AWS region for Bedrock live tests (e.g. us-east-1)")
-	testModelClaude   = flag.String("test-bedrock-model-claude", "", "Claude model ID (e.g. anthropic.claude-3-5-sonnet-20241022-v2:0)")
-	testModelNova     = flag.String("test-bedrock-model-nova", "", "Nova model ID (e.g. amazon.nova-pro-v1:0)")
-	testTitanEmbedder = flag.String("test-bedrock-titan-embedder", "", "Titan embedder model ID (e.g. amazon.titan-embed-text-v2:0)")
+	testRegion             = flag.String("test-bedrock-region", "", "AWS region for Bedrock live tests (e.g. us-east-1)")
+	testModelClaude        = flag.String("test-bedrock-model-claude", "", "Claude model ID (e.g. us.anthropic.claude-haiku-4-5-20251001-v1:0)")
+	testModelNova          = flag.String("test-bedrock-model-nova", "", "Nova model ID (e.g. amazon.nova-pro-v1:0)")
+	testTitanEmbedder      = flag.String("test-bedrock-titan-embedder", "", "Titan text embedder model ID (e.g. amazon.titan-embed-text-v2:0)")
+	testTitanImageEmbedder = flag.String("test-bedrock-titan-image-embedder", "", "Titan image embedder model ID (e.g. amazon.titan-embed-image-v1)")
+	testCohereEmbedder     = flag.String("test-bedrock-cohere-embedder", "", "Cohere embedder model ID (e.g. cohere.embed-english-v3)")
+	testNovaMMEmbedder     = flag.String("test-bedrock-nova-mm-embedder", "", "Nova multimodal embedder model ID (e.g. amazon.nova-2-multimodal-embeddings-v1:0)")
+	testRerankModel        = flag.String("test-bedrock-rerank-model", "", "Cohere rerank model ID (e.g. cohere.rerank-v3-5:0)")
 )
+
+const testPNGDataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAXklEQVR4nO3PMQ0AMAzAsPInvYLYYVWKESTzjhsd8KsBrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BrQGtAa0BbQHKU9LC7/CP1AAAAABJRU5ErkJggg=="
 
 // requireLive asserts the live-test prerequisites and skips otherwise.
 // Bedrock model access is region-scoped and requires manual opt-in per model
@@ -193,5 +199,128 @@ func TestBedrockLive_TitanEmbedder(t *testing.T) {
 	}
 	if len(out.Embeddings[0].Embedding) == 0 {
 		t.Error("embedding has zero dimensions")
+	}
+}
+
+func TestBedrockLive_TitanImageEmbedder(t *testing.T) {
+	requireLive(t)
+	if *testTitanImageEmbedder == "" {
+		t.Skip("pass -test-bedrock-titan-image-embedder=<model-id> to run")
+	}
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&Bedrock{Region: *testRegion}))
+	emb, err := DefineEmbedder(g, *testTitanImageEmbedder, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := genkit.Embed(ctx, g, ai.WithEmbedder(emb), ai.WithDocs(imageDoc()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOneEmbedding(t, out)
+}
+
+func TestBedrockLive_CohereEmbedderTextAndImage(t *testing.T) {
+	requireLive(t)
+	if *testCohereEmbedder == "" {
+		t.Skip("pass -test-bedrock-cohere-embedder=<model-id> to run")
+	}
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&Bedrock{Region: *testRegion}))
+	emb, err := DefineEmbedder(g, *testCohereEmbedder, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	textOut, err := genkit.Embed(ctx, g, ai.WithEmbedder(emb), ai.WithTextDocs("hello world", "goodbye world"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(textOut.Embeddings) != 2 {
+		t.Fatalf("text embeddings = %d, want 2", len(textOut.Embeddings))
+	}
+	for i, e := range textOut.Embeddings {
+		if len(e.Embedding) == 0 {
+			t.Fatalf("text embedding %d has zero dimensions", i)
+		}
+	}
+
+	imageOut, err := genkit.Embed(ctx, g, ai.WithEmbedder(emb), ai.WithDocs(imageDoc()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOneEmbedding(t, imageOut)
+}
+
+func TestBedrockLive_NovaMultimodalEmbedder(t *testing.T) {
+	requireLive(t)
+	if *testNovaMMEmbedder == "" {
+		t.Skip("pass -test-bedrock-nova-mm-embedder=<model-id> to run")
+	}
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&Bedrock{Region: *testRegion}))
+	emb, err := DefineEmbedder(g, *testNovaMMEmbedder, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := genkit.Embed(ctx, g, ai.WithEmbedder(emb),
+		ai.WithDocs(ai.DocumentFromText("hello world", nil), imageDoc()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Embeddings) != 2 {
+		t.Fatalf("embeddings = %d, want 2", len(out.Embeddings))
+	}
+	for i, e := range out.Embeddings {
+		if len(e.Embedding) == 0 {
+			t.Fatalf("embedding %d has zero dimensions", i)
+		}
+	}
+}
+
+func TestBedrockLive_Rerank(t *testing.T) {
+	requireLive(t)
+	if *testRerankModel == "" {
+		t.Skip("pass -test-bedrock-rerank-model=<model-id> to run")
+	}
+	ctx := context.Background()
+	g := genkit.Init(ctx, genkit.WithPlugins(&Bedrock{Region: *testRegion}))
+	out, err := Rerank(ctx, g, *testRerankModel, &ai.RerankerRequest{
+		Query: ai.DocumentFromText("What is the capital of France?", nil),
+		Documents: []*ai.Document{
+			ai.DocumentFromText("The capital of France is Paris.", nil),
+			ai.DocumentFromText("The tallest mountain is Everest.", nil),
+			ai.DocumentFromText("Bananas are yellow.", nil),
+		},
+		Options: &RerankOptions{TopN: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Documents) != 2 {
+		t.Fatalf("ranked docs = %d, want 2", len(out.Documents))
+	}
+	if got := docText(&ai.Document{Content: out.Documents[0].Content}); !strings.Contains(got, "Paris") {
+		t.Fatalf("top reranked doc = %q, want Paris doc", got)
+	}
+	if out.Documents[0].Metadata == nil || out.Documents[1].Metadata == nil {
+		t.Fatal("expected rerank scores in metadata")
+	}
+	if out.Documents[0].Metadata.Score < out.Documents[1].Metadata.Score {
+		t.Fatalf("scores not descending: %f < %f", out.Documents[0].Metadata.Score, out.Documents[1].Metadata.Score)
+	}
+}
+
+func imageDoc() *ai.Document {
+	return &ai.Document{Content: []*ai.Part{ai.NewMediaPart("image/png", testPNGDataURL)}}
+}
+
+func assertOneEmbedding(t *testing.T, out *ai.EmbedResponse) {
+	t.Helper()
+	if len(out.Embeddings) != 1 {
+		t.Fatalf("got %d embeddings, want 1", len(out.Embeddings))
+	}
+	if len(out.Embeddings[0].Embedding) == 0 {
+		t.Fatal("embedding has zero dimensions")
 	}
 }

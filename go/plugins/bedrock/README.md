@@ -20,7 +20,7 @@ g := genkit.Init(ctx,
     genkit.WithPlugins(&bedrock.Bedrock{Region: "us-east-1"}),
 )
 
-claude, _ := bedrock.DefineModel(g, "anthropic.claude-3-5-sonnet-20241022-v2:0", nil)
+claude, _ := bedrock.DefineModel(g, "us.anthropic.claude-haiku-4-5-20251001-v1:0", nil)
 
 resp, err := genkit.Generate(ctx, g,
     ai.WithModel(claude),
@@ -52,17 +52,19 @@ g := genkit.Init(ctx,
 
 ### Model access
 
-Every Claude, Nova, Llama, Mistral, and Cohere foundation model on Bedrock requires a one-time **"Request model access"** approval per region in the [Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess). Until access is granted, calls return `AccessDeniedException`. The plugin surfaces the underlying AWS error so the cause is obvious.
+Every Claude, Nova, Llama, Mistral, and Cohere foundation model on Bedrock requires a one-time **"Request model access"** approval per region in the [Bedrock console](https://console.aws.amazon.com/bedrock/home#/modelaccess). Until access is granted, calls return `AccessDeniedException`. Some newer models also require an inference profile ID (for example `us.anthropic...`) instead of the base foundation-model ID. The plugin surfaces the underlying AWS error so account access, model lifecycle, and inference-profile issues are visible.
 
 ### Cross-region inference profiles
 
 Pass cross-region inference profile IDs verbatim to `DefineModel`:
 
 ```go
-m, _ := bedrock.DefineModel(g, "us.anthropic.claude-3-5-sonnet-20241022-v2:0", nil)
+m, _ := bedrock.DefineModel(g, "us.anthropic.claude-haiku-4-5-20251001-v1:0", nil)
 ```
 
 Supported prefixes: `us.`, `eu.`, `apac.`, `jp.`, `au.`, `global.`, `us-gov.`. The plugin strips the prefix only when looking up capability metadata; the full prefixed ID is sent to Bedrock so AWS handles the region routing.
+
+For newer Claude models, prefer the inference profile ID shown in the Bedrock console or AWS model docs. The live tests currently use `us.anthropic.claude-haiku-4-5-20251001-v1:0` in `us-east-1`.
 
 ## Configuration
 
@@ -111,7 +113,7 @@ Each family has a different JSON wire shape; the plugin routes on model-ID prefi
 
 - `amazon.titan-embed-text-*` — one call per document, single text input.
 - `amazon.titan-embed-image-v1` — one call per document, text and/or image input.
-- `cohere.embed-*` — text-only requests are batched into a single `texts: []` call; when any document carries image media, the plugin issues one `images: []` call per document (Cohere accepts a single input type per call). Image documents take precedence over accompanying text.
+- `cohere.embed-*` — text-only requests are batched into a single `texts: []` call; when any document carries image media, the plugin issues one `images: []` call per document (Cohere accepts a single input type per call). Image requests include `embedding_types: ["int8", "float"]`, which Bedrock requires for the tested Cohere Embed v3 image path. Image documents take precedence over accompanying text.
 - `amazon.nova-*-multimodal-embeddings-*` — one `SINGLE_EMBEDDING` call per document; image input takes precedence over text. Uses `embeddingPurpose: GENERIC_INDEX` and the model's default dimension.
 
 Image documents are matched by `image/*` media parts (`png`/`jpeg`/`gif`/`webp`).
@@ -179,13 +181,36 @@ Bedrock requires a minimum of ~1024 cacheable tokens; small inputs silently bypa
 
 ## Live testing
 
+Live tests are opt-in: each test skips unless its model flag is provided. Use credentials from the standard AWS chain, or source a local `.env` first:
+
 ```
-cd go && go test ./plugins/bedrock/... \
+cd go
+set -a; source ../.env; set +a
+go test ./plugins/bedrock/... -v -run 'TestBedrockLive_' \
     -test-bedrock-region=us-east-1 \
-    -test-bedrock-model-claude=anthropic.claude-3-5-sonnet-20241022-v2:0 \
+    -test-bedrock-model-claude=us.anthropic.claude-haiku-4-5-20251001-v1:0 \
     -test-bedrock-model-nova=amazon.nova-pro-v1:0 \
     -test-bedrock-titan-embedder=amazon.titan-embed-text-v2:0 \
-    -v
+    -test-bedrock-titan-image-embedder=amazon.titan-embed-image-v1 \
+    -test-bedrock-cohere-embedder=cohere.embed-english-v3 \
+    -test-bedrock-nova-mm-embedder=amazon.nova-2-multimodal-embeddings-v1:0 \
+    -test-bedrock-rerank-model=cohere.rerank-v3-5:0
 ```
+
+This matrix covers:
+
+| Live test | Bedrock path covered |
+|---|---|
+| `TestBedrockLive_ClaudeSync` | Claude Converse sync |
+| `TestBedrockLive_ClaudeStream` | Claude ConverseStream chunks and final response |
+| `TestBedrockLive_ClaudeTool` | Claude tool request/response round trip |
+| `TestBedrockLive_NovaSync` | Nova Converse sync |
+| `TestBedrockLive_TitanEmbedder` | Titan text embedding |
+| `TestBedrockLive_TitanImageEmbedder` | Titan image embedding |
+| `TestBedrockLive_CohereEmbedderTextAndImage` | Cohere batched text embedding and per-image embedding |
+| `TestBedrockLive_NovaMultimodalEmbedder` | Nova text and image multimodal embeddings |
+| `TestBedrockLive_Rerank` | Cohere rerank request and score ordering |
+
+Failures with `AccessDeniedException`, legacy/EOL model messages, or "inference profile required" messages usually mean the account, region, or model ID needs adjustment rather than a plugin code change.
 
 Unit tests need no AWS access and run by default with plain `go test ./plugins/bedrock/...`.

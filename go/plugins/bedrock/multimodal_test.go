@@ -158,6 +158,9 @@ func TestCohereEmbedPayload_TextAndImage(t *testing.T) {
 	if img.InputType != cohereInputTypeImage {
 		t.Errorf("input_type = %q, want %q", img.InputType, cohereInputTypeImage)
 	}
+	if len(img.EmbeddingTypes) != 2 || img.EmbeddingTypes[0] != cohereEmbeddingTypeInt8 || img.EmbeddingTypes[1] != cohereEmbeddingTypeFloat {
+		t.Errorf("embedding_types = %v, want [%q %q]", img.EmbeddingTypes, cohereEmbeddingTypeInt8, cohereEmbeddingTypeFloat)
+	}
 	wantURI := "data:image/png;base64," + encoded
 	if len(img.Images) != 1 || img.Images[0] != wantURI {
 		t.Errorf("Images = %v, want [%q]", img.Images, wantURI)
