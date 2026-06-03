@@ -548,6 +548,9 @@ export function action<
         }
         metadata.name = actionName;
         metadata.input = input;
+        if (options?.init !== undefined) {
+          metadata.init = JSON.stringify(options.init);
+        }
 
         try {
           const actFn = () =>
