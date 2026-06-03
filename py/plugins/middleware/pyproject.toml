@@ -54,7 +54,7 @@ license = "Apache-2.0"
 name = "genkit-plugin-middleware"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.6.0"
+version = "0.5.2"
 
 [project.optional-dependencies]
 dev = [
