@@ -128,7 +128,9 @@ function renderPart(part: Part): string {
     return `[toolResponse ${name}: ${JSON.stringify(output)}]`;
   }
   if (part.reasoning !== undefined) return `[reasoning: ${part.reasoning}]`;
+  if (part.resource) return `[resource: ${part.resource.uri}]`;
   if (part.data !== undefined) return `[data: ${JSON.stringify(part.data)}]`;
+  if (part.custom !== undefined) return `[custom: ${JSON.stringify(part.custom)}]`;
   return '';
 }
 
