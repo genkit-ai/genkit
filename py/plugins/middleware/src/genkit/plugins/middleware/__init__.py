@@ -44,16 +44,43 @@ Or register all five with the ``Middleware`` plugin so they appear in
 the Dev UI.
 """
 
-from genkit.middleware import GenerateMiddleware
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, new_middleware
+from genkit.plugin_api import MiddlewarePlugin, new_middleware
 from genkit.plugins.middleware._fallback import Fallback
 from genkit.plugins.middleware._filesystem import Filesystem
 from genkit.plugins.middleware._retry import Retry
 from genkit.plugins.middleware._skills import Skills
 from genkit.plugins.middleware._tool_approval import ToolApproval
 
+_MIDDLEWARE_DESCS = [
+    new_middleware(
+        Retry,
+        name='retry',
+        description='Retries model calls on transient failures with exponential backoff',
+    ),
+    new_middleware(
+        Fallback,
+        name='fallback',
+        description='Falls back to alternative models on failure',
+    ),
+    new_middleware(
+        ToolApproval,
+        name='tool_approval',
+        description='Requires approval before executing tools',
+    ),
+    new_middleware(
+        Skills,
+        name='skills',
+        description='Provides access to skill library for specialized instructions',
+    ),
+    new_middleware(
+        Filesystem,
+        name='filesystem',
+        description='Sandboxed filesystem operations',
+    ),
+]
 
-class Middleware(Plugin):
+
+class Middleware(MiddlewarePlugin):
     """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
     Registers all five middleware descriptors so they show up in the Dev
@@ -74,48 +101,7 @@ class Middleware(Plugin):
     """
 
     name = 'genkit-middleware'
-
-    async def init(self) -> list[Action]:
-        """No actions to register; this plugin only contributes middleware."""
-        return []
-
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        """No dynamic actions to resolve."""
-        return None
-
-    async def list_actions(self) -> list[ActionMetadata]:
-        """No actions to list."""
-        return []
-
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        """Return descriptors for all middleware exposed by this plugin."""
-        return [
-            new_middleware(
-                Retry,
-                name='retry',
-                description='Retries model calls on transient failures with exponential backoff',
-            ),
-            new_middleware(
-                Fallback,
-                name='fallback',
-                description='Falls back to alternative models on failure',
-            ),
-            new_middleware(
-                ToolApproval,
-                name='tool_approval',
-                description='Requires approval before executing tools',
-            ),
-            new_middleware(
-                Skills,
-                name='skills',
-                description='Provides access to skill library for specialized instructions',
-            ),
-            new_middleware(
-                Filesystem,
-                name='filesystem',
-                description='Sandboxed filesystem operations',
-            ),
-        ]
+    middleware = list(_MIDDLEWARE_DESCS)
 
 
 __all__ = [
