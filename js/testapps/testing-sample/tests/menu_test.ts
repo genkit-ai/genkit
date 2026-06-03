@@ -31,10 +31,11 @@ describe('recommendDish flow', () => {
     const out = await recommendDish({ restaurant: 'Lumen', mood: 'cozy' });
 
     assert.equal(out, 'Try the risotto.');
-    // The flow rendered our inputs into the prompt the model saw. `lastMessage`
-    // is a genkit Message, so `.text` works just like it does on a response.
+    // The flow rendered our inputs into the prompt the model saw.
+    // `lastRequestMessage` is a genkit Message, so `.text` works just like it
+    // does on a response.
     assert.match(
-      model.lastMessage!.text,
+      model.lastRequestMessage!.text,
       /Recommend a dish at Lumen for someone feeling cozy/
     );
   });

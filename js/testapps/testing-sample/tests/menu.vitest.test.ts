@@ -31,7 +31,7 @@ describe('recommendDish flow (vitest)', () => {
     const out = await recommendDish({ restaurant: 'Lumen', mood: 'cozy' });
 
     expect(out).toBe('Try the risotto.');
-    expect(model.lastMessage!.text).toMatch(
+    expect(model.lastRequestMessage!.text).toMatch(
       /Recommend a dish at Lumen for someone feeling cozy/
     );
   });

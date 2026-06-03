@@ -92,10 +92,10 @@ export type MockModel = ModelAction & {
    * `.toolRequests`, etc. `undefined` if the model was never called.
    *
    * ```ts
-   * assert.match(model.lastMessage!.text, /Summarize: long text/);
+   * assert.match(model.lastRequestMessage!.text, /Summarize: long text/);
    * ```
    */
-  readonly lastMessage: Message | undefined;
+  readonly lastRequestMessage: Message | undefined;
   /** Every request this model received, oldest first. */
   readonly requests: GenerateRequest[];
   /** How many times this model was called. */
@@ -196,7 +196,7 @@ export function mockModel(
   Object.defineProperties(model, {
     requests: { get: () => [...requests] },
     lastRequest: { get: () => requests[requests.length - 1] },
-    lastMessage: {
+    lastRequestMessage: {
       get: () => {
         const last = requests[requests.length - 1]?.messages.at(-1);
         return last ? new Message(last) : undefined;
