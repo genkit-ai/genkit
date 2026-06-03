@@ -73,6 +73,18 @@ export const AgentsOptionsSchema = z.object({
         'to sub-agents as additional context. 0 or omitted means only the ' +
         'task description is sent.'
     ),
+  artifactStrategy: z
+    .enum(['inline', 'session'])
+    .optional()
+    .describe(
+      'How sub-agent artifacts are handled:\n' +
+        '  - "inline" (default): artifact content is included in the delegation ' +
+        'tool result so the orchestrator model can see it, AND artifacts are ' +
+        'merged into the parent session.\n' +
+        '  - "session": artifacts are merged into the parent session only. ' +
+        'The tool result mentions artifact names but not content. Use the ' +
+        '"artifacts" middleware to give the model read/write access to session artifacts.'
+    ),
 });
 
 export type AgentsOptions = z.infer<typeof AgentsOptionsSchema>;
@@ -96,6 +108,15 @@ function makeToolName(prefix: string, agentName: string): string {
   return prefix ? `${prefix}_${agentName}` : agentName;
 }
 
+/**
+ * Generates a short, unique invocation ID for a sub-agent call.
+ * Format: `{agentName}_{random4}` — e.g. `researcher_k9m2`
+ */
+function makeInvocationId(agentName: string): string {
+  const random = Math.random().toString(36).slice(2, 6);
+  return `${agentName}_${random}`;
+}
+
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
@@ -114,8 +135,16 @@ function makeToolName(prefix: string, agentName: string): string {
  * 1. Resolves the target agent from the registry.
  * 2. Optionally forwards recent conversation history as context.
  * 3. Runs the sub-agent with the task.
- * 4. Returns the sub-agent's response (including artifact metadata) as the
- *    tool result.
+ * 4. Returns the sub-agent's response as the tool result.
+ *
+ * Artifact handling is controlled by the `artifactStrategy` option:
+ *
+ * - `"inline"` (default): Artifact content is included in the tool result
+ *   so the orchestrator model can reason about it, AND artifacts are merged
+ *   into the parent session (prefixed with an invocation ID for namespacing).
+ * - `"session"`: Artifacts are merged into the parent session only. The tool
+ *   result mentions artifact names but not content. Pair with the `artifacts`
+ *   middleware to give the model `read_artifact` / `write_artifact` tools.
  *
  * If a sub-agent triggers an interrupt, the interrupt is propagated to the
  * caller as a `ToolInterruptError`.
@@ -140,7 +169,9 @@ function makeToolName(prefix: string, agentName: string): string {
  *       ],
  *       maxDelegations: 5,
  *       historyLength: 4,
+ *       artifactStrategy: 'session', // pair with artifacts() middleware
  *     }),
+ *     artifacts(),
  *   ],
  * });
  * ```
@@ -164,6 +195,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       const prefix = config.toolPrefix ?? 'delegate_to';
       const maxDelegations = config.maxDelegations;
       const historyLength = config.historyLength ?? 0;
+      const artifactStrategy = config.artifactStrategy ?? 'inline';
 
       // Shared mutable state — safe because `instantiate()` is called per
       // `generate()` invocation, giving each call its own closure.
@@ -211,6 +243,36 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
         return desc;
       }
 
+      // -- Build the output schema based on artifactStrategy ----------------
+
+      const inlineArtifactSchema = z.object({
+        name: z.string().optional().describe('Name of the artifact.'),
+        content: z
+          .string()
+          .optional()
+          .describe('Text content of the artifact.'),
+      });
+
+      const sessionArtifactSchema = z.object({
+        name: z.string().optional().describe('Name of the artifact.'),
+      });
+
+      const toolOutputSchema = z.object({
+        response: z.string().describe("The sub-agent's text response."),
+        artifacts: z
+          .array(
+            artifactStrategy === 'inline'
+              ? inlineArtifactSchema
+              : sessionArtifactSchema
+          )
+          .optional()
+          .describe(
+            artifactStrategy === 'inline'
+              ? 'Artifacts produced by the sub-agent, including their content.'
+              : 'Names of artifacts produced by the sub-agent. Use read_artifact to access content.'
+          ),
+      });
+
       // ── Per-agent delegation tools ────────────────────────────────────
 
       const delegationTools = agentRefs.map((ref) => {
@@ -229,20 +291,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                   'A clear, self-contained description of the task to delegate.'
                 ),
             }),
-            outputSchema: z.object({
-              response: z.string().describe("The sub-agent's text response."),
-              artifacts: z
-                .array(
-                  z.object({
-                    name: z
-                      .string()
-                      .optional()
-                      .describe('Name of the artifact.'),
-                  })
-                )
-                .optional()
-                .describe('Artifacts produced by the sub-agent, if any.'),
-            }),
+            outputSchema: toolOutputSchema,
           },
           async (input) => {
             // ── Guard rail ──────────────────────────────────────────
@@ -298,10 +347,50 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                 )
                 .join('\n');
 
-              // Extract artifact metadata for the model.
-              const artifacts = agentOutput.artifacts
-                ?.filter((a: any) => a.name)
-                .map((a: any) => ({ name: a.name }));
+              // ── Artifact handling ─────────────────────────────────
+              const subArtifacts = (agentOutput.artifacts ?? []).filter(
+                (a: any) => a.name
+              );
+
+              // Generate a unique invocation ID to namespace artifacts
+              const invocationId = makeInvocationId(ref.name);
+
+              // Merge artifacts into the parent session (both strategies)
+              if (subArtifacts.length > 0) {
+                const session = ai.currentSession();
+                if (session) {
+                  const namespacedArtifacts = subArtifacts.map((a: any) => ({
+                    ...a,
+                    name: `${invocationId}/${a.name}`,
+                    metadata: {
+                      ...a.metadata,
+                      source: ref.name,
+                      invocationId,
+                    },
+                  }));
+                  session.addArtifacts(namespacedArtifacts);
+                }
+              }
+
+              // Build tool result based on strategy
+              let artifacts: any[] | undefined;
+              if (subArtifacts.length > 0) {
+                if (artifactStrategy === 'inline') {
+                  // Include full content in tool result
+                  artifacts = subArtifacts.map((a: any) => ({
+                    name: `${invocationId}/${a.name}`,
+                    content: (a.parts ?? [])
+                      .map((p: any) => p.text ?? '')
+                      .filter((t: string) => t.length > 0)
+                      .join('\n'),
+                  }));
+                } else {
+                  // Session strategy: names only
+                  artifacts = subArtifacts.map((a: any) => ({
+                    name: `${invocationId}/${a.name}`,
+                  }));
+                }
+              }
 
               return {
                 response: textContent || '(no response)',

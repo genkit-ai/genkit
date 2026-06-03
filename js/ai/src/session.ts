@@ -49,7 +49,34 @@ export const SnapshotEventSchema = z.enum(['turnEnd', 'invocationEnd']);
 export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
 
 /**
+ * Reason an agent turn (or whole invocation) finished.
+ *
+ * Mirrors the generate `FinishReason` enum and adds two agent-specific
+ * states: `detached` (the turn was moved to the background) and `failed`
+ * (the turn ended in an error).
+ */
+export const AgentFinishReasonSchema = z.enum([
+  // From generate's FinishReason:
+  'stop',
+  'length',
+  'blocked',
+  'aborted',
+  'interrupted',
+  'other',
+  'unknown',
+  // Agent additions:
+  'detached',
+  'failed',
+]);
+
+/**
+ * Reason an agent turn (or whole invocation) finished.
+ */
+export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
+
+/**
  * Schema for session execution state.
+
  */
 export const SessionStateSchema = z.object({
   sessionId: z.string().optional(),
@@ -96,8 +123,15 @@ export interface SessionSnapshot<S = unknown> {
   state: SessionState<S>;
   status?: 'pending' | 'done' | 'failed' | 'aborted';
 
+  /**
+   * Semantic reason the turn/invocation finished (e.g. `interrupted`,
+   * `stop`). Distinct from `status`, which tracks the persistence lifecycle.
+   */
+  finishReason?: AgentFinishReason;
+
   error?: {
     status: string;
+
     message: string;
     details?: any;
   };
