@@ -77,3 +77,12 @@ export const ai = genkit({
   plugins: config.plugins(),
   model: defaultModel,
 });
+
+export const echo = ai.defineFlow(
+  {
+    name: 'echoFlow',
+  },
+  () => {
+    return 'Hello, world';
+  }
+);

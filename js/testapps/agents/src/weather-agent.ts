@@ -26,6 +26,9 @@ export const getWeather = ai.defineTool(
     outputSchema: z.object({ weather: z.string() }),
   },
   async (input) => {
+    if (input.location.includes("throwy")) {
+      throw new Error('Fake throwy');
+    }
     return { weather: `Sunny in ${input.location}`, temperature: '71F' };
   }
 );
