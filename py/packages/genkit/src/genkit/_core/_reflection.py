@@ -177,7 +177,7 @@ def create_reflection_asgi_app(
 
         return JSONResponse(response, headers={'x-genkit-version': version})
 
-    async def values(req: Request) -> Response:
+    async def values(req: Request) -> JSONResponse:
         raw = req.query_params.get('type')
         if not raw or not raw.strip():
             return JSONResponse(

@@ -183,11 +183,17 @@ class PartConverter:
                     if extra_parts:
                         tool_output = clean_output
 
+            # Gemini's FunctionResponse requires a dict-shaped ``response``,
+            # but a tool can legitimately hand back any JSON value (string,
+            # list, int, None, ...). Envelope it as ``{name, content}`` so
+            # the wire payload is always a dict; the inbound converter
+            # unwraps the same envelope so callers see the original value.
+            gemini_tool_name = tool_response.name.replace('/', '__')
             fn_part = genai.types.Part(
                 function_response=genai.types.FunctionResponse(
                     id=tool_response.ref,
-                    name=tool_response.name.replace('/', '__'),
-                    response=tool_output,
+                    name=gemini_tool_name,
+                    response={'name': gemini_tool_name, 'content': tool_output},
                 )
             )
             if extra_parts:
@@ -315,13 +321,19 @@ class PartConverter:
                 )
             )
         if part.function_response:
+            # If the model echoes back the ``{name, content}`` envelope we
+            # used on the outbound side, peel it off so the caller sees the
+            # original tool output.
+            output = part.function_response.response
+            if isinstance(output, dict) and output.get('name') == part.function_response.name and 'content' in output:
+                output = output['content']
             return Part(
                 root=ToolResponsePart(
                     tool_response=ToolResponse(
                         ref=getattr(part.function_response, 'id', None),
                         # restore slashes
                         name=(part.function_response.name or '').replace('__', '/'),
-                        output=part.function_response.response,
+                        output=output,
                     )
                 )
             )
