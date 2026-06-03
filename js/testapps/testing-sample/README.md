@@ -28,10 +28,13 @@ mock under that name and the app code runs unchanged.
 - **Streaming through a flow** — drive `flow.stream(...)`, emit chunks via
   `sendChunk`, and assert chunks arrive through the flow plus the final output.
 - **`echoModel`** — a zero-config model that echoes the whole assembled request
-  (system + Handlebars-rendered messages), for asserting prompt assembly. Use it
-  for text paths; `mockModel` for structured output.
+  (system + Handlebars-rendered messages), for asserting prompt assembly. It's a
+  *text*-path preset: if the request carries an output schema it throws an
+  explanatory error (text can't satisfy a schema) — use `mockModel` there.
 - **Inspection** — `model.lastRequest` / `lastRequestMessage` (a genkit
-  `Message`, so `.text` / `.media` work like on a response) / `requests` /
+  `Message`, so `.text` / `.media` work like on a response) / `lastRequestText`
+  (the full assembled conversation as a string — works on *any* mock, including
+  structured-output paths where `echoModel` can't be used) / `requests` /
   `requestCount`.
 
 `genkit/testing` is runner-agnostic. The same patterns are shown twice:

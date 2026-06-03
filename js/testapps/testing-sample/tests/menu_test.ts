@@ -80,6 +80,24 @@ describe('recommendDish flow — structured output + business logic', () => {
     assert.equal(out.withinBudget, false);
   });
 
+  it('inspects prompt assembly on the structured path via lastRequestText', async () => {
+    // echoModel can't be used here — the prompt requests structured output, and
+    // echo returns text. Inspect the recorded request instead: `lastRequestText`
+    // flattens the whole assembled conversation (system + rendered template).
+    const model = mockModel(ai, {
+      name: 'menuModel',
+      respond: respondWithRecommendation,
+    });
+
+    await recommendDish({ restaurant: 'Lumen', mood: 'cozy', budgetUSD: 30 });
+
+    assert.match(model.lastRequestText!, /You are a concise restaurant concierge/);
+    assert.match(
+      model.lastRequestText!,
+      /Recommend a dish at Lumen for someone feeling cozy/
+    );
+  });
+
   it('rejects a recommendation the flow considers invalid', async () => {
     // The model returns a structurally-valid but business-invalid price; the
     // flow's guard, not the framework, is what throws.
