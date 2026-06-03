@@ -19,7 +19,7 @@ authors = [
   { name = "Google" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",x
+  "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Environment :: Web Environment",
   "Framework :: AsyncIO",
