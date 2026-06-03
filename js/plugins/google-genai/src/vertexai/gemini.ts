@@ -428,6 +428,7 @@ export const KNOWN_GEMINI_MODELS = {
   'gemini-flash-latest': commonRef('gemini-flash-latest'),
   'gemini-flash-lite-latest': commonRef('gemini-flash-lite-latest'),
   'gemini-3.5-flash': commonRef('gemini-3.5-flash'),
+  'gemini-3.1-flash-lite': commonRef('gemini-3.1-flash-lite'),
   'gemini-3.1-flash-lite-preview': commonRef('gemini-3.1-flash-lite-preview'),
   'gemini-3.1-pro-preview': commonRef('gemini-3.1-pro-preview'),
   'gemini-3-flash-preview': commonRef('gemini-3-flash-preview'),
