@@ -2591,4 +2591,209 @@ Now respond to the latest message.`,
       assert.strictEqual(storedMessages[3].content[0].text, 'doing well');
     });
   });
+
+  describe('finishReason', () => {
+    it('reports the explicit finishReason from a custom agent turn', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'frCustom' },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'interrupted' as const };
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      assert.strictEqual(turnEndChunk?.turnEnd?.finishReason, 'interrupted');
+
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'interrupted');
+    });
+
+    it('prefers an explicit final finishReason on the AgentResult', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'frCustomFinal' },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'interrupted' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'stop');
+    });
+
+    it('omits finishReason when the turn does not report one', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'frCustomNone' },
+        async (sess) => {
+          await sess.run(async () => {
+            // no finishReason returned
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      assert.strictEqual(turnEndChunk?.turnEnd?.finishReason, undefined);
+
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, undefined);
+    });
+
+    it('persists the finishReason in the session snapshot', async () => {
+      const store = new InMemorySessionStore<{}>();
+
+      const flow = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'frPersist', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'interrupted' as const };
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+
+      const output = await session.output;
+      assert.ok(output.snapshotId);
+      const snapshot = await store.getSnapshot(output.snapshotId!);
+      assert.strictEqual(snapshot?.finishReason, 'interrupted');
+    });
+
+    it('reports failed as the finishReason when a turn throws', async () => {
+      const store = new InMemorySessionStore<{}>();
+
+      const flow = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'frFailed', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new Error('boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      try {
+        for await (const chunk of session.stream) {
+          chunks.push(chunk);
+        }
+        await session.output;
+        assert.fail('Expected the agent to throw');
+      } catch (e: any) {
+        assert.ok(e.message.includes('boom'));
+      }
+
+      const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      assert.strictEqual(turnEndChunk?.turnEnd?.finishReason, 'failed');
+
+      const turnEndSnapshotId = turnEndChunk?.turnEnd?.snapshotId;
+      assert.ok(turnEndSnapshotId);
+      const snapshot = await store.getSnapshot(turnEndSnapshotId!);
+      assert.strictEqual(snapshot?.finishReason, 'failed');
+      assert.strictEqual(snapshot?.status, 'failed');
+    });
+
+    it('surfaces the generate finishReason from a prompt agent', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry, undefined, 'frModel');
+
+      definePrompt(registry, {
+        name: 'frPrompt',
+        model: 'frModel',
+        config: { temperature: 1 },
+      });
+
+      const flow = definePromptAgent(registry, {
+        promptName: 'frPrompt',
+      });
+
+      pm.handleResponse = async () => ({
+        message: { role: 'model', content: [{ text: 'hello' }] },
+        finishReason: 'stop',
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      assert.strictEqual(turnEndChunk?.turnEnd?.finishReason, 'stop');
+
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'stop');
+    });
+  });
 });
+

@@ -49,6 +49,7 @@ import {
   type PromptConfig,
 } from './prompt.js';
 import {
+  AgentFinishReasonSchema,
   Artifact,
   ArtifactSchema,
   InMemorySessionStore,
@@ -59,9 +60,11 @@ import {
   SessionStore,
   SnapshotCallback,
   runWithSession,
+  type AgentFinishReason,
   type SessionSnapshotInput,
   type SessionStoreOptions,
 } from './session.js';
+
 
 /**
  * Schema for initializing an agent turn.
@@ -105,12 +108,15 @@ export type AgentInput = z.infer<typeof AgentInputSchema>;
  */
 export const TurnEndSchema = z.object({
   snapshotId: z.string().optional(),
+  /** The reason this turn finished (e.g. `stop`, `interrupted`). */
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 
 /**
  * Identifies a turn termination event.
  */
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
+
 
 /**
  * Schema for stream chunks emitted during agent execution.
@@ -132,11 +138,24 @@ export type AgentStreamChunk<Stream = unknown> = Omit<
 > & { status?: Stream };
 
 /**
+ * Result returned by a single turn handler passed to {@link SessionRunner.run}.
+ *
+ * Returning a `finishReason` lets a custom agent explicitly state why the turn
+ * ended (e.g. `interrupted`, `length`). When omitted, no per-turn reason is
+ * reported.
+ */
+export interface TurnResult {
+  finishReason?: AgentFinishReason;
+}
+
+/**
  * Schema for final results of an agent execution.
  */
 export const AgentResultSchema = z.object({
   message: MessageSchema.optional(),
   artifacts: z.array(ArtifactSchema).optional(),
+  /** The reason the whole invocation finished (e.g. `stop`, `interrupted`). */
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 
 /**
@@ -152,6 +171,8 @@ export const AgentOutputSchema = z.object({
   state: SessionStateSchema.optional(),
   message: MessageSchema.optional(),
   artifacts: z.array(ArtifactSchema).optional(),
+  /** The reason the invocation finished (e.g. `stop`, `interrupted`). */
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 
 /**
@@ -162,7 +183,9 @@ export interface AgentOutput<S = unknown> {
   message?: MessageData;
   snapshotId?: string;
   state?: SessionState<S>;
+  finishReason?: AgentFinishReason;
 }
+
 
 /**
  * Executor responsible for running turns over input streams and persisting state.
@@ -171,9 +194,14 @@ export class SessionRunner<State = unknown> {
   readonly session: Session<State>;
   readonly inputCh: AsyncIterable<AgentInput>;
   turnIndex: number = 0;
-  public onEndTurn?: (snapshotId?: string) => void;
+  public onEndTurn?: (
+    snapshotId?: string,
+    finishReason?: AgentFinishReason
+  ) => void;
   public onDetach?: (snapshotId: string) => void;
   public newSnapshotId?: string;
+  /** The finish reason of the most recently completed turn. */
+  public lastTurnFinishReason?: AgentFinishReason;
   private snapshotCallback?: SnapshotCallback<State>;
   private lastSnapshot?: SessionSnapshot<State>;
 
@@ -188,11 +216,15 @@ export class SessionRunner<State = unknown> {
       snapshotCallback?: SnapshotCallback<State>;
       lastSnapshot?: SessionSnapshot<State>;
       store?: SessionStore<State>;
-      onEndTurn?: (snapshotId?: string) => void;
+      onEndTurn?: (
+        snapshotId?: string,
+        finishReason?: AgentFinishReason
+      ) => void;
       onDetach?: (snapshotId: string) => void;
       newSnapshotId?: string;
     }
   ) {
+
     this.session = session;
     this.inputCh = inputCh;
 
@@ -250,8 +282,14 @@ export class SessionRunner<State = unknown> {
 
   /**
    * Executes the flow handler against incoming input messages sequentially.
+   *
+   * The handler may return a {@link TurnResult} carrying an explicit
+   * `finishReason` for the just-completed turn. When omitted, no per-turn
+   * reason is reported. Failures always report `failed`.
    */
-  async run(fn: (input: AgentInput) => Promise<void>): Promise<void> {
+  async run(
+    fn: (input: AgentInput) => Promise<TurnResult | void>
+  ): Promise<void> {
     for await (const input of this.inputCh) {
       if (input.messages) {
         this.session.addMessages(input.messages);
@@ -262,17 +300,20 @@ export class SessionRunner<State = unknown> {
 
       try {
         await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
-          await fn(input);
+          const turnResult = await fn(input);
+          const finishReason = turnResult?.finishReason;
+          this.lastTurnFinishReason = finishReason;
 
           const snapshotId = await this.maybeSnapshot(
             'turnEnd',
             'done',
             undefined,
-            turnSnapshotId
+            turnSnapshotId,
+            finishReason
           );
           try {
             if (this.onEndTurn) {
-              this.onEndTurn(snapshotId);
+              this.onEndTurn(snapshotId, finishReason);
             }
           } catch (e) {
             // Stream was closed, absorb exception
@@ -286,6 +327,7 @@ export class SessionRunner<State = unknown> {
         const errStatus = e.status || 'INTERNAL';
         const errMessage = e.message || 'Internal failure';
         const errDetails = e.detail || e.details || e;
+        this.lastTurnFinishReason = 'failed';
         const snapshotId = await this.maybeSnapshot(
           'turnEnd',
           'failed',
@@ -294,11 +336,12 @@ export class SessionRunner<State = unknown> {
             message: errMessage,
             details: errDetails,
           },
-          turnSnapshotId
+          turnSnapshotId,
+          'failed'
         );
         try {
           if (this.onEndTurn) {
-            this.onEndTurn(snapshotId);
+            this.onEndTurn(snapshotId, 'failed');
           }
         } catch (_) {
           // Stream was closed, absorb exception
@@ -320,7 +363,8 @@ export class SessionRunner<State = unknown> {
     event: 'turnEnd' | 'invocationEnd',
     status?: 'pending' | 'done' | 'failed',
     error?: { status: string; message: string; details?: any },
-    snapshotId?: string
+    snapshotId?: string,
+    finishReason?: AgentFinishReason
   ): Promise<string | undefined> {
     if (
       !this.store ||
@@ -358,6 +402,7 @@ export class SessionRunner<State = unknown> {
       state: currentState as SessionState<State>,
       parentId: this.lastSnapshot?.snapshotId,
       status,
+      ...(finishReason && { finishReason }),
       error,
     };
 
@@ -658,10 +703,13 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           }
         },
 
-        onEndTurn: (snapshotId) => {
+        onEndTurn: (snapshotId, finishReason) => {
           if (!runner.isDetached) {
             arg.sendChunk({
-              turnEnd: { ...(config.store && { snapshotId }) },
+              turnEnd: {
+                ...(config.store && { snapshotId }),
+                ...(finishReason && { finishReason }),
+              },
             });
           }
         },
@@ -710,15 +758,19 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       if (outcome === 'detached') {
         return {
           snapshotId: detachedSnapshotId!,
+          finishReason: 'detached' as AgentFinishReason,
           ...(!config.store && { state: toClientState(session.getState()) }),
         };
       }
 
       const { result, finalSnapshotId } = outcome;
 
+      const finishReason = result.finishReason ?? runner.lastTurnFinishReason;
+
       return {
         ...(result.artifacts?.length && { artifacts: result.artifacts }),
         ...(result.message && { message: result.message }),
+        ...(finishReason && { finishReason }),
         ...(config.store && { snapshotId: finalSnapshotId }),
         ...(!config.store && { state: toClientState(session.getState()) }),
       };
@@ -970,12 +1022,20 @@ export function definePromptAgent<State = unknown>(
           });
         }
       }
+
+      // Surface the generate finish reason as the turn's finish reason. The
+      // generate `FinishReason` enum is a subset of `AgentFinishReason`, so it
+      // maps through directly.
+      return { finishReason: res.finishReason as AgentFinishReason };
     });
 
     const msgs = sess.getMessages();
     return {
       artifacts: sess.getArtifacts(),
       message: msgs.length > 0 ? msgs[msgs.length - 1] : undefined,
+      ...(sess.lastTurnFinishReason && {
+        finishReason: sess.lastTurnFinishReason,
+      }),
     };
   };
 
