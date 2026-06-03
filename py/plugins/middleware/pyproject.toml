@@ -19,7 +19,7 @@ authors = [
   { name = "Google" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 3 - Alpha",x
   "Environment :: Console",
   "Environment :: Web Environment",
   "Framework :: AsyncIO",
@@ -54,7 +54,7 @@ license = "Apache-2.0"
 name = "genkit-plugin-middleware"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.5.2"
+version = "0.6.0"
 
 [project.optional-dependencies]
 dev = [
