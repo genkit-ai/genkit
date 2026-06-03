@@ -664,18 +664,7 @@ export function defineModel(
         filter: (part) => {
           try {
             const url = new URL(part.media.url);
-            if (
-              // Gemini can handle these URLs
-              [
-                'generativelanguage.googleapis.com',
-                'www.youtube.com',
-                'youtube.com',
-                'youtu.be',
-              ].includes(url.hostname)
-            )
-              return false;
-
-            // Allow http/https URLs to pass through for newer models
+            // Allow http/https URLs to pass through
             if (url.protocol === 'https:' || url.protocol === 'http:') {
               return false;
             }
