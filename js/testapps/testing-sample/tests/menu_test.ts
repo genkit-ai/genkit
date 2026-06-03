@@ -20,49 +20,89 @@ import { beforeEach, describe, it } from 'node:test';
 import { createMenuApp } from '../src/menu.js';
 
 // Build a fresh app (its own Genkit registry) for each test, then register the
-// mock under the app's default model name ('menuModel') so the flow's
-// `ai.generate({ prompt, tools })` resolves to it with no code change. The
-// fresh instance keeps tests isolated and avoids re-registering the same model
-// name on a shared registry.
-let ai: ReturnType<typeof createMenuApp>['ai'];
-let recommendDish: ReturnType<typeof createMenuApp>['recommendDish'];
+// mock under the app's default model name ('menuModel') so the app's
+// `ai.generate` / prompt resolves to it with no code change. The fresh instance
+// keeps tests isolated and avoids re-registering the same model name on a
+// shared registry.
+type App = ReturnType<typeof createMenuApp>;
+let ai: App['ai'];
+let recommendDish: App['recommendDish'];
+let recommendPrompt: App['recommendPrompt'];
+let streamRecommendation: App['streamRecommendation'];
 beforeEach(() => {
-  ({ ai, recommendDish } = createMenuApp());
+  ({ ai, recommendDish, recommendPrompt, streamRecommendation } =
+    createMenuApp());
 });
 
-describe('recommendDish flow', () => {
-  it('returns the model recommendation', async () => {
+// Structured output is the highest-value case: the model returns JSON, and the
+// flow's *own* logic (validation, deriving `withinBudget`) is what we pin down.
+describe('recommendDish flow — structured output + business logic', () => {
+  // A fixed, deterministic structured response from the "model".
+  const respondWithRecommendation = () => ({
+    text: JSON.stringify({
+      dish: 'Mushroom risotto',
+      reason: 'Comforting and in season.',
+      priceUSD: 18,
+    }),
+  });
+
+  it('parses the structured recommendation and marks it within budget', async () => {
     const model = mockModel(ai, {
       name: 'menuModel',
-      respond: () => ({ text: 'Try the risotto.' }),
+      respond: respondWithRecommendation,
     });
 
-    const out = await recommendDish({ restaurant: 'Lumen', mood: 'cozy' });
+    const out = await recommendDish({
+      restaurant: 'Lumen',
+      mood: 'cozy',
+      budgetUSD: 30,
+    });
 
-    assert.equal(out, 'Try the risotto.');
-    // The flow rendered our inputs into the prompt the model saw.
-    // `lastRequestMessage` is a genkit Message, so `.text` works just like it
-    // does on a response.
-    assert.match(
-      model.lastRequestMessage!.text,
-      /Recommend a dish at Lumen for someone feeling cozy/
+    assert.equal(out.dish, 'Mushroom risotto');
+    assert.equal(out.withinBudget, true);
+    assert.equal(model.requestCount, 1);
+  });
+
+  it('marks the SAME model output over budget when the budget is lower', async () => {
+    // Identical model response as above — only the flow's input changes. This
+    // proves the test exercises *our* budget logic, not the model.
+    mockModel(ai, {
+      name: 'menuModel',
+      respond: respondWithRecommendation,
+    });
+
+    const out = await recommendDish({
+      restaurant: 'Lumen',
+      mood: 'cozy',
+      budgetUSD: 15,
+    });
+
+    assert.equal(out.withinBudget, false);
+  });
+
+  it('rejects a recommendation the flow considers invalid', async () => {
+    // The model returns a structurally-valid but business-invalid price; the
+    // flow's guard, not the framework, is what throws.
+    mockModel(ai, {
+      name: 'menuModel',
+      respond: () => ({
+        text: JSON.stringify({
+          dish: 'Free water',
+          reason: 'Out of stock on everything else.',
+          priceUSD: 0,
+        }),
+      }),
+    });
+
+    await assert.rejects(
+      recommendDish({ restaurant: 'Lumen', mood: 'broke', budgetUSD: 30 }),
+      /non-positive price/
     );
   });
+});
 
-  it('exposes the dailySpecial tool to the model', async () => {
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      info: { supports: { tools: true } },
-      respond: () => ({ text: 'ok' }),
-    });
-
-    await recommendDish({ restaurant: 'Lumen', mood: 'hungry' });
-
-    const toolNames = (model.lastRequest!.tools ?? []).map((t) => t.name);
-    assert.ok(toolNames.includes('dailySpecial'));
-  });
-
-  it('runs the tool the model calls, then returns the final text', async () => {
+describe('recommendDish flow — tool round-trip', () => {
+  it('runs dailySpecial, then returns the structured recommendation', async () => {
     const model = mockModel(ai, {
       name: 'menuModel',
       info: { supports: { tools: true } },
@@ -70,8 +110,16 @@ describe('recommendDish flow', () => {
         const toolAnswered = req.messages.some((m) =>
           m.content.some((c) => c.toolResponse)
         );
+        // First turn: ask for the special. Second turn (after the tool ran):
+        // return the structured recommendation.
         return toolAnswered
-          ? { text: 'Go for the mushroom risotto.' }
+          ? {
+              text: JSON.stringify({
+                dish: 'Mushroom risotto',
+                reason: "It's the daily special.",
+                priceUSD: 22,
+              }),
+            }
           : {
               toolRequests: [
                 { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
@@ -80,11 +128,17 @@ describe('recommendDish flow', () => {
       },
     });
 
-    const out = await recommendDish({ restaurant: 'Lumen', mood: 'curious' });
+    const out = await recommendDish({
+      restaurant: 'Lumen',
+      mood: 'curious',
+      budgetUSD: 40,
+    });
 
-    assert.equal(out, 'Go for the mushroom risotto.');
+    assert.equal(out.dish, 'Mushroom risotto');
+    assert.equal(out.withinBudget, true);
     // Two turns: the tool request, then the follow-up with the tool result.
     assert.equal(model.requestCount, 2);
+    // The tool's output was fed back to the model.
     const toolResult = model.lastRequest!.messages
       .flatMap((m) => m.content)
       .find((c) => c.toolResponse);
@@ -93,19 +147,29 @@ describe('recommendDish flow', () => {
 });
 
 describe('prompt assembly with echoModel', () => {
-  it('shows what the model would have seen', async () => {
-    const model = echoModel(ai, { name: 'menuModel' });
+  it('shows the full rendered request — system + interpolated template', async () => {
+    // echoModel echoes the whole assembled conversation, so we can assert on
+    // the system instruction *and* the Handlebars-rendered user message — what
+    // the model would have seen — without a live model.
+    echoModel(ai, { name: 'menuModel', info: { supports: { tools: true } } });
 
-    const out = await recommendDish({ restaurant: 'Lumen', mood: 'tired' });
+    const res = await recommendPrompt({
+      restaurant: 'Lumen',
+      mood: 'tired',
+      budgetUSD: 40,
+    });
 
-    assert.match(out, /Recommend a dish at Lumen for someone feeling tired/);
-    assert.ok(model.requestCount >= 1);
+    assert.match(res.text, /system: You are a concise restaurant concierge/);
+    assert.match(
+      res.text,
+      /Recommend a dish at Lumen for someone feeling tired\. Their budget is 40 USD/
+    );
   });
 });
 
-describe('streaming', () => {
-  it('streams chunks through generateStream', async () => {
-    const model = mockModel(ai, {
+describe('streamRecommendation flow — streaming through the flow', () => {
+  it('forwards model chunks out through the flow stream', async () => {
+    mockModel(ai, {
       name: 'menuModel',
       respond: (_req, { sendChunk }) => {
         sendChunk('Try ');
@@ -115,14 +179,17 @@ describe('streaming', () => {
       },
     });
 
-    const { response, stream } = ai.generateStream({ prompt: 'recommend' });
+    const { stream, output } = streamRecommendation.stream({
+      restaurant: 'Lumen',
+      mood: 'cozy',
+    });
+
     const chunks: string[] = [];
     for await (const chunk of stream) {
-      chunks.push(chunk.text);
+      chunks.push(chunk);
     }
 
     assert.deepEqual(chunks, ['Try ', 'the ', 'risotto.']);
-    assert.equal((await response).text, 'Try the risotto.');
-    assert.equal(model.requestCount, 1);
+    assert.equal(await output, 'Try the risotto.');
   });
 });

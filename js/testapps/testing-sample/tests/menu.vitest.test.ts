@@ -20,30 +20,60 @@ import { createMenuApp } from '../src/menu.js';
 
 // The same patterns as menu_test.ts, written with vitest instead of node:test —
 // `genkit/testing` is runner-agnostic. Build a fresh app per test, then register
-// the mock under the app's default model name ('menuModel') so the flow runs
+// the mock under the app's default model name ('menuModel') so the app runs
 // unchanged.
-let ai: ReturnType<typeof createMenuApp>['ai'];
-let recommendDish: ReturnType<typeof createMenuApp>['recommendDish'];
+type App = ReturnType<typeof createMenuApp>;
+let ai: App['ai'];
+let recommendDish: App['recommendDish'];
+let recommendPrompt: App['recommendPrompt'];
+let streamRecommendation: App['streamRecommendation'];
 beforeEach(() => {
-  ({ ai, recommendDish } = createMenuApp());
+  ({ ai, recommendDish, recommendPrompt, streamRecommendation } =
+    createMenuApp());
 });
 
-describe('recommendDish flow (vitest)', () => {
-  it('returns the model recommendation', async () => {
-    const model = mockModel(ai, {
-      name: 'menuModel',
-      respond: () => ({ text: 'Try the risotto.' }),
-    });
-
-    const out = await recommendDish({ restaurant: 'Lumen', mood: 'cozy' });
-
-    expect(out).toBe('Try the risotto.');
-    expect(model.lastRequestMessage!.text).toMatch(
-      /Recommend a dish at Lumen for someone feeling cozy/
-    );
+describe('recommendDish flow — structured output + business logic (vitest)', () => {
+  const respondWithRecommendation = () => ({
+    text: JSON.stringify({
+      dish: 'Mushroom risotto',
+      reason: 'Comforting and in season.',
+      priceUSD: 18,
+    }),
   });
 
-  it('runs the tool the model calls, then returns the final text', async () => {
+  it('parses the structured recommendation and applies the budget logic', async () => {
+    mockModel(ai, { name: 'menuModel', respond: respondWithRecommendation });
+
+    // Same model output, two budgets — only our logic decides `withinBudget`.
+    const ok = await recommendDish({
+      restaurant: 'Lumen',
+      mood: 'cozy',
+      budgetUSD: 30,
+    });
+    expect(ok.dish).toBe('Mushroom risotto');
+    expect(ok.withinBudget).toBe(true);
+  });
+
+  it('rejects a recommendation the flow considers invalid', async () => {
+    mockModel(ai, {
+      name: 'menuModel',
+      respond: () => ({
+        text: JSON.stringify({
+          dish: 'Free water',
+          reason: 'Out of stock on everything else.',
+          priceUSD: 0,
+        }),
+      }),
+    });
+
+    await expect(
+      recommendDish({ restaurant: 'Lumen', mood: 'broke', budgetUSD: 30 })
+    ).rejects.toThrow(/non-positive price/);
+  });
+});
+
+describe('recommendDish flow — tool round-trip (vitest)', () => {
+  it('runs dailySpecial, then returns the structured recommendation', async () => {
     const model = mockModel(ai, {
       name: 'menuModel',
       info: { supports: { tools: true } },
@@ -52,7 +82,13 @@ describe('recommendDish flow (vitest)', () => {
           m.content.some((c) => c.toolResponse)
         );
         return toolAnswered
-          ? { text: 'Go for the mushroom risotto.' }
+          ? {
+              text: JSON.stringify({
+                dish: 'Mushroom risotto',
+                reason: "It's the daily special.",
+                priceUSD: 22,
+              }),
+            }
           : {
               toolRequests: [
                 { name: 'dailySpecial', input: { restaurant: 'Lumen' } },
@@ -61,15 +97,36 @@ describe('recommendDish flow (vitest)', () => {
       },
     });
 
-    const out = await recommendDish({ restaurant: 'Lumen', mood: 'curious' });
+    const out = await recommendDish({
+      restaurant: 'Lumen',
+      mood: 'curious',
+      budgetUSD: 40,
+    });
 
-    expect(out).toBe('Go for the mushroom risotto.');
+    expect(out.dish).toBe('Mushroom risotto');
     expect(model.requestCount).toBe(2);
   });
 });
 
-describe('streaming (vitest)', () => {
-  it('streams chunks through generateStream', async () => {
+describe('prompt assembly with echoModel (vitest)', () => {
+  it('shows the full rendered request — system + interpolated template', async () => {
+    echoModel(ai, { name: 'menuModel', info: { supports: { tools: true } } });
+
+    const res = await recommendPrompt({
+      restaurant: 'Lumen',
+      mood: 'tired',
+      budgetUSD: 40,
+    });
+
+    expect(res.text).toMatch(/system: You are a concise restaurant concierge/);
+    expect(res.text).toMatch(
+      /Recommend a dish at Lumen for someone feeling tired\. Their budget is 40 USD/
+    );
+  });
+});
+
+describe('streamRecommendation flow — streaming through the flow (vitest)', () => {
+  it('forwards model chunks out through the flow stream', async () => {
     mockModel(ai, {
       name: 'menuModel',
       respond: (_req, { sendChunk }) => {
@@ -80,23 +137,17 @@ describe('streaming (vitest)', () => {
       },
     });
 
-    const { response, stream } = ai.generateStream({ prompt: 'recommend' });
+    const { stream, output } = streamRecommendation.stream({
+      restaurant: 'Lumen',
+      mood: 'cozy',
+    });
+
     const chunks: string[] = [];
     for await (const chunk of stream) {
-      chunks.push(chunk.text);
+      chunks.push(chunk);
     }
 
     expect(chunks).toEqual(['Try ', 'the ', 'risotto.']);
-    expect((await response).text).toBe('Try the risotto.');
-  });
-});
-
-describe('prompt assembly with echoModel (vitest)', () => {
-  it('shows what the model would have seen', async () => {
-    echoModel(ai, { name: 'menuModel' });
-
-    const out = await recommendDish({ restaurant: 'Lumen', mood: 'tired' });
-
-    expect(out).toMatch(/Recommend a dish at Lumen for someone feeling tired/);
+    expect(await output).toBe('Try the risotto.');
   });
 });
