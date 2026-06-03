@@ -133,7 +133,7 @@ mockModel(ai, {
 });
 
 // Inspection:
-model.lastMessage;        // final message of the last *request* (the input
+model.lastRequestMessage; // final message of the last *request* (the input
                           //   prompt, not the response), as a Genkit Message —
                           //   read it with `.text` / `.media` / `.toolRequests`
 model.lastRequest;        // the full resolved request the model received
@@ -159,7 +159,7 @@ test('summarize flow returns the model text', async () => {
   );
 
   assert.equal(await summarize('long text'), 'a summary');
-  assert.match(model.lastMessage!.text, /Summarize: long text/);
+  assert.match(model.lastRequestMessage!.text, /Summarize: long text/);
 });
 ```
 
@@ -240,7 +240,7 @@ A dedicated fake model avoids all three by construction: it owns its own streami
 5. Ship the zero-config `autoModel` (cf. Pydantic `TestModel`) in v1, or start with `echoModel` + `mockModel` only?
 6. Mock-by-name / registry override: code under test often references models by string (`ai.generate({ model: 'googleai/...' })`) rather than passing a reference. Should `mockModel` register itself under a given name and shadow an existing registered model to support these non-DI patterns?
 7. Global guard API: what mechanism for the "no real calls" switch — env var (e.g. `GENKIT_ALLOW_MODEL_REQUESTS=false`), or a programmatic call on the `genkit` instance / testing module?
-8. Inspection naming + lifecycle: `lastMessage` reads the request (input) — rename to `lastRequestMessage` to avoid confusion with the response? And should the mock expose `reset()` to clear `requests` between tests that reuse one instance?
+8. Inspection lifecycle: should the mock expose `reset()` to clear `requests` between tests that reuse one instance? (Naming resolved: the request-message getter is `lastRequestMessage`, not `lastMessage`, to avoid confusion with the response.)
 
 ## Rollout
 
