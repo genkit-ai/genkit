@@ -96,6 +96,17 @@ export type MockModel = ModelAction & {
    * ```
    */
   readonly lastRequestMessage: Message | undefined;
+  /**
+   * The full assembled conversation of the most recent request, flattened to a
+   * single string (system + every message, in order). Use it for prompt-
+   * assembly assertions on any mock — including ones returning structured
+   * output, where {@link echoModel} can't be used. `undefined` if never called.
+   *
+   * ```ts
+   * assert.match(model.lastRequestText!, /system: Be terse/);
+   * ```
+   */
+  readonly lastRequestText: string | undefined;
   /** Every request this model received, oldest first. */
   readonly requests: GenerateRequest[];
   /** How many times this model was called. */
@@ -110,9 +121,11 @@ function toChunkData(chunk: MockChunk): GenerateResponseChunkData {
   return typeof chunk === 'string' ? { content: [{ text: chunk }] } : chunk;
 }
 
-/** Renders a single request part to text for {@link echoModel}. Non-text parts
- * (media, tool requests/responses, reasoning, data) are rendered as a labelled
- * placeholder rather than silently dropped. */
+/**
+ * Renders a single request part to text for {@link renderRequestText}. Non-text
+ * parts (media, tool requests/responses, reasoning, resource, data, custom) are
+ * rendered as a labelled placeholder rather than silently dropped.
+ */
 function renderPart(part: Part): string {
   if (part.text !== undefined) return part.text;
   if (part.media) {
@@ -132,6 +145,22 @@ function renderPart(part: Part): string {
   if (part.data !== undefined) return `[data: ${JSON.stringify(part.data)}]`;
   if (part.custom !== undefined) return `[custom: ${JSON.stringify(part.custom)}]`;
   return '';
+}
+
+/**
+ * Flattens a request's full message list to text — system and tool messages are
+ * prefixed with their role; `user`/`model` are not. This is the assembled
+ * conversation the model would have seen, used by both {@link echoModel} and
+ * {@link MockModel.lastRequestText}.
+ */
+function renderRequestText(request: GenerateRequest): string {
+  return request.messages
+    .map(
+      (m) =>
+        (m.role === 'user' || m.role === 'model' ? '' : `${m.role}: `) +
+        m.content.map(renderPart).join('')
+    )
+    .join('');
 }
 
 function toResponseData(response: MockResponse): GenerateResponseData {
@@ -228,6 +257,12 @@ export function mockModel(
         return last ? new Message(last) : undefined;
       },
     },
+    lastRequestText: {
+      get: () => {
+        const last = requests[requests.length - 1];
+        return last ? renderRequestText(last) : undefined;
+      },
+    },
     requestCount: { get: () => requests.length },
   });
   return model;
@@ -242,15 +277,23 @@ export interface EchoModelOptions {
 }
 
 /**
- * Defines a zero-config mock model that echoes the rendered request back as
- * text — useful for asserting prompt and message assembly (what the model
- * *would have seen*). Supports the same inspection members as {@link mockModel}.
+ * A {@link mockModel} preset for *text* paths: a zero-config model that echoes
+ * the rendered request back as text, for asserting prompt and message assembly
+ * (what the model *would have seen*). Supports the same inspection members as
+ * {@link mockModel}.
  *
  * ```ts
  * const model = echoModel(ai);
  * const res = await ai.generate({ model, system: 'Be terse', prompt: 'hi' });
  * assert.match(res.text, /system: Be terse/);
  * ```
+ *
+ * Because it returns text, it can't satisfy a structured **output schema** —
+ * Genkit derives `output` by parsing the response text and validating it, which
+ * prose can't pass. If the request carries an output schema, `echoModel` throws
+ * an explanatory error. For structured-output paths, use {@link mockModel} with
+ * a conforming response and assert assembly via {@link MockModel.lastRequestText}
+ * / {@link MockModel.lastRequest} instead.
  *
  * @param registry a `Genkit` instance (or anything holding a `Registry`).
  * @param options model name and metadata.
@@ -261,23 +304,30 @@ export function echoModel(
 ): MockModel {
   return mockModel(registry, {
     name: options.name ?? 'echoModel',
-    info: options.info,
-    respond: (request) => ({
-      content: [
-        {
-          text:
-            'Echo: ' +
-            request.messages
-              .map(
-                (m) =>
-                  (m.role === 'user' || m.role === 'model'
-                    ? ''
-                    : `${m.role}: `) + m.content.map(renderPart).join('')
-              )
-              .join(''),
-        },
-        { text: '; config: ' + JSON.stringify(request.config) },
-      ],
-    }),
+    // Declare native constrained support so the framework hands the output
+    // schema to the model directly (in `request.output.schema`) rather than
+    // injecting it as prompt text — that lets the guard below detect it
+    // reliably, and keeps the echo free of framework-injected schema blobs.
+    info: {
+      ...options.info,
+      supports: { ...options.info?.supports, constrained: 'all' },
+    },
+    respond: (request) => {
+      if (request.output?.schema) {
+        throw new Error(
+          "echoModel returns text and can't satisfy an output schema: this " +
+            'request asks for structured output. Either move `output: { schema }` ' +
+            'to the generate()/flow call site so the prompt stays text-only, or ' +
+            'use mockModel(...) with a conforming response and assert prompt ' +
+            'assembly via model.lastRequestText / model.lastRequest.'
+        );
+      }
+      return {
+        content: [
+          { text: 'Echo: ' + renderRequestText(request) },
+          { text: '; config: ' + JSON.stringify(request.config) },
+        ],
+      };
+    },
   });
 }

@@ -114,6 +114,24 @@ describe('mockModel', () => {
 
     assert.match(captured!.messages.at(-1)!.content[0].text!, /first/);
   });
+
+  it('flattens the whole assembled request via lastRequestText', async () => {
+    // Works even with an output schema, where echoModel can't be used: the mock
+    // returns conforming JSON, and assembly is asserted by inspection.
+    const model = mockModel(ai, {
+      respond: () => ({ text: JSON.stringify({ x: 'ok' }) }),
+    });
+
+    await ai.generate({
+      model,
+      system: 'Be terse',
+      prompt: 'hello',
+      output: { schema: z.object({ x: z.string() }) },
+    });
+
+    assert.match(model.lastRequestText!, /system: Be terse/);
+    assert.match(model.lastRequestText!, /hello/);
+  });
 });
 
 describe('echoModel', () => {
@@ -133,5 +151,18 @@ describe('echoModel', () => {
 
     assert.match(res.text, /system: Be terse/);
     assert.match(res.text, /hello/);
+  });
+
+  it('throws a clear error when the request carries an output schema', async () => {
+    const model = echoModel(ai);
+
+    await assert.rejects(
+      ai.generate({
+        model,
+        prompt: 'hi',
+        output: { schema: z.object({ x: z.string() }) },
+      }),
+      /can't satisfy an output schema/
+    );
   });
 });
