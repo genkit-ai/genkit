@@ -36,6 +36,7 @@ export {
   type AgentInput,
   type AgentOutput,
 } from '@genkit-ai/ai';
+export { Session, type Artifact } from '@genkit-ai/ai/session';
 export {
   InMemoryStreamManager,
   StreamNotFoundError,
