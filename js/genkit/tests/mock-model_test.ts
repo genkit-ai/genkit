@@ -39,7 +39,7 @@ describe('mockModel', () => {
 
     assert.strictEqual(await summarize('long text'), 'a summary');
     assert.strictEqual(model.requestCount, 1);
-    assert.match(model.lastMessage!.text, /Summarize: long text/);
+    assert.match(model.lastRequestMessage!.text, /Summarize: long text/);
   });
 
   it('accepts a bare string as shorthand for text', async () => {

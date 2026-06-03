@@ -11,7 +11,7 @@ code runs unchanged.
 `tests/menu_test.ts` shows the patterns:
 
 - **`mockModel`** — script the model response, then assert flow output and
-  inspect what the model was called with: `model.lastMessage` (a genkit
+  inspect what the model was called with: `model.lastRequestMessage` (a genkit
   `Message`, so `.text` / `.media` work like on a response), plus
   `model.lastRequest`, `model.requests`, `model.requestCount`.
 - **Tool calls** — return `toolRequests` from the mock; the framework dispatches
