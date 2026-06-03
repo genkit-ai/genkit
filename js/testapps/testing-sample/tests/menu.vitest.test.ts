@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,19 @@
  */
 
 import { echoModel, mockModel } from 'genkit/testing';
-import { describe, expect, it } from 'vitest';
-import { ai, recommendDish } from '../src/menu.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createMenuApp } from '../src/menu.js';
 
 // The same patterns as menu_test.ts, written with vitest instead of node:test —
-// `genkit/testing` is runner-agnostic. Register the mock under the app's default
-// model name ('menuModel') so the flow runs unchanged.
+// `genkit/testing` is runner-agnostic. Build a fresh app per test, then register
+// the mock under the app's default model name ('menuModel') so the flow runs
+// unchanged.
+let ai: ReturnType<typeof createMenuApp>['ai'];
+let recommendDish: ReturnType<typeof createMenuApp>['recommendDish'];
+beforeEach(() => {
+  ({ ai, recommendDish } = createMenuApp());
+});
+
 describe('recommendDish flow (vitest)', () => {
   it('returns the model recommendation', async () => {
     const model = mockModel(ai, {

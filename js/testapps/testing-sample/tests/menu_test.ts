@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,22 @@
  * limitations under the License.
  */
 
-import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
 import { echoModel, mockModel } from 'genkit/testing';
-import { ai, recommendDish } from '../src/menu.js';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
+import { createMenuApp } from '../src/menu.js';
 
-// Register the mock under the app's default model name ('menuModel'), so the
-// flow's `ai.generate({ prompt, tools })` resolves to it with no code change.
+// Build a fresh app (its own Genkit registry) for each test, then register the
+// mock under the app's default model name ('menuModel') so the flow's
+// `ai.generate({ prompt, tools })` resolves to it with no code change. The
+// fresh instance keeps tests isolated and avoids re-registering the same model
+// name on a shared registry.
+let ai: ReturnType<typeof createMenuApp>['ai'];
+let recommendDish: ReturnType<typeof createMenuApp>['recommendDish'];
+beforeEach(() => {
+  ({ ai, recommendDish } = createMenuApp());
+});
+
 describe('recommendDish flow', () => {
   it('returns the model recommendation', async () => {
     const model = mockModel(ai, {

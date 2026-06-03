@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -110,6 +110,28 @@ function toChunkData(chunk: MockChunk): GenerateResponseChunkData {
   return typeof chunk === 'string' ? { content: [{ text: chunk }] } : chunk;
 }
 
+/** Renders a single request part to text for {@link echoModel}. Non-text parts
+ * (media, tool requests/responses, reasoning, data) are rendered as a labelled
+ * placeholder rather than silently dropped. */
+function renderPart(part: Part): string {
+  if (part.text !== undefined) return part.text;
+  if (part.media) {
+    const type = part.media.contentType ? ` ${part.media.contentType}` : '';
+    return `[media${type}: ${part.media.url}]`;
+  }
+  if (part.toolRequest) {
+    const { name, input } = part.toolRequest;
+    return `[toolRequest ${name}(${JSON.stringify(input)})]`;
+  }
+  if (part.toolResponse) {
+    const { name, output } = part.toolResponse;
+    return `[toolResponse ${name}: ${JSON.stringify(output)}]`;
+  }
+  if (part.reasoning !== undefined) return `[reasoning: ${part.reasoning}]`;
+  if (part.data !== undefined) return `[data: ${JSON.stringify(part.data)}]`;
+  return '';
+}
+
 function toResponseData(response: MockResponse): GenerateResponseData {
   if (typeof response === 'string') {
     return {
@@ -178,14 +200,16 @@ export function mockModel(
     resolveRegistry(registry),
     {
       apiVersion: 'v2',
-      // info widened to satisfy defineModel's overload resolution, mirroring
-      // the internal helpers in js/ai/tests/helpers.ts.
-      ...((options.info as any) ?? {}),
       name: options.name ?? 'mockModel',
+      // Forward only the metadata fields defineModel accepts; ModelInfo's
+      // `configSchema`/`stage` aren't part of DefineModelOptions.
+      versions: options.info?.versions,
+      label: options.info?.label,
+      supports: options.info?.supports,
     },
     async (request, { sendChunk }) => {
       // Snapshot so later mutation of the request can't alter recorded history.
-      requests.push(JSON.parse(JSON.stringify(request)));
+      requests.push(structuredClone(request));
       const context: MockContext = {
         sendChunk: (chunk) => sendChunk?.(toChunkData(chunk)),
       };
@@ -246,8 +270,7 @@ export function echoModel(
                 (m) =>
                   (m.role === 'user' || m.role === 'model'
                     ? ''
-                    : `${m.role}: `) +
-                  m.content.map((c) => c.text ?? '').join('')
+                    : `${m.role}: `) + m.content.map(renderPart).join('')
               )
               .join(''),
         },
