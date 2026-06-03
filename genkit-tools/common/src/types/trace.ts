@@ -52,6 +52,7 @@ export const SpanMetadataSchema = z.object({
   state: z.enum(['success', 'error']).optional(),
   input: z.any().optional(),
   output: z.any().optional(),
+  init: z.any().optional(),
   isRoot: z.boolean().optional(),
   metadata: z.record(z.string(), z.string()).optional(),
   path: z.string().optional(),
