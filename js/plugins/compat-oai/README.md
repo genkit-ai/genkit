@@ -140,6 +140,80 @@ const result = await ai.generate({
 console.log(result.text);
 ```
 
+### Using the OpenAI Responses API
+
+The Responses API (`POST /v1/responses`) is OpenAI's newer endpoint that
+supports built-in tools (`web_search_preview`, `file_search`,
+`code_interpreter`), reasoning models (`o1`, `o3`, `o4-mini`,
+`gpt-5*`), and stateful conversations via `previous_response_id`.
+
+Opt in by registering the companion `openAIResponses()` plugin alongside
+`openAI()`, then build model references with `openAI.responsesModel(...)`:
+
+```typescript
+import { genkit } from 'genkit';
+import openAI, { openAIResponses } from '@genkit-ai/compat-oai/openai';
+
+const ai = genkit({ plugins: [openAI(), openAIResponses()] });
+
+const result = await ai.generate({
+  model: openAI.responsesModel('gpt-5-mini'),
+  prompt: 'What is one positive news story today?',
+  config: {
+    builtInTools: [{ type: 'web_search_preview' }],
+    reasoning: { effort: 'medium' },
+  },
+});
+
+console.log(result.text);
+```
+
+**Citations.** When `web_search_preview` or `file_search` returns
+sources, each text Part carries them on `metadata.citations`:
+
+```typescript
+for (const part of result.message?.content ?? []) {
+  const citations = part.metadata?.citations as
+    | Array<{
+        type: 'url_citation';
+        url: string;
+        title?: string;
+        startIndex?: number;
+        endIndex?: number;
+      }>
+    | undefined;
+  if (citations) {
+    for (const c of citations) {
+      console.log(`- [${c.title ?? c.url}](${c.url})`);
+    }
+  }
+}
+```
+
+**Stateful chaining.** Pass the previous `responseId` to continue a
+conversation server-side without re-sending history:
+
+```typescript
+const first = await ai.generate({
+  model: openAI.responsesModel('gpt-5-mini'),
+  prompt: 'What was a positive news story today?',
+  config: { builtInTools: [{ type: 'web_search_preview' }], store: true },
+});
+const responseId = (first.custom as { responseId?: string } | undefined)
+  ?.responseId;
+
+const followup = await ai.generate({
+  model: openAI.responsesModel('gpt-5-mini'),
+  prompt: 'Summarize that in one sentence.',
+  config: { previousResponseId: responseId },
+});
+```
+
+**Privacy default.** Unlike OpenAI's API default, this plugin sends
+`store: false` unless you explicitly opt in. Set `store: true` (as
+above) only when you intend to chain via `previous_response_id` or
+inspect the response in the OpenAI dashboard.
+
 ### Custom models & other Cloud providers
 
 ```typescript
