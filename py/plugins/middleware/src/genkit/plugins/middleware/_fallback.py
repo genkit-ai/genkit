@@ -66,13 +66,13 @@ class Fallback(BaseMiddleware[FallbackConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
         try:
-            return await next_fn(params)
+            return await next_fn(params, ctx)
         except Exception as exc:
             if not isinstance(exc, GenkitError) or exc.status not in self.config.statuses:
                 raise

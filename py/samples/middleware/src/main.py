@@ -48,9 +48,9 @@ ai = Genkit(
 class LoggingMiddleware(BaseMiddleware):
     """Log request/response details without changing behavior."""
 
-    async def wrap_model(self, params, next_fn, ctx: GenerateMiddlewareContext):
+    async def wrap_model(self, params, ctx: GenerateMiddlewareContext, next_fn):
         await logger.ainfo('middleware saw request', message_count=len(params.request.messages))
-        response = await next_fn(params)
+        response = await next_fn(params, ctx)
         await logger.ainfo('middleware saw response', finish_reason=response.finish_reason)
         return response
 
@@ -69,14 +69,14 @@ class ConciseReplyMiddleware(BaseMiddleware[ConciseReplyConfig]):
     ``ConciseReplyMiddleware(instruction=...)``.
     """
 
-    async def wrap_model(self, params, next_fn, ctx: GenerateMiddlewareContext):
+    async def wrap_model(self, params, ctx: GenerateMiddlewareContext, next_fn):
         system_message = Message(
             role=Role.SYSTEM,
             content=[Part(root=TextPart(text=self.config.instruction))],
         )
         params.request = params.request.model_copy()
         params.request.messages = [system_message, *params.request.messages]
-        return await next_fn(params)
+        return await next_fn(params, ctx)
 
 
 @ai.flow()

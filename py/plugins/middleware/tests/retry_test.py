@@ -36,10 +36,10 @@ async def test_retry_success_on_first_attempt(ctx: GenerateMiddlewareContext) ->
     """Test that successful calls pass through without retry."""
     retry = Retry(max_retries=3)
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return ModelResponse(message=None)
 
-    result = await retry.wrap_model(_make_params(), next_fn, ctx)
+    result = await retry.wrap_model(_make_params(), ctx, next_fn)
     assert result is not None
 
 
@@ -50,14 +50,14 @@ async def test_retry_on_retryable_error(ctx: GenerateMiddlewareContext) -> None:
 
     call_count = 0
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         nonlocal call_count
         call_count += 1
         if call_count < 2:
             raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
         return ModelResponse(message=None)
 
-    result = await retry.wrap_model(_make_params(), next_fn, ctx)
+    result = await retry.wrap_model(_make_params(), ctx, next_fn)
     assert result is not None
     assert call_count == 2
 
@@ -67,11 +67,11 @@ async def test_retry_exhausted(ctx: GenerateMiddlewareContext) -> None:
     """Test that errors are raised after max retries."""
     retry = Retry(max_retries=1, initial_delay_ms=10, jitter=False)
 
-    async def next_fn(params) -> NoReturn:
+    async def next_fn(params, ctx) -> NoReturn:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
 
     with pytest.raises(GenkitError):
-        await retry.wrap_model(_make_params(), next_fn, ctx)
+        await retry.wrap_model(_make_params(), ctx, next_fn)
 
 
 @pytest.mark.asyncio
@@ -81,13 +81,13 @@ async def test_retry_non_retryable_error(ctx: GenerateMiddlewareContext) -> None
 
     call_count = 0
 
-    async def next_fn(params) -> NoReturn:
+    async def next_fn(params, ctx) -> NoReturn:
         nonlocal call_count
         call_count += 1
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
 
     with pytest.raises(GenkitError):
-        await retry.wrap_model(_make_params(), next_fn, ctx)
+        await retry.wrap_model(_make_params(), ctx, next_fn)
     assert call_count == 1
 
 
@@ -109,13 +109,13 @@ async def test_retry_non_genkit_error(ctx: GenerateMiddlewareContext) -> None:
 
     call_count = 0
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         nonlocal call_count
         call_count += 1
         if call_count < 2:
             raise ConnectionError('Network failure')
         return ModelResponse(message=None)
 
-    result = await retry.wrap_model(_make_params(), next_fn, ctx)
+    result = await retry.wrap_model(_make_params(), ctx, next_fn)
     assert result is not None
     assert call_count == 2

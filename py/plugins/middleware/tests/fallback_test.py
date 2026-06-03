@@ -39,10 +39,10 @@ async def test_fallback_success_on_first_model(ctx) -> None:
     """Test that successful primary model calls pass through."""
     fallback = _make_fallback(models=['model2', 'model3'])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return ModelResponse(message=None)
 
-    result = await fallback.wrap_model(_make_params(), next_fn, ctx)
+    result = await fallback.wrap_model(_make_params(), ctx, next_fn)
     assert result is not None
 
 
@@ -51,11 +51,11 @@ async def test_fallback_on_retryable_error(ctx) -> None:
     """Test that retryable errors are classified correctly."""
     fallback = _make_fallback(models=['model2'])
 
-    async def next_fn(params) -> NoReturn:
+    async def next_fn(params, ctx) -> NoReturn:
         raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
 
     with pytest.raises(GenkitError):
-        await fallback.wrap_model(_make_params(), next_fn, ctx)
+        await fallback.wrap_model(_make_params(), ctx, next_fn)
 
 
 @pytest.mark.asyncio
@@ -63,11 +63,11 @@ async def test_fallback_non_retryable_error(ctx) -> None:
     """Test that non-retryable errors fail immediately."""
     fallback = _make_fallback(models=['model2'])
 
-    async def next_fn(params) -> NoReturn:
+    async def next_fn(params, ctx) -> NoReturn:
         raise GenkitError(message='Invalid argument', status='INVALID_ARGUMENT')
 
     with pytest.raises(GenkitError):
-        await fallback.wrap_model(_make_params(), next_fn, ctx)
+        await fallback.wrap_model(_make_params(), ctx, next_fn)
 
 
 @pytest.mark.asyncio
@@ -75,8 +75,8 @@ async def test_fallback_non_genkit_error(ctx) -> None:
     """Test that non-GenkitError exceptions fail immediately."""
     fallback = _make_fallback(models=['model2'])
 
-    async def next_fn(params) -> NoReturn:
+    async def next_fn(params, ctx) -> NoReturn:
         raise ConnectionError('Network failure')
 
     with pytest.raises(ConnectionError):
-        await fallback.wrap_model(_make_params(), next_fn, ctx)
+        await fallback.wrap_model(_make_params(), ctx, next_fn)

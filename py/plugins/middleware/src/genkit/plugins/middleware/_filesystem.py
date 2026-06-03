@@ -308,12 +308,12 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Drain queued user messages into the request before the next model turn."""
         if not self._message_queue:
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
         message_index = params.message_index
         if ctx.on_chunk:
@@ -331,20 +331,20 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 'message_index': message_index,
             }
         )
-        return await next_fn(params)
+        return await next_fn(params, ctx)
 
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Catch filesystem tool errors and enqueue them as user messages."""
         if params.tool.name not in self._filesystem_tool_names():
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
         try:
-            return await next_fn(params)
+            return await next_fn(params, ctx)
         except Interrupt:
             raise
         except Exception as exc:

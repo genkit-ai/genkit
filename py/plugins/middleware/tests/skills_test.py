@@ -40,10 +40,10 @@ async def test_skills_no_paths(ctx: GenerateMiddlewareContext) -> None:
     """Test that middleware works with no skill paths."""
     skills = Skills(skill_paths=[])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return ModelResponse(message=None)
 
-    result = await skills.wrap_generate(_make_params(), next_fn, ctx)
+    result = await skills.wrap_generate(_make_params(), ctx, next_fn)
     assert result is not None
 
 
@@ -52,10 +52,10 @@ async def test_skills_nonexistent_path(ctx: GenerateMiddlewareContext) -> None:
     """Test that nonexistent paths are silently skipped."""
     skills = Skills(skill_paths=['/nonexistent/path'])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return ModelResponse(message=None)
 
-    result = await skills.wrap_generate(_make_params(), next_fn, ctx)
+    result = await skills.wrap_generate(_make_params(), ctx, next_fn)
     assert result is not None
 
 
@@ -75,12 +75,12 @@ You are a test assistant.
 
         skills = Skills(skill_paths=[tmpdir])
 
-        async def next_fn(params):
+        async def next_fn(params, ctx):
             # Check that skills prompt was injected
             assert len(params.request.messages) > 0
             return ModelResponse(message=None)
 
-        result = await skills.wrap_generate(_make_params(), next_fn, ctx)
+        result = await skills.wrap_generate(_make_params(), ctx, next_fn)
         assert result is not None
 
 

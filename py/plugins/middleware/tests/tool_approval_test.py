@@ -40,7 +40,7 @@ async def test_tool_approval_allowed_tool(ctx: GenerateMiddlewareContext) -> Non
     """Test that allowed tools pass through without approval."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return MultipartToolResponse(output='sunny')
 
     tool = _make_tool('get_weather')
@@ -48,7 +48,7 @@ async def test_tool_approval_allowed_tool(ctx: GenerateMiddlewareContext) -> Non
     tool_request_part = ToolRequestPart(tool_request=tool_request)
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
-    result = await approval.wrap_tool(params, next_fn, ctx)
+    result = await approval.wrap_tool(params, ctx, next_fn)
     assert result is not None
 
 
@@ -57,7 +57,7 @@ async def test_tool_approval_non_allowed_tool(ctx: GenerateMiddlewareContext) ->
     """Test that non-allowed tools raise Interrupt."""
     approval = ToolApproval(allowed_tools=['get_weather'])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return MultipartToolResponse(output=None)
 
     tool = _make_tool('delete_database')
@@ -66,7 +66,7 @@ async def test_tool_approval_non_allowed_tool(ctx: GenerateMiddlewareContext) ->
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt) as exc_info:
-        await approval.wrap_tool(params, next_fn, ctx)
+        await approval.wrap_tool(params, ctx, next_fn)
     assert 'delete_database' in exc_info.value.metadata['message']
 
 
@@ -75,7 +75,7 @@ async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContex
     """Test that resumed tools with approval metadata pass through."""
     approval = ToolApproval(allowed_tools=[])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return MultipartToolResponse(output='approved')
 
     tool = _make_tool('some_tool')
@@ -86,7 +86,7 @@ async def test_tool_approval_resumed_with_approval(ctx: GenerateMiddlewareContex
     )
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
-    result = await approval.wrap_tool(params, next_fn, ctx)
+    result = await approval.wrap_tool(params, ctx, next_fn)
     assert result is not None
 
 
@@ -95,7 +95,7 @@ async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) 
     """Test that empty allowed list requires approval for all tools."""
     approval = ToolApproval(allowed_tools=[])
 
-    async def next_fn(params):
+    async def next_fn(params, ctx):
         return MultipartToolResponse(output=None)
 
     tool = _make_tool('any_tool')
@@ -104,4 +104,4 @@ async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) 
     params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
 
     with pytest.raises(Interrupt):
-        await approval.wrap_tool(params, next_fn, ctx)
+        await approval.wrap_tool(params, ctx, next_fn)

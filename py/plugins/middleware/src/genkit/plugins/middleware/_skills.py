@@ -173,8 +173,8 @@ class Skills(BaseMiddleware[SkillsConfig]):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        next_fn: Callable[[GenerateHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         skills = await asyncio.to_thread(self._scan_skills)
         if skills:
@@ -182,4 +182,4 @@ class Skills(BaseMiddleware[SkillsConfig]):
             if prompt_text:
                 params = params.model_copy()
                 params.request = self._inject_skills_prompt(params.request, prompt_text)
-        return await next_fn(params)
+        return await next_fn(params, ctx)

@@ -40,19 +40,19 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        next_fn: Callable[[ToolHookParams], Awaitable[MultipartToolResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Intercept tool execution and require approval if not in allowed list."""
         tool_name = params.tool.name
 
         if tool_name in self.config.allowed_tools:
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
         metadata = params.tool_request_part.metadata or {}
         resumed = metadata.get('resumed')
         if isinstance(resumed, dict) and resumed.get('toolApproved'):
-            return await next_fn(params)
+            return await next_fn(params, ctx)
 
         tool_input = params.tool_request_part.tool_request.input
         with run_in_new_span(

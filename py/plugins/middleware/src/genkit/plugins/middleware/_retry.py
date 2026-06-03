@@ -55,15 +55,15 @@ class Retry(BaseMiddleware[RetryConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        next_fn: Callable[[ModelHookParams], Awaitable[ModelResponse]],
         ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Retry the model call up to max_retries times on transient failures."""
         current_delay_ms = float(self.config.initial_delay_ms)
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                return await next_fn(params)
+                return await next_fn(params, ctx)
             except Exception as e:
                 if attempt == self.config.max_retries:
                     raise
