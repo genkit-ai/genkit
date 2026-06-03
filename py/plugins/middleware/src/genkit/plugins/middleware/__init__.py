@@ -27,21 +27,8 @@ Provides concrete middleware implementations:
 * ``Filesystem`` — sandboxed filesystem operations (list / read / write /
   edit).
 
-Import the classes you need and pass instances into ``use=[...]``:
-
-    from genkit.plugins.middleware import Retry, Fallback
-
-    response = await ai.generate(
-        model='googleai/gemini-flash-latest',
-        prompt='Hello',
-        use=[
-            Retry(max_retries=5),
-            Fallback(models=['googleai/gemini-2.5-pro']),
-        ],
-    )
-
-Or register all five with the ``Middleware`` plugin so they appear in
-the Dev UI.
+Import the classes you need and pass instances into ``use=[...]``.
+See below for an example.
 """
 
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
