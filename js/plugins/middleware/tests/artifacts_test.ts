@@ -457,9 +457,7 @@ describe('artifacts middleware', () => {
         const toolMsgs = req.messages?.filter((m: any) => m.role === 'tool');
         if (toolMsgs && toolMsgs.length >= 2) {
           const lastToolMsg = toolMsgs[toolMsgs.length - 1];
-          const toolResp = lastToolMsg.content.find(
-            (p: any) => p.toolResponse
-          );
+          const toolResp = lastToolMsg.content.find((p: any) => p.toolResponse);
           capturedToolOutput = toolResp?.toolResponse?.output;
         }
         return {
@@ -609,10 +607,7 @@ describe('artifacts middleware', () => {
       assert.strictEqual(capturedToolOutput.found, false);
     } catch (e: any) {
       // If it threw, that's also acceptable — session is required.
-      assert.ok(
-        e.message.includes('session'),
-        'Error should mention session'
-      );
+      assert.ok(e.message.includes('session'), 'Error should mention session');
     }
   });
 });
