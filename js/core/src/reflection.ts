@@ -43,12 +43,36 @@ export type RunActionResponse = z.infer<typeof RunActionResponseSchema>;
 export interface ReflectionServerOptions {
   /** Port to run the server on. Actual port may be different if chosen port is occupied. Defaults to 3100. */
   port?: number;
+  /** Host/interface to bind the server to. Defaults to `localhost` (loopback only). */
+  host?: string;
   /** Body size limit for the server. Defaults to `30mb`. */
   bodyLimit?: string;
   /** Configured environments. Defaults to `dev`. */
   configuredEnvs?: string[];
   /** Display name that will be shown in developer tooling. */
   name?: string;
+}
+
+/**
+ * Checks whether a `Host` header refers to a loopback interface.
+ *
+ * Used to reject cross-origin/DNS-rebinding requests against the reflection
+ * server, which is bound to loopback and intended only for local dev tooling.
+ */
+function isLoopbackHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return true; // no Host -> nothing to spoof
+  let h = hostHeader.trim().toLowerCase();
+  // strip :port (handle [::1]:n)
+  if (h.startsWith('[')) {
+    const c = h.indexOf(']');
+    h = c !== -1 ? h.slice(0, c + 1) : h;
+  } else {
+    const i = h.indexOf(':');
+    if (i !== -1 && h.indexOf(':', i + 1) === -1) h = h.slice(0, i);
+  }
+  return (
+    h === 'localhost' || h === '::1' || h === '[::1]' || h.startsWith('127.')
+  );
 }
 
 /**
@@ -98,6 +122,7 @@ export class ReflectionServer {
     this.registry = registry;
     this.options = {
       port: 3100,
+      host: 'localhost',
       bodyLimit: '30mb',
       configuredEnvs: ['dev'],
       ...options,
@@ -151,6 +176,20 @@ export class ReflectionServer {
     const server = express();
 
     server.use(express.json({ limit: this.options.bodyLimit }));
+    // Reject requests whose Host header is not a loopback address. The
+    // reflection server binds to loopback, but a Host check is still required
+    // to defeat DNS-rebinding (which would otherwise let a remote page reach
+    // the server as if same-origin).
+    server.use((req, res, next) => {
+      if (!isLoopbackHost(req.headers.host)) {
+        res.status(403).json({
+          error:
+            'Request blocked: untrusted Host header. The Genkit reflection server only accepts loopback requests.',
+        });
+        return;
+      }
+      next();
+    });
     server.use((req, res, next) => {
       res.header('x-genkit-version', GENKIT_VERSION);
       next();
@@ -165,7 +204,16 @@ export class ReflectionServer {
       response.status(200).send('OK');
     });
 
-    server.get('/api/__quitquitquit', async (_, response) => {
+    server.get('/api/__quitquitquit', async (req, response) => {
+      // Defense-in-depth: a legitimate CLI/in-process shutdown call carries no
+      // Origin header. Reject any request that does, so a cross-origin page
+      // cannot trivially terminate the dev process via this simple GET.
+      if (req.headers.origin) {
+        response.status(403).json({
+          error: 'Request blocked: cross-origin shutdown is not allowed.',
+        });
+        return;
+      }
       logger.debug('Received quitquitquit');
       response.status(200).send('OK');
       await this.stop();
@@ -436,24 +484,31 @@ export class ReflectionServer {
     });
 
     this.port = await this.findPort();
-    this.server = server.listen(this.port, async () => {
-      logger.debug(
-        `Reflection server (${process.pid}) running on http://localhost:${this.port}`
-      );
-      ReflectionServer.RUNNING_SERVERS.push(this);
-
-      try {
-        await this.registry.listActions();
-        await this.writeRuntimeFile();
-      } catch (e) {
-        logger.error(`Error initializing plugins: ${e}`);
-        try {
-          await this.stop();
-        } catch (err) {
-          logger.error(`Failed to stop server gracefully: ${err}`);
-        }
-      }
+    // Bind to the loopback interface by default so the reflection server is not
+    // reachable from other hosts on the network. Wait for the server to be
+    // listening before resolving: when a host is provided, `listen()` resolves
+    // it asynchronously, so `server.address()` is not populated synchronously.
+    await new Promise<void>((resolve) => {
+      this.server = server.listen(this.port!, this.options.host!, () => {
+        resolve();
+      });
     });
+    logger.debug(
+      `Reflection server (${process.pid}) running on http://localhost:${this.port}`
+    );
+    ReflectionServer.RUNNING_SERVERS.push(this);
+
+    try {
+      await this.registry.listActions();
+      await this.writeRuntimeFile();
+    } catch (e) {
+      logger.error(`Error initializing plugins: ${e}`);
+      try {
+        await this.stop();
+      } catch (err) {
+        logger.error(`Failed to stop server gracefully: ${err}`);
+      }
+    }
   }
 
   /**
