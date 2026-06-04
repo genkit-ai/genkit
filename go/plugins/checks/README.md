@@ -11,6 +11,12 @@ v1alpha REST API:
 It is a Go port of the JS `@genkit-ai/checks` plugin, built directly on
 `net/http` + Application Default Credentials (there is no first-party Go SDK).
 
+Import path:
+
+```go
+import "github.com/firebase/genkit/go/plugins/checks"
+```
+
 ## Prerequisites
 
 - A Google Cloud project with the **Checks API** enabled and quota.
@@ -29,10 +35,14 @@ Project ID is resolved in this order: explicit `Checks.ProjectID` >
 
 ## Evaluator
 
+Configure `Checks.Metrics` to register the `checks/guardrails` evaluator at
+plugin init time. These metrics apply to evaluator runs only; middleware
+policies are passed separately to `GuardrailMiddleware`.
+
 ```go
 import (
-    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/ai"
+    "github.com/firebase/genkit/go/genkit"
     "github.com/firebase/genkit/go/plugins/checks"
 )
 
@@ -56,15 +66,20 @@ resp, err := ev.Evaluate(ctx, &ai.EvaluatorRequest{
 
 The single `checks/guardrails` evaluator scores each datapoint's `Output`
 against **all** configured policies in one API call. Each policy yields a
-`Score{Id: <policyType>, Score: <0–1, if returned>, Details: {"reasoning":
+`Score{Id: <policyType>, Score: <0-1, if returned>, Details: {"reasoning":
 "Status <VIOLATIVE|NON_VIOLATIVE>"}}`. As in the JS plugin, the score is the raw
 likelihood and the violation result is surfaced as reasoning only — no Pass/Fail
 status is synthesized. A score absent from the API response is omitted.
 
+The evaluator classifies `ai.Example.Output`. Non-string outputs are converted
+with `fmt.Sprint`.
+
 ## Guardrails client & middleware
 
 Use the exported `Guardrails` client for synchronous classification, or
-`GuardrailMiddleware` to block generations whose input or output is VIOLATIVE:
+`GuardrailMiddleware` to block generations whose input or output is VIOLATIVE.
+The plugin resolves ADC for evaluator use, but `NewGuardrails` expects an
+explicit token source and project ID:
 
 ```go
 import "golang.org/x/oauth2/google"
@@ -91,6 +106,13 @@ resp, err := genkit.Generate(ctx, g,
 
 `ClassifyContent` retries on `429`/`503` with exponential backoff, honoring
 `Retry-After`.
+
+## Limitations
+
+- The implementation targets the Checks v1alpha `aisafety:classifyContent` API.
+- Classification is text-only. Media parts are not sent to Checks.
+- The evaluator only inspects `Example.Output`, matching the JS plugin.
+- Middleware output blocking is best-effort for streamed responses.
 
 > **Streaming note:** the input guardrail runs before the model is called, so
 > violative prompts are blocked outright. The output guardrail runs after

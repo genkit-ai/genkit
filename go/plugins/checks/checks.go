@@ -21,6 +21,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -74,6 +75,9 @@ type Checks struct {
 	ts        oauth2.TokenSource
 	projectID string
 	endpoint  string // overridable classifyContent URL; defaults to classifyEndpoint (tests).
+	// initErr records a credential/project-resolution failure from Init. It is
+	// returned when the evaluator runs, rather than panicking at startup.
+	initErr error
 }
 
 // classifyURL returns the configured endpoint or the default Checks endpoint.
@@ -90,33 +94,38 @@ var _ api.Plugin = (*Checks)(nil)
 func (c *Checks) Name() string { return provider }
 
 // Init resolves credentials and project ID, then registers the
-// checks/guardrails evaluator (when at least one metric is configured).
+// checks/guardrails evaluator (when at least one metric is configured). A
+// credential or project-resolution failure is recorded in c.initErr and
+// surfaced when the evaluator runs, so a misconfigured plugin doesn't crash the
+// whole application at startup.
 func (c *Checks) Init(ctx context.Context) []api.Action {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.initted {
 		panic("checks.Init already called")
 	}
-
-	creds, err := google.FindDefaultCredentials(ctx, cloudPlatformScope, checksScope)
-	if err != nil {
-		panic(fmt.Sprintf("checks: unable to find default credentials: %v", err))
-	}
-	if creds.TokenSource == nil {
-		panic("checks: missing or invalid credentials")
-	}
-	c.ts = creds.TokenSource
-
-	c.projectID = resolveProjectID(c.ProjectID, creds)
-	if c.projectID == "" {
-		panic("checks: missing project ID; set Checks.ProjectID or the GOOGLE_CLOUD_PROJECT environment variable")
-	}
-
 	c.initted = true
 
+	// No metrics means no evaluator to register, so skip credential and project
+	// resolution entirely — registering the plugin shouldn't require ADC when the
+	// evaluator isn't used (the exported Guardrails client resolves its own creds).
 	if len(c.Metrics) == 0 {
 		return []api.Action{}
 	}
+
+	creds, err := google.FindDefaultCredentials(ctx, cloudPlatformScope, checksScope)
+	if err != nil {
+		c.initErr = fmt.Errorf("checks: unable to find default credentials: %w", err)
+	} else if creds.TokenSource == nil {
+		c.initErr = errors.New("checks: missing or invalid credentials")
+	} else {
+		c.ts = creds.TokenSource
+		c.projectID = resolveProjectID(c.ProjectID, creds)
+		if c.projectID == "" {
+			c.initErr = errors.New("checks: missing project ID; set Checks.ProjectID or the GOOGLE_CLOUD_PROJECT environment variable")
+		}
+	}
+
 	return []api.Action{newEvaluator(c).(api.Action)}
 }
 

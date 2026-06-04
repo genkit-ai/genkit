@@ -17,6 +17,7 @@ package checks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,16 @@ type fakeTokenSource struct{}
 
 func (fakeTokenSource) Token() (*oauth2.Token, error) {
 	return &oauth2.Token{AccessToken: "test-token", TokenType: "Bearer", Expiry: time.Now().Add(time.Hour)}, nil
+}
+
+type nilTokenSource struct{}
+
+func (nilTokenSource) Token() (*oauth2.Token, error) { return nil, nil }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func ptr(f float64) *float64 { return &f }
@@ -113,6 +124,26 @@ func TestClassifyContent_RequestAndResponse(t *testing.T) {
 	}
 }
 
+func TestClassifyContent_NilSafety(t *testing.T) {
+	if _, err := (*Guardrails)(nil).ClassifyContent(context.Background(), "text", nil); err == nil {
+		t.Fatal("expected error for nil guardrails client")
+	}
+	if _, err := newGuardrails(nil, "proj", "http://example.invalid").ClassifyContent(context.Background(), "text", nil); err == nil {
+		t.Fatal("expected error for nil token source")
+	}
+	if _, err := newGuardrails(nilTokenSource{}, "proj", "http://example.invalid").ClassifyContent(context.Background(), "text", nil); err == nil {
+		t.Fatal("expected error for nil token")
+	}
+
+	g := newGuardrails(fakeTokenSource{}, "proj", "http://example.invalid")
+	g.httpClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, nil
+	})}
+	if _, err := g.ClassifyContent(context.Background(), "text", nil); err == nil {
+		t.Fatal("expected error for nil HTTP response")
+	}
+}
+
 func TestEvaluator_FanOutAndMapping(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req classifyRequest
@@ -168,6 +199,27 @@ func TestEvaluator_FanOutAndMapping(t *testing.T) {
 	// Datapoint b is violative.
 	if got := results[1].Evaluation[0].Details["reasoning"]; got != "Status VIOLATIVE" {
 		t.Errorf("datapoint b reasoning = %v, want 'Status VIOLATIVE'", got)
+	}
+}
+
+func TestEvaluator_NilInputs(t *testing.T) {
+	c := &Checks{
+		Metrics:   []ChecksMetricConfig{{Type: HateSpeech}},
+		ts:        fakeTokenSource{},
+		projectID: "proj",
+		initted:   true,
+	}
+	ev := newEvaluator(c)
+	if _, err := ev.Evaluate(context.Background(), nil); err == nil {
+		t.Fatal("expected error for nil evaluator request")
+	}
+
+	result := evaluateOne(context.Background(), nil, nil, nil)
+	if len(result.Evaluation) != 1 {
+		t.Fatalf("nil example result = %+v", result)
+	}
+	if !strings.Contains(result.Evaluation[0].Error, "dataset example is nil") {
+		t.Fatalf("nil example error = %q", result.Evaluation[0].Error)
 	}
 }
 
@@ -241,6 +293,31 @@ func TestGuardrailMiddleware(t *testing.T) {
 	})
 }
 
+func TestGuardrailMiddleware_NilSafety(t *testing.T) {
+	if _, err := GuardrailMiddleware(nil, nil).New(context.Background()); err == nil {
+		t.Fatal("expected error for nil guardrails client")
+	}
+
+	g := newGuardrails(fakeTokenSource{}, "proj", "http://example.invalid")
+	mw := GuardrailMiddleware(g, nil)
+	hooks, err := mw.New(context.Background())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	next := func(context.Context, *ai.ModelParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{}, nil
+	}
+	if _, err := hooks.WrapModel(context.Background(), nil, next); err == nil {
+		t.Fatal("expected error for nil model params")
+	}
+	if _, err := hooks.WrapModel(context.Background(), &ai.ModelParams{}, nil); err == nil {
+		t.Fatal("expected error for nil next callback")
+	}
+	if _, err := hooks.WrapModel(context.Background(), &ai.ModelParams{}, next); err != nil {
+		t.Fatalf("nil request should pass through when there is no text to classify: %v", err)
+	}
+}
+
 func TestClassifyContent_RetriesOn429(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +355,53 @@ func TestEvaluatorRegistration(t *testing.T) {
 	}
 	if _, ok := ev.(api.Action); !ok {
 		t.Fatal("evaluator does not implement api.Action — Init cast would panic")
+	}
+}
+
+// TestEvaluator_InitErrSurfaced verifies that a credential/project failure
+// recorded by Init (in c.initErr) is returned when the evaluator runs, rather
+// than having panicked at startup.
+func TestEvaluator_InitErrSurfaced(t *testing.T) {
+	wantErr := errors.New("checks: missing project ID")
+	c := &Checks{Metrics: []ChecksMetricConfig{{Type: HateSpeech}}, initErr: wantErr}
+	ev := newEvaluator(c)
+	_, err := ev.Evaluate(context.Background(), &ai.EvaluatorRequest{
+		Dataset: []*ai.Example{{TestCaseId: "a", Output: "x"}},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Errorf("Evaluate err = %v, want %v", err, wantErr)
+	}
+}
+
+// TestGuardrailMiddleware_NoPoliciesSkipsAPI verifies the middleware makes no
+// classifyContent calls when no policies are configured.
+func TestGuardrailMiddleware_NoPoliciesSkipsAPI(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+	}))
+	defer srv.Close()
+
+	g := newGuardrails(fakeTokenSource{}, "proj", srv.URL)
+	hooks, err := GuardrailMiddleware(g, nil).New(context.Background())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	next := func(context.Context, *ai.ModelParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("a bad answer")}}}, nil
+	}
+	params := &ai.ModelParams{Request: &ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("this is bad")}}},
+	}}
+	resp, err := hooks.WrapModel(context.Background(), params, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.FinishReason == ai.FinishReasonBlocked {
+		t.Errorf("should not block when no policies are configured, got %+v", resp)
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Errorf("expected 0 classifyContent calls with no policies, got %d", got)
 	}
 }
 

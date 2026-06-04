@@ -28,11 +28,25 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
 	violative  = "VIOLATIVE"
 	maxRetries = 3
+
+	// maxRetryWait caps the per-attempt backoff so a hostile or misconfigured
+	// Retry-After header can't make the client sleep for an unbounded time.
+	maxRetryWait = 30 * time.Second
+
+	// maxResponseBytes bounds how much of an HTTP response we read. classifyContent
+	// responses are small JSON; the cap is a defensive guard against an unbounded
+	// body (e.g. a misbehaving or overridden endpoint) exhausting memory.
+	maxResponseBytes = 4 << 20 // 4 MiB
+
+	// guardrailConcurrency bounds parallel classifyContent calls made by the
+	// middleware for a single request; Checks rate-limits per project.
+	guardrailConcurrency = 4
 )
 
 // --- REST request/response shapes (Checks v1alpha aisafety:classifyContent) ---
@@ -96,6 +110,12 @@ func newGuardrails(ts oauth2.TokenSource, projectID, endpoint string) *Guardrail
 // ClassifyContent classifies content against the given policies, retrying on
 // 429/503 with exponential backoff (honoring Retry-After).
 func (g *Guardrails) ClassifyContent(ctx context.Context, content string, policies []ChecksMetricConfig) (*classifyResponse, error) {
+	if g == nil {
+		return nil, errors.New("checks: guardrails client is nil")
+	}
+	if g.ts == nil {
+		return nil, errors.New("checks: token source is nil")
+	}
 	payload, err := json.Marshal(classifyRequest{
 		Input:    classifyInput{TextInput: textInput{Content: content}},
 		Policies: toPolicies(policies),
@@ -113,10 +133,16 @@ func (g *Guardrails) ClassifyContent(ctx context.Context, content string, polici
 			if errors.As(lastErr, &he) && he.retryAfter > wait {
 				wait = he.retryAfter
 			}
+			if wait > maxRetryWait {
+				wait = maxRetryWait
+			}
+
+			t := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
+				t.Stop()
 				return nil, ctx.Err()
-			case <-time.After(wait):
+			case <-t.C:
 			}
 			delay *= 2
 		}
@@ -147,7 +173,11 @@ func (e *httpError) Error() string {
 }
 
 func (g *Guardrails) do(ctx context.Context, payload []byte) (*classifyResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.endpoint, bytes.NewReader(payload))
+	endpoint := g.endpoint
+	if endpoint == "" {
+		endpoint = classifyEndpoint
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("checks: build request: %w", err)
 	}
@@ -155,16 +185,29 @@ func (g *Guardrails) do(ctx context.Context, payload []byte) (*classifyResponse,
 	if err != nil {
 		return nil, fmt.Errorf("checks: get token: %w", err)
 	}
+	if tok == nil {
+		return nil, errors.New("checks: token source returned nil token")
+	}
 	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	req.Header.Set("x-goog-user-project", g.projectID)
 	req.Header.Set("Content-Type", "application/json")
 
-	httpResp, err := g.httpClient.Do(req)
+	client := g.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	httpResp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("checks: request failed: %w", err)
 	}
+	if httpResp == nil {
+		return nil, errors.New("checks: request returned nil response")
+	}
 	defer httpResp.Body.Close()
-	body, _ := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("checks: read response body: %w", err)
+	}
 
 	if httpResp.StatusCode != http.StatusOK {
 		he := &httpError{status: httpResp.StatusCode, body: string(body)}
@@ -226,12 +269,25 @@ type guardrailMiddleware struct {
 func (m *guardrailMiddleware) Name() string { return provider + "/guardrail" }
 
 func (m *guardrailMiddleware) New(ctx context.Context) (*ai.Hooks, error) {
+	if m == nil || m.g == nil {
+		return nil, errors.New("checks: guardrails client is nil")
+	}
 	return &ai.Hooks{WrapModel: m.wrapModel}, nil
 }
 
 func (m *guardrailMiddleware) wrapModel(ctx context.Context, params *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
+	if next == nil {
+		return nil, errors.New("checks: next model callback is nil")
+	}
+	if params == nil {
+		return nil, errors.New("checks: model params are nil")
+	}
+	var messages []*ai.Message
+	if params.Request != nil {
+		messages = params.Request.Messages
+	}
 	// Check input before calling the model.
-	violated, err := m.classify(ctx, messagesText(params.Request.Messages))
+	violated, err := m.classify(ctx, messagesText(messages))
 	if err != nil {
 		return nil, err
 	}
@@ -257,23 +313,55 @@ func (m *guardrailMiddleware) wrapModel(ctx context.Context, params *ai.ModelPar
 	return resp, nil
 }
 
-// classify runs each non-empty text through the classifier and returns the
-// names of any VIOLATIVE policies found.
+// classify runs each non-empty text through the classifier concurrently
+// (bounded by guardrailConcurrency) and returns the names of any VIOLATIVE
+// policies found across all of them.
 func (m *guardrailMiddleware) classify(ctx context.Context, texts []string) ([]string, error) {
-	var violated []string
+	if m == nil || m.g == nil {
+		return nil, errors.New("checks: guardrails client is nil")
+	}
+	if len(m.policies) == 0 {
+		return nil, nil
+	}
+
+	active := make([]string, 0, len(texts))
 	for _, t := range texts {
-		if strings.TrimSpace(t) == "" {
-			continue
+		if strings.TrimSpace(t) != "" {
+			active = append(active, t)
 		}
-		resp, err := m.g.ClassifyContent(ctx, t, m.policies)
-		if err != nil {
-			return nil, err
-		}
-		for _, pr := range resp.PolicyResults {
-			if pr.ViolationResult == violative {
-				violated = append(violated, pr.PolicyType)
+	}
+	if len(active) == 0 {
+		return nil, nil
+	}
+
+	// One slot per text preserves order and lets goroutines write without locking.
+	perText := make([][]string, len(active))
+	eg, egctx := errgroup.WithContext(ctx)
+	eg.SetLimit(guardrailConcurrency)
+	for i, t := range active {
+		eg.Go(func() error {
+			resp, err := m.g.ClassifyContent(egctx, t, m.policies)
+			if err != nil {
+				return fmt.Errorf("checks: classify text %d: %w", i, err)
 			}
-		}
+			if resp == nil {
+				return fmt.Errorf("checks: classifyContent returned nil response for text %d", i)
+			}
+			for _, pr := range resp.PolicyResults {
+				if pr.ViolationResult == violative {
+					perText[i] = append(perText[i], pr.PolicyType)
+				}
+			}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+
+	var violated []string
+	for _, v := range perText {
+		violated = append(violated, v...)
 	}
 	return violated, nil
 }

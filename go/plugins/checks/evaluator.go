@@ -16,6 +16,7 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
@@ -39,6 +40,13 @@ func newEvaluator(c *Checks) ai.Evaluator {
 	}
 
 	fn := func(ctx context.Context, req *ai.EvaluatorRequest) (*ai.EvaluatorResponse, error) {
+		if req == nil {
+			return nil, errors.New("checks: evaluator request is nil")
+		}
+		// Init defers credential/project failures to here instead of panicking.
+		if c.initErr != nil {
+			return nil, c.initErr
+		}
 		results := make([]ai.EvaluationResult, len(req.Dataset))
 
 		eg, egctx := errgroup.WithContext(ctx)
@@ -63,11 +71,18 @@ func newEvaluator(c *Checks) ai.Evaluator {
 // evaluateOne classifies a single datapoint. A failed call is isolated to that
 // datapoint's result (as a Score with Error) rather than failing the whole run.
 func evaluateOne(ctx context.Context, g *Guardrails, metrics []ChecksMetricConfig, dp *ai.Example) ai.EvaluationResult {
+	if dp == nil {
+		return ai.EvaluationResult{Evaluation: []ai.Score{{Error: "checks: dataset example is nil"}}}
+	}
 	res := ai.EvaluationResult{TestCaseId: dp.TestCaseId}
 
 	resp, err := g.ClassifyContent(ctx, outputText(dp.Output), metrics)
 	if err != nil {
 		res.Evaluation = []ai.Score{{Error: err.Error()}}
+		return res
+	}
+	if resp == nil {
+		res.Evaluation = []ai.Score{{Error: "checks: classifyContent returned nil response"}}
 		return res
 	}
 
