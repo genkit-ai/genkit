@@ -115,14 +115,15 @@ first = await ai.generate(
     use=[approval],
 )
 
+from genkit import restart_tool
+
 response = await ai.generate(
     model='googleai/gemini-flash-latest',
     prompt='Delete the database',
     messages=list(first.messages),
     tools=[delete_database_tool],
     use=[approval],
-    resume_restart=delete_database_tool.restart(
-        None,
+    resume_restart=restart_tool(
         interrupt=first.interrupts[0],
         resumed_metadata={'toolApproved': True},
     ),
@@ -184,14 +185,3 @@ Provides four tools:
 - `write_file`: Write to a file (requires `allow_write_access=True`)
 - `edit_file`: Edit file with string replacements (requires `allow_write_access=True`)
 
-## Development
-
-```bash
-cd py/plugins/middleware
-pip install -e ".[dev]"
-pytest tests/
-```
-
-## License
-
-Apache 2.0
