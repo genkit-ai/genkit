@@ -176,7 +176,7 @@ class BaseMiddleware(Generic[TConfig]):
 
     2. Extend BaseMiddleware with your config model, e.g. Retry:
         ai = Genkit()
-        
+
         @ai.middleware(
             name="retry",
             description="Configures smart retry logic with exponential backoff and a jitter."
@@ -194,7 +194,7 @@ class BaseMiddleware(Generic[TConfig]):
             ...,
             use=[Retry(max_retries=5)]
         )
-        
+
         # Or alternatively, for full keyword auto-complete in your preferred IDE:
         ai.generate(
             ...,
