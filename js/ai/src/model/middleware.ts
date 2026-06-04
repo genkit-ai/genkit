@@ -15,6 +15,7 @@
  */
 
 import { GenkitError, StatusName } from '@genkit-ai/core';
+import { logger } from '@genkit-ai/core/logging';
 import { HasRegistry } from '@genkit-ai/core/registry';
 import { Document } from '../document.js';
 import { injectInstructions } from '../formats/index.js';
@@ -379,6 +380,9 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
             if (!noJitter) {
               delay = delay + 1000 * Math.pow(2, i) * Math.random();
             }
+            logger.warn(
+              `Request failed: ${error?.message || String(error)}. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1} of ${maxRetries})`
+            );
             await new Promise((resolve) => __setTimeout(resolve, delay));
             currentDelay = Math.min(currentDelay * backoffFactor, maxDelayMs);
             continue;
@@ -445,6 +449,9 @@ export function fallback(
         for (const model of models) {
           try {
             const resolved = await resolveModel(ai.registry, model);
+            logger.warn(
+              `Request failed with status ${lastError.status}: ${lastError.message}. Falling back to model ${resolved.modelAction.__action.name}...`
+            );
             return await resolved.modelAction(req);
           } catch (e2) {
             lastError = e2;

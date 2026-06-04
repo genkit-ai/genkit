@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import { generateMiddleware, z, type GenerateMiddleware } from 'genkit';
 import { tool } from 'genkit/beta';
+import { logger } from 'genkit/logging';
 import * as path from 'path';
 
 export const SkillsOptionsSchema = z.object({
@@ -97,14 +98,23 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                         path: skillMdPath,
                         description,
                       });
-                    } catch (e) {
-                      // ignore file read errors
+                    } catch (e: any) {
+                      logger.warn(
+                        `Failed to read skill file "${skillMdPath}": ${e.message || String(e)}`
+                      );
                     }
                   }
                 }
-              } catch (e) {
-                // ignore directory read errors
+              } catch (e: any) {
+                logger.debug(
+                  `Failed to read skill directory "${dirPath}": ${e.message || String(e)}`
+                );
               }
+            }
+            if (skillCache.size > 0) {
+              logger.info(
+                `Loaded ${skillCache.size} skills from disk (${Array.from(skillCache.keys()).join(', ')}).`
+              );
             }
           })();
         }

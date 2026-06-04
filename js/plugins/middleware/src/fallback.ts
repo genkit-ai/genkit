@@ -26,6 +26,7 @@ import {
   type GenerateMiddleware,
   type StatusName,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 import { ModelAction } from 'genkit/model';
 import { Registry } from 'genkit/registry';
 
@@ -116,6 +117,9 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
             ) {
               let lastError: any = e;
               for (const model of models) {
+                logger.warn(
+                  `Request failed with status ${lastError.status}: ${lastError.message}. Falling back to model ${model.name}...`
+                );
                 const normalizedModel = await resolveModel(
                   options.ai.registry,
                   model
