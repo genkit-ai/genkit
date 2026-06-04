@@ -65,7 +65,6 @@ import {
   type SessionStoreOptions,
 } from './session.js';
 
-
 /**
  * Schema for initializing an agent turn.
  */
@@ -116,7 +115,6 @@ export const TurnEndSchema = z.object({
  * Identifies a turn termination event.
  */
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
-
 
 /**
  * Schema for stream chunks emitted during agent execution.
@@ -208,8 +206,6 @@ export interface AgentOutput<S = unknown> {
   };
 }
 
-
-
 /**
  * Executor responsible for running turns over input streams and persisting state.
  */
@@ -264,7 +260,6 @@ export class SessionRunner<State = unknown> {
       newSnapshotId?: string;
     }
   ) {
-
     this.session = session;
     this.inputCh = inputCh;
 

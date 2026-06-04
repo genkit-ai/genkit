@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import { generateMiddleware, ToolAction, z, type GenerateMiddleware } from 'genkit';
+import {
+  generateMiddleware,
+  ToolAction,
+  z,
+  type GenerateMiddleware,
+} from 'genkit';
 import { tool, type Artifact } from 'genkit/beta';
 
 // ---------------------------------------------------------------------------

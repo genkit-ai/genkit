@@ -1964,6 +1964,7 @@
         },
         "input": {},
         "output": {},
+        "init": {},
         "isRoot": {
           "type": "boolean"
         },
