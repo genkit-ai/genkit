@@ -130,8 +130,9 @@ func cfgToolChoice(cfg *Config) string {
 	return cfg.ToolChoice
 }
 
-// configFromRequest decodes req.Config (which may be *Config, Config, or a
-// map[string]any from JSON-deserialised resumed flows) into a *Config.
+// configFromRequest decodes req.Config (which may be *Config, Config,
+// ai.GenerationCommonConfig, or a map[string]any from JSON-deserialised
+// resumed flows) into a *Config.
 // Returns (nil, nil) when no config is provided.
 func configFromRequest(req *ai.ModelRequest) (*Config, error) {
 	if req == nil {
@@ -145,6 +146,10 @@ func configFromRequest(req *ai.ModelRequest) (*Config, error) {
 		return v, nil
 	case Config:
 		return &v, nil
+	case *ai.GenerationCommonConfig:
+		return configFromGenerationCommonConfig(v), nil
+	case ai.GenerationCommonConfig:
+		return configFromGenerationCommonConfig(&v), nil
 	case map[string]any:
 		b, err := json.Marshal(v)
 		if err != nil {
@@ -156,8 +161,27 @@ func configFromRequest(req *ai.ModelRequest) (*Config, error) {
 		}
 		return &c, nil
 	default:
-		return nil, fmt.Errorf("bedrock: unexpected config type %T, want *bedrock.Config", req.Config)
+		return nil, fmt.Errorf("bedrock: unexpected config type %T, want *bedrock.Config or *ai.GenerationCommonConfig", req.Config)
 	}
+}
+
+func configFromGenerationCommonConfig(v *ai.GenerationCommonConfig) *Config {
+	if v == nil {
+		return nil
+	}
+	cfg := &Config{
+		MaxTokens:     v.MaxOutputTokens,
+		StopSequences: v.StopSequences,
+	}
+	if v.Temperature != 0 {
+		t := float32(v.Temperature)
+		cfg.Temperature = &t
+	}
+	if v.TopP != 0 {
+		p := float32(v.TopP)
+		cfg.TopP = &p
+	}
+	return cfg
 }
 
 // convertMessages walks the ai.ModelRequest messages and produces a system

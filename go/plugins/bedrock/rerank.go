@@ -18,6 +18,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -127,13 +128,24 @@ func buildRerankResponse(resp cohereRerankResp, docs []*ai.Document) (*ai.Rerank
 }
 
 // rerankOptions extracts [RerankOptions] from the request's Options field,
-// accepting either a value or a pointer. Returns nil when absent.
+// accepting either a value, pointer, or JSON-deserialised map. Returns nil
+// when absent or malformed.
 func rerankOptions(o any) *RerankOptions {
 	switch v := o.(type) {
 	case *RerankOptions:
 		return v
 	case RerankOptions:
 		return &v
+	case map[string]any:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		var opts RerankOptions
+		if err := json.Unmarshal(b, &opts); err != nil {
+			return nil
+		}
+		return &opts
 	default:
 		return nil
 	}

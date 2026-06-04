@@ -197,6 +197,9 @@ func TestRerankOptions(t *testing.T) {
 	if got := rerankOptions(RerankOptions{TopN: 5}); got == nil || got.TopN != 5 {
 		t.Errorf("value opts = %+v", got)
 	}
+	if got := rerankOptions(map[string]any{"topN": float64(7)}); got == nil || got.TopN != 7 {
+		t.Errorf("map opts = %+v", got)
+	}
 	if got := rerankOptions(nil); got != nil {
 		t.Errorf("nil opts = %+v, want nil", got)
 	}

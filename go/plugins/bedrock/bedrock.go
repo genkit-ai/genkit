@@ -130,13 +130,6 @@ func (b *Bedrock) Client() *bedrockruntime.Client { return b.client }
 // model registry; pass an explicit opts to override or to register a model
 // not in the registry.
 func DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
-	if p == nil {
-		return nil, errors.New("bedrock plugin not registered; pass &bedrock.Bedrock{...} to genkit.WithPlugins")
-	}
-	if !p.initted {
-		return nil, errors.New("bedrock.DefineModel: plugin not initialized")
-	}
 	if name == "" {
 		return nil, errors.New("bedrock.DefineModel: model name required")
 	}
@@ -150,6 +143,13 @@ func DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model
 		opts.Label = "Bedrock - " + name
 	}
 	m := genkit.DefineModel(g, api.NewName(provider, name), opts, func(ctx context.Context, req *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
+		p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
+		if p == nil {
+			return nil, errors.New("bedrock plugin not registered; pass &bedrock.Bedrock{...} to genkit.WithPlugins")
+		}
+		if !p.initted {
+			return nil, errors.New("bedrock.DefineModel: plugin not initialized")
+		}
 		return generate(ctx, p.client, name, req, cb)
 	})
 	return m, nil
@@ -169,13 +169,6 @@ func DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model
 // If opts is nil, capability metadata is derived from the model ID
 // (multimodal model IDs advertise image input; everything else is text-only).
 func DefineEmbedder(g *genkit.Genkit, name string, opts *ai.EmbedderOptions) (ai.Embedder, error) {
-	p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
-	if p == nil {
-		return nil, errors.New("bedrock plugin not registered")
-	}
-	if !p.initted {
-		return nil, errors.New("bedrock.DefineEmbedder: plugin not initialized")
-	}
 	if name == "" {
 		return nil, errors.New("bedrock.DefineEmbedder: name required")
 	}
@@ -185,7 +178,16 @@ func DefineEmbedder(g *genkit.Genkit, name string, opts *ai.EmbedderOptions) (ai
 	if opts.Label == "" {
 		opts.Label = "Bedrock - " + name
 	}
-	emb := genkit.DefineEmbedder(g, api.NewName(provider, name), opts, embedderFunc(p.client, name))
+	emb := genkit.DefineEmbedder(g, api.NewName(provider, name), opts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+		p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
+		if p == nil {
+			return nil, errors.New("bedrock plugin not registered")
+		}
+		if !p.initted {
+			return nil, errors.New("bedrock.DefineEmbedder: plugin not initialized")
+		}
+		return embedderFunc(p.client, name)(ctx, req)
+	})
 	return emb, nil
 }
 
@@ -197,13 +199,6 @@ func DefineEmbedder(g *genkit.Genkit, name string, opts *ai.EmbedderOptions) (ai
 //
 // Images are returned as base64 PNG embedded in [ai.Media] parts.
 func DefineImager(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Model, error) {
-	p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
-	if p == nil {
-		return nil, errors.New("bedrock plugin not registered")
-	}
-	if !p.initted {
-		return nil, errors.New("bedrock.DefineImager: plugin not initialized")
-	}
 	if name == "" {
 		return nil, errors.New("bedrock.DefineImager: name required")
 	}
@@ -216,7 +211,16 @@ func DefineImager(g *genkit.Genkit, name string, opts *ai.ModelOptions) (ai.Mode
 	if opts.Label == "" {
 		opts.Label = "Bedrock - " + name
 	}
-	m := genkit.DefineModel(g, api.NewName(provider, name), opts, imagerFunc(p.client, name))
+	m := genkit.DefineModel(g, api.NewName(provider, name), opts, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		p, _ := genkit.LookupPlugin(g, provider).(*Bedrock)
+		if p == nil {
+			return nil, errors.New("bedrock plugin not registered")
+		}
+		if !p.initted {
+			return nil, errors.New("bedrock.DefineImager: plugin not initialized")
+		}
+		return imagerFunc(p.client, name)(ctx, req, cb)
+	})
 	return m, nil
 }
 

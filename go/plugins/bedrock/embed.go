@@ -54,9 +54,10 @@ func embedderFunc(client *bedrockruntime.Client, modelID string) ai.EmbedderFunc
 	}
 }
 
-// embedTitan submits one InvokeModel call per input document. Titan text
-// embedders accept text; Titan multimodal embedders accept text, image, or
-// both, and all return a single vector.
+// embedTitan submits one InvokeModel call per input document. Calls are made
+// concurrently and results are reassembled in input order. Titan text embedders
+// accept text; Titan multimodal embedders accept text, image, or both, and all
+// return a single vector.
 type titanEmbedReq struct {
 	InputText       string           `json:"inputText,omitempty"`
 	InputImage      string           `json:"inputImage,omitempty"`
@@ -69,22 +70,46 @@ type titanEmbedResp struct {
 }
 
 func embedTitan(ctx context.Context, client *bedrockruntime.Client, modelID string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	out := &ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(req.Input))}
-	for i, doc := range req.Input {
-		body, err := titanEmbedPayload(modelID, doc)
-		if err != nil {
-			return nil, fmt.Errorf("bedrock: titan embedder: document %d: %w", i, err)
-		}
-		var resp titanEmbedResp
-		if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
-			return nil, err
-		}
-		if resp.Message != "" {
-			return nil, fmt.Errorf("bedrock: titan embedder: %s", resp.Message)
-		}
-		out.Embeddings = append(out.Embeddings, &ai.Embedding{Embedding: resp.Embedding})
+	type result struct {
+		index     int
+		embedding []float32
+		err       error
 	}
-	return out, nil
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan result, len(req.Input))
+	for i, doc := range req.Input {
+		go func(i int, doc *ai.Document) {
+			body, err := titanEmbedPayload(modelID, doc)
+			if err != nil {
+				results <- result{err: fmt.Errorf("bedrock: titan embedder: document %d: %w", i, err)}
+				return
+			}
+			var resp titanEmbedResp
+			if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
+				results <- result{err: fmt.Errorf("bedrock: titan embedder: document %d: %w", i, err)}
+				return
+			}
+			if resp.Message != "" {
+				results <- result{err: fmt.Errorf("bedrock: titan embedder: document %d: %s", i, resp.Message)}
+				return
+			}
+			results <- result{index: i, embedding: resp.Embedding}
+		}(i, doc)
+	}
+
+	embeddings := make([]*ai.Embedding, len(req.Input))
+	for range req.Input {
+		res := <-results
+		if res.err != nil {
+			cancel()
+			return nil, res.err
+		}
+		embeddings[res.index] = &ai.Embedding{Embedding: res.embedding}
+	}
+	return &ai.EmbedResponse{Embeddings: embeddings}, nil
 }
 
 func titanEmbedPayload(modelID string, doc *ai.Document) (titanEmbedReq, error) {
@@ -250,25 +275,49 @@ func cohereHasImage(req *ai.EmbedRequest) bool {
 }
 
 // embedCoherePerDoc handles mixed text/image batches by issuing one
-// InvokeModel call per document, preserving input order. Image documents take
-// precedence over any accompanying text in the same document.
+// InvokeModel call per document concurrently, preserving input order. Image
+// documents take precedence over any accompanying text in the same document.
 func embedCoherePerDoc(ctx context.Context, client *bedrockruntime.Client, modelID string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	out := &ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(req.Input))}
-	for i, doc := range req.Input {
-		body, err := cohereEmbedPayload(doc)
-		if err != nil {
-			return nil, fmt.Errorf("bedrock: cohere embedder: document %d: %w", i, err)
-		}
-		var resp cohereEmbedResp
-		if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
-			return nil, err
-		}
-		if len(resp.Embeddings) != 1 {
-			return nil, fmt.Errorf("bedrock: cohere embedder: document %d: expected 1 embedding, got %d", i, len(resp.Embeddings))
-		}
-		out.Embeddings = append(out.Embeddings, &ai.Embedding{Embedding: resp.Embeddings[0]})
+	type result struct {
+		index     int
+		embedding []float32
+		err       error
 	}
-	return out, nil
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan result, len(req.Input))
+	for i, doc := range req.Input {
+		go func(i int, doc *ai.Document) {
+			body, err := cohereEmbedPayload(doc)
+			if err != nil {
+				results <- result{err: fmt.Errorf("bedrock: cohere embedder: document %d: %w", i, err)}
+				return
+			}
+			var resp cohereEmbedResp
+			if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
+				results <- result{err: fmt.Errorf("bedrock: cohere embedder: document %d: %w", i, err)}
+				return
+			}
+			if len(resp.Embeddings) != 1 {
+				results <- result{err: fmt.Errorf("bedrock: cohere embedder: document %d: expected 1 embedding, got %d", i, len(resp.Embeddings))}
+				return
+			}
+			results <- result{index: i, embedding: resp.Embeddings[0]}
+		}(i, doc)
+	}
+
+	embeddings := make([]*ai.Embedding, len(req.Input))
+	for range req.Input {
+		res := <-results
+		if res.err != nil {
+			cancel()
+			return nil, res.err
+		}
+		embeddings[res.index] = &ai.Embedding{Embedding: res.embedding}
+	}
+	return &ai.EmbedResponse{Embeddings: embeddings}, nil
 }
 
 // cohereEmbedPayload builds a single-document Cohere request, choosing the
@@ -345,26 +394,50 @@ const (
 	novaTruncationModeDefault   = "NONE"
 )
 
-// embedNova submits one InvokeModel call per document. Each Nova multimodal
-// request carries exactly one modality; image content takes precedence over
-// any accompanying text in the same document.
+// embedNova submits one InvokeModel call per document concurrently. Each Nova
+// multimodal request carries exactly one modality; image content takes
+// precedence over any accompanying text in the same document.
 func embedNova(ctx context.Context, client *bedrockruntime.Client, modelID string, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	out := &ai.EmbedResponse{Embeddings: make([]*ai.Embedding, 0, len(req.Input))}
-	for i, doc := range req.Input {
-		body, err := novaEmbedPayload(doc)
-		if err != nil {
-			return nil, fmt.Errorf("bedrock: nova embedder: document %d: %w", i, err)
-		}
-		var resp novaEmbedResp
-		if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
-			return nil, err
-		}
-		if len(resp.Embeddings) != 1 {
-			return nil, fmt.Errorf("bedrock: nova embedder: document %d: expected 1 embedding, got %d", i, len(resp.Embeddings))
-		}
-		out.Embeddings = append(out.Embeddings, &ai.Embedding{Embedding: resp.Embeddings[0].Embedding})
+	type result struct {
+		index     int
+		embedding []float32
+		err       error
 	}
-	return out, nil
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan result, len(req.Input))
+	for i, doc := range req.Input {
+		go func(i int, doc *ai.Document) {
+			body, err := novaEmbedPayload(doc)
+			if err != nil {
+				results <- result{err: fmt.Errorf("bedrock: nova embedder: document %d: %w", i, err)}
+				return
+			}
+			var resp novaEmbedResp
+			if err := invokeJSON(ctx, client, modelID, body, &resp); err != nil {
+				results <- result{err: fmt.Errorf("bedrock: nova embedder: document %d: %w", i, err)}
+				return
+			}
+			if len(resp.Embeddings) != 1 {
+				results <- result{err: fmt.Errorf("bedrock: nova embedder: document %d: expected 1 embedding, got %d", i, len(resp.Embeddings))}
+				return
+			}
+			results <- result{index: i, embedding: resp.Embeddings[0].Embedding}
+		}(i, doc)
+	}
+
+	embeddings := make([]*ai.Embedding, len(req.Input))
+	for range req.Input {
+		res := <-results
+		if res.err != nil {
+			cancel()
+			return nil, res.err
+		}
+		embeddings[res.index] = &ai.Embedding{Embedding: res.embedding}
+	}
+	return &ai.EmbedResponse{Embeddings: embeddings}, nil
 }
 
 func novaEmbedPayload(doc *ai.Document) (novaEmbedReq, error) {

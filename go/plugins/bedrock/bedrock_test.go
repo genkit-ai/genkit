@@ -26,6 +26,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 )
 
 func TestStripInferenceProfilePrefix(t *testing.T) {
@@ -407,15 +408,41 @@ func TestConvertToolChoice_UnknownToolErrors(t *testing.T) {
 }
 
 func TestConfigFromRequest_Variants(t *testing.T) {
+	temp := float32(0.7)
+	topP := float32(0.8)
+	tempValue := float32(0.2)
+	topPValue := float32(0.3)
 	cases := []struct {
 		name string
 		in   any
-		want int
+		want *Config
 	}{
-		{"nil", nil, 0},
-		{"ptr", &Config{MaxTokens: 100}, 100},
-		{"value", Config{MaxTokens: 200}, 200},
-		{"map", map[string]any{"maxTokens": float64(300)}, 300},
+		{"nil", nil, nil},
+		{"ptr", &Config{MaxTokens: 100}, &Config{MaxTokens: 100}},
+		{"value", Config{MaxTokens: 200}, &Config{MaxTokens: 200}},
+		{"map", map[string]any{"maxTokens": float64(300)}, &Config{MaxTokens: 300}},
+		{"common ptr", &ai.GenerationCommonConfig{
+			MaxOutputTokens: 400,
+			StopSequences:   []string{"stop"},
+			Temperature:     0.7,
+			TopP:            0.8,
+		}, &Config{
+			MaxTokens:     400,
+			StopSequences: []string{"stop"},
+			Temperature:   &temp,
+			TopP:          &topP,
+		}},
+		{"common value", ai.GenerationCommonConfig{
+			MaxOutputTokens: 500,
+			StopSequences:   []string{"halt"},
+			Temperature:     0.2,
+			TopP:            0.3,
+		}, &Config{
+			MaxTokens:     500,
+			StopSequences: []string{"halt"},
+			Temperature:   &tempValue,
+			TopP:          &topPValue,
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -424,14 +451,37 @@ func TestConfigFromRequest_Variants(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.want == 0 {
+			if c.want == nil {
 				if cfg != nil {
 					t.Errorf("want nil cfg, got %+v", cfg)
 				}
 				return
 			}
-			if cfg == nil || cfg.MaxTokens != c.want {
-				t.Errorf("MaxTokens = %v, want %d", cfg, c.want)
+			if cfg == nil {
+				t.Fatal("configFromRequest() returned nil config")
+			}
+			if cfg.MaxTokens != c.want.MaxTokens {
+				t.Errorf("MaxTokens = %v, want %d", cfg.MaxTokens, c.want.MaxTokens)
+			}
+			if len(cfg.StopSequences) != len(c.want.StopSequences) {
+				t.Fatalf("StopSequences = %v, want %v", cfg.StopSequences, c.want.StopSequences)
+			}
+			for i, want := range c.want.StopSequences {
+				if cfg.StopSequences[i] != want {
+					t.Errorf("StopSequences[%d] = %q, want %q", i, cfg.StopSequences[i], want)
+				}
+			}
+			if cfg.Temperature == nil != (c.want.Temperature == nil) {
+				t.Fatalf("Temperature = %v, want %v", cfg.Temperature, c.want.Temperature)
+			}
+			if cfg.Temperature != nil && *cfg.Temperature != *c.want.Temperature {
+				t.Errorf("Temperature = %v, want %v", *cfg.Temperature, *c.want.Temperature)
+			}
+			if cfg.TopP == nil != (c.want.TopP == nil) {
+				t.Fatalf("TopP = %v, want %v", cfg.TopP, c.want.TopP)
+			}
+			if cfg.TopP != nil && *cfg.TopP != *c.want.TopP {
+				t.Errorf("TopP = %v, want %v", *cfg.TopP, *c.want.TopP)
 			}
 		})
 	}
@@ -449,6 +499,66 @@ func TestConfigFromRequest_NilRequest(t *testing.T) {
 	_, err := configFromRequest(nil)
 	if err == nil {
 		t.Fatal("expected error for nil request")
+	}
+}
+
+func TestDefineModel_DefersPluginLookupUntilExecution(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+	m, err := DefineModel(g, "anthropic.claude-3-haiku-20240307-v1:0", nil)
+	if err != nil {
+		t.Fatalf("DefineModel() error = %v", err)
+	}
+	if m == nil {
+		t.Fatal("DefineModel() returned nil model")
+	}
+
+	_, err = genkit.Generate(ctx, g, ai.WithModel(m), ai.WithPrompt("hello"))
+	if err == nil {
+		t.Fatal("expected generate to fail without registered plugin")
+	}
+	if !strings.Contains(err.Error(), "bedrock plugin not registered") {
+		t.Fatalf("generate error = %v, want plugin-not-registered error", err)
+	}
+}
+
+func TestDefineEmbedder_DefersPluginLookupUntilExecution(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+	emb, err := DefineEmbedder(g, "amazon.titan-embed-text-v2:0", nil)
+	if err != nil {
+		t.Fatalf("DefineEmbedder() error = %v", err)
+	}
+	if emb == nil {
+		t.Fatal("DefineEmbedder() returned nil embedder")
+	}
+
+	_, err = genkit.Embed(ctx, g, ai.WithEmbedder(emb), ai.WithTextDocs("hello"))
+	if err == nil {
+		t.Fatal("expected embed to fail without registered plugin")
+	}
+	if !strings.Contains(err.Error(), "bedrock plugin not registered") {
+		t.Fatalf("embed error = %v, want plugin-not-registered error", err)
+	}
+}
+
+func TestDefineImager_DefersPluginLookupUntilExecution(t *testing.T) {
+	ctx := context.Background()
+	g := genkit.Init(ctx)
+	m, err := DefineImager(g, "amazon.titan-image-generator-v1", nil)
+	if err != nil {
+		t.Fatalf("DefineImager() error = %v", err)
+	}
+	if m == nil {
+		t.Fatal("DefineImager() returned nil model")
+	}
+
+	_, err = genkit.Generate(ctx, g, ai.WithModel(m), ai.WithPrompt("draw a square"))
+	if err == nil {
+		t.Fatal("expected generate to fail without registered plugin")
+	}
+	if !strings.Contains(err.Error(), "bedrock plugin not registered") {
+		t.Fatalf("generate error = %v, want plugin-not-registered error", err)
 	}
 }
 
