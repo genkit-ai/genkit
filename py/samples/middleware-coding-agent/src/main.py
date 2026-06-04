@@ -36,8 +36,7 @@ Re-running cleanly:
 
 from pathlib import Path
 
-from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, Tool, ToolRequestPart, restart_tool
-from genkit._ai._generate import resolve_tool
+from genkit import Genkit, Message, ModelResponse, Part, Role, TextPart, ToolRequestPart, restart_tool
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Filesystem, Middleware, Skills, ToolApproval
 
@@ -109,9 +108,8 @@ async def _ask_for_approvals(interrupts: list[ToolRequestPart]) -> list[ToolRequ
         print(f'Tool:  {trp.tool_request.name}')  # noqa: T201
         print(f'Input: {trp.tool_request.input}')  # noqa: T201
         if input('Approve? (y/N): ').strip().lower() in ('y', 'yes'):
-            tool = Tool(await resolve_tool(ai.registry, trp.tool_request.name))
             approved.append(
-                restart_tool(tool=tool, interrupt=trp, resumed_metadata={'toolApproved': True}),
+                restart_tool(interrupt=trp, resumed_metadata={'toolApproved': True}),
             )
     return approved
 
