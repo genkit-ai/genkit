@@ -194,14 +194,35 @@ export default function WeatherChat() {
         const result = await response.output;
         setStreamingText('');
 
-        // Save session state for the next turn.
+        // Save session state for the next turn. On a failed turn this is the
+        // *last-good* state (what the failed turn started with).
         if (result?.state) stateRef.current = result.state;
 
-        // Update the snapshotId and push it into the URL.
+        // Update the snapshotId and push it into the URL. On a failed turn
+        // the server writes a recovery snapshot of the last-good state and
+        // returns its id, so the session stays restorable.
         if (result?.snapshotId) {
           snapshotIdRef.current = result.snapshotId;
           // Update URL so the user can bookmark or hard-reload this session.
           navigate(`/weather/${result.snapshotId}`, { replace: true });
+        }
+
+        // A turn can now fail gracefully: instead of throwing, the agent
+        // resolves with `finishReason: 'failed'` and a structured `error`,
+        // while preserving the last-good state/snapshot above. Surface the
+        // error but keep the session usable.
+        if (result?.finishReason === 'failed') {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'system',
+              text:
+                `⚠️ Turn failed (${result.error?.status ?? 'INTERNAL'}): ` +
+                `${result.error?.message ?? 'Unknown error'}. ` +
+                `The last-good snapshot was preserved — you can keep chatting.`,
+            },
+          ]);
+          return;
         }
 
         const replyText = extractText(result);
@@ -210,14 +231,17 @@ export default function WeatherChat() {
           { role: 'model', text: replyText || accumulated },
         ]);
       } catch (err: any) {
+        // Only transport/connection errors reach here now — turn-level
+        // failures resolve gracefully via `finishReason: 'failed'` above.
         setStreamingText('');
         setMessages((prev) => [
           ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
+          { role: 'system', text: `Connection error: ${err.message}` },
         ]);
       } finally {
         setLoading(false);
       }
+
     },
     [loading, navigate]
   );

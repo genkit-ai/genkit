@@ -179,29 +179,63 @@ export default function BankingInterrupt() {
     const result = await response.output;
     setStreamingText('');
 
-    // Show the model's reply (or the accumulated stream text).
-    const replyText = extractText(result);
-    if (accumulated || replyText !== '(no result)') {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'model', text: replyText || accumulated },
-      ]);
+    // Don't render a model bubble for a failed turn (processResult surfaces the
+    // structured error) or an interrupted turn (the approval dialog shows the
+    // tool-request details instead).
+    if (
+      result?.finishReason !== 'failed' &&
+      result?.finishReason !== 'interrupted'
+    ) {
+      // Show the model's reply (or the accumulated stream text).
+      const replyText = extractText(result);
+      if (accumulated || replyText !== '(no result)') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'model', text: replyText || accumulated },
+        ]);
+      }
     }
+
 
     return result;
   }
 
   // ── Process a result: update session tracking & detect interrupts ────
   function processResult(result: AgentOutput) {
+    // On a failed turn this is the last-good state/snapshot (e.g. a forged or
+    // stale resume is rejected with INVALID_ARGUMENT but the snapshot the flow
+    // paused on is preserved), so the user can retry the approval.
     if (result?.state) stateRef.current = result.state;
     if (result?.snapshotId) snapshotIdRef.current = result.snapshotId;
 
-    // Check if the result contains an interrupt (userApproval tool request).
-    const irpt = findInterrupt(result);
-    if (irpt && result.snapshotId) {
-      setInterrupt({ ...irpt, snapshotId: result.snapshotId });
+    // A turn (including a resume) can now fail gracefully: instead of throwing,
+    // the agent resolves with `finishReason: 'failed'` and a structured
+    // `error`. Surface it but keep the session usable.
+    if (result?.finishReason === 'failed') {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'system',
+          text:
+            `⚠️ Turn failed (${result.error?.status ?? 'INTERNAL'}): ` +
+            `${result.error?.message ?? 'Unknown error'}.`,
+        },
+      ]);
+      return;
+    }
+
+    // The turn paused for approval — drive off the finish reason rather than
+    // scanning message content. `findInterrupt` is then used only to extract
+    // the dialog details (ref/action/details) from the tool request.
+    if (result?.finishReason === 'interrupted' && result.snapshotId) {
+      const irpt = findInterrupt(result);
+      if (irpt) {
+        setInterrupt({ ...irpt, snapshotId: result.snapshotId });
+      }
     }
   }
+
+
 
   return (
     <div className="page-with-sidebar">
