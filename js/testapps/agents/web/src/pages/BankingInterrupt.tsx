@@ -196,7 +196,6 @@ export default function BankingInterrupt() {
       }
     }
 
-
     return result;
   }
 
@@ -234,8 +233,6 @@ export default function BankingInterrupt() {
       }
     }
   }
-
-
 
   return (
     <div className="page-with-sidebar">

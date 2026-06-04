@@ -241,7 +241,6 @@ export default function WeatherChat() {
       } finally {
         setLoading(false);
       }
-
     },
     [loading, navigate]
   );

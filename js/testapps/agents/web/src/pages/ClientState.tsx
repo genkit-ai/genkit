@@ -161,7 +161,6 @@ export default function ClientState() {
       } finally {
         setLoading(false);
       }
-
     },
     [loading]
   );

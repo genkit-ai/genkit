@@ -43,7 +43,6 @@ export const AgentFinishReasonSchema = z.enum([
 ]);
 export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
 
-
 // ---------------------------------------------------------------------------
 // Session state & artifacts
 // ---------------------------------------------------------------------------
@@ -100,7 +99,6 @@ export const TurnEndSchema = z.object({
 });
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
-
 /**
  * Schema for stream chunks emitted during agent execution.
  */
@@ -130,7 +128,6 @@ export const AgentOutputSchema = z.object({
     .optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
-
 
 // ---------------------------------------------------------------------------
 // Snapshot

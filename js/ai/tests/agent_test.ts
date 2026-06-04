@@ -398,7 +398,6 @@ describe('Agent', () => {
       );
     });
 
-
     it('should use init.state for client-managed agents (no store)', async () => {
       const registry = new Registry();
 
@@ -1593,7 +1592,6 @@ describe('Agent', () => {
       );
     });
 
-
     it('should reject resume.respond referencing a non-existent tool', async () => {
       const registry = new Registry();
       registry.apiStability = 'beta';
@@ -1682,7 +1680,6 @@ describe('Agent', () => {
       );
     });
 
-
     it('should reject resume.restart referencing a non-existent tool', async () => {
       const registry = new Registry();
       registry.apiStability = 'beta';
@@ -1754,7 +1751,6 @@ describe('Agent', () => {
         `Expected not found error, got: ${output2.error!.message}`
       );
     });
-
 
     it('should process all pre-queued messages in the background after detaching', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
@@ -2800,10 +2796,7 @@ Now respond to the latest message.`,
       assert.strictEqual((output.state!.custom as any).count, 1);
       // The first user message is preserved in the recovered history.
       assert.ok(output.state!.messages);
-      assert.strictEqual(
-        output.state!.messages![0].content[0].text,
-        'one'
-      );
+      assert.strictEqual(output.state!.messages![0].content[0].text, 'one');
     });
 
     it('server-managed: writes a recovery snapshot when a selective callback skipped the prior turn', async () => {
@@ -2857,7 +2850,6 @@ Now respond to the latest message.`,
     });
 
     it('surfaces the generate finishReason from a prompt agent', async () => {
-
       const registry = new Registry();
       registry.apiStability = 'beta';
       const pm = defineProgrammableModel(registry, undefined, 'frModel');

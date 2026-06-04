@@ -244,7 +244,6 @@ export class SessionRunner<State = unknown> {
   private store?: SessionStore<State>;
   public isDetached: boolean = false;
 
-
   constructor(
     session: Session<State>,
     inputCh: AsyncIterable<AgentInput>,
@@ -276,7 +275,6 @@ export class SessionRunner<State = unknown> {
     this.lastGoodState = this.session.getState();
     this.lastGoodStateVersion = this.session.getVersion();
   }
-
 
   // ── Session delegate methods ────────────────────────────────────────
   // These forward to `this.session` so callers can write `sess.addMessages()`
@@ -465,7 +463,6 @@ export class SessionRunner<State = unknown> {
     }
     return assignedId;
   }
-
 
   /**
    * Evaluates whether to save a snapshot to the persistent store.
@@ -738,7 +735,6 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         };
       }
 
-
       // Tag the current trace span with the sessionId so that traces
       // belonging to the same agent conversation can be correlated.
       setCustomMetadataAttributes({
@@ -936,7 +932,6 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         ...(!config.store && { state: toClientState(session.getState()) }),
       };
     }
-
   );
 
   // Helper that applies the clientStateTransform to a snapshot's state,
