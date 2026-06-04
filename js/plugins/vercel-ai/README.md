@@ -72,9 +72,12 @@ export default function Chat() {
     () => new GenkitChatTransport({ url: '/api/chat/weather' }),
     []
   );
+  // The `useChat` `id` is sent to the agent as its `sessionId`; it must be a UUID.
+  const chatId = useMemo(() => crypto.randomUUID(), []);
 
   const { messages, input, handleInputChange, handleSubmit, status } =
-    useChat({ transport });
+    useChat({ id: chatId, transport });
+
 
   return (
     <div>
@@ -131,7 +134,10 @@ export default function Chat() {
     () => new GenkitChatTransport({ url: '/api/chat/weather' }),
     []
   );
-  const { messages, status, sendMessage } = useChat({ transport });
+  // The `useChat` `id` is sent to the agent as its `sessionId`; it must be a UUID.
+  const chatId = useMemo(() => crypto.randomUUID(), []);
+  const { messages, status, sendMessage } = useChat({ id: chatId, transport });
+
 
   return (
     <Conversation>
@@ -208,60 +214,39 @@ const transport = new GenkitChatTransport({
 | ------ | ---- | ----------- |
 | `url` | `string` | **Required.** URL of the Genkit agent endpoint. |
 | `headers` | `Record<string, string> \| () => Record<string, string>` | Optional HTTP headers to include on every request. Accepts a static object or a function for dynamic values (e.g. auth tokens). |
-| `store` | `SnapshotStore` | Optional storage for per-chat snapshot state. Defaults to `InMemorySnapshotStore` (lost on reload). Use `LocalStorageSnapshotStore` to persist multi-turn continuity across reloads, or supply your own. |
 
-#### Persisting conversations across reloads
+> **The `useChat` `id` must be a bare UUID.** The transport sends the chat
+> `id` to the agent as its Genkit `sessionId`, and the agent server requires
+> session ids to be bare UUIDs. Generate one with `crypto.randomUUID()` and
+> pass it to `useChat({ id })`. If you omit `id`, the AI SDK generates a
+> non-UUID id and the transport will return an error.
 
-The transport tracks each chat's server-side `snapshotId` so multi-turn
-conversations resume from the correct state. By default this lives in memory
-and is lost on a full page reload. Provide a persistent `store` to keep it:
+```tsx
+import { useMemo } from 'react';
 
-```ts
-import {
-  GenkitChatTransport,
-  LocalStorageSnapshotStore,
-} from '@genkit-ai/vercel-ai/client';
-
-const transport = new GenkitChatTransport({
-  url: '/api/chat/weather',
-  store: new LocalStorageSnapshotStore(), // survives page reloads
-});
+const chatId = useMemo(() => crypto.randomUUID(), []);
+const { messages, sendMessage } = useChat({ id: chatId, transport });
 ```
 
-Implement the `SnapshotStore` interface (`get`/`set`/`delete`, all
-async-capable) to back snapshots with any storage you like (IndexedDB, a
-remote API, etc.):
+#### Server-managed session state
 
-```ts
-import type {
-  ChatSnapshot,
-  SnapshotStore,
-} from '@genkit-ai/vercel-ai/client';
+Conversation state is **fully server-managed**. The transport sends the chat
+`id` to the agent as a `sessionId`, and the agent persists per-session state in
+its configured `SessionStore`. Each turn automatically resumes the session's
+latest snapshot — there is **no client-side snapshot bookkeeping** to manage or
+persist, and nothing is lost on a page reload (the server holds the state).
 
-class MyStore implements SnapshotStore {
-  async get(chatId: string): Promise<ChatSnapshot | undefined> {
-    /* ... */
-  }
-  async set(chatId: string, snapshot: ChatSnapshot): Promise<void> {
-    /* ... */
-  }
-  async delete(chatId: string): Promise<void> {
-    /* ... */
-  }
-}
-```
+To continue an existing conversation, simply reuse the same UUID `id`.
 
 #### Restoring a conversation after a reload
 
-The transport tracks the *server-side* `snapshotId` so the next turn resumes
-from the right place — but it does **not** persist the rendered messages
-(`useChat` owns those). To fully rehydrate a previous conversation (e.g. after
-a hard reload, or when re-opening a saved chat), you need to do two things:
+Because state is server-managed, resuming the *next* turn requires nothing more
+than reusing the same UUID `id`. The only thing the client must rebuild is the
+*rendered* message list (`useChat` owns those, and they are not persisted by
+the transport).
 
-1. Rebuild the visible messages for `useChat` from a Genkit `SessionSnapshot`.
-2. Seed the transport so the *next* turn resumes from that snapshot.
-
-Use `messagesFromSnapshot` for (1) and `transport.restoreChat` for (2):
+Use `messagesFromSnapshot` to rebuild the visible messages from a Genkit
+`SessionSnapshot` (loaded via a `/state` flow keyed by the same `sessionId`):
 
 ```tsx
 import { useChat } from '@ai-sdk/react';
@@ -270,24 +255,21 @@ import { messagesFromSnapshot } from '@genkit-ai/vercel-ai';
 import { runFlow } from 'genkit/beta/client';
 import { useEffect, useMemo, useState } from 'react';
 
-const chatId = 'my-chat';
-
-export default function RestoredChat({ snapshotId }: { snapshotId: string }) {
+export default function RestoredChat({ sessionId }: { sessionId: string }) {
   const transport = useMemo(() => new GenkitChatTransport({ url: '/api/chat/weather' }), []);
   const [initialMessages, setInitialMessages] = useState([]);
 
   useEffect(() => {
     (async () => {
-      // Load the snapshot from a Genkit `/state` flow (returns a SessionSnapshot).
-      const snapshot = await runFlow({ url: '/api/chat/weather/state', input: snapshotId });
-      // 1. Rebuild the visible message list.
+      // Load the latest snapshot for this session (returns a SessionSnapshot).
+      const snapshot = await runFlow({ url: '/api/chat/weather/state', input: sessionId });
+      // Rebuild the visible message list from the snapshot.
       setInitialMessages(messagesFromSnapshot(snapshot.state.messages));
-      // 2. Seed the transport so the next turn resumes from this snapshot.
-      await transport.restoreChat(chatId, snapshot.snapshotId);
     })();
-  }, [snapshotId, transport]);
+  }, [sessionId]);
 
-  const { messages, sendMessage } = useChat({ id: chatId, transport, messages: initialMessages });
+  // Reuse the same UUID `id` so the next turn resumes the server-side session.
+  const { messages, sendMessage } = useChat({ id: sessionId, transport, messages: initialMessages });
   // ...render messages, send new turns — continuity is preserved.
 }
 ```
@@ -298,24 +280,18 @@ element), maps `reasoning` and `media` parts, preserves part `metadata`, and
 emits any unresolved tool request (e.g. a pending interrupt) in the
 `input-available` state so the UI can still resolve it.
 
-> **Tip:** pass the same `id` to `useChat` that you pass to
-> `transport.restoreChat` so the snapshot and the rendered messages stay in
-> sync.
+> **Tip:** the `sessionId` you load the snapshot with must be the same UUID you
+> pass as the `useChat` `id`, so the rendered messages and the server-side
+> session stay in sync.
 
 #### Regenerating a response
 
-
 When the UI triggers a regeneration (the AI SDK sends
-`trigger: 'regenerate-message'`), the transport re-runs the **last turn** from
-the snapshot taken *before* it — so the final assistant message is produced
-again from the prior conversation state instead of appending a new turn.
-
-> **First turn:** regenerating the very first assistant response has no
-> earlier snapshot to resume from. In that case the transport falls back to a
-> **fresh run** from the last user message (no resume payload), which produces
-> a new answer to the same prompt — the expected "regenerate the first answer"
-> behavior.
-
+`trigger: 'regenerate-message'`), the transport re-runs the last user message
+as a **fresh turn** against the current server-side session state. This
+produces a new answer to the same prompt. Because state is server-managed by
+`sessionId`, there is no client-side snapshot pointer to rewind to — the
+regenerated turn is appended to the session like any other turn.
 
 #### How it works
 
@@ -325,13 +301,16 @@ again from the prior conversation state instead of appending a new turn.
 2. **Transforms** Genkit's `AgentStreamChunk` events into Vercel AI SDK
    `UIMessageChunk` events (`text-delta`, `tool-input-available`,
    `tool-output-available`, etc.).
-3. **Tracks session state** client-side using a `chatId → snapshotId` map,
-   so multi-turn conversations automatically resume from the correct
-   server-side snapshot without any additional state management.
+3. **Sends the session id** — the transport passes `init: { sessionId: chatId }`
+   to the agent, which persists per-session state server-side and resumes the
+   session's latest snapshot on each turn. No client-side snapshot tracking is
+   needed.
 4. **Handles interrupts** — when an agent pauses for human input (via
-   `defineInterrupt`), the transport detects the pending tool request and
-   records it. On the next `sendMessages` call with resolved tool results,
-   it automatically sends a `resume` payload instead of a new message.
+   `defineInterrupt`), the transport surfaces the pending tool call to the UI.
+   On the next `sendMessages` call the resolved tool results are detected
+   directly from the message history, and the transport automatically sends a
+   `resume` payload instead of a new message.
+
 
 ### Interrupts (human-in-the-loop)
 
@@ -415,8 +394,9 @@ The `UIMessage` type is also re-exported from the `ai` package for convenience.
 ## Features
 
 - **Text streaming** — streams token-by-token text deltas to the UI
-- **Multi-turn conversations** — automatic snapshot-based session continuity
+- **Multi-turn conversations** — automatic server-managed session continuity keyed by the `useChat` `id` (`sessionId`)
 - **Tool calls** — surfaces tool inputs and outputs as they happen
+
 - **Interrupts (human-in-the-loop)** — first-class support for `defineInterrupt` tools; pause and resume flows with user input
 - **Custom headers** — static or dynamic headers for authentication
 - **Browser-safe** — the `/client` entry point has no Node.js dependencies

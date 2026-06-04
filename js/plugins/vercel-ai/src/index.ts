@@ -17,7 +17,9 @@
 export type { UIMessage } from 'ai';
 
 export {
+  currentTurnResolvedTools,
   extractResolvedToolResults,
+  findLastNonEmptyUserMessage,
   findLastUserMessage,
   mapGenkitMessageToUI,
   mapUIMessageToGenkit,
@@ -27,11 +29,3 @@ export {
   type ResolvedToolResult,
   type RestartInterruptOutput,
 } from './mapping.js';
-
-export {
-  InMemorySnapshotStore,
-  LocalStorageSnapshotStore,
-  type ChatSnapshot,
-  type PendingInterrupt,
-  type SnapshotStore,
-} from './store.js';

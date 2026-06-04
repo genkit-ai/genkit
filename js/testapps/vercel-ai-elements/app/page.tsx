@@ -19,7 +19,6 @@
 import { useChat } from '@ai-sdk/react';
 import {
   GenkitChatTransport,
-  LocalStorageSnapshotStore,
   restartInterrupt,
 } from '@genkit-ai/vercel-ai/client';
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
@@ -112,19 +111,17 @@ const agents: Record<
 function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
   const agent = agents[agentKey];
 
-  // Persist per-chat snapshot state in localStorage (namespaced per agent) so
-  // multi-turn continuity survives a page reload. Without a `store`, the
-  // transport defaults to an in-memory store and history resets on refresh.
+  // Conversation state is fully server-managed: the transport sends the
+  // `useChat` `id` to the agent as its Genkit `sessionId`, and the agent
+  // persists per-session state server-side. The `id` must be a bare UUID.
   const transport = useMemo(
-    () =>
-      new GenkitChatTransport({
-        url: agent.endpoint,
-        store: new LocalStorageSnapshotStore({
-          prefix: `genkit-vercel-ai:${agentKey}:`,
-        }),
-      }),
-    [agent.endpoint, agentKey]
+    () => new GenkitChatTransport({ url: agent.endpoint }),
+    [agent.endpoint]
   );
+
+  // A stable UUID for this chat session (regenerated when the agent changes,
+  // since each panel is keyed by `activeAgent` and remounts).
+  const chatId = useMemo(() => crypto.randomUUID(), []);
 
   // `addToolResult` records the user's resolution of an interrupted tool;
   // `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls`
@@ -132,6 +129,7 @@ function ChatPanel({ agentKey }: { agentKey: AgentKey }) {
   // tool call has a result. These are AI SDK v6 native HITL primitives — no
   // manual setMessages/flushSync/phantom-message dance required.
   const { messages, status, sendMessage, addToolResult } = useChat({
+    id: chatId,
     transport,
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
   });

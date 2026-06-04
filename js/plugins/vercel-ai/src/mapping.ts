@@ -281,16 +281,15 @@ export function mapGenkitMessageToUI(
  * requests (e.g. a pending interrupt) are emitted in the `input-available`
  * state.
  *
- * To also resume the *next* turn from the restored snapshot, seed the
- * transport with {@link GenkitChatTransport.restoreChat} using the snapshot's
- * `snapshotId`.
+ * Conversation state is server-managed by `sessionId` (the `useChat` `id`), so
+ * to resume the *next* turn you only need to reuse the same chat `id` — there
+ * is no snapshot to restore on the client.
  *
  * @example
  * ```ts
- * const snapshot = await runFlow({ url: '/api/chat/weather/state', input: snapshotId });
+ * const snapshot = await runFlow({ url: '/api/chat/weather/state', input: sessionId });
  * const messages = messagesFromSnapshot(snapshot.state.messages);
- * await transport.restoreChat(chatId, snapshot.snapshotId);
- * // pass `messages` to useChat({ messages })
+ * // pass `messages` to useChat({ id: sessionId, messages })
  * ```
  */
 export function messagesFromSnapshot(messages: MessageData[]): UIMessage[] {
@@ -403,6 +402,64 @@ export interface ResolvedToolResult {
 }
 
 /**
+ * Returns true if a user message carries no meaningful content — i.e. it has
+ * no non-empty text and no file parts. The AI SDK's `sendMessage({ text: '' })`
+ * (used to nudge a resume) produces such a "phantom" user message, which must
+ * not be treated as a real user turn.
+ */
+function isEmptyUserMessage(msg: UIMessage): boolean {
+  return !msg.parts.some((part) => {
+    if (part.type === 'text') {
+      return typeof part.text === 'string' && part.text.trim() !== '';
+    }
+    if (part.type === 'file') {
+      return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Extracts the resolved tool invocations carried by a single UIMessage.
+ *
+ * Supports the v6 per-tool format (`type === 'tool-<toolName>'`) as well as
+ * dynamic tools (`type === 'dynamic-tool'`, with an explicit `toolName`),
+ * matching `state === 'output-available'`. De-duplicates by `toolCallId`.
+ */
+function resolvedToolsFromMessage(msg: UIMessage): ResolvedToolResult[] {
+  const seen = new Set<string>();
+  const results: ResolvedToolResult[] = [];
+  for (const part of msg.parts) {
+    const p = part as unknown as Record<string, unknown>;
+    const isTool =
+      part.type === 'dynamic-tool' || part.type.startsWith('tool-');
+    if (
+      isTool &&
+      typeof p.toolCallId === 'string' &&
+      p.toolCallId &&
+      !seen.has(p.toolCallId) &&
+      p.state === 'output-available' &&
+      p.output !== undefined
+    ) {
+      const toolName =
+        typeof p.toolName === 'string' && p.toolName
+          ? p.toolName
+          : part.type.startsWith('tool-')
+            ? part.type.slice('tool-'.length)
+            : 'unknown';
+      seen.add(p.toolCallId);
+      results.push({
+        toolCallId: p.toolCallId,
+        toolName,
+        input: p.input,
+        result: p.output,
+      });
+    }
+  }
+  return results;
+}
+
+/**
  * Extracts resolved tool invocations from a UIMessage array.
  *
  * Supports the v6 per-tool format (`type === 'tool-<toolName>'`) as well as
@@ -410,10 +467,11 @@ export interface ResolvedToolResult {
  * matching `state === 'output-available'`.
  *
  * Scans **all** messages (most-recent first) and returns every resolved tool
- * result, de-duplicated by `toolCallId` (keeping the most recent). The
- * transport then filters these against the set of pending interrupts so only
- * the relevant resolutions are sent back as a resume payload — this avoids
- * misclassifying an auto-executed tool's output as an interrupt response.
+ * result, de-duplicated by `toolCallId` (keeping the most recent).
+ *
+ * Prefer {@link currentTurnResolvedTools} for interrupt-resume detection — it
+ * scopes the scan to the most recent turn so prior turns' (already-completed)
+ * tool calls are not re-sent as a resume payload.
  */
 export function extractResolvedToolResults(
   messages: UIMessage[]
@@ -425,46 +483,50 @@ export function extractResolvedToolResults(
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== 'assistant') continue;
-
-    for (const part of msg.parts) {
-      // v6 per-tool format: { type: 'tool-<name>', toolCallId,
-      //   state: 'output-available', output: ... }
-      // In SDK v6, ToolUIPart encodes the tool name in the `type` field
-      // (e.g. `type: 'tool-userApproval'`) and does NOT have a separate
-      // `toolName` property.  We derive the name from `type` when
-      // `toolName` is not explicitly present.
-      // Also handle dynamic tools (`type: 'dynamic-tool'`, which carry an
-      // explicit `toolName`) for parity with `mapUIPartToGenkit` — otherwise
-      // an interrupt surfaced as a dynamic tool could never be resolved.
-      const p = part as unknown as Record<string, unknown>;
-      const isTool =
-        part.type === 'dynamic-tool' || part.type.startsWith('tool-');
-      if (
-        isTool &&
-        typeof p.toolCallId === 'string' &&
-        p.toolCallId &&
-        !seen.has(p.toolCallId) &&
-        p.state === 'output-available' &&
-        p.output !== undefined
-      ) {
-        const toolName =
-          typeof p.toolName === 'string' && p.toolName
-            ? p.toolName
-            : part.type.startsWith('tool-')
-              ? part.type.slice('tool-'.length)
-              : 'unknown';
-        seen.add(p.toolCallId);
-        results.push({
-          toolCallId: p.toolCallId,
-          toolName,
-          input: p.input,
-          result: p.output,
-        });
-      }
+    for (const tr of resolvedToolsFromMessage(msg)) {
+      if (seen.has(tr.toolCallId)) continue;
+      seen.add(tr.toolCallId);
+      results.push(tr);
     }
   }
 
   return results;
+}
+
+/**
+ * Returns the resolved tool invocations that constitute an interrupt resume
+ * for the *current* turn, or an empty array if this is a fresh user turn.
+ *
+ * An interrupt resume is identified by the last assistant message carrying
+ * resolved tool outputs (e.g. supplied via `addToolResult`) with no *non-empty*
+ * user message after it. A real user message following the assistant turn means
+ * the user started a new turn, so no resume is performed.
+ *
+ * This deliberately scopes detection to the most recent turn: tool calls from
+ * earlier turns are already part of the server-side session state and must not
+ * be replayed as a resume payload.
+ */
+export function currentTurnResolvedTools(
+  messages: UIMessage[]
+): ResolvedToolResult[] {
+  // Locate the most recent assistant message.
+  let lastAssistantIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  if (lastAssistantIdx === -1) return [];
+
+  // A non-empty user message after the assistant turn means a fresh user turn.
+  for (let i = lastAssistantIdx + 1; i < messages.length; i++) {
+    if (messages[i].role === 'user' && !isEmptyUserMessage(messages[i])) {
+      return [];
+    }
+  }
+
+  return resolvedToolsFromMessage(messages[lastAssistantIdx]);
 }
 
 /**
@@ -475,6 +537,20 @@ export function findLastUserMessage(
 ): UIMessage | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === 'user') return messages[i];
+  }
+  return undefined;
+}
+
+/**
+ * Finds the last *non-empty* user message in a UIMessage array, skipping
+ * phantom empty messages produced by `sendMessage({ text: '' })`.
+ */
+export function findLastNonEmptyUserMessage(
+  messages: UIMessage[]
+): UIMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === 'user' && !isEmptyUserMessage(msg)) return msg;
   }
   return undefined;
 }

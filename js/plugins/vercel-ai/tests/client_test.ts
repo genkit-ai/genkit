@@ -30,10 +30,7 @@ import type * as http from 'http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   GenkitChatTransport,
-  InMemorySnapshotStore,
   restartInterrupt,
-  type ChatSnapshot,
-  type SnapshotStore,
   type UIMessageChunk,
 } from '../src/client.js';
 
@@ -66,6 +63,11 @@ function makeUIMessage(
     role,
     parts: parts ?? [{ type: 'text', text }],
   };
+}
+
+/** A fresh, valid session id (the useChat `id` must be a bare UUID). */
+function newChatId(): string {
+  return crypto.randomUUID();
 }
 
 /** Filter chunks by type. */
@@ -199,7 +201,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-1',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', 'Hi')],
       abortSignal: undefined,
@@ -274,7 +276,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-reasoning',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', 'What is the answer?')],
       abortSignal: undefined,
@@ -323,9 +325,9 @@ describe('GenkitChatTransport e2e', () => {
     );
   });
 
-  // ── Test: Multi-turn conversation with snapshotId ───────────────────
+  // ── Test: Multi-turn conversation (server-managed by sessionId) ──────
 
-  it('should maintain snapshotId across turns for multi-turn conversation', async () => {
+  it('should maintain conversation across turns via sessionId', async () => {
     let callCount = 0;
     const capturedRequests: GenerateRequest[] = [];
 
@@ -350,10 +352,14 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
+    // The same chat id is reused across turns; the agent keeps per-session
+    // state keyed by that id.
+    const chatId = newChatId();
+
     // Turn 1
     const stream1 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-multi',
+      chatId,
       messageId: undefined,
       messages: [makeUIMessage('user', 'Hello')],
       abortSignal: undefined,
@@ -366,10 +372,10 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(deltas1.length, 1);
     assert.strictEqual(deltas1[0].delta, 'Reply 1');
 
-    // Turn 2 — transport automatically sends snapshotId from turn 1
+    // Turn 2 — same sessionId resumes the server-side state automatically.
     const stream2 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-multi',
+      chatId,
       messageId: undefined,
       messages: [
         makeUIMessage('user', 'Hello'),
@@ -389,9 +395,9 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(callCount, 2);
 
     // Turn 2's model request should contain the accumulated history from
-    // the server-side snapshot (not just the latest message). The agent
+    // the server-side session (not just the latest message). The agent
     // adds the user message from turn 1 and the model reply, plus the
-    // new user message — so there should be at least 3 messages.
+    // new user message — so there should be at least 2 user messages.
     const turn2Req = capturedRequests[1];
     const turn2UserMsgs = turn2Req.messages.filter((m) => m.role === 'user');
     assert.ok(
@@ -446,7 +452,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-tool',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', "What's the weather in London?")],
       abortSignal: undefined,
@@ -559,10 +565,12 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
+    const chatId = newChatId();
+
     // ── Phase 1: Initial message triggers interrupt ──────────────────
     const stream1 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-interrupt',
+      chatId,
       messageId: undefined,
       messages: [makeUIMessage('user', 'Delete my account')],
       abortSignal: undefined,
@@ -625,7 +633,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream2 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-interrupt',
+      chatId,
       messageId: undefined,
       messages: messagesForResume,
       abortSignal: undefined,
@@ -713,10 +721,12 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
+    const chatId = newChatId();
+
     // ── Phase 1: Initial message triggers interrupt ──────────────────
     const stream1 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-interrupt-v6',
+      chatId,
       messageId: undefined,
       messages: [makeUIMessage('user', 'Transfer 500 to savings')],
       abortSignal: undefined,
@@ -758,7 +768,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream2 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-interrupt-v6',
+      chatId,
       messageId: undefined,
       messages: messagesForResume,
       abortSignal: undefined,
@@ -818,6 +828,40 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(result, null);
   });
 
+  // ── Test: Invalid (non-UUID) chatId is rejected ──────────────────────
+
+  it('should return an error chunk when chatId is not a UUID', async () => {
+    const transport = new GenkitChatTransport({
+      url: `http://localhost:${port}/testAgent`,
+    });
+
+    const stream = await transport.sendMessages({
+      trigger: 'submit-message',
+      chatId: 'not-a-uuid',
+      messageId: undefined,
+      messages: [makeUIMessage('user', 'Hi')],
+      abortSignal: undefined,
+    });
+
+    const chunks = await collectChunks(stream);
+    const types = chunkTypes(chunks);
+
+    // Error stream uses the standard envelope: start → error → finish
+    assert.strictEqual(types[0], 'start');
+    assert.strictEqual(types[types.length - 1], 'finish');
+
+    const errorChunks = chunksOfType(chunks, 'error');
+    assert.strictEqual(errorChunks.length, 1, 'Exactly one error chunk');
+    assert.ok(
+      errorChunks[0].errorText.includes('UUID'),
+      `Error text should mention UUID, got: ${errorChunks[0].errorText}`
+    );
+
+    // No content chunks should be emitted.
+    assert.strictEqual(chunksOfType(chunks, 'text-delta').length, 0);
+    assert.strictEqual(chunksOfType(chunks, 'start-step').length, 0);
+  });
+
   // ── Test: Error handling ────────────────────────────────────────────
 
   it('should return error chunk when no user message is found', async () => {
@@ -827,7 +871,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-err',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('assistant', 'I am assistant')],
       abortSignal: undefined,
@@ -882,7 +926,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream1 = await transport1.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-headers-1',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', 'hi')],
       abortSignal: undefined,
@@ -910,7 +954,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream2 = await transport2.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-headers-2',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', 'hi')],
       abortSignal: undefined,
@@ -930,9 +974,9 @@ describe('GenkitChatTransport e2e', () => {
     );
   });
 
-  // ── Test: Different chatIds get independent snapshotIds ──────────────
+  // ── Test: Different chatIds get independent sessions ─────────────────
 
-  it('should maintain independent snapshots per chatId', async () => {
+  it('should maintain independent sessions per chatId', async () => {
     let callCount = 0;
     const capturedRequests: GenerateRequest[] = [];
 
@@ -956,10 +1000,13 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
+    const chatA = newChatId();
+    const chatB = newChatId();
+
     // Chat A — turn 1
     const streamA1 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-A',
+      chatId: chatA,
       messageId: undefined,
       messages: [makeUIMessage('user', 'Hello A')],
       abortSignal: undefined,
@@ -974,7 +1021,7 @@ describe('GenkitChatTransport e2e', () => {
     // Chat B — turn 1
     const streamB1 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-B',
+      chatId: chatB,
       messageId: undefined,
       messages: [makeUIMessage('user', 'Hello B')],
       abortSignal: undefined,
@@ -986,10 +1033,10 @@ describe('GenkitChatTransport e2e', () => {
       'echo: Hello B'
     );
 
-    // Chat A — turn 2 (should use A's snapshot, not B's)
+    // Chat A — turn 2 (should use A's session, not B's)
     const streamA2 = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-A',
+      chatId: chatA,
       messageId: undefined,
       messages: [
         makeUIMessage('user', 'Hello A'),
@@ -1046,7 +1093,7 @@ describe('GenkitChatTransport e2e', () => {
 
     const stream = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-abort',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', 'slow request')],
       abortSignal: abortController.signal,
@@ -1086,57 +1133,6 @@ describe('GenkitChatTransport e2e', () => {
     );
   });
 
-  // ── Test: clearChat releases internal state ──────────────────────────
-
-  it('should clear internal state for a chat via clearChat', async () => {
-    let callCount = 0;
-
-    modelHandler = async (_req, sendChunk) => {
-      callCount++;
-      sendChunk({ content: [{ text: `reply-${callCount}` }] });
-      return {
-        message: { role: 'model', content: [{ text: `reply-${callCount}` }] },
-        finishReason: 'stop',
-      };
-    };
-
-    const transport = new GenkitChatTransport({
-      url: `http://localhost:${port}/testAgent`,
-    });
-
-    // Turn 1 — establishes a snapshot
-    const stream1 = await transport.sendMessages({
-      trigger: 'submit-message',
-      chatId: 'chat-clear',
-      messageId: undefined,
-      messages: [makeUIMessage('user', 'Hello')],
-      abortSignal: undefined,
-    });
-    await collectChunks(stream1);
-    assert.strictEqual(callCount, 1);
-
-    // Clear the chat state
-    transport.clearChat('chat-clear');
-
-    // Turn 2 — after clear, should start a fresh session (no snapshotId)
-    const stream2 = await transport.sendMessages({
-      trigger: 'submit-message',
-      chatId: 'chat-clear',
-      messageId: undefined,
-      messages: [makeUIMessage('user', 'Hello again')],
-      abortSignal: undefined,
-    });
-    const chunks2 = await collectChunks(stream2);
-
-    assert.strictEqual(chunksOfType(chunks2, 'error').length, 0);
-    assert.strictEqual(callCount, 2);
-
-    // The response should work — no errors from stale snapshot state
-    const deltas = chunksOfType(chunks2, 'text-delta');
-    assert.strictEqual(deltas.length, 1);
-    assert.strictEqual(deltas[0].delta, 'reply-2');
-  });
-
   // ── Test: Media/file parts in user messages ───────────────────────────
 
   it('should send file parts as media in Genkit messages', async () => {
@@ -1158,7 +1154,7 @@ describe('GenkitChatTransport e2e', () => {
     // User message with both text and a file part
     const stream = await transport.sendMessages({
       trigger: 'submit-message',
-      chatId: 'chat-media',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [
         makeUIMessage('user', 'Describe this image', [
@@ -1198,9 +1194,13 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual((mediaParts[0] as any).media.contentType, 'image/png');
   });
 
-  // ── Test: Regenerate reruns from the previous snapshot ───────────────
+  // ── Test: Regenerate re-runs the last user turn ──────────────────────
+  //
+  // With server-managed state, regeneration is treated as a fresh turn from
+  // the current session state (there is no client-side snapshot pointer to
+  // rewind to). The transport sends the last *user* message again.
 
-  it('should regenerate the last turn from the previous snapshot', async () => {
+  it('should regenerate the last turn as a fresh run', async () => {
     let callCount = 0;
     const capturedRequests: GenerateRequest[] = [];
 
@@ -1224,11 +1224,13 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
+    const chatId = newChatId();
+
     // Turn 1
     await collectChunks(
       await transport.sendMessages({
         trigger: 'submit-message',
-        chatId: 'chat-regen',
+        chatId,
         messageId: undefined,
         messages: [makeUIMessage('user', 'first')],
         abortSignal: undefined,
@@ -1239,7 +1241,7 @@ describe('GenkitChatTransport e2e', () => {
     await collectChunks(
       await transport.sendMessages({
         trigger: 'submit-message',
-        chatId: 'chat-regen',
+        chatId,
         messageId: undefined,
         messages: [
           makeUIMessage('user', 'first'),
@@ -1251,11 +1253,11 @@ describe('GenkitChatTransport e2e', () => {
     );
     assert.strictEqual(callCount, 2);
 
-    // Regenerate turn 2: should re-run from the snapshot taken after turn 1,
-    // so the model sees the "first" history but NOT a duplicated "second".
+    // Regenerate turn 2: re-runs the last user turn against the current
+    // session state. It must NOT be treated as an interrupt resume.
     const regenStream = await transport.sendMessages({
       trigger: 'regenerate-message',
-      chatId: 'chat-regen',
+      chatId,
       messageId: undefined,
       messages: [
         makeUIMessage('user', 'first'),
@@ -1272,24 +1274,18 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(regenDeltas[0].delta, 'answer-3');
     assert.strictEqual(callCount, 3);
 
-    // The regeneration request should resume from the post-turn-1 snapshot:
-    // it includes the original "first" exchange and a single "second" user
-    // turn (sent fresh), but not the turn-2 assistant reply.
+    // The regeneration request should see the last user message ("second").
     const regenReq = capturedRequests[2];
     const regenUserMsgs = regenReq.messages.filter((m) => m.role === 'user');
-    const secondCount = regenUserMsgs.filter(
-      (m) => m.content[0]?.text === 'second'
-    ).length;
     assert.strictEqual(
-      secondCount,
-      1,
-      `Regeneration should include "second" exactly once, got ${secondCount}`
+      regenUserMsgs[regenUserMsgs.length - 1]?.content[0]?.text,
+      'second'
     );
   });
 
-  // ── Test: Regenerate on the very first turn (no previous snapshot) ────
+  // ── Test: Regenerate on the very first turn ──────────────────────────
 
-  it('should regenerate the first turn from scratch when there is no previous snapshot', async () => {
+  it('should regenerate the first turn from scratch', async () => {
     let callCount = 0;
     const capturedRequests: GenerateRequest[] = [];
 
@@ -1313,13 +1309,12 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
-    // Regenerate as the *first* interaction for this chat: there is no stored
-    // snapshot, so `previousSnapshotId` is undefined. The transport must fall
-    // back to a fresh run from the last user message rather than crashing or
-    // trying to resume from a nonexistent snapshot.
+    // Regenerate as the *first* interaction for this chat: the session has
+    // no prior state, so the transport falls back to a fresh run from the
+    // last user message rather than crashing.
     const regenStream = await transport.sendMessages({
       trigger: 'regenerate-message',
-      chatId: 'chat-regen-first',
+      chatId: newChatId(),
       messageId: undefined,
       messages: [makeUIMessage('user', 'only message')],
       abortSignal: undefined,
@@ -1344,120 +1339,6 @@ describe('GenkitChatTransport e2e', () => {
     // Stream envelope complete.
     assert.strictEqual(chunkTypes(regenChunks)[0], 'start');
     assert.strictEqual(chunkTypes(regenChunks).at(-1), 'finish');
-  });
-
-  // ── Test: Custom SnapshotStore is used for persistence ───────────────
-
-  it('should use a custom SnapshotStore for snapshot persistence', async () => {
-    modelHandler = async (_req, sendChunk) => {
-      sendChunk({ content: [{ text: 'stored' }] });
-      return {
-        message: { role: 'model', content: [{ text: 'stored' }] },
-        finishReason: 'stop',
-      };
-    };
-
-    // Recording store wrapper to observe reads/writes.
-    const inner = new InMemorySnapshotStore();
-    const sets: Array<{ chatId: string; snapshot: ChatSnapshot }> = [];
-    const store: SnapshotStore = {
-      get: (chatId) => inner.get(chatId),
-      set: (chatId, snapshot) => {
-        sets.push({ chatId, snapshot });
-        inner.set(chatId, snapshot);
-      },
-      delete: (chatId) => inner.delete(chatId),
-    };
-
-    const transport = new GenkitChatTransport({
-      url: `http://localhost:${port}/testAgent`,
-      store,
-    });
-
-    await collectChunks(
-      await transport.sendMessages({
-        trigger: 'submit-message',
-        chatId: 'chat-custom-store',
-        messageId: undefined,
-        messages: [makeUIMessage('user', 'hi')],
-        abortSignal: undefined,
-      })
-    );
-
-    // The transport must have persisted a snapshot via the custom store.
-    assert.ok(sets.length >= 1, 'Custom store should receive at least one set');
-    const last = sets[sets.length - 1];
-    assert.strictEqual(last.chatId, 'chat-custom-store');
-    assert.ok(
-      typeof last.snapshot.snapshotId === 'string' &&
-        last.snapshot.snapshotId.length > 0,
-      'Persisted snapshot should carry a snapshotId'
-    );
-
-    // And the snapshot should be retrievable for the next turn.
-    const persisted = await store.get('chat-custom-store');
-    assert.ok(persisted?.snapshotId, 'Snapshot should be retrievable');
-  });
-
-  // ── Test: Persisted pendingInterrupts identify the paused tool ────────
-
-  it('should persist pendingInterrupts describing the paused tool', async () => {
-    modelHandler = async (_req) => {
-      // Model requests the interrupt tool — the agent pauses on it.
-      return {
-        message: {
-          role: 'model',
-          content: [
-            {
-              toolRequest: {
-                name: 'confirmAction',
-                input: { action: 'wire transfer' },
-                ref: 'pending-ref-1',
-              },
-            },
-          ],
-        },
-        finishReason: 'stop',
-      };
-    };
-
-    const inner = new InMemorySnapshotStore();
-    const store: SnapshotStore = {
-      get: (chatId) => inner.get(chatId),
-      set: (chatId, snapshot) => inner.set(chatId, snapshot),
-      delete: (chatId) => inner.delete(chatId),
-    };
-
-    const transport = new GenkitChatTransport({
-      url: `http://localhost:${port}/testAgent`,
-      store,
-    });
-
-    await collectChunks(
-      await transport.sendMessages({
-        trigger: 'submit-message',
-        chatId: 'chat-pending',
-        messageId: undefined,
-        messages: [makeUIMessage('user', 'Wire some money')],
-        abortSignal: undefined,
-      })
-    );
-
-    const snapshot = await store.get('chat-pending');
-    assert.strictEqual(
-      snapshot?.interrupted,
-      true,
-      'Chat should be flagged interrupted'
-    );
-    assert.ok(
-      snapshot?.pendingInterrupts,
-      'pendingInterrupts should be persisted'
-    );
-    assert.strictEqual(snapshot!.pendingInterrupts!.length, 1);
-    assert.deepStrictEqual(snapshot!.pendingInterrupts![0], {
-      toolCallId: 'pending-ref-1',
-      toolName: 'confirmAction',
-    });
   });
 
   // ── Test: Interrupt → restart re-runs the tool server-side ───────────
@@ -1506,11 +1387,13 @@ describe('GenkitChatTransport e2e', () => {
       url: `http://localhost:${port}/testAgent`,
     });
 
+    const chatId = newChatId();
+
     // ── Phase 1: triggers the interrupt ──────────────────────────────
     const chunks1 = await collectChunks(
       await transport.sendMessages({
         trigger: 'submit-message',
-        chatId: 'chat-restart',
+        chatId,
         messageId: undefined,
         messages: [makeUIMessage('user', 'Run the risky action')],
         abortSignal: undefined,
@@ -1547,7 +1430,7 @@ describe('GenkitChatTransport e2e', () => {
     const chunks2 = await collectChunks(
       await transport.sendMessages({
         trigger: 'submit-message',
-        chatId: 'chat-restart',
+        chatId,
         messageId: undefined,
         messages: messagesForRestart,
         abortSignal: undefined,
@@ -1575,141 +1458,5 @@ describe('GenkitChatTransport e2e', () => {
     assert.strictEqual(textDeltas2[0].delta, 'Action completed.');
 
     assert.strictEqual(callCount, 2);
-  });
-
-  // ── Test: Precise filtering ignores auto-executed tool outputs ───────
-  //
-  // When an assistant turn contains BOTH a real interrupt and an unrelated
-  // (already auto-executed) tool output, the resume must send back only the
-  // interrupt's resolution — not the auto-executed tool's output.
-
-  it('should only resume the pending interrupt, ignoring auto-executed tool outputs', async () => {
-    let callCount = 0;
-    const capturedRequests: GenerateRequest[] = [];
-
-    modelHandler = async (req, sendChunk) => {
-      callCount++;
-      capturedRequests.push(JSON.parse(JSON.stringify(req)));
-
-      if (callCount === 1) {
-        // The model asks to run getWeather (auto-executed) AND confirmAction
-        // (an interrupt). Only confirmAction pauses the agent.
-        const toolContent = [
-          {
-            toolRequest: {
-              name: 'getWeather',
-              input: { city: 'Paris' },
-              ref: 'weather-ref',
-            },
-          },
-        ];
-        sendChunk({ content: toolContent });
-        return {
-          message: { role: 'model', content: toolContent },
-          finishReason: 'stop',
-        };
-      }
-
-      if (callCount === 2) {
-        // After getWeather runs, the model now triggers the interrupt.
-        return {
-          message: {
-            role: 'model',
-            content: [
-              {
-                toolRequest: {
-                  name: 'confirmAction',
-                  input: { action: 'book trip' },
-                  ref: 'confirm-ref',
-                },
-              },
-            ],
-          },
-          finishReason: 'stop',
-        };
-      }
-
-      // After resume, final reply.
-      sendChunk({ content: [{ text: 'All set.' }] });
-      return {
-        message: { role: 'model', content: [{ text: 'All set.' }] },
-        finishReason: 'stop',
-      };
-    };
-
-    const transport = new GenkitChatTransport({
-      url: `http://localhost:${port}/testAgent`,
-    });
-
-    // Phase 1: produces an auto-executed getWeather output AND an interrupt.
-    await collectChunks(
-      await transport.sendMessages({
-        trigger: 'submit-message',
-        chatId: 'chat-precise',
-        messageId: undefined,
-        messages: [makeUIMessage('user', 'Book a trip to Paris')],
-        abortSignal: undefined,
-      })
-    );
-
-    // Phase 2: resume. The history carries the resolved interrupt AND the
-    // already-resolved getWeather output. Only the interrupt should resume.
-    const messagesForResume: UIMessage[] = [
-      makeUIMessage('user', 'Book a trip to Paris'),
-      {
-        id: 'assistant-mixed-1',
-        role: 'assistant',
-        parts: [
-          {
-            type: 'tool-getWeather',
-            toolCallId: 'weather-ref',
-            state: 'output-available',
-            input: { city: 'Paris' },
-            output: { temp: 72, condition: 'sunny' },
-          } as UIMessage['parts'][number],
-          {
-            type: 'tool-confirmAction',
-            toolCallId: 'confirm-ref',
-            state: 'output-available',
-            input: { action: 'book trip' },
-            output: { confirmed: true },
-          } as UIMessage['parts'][number],
-        ],
-      },
-    ];
-
-    const chunks = await collectChunks(
-      await transport.sendMessages({
-        trigger: 'submit-message',
-        chatId: 'chat-precise',
-        messageId: undefined,
-        messages: messagesForResume,
-        abortSignal: undefined,
-      })
-    );
-
-    assert.strictEqual(chunksOfType(chunks, 'error').length, 0);
-    const textDeltas = chunksOfType(chunks, 'text-delta');
-    assert.strictEqual(textDeltas.length, 1);
-    assert.strictEqual(textDeltas[0].delta, 'All set.');
-
-    // The resume request (3rd model call) should carry exactly ONE tool
-    // response (the interrupt), not the auto-executed getWeather output.
-    const resumeReq = capturedRequests[2];
-    const toolMsgs = resumeReq.messages.filter((m: any) => m.role === 'tool');
-    const allToolResponses = toolMsgs.flatMap((m: any) =>
-      m.content.filter((p: any) => p.toolResponse)
-    );
-    const confirmResponses = allToolResponses.filter(
-      (p: any) => p.toolResponse?.name === 'confirmAction'
-    );
-    assert.strictEqual(
-      confirmResponses.length,
-      1,
-      'Should resume the confirmAction interrupt exactly once'
-    );
-    assert.deepStrictEqual(confirmResponses[0].toolResponse?.output, {
-      confirmed: true,
-    });
   });
 });
