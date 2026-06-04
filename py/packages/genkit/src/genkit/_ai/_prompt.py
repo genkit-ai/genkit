@@ -339,8 +339,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Args:
             input: Template variables for rendering.
+            **opts: Runtime prompt options (e.g. model, tools, config).
         """
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
 
     async def _call_impl(
         self,
@@ -437,7 +439,8 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
-        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]  # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
+        # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
+        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
         _child_registry, gen_options = await _prepare(self, input, call_opts)
         return gen_options
 
