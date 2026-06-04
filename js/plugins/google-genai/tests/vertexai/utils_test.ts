@@ -22,6 +22,7 @@ import * as sinon from 'sinon';
 import {
   ExpressClientOptions,
   GlobalClientOptions,
+  MultiRegionalClientOptions,
   RegionalClientOptions,
   VertexPluginOptions,
 } from '../../src/vertexai/types.js';
@@ -109,6 +110,34 @@ describe('Vertex AI Utils', () => {
         assert.ok(options.authClient);
         sinon.assert.calledOnce(mockAuthClass);
         sinon.assert.notCalled(authInstance.getProjectId);
+      });
+
+      it('should use multi-regional options when location is in MULTI_REGIONAL_LOCATIONS', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          projectId: 'options-project',
+          location: 'us',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as MultiRegionalClientOptions;
+        assert.strictEqual(options.kind, 'multi-regional');
+        assert.strictEqual(options.projectId, 'options-project');
+        assert.strictEqual(options.location, 'us');
+        assert.ok(options.authClient);
+      });
+
+      it('should pass apiVersion to regional options if provided', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          projectId: 'options-project',
+          location: 'options-location',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as RegionalClientOptions;
+        assert.strictEqual(options.apiVersion, 'v1');
       });
 
       it('should use GCLOUD_PROJECT and GCLOUD_LOCATION env vars', async () => {
@@ -249,6 +278,19 @@ describe('Vertex AI Utils', () => {
         sinon.assert.notCalled(authInstance.getProjectId);
       });
 
+      it('should pass apiVersion to global options if provided', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          location: 'global',
+          projectId: 'options-project',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as GlobalClientOptions;
+        assert.strictEqual(options.apiVersion, 'v1');
+      });
+
       it('should use env project for global options', async () => {
         process.env.GCLOUD_PROJECT = 'env-project';
         const pluginOptions: VertexPluginOptions = { location: 'global' };
@@ -312,6 +354,18 @@ describe('Vertex AI Utils', () => {
         assert.strictEqual(options.kind, 'express');
         assert.strictEqual(options.apiKey, 'key1');
         sinon.assert.notCalled(mockAuthClass);
+      });
+
+      it('should pass apiVersion to express options if provided', async () => {
+        const pluginOptions: VertexPluginOptions = {
+          apiKey: 'key1',
+          apiVersion: 'v1',
+        };
+        const options = (await getDerivedOptions(
+          pluginOptions,
+          mockAuthClass as any
+        )) as ExpressClientOptions;
+        assert.strictEqual(options.apiVersion, 'v1');
       });
 
       it('should use express options with apiKey false in options', async () => {
