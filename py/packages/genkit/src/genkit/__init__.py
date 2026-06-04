@@ -101,6 +101,7 @@ __all__ = [
     # Errors
     'GenkitError',
     'PublicError',
+    # Tools
     'Interrupt',
     'Tool',
     'respond_to_interrupt',
