@@ -22,6 +22,7 @@ import {
   z,
   type StatusName,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 
 export const RetryOptionsSchema = z
   .object({
@@ -191,6 +192,9 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                   if (!noJitter) {
                     delay = delay + 1000 * Math.pow(2, i) * Math.random();
                   }
+                  logger.warn(
+                    `Request failed: ${error?.message || String(error)}. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1} of ${maxRetries})`
+                  );
                   await new Promise((resolve) => __setTimeout(resolve, delay));
                   currentDelay = Math.min(
                     currentDelay * backoffFactor,
