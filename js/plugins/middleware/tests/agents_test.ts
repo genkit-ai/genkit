@@ -577,7 +577,10 @@ describe('agents middleware', () => {
       artifact.name.includes('inlineResearcher'),
       'Artifact name should be namespaced with agent name'
     );
-    assert.ok(artifact.name.includes('result.md'), 'Should contain original name');
+    assert.ok(
+      artifact.name.includes('result.md'),
+      'Should contain original name'
+    );
     assert.ok(
       artifact.content.includes('Research Results'),
       'Inline strategy should include content in tool result'
@@ -700,7 +703,10 @@ describe('agents middleware', () => {
       artifact.name.includes('sessionCoder'),
       'Artifact name should be namespaced with agent name'
     );
-    assert.ok(artifact.name.includes('code.ts'), 'Should contain original name');
+    assert.ok(
+      artifact.name.includes('code.ts'),
+      'Should contain original name'
+    );
     // Session strategy should NOT have content in the tool result.
     assert.strictEqual(
       artifact.content,
