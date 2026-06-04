@@ -173,6 +173,19 @@ export const AgentOutputSchema = z.object({
   artifacts: z.array(ArtifactSchema).optional(),
   /** The reason the invocation finished (e.g. `stop`, `interrupted`). */
   finishReason: AgentFinishReasonSchema.optional(),
+  /**
+   * Present when `finishReason` is `failed`. Carries the original error
+   * details (the runtime resolves gracefully instead of throwing). The
+   * accompanying `state`/`snapshotId` hold the last-good state — the state
+   * the failed turn started with.
+   */
+  error: z
+    .object({
+      status: z.string(),
+      message: z.string(),
+      details: z.any().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -184,7 +197,17 @@ export interface AgentOutput<S = unknown> {
   snapshotId?: string;
   state?: SessionState<S>;
   finishReason?: AgentFinishReason;
+  /**
+   * Present when `finishReason` is `failed`. Carries the original error
+   * details; `state`/`snapshotId` hold the last-good state.
+   */
+  error?: {
+    status: string;
+    message: string;
+    details?: any;
+  };
 }
+
 
 
 /**
@@ -202,12 +225,29 @@ export class SessionRunner<State = unknown> {
   public newSnapshotId?: string;
   /** The finish reason of the most recently completed turn. */
   public lastTurnFinishReason?: AgentFinishReason;
+  /**
+   * Error details of the most recent failed turn. Set when a turn throws and
+   * the runner resolves gracefully instead of propagating the exception.
+   */
+  public lastTurnError?: { status: string; message: string; details?: any };
+  /**
+   * The state the most recently *successful* turn left behind, captured
+   * regardless of whether the `snapshotCallback` chose to persist it. On a
+   * failed turn this is the state the failed turn started with — the
+   * last-good state returned to the caller.
+   */
+  public lastGoodState?: SessionState<State>;
+  /** The finish reason of the most recently successful turn. */
+  private lastGoodFinishReason?: AgentFinishReason;
+  /** Session version corresponding to {@link lastGoodState}. */
+  private lastGoodStateVersion?: number;
   private snapshotCallback?: SnapshotCallback<State>;
   private lastSnapshot?: SessionSnapshot<State>;
 
   private lastSnapshotVersion: number = 0;
   private store?: SessionStore<State>;
   public isDetached: boolean = false;
+
 
   constructor(
     session: Session<State>,
@@ -234,7 +274,14 @@ export class SessionRunner<State = unknown> {
     this.onEndTurn = options?.onEndTurn;
     this.onDetach = options?.onDetach;
     this.newSnapshotId = options?.newSnapshotId;
+
+    // Seed the last-good state with the initial session state so that a
+    // failure on the very first turn still has a valid state to fall back to
+    // (the seed/loaded state, excluding the failed turn's mutations).
+    this.lastGoodState = this.session.getState();
+    this.lastGoodStateVersion = this.session.getVersion();
   }
+
 
   // ── Session delegate methods ────────────────────────────────────────
   // These forward to `this.session` so callers can write `sess.addMessages()`
@@ -303,6 +350,7 @@ export class SessionRunner<State = unknown> {
           const turnResult = await fn(input);
           const finishReason = turnResult?.finishReason;
           this.lastTurnFinishReason = finishReason;
+          this.lastTurnError = undefined;
 
           const snapshotId = await this.maybeSnapshot(
             'turnEnd',
@@ -311,6 +359,14 @@ export class SessionRunner<State = unknown> {
             turnSnapshotId,
             finishReason
           );
+
+          // Capture the state this successful turn produced. This becomes the
+          // last-good state to fall back to if a later turn fails — captured
+          // regardless of whether the snapshotCallback chose to persist it.
+          this.lastGoodState = this.session.getState();
+          this.lastGoodStateVersion = this.session.getVersion();
+          this.lastGoodFinishReason = finishReason;
+
           try {
             if (this.onEndTurn) {
               this.onEndTurn(snapshotId, finishReason);
@@ -328,14 +384,15 @@ export class SessionRunner<State = unknown> {
         const errMessage = e.message || 'Internal failure';
         const errDetails = e.detail || e.details || e;
         this.lastTurnFinishReason = 'failed';
+        this.lastTurnError = {
+          status: errStatus,
+          message: errMessage,
+          details: errDetails,
+        };
         const snapshotId = await this.maybeSnapshot(
           'turnEnd',
           'failed',
-          {
-            status: errStatus,
-            message: errMessage,
-            details: errDetails,
-          },
+          this.lastTurnError,
           turnSnapshotId,
           'failed'
         );
@@ -346,10 +403,74 @@ export class SessionRunner<State = unknown> {
         } catch (_) {
           // Stream was closed, absorb exception
         }
-        throw e;
+
+        // Graceful failure: rather than propagating the exception (which would
+        // discard the action's final return — and with it the last-good state
+        // and all prior successful turns), stop processing further inputs and
+        // let the invocation resolve with `finishReason: 'failed'`. The caller
+        // recovers the last-good state from the returned AgentOutput.
+        break;
       }
     }
   }
+
+  /**
+   * Ensures the last-good state is persisted and returns its snapshotId.
+   *
+   * Used on the failure path for server-managed agents: a selective
+   * `snapshotCallback` may have skipped persisting the last successful turn,
+   * so the newest stored snapshot could predate it. If the last-good state is
+   * already persisted this returns the existing id; otherwise it writes a
+   * one-off recovery snapshot (bypassing the `snapshotCallback`) of the
+   * last-good state and returns its id.
+   *
+   * No-op (returns the last snapshot id, if any) when there is no store.
+   */
+  async ensureRecoverySnapshot(): Promise<string | undefined> {
+    if (!this.store || !this.lastGoodState) {
+      return this.lastSnapshot?.snapshotId;
+    }
+
+    // Already persisted: the last write captured the last-good version.
+    if (
+      this.lastGoodStateVersion !== undefined &&
+      this.lastGoodStateVersion === this.lastSnapshotVersion
+    ) {
+      return this.lastSnapshot?.snapshotId;
+    }
+
+    const snapshotInput: SessionSnapshotInput<State> = {
+      createdAt: new Date().toISOString(),
+      event: 'turnEnd',
+      state: this.lastGoodState,
+      parentId: this.lastSnapshot?.snapshotId,
+      status: 'done',
+      ...(this.lastGoodFinishReason && {
+        finishReason: this.lastGoodFinishReason,
+      }),
+    };
+
+    const assignedId = await this.store.saveSnapshot(
+      undefined,
+      (current) => {
+        if (current?.status === 'aborted') {
+          return null; // Respect a concurrent abort — skip the write.
+        }
+        return snapshotInput;
+      },
+      { context: getContext() }
+    );
+    if (assignedId === null) {
+      return this.lastSnapshot?.snapshotId;
+    }
+
+    this.lastSnapshot = { ...snapshotInput, snapshotId: assignedId };
+    if (this.lastGoodStateVersion !== undefined) {
+      this.lastSnapshotVersion = this.lastGoodStateVersion;
+    }
+    return assignedId;
+  }
+
 
   /**
    * Evaluates whether to save a snapshot to the persistent store.
@@ -555,52 +676,73 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       const init = arg.init;
       const store = config.store || new InMemorySessionStore<State>();
 
-      // Validate that the init strategy matches the agent's state management
-      // mode.  Server-managed agents (with a store) expect a snapshotId;
-      // client-managed agents (no store) expect the full state blob.
-      if (init?.snapshotId && !config.store) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message:
-            `Cannot use 'snapshotId' with agent '${config.name}': this agent ` +
-            `has no store configured (client-managed state). Send 'state' instead.`,
-        });
-      }
-      if (init?.state && config.store) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message:
-            `Cannot send 'state' to agent '${config.name}': this agent uses ` +
-            `a server-managed store. Send 'snapshotId' instead.`,
-        });
-      }
-
-      let session: Session<State>;
-
+      let session!: Session<State>;
       let snapshot: SessionSnapshot<State> | undefined;
 
-      if (init?.snapshotId) {
-        snapshot = await store.getSnapshot(init.snapshotId, {
-          context: getContext(),
-        });
-        if (!snapshot) {
-          throw new Error(`Snapshot ${init.snapshotId} not found`);
+      try {
+        // Validate that the init strategy matches the agent's state management
+        // mode.  Server-managed agents (with a store) expect a snapshotId;
+        // client-managed agents (no store) expect the full state blob.
+        if (init?.snapshotId && !config.store) {
+          throw new GenkitError({
+            status: 'FAILED_PRECONDITION',
+            message:
+              `Cannot use 'snapshotId' with agent '${config.name}': this agent ` +
+              `has no store configured (client-managed state). Send 'state' instead.`,
+          });
         }
-        validateCustomState(
-          snapshot.state?.custom,
-          `snapshot ${init.snapshotId}`
-        );
-        session = new Session<State>(snapshot.state as SessionState<State>);
-      } else if (init?.state && !config.store) {
-        validateCustomState(init.state.custom, 'client-supplied init.state');
-        session = new Session<State>(init.state as SessionState<State>);
-      } else {
-        session = new Session<State>({
-          custom: {} as State,
-          artifacts: [],
-          messages: [],
-        });
+        if (init?.state && config.store) {
+          throw new GenkitError({
+            status: 'FAILED_PRECONDITION',
+            message:
+              `Cannot send 'state' to agent '${config.name}': this agent uses ` +
+              `a server-managed store. Send 'snapshotId' instead.`,
+          });
+        }
+
+        if (init?.snapshotId) {
+          snapshot = await store.getSnapshot(init.snapshotId, {
+            context: getContext(),
+          });
+          if (!snapshot) {
+            throw new GenkitError({
+              status: 'NOT_FOUND',
+              message: `Snapshot ${init.snapshotId} not found`,
+            });
+          }
+          validateCustomState(
+            snapshot.state?.custom,
+            `snapshot ${init.snapshotId}`
+          );
+          session = new Session<State>(snapshot.state as SessionState<State>);
+        } else if (init?.state && !config.store) {
+          validateCustomState(init.state.custom, 'client-supplied init.state');
+          session = new Session<State>(init.state as SessionState<State>);
+        } else {
+          session = new Session<State>({
+            custom: {} as State,
+            artifacts: [],
+            messages: [],
+          });
+        }
+      } catch (e: any) {
+        // Pre-turn / setup failure (state-vs-store mismatch, missing snapshot,
+        // invalid client state). Resolve gracefully with `finishReason: 'failed'`
+        // — preserving the original `error.status` — rather than throwing, so
+        // the caller gets a structured, inspectable result. There is no
+        // last-good turn yet; echo back the client-supplied state when present.
+        return {
+          finishReason: 'failed' as AgentFinishReason,
+          error: {
+            status: e.status || 'INTERNAL',
+            message: e.message || 'Internal failure',
+            details: e.detail || e.details || e,
+          },
+          ...(!config.store &&
+            init?.state && { state: init.state as SessionState }),
+        };
       }
+
 
       // Tag the current trace span with the sessionId so that traces
       // belonging to the same agent conversation can be correlated.
@@ -765,6 +907,30 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
       const { result, finalSnapshotId } = outcome;
 
+      // A turn failed: resolve gracefully with `finishReason: 'failed'` and the
+      // last-good state (what the failed turn started with), rather than the
+      // live state which may hold the failed turn's partial mutations.
+      if (runner.lastTurnFinishReason === 'failed' && runner.lastTurnError) {
+        const lastGood = (runner.lastGoodState ??
+          session.getState()) as SessionState<State>;
+        const lastGoodMessages = lastGood.messages;
+        return {
+          finishReason: 'failed' as AgentFinishReason,
+          error: runner.lastTurnError,
+          ...(result.artifacts?.length && { artifacts: result.artifacts }),
+          ...(lastGoodMessages?.length && {
+            message: lastGoodMessages[lastGoodMessages.length - 1],
+          }),
+          // Server-managed: ensure the last-good state is persisted (a selective
+          // snapshotCallback may have skipped it) and return its id.
+          ...(config.store && {
+            snapshotId: await runner.ensureRecoverySnapshot(),
+          }),
+          // Client-managed: return the last-good state directly.
+          ...(!config.store && { state: toClientState(lastGood) }),
+        };
+      }
+
       const finishReason = result.finishReason ?? runner.lastTurnFinishReason;
 
       return {
@@ -775,6 +941,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         ...(!config.store && { state: toClientState(session.getState()) }),
       };
     }
+
   );
 
   // Helper that applies the clientStateTransform to a snapshot's state,

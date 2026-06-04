@@ -26,6 +26,24 @@ import { z } from 'zod';
 import { MessageSchema, ModelResponseChunkSchema } from './model';
 import { PartSchema } from './parts';
 
+/**
+ * Reason an agent turn or invocation finished. Mirrors generate's
+ * `FinishReason` plus the agent-specific states `detached` and `failed`.
+ */
+export const AgentFinishReasonSchema = z.enum([
+  'stop',
+  'length',
+  'blocked',
+  'aborted',
+  'interrupted',
+  'other',
+  'unknown',
+  'detached',
+  'failed',
+]);
+export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
+
+
 // ---------------------------------------------------------------------------
 // Session state & artifacts
 // ---------------------------------------------------------------------------
@@ -78,8 +96,10 @@ export type AgentInput = z.infer<typeof AgentInputSchema>;
  */
 export const TurnEndSchema = z.object({
   snapshotId: z.string().optional(),
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
+
 
 /**
  * Schema for stream chunks emitted during agent execution.
@@ -100,8 +120,17 @@ export const AgentOutputSchema = z.object({
   state: SessionStateSchema.optional(),
   message: MessageSchema.optional(),
   artifacts: z.array(ArtifactSchema).optional(),
+  finishReason: AgentFinishReasonSchema.optional(),
+  error: z
+    .object({
+      status: z.string(),
+      message: z.string(),
+      details: z.any().optional(),
+    })
+    .optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
+
 
 // ---------------------------------------------------------------------------
 // Snapshot
