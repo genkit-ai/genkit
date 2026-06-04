@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs';
+import { requireCurrentBackend } from '@genkit-ai/ai/backends';
 import { generateMiddleware, z, type GenerateMiddleware } from 'genkit';
 import { tool } from 'genkit/beta';
 import * as path from 'path';
@@ -43,7 +43,7 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
       description: 'Injects system instructions and tools for using skills.',
       configSchema: SkillsOptionsSchema,
     },
-    ({ config }) => {
+    ({ config, ai }) => {
       const skillPaths = config?.skillPaths ?? ['skills'];
       const skillCache = new Map<
         string,
@@ -74,26 +74,30 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
             skillCache.clear();
 
             for (const p of skillPaths) {
-              const dirPath = path.resolve(p);
+              const backend = requireCurrentBackend(ai.registry);
               try {
-                const files = await fs.promises.readdir(dirPath, {
-                  withFileTypes: true,
-                });
+                const result = await backend.ls(p);
+                const files = result.files ?? [];
                 for (const file of files) {
-                  if (file.isDirectory() && !file.name.startsWith('.')) {
-                    const skillDir = path.join(dirPath, file.name);
+                  const name = path.basename(file.path);
+                  if (file.isDirectory && !name.startsWith('.')) {
+                    const skillDir = path.join(p, file.path);
                     const skillMdPath = path.join(skillDir, 'SKILL.md');
                     try {
-                      const content = await fs.promises.readFile(
-                        skillMdPath,
-                        'utf-8'
-                      );
+                      const readResult = await backend.read(skillMdPath);
+                      if (readResult.error) continue;
+                      const content =
+                        typeof readResult.content === 'string'
+                          ? readResult.content
+                          : Buffer.from(readResult.content ?? '').toString(
+                              'utf8'
+                            );
                       let description = 'No description provided.';
                       const fm = parseFrontmatter(content);
                       if (fm?.description) {
                         description = fm.description;
                       }
-                      skillCache.set(file.name, {
+                      skillCache.set(name, {
                         path: skillMdPath,
                         description,
                       });
@@ -128,7 +132,15 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
           }
 
           try {
-            return await fs.promises.readFile(info.path, 'utf-8');
+            const result = await requireCurrentBackend(ai.registry).read(
+              info.path
+            );
+            if (result.error) {
+              throw new Error(result.error);
+            }
+            return typeof result.content === 'string'
+              ? result.content
+              : Buffer.from(result.content ?? '').toString('utf8');
           } catch (e) {
             throw new Error(`Failed to read skill "${input.skillName}": ${e}`);
           }

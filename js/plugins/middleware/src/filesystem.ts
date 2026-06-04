@@ -20,6 +20,10 @@ import {
   z,
   type GenerateMiddleware,
 } from 'genkit';
+import {
+  requireCurrentBackend,
+  type AgentBackend,
+} from '@genkit-ai/ai/backends';
 import * as path from 'path';
 import { defineListFileTool } from './filesystem/list_files.js';
 import { defineReadFileTool } from './filesystem/read_file.js';
@@ -56,48 +60,56 @@ export const filesystem: GenerateMiddleware<typeof FilesystemOptionsSchema> =
         'Injects tools for reading, writing, and searching files in a directory.',
       configSchema: FilesystemOptionsSchema,
     },
-    ({ config }) => {
+    ({ config, ai }) => {
       if (!config?.rootDirectory) {
         throw new Error(
           'filesystem middleware requires a rootDirectory option'
         );
       }
-      const rootDir = path.resolve(config.rootDirectory);
-      const securePrefix = rootDir.endsWith(path.sep)
-        ? rootDir
-        : rootDir + path.sep;
-
-      function resolvePath(requestedPath: string) {
-        const p = path.resolve(rootDir, requestedPath);
-        // Ensure the resolved path starts with the rootDir and a path separator
-        // to prevent directory traversal attacks (e.g. rootDir is /a/b, requested is ../b_secret)
-        if (!p.startsWith(securePrefix) && p !== rootDir) {
+      const getBackend = (): AgentBackend => requireCurrentBackend(ai.registry);
+      const rootDirectory =
+        config.rootDirectory.replace(/^[/\\]+/, '') || '.';
+      const resolveBackendPath = (requestedPath: string) => {
+        const normalizedPath = requestedPath.replace(/^[/\\]+/, '');
+        const backendPath = path.normalize(
+          path.join(rootDirectory, normalizedPath)
+        );
+        const relativeToRoot = path.relative(rootDirectory, backendPath);
+        if (
+          relativeToRoot === '..' ||
+          relativeToRoot.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relativeToRoot)
+        ) {
           throw new Error('Access denied: Path is outside of root directory.');
         }
-        return p;
-      }
+        return backendPath;
+      };
 
       // Middleware is instantiated once per top generate call, so it's ok (by design) to keep state here.
       const messageQueue: MessageData[] = [];
 
       const listFilesTool = defineListFileTool(
-        resolvePath,
+        getBackend,
+        resolveBackendPath,
         config.toolNamePrefix
       );
       const readFileTool = defineReadFileTool(
         messageQueue,
-        resolvePath,
+        getBackend,
+        resolveBackendPath,
         config.toolNamePrefix
       );
 
       const filesystemTools = [listFilesTool, readFileTool];
       if (config.allowWriteAccess) {
         const writeFileTool = defineWriteFileTool(
-          resolvePath,
+          getBackend,
+          resolveBackendPath,
           config.toolNamePrefix
         );
         const searchAndReplaceTool = defineSearchAndReplaceTool(
-          resolvePath,
+          getBackend,
+          resolveBackendPath,
           config.toolNamePrefix
         );
         filesystemTools.push(writeFileTool, searchAndReplaceTool);

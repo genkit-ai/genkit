@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs/promises';
+import type { AgentBackend } from '@genkit-ai/ai/backends';
 import { MessageData, Part, ToolAction, z } from 'genkit';
 import { tool } from 'genkit/beta';
-import * as mime from 'mime-types';
-import * as path from 'path';
 
 export function defineReadFileTool(
   messageQueue: MessageData[],
-  resolvePath: (requestedPath: string) => string,
+  getBackend: () => AgentBackend,
+  resolveBackendPath: (requestedPath: string) => string,
   prefix?: string
 ): ToolAction {
   const toolName = `${prefix || ''}read_file`;
@@ -36,15 +35,17 @@ export function defineReadFileTool(
       outputSchema: z.string(),
     },
     async (input) => {
-      const targetFile = resolvePath(input.filePath);
-      const ext = path.extname(targetFile).toLowerCase();
-      const mimeType = mime.lookup(ext);
-      const isImage = mimeType != false && mimeType?.startsWith('image/');
+      const result = await getBackend().read(resolveBackendPath(input.filePath));
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      const mimeType = result.mimeType;
+      const isImage = mimeType?.startsWith('image/');
 
       const parts: Part[] = [];
 
       if (isImage && mimeType) {
-        const buffer = await fs.readFile(targetFile);
+        const buffer = Buffer.from(result.content as Uint8Array);
         const base64 = buffer.toString('base64');
 
         parts.push({
@@ -57,7 +58,10 @@ export function defineReadFileTool(
           },
         });
       } else {
-        const content = await fs.readFile(targetFile, 'utf8');
+        const content =
+          typeof result.content === 'string'
+            ? result.content
+            : Buffer.from(result.content ?? '').toString('utf8');
         parts.push({
           text: `<read_file path="${input.filePath}">\n${content}\n</read_file>`,
           metadata: {

@@ -20,6 +20,7 @@ import type { Registry } from '@genkit-ai/core/registry';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
+import type { AgentBackend } from './backends/agent-backend.js';
 import { MessageData, MessageSchema } from './model-types.js';
 
 import { PartSchema } from './model-types.js';
@@ -190,6 +191,7 @@ export interface SessionStore<S = unknown> {
 export class Session<S = unknown> extends EventEmitter {
   private state: SessionState<S>;
   private version: number = 0;
+  private backend?: AgentBackend;
 
   /** Stable identifier that correlates traces across agent turns. */
   readonly sessionId: string;
@@ -244,6 +246,14 @@ export class Session<S = unknown> extends EventEmitter {
   updateCustom(fn: (custom?: S) => S) {
     this.state.custom = fn(this.state.custom);
     this.version++;
+  }
+
+  attachBackend(backend: AgentBackend): void {
+    this.backend = backend;
+  }
+
+  getBackend(): AgentBackend | undefined {
+    return this.backend;
   }
 
   /**

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs/promises';
+import type { AgentBackend } from '@genkit-ai/ai/backends';
 import { ToolAction, z } from 'genkit';
 import { tool } from 'genkit/beta';
-import * as path from 'path';
 
 export function defineWriteFileTool(
-  resolvePath: (requestedPath: string) => string,
+  getBackend: () => AgentBackend,
+  resolveBackendPath: (requestedPath: string) => string,
   prefix?: string
 ): ToolAction {
   return tool(
@@ -35,9 +35,13 @@ export function defineWriteFileTool(
       outputSchema: z.string(),
     },
     async (input) => {
-      const targetFile = resolvePath(input.filePath);
-      await fs.mkdir(path.dirname(targetFile), { recursive: true });
-      await fs.writeFile(targetFile, input.content, 'utf8');
+      const result = await getBackend().write(
+        resolveBackendPath(input.filePath),
+        input.content
+      );
+      if (result.error) {
+        throw new Error(result.error);
+      }
       return `File ${input.filePath} written successfully.`;
     }
   );

@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs/promises';
+import type { AgentBackend } from '@genkit-ai/ai/backends';
 import { ToolAction, z } from 'genkit';
 import { tool } from 'genkit/beta';
 
 export function defineSearchAndReplaceTool(
-  resolvePath: (requestedPath: string) => string,
+  getBackend: () => AgentBackend,
+  resolveBackendPath: (requestedPath: string) => string,
   prefix?: string
 ): ToolAction {
   return tool(
@@ -41,8 +42,16 @@ export function defineSearchAndReplaceTool(
       outputSchema: z.string(),
     },
     async (input) => {
-      const targetFile = resolvePath(input.filePath);
-      let content = await fs.readFile(targetFile, 'utf8');
+      const backend = getBackend();
+      const backendPath = resolveBackendPath(input.filePath);
+      const readResult = await backend.read(backendPath);
+      if (readResult.error) {
+        throw new Error(readResult.error);
+      }
+      let content =
+        typeof readResult.content === 'string'
+          ? readResult.content
+          : Buffer.from(readResult.content ?? '').toString('utf8');
 
       for (const editBlock of input.edits) {
         const startMarker = '<<<<<<< SEARCH\n';
@@ -114,7 +123,10 @@ export function defineSearchAndReplaceTool(
         }
       }
 
-      await fs.writeFile(targetFile, content, 'utf8');
+      const writeResult = await backend.write(backendPath, content);
+      if (writeResult.error) {
+        throw new Error(writeResult.error);
+      }
       return `Successfully applied ${input.edits.length} edit(s) to ${input.filePath}.`;
     }
   );

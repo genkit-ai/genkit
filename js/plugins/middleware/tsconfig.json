@@ -1,4 +1,10 @@
 {
   "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@genkit-ai/ai/backends": ["../../ai/src/backends/index.ts"]
+    }
+  },
   "include": ["src"]
 }
