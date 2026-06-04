@@ -6,9 +6,6 @@ Interactive coding-agent REPL that wires up the
 and [`ToolApproval`](../../plugins/middleware/src/genkit/plugins/middleware/_tool_approval.py)
 middleware against a sandboxed workspace.
 
-Python port of the JavaScript example at
-[`js/plugins/middleware/examples/coding_agent.ts`](../../../js/plugins/middleware/examples/coding_agent.ts).
-
 ## What's here
 
 ```
