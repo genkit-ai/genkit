@@ -128,8 +128,15 @@ func TestDeepResearchBackgroundModelStartCheckCancel(t *testing.T) {
 		if got := r.Header.Get("Api-Revision"); got != deepResearchAPIRevision {
 			t.Errorf("Api-Revision = %q, want %q", got, deepResearchAPIRevision)
 		}
-		if got := r.Header.Get("x-goog-api-key"); got != "override-key" {
-			t.Errorf("x-goog-api-key = %q, want override-key", got)
+		// The start request carries the per-request key override; check and cancel
+		// re-derive the key from the live client (the override is not persisted in
+		// operation metadata), so they send the client's key instead.
+		wantKey := "test-key"
+		if r.Method == http.MethodPost && r.URL.Path == "/v1beta/interactions" {
+			wantKey = "override-key"
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != wantKey {
+			t.Errorf("x-goog-api-key = %q, want %q", got, wantKey)
 		}
 
 		switch {
