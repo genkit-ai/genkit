@@ -110,15 +110,20 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
         model: async (req, ctx, next) => {
           try {
             return await next(req, ctx);
-          } catch (e) {
-            if (
+          } catch (e: any) {
+            const isFallbackable =
               e instanceof GenkitError &&
-              statuses.includes(e.status as StatusName)
-            ) {
+              statuses.includes(e.status as StatusName);
+            if (isFallbackable) {
               let lastError: any = e;
               for (const model of models) {
-                logger.warn(
-                  `Request failed with status ${lastError.status}: ${lastError.message}. Falling back to model ${model.name}...`
+                logger.logStructuredWarn(
+                  `Request failed with status ${lastError.status}: ${lastError.message}. Falling back to model ${model.name}...`,
+                  {
+                    'genkit.middleware.name': 'fallback',
+                    'genkit.middleware.fallback.target_model': model.name,
+                  },
+                  lastError
                 );
                 const normalizedModel = await resolveModel(
                   options.ai.registry,
@@ -134,7 +139,7 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
                     },
                     ctx
                   );
-                } catch (e2) {
+                } catch (e2: any) {
                   lastError = e2;
                   if (
                     e2 instanceof GenkitError &&
@@ -142,12 +147,43 @@ export const fallback: GenerateMiddleware<typeof FallbackOptionsSchema> =
                   ) {
                     continue;
                   }
+                  const statusStr =
+                    e2 instanceof GenkitError
+                      ? `status ${e2.status}`
+                      : 'non-Genkit error';
+                  logger.logStructuredWarn(
+                    `Fallback model ${model.name} failed with ${statusStr}: ${e2.message || String(e2)}. Aborting fallback sequence.`,
+                    {
+                      'genkit.middleware.name': 'fallback',
+                      'genkit.middleware.fallback.target_model': model.name,
+                    },
+                    e2
+                  );
                   throw e2;
                 }
               }
+              logger.logStructuredWarn(
+                `All fallback options exhausted. Last error: ${lastError.message || String(lastError)}`,
+                {
+                  'genkit.middleware.name': 'fallback',
+                },
+                lastError
+              );
               throw lastError;
+            } else {
+              const statusStr =
+                e instanceof GenkitError
+                  ? `status ${e.status}`
+                  : 'non-Genkit error';
+              logger.logStructuredWarn(
+                `Request failed with ${statusStr}: ${e.message || String(e)}. Skipping fallback.`,
+                {
+                  'genkit.middleware.name': 'fallback',
+                },
+                e
+              );
+              throw e;
             }
-            throw e;
           }
         },
       };

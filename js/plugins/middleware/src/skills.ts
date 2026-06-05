@@ -99,21 +99,33 @@ export const skills: GenerateMiddleware<typeof SkillsOptionsSchema> =
                         description,
                       });
                     } catch (e: any) {
-                      logger.warn(
-                        `Failed to read skill file "${skillMdPath}": ${e.message || String(e)}`
-                      );
+                      if (e.code !== 'ENOENT') {
+                        logger.logStructuredWarn(
+                          `Failed to read skill file "${skillMdPath}": ${e.message || String(e)}`,
+                          {
+                            'genkit.middleware.name': 'skills',
+                            'genkit.middleware.skills.path': skillMdPath,
+                          },
+                          e
+                        );
+                      }
                     }
                   }
                 }
               } catch (e: any) {
-                logger.debug(
-                  `Failed to read skill directory "${dirPath}": ${e.message || String(e)}`
-                );
+                // ignore directory read errors
               }
             }
             if (skillCache.size > 0) {
-              logger.info(
-                `Loaded ${skillCache.size} skills from disk (${Array.from(skillCache.keys()).join(', ')}).`
+              logger.logStructuredInfo(
+                `Loaded ${skillCache.size} skills from disk (${Array.from(skillCache.keys()).join(', ')}).`,
+                {
+                  'genkit.middleware.name': 'skills',
+                  'genkit.middleware.skills.loaded_count': skillCache.size,
+                  'genkit.middleware.skills.loaded_names': Array.from(
+                    skillCache.keys()
+                  ),
+                }
               );
             }
           })();
