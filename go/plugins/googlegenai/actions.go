@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"google.golang.org/genai"
 )
@@ -41,6 +42,11 @@ func listActions(ctx context.Context, client *genai.Client, c catalog) []api.Act
 		actions = append(actions, newVeoModel(client, name, c.modelOptions(name)).Desc())
 	}
 
+	// Deep Research models (background models)
+	for _, name := range models.deep {
+		actions = append(actions, newDeepResearchModel(client, name, c.modelOptions(name)).Desc())
+	}
+
 	// Embedders
 	for _, name := range models.embedders {
 		opts := c.embedderOptions(name)
@@ -70,27 +76,41 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 		return newEmbedder(client, id, &opts)
 
 	case api.ActionTypeModel:
-		// Veo models should not be resolved as regular models
-		if mt == ModelTypeVeo {
+		// Background models should not be resolved as regular models
+		if mt == ModelTypeVeo || mt == ModelTypeDeepResearch {
 			return nil
 		}
 		return newModel(client, id, c.modelOptions(id))
 
-	// A background model is a bundle: registering it registers both its start
-	// and check actions. The registry registers what we return and then looks
-	// up the key it was asked for.
-	case api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation:
-		// The two keys differ: start is the bare model, and the check companion
-		// is the model plus the operation it performs. Strip the suffix to get
-		// back the model the companion belongs to.
+	// A background model is a bundle: registering it registers its start,
+	// check and (where supported) cancel actions. The registry registers what
+	// we return and then looks up the key it was asked for.
+	case api.ActionTypeBackgroundModel, api.ActionTypeCheckOperation, api.ActionTypeCancelOperation:
+		// The keys differ: start is the bare model, and each companion is the
+		// model plus the operation it performs. Strip the suffix to get back
+		// the model the companion belongs to.
 		modelID := id
-		if atype == api.ActionTypeCheckOperation {
+		switch atype {
+		case api.ActionTypeCheckOperation:
 			modelID = strings.TrimSuffix(id, "/check")
+		case api.ActionTypeCancelOperation:
+			modelID = strings.TrimSuffix(id, "/cancel")
 		}
-		if ClassifyModel(modelID) != ModelTypeVeo {
+		var model *ai.BackgroundModelAction
+		switch ClassifyModel(modelID) {
+		case ModelTypeVeo:
+			model = newVeoModel(client, modelID, c.modelOptions(modelID))
+		case ModelTypeDeepResearch:
+			model = newDeepResearchModel(client, modelID, c.modelOptions(modelID))
+		default:
 			return nil
 		}
-		return newVeoModel(client, modelID, c.modelOptions(modelID))
+		// A model that cannot cancel has no cancel action. Resolving the key
+		// to the bundle anyway would register its start action a second time.
+		if atype == api.ActionTypeCancelOperation && !model.SupportsCancel() {
+			return nil
+		}
+		return model
 	}
 
 	return nil

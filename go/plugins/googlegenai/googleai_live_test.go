@@ -17,13 +17,21 @@
 package googlegenai_test
 
 import (
+	"flag"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/internal/livetest"
 	"google.golang.org/genai"
 )
+
+// Deep Research runs are long (minutes) and consume preview-tier quota, so they
+// are gated behind an explicit flag in addition to the API key.
+var deepResearch = flag.Bool("deepresearch", false, "run live Deep Research tests (slow, consumes preview quota)")
 
 func TestGoogleAILive(t *testing.T) {
 	apiKey := livetest.Env(t, "GEMINI_API_KEY", "GOOGLE_API_KEY")
@@ -144,4 +152,73 @@ func TestCacheHelper(t *testing.T) {
 			t.Fatalf("cache name mismatch, want dummy-name, got: %s", name)
 		}
 	})
+}
+
+// TestGoogleAIDeepResearchLive exercises the Deep Research background model
+// against the real Gemini API: it starts an interaction, polls it to
+// completion and checks the text and usage.
+//
+// It is gated behind both an API key and the -deepresearch flag because a
+// single run takes minutes and consumes preview-tier quota. Run it with:
+//
+//	GEMINI_API_KEY=... go test ./plugins/googlegenai/ -v -run TestGoogleAIDeepResearchLive -deepresearch -timeout 30m
+func TestGoogleAIDeepResearchLive(t *testing.T) {
+	apiKey := livetest.Env(t, "GEMINI_API_KEY", "GOOGLE_API_KEY")
+	if !*deepResearch {
+		t.Skip("skipping live Deep Research test; pass -deepresearch to run (slow, consumes preview quota)")
+	}
+	g := livetest.Init(t, &googlegenai.GoogleAI{APIKey: apiKey})
+	ctx := t.Context()
+
+	op, err := genkit.GenerateOperation(ctx, g,
+		ai.WithModelName("googleai/deep-research-preview-04-2026"),
+		ai.WithMessages(ai.NewUserTextMessage(
+			"Briefly research the history of the Go programming language and summarize it in three bullet points.")),
+		ai.WithConfig(&googlegenai.DeepResearchConfig{GoogleSearch: true}),
+	)
+	if err != nil {
+		t.Fatalf("GenerateOperation failed to start: %v", err)
+	}
+	if op.ID == "" {
+		t.Fatal("started operation has no ID")
+	}
+	t.Logf("started Deep Research operation %s", op.ID)
+
+	// Runs take several minutes; poll until done or the test timeout fires.
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for !op.Done {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context cancelled while polling: %v", ctx.Err())
+		case <-ticker.C:
+			op, err = genkit.CheckModelOperation(ctx, g, op)
+			if err != nil {
+				t.Fatalf("CheckModelOperation failed: %v", err)
+			}
+			t.Logf("operation %s done=%t", op.ID, op.Done)
+		}
+	}
+
+	if op.Error != nil {
+		t.Fatalf("operation finished with error: %v", op.Error)
+	}
+	if op.Output == nil || op.Output.Message == nil {
+		t.Fatal("completed operation has no output message")
+	}
+
+	var text strings.Builder
+	for _, part := range op.Output.Message.Content {
+		if part.IsText() {
+			text.WriteString(part.Text)
+		}
+	}
+	if strings.TrimSpace(text.String()) == "" {
+		t.Errorf("expected non-empty text output, got %#v", op.Output.Message.Content)
+	}
+	t.Logf("Deep Research output:\n%s", text.String())
+
+	if op.Output.Usage == nil || op.Output.Usage.TotalTokens == 0 {
+		t.Errorf("expected non-zero usage, got %#v", op.Output.Usage)
+	}
 }
