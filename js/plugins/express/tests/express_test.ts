@@ -422,6 +422,21 @@ describe('expressHandler', async () => {
       }
     });
 
+    it('detects streaming when Accept lists multiple media types', async () => {
+      // Clients can send e.g. "text/event-stream, */*"; the handler should
+      // still stream rather than fall back to a single JSON response.
+      const response = await fetch(`http://localhost:${port}/streamingFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream, */*',
+        },
+        body: JSON.stringify({ data: { question: 'hi' } }),
+      });
+      const text = await response.text();
+      assert.match(text, /^data: /m); // SSE frames, not a single JSON body
+    });
+
     it('stream a model', async () => {
       const result = streamFlow({
         url: `http://localhost:${port}/echoModel`,
