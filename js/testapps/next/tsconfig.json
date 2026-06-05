@@ -8,11 +8,7 @@
     "target": "es2017",
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
+    "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "noEmit": true,
     "incremental": true,
@@ -25,21 +21,13 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "src/*"
-      ]
+      "@/*": ["src/*"]
     },
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "module": "esnext"
   },
   "compileOnSave": true,
-  "include": [
-    "src",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["src", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
+  "exclude": ["node_modules"]
 }
