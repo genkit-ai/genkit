@@ -87,7 +87,7 @@ export const testBackgroundAgent = ai.defineFlow(
     let snapshot: any;
     for (let i = 0; i < 60; i++) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      snapshot = await store.getSnapshot(snapshotId);
+      snapshot = await store.getSnapshot({ snapshotId: snapshotId });
       if (snapshot?.status && snapshot.status !== 'pending') break;
     }
 

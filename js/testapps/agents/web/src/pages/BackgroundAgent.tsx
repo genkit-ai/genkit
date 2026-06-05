@@ -79,7 +79,7 @@ export default function BackgroundAgent() {
           setPollCount((c) => c + 1);
           const snapshot = (await runFlow({
             url: STATE_ENDPOINT,
-            input: id,
+            input: { snapshotId: id },
           })) as any;
 
           if (!snapshot) return;
@@ -327,9 +327,10 @@ runFlow({
 // Poll for status
 runFlow({
   url: '/api/.../state',
-  input: snapshotId,
+  input: { snapshotId },
 });
 // → { status, state }
+
 
 // Abort
 runFlow({

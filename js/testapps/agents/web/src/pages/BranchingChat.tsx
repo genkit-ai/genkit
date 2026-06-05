@@ -76,7 +76,7 @@ export default function BranchingChat() {
       try {
         const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
-          input: urlSnapshotId,
+          input: { snapshotId: urlSnapshotId },
         });
 
         if (cancelled) return;

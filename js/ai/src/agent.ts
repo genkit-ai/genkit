@@ -70,14 +70,22 @@ import {
  */
 export const AgentInitSchema = z.object({
   snapshotId: z.string().optional(),
+  sessionId: z.string().optional(),
   state: SessionStateSchema.optional(),
 });
 
 /**
  * Initialization options for an agent turn.
+ *
+ * For server-managed agents (with a `store`) provide *either* a `snapshotId`
+ * (resume an exact snapshot, required for branching/snapshotting clients) *or*
+ * a `sessionId` (resume the session's latest snapshot — the simple case used
+ * by `useChat`-style clients). For client-managed agents (no store) provide
+ * the full `state`.
  */
 export interface AgentInit<S = unknown> {
   snapshotId?: string;
+  sessionId?: string;
   newSnapshotId?: string;
   state?: SessionState<S>;
 }
@@ -451,8 +459,28 @@ export type AgentFn<Stream, State> = (
   }
 ) => Promise<AgentResult>;
 
+/**
+ * Lookup input for the `getSnapshotData` action / method.
+ *
+ * Mirrors {@link GetSnapshotOptions}: provide exactly one of `snapshotId`
+ * (an exact snapshot) or `sessionId` (the session's latest leaf snapshot).
+ */
+export const GetSnapshotDataInputSchema = z.object({
+  snapshotId: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * Lookup input for `getSnapshotData`.
+ */
+export interface GetSnapshotDataInput {
+  snapshotId?: string;
+  sessionId?: string;
+  context?: ActionContext;
+}
+
 export type GetSnapshotDataAction<S = unknown> = Action<
-  z.ZodString,
+  typeof GetSnapshotDataInputSchema,
   z.ZodType<SessionSnapshot<S>>
 >;
 
@@ -467,8 +495,7 @@ export interface Agent<State = unknown>
     typeof AgentInitSchema
   > {
   getSnapshotData(
-    snapshotId: string,
-    options?: SessionStoreOptions
+    opts: GetSnapshotDataInput
   ): Promise<SessionSnapshot<State> | undefined>;
 
   abort(
@@ -575,27 +602,102 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
 
       let snapshot: SessionSnapshot<State> | undefined;
 
-      if (init?.snapshotId) {
-        snapshot = await store.getSnapshot(init.snapshotId, {
-          context: getContext(),
-        });
-        if (!snapshot) {
-          throw new Error(`Snapshot ${init.snapshotId} not found`);
+      try {
+        // Validate that the init strategy matches the agent's state management
+        // mode.  Server-managed agents (with a store) resume via a `snapshotId`
+        // (exact snapshot) or a `sessionId` (the session's latest snapshot);
+        // client-managed agents (no store) send the full `state` blob.
+        if ((init?.snapshotId || init?.sessionId) && !config.store) {
+          throw new GenkitError({
+            status: 'FAILED_PRECONDITION',
+            message:
+              `Cannot use '${init.snapshotId ? 'snapshotId' : 'sessionId'}' with ` +
+              `agent '${config.name}': this agent has no store configured ` +
+              `(client-managed state). Send 'state' instead.`,
+          });
         }
-        validateCustomState(
-          snapshot.state?.custom,
-          `snapshot ${init.snapshotId}`
-        );
-        session = new Session<State>(snapshot.state as SessionState<State>);
-      } else if (init?.state && !config.store) {
-        validateCustomState(init.state.custom, 'client-supplied init.state');
-        session = new Session<State>(init.state as SessionState<State>);
-      } else {
-        session = new Session<State>({
-          custom: {} as State,
-          artifacts: [],
-          messages: [],
-        });
+        if (init?.state && config.store) {
+          throw new GenkitError({
+            status: 'FAILED_PRECONDITION',
+            message:
+              `Cannot send 'state' to agent '${config.name}': this agent uses ` +
+              `a server-managed store. Send 'snapshotId' or 'sessionId' instead.`,
+          });
+        }
+        if (init?.snapshotId && init?.sessionId) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message:
+              `Cannot send both 'snapshotId' and 'sessionId' to agent ` +
+              `'${config.name}'. Provide exactly one (snapshotId for an exact ` +
+              `snapshot, sessionId for the session's latest snapshot).`,
+          });
+        }
+
+        if (init?.snapshotId) {
+          snapshot = await store.getSnapshot({
+            snapshotId: init.snapshotId,
+            context: getContext(),
+          });
+          if (!snapshot) {
+            throw new GenkitError({
+              status: 'NOT_FOUND',
+              message: `Snapshot ${init.snapshotId} not found`,
+            });
+          }
+          validateCustomState(
+            snapshot.state?.custom,
+            `snapshot ${init.snapshotId}`
+          );
+          session = new Session<State>(snapshot.state as SessionState<State>);
+        } else if (init?.sessionId) {
+          // Resume the session's latest (leaf) snapshot. When the session has
+          // no snapshots yet (first turn) seed a fresh session bound to the
+          // requested sessionId so subsequent turns can find it.
+          snapshot = await store.getSnapshot({
+            sessionId: init.sessionId,
+            context: getContext(),
+          });
+          if (snapshot) {
+            validateCustomState(
+              snapshot.state?.custom,
+              `session ${init.sessionId}`
+            );
+            session = new Session<State>(snapshot.state as SessionState<State>);
+          } else {
+            session = new Session<State>({
+              custom: {} as State,
+              artifacts: [],
+              messages: [],
+              sessionId: init.sessionId,
+            });
+          }
+        } else if (init?.state && !config.store) {
+          validateCustomState(init.state.custom, 'client-supplied init.state');
+          session = new Session<State>(init.state as SessionState<State>);
+        } else {
+          session = new Session<State>({
+            custom: {} as State,
+            artifacts: [],
+            messages: [],
+          });
+        }
+      } catch (e: any) {
+        // Pre-turn / setup failure (state-vs-store mismatch, missing snapshot,
+        // invalid client state). Resolve gracefully with `finishReason: 'failed'`
+        // — preserving the original `error.status` — rather than throwing, so
+        // the caller gets a structured, inspectable result. There is no
+        // last-good turn yet; echo back the client-supplied state when present.
+        return {
+          finishReason: 'failed' as AgentFinishReason,
+          error: {
+            status: e.status || 'INTERNAL',
+            message: e.message || 'Internal failure',
+            details: e.detail || e.details || e,
+          },
+          ...(!config.store &&
+            init?.state && { state: init.state as SessionState }),
+        };
       }
 
       // Tag the current trace span with the sessionId so that traces
@@ -791,19 +893,20 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     registry,
     {
       name: config.name,
-      description: `Gets snapshot data for ${config.name} by snapshotId`,
+      description: `Gets snapshot data for ${config.name} by snapshotId or sessionId`,
       actionType: 'agent-snapshot',
-      inputSchema: z.string(),
+      inputSchema: GetSnapshotDataInputSchema,
       outputSchema: z.any(), // SessionSnapshot Schema
     },
-    async (snapshotId) => {
+    async (lookup) => {
       if (!config.store) {
         throw new GenkitError({
           status: 'FAILED_PRECONDITION',
           message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      const snapshot = await config.store.getSnapshot(snapshotId, {
+      const snapshot = await config.store.getSnapshot({
+        ...lookup,
         context: getContext(),
       });
       return snapshot ? toClientSnapshot(snapshot) : undefined;
@@ -848,17 +951,14 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
   );
 
   const composite = Object.assign(primaryAction, {
-    getSnapshotData: async (
-      snapshotId: string,
-      options?: SessionStoreOptions
-    ) => {
+    getSnapshotData: async (opts: GetSnapshotDataInput) => {
       if (!config.store) {
         throw new GenkitError({
           status: 'FAILED_PRECONDITION',
           message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
         });
       }
-      const snapshot = await config.store.getSnapshot(snapshotId, options);
+      const snapshot = await config.store.getSnapshot(opts);
       return snapshot ? toClientSnapshot(snapshot) : undefined;
     },
     abort: async (snapshotId: string, options?: SessionStoreOptions) => {

@@ -64,11 +64,11 @@ export default function WeatherChat() {
     async function restore() {
       try {
         // Call the /state endpoint to fetch the snapshot data.
-        // The getSnapshotDataAction takes a snapshotId string as input
+        // The getSnapshotDataAction takes a { snapshotId } object as input
         // and returns a SessionSnapshot with the full session state.
         const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
-          input: urlSnapshotId,
+          input: { snapshotId: urlSnapshotId },
         });
 
         if (cancelled) return;
@@ -315,7 +315,7 @@ const result = await response.output;
 // Restore session
 runFlow({
   url: '/api/weatherAgent/state',
-  input: snapshotId,
+  input: { snapshotId },
 });`}</pre>
 
         <h4>Session Persistence</h4>
