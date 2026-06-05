@@ -59,10 +59,13 @@ const contextProvider: ContextProvider<Context> = (req: RequestData) => {
 describe('fastifyHandler', async () => {
   let app: FastifyInstance;
   let port: number;
+  let abortableFlowResult: [string, boolean] | undefined;
 
   beforeEach(async () => {
+    abortableFlowResult = undefined;
     const ai = genkit({});
     const echoModel = defineEchoModel(ai);
+    defineEchoModelV2(ai);
 
     const voidInput = ai.defineFlow('voidInput', async () => {
       return 'banana';
@@ -102,6 +105,21 @@ describe('fastifyHandler', async () => {
       }
     );
 
+    const streamingFlowV2 = ai.defineFlow(
+      {
+        name: 'streamingFlowV2',
+        inputSchema: z.object({ question: z.string() }),
+      },
+      async (input, sendChunk) => {
+        const { text } = await ai.generate({
+          model: 'echoModelV2',
+          prompt: input.question,
+          onChunk: sendChunk,
+        });
+        return text;
+      }
+    );
+
     const flowWithAuth = ai.defineFlow(
       {
         name: 'flowWithAuth',
@@ -112,6 +130,27 @@ describe('fastifyHandler', async () => {
       }
     );
 
+    const abortableFlow = ai.defineFlow(
+      {
+        name: 'abortableFlow',
+      },
+      async (_, { abortSignal, sendChunk }) => {
+        let itersLeft = 20;
+        while (itersLeft > 0 && !abortSignal.aborted) {
+          await new Promise((r) => {
+            setTimeout(r, 100);
+          });
+          sendChunk(itersLeft);
+          itersLeft--;
+        }
+        abortableFlowResult = [
+          itersLeft > 0 ? 'success' : 'failure',
+          abortSignal.aborted,
+        ];
+        return itersLeft > 0 ? 'success' : 'failure';
+      }
+    );
+
     app = Fastify();
     port = await getPort();
 
@@ -119,6 +158,7 @@ describe('fastifyHandler', async () => {
     app.post('/stringInput', fastifyHandler(stringInput));
     app.post('/objectInput', fastifyHandler(objectInput));
     app.post('/streamingFlow', fastifyHandler(streamingFlow));
+    app.post('/streamingFlowV2', fastifyHandler(streamingFlowV2));
     app.post(
       '/streamingFlowDurable',
       fastifyHandler(streamingFlow, {
@@ -132,6 +172,7 @@ describe('fastifyHandler', async () => {
       '/echoModelWithAuth',
       fastifyHandler(echoModel, { contextProvider })
     );
+    app.post('/abortableFlow', fastifyHandler(abortableFlow));
 
     await app.listen({ port });
   });
@@ -251,6 +292,49 @@ describe('fastifyHandler', async () => {
         return (err as Error).message.includes('not authorized');
       });
     });
+
+    it('should set x-genkit-trace-id and x-genkit-span-id headers', async () => {
+      const response = await fetch(`http://localhost:${port}/voidInput`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: null }),
+      });
+      assert.strictEqual(response.status, 200);
+      assert.ok(response.headers.get('x-genkit-trace-id'));
+      assert.ok(response.headers.get('x-genkit-span-id'));
+    });
+
+    it('should return 400 when the body is missing', async () => {
+      const response = await fetch(`http://localhost:${port}/voidInput`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      assert.strictEqual(response.status, 400);
+    });
+
+    // TODO: This test is flaky, skipping until fixed (mirrors the express plugin).
+    it.skip('should abort a flow', async () => {
+      const controller = new AbortController();
+      const response = fetch(`http://localhost:${port}/abortableFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ data: null }),
+        signal: controller.signal,
+      });
+
+      setTimeout(() => controller.abort(), 10);
+
+      await assert.rejects(response); // abort error
+
+      await new Promise((r) => {
+        setTimeout(r, 200);
+      });
+
+      assert.deepStrictEqual(abortableFlowResult, ['success', true]);
+    });
   });
 
   describe('streamFlow', () => {
@@ -308,6 +392,57 @@ describe('fastifyHandler', async () => {
       assert.deepStrictEqual(gotChunks, originalChunks);
       assert.strictEqual(await subscription.output, 'Echo: durable');
       assert.strictEqual(await result.output, 'Echo: durable');
+    });
+
+    it('should subscribe to a stream in progress', async () => {
+      const result = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+      });
+
+      const streamId = await result.streamId;
+      assert.ok(streamId);
+
+      // Don't wait for the original stream to finish.
+      const subscription = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: {
+          question: 'durable',
+        },
+        streamId: streamId!,
+      });
+
+      const gotChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of subscription.stream) {
+        gotChunks.push(chunk);
+      }
+
+      assert.deepStrictEqual(gotChunks.length, 3);
+      assert.strictEqual(await subscription.output, 'Echo: durable');
+    });
+
+    it('stream a flow (v2 model)', async () => {
+      const result = streamFlow<string, GenerateResponseChunkData>({
+        url: `http://localhost:${port}/streamingFlowV2`,
+        input: {
+          question: 'olleh',
+        },
+      });
+
+      const gotChunks: GenerateResponseChunkData[] = [];
+      for await (const chunk of result.stream) {
+        gotChunks.push(chunk);
+      }
+
+      assert.deepStrictEqual(gotChunks, [
+        { index: 0, role: 'model', content: [{ text: '3' }] },
+        { index: 0, role: 'model', content: [{ text: '2' }] },
+        { index: 0, role: 'model', content: [{ text: '1' }] },
+      ]);
+
+      assert.strictEqual(await result.output, 'Echo v2: olleh');
     });
 
     it('should return 204 for a non-existent stream', async () => {
@@ -411,6 +546,7 @@ describe('genkitFastify', async () => {
         stringInput,
         streamingFlow,
         withFlowOptions(flowWithAuth, { contextProvider }),
+        withFlowOptions(stringInput, { path: 'customPath' }),
       ],
     });
 
@@ -431,6 +567,14 @@ describe('genkitFastify', async () => {
   it('should run a flow with string input', async () => {
     const result = await runFlow({
       url: `http://localhost:${port}/api/stringInput`,
+      input: 'hello',
+    });
+    assert.strictEqual(result, 'Echo: hello');
+  });
+
+  it('should route to a flow with a custom path option', async () => {
+    const result = await runFlow({
+      url: `http://localhost:${port}/api/customPath`,
       input: 'hello',
     });
     assert.strictEqual(result, 'Echo: hello');
@@ -493,6 +637,40 @@ export function defineEchoModel(ai: Genkit): ModelAction {
             {
               text:
                 'Echo: ' +
+                request.messages
+                  .map(
+                    (m) =>
+                      (m.role === 'user' || m.role === 'model'
+                        ? ''
+                        : `${m.role}: `) + m.content.map((c) => c.text).join()
+                  )
+                  .join(),
+            },
+          ],
+        },
+        finishReason: 'stop',
+      };
+    }
+  );
+}
+
+export function defineEchoModelV2(ai: Genkit): ModelAction {
+  return ai.defineModel(
+    {
+      apiVersion: 'v2',
+      name: 'echoModelV2',
+    },
+    async (request, { sendChunk }) => {
+      sendChunk({ content: [{ text: '3' }] });
+      sendChunk({ content: [{ text: '2' }] });
+      sendChunk({ content: [{ text: '1' }] });
+      return {
+        message: {
+          role: 'model',
+          content: [
+            {
+              text:
+                'Echo v2: ' +
                 request.messages
                   .map(
                     (m) =>
