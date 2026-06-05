@@ -470,6 +470,21 @@ describe('fastifyHandler', async () => {
       await response.text(); // drain the stream
     });
 
+    it('detects streaming when Accept lists multiple media types', async () => {
+      // Clients can send e.g. "text/event-stream, */*"; the handler should
+      // still stream rather than fall back to a single JSON response.
+      const response = await fetch(`http://localhost:${port}/streamingFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream, */*',
+        },
+        body: JSON.stringify({ data: { question: 'hi' } }),
+      });
+      const text = await response.text();
+      assert.match(text, /^data: /m); // SSE frames, not a single JSON body
+    });
+
     it('should return 204 for a non-existent stream', async () => {
       try {
         const result = streamFlow({

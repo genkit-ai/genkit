@@ -132,7 +132,7 @@ export function fastifyHandler<
     });
 
     if (
-      request.headers['accept'] === 'text/event-stream' ||
+      request.headers['accept']?.includes('text/event-stream') ||
       stream === 'true'
     ) {
       // Headers set by earlier hooks/plugins (e.g. @fastify/cors) live on the
@@ -218,6 +218,9 @@ async function runActionWithDurableStreaming<
   }
   try {
     let onChunk = (chunk: z.infer<S>) => {
+      // The client may have disconnected mid-stream; writing to a destroyed
+      // response would throw.
+      if (response.destroyed) return;
       response.write(
         'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
       );
@@ -238,10 +241,12 @@ async function runActionWithDurableStreaming<
       taskQueue!.enqueue(() => durableStream!.done(result.result));
       await taskQueue!.merge();
     }
-    response.write(
-      'data: ' + JSON.stringify({ result: result.result }) + streamDelimiter
-    );
-    response.end();
+    if (!response.destroyed) {
+      response.write(
+        'data: ' + JSON.stringify({ result: result.result }) + streamDelimiter
+      );
+      response.end();
+    }
   } catch (e) {
     if (durableStream) {
       taskQueue!.enqueue(() => durableStream!.error(e));
@@ -250,12 +255,14 @@ async function runActionWithDurableStreaming<
     logger.error(
       `Streaming request failed with error: ${getErrorMessage(e)}\n${getErrorStack(e)}`
     );
-    response.write(
-      `error: ${JSON.stringify({
-        error: getCallableJSON(e),
-      })}${streamDelimiter}`
-    );
-    response.end();
+    if (!response.destroyed) {
+      response.write(
+        `error: ${JSON.stringify({
+          error: getCallableJSON(e),
+        })}${streamDelimiter}`
+      );
+      response.end();
+    }
   }
 }
 
@@ -267,11 +274,15 @@ async function subscribeToStream(
   try {
     await streamManager.subscribe(streamId, {
       onChunk: (chunk) => {
+        // The subscribing client may have disconnected; skip writes to a
+        // destroyed response to avoid throwing.
+        if (response.destroyed) return;
         response.write(
           'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
         );
       },
       onDone: (output) => {
+        if (response.destroyed) return;
         response.write(
           'data: ' + JSON.stringify({ result: output }) + streamDelimiter
         );
@@ -281,6 +292,7 @@ async function subscribeToStream(
         logger.error(
           `Streaming request failed with error: ${getErrorMessage(err)}\n${getErrorStack(err)}`
         );
+        if (response.destroyed) return;
         response.write(
           `error: ${JSON.stringify({
             error: getCallableJSON(err),
