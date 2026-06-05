@@ -84,7 +84,7 @@ const analyticsEventForRoute = (
 
 const REDACTED_ENV_VALUE = '[redacted]';
 const SENSITIVE_ENV_NAME_PATTERN =
-  /(api_?key|token|secret|password|passwd|pwd|credential|auth|cookie|session|private|cert)/i;
+  /(api_?key|token|secret|password|passwd|pwd|credentials?|auth|cookie|session|private|cert|dsn|database|db_?(url|uri|dsn|conn(?:ection)?_?string)|conn(?:ection)?_?string)/i;
 
 const sanitizeEnvValue = (name: string, value: string | undefined): string => {
   if (!value) {

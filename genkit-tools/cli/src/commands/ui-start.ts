@@ -149,10 +149,12 @@ async function startAndWaitUntilHealthy(
 
   // Build spawn configuration
   const logPath = path.join(serversDir, 'devui.log');
-  const spawnConfig =
-    host === 'localhost'
-      ? buildServerHarnessSpawnConfig(cliRuntime, port, logPath)
-      : buildServerHarnessSpawnConfig(cliRuntime, port, logPath, host);
+  const spawnConfig = buildServerHarnessSpawnConfig(
+    cliRuntime,
+    port,
+    logPath,
+    host
+  );
 
   // Validate executable path
   const isExecutable = await validateExecutablePath(spawnConfig.command);

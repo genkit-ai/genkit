@@ -201,7 +201,8 @@ describe('ui:start', () => {
       expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
         mockCLIRuntime,
         0,
-        mockLogPath
+        mockLogPath,
+        'localhost'
       );
     });
 
@@ -296,7 +297,8 @@ describe('ui:start', () => {
       expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
         mockCLIRuntime,
         actualPort,
-        mockLogPath
+        mockLogPath,
+        'localhost'
       );
       expect(mockedValidateExecutablePath).toHaveBeenCalledWith(
         mockSpawnConfig.command
@@ -492,7 +494,8 @@ describe('ui:start', () => {
       expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
         bunRuntime,
         actualPort,
-        mockLogPath
+        mockLogPath,
+        'localhost'
       );
     });
 
@@ -520,7 +523,8 @@ describe('ui:start', () => {
       expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
         binaryRuntime,
         actualPort,
-        mockLogPath
+        mockLogPath,
+        'localhost'
       );
     });
   });
