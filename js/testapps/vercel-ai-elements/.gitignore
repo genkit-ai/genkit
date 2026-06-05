@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# This app uses lib/ for source code (not build output), so it must be
+# tracked even though the root .gitignore ignores `lib` globally.
+!lib
+!lib/**
