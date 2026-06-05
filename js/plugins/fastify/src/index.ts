@@ -134,10 +134,20 @@ export function fastifyHandler<
     });
 
     if (request.headers['accept'] === 'text/event-stream' || stream === 'true') {
+      // Headers set by earlier hooks/plugins (e.g. @fastify/cors) live on the
+      // Fastify reply. hijack() stops Fastify from flushing them to the socket,
+      // so copy them onto the raw response ourselves before streaming, or the
+      // browser would reject the streamed response for missing CORS headers.
+      const pendingHeaders = reply.getHeaders();
       // Take ownership of the underlying response so Fastify does not also try
       // to serialize and send a reply while we stream raw SSE bytes.
       reply.hijack();
       const raw = reply.raw;
+      for (const [key, value] of Object.entries(pendingHeaders)) {
+        if (value !== undefined) {
+          raw.setHeader(key, value);
+        }
+      }
 
       const streamManager = opts?.streamManager;
       if (streamManager && streamId) {

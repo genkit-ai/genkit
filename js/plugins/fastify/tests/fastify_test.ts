@@ -154,6 +154,12 @@ describe('fastifyHandler', async () => {
     app = Fastify();
     port = await getPort();
 
+    // Simulates a plugin/hook (e.g. @fastify/cors) that sets response headers
+    // before the handler runs. These must survive reply.hijack() when streaming.
+    app.addHook('onRequest', async (_req, reply) => {
+      reply.header('x-pre-hijack', 'preserved');
+    });
+
     app.post('/voidInput', fastifyHandler(voidInput));
     app.post('/stringInput', fastifyHandler(stringInput));
     app.post('/objectInput', fastifyHandler(objectInput));
@@ -443,6 +449,22 @@ describe('fastifyHandler', async () => {
       ]);
 
       assert.strictEqual(await result.output, 'Echo v2: olleh');
+    });
+
+    it('preserves headers set by earlier hooks on a streamed response', async () => {
+      // A streamed response goes through reply.hijack(); headers set by hooks
+      // (like CORS) must still reach the client. Without this, the browser
+      // rejects the streamed response even when the preflight passed.
+      const response = await fetch(`http://localhost:${port}/streamingFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ data: { question: 'hi' } }),
+      });
+      assert.strictEqual(response.headers.get('x-pre-hijack'), 'preserved');
+      await response.text(); // drain the stream
     });
 
     it('should return 204 for a non-existent stream', async () => {
