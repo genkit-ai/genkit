@@ -46,6 +46,14 @@ func VideoModelRef(name string, config *genai.GenerateVideosConfig) ai.ModelRef 
 	return ai.NewModelRef(name, config)
 }
 
+// --- Deep Research ---
+
+// DeepResearchModelRef creates a ModelRef for a Deep Research model.
+// The name should include provider prefix (e.g., "googleai/deep-research-preview-04-2026").
+func DeepResearchModelRef(name string, config *DeepResearchConfig) ai.ModelRef {
+	return ai.NewModelRef(name, config)
+}
+
 // --- Embedders ---
 
 // EmbedderRef creates an EmbedderRef for an embedding model.

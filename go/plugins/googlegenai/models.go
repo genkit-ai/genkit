@@ -52,6 +52,28 @@ var (
 		Output:      []string{"media"},
 		LongRunning: true,
 	}
+
+	// DeepResearchSupports describes the common Deep Research model capabilities.
+	DeepResearchSupports = ai.ModelSupports{
+		Media:       false,
+		Multiturn:   true,
+		Tools:       false,
+		ToolChoice:  false,
+		SystemRole:  false,
+		Output:      []string{"text"},
+		LongRunning: true,
+	}
+
+	// AdvancedDeepResearchSupports describes Deep Research models with media and tool support.
+	AdvancedDeepResearchSupports = ai.ModelSupports{
+		Media:       true,
+		Multiturn:   true,
+		Tools:       true,
+		ToolChoice:  false,
+		SystemRole:  false,
+		Output:      []string{"text", "media"},
+		LongRunning: true,
+	}
 )
 
 // Default options for unknown models of each type.
@@ -72,6 +94,12 @@ var (
 		Supports:     &VeoSupports,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: configToMap(genai.GenerateVideosConfig{}),
+	}
+
+	defaultDeepResearchOpts = ai.ModelOptions{
+		Supports:     &DeepResearchSupports,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(DeepResearchConfig{}),
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
@@ -103,6 +131,10 @@ const (
 	veo31FastGenerate001     = "veo-3.1-fast-generate-001"
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
+
+	deepResearchProPreview122025 = "deep-research-pro-preview-12-2025"
+	deepResearchPreview042026    = "deep-research-preview-04-2026"
+	deepResearchMaxPreview042026 = "deep-research-max-preview-04-2026"
 
 	embedding001                      = "embedding-001"
 	textembeddinggecko003             = "textembedding-gecko@003"
@@ -149,6 +181,10 @@ var (
 		veo30FastGenerate001,
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
+
+		deepResearchProPreview122025,
+		deepResearchPreview042026,
+		deepResearchMaxPreview042026,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
@@ -260,6 +296,27 @@ var (
 		},
 	}
 
+	supportedDeepResearchModels = map[string]ai.ModelOptions{
+		deepResearchProPreview122025: {
+			Label:    "Deep Research Pro Preview 12 2025",
+			Versions: []string{},
+			Supports: &DeepResearchSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		deepResearchPreview042026: {
+			Label:    "Deep Research Preview 04 2026",
+			Versions: []string{},
+			Supports: &AdvancedDeepResearchSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		deepResearchMaxPreview042026: {
+			Label:    "Deep Research Max Preview 04 2026",
+			Versions: []string{},
+			Supports: &AdvancedDeepResearchSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+	}
+
 	embedderConfig = map[string]ai.EmbedderOptions{
 		embedding001: {
 			Dimensions: 768,
@@ -339,6 +396,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		if !ok {
 			opts = defaultVeoOpts
 		}
+	case ModelTypeDeepResearch:
+		opts, ok = supportedDeepResearchModels[name]
+		if !ok {
+			opts = defaultDeepResearchOpts
+		}
 	default:
 		opts = defaultGeminiOpts
 	}
@@ -410,6 +472,7 @@ type genaiModels struct {
 	imagen    []string
 	embedders []string
 	veo       []string
+	deep      []string
 }
 
 // listGenaiModels returns a list of supported models and embedders from the
@@ -439,6 +502,11 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		if strings.Contains(name, "veo") {
 			models.veo = append(models.veo, name)
+			continue
+		}
+
+		if strings.HasPrefix(name, "deep-research-") {
+			models.deep = append(models.deep, name)
 			continue
 		}
 

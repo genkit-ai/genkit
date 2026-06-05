@@ -27,6 +27,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
@@ -50,6 +51,10 @@ func requireEnv(key string) (string, bool) {
 // We can't test the DefineAll functions along with the other tests because
 // we get duplicate definitions of models.
 var testAll = flag.Bool("all", false, "test DefineAllXXX functions")
+
+// Deep Research runs are long (minutes) and consume preview-tier quota, so they
+// are gated behind an explicit flag in addition to the API key.
+var deepResearch = flag.Bool("deepresearch", false, "run live Deep Research tests (slow, consumes preview quota)")
 
 func TestGoogleAILive(t *testing.T) {
 	apiKey, ok := requireEnv("GEMINI_API_KEY")
@@ -696,6 +701,87 @@ func TestCacheHelper(t *testing.T) {
 			t.Fatalf("cache name mismatch, want dummy-name, got: %s", name)
 		}
 	})
+}
+
+// TestGoogleAIDeepResearchLive exercises the Deep Research background model against
+// the real Gemini API: it starts an interaction and polls it to completion.
+//
+// It is gated behind both an API key and the -deepresearch flag because a single
+// run takes minutes and consumes preview-tier quota. Run it with:
+//
+//	GEMINI_API_KEY=... go test ./plugins/googlegenai/ -v -run TestGoogleAIDeepResearchLive -deepresearch -timeout 30m
+func TestGoogleAIDeepResearchLive(t *testing.T) {
+	apiKey, ok := requireEnv("GEMINI_API_KEY")
+	if !ok {
+		apiKey, ok = requireEnv("GOOGLE_API_KEY")
+		if !ok {
+			t.Skip("no gemini api key provided, set either GEMINI_API_KEY or GOOGLE_API_KEY in environment")
+		}
+	}
+	if !*deepResearch {
+		t.Skip("skipping live Deep Research test; pass -deepresearch to run (slow, consumes preview quota)")
+	}
+
+	ctx := context.Background()
+	g := genkit.Init(ctx,
+		genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey}),
+	)
+
+	const model = "googleai/deep-research-preview-04-2026"
+	op, err := genkit.GenerateOperation(ctx, g,
+		ai.WithModelName(model),
+		ai.WithMessages(ai.NewUserTextMessage(
+			"Briefly research the history of the Go programming language and summarize it in three bullet points.")),
+		ai.WithConfig(&googlegenai.DeepResearchConfig{
+			GoogleSearch: true,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("GenerateOperation failed to start: %v", err)
+	}
+	if op.ID == "" {
+		t.Fatal("started operation has no ID")
+	}
+	t.Logf("started Deep Research operation %s", op.ID)
+
+	// Deep Research runs can take several minutes; poll until done or the test
+	// timeout (-timeout) fires.
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for !op.Done {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context cancelled while polling: %v", ctx.Err())
+		case <-ticker.C:
+			op, err = genkit.CheckModelOperation(ctx, g, op)
+			if err != nil {
+				t.Fatalf("CheckModelOperation failed: %v", err)
+			}
+			t.Logf("operation %s done=%t", op.ID, op.Done)
+		}
+	}
+
+	if op.Error != nil {
+		t.Fatalf("operation finished with error: %v", op.Error)
+	}
+	if op.Output == nil || op.Output.Message == nil {
+		t.Fatal("completed operation has no output message")
+	}
+
+	var text strings.Builder
+	for _, part := range op.Output.Message.Content {
+		if part.IsText() {
+			text.WriteString(part.Text)
+		}
+	}
+	if strings.TrimSpace(text.String()) == "" {
+		t.Errorf("expected non-empty text output, got %#v", op.Output.Message.Content)
+	}
+	t.Logf("Deep Research output:\n%s", text.String())
+
+	if op.Output.Usage == nil || op.Output.Usage.TotalTokens == 0 {
+		t.Errorf("expected non-zero usage, got %#v", op.Output.Usage)
+	}
 }
 
 func fetchImgAsBase64() (string, error) {
