@@ -371,7 +371,8 @@ describe('Agent', () => {
         }
       );
 
-      // Pass init.state — should throw FAILED_PRECONDITION for server-managed agents
+      // Pass init.state — should fail gracefully with finishReason 'failed' and
+      // a FAILED_PRECONDITION error for server-managed agents.
       const session = flow.streamBidi({
         state: {
           custom: { foo: 'should-be-rejected' },
@@ -384,18 +385,17 @@ describe('Agent', () => {
       });
       session.close();
 
-      try {
-        for await (const _ of session.stream) {
-        }
-        await session.output;
-        assert.fail('Expected FAILED_PRECONDITION error');
-      } catch (e: any) {
-        assert.ok(
-          e.message.includes("Cannot send 'state' to agent"),
-          `Expected FAILED_PRECONDITION error, got: ${e.message}`
-        );
-        assert.strictEqual(e.status, 'FAILED_PRECONDITION');
+      for await (const _ of session.stream) {
       }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.error);
+      assert.strictEqual(output.error!.status, 'FAILED_PRECONDITION');
+      assert.ok(
+        output.error!.message.includes("Cannot send 'state' to agent"),
+        `Expected FAILED_PRECONDITION message, got: ${output.error!.message}`
+      );
     });
 
     it('should use init.state for client-managed agents (no store)', async () => {
@@ -1597,20 +1597,18 @@ describe('Agent', () => {
       });
       session2.close();
 
-      try {
-        for await (const _ of session2.stream) {
-        }
-        await session2.output;
-        assert.fail(
-          'Expected INVALID_ARGUMENT error for forged restart inputs'
-        );
-      } catch (e: any) {
-        assert.ok(
-          e.message.includes('modified inputs'),
-          `Expected modified inputs error, got: ${e.message}`
-        );
-        assert.strictEqual(e.status, 'INVALID_ARGUMENT');
+      // Forged inputs fail gracefully with finishReason 'failed' and the
+      // original INVALID_ARGUMENT status preserved on the error.
+      for await (const _ of session2.stream) {
       }
+      const output2 = await session2.output;
+      assert.strictEqual(output2.finishReason, 'failed');
+      assert.ok(output2.error);
+      assert.strictEqual(output2.error!.status, 'INVALID_ARGUMENT');
+      assert.ok(
+        output2.error!.message.includes('modified inputs'),
+        `Expected modified inputs error, got: ${output2.error!.message}`
+      );
     });
 
     it('should reject resume.respond referencing a non-existent tool', async () => {
@@ -1688,20 +1686,17 @@ describe('Agent', () => {
       });
       session2.close();
 
-      try {
-        for await (const _ of session2.stream) {
-        }
-        await session2.output;
-        assert.fail(
-          'Expected INVALID_ARGUMENT error for non-existent tool respond'
-        );
-      } catch (e: any) {
-        assert.ok(
-          e.message.includes('not found in session history'),
-          `Expected not found error, got: ${e.message}`
-        );
-        assert.strictEqual(e.status, 'INVALID_ARGUMENT');
+      // Fails gracefully with finishReason 'failed' and INVALID_ARGUMENT.
+      for await (const _ of session2.stream) {
       }
+      const output2 = await session2.output;
+      assert.strictEqual(output2.finishReason, 'failed');
+      assert.ok(output2.error);
+      assert.strictEqual(output2.error!.status, 'INVALID_ARGUMENT');
+      assert.ok(
+        output2.error!.message.includes('not found in session history'),
+        `Expected not found error, got: ${output2.error!.message}`
+      );
     });
 
     it('should reject resume.restart referencing a non-existent tool', async () => {
@@ -1763,18 +1758,17 @@ describe('Agent', () => {
       });
       session2.close();
 
-      try {
-        for await (const _ of session2.stream) {
-        }
-        await session2.output;
-        assert.fail('Expected INVALID_ARGUMENT error for fabricated restart');
-      } catch (e: any) {
-        assert.ok(
-          e.message.includes('not found in session history'),
-          `Expected not found error, got: ${e.message}`
-        );
-        assert.strictEqual(e.status, 'INVALID_ARGUMENT');
+      // Fails gracefully with finishReason 'failed' and INVALID_ARGUMENT.
+      for await (const _ of session2.stream) {
       }
+      const output2 = await session2.output;
+      assert.strictEqual(output2.finishReason, 'failed');
+      assert.ok(output2.error);
+      assert.strictEqual(output2.error!.status, 'INVALID_ARGUMENT');
+      assert.ok(
+        output2.error!.message.includes('not found in session history'),
+        `Expected not found error, got: ${output2.error!.message}`
+      );
     });
 
     it('should process all pre-queued messages in the background after detaching', async () => {
@@ -2765,20 +2759,23 @@ Now respond to the latest message.`,
       });
       session.close();
 
+      // The agent no longer throws on an in-band turn failure — it resolves
+      // gracefully with finishReason 'failed' and a structured error.
       const chunks: AgentStreamChunk[] = [];
-      try {
-        for await (const chunk of session.stream) {
-          chunks.push(chunk);
-        }
-        await session.output;
-        assert.fail('Expected the agent to throw');
-      } catch (e: any) {
-        assert.ok(e.message.includes('boom'));
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
       }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.error);
+      assert.strictEqual(output.error!.status, 'INTERNAL');
+      assert.ok(output.error!.message.includes('boom'));
 
       const turnEndChunk = chunks.find((c) => !!c.turnEnd);
       assert.strictEqual(turnEndChunk?.turnEnd?.finishReason, 'failed');
 
+      // The failed turn's snapshot records the failure.
       const turnEndSnapshotId = turnEndChunk?.turnEnd?.snapshotId;
       assert.ok(turnEndSnapshotId);
       const snapshot = await store.getSnapshot({
@@ -2883,6 +2880,111 @@ Now respond to the latest message.`,
       assert.strictEqual(snapshot!.status, 'done');
       // The recovery snapshot holds the last-good state (turn 1 only).
       assert.strictEqual((snapshot!.state.custom as any).count, 1);
+    });
+
+    it('server-managed: recovery snapshot holds last-good state and chains from the failed snapshot (default callback)', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      let turn = 0;
+
+      // Default snapshotCallback — every turn (including the failed one) is
+      // persisted. The retroactive recovery snapshot must still be written as a
+      // distinct 'done' snapshot holding the last-good state, separate from the
+      // failed turn's snapshot.
+      const flow = defineCustomAgent<unknown, { count: number }>(
+        new Registry(),
+        { name: 'frServerRecoveryDefault', store },
+        async (sess) => {
+          await sess.run(async () => {
+            turn++;
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            if (turn === 2) {
+              throw new Error('default cb boom');
+            }
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+      });
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.snapshotId);
+
+      // The failed turn's snapshot records the partial (failed-turn) state.
+      const turnEndChunks = chunks.filter((c) => !!c.turnEnd);
+      const failedTurnSnapshotId =
+        turnEndChunks[turnEndChunks.length - 1]?.turnEnd?.snapshotId;
+      assert.ok(failedTurnSnapshotId);
+      const failedSnap = await store.getSnapshot({
+        snapshotId: failedTurnSnapshotId!,
+      });
+      assert.strictEqual(failedSnap?.status, 'failed');
+      assert.strictEqual((failedSnap!.state.custom as any).count, 2);
+
+      // The recovery snapshot is a distinct, 'done' snapshot holding the
+      // last-good state (turn 1 only) and chains from the failed snapshot.
+      assert.notStrictEqual(output.snapshotId, failedTurnSnapshotId);
+      const recovery = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(recovery?.status, 'done');
+      assert.strictEqual((recovery!.state.custom as any).count, 1);
+      assert.strictEqual(recovery?.parentId, failedTurnSnapshotId);
+    });
+
+    it('server-managed: recovery snapshot falls back to the seed state when the first turn fails', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+
+      // The very first turn fails — there is no prior successful turn, so the
+      // last-good state is the seed state captured at construction (before the
+      // failed turn's user message and mutations were applied).
+      const flow = defineCustomAgent<unknown, { count: number }>(
+        new Registry(),
+        { name: 'frServerRecoveryFirstTurn', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            throw new Error('first turn boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.snapshotId);
+
+      const recovery = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.ok(recovery, 'recovery snapshot should exist in the store');
+      assert.strictEqual(recovery!.status, 'done');
+      // No successful turn ran, so the seed state has no count mutation and no
+      // history from the failed turn.
+      assert.strictEqual((recovery!.state.custom as any)?.count, undefined);
+      assert.strictEqual(recovery!.state.messages?.length ?? 0, 0);
     });
 
     it('surfaces the generate finishReason from a prompt agent', async () => {
