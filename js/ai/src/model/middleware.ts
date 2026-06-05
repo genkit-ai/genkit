@@ -344,6 +344,8 @@ const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
  * });
  * ```
  */
+const NEVER_RETRY_ERROR_NAMES = ['AbortError', 'ToolInterruptError'];
+
 export function retry(options: RetryOptions = {}): ModelMiddleware {
   const {
     maxRetries = 3,
@@ -366,9 +368,15 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
         const error = e as Error;
         if (i < maxRetries) {
           let shouldRetry = false;
-          if (error instanceof GenkitError) {
+          let reason = '';
+          if (NEVER_RETRY_ERROR_NAMES.includes(error?.name)) {
+            shouldRetry = false;
+            reason = `error name "${error?.name}" is explicitly non-retryable`;
+          } else if (error instanceof GenkitError) {
             if (statuses.includes(error.status)) {
               shouldRetry = true;
+            } else {
+              reason = `status "${error.status}" is not retryable`;
             }
           } else {
             shouldRetry = true;
@@ -380,13 +388,39 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
             if (!noJitter) {
               delay = delay + 1000 * Math.pow(2, i) * Math.random();
             }
-            logger.warn(
-              `Request failed: ${error?.message || String(error)}. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1} of ${maxRetries})`
+            logger.logStructuredWarn(
+              `Retry attempt ${i + 1} of ${maxRetries} triggered in ${Math.round(delay)}ms due to error: ${error?.message || String(error)}`,
+              {
+                'genkit.middleware.name': 'retry',
+                'genkit.middleware.retry.attempt': i + 1,
+                'genkit.middleware.retry.max_attempts': maxRetries,
+                'genkit.middleware.retry.delay_ms': Math.round(delay),
+              },
+              error
             );
             await new Promise((resolve) => __setTimeout(resolve, delay));
             currentDelay = Math.min(currentDelay * backoffFactor, maxDelayMs);
             continue;
+          } else {
+            logger.logStructuredWarn(
+              `Request failed with error: ${error?.message || String(error)}. Skipping retry because ${reason}.`,
+              {
+                'genkit.middleware.name': 'retry',
+                'genkit.middleware.retry.skipped_reason': reason,
+                'genkit.middleware.retry.max_attempts': maxRetries,
+              },
+              error
+            );
           }
+        } else {
+          logger.logStructuredWarn(
+            `All retry attempts exhausted (${maxRetries}). Last error: ${error?.message || String(error)}`,
+            {
+              'genkit.middleware.name': 'retry',
+              'genkit.middleware.retry.max_attempts': maxRetries,
+            },
+            error
+          );
         }
         throw error;
       }
@@ -442,29 +476,67 @@ export function fallback(
   return async (req, next) => {
     try {
       return await next(req);
-    } catch (e) {
-      if (e instanceof GenkitError && statuses.includes(e.status)) {
+    } catch (e: any) {
+      const isFallbackable =
+        e instanceof GenkitError && statuses.includes(e.status);
+      if (isFallbackable) {
         onError?.(e);
         let lastError: any = e;
         for (const model of models) {
+          const resolved = await resolveModel(ai.registry, model);
+          const targetModelName =
+            resolved.modelAction?.__action?.name || String(model);
           try {
-            const resolved = await resolveModel(ai.registry, model);
-            logger.warn(
-              `Request failed with status ${lastError.status}: ${lastError.message}. Falling back to model ${resolved.modelAction.__action.name}...`
+            logger.logStructuredWarn(
+              `Request failed with status ${lastError.status}: ${lastError.message}. Falling back to model ${targetModelName}...`,
+              {
+                'genkit.middleware.name': 'fallback',
+                'genkit.middleware.fallback.target_model': targetModelName,
+              },
+              lastError
             );
             return await resolved.modelAction(req);
-          } catch (e2) {
+          } catch (e2: any) {
             lastError = e2;
             if (e2 instanceof GenkitError && statuses.includes(e2.status)) {
               onError?.(e2);
               continue;
             }
+            const statusStr =
+              e2 instanceof GenkitError
+                ? `status ${e2.status}`
+                : 'non-Genkit error';
+            logger.logStructuredWarn(
+              `Fallback model ${targetModelName} failed with ${statusStr}: ${e2.message || String(e2)}. Aborting fallback sequence.`,
+              {
+                'genkit.middleware.name': 'fallback',
+                'genkit.middleware.fallback.target_model': targetModelName,
+              },
+              e2
+            );
             throw e2;
           }
         }
+        logger.logStructuredWarn(
+          `All fallback options exhausted. Last error: ${lastError.message || String(lastError)}`,
+          {
+            'genkit.middleware.name': 'fallback',
+          },
+          lastError
+        );
         throw lastError;
+      } else {
+        const statusStr =
+          e instanceof GenkitError ? `status ${e.status}` : 'non-Genkit error';
+        logger.logStructuredWarn(
+          `Request failed with ${statusStr}: ${e.message || String(e)}. Skipping fallback.`,
+          {
+            'genkit.middleware.name': 'fallback',
+          },
+          e
+        );
+        throw e;
       }
-      throw e;
     }
   };
 }

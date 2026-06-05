@@ -145,14 +145,44 @@ class Logger {
     getLogger().level = level;
   }
 
-  logStructured(msg: string, metadata: any) {
-    getLogger().info(msg, metadata);
-    this._emitOtel('info', [], msg, metadata);
+  private _mergeErrorMetadata(metadata: any, err?: any): any {
+    const mergedMetadata = { ...metadata };
+    if (err) {
+      mergedMetadata['exception.type'] = err.name || 'Error';
+      mergedMetadata['exception.message'] = err.message || String(err);
+      if (err.stack) {
+        mergedMetadata['exception.stacktrace'] = err.stack;
+      }
+    }
+    return mergedMetadata;
   }
 
-  logStructuredError(msg: string, metadata: any) {
-    getLogger().error(msg, metadata);
-    this._emitOtel('error', [], msg, metadata);
+  logStructuredInfo(msg: string, metadata: any, err?: any) {
+    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
+    getLogger().info(msg, mergedMetadata);
+    this._emitOtel('info', [], msg, mergedMetadata);
+  }
+
+  logStructured(msg: string, metadata: any, err?: any) {
+    this.logStructuredInfo(msg, metadata, err);
+  }
+
+  logStructuredError(msg: string, metadata: any, err?: any) {
+    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
+    getLogger().error(msg, mergedMetadata);
+    this._emitOtel('error', [], msg, mergedMetadata);
+  }
+
+  logStructuredWarn(msg: string, metadata: any, err?: any) {
+    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
+    getLogger().warn(msg, mergedMetadata);
+    this._emitOtel('warn', [], msg, mergedMetadata);
+  }
+
+  logStructuredDebug(msg: string, metadata: any, err?: any) {
+    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
+    getLogger().debug(msg, mergedMetadata);
+    this._emitOtel('debug', [], msg, mergedMetadata);
   }
 }
 
