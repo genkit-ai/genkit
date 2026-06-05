@@ -40,6 +40,7 @@ from websockets.exceptions import ConnectionClosed
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
+from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
@@ -377,9 +378,11 @@ class ReflectionServerV2:
         mapped: dict[str, Any] = {}
         for name in self._registry.list_values(p.type):
             value = self._registry.lookup_value(p.type, name)
-            to_json_fn = getattr(value, 'to_json', None) if value is not None else None
-            if callable(to_json_fn):
-                mapped[name] = to_json_fn()
+            if p.type == 'middleware':
+                assert isinstance(value, GenerateMiddleware), (
+                    f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
+                )
+                mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             else:
                 mapped[name] = value
         await self._send_response(sid, {'values': mapped})
