@@ -896,6 +896,29 @@ async function downloadVideo(video: MediaPart, path: string) {
   Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
 }
 
+ai.defineFlow('video-to-image-generation', async () => {
+  const response = await ai.generate({
+    model: googleAI.model('gemini-3.1-flash-image'),
+    prompt: [
+      {
+        media: {
+          url: 'https://www.youtube.com/watch?v=QO30-W3b_vw',
+        },
+        metadata: {
+          videoMetadata: {
+            fps: 0.5,
+          },
+        },
+      },
+      {
+        text: 'Can you create an image that explains what this video is about?',
+      },
+    ],
+  });
+
+  return response;
+});
+
 // Test external URL with Gemini 3.0 (should pass as fileUri)
 ai.defineFlow('external-url-gemini-3.0', async () => {
   const { text } = await ai.generate({

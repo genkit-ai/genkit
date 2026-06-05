@@ -410,6 +410,7 @@ function getFetchOptions(params: {
       params.clientOptions,
       params.isInteraction
     ),
+    redirect: 'manual',
   };
   if (params.body) {
     fetchOptions.body = params.body;

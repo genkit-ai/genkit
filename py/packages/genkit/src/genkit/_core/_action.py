@@ -627,3 +627,21 @@ class Action(Generic[InputT, OutputT, ChunkT]):
                 return await self._fn(input, ctx)
             case _:
                 raise ValueError('action fn must have 0-2 args')
+
+
+def get_current_context() -> dict[str, object] | None:
+    """Get the current action execution context, or None if not in an action.
+
+    This module-level helper provides public cross-boundary access to
+    the private _action_context ContextVar.
+    """
+    return _action_context.get(None)
+
+
+def set_action_name(action: Action[Any, Any, Any], name: str) -> None:
+    """Set the name of an action.
+
+    Used internally for plugin namespace normalization to mutate the action's
+    private name backing field without exposing a setter on the Action class.
+    """
+    action._name = name

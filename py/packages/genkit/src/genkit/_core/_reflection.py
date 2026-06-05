@@ -41,6 +41,7 @@ from genkit._core._action import Action
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
+from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
 
 logger = get_logger(__name__)
@@ -177,9 +178,32 @@ def create_reflection_asgi_app(
         return JSONResponse(response, headers={'x-genkit-version': version})
 
     async def values(req: Request) -> JSONResponse:
-        if req.query_params.get('type') != 'defaultModel':
-            return JSONResponse({'error': 'Only type=defaultModel supported'}, status_code=400)
-        return JSONResponse(registry.list_values('defaultModel'))
+        raw = req.query_params.get('type')
+        if not raw or not raw.strip():
+            return JSONResponse(
+                {'error': 'Query parameter "type" is required.'},
+                status_code=400,
+                headers={'x-genkit-version': version},
+            )
+        type_param = raw.strip()
+        try:
+            raw_values = registry.list_values(type_param)
+            if type_param == 'middleware':
+                serialized: dict[str, Any] = {}
+                for key, val in raw_values.items():
+                    assert isinstance(val, GenerateMiddleware), (
+                        f'registry middleware/{key!r} must be GenerateMiddleware, got {type(val).__name__}'
+                    )
+                    serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
+                raw_values = serialized
+            return JSONResponse(raw_values, headers={'x-genkit-version': version})
+        except Exception:
+            logger.exception('Reflection /api/values failed')
+            return JSONResponse(
+                {'error': 'Failed to list values', 'detail': 'See Python process logs for the traceback.'},
+                status_code=500,
+                headers={'x-genkit-version': version},
+            )
 
     async def envs(_: Request) -> JSONResponse:
         return JSONResponse(['dev'])

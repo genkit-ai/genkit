@@ -5,6 +5,7 @@ requires-python = ">=3.10"
 dependencies = [
   "genkit",
   "genkit-plugin-google-genai",
+  "genkit-plugin-middleware",
   "pydantic>=2.0.0",
   "structlog>=24.0.0",
   "uvloop>=0.21.0",
