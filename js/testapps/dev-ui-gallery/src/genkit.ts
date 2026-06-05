@@ -30,7 +30,7 @@ import {
   vertexAIEvaluation,
 } from '@genkit-ai/vertexai/evaluation';
 import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
-import { genkit } from 'genkit';
+import { genkit } from 'genkit/beta';
 import { logger } from 'genkit/logging';
 import { chroma } from 'genkitx-chromadb';
 import { ollama } from 'genkitx-ollama';
