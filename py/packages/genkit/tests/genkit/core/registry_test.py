@@ -430,3 +430,11 @@ async def test_list_actions_registered_canonical_coexists_with_qualified_dap_row
     assert catalog[qualified].key == qualified
 
     assert provider_key in catalog
+
+
+def test_registry_satisfies_registry_like() -> None:
+    """Registry must structurally satisfy RegistryLike so middleware can use it as such."""
+    from genkit._core._protocols import RegistryLike
+    from genkit._core._registry import Registry
+
+    assert isinstance(Registry(None), RegistryLike)

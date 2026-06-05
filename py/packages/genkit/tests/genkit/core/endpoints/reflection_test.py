@@ -44,8 +44,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel, Field
 
+from genkit import Genkit
 from genkit._core._action import ActionKind
+from genkit._core._middleware import BaseMiddleware
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
 from genkit._core._typing import ActionMetadata
@@ -309,3 +312,107 @@ async def test_run_action_streaming_primitive_types(
 
     final_result = json.loads(lines[-1])
     assert final_result['result'] == {'final': 'result'}
+
+
+# Real-registry tests for the /api/values?type=middleware endpoint. The other
+# endpoint tests above use a MagicMock registry, but here we want to exercise
+# the actual GenerateMiddleware serialization path the Dev UI consumes — mocking
+# would defeat the point.
+
+
+async def _registry_asgi_client(registry: Registry) -> AsyncClient:
+    """Build an ASGI client wired to a real Registry instance."""
+    app = create_reflection_asgi_app(registry)
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url='http://test')
+
+
+@pytest.mark.asyncio
+async def test_values_middleware_includes_derived_config_schema() -> None:
+    """The Dev UI's /api/values?type=middleware response carries each middleware's configSchema.
+
+    The schema is derived from the middleware class's pydantic fields by ``GenerateMiddleware(cls=...)``.
+    """
+
+    ai = Genkit()
+
+    class _FallbackConfig(BaseModel):
+        models: list[str] = Field(default_factory=list)
+        statuses: list[str] = Field(default_factory=list)
+        isolate_config: bool = False
+
+    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
+    class _Fallback(BaseMiddleware[_FallbackConfig]):
+        pass
+
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        body = response.json()
+        entry = body['fallback']
+        assert entry['name'] == 'fallback'
+        assert entry['description'] == 'Falls back to alternative models on failure'
+        config_schema = entry['configSchema']
+        assert config_schema['type'] == 'object'
+        # Author-defined fields show up; framework-injected ones (registry,
+        # custom_context / on_chunk) must not leak into the form.
+        assert set(config_schema['properties'].keys()) == {'models', 'statuses', 'isolate_config'}
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_values_middleware_uses_class_docstring_as_description_fallback() -> None:
+    """When no explicit description is passed, the class docstring is the fallback.
+
+    Mirrors the action/tool convention: authors get a Dev-UI-visible description
+    for free from a well-written docstring, with leading indentation cleaned up.
+    """
+
+    ai = Genkit()
+
+    @ai.middleware(name='docstring_mw')
+    class _DocMw(BaseMiddleware):
+        """Logs every model call with a configurable prefix.
+
+        Extra paragraphs end up in the description verbatim.
+        """
+
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        entry = response.json()['docstring_mw']
+        assert entry['description'] == (
+            'Logs every model call with a configurable prefix.\n\nExtra paragraphs end up in the description verbatim.'
+        )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_values_middleware_empty_config_schema_for_no_op() -> None:
+    """A middleware with no config knobs still gets an (empty) object schema.
+
+    The Dev UI renders an empty config form, signalling registered.
+    """
+
+    ai = Genkit()
+
+    @ai.middleware(name='no_op')
+    class _NoOp(BaseMiddleware):
+        pass
+
+    client = await _registry_asgi_client(ai.registry)
+    try:
+        response = await client.get('/api/values?type=middleware')
+        assert response.status_code == 200
+        entry = response.json()['no_op']
+        assert entry['configSchema'] == {
+            'type': 'object',
+            'properties': {},
+            'additionalProperties': True,
+        }
+    finally:
+        await client.aclose()

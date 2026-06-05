@@ -28,6 +28,7 @@ dependencies = [
   "genkit-plugin-google-genai",
   "genkit-plugin-ollama",
   "genkit-plugin-evaluators",
+  "genkit-plugin-middleware",
   "genkit-plugin-vertex-ai",
   # Internal tools (private, not published)
   "liccheck>=0.9.2",
@@ -158,6 +159,7 @@ gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
 google-genai-media   = { workspace = true }
 middleware           = { workspace = true }
+middleware-coding-agent = { workspace = true }
 output-formats       = { workspace = true }
 prompts              = { workspace = true }
 tool-interrupts      = { workspace = true }
@@ -174,6 +176,7 @@ genkit-plugin-fastapi               = { workspace = true }
 genkit-plugin-flask                 = { workspace = true }
 genkit-plugin-google-cloud          = { workspace = true }
 genkit-plugin-google-genai          = { workspace = true }
+genkit-plugin-middleware            = { workspace = true }
 genkit-plugin-ollama                = { workspace = true }
 genkit-plugin-evaluators            = { workspace = true }
 genkit-plugin-vertex-ai             = { workspace = true }
@@ -268,6 +271,7 @@ select = [
 "packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
 # Test files don't need docstrings; test method names are self-documenting
 "**/tests/**/*.py" = ["D", "ANN401"]
+"plugins/middleware/tests/*_test.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Validation/provenance/safe-defaults test methods are self-documenting via names;
 # S108 false positives on Path('/tmp/x') used as dummy non-existent paths in tests.

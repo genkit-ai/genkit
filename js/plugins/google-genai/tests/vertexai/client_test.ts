@@ -513,6 +513,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'GET',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
               });
 
               if (!isExpress) {
@@ -553,6 +554,7 @@ describe('Vertex AI Client', () => {
             sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
               method: 'POST',
               headers: getExpectedHeaders(),
+              redirect: 'manual',
               body: JSON.stringify(request),
             });
             sinon.assert.notCalled(runInNewSpanSpy);
@@ -614,6 +616,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             }
@@ -655,6 +658,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
               sinon.assert.notCalled(runInNewSpanSpy);
@@ -713,6 +717,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -742,6 +747,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -773,6 +779,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -813,6 +820,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -862,6 +870,7 @@ describe('Vertex AI Client', () => {
             sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
               method: 'POST',
               headers: getExpectedHeaders(),
+              redirect: 'manual',
               body: JSON.stringify(request),
             });
             sinon.assert.notCalled(runInNewSpanSpy);
@@ -914,6 +923,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             }
