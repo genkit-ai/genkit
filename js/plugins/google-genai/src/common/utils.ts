@@ -385,6 +385,7 @@ function getResponseStream(
           .read()
           .then(({ value, done }) => {
             if (done) {
+              reader.releaseLock();
               if (currentText.trim()) {
                 controller.error(new Error('Failed to parse stream'));
                 return;
@@ -400,6 +401,7 @@ function getResponseStream(
               try {
                 parsedResponse = JSON.parse(match[1]);
               } catch (e) {
+                reader.releaseLock();
                 controller.error(
                   new Error(`Error parsing JSON response: "${match[1]}"`)
                 );
@@ -412,6 +414,7 @@ function getResponseStream(
             return pump();
           })
           .catch((e: Error) => {
+            reader.releaseLock();
             let err = e;
             err.stack = e.stack;
             if (err.name === 'AbortError') {
@@ -426,6 +429,10 @@ function getResponseStream(
           });
       }
     },
+    cancel() {
+      // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+      reader.cancel().catch(() => {});
+    },
   });
   return stream;
 }
@@ -434,12 +441,16 @@ async function* generateResponseSequence(
   stream: ReadableStream<GenerateContentResponse>
 ): AsyncGenerator<GenerateContentResponse> {
   const reader = stream.getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      yield value;
     }
-    yield value;
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -448,12 +459,16 @@ async function getResponsePromise(
 ): Promise<GenerateContentResponse> {
   const allResponses: GenerateContentResponse[] = [];
   const reader = stream.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      return aggregateResponses(allResponses);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return aggregateResponses(allResponses);
+      }
+      allResponses.push(value);
     }
-    allResponses.push(value);
+  } finally {
+    reader.releaseLock();
   }
 }
 

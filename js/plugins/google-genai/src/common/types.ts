@@ -282,7 +282,7 @@ export declare interface PromptFeedback {
  */
 export declare interface FileData {
   /** The IANA standard MIME type of the source data. */
-  mimeType: string;
+  mimeType?: string;
   /** URI of the file. */
   fileUri: string;
 }

@@ -18,15 +18,17 @@
 """Tests for the action module."""
 
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Message, ModelResponse
-from genkit._ai._prompt import load_prompt_folder, lookup_prompt, prompt
+from genkit import Genkit, Message, MiddlewareRef, ModelResponse
+from genkit._ai._model import ModelRequest, text_from_message
+from genkit._ai._prompt import _parse_dotprompt_use, load_prompt_folder, lookup_prompt, prompt
 from genkit._ai._testing import (
     EchoModel,
     ProgrammableModel,
@@ -34,13 +36,53 @@ from genkit._ai._testing import (
     define_programmable_model,
 )
 from genkit._core._action import ActionKind
-from genkit._core._model import GenerateActionOptions, ModelConfig, ModelRequest
-from genkit._core._typing import (
-    Part,
-    Role,
-    TextPart,
-    ToolChoice,
-)
+from genkit._core._error import GenkitError
+from genkit._core._model import GenerateActionOptions, ModelConfig
+from genkit._core._typing import Part, Role, TextPart, ToolChoice
+from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.plugin_api import MiddlewarePlugin, new_middleware
+
+
+class _PreMiddleware(BaseMiddleware):
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        txt = ''.join(text_from_message(m) for m in params.request.messages)
+        return await next_fn(
+            ModelHookParams(
+                request=ModelRequest(
+                    messages=[Message(role=Role.USER, content=[Part(TextPart(text=f'PRE {txt}'))])],
+                ),
+            ),
+            ctx,
+        )
+
+
+class _PostMiddleware(BaseMiddleware):
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: GenerateMiddlewareContext,
+        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        resp: ModelResponse = await next_fn(params, ctx)
+        assert resp.message is not None
+        txt = text_from_message(resp.message)
+        return ModelResponse(
+            finish_reason=resp.finish_reason,
+            message=Message(role=Role.USER, content=[Part(TextPart(text=f'{txt} POST'))]),
+        )
+
+
+class PrePostMiddlewarePlugin(MiddlewarePlugin):
+    name = 'extension-middleware'
+    middleware = [
+        new_middleware(_PreMiddleware, name='pre_mw'),
+        new_middleware(_PostMiddleware, name='post_mw'),
+    ]
 
 
 def setup_test() -> tuple[Genkit, EchoModel, ProgrammableModel]:
@@ -818,3 +860,136 @@ async def test_variant_prompt_loading_does_not_recurse() -> None:
         robot_exec = await prompt(ai.registry, 'recipe', variant='robot')
         robot_response = await robot_exec({'food': 'pizza'})
         assert 'pizza' in robot_response.text
+
+
+@pytest.mark.parametrize(
+    ('raw', 'want'),
+    [
+        (None, None),
+        ([], []),
+        (['a', 'b'], [MiddlewareRef(name='a'), MiddlewareRef(name='b')]),
+        (
+            ['a', {'name': 'b', 'config': {'k': 1}}],
+            [MiddlewareRef(name='a'), MiddlewareRef(name='b', config={'k': 1})],
+        ),
+        ([{'name': 'x'}], [MiddlewareRef(name='x')]),
+    ],
+)
+def test_parse_dotprompt_use(raw: object, want: list[MiddlewareRef] | None) -> None:
+    """Frontmatter ``use`` entries normalize to middleware refs."""
+    assert _parse_dotprompt_use(raw) == want
+
+
+@pytest.mark.parametrize(
+    'raw',
+    [
+        'single',
+        [''],
+        [{'config': 'x'}],
+        [42],
+    ],
+)
+def test_parse_dotprompt_use_invalid(raw: object) -> None:
+    """Malformed frontmatter ``use`` raises a clear error."""
+    with pytest.raises(GenkitError):
+        _parse_dotprompt_use(raw)
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_use_middleware() -> None:
+    """Dotprompt frontmatter ``use`` runs middleware on prompt execution."""
+    ai = Genkit(model='echoModel', plugins=[PrePostMiddlewarePlugin()])
+    define_echo_model(ai)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'with_mw.prompt').write_text('---\nmodel: echoModel\nuse:\n  - pre_mw\n  - post_mw\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        with_mw = await prompt(ai.registry, 'with_mw')
+        response = await with_mw()
+
+    assert response.text == '[ECHO] user: "PRE hi" POST'
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_use_middleware_not_registered() -> None:
+    """Dotprompt ``use`` referencing unknown middleware fails at resolve time."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'missing_mw.prompt').write_text('---\nmodel: echoModel\nuse:\n  - missing_mw\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        missing = await prompt(ai.registry, 'missing_mw')
+        with pytest.raises(GenkitError, match='missing_mw'):
+            await missing()
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_use_middleware_invalid_shape() -> None:
+    """Non-list dotprompt ``use`` fails when the prompt is first resolved."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'bad_use.prompt').write_text('---\nmodel: echoModel\nuse: not-a-list\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        with pytest.raises(GenkitError, match='must be a list'):
+            await prompt(ai.registry, 'bad_use')
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_with_use_middleware_metadata() -> None:
+    """Resolved dotprompt actions expose ``use`` in metadata for the Dev UI."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'with_meta.prompt').write_text(
+            '---\nmodel: echoModel\nuse:\n  - mw1\n  - name: mw2\n    config:\n      foo: bar\n---\nhi\n'
+        )
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        with_meta = await prompt(ai.registry, 'with_meta')
+
+        assert with_meta._use == [  # pyright: ignore[reportPrivateUsage]
+            MiddlewareRef(name='mw1'),
+            MiddlewareRef(name='mw2', config={'foo': 'bar'}),
+        ]
+        assert with_meta._metadata is not None
+        prompt_md = with_meta._metadata['prompt']  # pyright: ignore[reportPrivateUsage]
+        assert prompt_md['use'] == [
+            {'name': 'mw1'},
+            {'name': 'mw2', 'config': {'foo': 'bar'}},
+        ]
+        assert prompt_md['toolDefs'] == []
+
+
+@pytest.mark.asyncio
+async def test_load_prompt_metadata_tool_defs_empty_array() -> None:
+    """Dev UI listActions rejects null toolDefs on prompt metadata."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        prompt_dir.mkdir()
+        (prompt_dir / 'no_tools.prompt').write_text('---\nmodel: echoModel\n---\nhi\n')
+        load_prompt_folder(ai.registry, prompt_dir)
+
+        no_tools = await prompt(ai.registry, 'no_tools')
+        prompt_action = no_tools._prompt_action  # pyright: ignore[reportPrivateUsage]
+        assert prompt_action is not None
+        action_md = cast(dict[str, Any], prompt_action.metadata)
+        for leaked in ('name', 'variant', 'model', 'tools', 'description', 'version', 'toolDefs'):
+            assert leaked not in action_md
+        assert action_md['type'] == 'prompt'
+        prompt_md = cast(dict[str, Any], action_md['prompt'])
+        assert prompt_md['toolDefs'] == []
+        assert prompt_md['name'] == 'no_tools'
