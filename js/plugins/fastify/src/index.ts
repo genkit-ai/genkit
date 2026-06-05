@@ -14,6 +14,14 @@
  * limitations under the License.
  */
 
+import { randomUUID } from 'crypto';
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+  RouteHandlerMethod,
+} from 'fastify';
 import {
   Action,
   ActionStreamInput,
@@ -31,20 +39,10 @@ import {
   type RequestData,
 } from 'genkit/context';
 import { logger } from 'genkit/logging';
-import type {
-  FastifyInstance,
-  FastifyPluginAsync,
-  FastifyReply,
-  FastifyRequest,
-  RouteHandlerMethod,
-} from 'fastify';
 import type { ServerResponse } from 'http';
 import { getErrorMessage, getErrorStack } from './utils.js';
 
 const streamDelimiter = '\n\n';
-
-// Let the runtime provide the randomUUID function.
-const randomUUID = () => globalThis.crypto.randomUUID();
 
 /**
  * Options for a {@link fastifyHandler} (context provider, stream manager).
@@ -133,7 +131,10 @@ export function fastifyHandler<
       abortController.abort();
     });
 
-    if (request.headers['accept'] === 'text/event-stream' || stream === 'true') {
+    if (
+      request.headers['accept'] === 'text/event-stream' ||
+      stream === 'true'
+    ) {
       // Headers set by earlier hooks/plugins (e.g. @fastify/cors) live on the
       // Fastify reply. hijack() stops Fastify from flushing them to the socket,
       // so copy them onto the raw response ourselves before streaming, or the
@@ -392,7 +393,11 @@ export interface GenkitFastifyOptions {
   pathPrefix?: string;
 }
 
-function registerFlow(instance: FastifyInstance, path: string, handler: RouteHandlerMethod) {
+function registerFlow(
+  instance: FastifyInstance,
+  path: string,
+  handler: RouteHandlerMethod
+) {
   logger.debug(` - POST ${path}`);
   instance.post(path, handler);
 }

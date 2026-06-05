@@ -171,7 +171,10 @@ describe('fastifyHandler', async () => {
         streamManager: new InMemoryStreamManager(),
       })
     );
-    app.post('/flowWithAuth', fastifyHandler(flowWithAuth, { contextProvider }));
+    app.post(
+      '/flowWithAuth',
+      fastifyHandler(flowWithAuth, { contextProvider })
+    );
     // Can also expose any action.
     app.post('/echoModel', fastifyHandler(echoModel));
     app.post(
