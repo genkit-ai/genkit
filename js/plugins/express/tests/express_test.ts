@@ -405,7 +405,7 @@ describe('expressHandler', async () => {
       assert.strictEqual(await subscription.output, 'Echo: durable');
     });
 
-    it.only('should return 204 for a non-existent stream', async () => {
+    it('should return 204 for a non-existent stream', async () => {
       try {
         const result = streamFlow({
           url: `http://localhost:${port}/streamingFlowDurable`,
