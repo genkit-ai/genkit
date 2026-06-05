@@ -76,7 +76,8 @@ function isValidPort(port: number): boolean {
 export function buildServerHarnessSpawnConfig(
   cliRuntime: CLIRuntimeInfo,
   port: number,
-  logPath: string
+  logPath: string,
+  host: string = 'localhost'
 ): SpawnConfig {
   // Validate inputs
   if (!cliRuntime) {
@@ -93,23 +94,26 @@ export function buildServerHarnessSpawnConfig(
   if (!logPath) {
     throw new Error('Log path is required');
   }
+  if (!host) {
+    throw new Error('Host is required');
+  }
 
   let command = cliRuntime.execPath;
   let args: string[];
 
+  const harnessArgs = [SERVER_HARNESS_COMMAND, port.toString(), logPath];
+  if (host !== 'localhost') {
+    harnessArgs.push(host);
+  }
+
   if (cliRuntime.type === 'compiled-binary') {
     // For compiled binaries, execute directly with arguments
-    args = [SERVER_HARNESS_COMMAND, port.toString(), logPath];
+    args = harnessArgs;
   } else {
     // For interpreted runtimes (Node.js, Bun), include script path if available
     args = cliRuntime.scriptPath
-      ? [
-          cliRuntime.scriptPath,
-          SERVER_HARNESS_COMMAND,
-          port.toString(),
-          logPath,
-        ]
-      : [SERVER_HARNESS_COMMAND, port.toString(), logPath];
+      ? [cliRuntime.scriptPath, ...harnessArgs]
+      : harnessArgs;
   }
 
   // Build spawn options with platform-specific settings

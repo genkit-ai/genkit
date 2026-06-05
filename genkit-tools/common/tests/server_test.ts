@@ -86,6 +86,36 @@ describe('Tools Server', () => {
     );
   });
 
+  it('should redact sensitive environment variable values', async () => {
+    process.env.GENKIT_TEST_API_KEY = 'test-secret-value';
+    process.env.GENKIT_TEST_PUBLIC_VALUE = 'test-public-value';
+
+    try {
+      const response = await axios.get(
+        `http://localhost:${port}/api/getGenkitEnvironment`
+      );
+      const environmentVars = response.data.result.data.environmentVars;
+
+      expect(
+        environmentVars.find((env: any) => env.name === 'GENKIT_TEST_API_KEY')
+      ).toEqual({
+        name: 'GENKIT_TEST_API_KEY',
+        value: '[redacted]',
+      });
+      expect(
+        environmentVars.find(
+          (env: any) => env.name === 'GENKIT_TEST_PUBLIC_VALUE'
+        )
+      ).toEqual({
+        name: 'GENKIT_TEST_PUBLIC_VALUE',
+        value: 'test-public-value',
+      });
+    } finally {
+      delete process.env.GENKIT_TEST_API_KEY;
+      delete process.env.GENKIT_TEST_PUBLIC_VALUE;
+    }
+  });
+
   it('should handle bidi streaming', async () => {
     let inputStream: AsyncIterable<any> | undefined;
     let finishAction: (() => void) | undefined;

@@ -30,6 +30,7 @@ import {
 interface RunOptions {
   noui?: boolean;
   port?: string;
+  host?: string;
   open?: boolean;
   disableRealtimeTelemetry?: boolean;
   corsOrigin?: string;
@@ -42,6 +43,7 @@ export const start = new Command('start')
   .description('runs a command in Genkit dev mode')
   .option('-n, --noui', 'do not start the Dev UI', false)
   .option('-p, --port <port>', 'port for the Dev UI')
+  .option('--host <host>', 'host for the Dev UI', 'localhost')
   .option('-o, --open', 'Open the browser on UI start up')
   .option(
     '--disable-realtime-telemetry',
@@ -115,6 +117,7 @@ export const start = new Command('start')
     }
     if (!options.noui) {
       let port: number;
+      const host = options.host ?? 'localhost';
       if (options.port) {
         port = Number(options.port);
         if (isNaN(port) || port < 0) {
@@ -124,9 +127,9 @@ export const start = new Command('start')
       } else {
         port = await getPort({ port: makeRange(4000, 4099) });
       }
-      startServer(manager, port);
+      startServer(manager, port, { host });
       if (options.open) {
-        open(`http://localhost:${port}`);
+        open(`http://${host}:${port}`);
       }
     }
     await processPromise;

@@ -65,6 +65,10 @@ describe('start command', () => {
 
     // Reset args
     start.args = [];
+    start.setOptionValue('host', undefined);
+    start.setOptionValue('port', undefined);
+    start.setOptionValue('noui', undefined);
+    start.setOptionValue('open', undefined);
   });
 
   afterEach(() => {
@@ -144,5 +148,22 @@ describe('start command', () => {
       expect.anything(),
       expect.objectContaining({ disableRealtimeTelemetry: true })
     );
+  });
+
+  it('should pass host option to the Dev UI server', async () => {
+    await start.parseAsync([
+      'node',
+      'genkit',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '4040',
+      'run',
+      'app',
+    ]);
+
+    expect(startServerSpy).toHaveBeenCalledWith(expect.anything(), 4040, {
+      host: '127.0.0.1',
+    });
   });
 });

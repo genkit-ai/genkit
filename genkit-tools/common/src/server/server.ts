@@ -42,6 +42,15 @@ const UI_ASSETS_ROOT = path.resolve(
 );
 const UI_ASSETS_SERVE_PATH = path.resolve(UI_ASSETS_ROOT, 'ui', 'browser');
 const API_BASE_PATH = '/api';
+export const DEFAULT_SERVER_HOST = 'localhost';
+
+export interface StartServerOptions {
+  host?: string;
+}
+
+function formatHostForUrl(host: string): string {
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
 
 class PushableAsyncIterable<T> implements AsyncIterable<T> {
   private queue: T[] = [];
@@ -86,9 +95,14 @@ const activeInputStreams = new Map<string, PushableAsyncIterable<any>>();
 /**
  * Starts up the Genkit Tools server which includes static files for the UI and the Tools API.
  */
-export function startServer(manager: BaseRuntimeManager, port: number) {
+export function startServer(
+  manager: BaseRuntimeManager,
+  port: number,
+  options: StartServerOptions = {}
+) {
   let server: Server;
   const app = express();
+  const host = options.host ?? DEFAULT_SERVER_HOST;
 
   app.use(
     cors({
@@ -320,8 +334,8 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   };
   app.use(errorHandler);
 
-  server = app.listen(port, async () => {
-    const uiUrl = 'http://localhost:' + port;
+  server = app.listen(port, host, async () => {
+    const uiUrl = `http://${formatHostForUrl(host)}:${port}`;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);
     logger.info(`${clc.green(clc.bold('Genkit Developer UI:'))} ${uiUrl}`);

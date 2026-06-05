@@ -153,6 +153,9 @@ describe('ui:start', () => {
     mockedSpawn.mockReturnValue(mockChildProcess as any);
     mockedWaitUntilHealthy.mockResolvedValue(true);
     mockedClc.green.mockImplementation((text) => `GREEN:${text}`);
+    uiStart.setOptionValue('host', undefined);
+    uiStart.setOptionValue('port', undefined);
+    uiStart.setOptionValue('open', undefined);
   });
 
   describe('port validation', () => {
@@ -333,6 +336,32 @@ describe('ui:start', () => {
       const actualPort = spawnConfigCall[1];
 
       expect(mockedOpen).toHaveBeenCalledWith(`http://localhost:${actualPort}`);
+    });
+
+    it('should pass custom host to the server harness', async () => {
+      await createCommand().parseAsync([
+        'node',
+        'ui:start',
+        '--port',
+        '8080',
+        '--host',
+        '127.0.0.1',
+      ]);
+
+      expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
+        mockCLIRuntime,
+        8080,
+        mockLogPath,
+        '127.0.0.1'
+      );
+      expect(mockedWaitUntilHealthy).toHaveBeenCalledWith(
+        'http://127.0.0.1:8080',
+        10000
+      );
+      expect(mockedFs.writeFile).toHaveBeenCalledWith(
+        mockToolsJsonPath,
+        expect.stringContaining('"url": "http://127.0.0.1:8080"')
+      );
     });
 
     it('should handle server startup failure', async () => {
@@ -569,7 +598,7 @@ describe('ui:start', () => {
       // The debug message should contain the spawn command and args
       expect(mockedLogger.debug).toHaveBeenCalledWith(
         expect.stringMatching(
-          /^Spawning: \/usr\/bin\/node \/usr\/lib\/node_modules\/genkit-cli\/dist\/bin\/genkit\.js server-harness \d+ \/mock\/project\/root\/\.genkit\/servers\/devui\.log$/
+          /^Spawning: \/usr\/bin\/node \/usr\/lib\/node_modules\/genkit-cli\/dist\/bin\/genkit\.js server-harness \d+ .*devui\.log$/
         )
       );
     });

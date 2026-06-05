@@ -49,6 +49,8 @@ import {
   StreamingCallback,
 } from './types';
 
+const DEFAULT_REFLECTION_HOST = 'localhost';
+
 interface JsonRpcRequest {
   jsonrpc: '2.0';
   method: string;
@@ -133,7 +135,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     if (!port) {
       port = await getPort({ port: makeRange(3200, 3400) });
     }
-    this.wss = new WebSocketServer({ port });
+    this.wss = new WebSocketServer({ port, host: DEFAULT_REFLECTION_HOST });
 
     this._port = port;
     logger.info(`Starting reflection server: ws://localhost:${port}`);
