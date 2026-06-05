@@ -44,6 +44,28 @@ export const AgentFinishReasonSchema = z.enum([
 export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
 
 // ---------------------------------------------------------------------------
+// Finish reasons
+// ---------------------------------------------------------------------------
+
+/**
+ * Reason an agent turn (or whole invocation) finished.
+ */
+export const AgentFinishReasonSchema = z.enum([
+  // From generate's FinishReason:
+  'stop',
+  'length',
+  'blocked',
+  'aborted',
+  'interrupted',
+  'other',
+  'unknown',
+  // Agent additions:
+  'detached',
+  'failed',
+]);
+export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
+
+// ---------------------------------------------------------------------------
 // Session state & artifacts
 // ---------------------------------------------------------------------------
 
