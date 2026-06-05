@@ -17,6 +17,7 @@
 import {
   GenerateMiddleware,
   GenkitError,
+  StatusNameSchema,
   generateMiddleware,
   z,
   type StatusName,
@@ -38,7 +39,7 @@ export const RetryOptionsSchema = z
      * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']
      */
     statuses: z
-      .array(z.string())
+      .array(StatusNameSchema)
       .optional()
       .describe('An array of StatusName values that should trigger a retry.'),
     /**

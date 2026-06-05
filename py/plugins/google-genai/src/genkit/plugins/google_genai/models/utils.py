@@ -47,6 +47,7 @@ kept in mind when modifying media handling or tool conversion logic:
 """
 
 import base64
+import logging
 from typing import cast
 from urllib.parse import urlparse
 
@@ -67,6 +68,8 @@ from genkit import (
     ToolResponsePart,
 )
 from genkit.plugin_api import get_cached_client
+
+logger = logging.getLogger(__name__)
 
 
 class PartConverter:
@@ -137,61 +140,65 @@ class PartConverter:
                 thought_signature=cls._extract_thought_signature(part.root.metadata),
             )
         if isinstance(part.root, ToolResponsePart):
-            tool_output = part.root.tool_response.output
-            parts_to_return = []
+            tool_response = part.root.tool_response
+            tool_output = tool_response.output
 
-            # Check for multimodal content structure {content: [{media: ...}]}
-            if isinstance(tool_output, dict) and 'content' in tool_output:
+            # A tool can hand back media (text/image/audio parts) next to its
+            # structured output by populating tool_response.content. Surface
+            # each item as its own Gemini Part so the model sees the
+            # tool output and the media in the same turn.
+            extra_parts: list[genai.types.Part] = []
+            if tool_response.content:
+                for item in tool_response.content:
+                    try:
+                        genkit_part = Part.model_validate(item)
+                        converted = await cls.to_gemini(genkit_part)
+                        if isinstance(converted, list):
+                            extra_parts.extend(converted)
+                        else:
+                            extra_parts.append(converted)
+                    except Exception as exc:
+                        logger.debug('Skipping unrecognised tool-response content part: %s', exc)
+
+            # Older tools that don't fill in tool_response.content stash media
+            # as data URLs inside output['content'] instead. Only runs when
+            # the primary path came up empty: lift the data URLs into inline
+            # Blob parts and strip 'content' from the dict so the model
+            # doesn't see the same media twice.
+            if not extra_parts and isinstance(tool_output, dict) and 'content' in tool_output:
                 content_list = tool_output['content']
                 if isinstance(content_list, list):
-                    # Create a copy to avoid mutating original if that matters,
-                    # but here we just want to separate content from other fields.
-                    clean_output = tool_output.copy()
-                    clean_output.pop('content')
-
-                    # Heuristic: if media found, extract it to separate parts.
-                    has_media = False
+                    clean_output = {k: v for k, v in tool_output.items() if k != 'content'}
                     for item in content_list:
                         if isinstance(item, dict) and 'media' in item:
-                            has_media = True
                             media_info = item['media']
-                            url = media_info.get('url')
+                            url = media_info.get('url') or ''
                             content_type = media_info.get('contentType') or media_info.get('content_type')
-
-                            if url and url.startswith(cls.DATA):
+                            if url.startswith(cls.DATA):
                                 _, data_str = url.split(',', 1)
                                 data = base64.b64decode(data_str)
-                                parts_to_return.append(
+                                extra_parts.append(
                                     genai.types.Part(inline_data=genai.types.Blob(mime_type=content_type, data=data))
                                 )
+                    if extra_parts:
+                        tool_output = clean_output
 
-                    if has_media:
-                        # Append the function response part FIRST (contextually correct)
-                        parts_to_return.insert(
-                            0,
-                            genai.types.Part(
-                                function_response=genai.types.FunctionResponse(
-                                    id=part.root.tool_response.ref,
-                                    name=part.root.tool_response.name.replace('/', '__'),
-                                    response=clean_output,
-                                )
-                            ),
-                        )
-                        return parts_to_return
-
-            # Default behavior for standard tool responses
-            # FunctionResponse.response must be a dict, not a raw value
-            output = tool_output
-            if not isinstance(output, dict):
-                output = {'result': output}
-
-            return genai.types.Part(
+            # Gemini's FunctionResponse requires a dict-shaped ``response``,
+            # but a tool can legitimately hand back any JSON value (string,
+            # list, int, None, ...). Envelope it as ``{name, content}`` so
+            # the wire payload is always a dict; the inbound converter
+            # unwraps the same envelope so callers see the original value.
+            gemini_tool_name = tool_response.name.replace('/', '__')
+            fn_part = genai.types.Part(
                 function_response=genai.types.FunctionResponse(
-                    id=part.root.tool_response.ref,
-                    name=part.root.tool_response.name.replace('/', '__'),
-                    response=output,
+                    id=tool_response.ref,
+                    name=gemini_tool_name,
+                    response={'name': gemini_tool_name, 'content': tool_output},
                 )
             )
+            if extra_parts:
+                return [fn_part, *extra_parts]
+            return fn_part
         if isinstance(part.root, MediaPart):
             url = part.root.media.url
             if url.startswith(cls.DATA):
@@ -314,13 +321,19 @@ class PartConverter:
                 )
             )
         if part.function_response:
+            # If the model echoes back the ``{name, content}`` envelope we
+            # used on the outbound side, peel it off so the caller sees the
+            # original tool output.
+            output = part.function_response.response
+            if isinstance(output, dict) and output.get('name') == part.function_response.name and 'content' in output:
+                output = output['content']
             return Part(
                 root=ToolResponsePart(
                     tool_response=ToolResponse(
                         ref=getattr(part.function_response, 'id', None),
                         # restore slashes
                         name=(part.function_response.name or '').replace('__', '/'),
-                        output=part.function_response.response,
+                        output=output,
                     )
                 )
             )

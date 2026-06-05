@@ -195,8 +195,14 @@ class GenkitError(Exception):
         self.status: StatusName = temp_status
         self.http_code: int = http_status_code(temp_status)
 
+        # When this error wraps another (the common shape — the action runtime
+        # catches the underlying failure and re-raises as ``GenkitError(...,
+        # cause=original)``), surface the cause in the default string form so
+        # downstream consumers (logs, model-facing tool error messages, the Dev
+        # UI) see the real reason instead of the bare wrapper text.
         source_prefix = f'{source}: ' if source else ''
-        super().__init__(f'{source_prefix}{self.status}: {message}')
+        cause_suffix = f': {cause}' if cause else ''
+        super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
         self.original_message: str = message
 
         if not details:
