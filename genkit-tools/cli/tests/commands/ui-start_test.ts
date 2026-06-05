@@ -338,29 +338,29 @@ describe('ui:start', () => {
       expect(mockedOpen).toHaveBeenCalledWith(`http://localhost:${actualPort}`);
     });
 
-    it('should pass custom host to the server harness', async () => {
+    it('should pass custom IPv6 host to the server harness and format URLs', async () => {
       await createCommand().parseAsync([
         'node',
         'ui:start',
         '--port',
         '8080',
         '--host',
-        '127.0.0.1',
+        '::1',
       ]);
 
       expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
         mockCLIRuntime,
         8080,
         mockLogPath,
-        '127.0.0.1'
+        '::1'
       );
       expect(mockedWaitUntilHealthy).toHaveBeenCalledWith(
-        'http://127.0.0.1:8080',
+        'http://[::1]:8080',
         10000
       );
       expect(mockedFs.writeFile).toHaveBeenCalledWith(
         mockToolsJsonPath,
-        expect.stringContaining('"url": "http://127.0.0.1:8080"')
+        expect.stringContaining('"url": "http://[::1]:8080"')
       );
     });
 

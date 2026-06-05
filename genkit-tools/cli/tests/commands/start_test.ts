@@ -23,6 +23,7 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import open from 'open';
 import { start } from '../../src/commands/start';
 import * as managerUtils from '../../src/utils/manager-utils';
 
@@ -40,6 +41,8 @@ jest.mock('get-port', () => ({
   makeRange: jest.fn(),
 }));
 jest.mock('open');
+
+const mockedOpen = open as jest.MockedFunction<typeof open>;
 
 describe('start command', () => {
   let startDevProcessManagerSpy: any;
@@ -165,5 +168,24 @@ describe('start command', () => {
     expect(startServerSpy).toHaveBeenCalledWith(expect.anything(), 4040, {
       host: '127.0.0.1',
     });
+  });
+
+  it('should format IPv6 hosts when opening the Dev UI', async () => {
+    await start.parseAsync([
+      'node',
+      'genkit',
+      '--host',
+      '::1',
+      '--port',
+      '4040',
+      '--open',
+      'run',
+      'app',
+    ]);
+
+    expect(startServerSpy).toHaveBeenCalledWith(expect.anything(), 4040, {
+      host: '::1',
+    });
+    expect(mockedOpen).toHaveBeenCalledWith('http://[::1]:4040');
   });
 });

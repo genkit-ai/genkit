@@ -26,6 +26,7 @@ import {
   startDevProcessManager,
   startManager,
 } from '../utils/manager-utils';
+import { httpUrl } from '../utils/url';
 
 interface RunOptions {
   noui?: boolean;
@@ -129,7 +130,7 @@ export const start = new Command('start')
       }
       startServer(manager, port, { host });
       if (options.open) {
-        open(`http://${host}:${port}`);
+        open(httpUrl(host, port));
       }
     }
     await processPromise;

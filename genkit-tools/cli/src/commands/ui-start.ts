@@ -36,6 +36,7 @@ import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,
 } from '../utils/spawn-config';
+import { httpUrl } from '../utils/url';
 
 interface StartOptions {
   port?: string;
@@ -63,7 +64,7 @@ export const uiStart = new Command('ui:start')
       port = await getPort({ port: makeRange(4000, 4099) });
     }
     const host = options.host ?? 'localhost';
-    const url = `http://${host}:${port}`;
+    const url = httpUrl(host, port);
     const serversDir = await findServersDir(await findProjectRoot());
     const toolsJsonPath = path.join(serversDir, 'tools.json');
     try {
@@ -190,7 +191,7 @@ async function startAndWaitUntilHealthy(
     });
 
     // Wait for the UI to become healthy
-    waitUntilHealthy(`http://${host}:${port}`, 10000 /* 10 seconds */)
+    waitUntilHealthy(httpUrl(host, port), 10000 /* 10 seconds */)
       .then((isHealthy) => {
         if (isHealthy) {
           child.unref();
