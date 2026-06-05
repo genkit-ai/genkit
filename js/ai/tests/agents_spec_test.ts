@@ -57,11 +57,14 @@ const OutputAssertionsSchema = z.object({
   hasSessionId: z.boolean().optional(),
   stateContains: z.any().optional(),
   artifactsContain: z.array(z.any()).optional(),
+  finishReason: z.string().optional(),
+  errorContains: z.any().optional(),
 });
 
 const SnapshotAssertionsSchema = z.object({
   parentId: z.string().optional(),
   status: z.string().optional(),
+  finishReason: z.string().optional(),
   hasSessionId: z.boolean().optional(),
   stateContains: z.any().optional(),
   errorContains: z.any().optional(),
@@ -75,16 +78,22 @@ const SendInvocationSchema = z.object({
   streamChunks: z.array(z.array(z.any())).optional(),
   expectChunks: z.array(z.any()).optional(),
   expectOutput: OutputAssertionsSchema.optional(),
-  expectError: z.string().optional(),
   captureSnapshotId: z.string().optional(),
+
   captureState: z.string().optional(),
   captureSessionId: z.string().optional(),
 });
 
 const GetSnapshotDataInvocationSchema = z.object({
   type: z.literal('getSnapshotData'),
-  snapshotId: z.string(),
+  // Exactly one of snapshotId / sessionId. sessionId resolves the session's
+  // latest (leaf) snapshot.
+  snapshotId: z.string().optional(),
+  sessionId: z.string().optional(),
   expectSnapshot: SnapshotAssertionsSchema.optional(),
+  // If present, the lookup is expected to throw an error containing this text
+  // (e.g. branching sessions reject sessionId lookups).
+  expectError: z.string().optional(),
 });
 
 const AbortInvocationSchema = z.object({
@@ -544,26 +553,8 @@ async function executeSendInvocation(
   }
   session.close();
 
-  // If the spec expects an error, catch it and verify the message.
-  if (resolvedInvocation.expectError) {
-    try {
-      // Drain the stream so the error surfaces on output.
-      for await (const _ of session.stream) {
-      }
-      await session.output;
-      assert.fail(
-        `Expected error containing "${resolvedInvocation.expectError}" but invocation succeeded`
-      );
-    } catch (e: any) {
-      assert.ok(
-        e.message?.includes(resolvedInvocation.expectError),
-        `Expected error containing "${resolvedInvocation.expectError}", got: ${e.message}`
-      );
-    }
-    return;
-  }
-
   // Collect stream chunks
+
   const chunks: AgentStreamChunk[] = [];
   for await (const chunk of session.stream) {
     chunks.push(chunk);
@@ -598,11 +589,19 @@ async function executeSendInvocation(
       const actual = strippedChunks[i];
 
       if (expected.turnEnd !== undefined) {
-        // turnEnd: verify turnEnd key exists, but snapshotId is dynamic
+        // turnEnd: verify turnEnd key exists, but snapshotId is dynamic.
+        // finishReason, when specified in the spec, must match exactly.
         assert.ok(
           actual.turnEnd !== undefined,
           `Chunk ${i}: expected turnEnd, got ${JSON.stringify(actual)}`
         );
+        if (expected.turnEnd.finishReason !== undefined) {
+          assert.strictEqual(
+            actual.turnEnd?.finishReason,
+            expected.turnEnd.finishReason,
+            `Chunk ${i}: expected turnEnd.finishReason '${expected.turnEnd.finishReason}', got '${actual.turnEnd?.finishReason}'`
+          );
+        }
       } else if (expected.modelChunk !== undefined) {
         assertContains(
           actual.modelChunk,
@@ -675,6 +674,40 @@ async function executeSendInvocation(
         assertContains(found, expectedArt, `artifact(${expectedArt.name})`);
       }
     }
+
+    // finishReason: exact match. Covers the finish-reasons contract — e.g.
+    // 'stop' on a normal completion, 'interrupted' on a tool pause, and
+    // 'failed' on graceful error handling.
+    if (expect.finishReason !== undefined) {
+      assert.strictEqual(
+        output.finishReason,
+        expect.finishReason,
+        `Expected output.finishReason '${expect.finishReason}', got '${output.finishReason}'`
+      );
+    }
+
+    // errorContains: partial match on the structured error returned by the
+    // graceful-failure path ({ status, message, details? }). `status` is
+    // matched exactly and `message` as a substring.
+    if (expect.errorContains) {
+      assert.ok(
+        output.error,
+        `Expected output to have an error, got: ${JSON.stringify(output.error)}`
+      );
+      if (expect.errorContains.status !== undefined) {
+        assert.strictEqual(
+          output.error!.status,
+          expect.errorContains.status,
+          `Expected output.error.status '${expect.errorContains.status}', got '${output.error!.status}'`
+        );
+      }
+      if (expect.errorContains.message !== undefined) {
+        assert.ok(
+          output.error!.message?.includes(expect.errorContains.message),
+          `Expected output.error.message to contain '${expect.errorContains.message}', got: ${output.error!.message}`
+        );
+      }
+    }
   }
 
   // Capture values for subsequent invocations
@@ -709,12 +742,35 @@ async function executeGetSnapshotDataInvocation(
   captures: Map<string, any>
 ): Promise<void> {
   const resolved = resolveTemplates(invocation, captures);
-  const snapshotId = resolved.snapshotId;
+  const { snapshotId, sessionId } = resolved;
 
-  assert.ok(snapshotId, 'getSnapshotData invocation requires snapshotId');
+  assert.ok(
+    !!snapshotId !== !!sessionId,
+    'getSnapshotData invocation requires exactly one of snapshotId or sessionId'
+  );
 
-  const snapshot = await agent.getSnapshotData(snapshotId);
-  assert.ok(snapshot, `Snapshot ${snapshotId} not found`);
+  // Lookup by either snapshotId (exact) or sessionId (latest leaf snapshot).
+  const lookup = snapshotId ? { snapshotId } : { sessionId };
+
+  // If the spec expects an error (e.g. branching session rejects sessionId
+  // lookup), assert it is thrown and stop.
+  if (resolved.expectError) {
+    try {
+      await agent.getSnapshotData(lookup);
+      assert.fail(
+        `Expected error containing "${resolved.expectError}" but getSnapshotData succeeded`
+      );
+    } catch (e: any) {
+      assert.ok(
+        e.message?.includes(resolved.expectError),
+        `Expected error containing "${resolved.expectError}", got: ${e.message}`
+      );
+    }
+    return;
+  }
+
+  const snapshot = await agent.getSnapshotData(lookup);
+  assert.ok(snapshot, `Snapshot not found for ${JSON.stringify(lookup)}`);
 
   if (resolved.expectSnapshot) {
     const expect = resolved.expectSnapshot;
@@ -795,7 +851,7 @@ async function executeWaitUntilCompletedInvocation(
 
   let snapshot: any;
   while (Date.now() - startTime < timeoutMs) {
-    snapshot = await agent.getSnapshotData(snapshotId);
+    snapshot = await agent.getSnapshotData({ snapshotId: snapshotId });
     if (snapshot && terminalStatuses.has(snapshot.status)) {
       break;
     }

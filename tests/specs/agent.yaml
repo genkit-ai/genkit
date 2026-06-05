@@ -28,9 +28,12 @@ tests:
           - message: { role: model, content: [{ text: hello back }] }
             finishReason: stop
         expectChunks:
-          - turnEnd: {}
+          # A normal completion carries the model's finishReason on turnEnd.
+          - turnEnd: { finishReason: stop }
         expectOutput:
           message: { role: model, content: [{ text: hello back }] }
+          # A normal completion surfaces finishReason 'stop' on the output.
+          finishReason: stop
           hasSessionId: true
           stateContains:
             messages:
@@ -52,9 +55,10 @@ tests:
           - message: { role: model, content: [{ text: hello back }] }
             finishReason: stop
         expectChunks:
-          - turnEnd: {}
+          - turnEnd: { finishReason: stop }
         expectOutput:
           message: { role: model, content: [{ text: hello back }] }
+          finishReason: stop
           hasSnapshotId: true
         captureSnapshotId: snap1
 
@@ -88,9 +92,10 @@ tests:
         expectChunks:
           - modelChunk: { index: 0, role: model, content: [{ text: 'hel' }] }
           - modelChunk: { index: 0, role: model, content: [{ text: 'lo' }] }
-          - turnEnd: {}
+          - turnEnd: { finishReason: stop }
         expectOutput:
           message: { role: model, content: [{ text: hello }] }
+          finishReason: stop
           stateContains:
             messages:
               - { role: user, content: [{ text: hi }] }
@@ -117,10 +122,12 @@ tests:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
         expectChunks:
-          - turnEnd: {}
-          - turnEnd: {}
+          # Each turn ends with the model's finishReason.
+          - turnEnd: { finishReason: stop }
+          - turnEnd: { finishReason: stop }
         expectOutput:
           message: { role: model, content: [{ text: reply2 }] }
+          finishReason: stop
           stateContains:
             messages:
               - { role: user, content: [{ text: turn1 }] }
@@ -199,11 +206,13 @@ tests:
                       ref: '123',
                     }
             finishReason: stop
+        # A tool interrupt pauses the turn — finishReason is 'interrupted'.
         expectOutput:
           message:
             content:
               - toolRequest:
                   { name: interruptTool, input: { query: 'yes?' }, ref: '123' }
+          finishReason: interrupted
           hasSnapshotId: true
         captureSnapshotId: snap1
 
@@ -253,11 +262,13 @@ tests:
                       ref: 'r1',
                     }
             finishReason: stop
+        # ToolInterruptError pauses the turn — finishReason is 'interrupted'.
         expectOutput:
           message:
             content:
               - toolRequest:
                   { name: restartTool, input: { action: 'delete' }, ref: 'r1' }
+          finishReason: interrupted
           hasSnapshotId: true
         captureSnapshotId: snap1
 
@@ -324,7 +335,13 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: should not reach }] }
             finishReason: stop
-        expectError: 'modified inputs'
+        # The agent does not throw — it resolves gracefully with
+        # finishReason 'failed', preserving the original error status.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: INVALID_ARGUMENT
+            message: modified inputs
 
   # ---------------------------------------------------------------------------
   # Resume validation — respond referencing non-existent tool
@@ -369,7 +386,12 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: should not reach }] }
             finishReason: stop
-        expectError: 'not found in session history'
+        # Resolves gracefully with finishReason 'failed' and INVALID_ARGUMENT.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: INVALID_ARGUMENT
+            message: not found in session history
 
   # ---------------------------------------------------------------------------
   # Snapshot chaining
@@ -506,6 +528,9 @@ tests:
         snapshotId: '{{snap1}}'
         expectSnapshot:
           status: failed
+          # A failed run records finishReason 'failed' on the snapshot,
+          # distinct from the snapshot status.
+          finishReason: failed
 
   # ---------------------------------------------------------------------------
   # Abort
@@ -580,7 +605,13 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: reply }] }
             finishReason: stop
-        expectError: "Cannot send 'state' to agent"
+        # Pre-turn validation fails gracefully with finishReason 'failed' and
+        # the original FAILED_PRECONDITION status preserved.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: FAILED_PRECONDITION
+            message: Cannot send 'state' to agent
 
   - name: pure detach without payload
     description: >
@@ -626,6 +657,7 @@ tests:
         snapshotId: '{{snap1}}'
         expectSnapshot:
           status: failed
+          finishReason: failed
           errorContains:
             message: intentional failure
 
@@ -1025,6 +1057,7 @@ tests:
         snapshotId: '{{snap1}}'
         expectSnapshot:
           status: failed
+          finishReason: failed
 
       - type: abort
         snapshotId: '{{snap1}}'
@@ -1062,3 +1095,224 @@ tests:
         snapshotId: '{{snap1}}'
         expectSnapshot:
           status: aborted
+
+  # ===========================================================================
+  # Phase 4: Server-managed sessions by sessionId
+  # ===========================================================================
+  #
+  # Server-managed agents can be resumed by a bare `sessionId` (a UUID) in
+  # addition to an exact `snapshotId`. This is the simple case used by
+  # `useChat`-style clients: the client tracks only a stable session id and the
+  # store resolves the session's latest (leaf) snapshot on each turn.
+
+  # ---------------------------------------------------------------------------
+  # Resume a server-managed session by sessionId
+  # ---------------------------------------------------------------------------
+  - name: resume server-managed session by sessionId
+    description: >
+      A server-managed agent is invoked twice using the same caller-provided
+      sessionId (a UUID). The first turn seeds a fresh session bound to that
+      sessionId; the second turn resumes the session's latest snapshot without a
+      snapshotId. History must accumulate and the resulting snapshot must carry
+      the same sessionId and chain to the first snapshot.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 11111111-1111-4111-8111-111111111111 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { sessionId: 11111111-1111-4111-8111-111111111111 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        captureSnapshotId: snap2
+
+      - type: getSnapshotData
+        snapshotId: '{{snap2}}'
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: done
+          stateContains:
+            sessionId: 11111111-1111-4111-8111-111111111111
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # Fetch the latest snapshot by sessionId
+  # ---------------------------------------------------------------------------
+  - name: fetch latest snapshot by sessionId
+    description: >
+      getSnapshotData can resolve a snapshot by sessionId, returning the
+      session's latest (leaf) snapshot. After two linear turns the leaf is the
+      second snapshot, whose parent is the first.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 22222222-2222-4222-8222-222222222222 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init: { sessionId: 22222222-2222-4222-8222-222222222222 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+
+      - type: getSnapshotData
+        sessionId: 22222222-2222-4222-8222-222222222222
+        expectSnapshot:
+          parentId: '{{snap1}}'
+          status: done
+          hasSessionId: true
+          stateContains:
+            sessionId: 22222222-2222-4222-8222-222222222222
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
+              - { role: user, content: [{ text: second }] }
+              - { role: model, content: [{ text: reply2 }] }
+
+  # ---------------------------------------------------------------------------
+  # sessionId lookup rejected for a branching session
+  # ---------------------------------------------------------------------------
+  - name: sessionId lookup rejected for branching session
+    description: >
+      When a session has branched (more than one leaf snapshot — e.g. two
+      continuations forked from the same snapshot), there is no single "latest"
+      snapshot. Resolving the session by sessionId must fail with
+      FAILED_PRECONDITION; the caller must resume by an exact snapshotId.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 33333333-3333-4333-8333-333333333333 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: root }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: rootReply }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      # Fork branch A from the root snapshot.
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: branch-a }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply-a }] }
+            finishReason: stop
+
+      # Fork branch B from the same root snapshot — now two leaves exist.
+      - type: send
+        init: { snapshotId: '{{snap1}}' }
+        inputs:
+          - messages: [{ role: user, content: [{ text: branch-b }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply-b }] }
+            finishReason: stop
+
+      # Resolving by sessionId is now ambiguous and must error.
+      - type: getSnapshotData
+        sessionId: 33333333-3333-4333-8333-333333333333
+        expectError: branching snapshots
+
+  # ---------------------------------------------------------------------------
+  # Non-UUID sessionId rejected
+  # ---------------------------------------------------------------------------
+  - name: non-UUID sessionId rejected
+    description: >
+      A sessionId must be a bare UUID. Sending a non-UUID sessionId to a
+      server-managed agent must be rejected.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: not-a-uuid }
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        # Resolves gracefully with finishReason 'failed'. The non-UUID check
+        # surfaces as a plain Error (no status), so only the message is asserted.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            message: expected a UUID
+
+  # ---------------------------------------------------------------------------
+  # Client-managed agent rejects sessionId
+  # ---------------------------------------------------------------------------
+  - name: client-managed agent rejects sessionId
+    description: >
+      A client-managed agent (no store) cannot resume by sessionId because it
+      has nowhere to load the session from. Sending init.sessionId must be
+      rejected with FAILED_PRECONDITION.
+    agent: promptAgent
+    steps:
+      - type: send
+        init: { sessionId: 44444444-4444-4444-8444-444444444444 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: hi }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: hello }] }
+            finishReason: stop
+        # Resolves gracefully with finishReason 'failed' and the original
+        # FAILED_PRECONDITION status preserved.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: FAILED_PRECONDITION
+            message: "Cannot use 'sessionId'"
+
+  # ---------------------------------------------------------------------------
+  # snapshotId and sessionId are mutually exclusive
+  # ---------------------------------------------------------------------------
+  - name: snapshotId and sessionId together rejected
+    description: >
+      init may carry a snapshotId (exact snapshot) or a sessionId (latest
+      snapshot) but not both. Providing both must be rejected.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - messages: [{ role: user, content: [{ text: first }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init:
+          snapshotId: '{{snap1}}'
+          sessionId: 55555555-5555-4555-8555-555555555555
+        inputs:
+          - messages: [{ role: user, content: [{ text: second }] }]
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
+        # Resolves gracefully with finishReason 'failed' and the original
+        # INVALID_ARGUMENT status preserved.
+        expectOutput:
+          finishReason: failed
+          errorContains:
+            status: INVALID_ARGUMENT
+            message: 'Cannot send both'
