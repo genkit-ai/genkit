@@ -147,11 +147,11 @@ export default function CodingAgent() {
     async function restore() {
       try {
         // Call the /state endpoint to fetch the snapshot data.
-        // getSnapshotDataAction takes a snapshotId string as input
+        // getSnapshotDataAction takes a { snapshotId } object as input
         // and returns a SessionSnapshot with the full message history.
         const snapshot = await runFlow<SessionSnapshot>({
           url: STATE_ENDPOINT,
-          input: urlSnapshotId,
+          input: { snapshotId: urlSnapshotId },
         });
 
         if (cancelled) return;
