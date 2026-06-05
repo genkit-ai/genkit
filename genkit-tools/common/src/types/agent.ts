@@ -26,23 +26,6 @@ import { z } from 'zod';
 import { MessageSchema, ModelResponseChunkSchema } from './model';
 import { PartSchema } from './parts';
 
-/**
- * Reason an agent turn or invocation finished. Mirrors generate's
- * `FinishReason` plus the agent-specific states `detached` and `failed`.
- */
-export const AgentFinishReasonSchema = z.enum([
-  'stop',
-  'length',
-  'blocked',
-  'aborted',
-  'interrupted',
-  'other',
-  'unknown',
-  'detached',
-  'failed',
-]);
-export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
-
 // ---------------------------------------------------------------------------
 // Finish reasons
 // ---------------------------------------------------------------------------
