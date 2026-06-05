@@ -27,12 +27,14 @@
 
 import { z } from 'zod';
 import {
+  AgentFinishReasonSchema,
   AgentInitSchema,
   AgentInputSchema,
   AgentStreamChunkSchema,
   ArtifactSchema,
   SessionStateSchema,
 } from './agent';
+
 import {
   GenerateResponseChunkSchema,
   GenerateResponseSchema,
@@ -57,6 +59,14 @@ export const OutputAssertionsSchema = z.object({
   stateContains: SessionStateSchema.partial().optional(),
   /** Partial match on output.artifacts. */
   artifactsContain: z.array(ArtifactSchema).optional(),
+  /** If present, output.finishReason must equal this value exactly. */
+  finishReason: AgentFinishReasonSchema.optional(),
+  /**
+   * If present, asserts output.error contains (at minimum) these fields
+   * (`status` matched exactly, `message` as a substring). Set by the graceful
+   * failure path when finishReason is `failed`.
+   */
+  errorContains: z.record(z.string(), z.any()).optional(),
 });
 export type OutputAssertions = z.infer<typeof OutputAssertionsSchema>;
 
@@ -73,10 +83,15 @@ export const SnapshotAssertionsSchema = z.object({
   parentId: z.string().optional(),
   /** Expected status (e.g. "done", "pending", "failed", "aborted"). */
   status: z.string().optional(),
+  /** If present, snapshot.finishReason must equal this value exactly. */
+  finishReason: AgentFinishReasonSchema.optional(),
   /** If true, asserts snapshot.state.sessionId is a non-empty string. */
   hasSessionId: z.boolean().optional(),
+
   /** Partial match on snapshot.state. */
   stateContains: SessionStateSchema.partial().optional(),
+  /** If present, asserts snapshot.error contains (at minimum) these fields. */
+  errorContains: z.record(z.string(), z.any()).optional(),
 });
 export type SnapshotAssertions = z.infer<typeof SnapshotAssertionsSchema>;
 
@@ -111,15 +126,29 @@ export const SendInvocationSchema = z.object({
 export type SendInvocation = z.infer<typeof SendInvocationSchema>;
 
 /**
- * Schema for a `getSnapshotData` invocation — fetches a snapshot by ID.
+ * Schema for a `getSnapshotData` invocation — fetches a snapshot by
+ * snapshotId (exact) or sessionId (latest leaf snapshot).
+ *
+ * Exactly one of `snapshotId` / `sessionId` must be provided.
  */
 export const GetSnapshotDataInvocationSchema = z.object({
   type: z.literal('getSnapshotData'),
-  /** Snapshot ID to fetch. Supports {{name}} references. */
-  snapshotId: z.string(),
+  /** Exact snapshot ID to fetch. Supports {{name}} references. */
+  snapshotId: z.string().optional(),
+  /**
+   * Session ID (a UUID) whose latest (leaf) snapshot should be resolved.
+   * Mutually exclusive with `snapshotId`.
+   */
+  sessionId: z.string().optional(),
   /** Assertions on the fetched snapshot. */
   expectSnapshot: SnapshotAssertionsSchema.optional(),
+  /**
+   * If present, the lookup is expected to throw an error whose message
+   * contains this text (e.g. branching sessions reject sessionId lookups).
+   */
+  expectError: z.string().optional(),
 });
+
 export type GetSnapshotDataInvocation = z.infer<
   typeof GetSnapshotDataInvocationSchema
 >;

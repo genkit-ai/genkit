@@ -52,13 +52,18 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 
 #### `getSnapshotData`
 
-Fetches a snapshot by ID and asserts on its contents.
+Fetches a snapshot and asserts on its contents. Resolve the snapshot either by
+an exact `snapshotId` or by a `sessionId` (which returns the session's latest
+leaf snapshot). Exactly one of `snapshotId` / `sessionId` must be provided.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | `"getSnapshotData"` | Required. |
-| `snapshotId` | `string` | The snapshot ID to fetch. Supports `{{name}}` references. |
+| `snapshotId` | `string` | Exact snapshot ID to fetch. Supports `{{name}}` references. Mutually exclusive with `sessionId`. |
+| `sessionId` | `string` | Session ID (a UUID) whose latest (leaf) snapshot is resolved. Mutually exclusive with `snapshotId`. |
 | `expectSnapshot` | Object | See [Snapshot Assertions](#snapshot-assertions). |
+| `expectError` | `string` | If present, the lookup is expected to throw an error whose message contains this substring (e.g. resolving a branching session by `sessionId`). |
+
 
 #### `abort`
 
@@ -94,6 +99,9 @@ Used in `expectOutput` for `send` steps.
 | `hasSnapshotId` | `boolean` | If `true`, asserts `output.snapshotId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | If present, asserts that `output.state` contains (at minimum) these fields. Uses "contains" / subset matching — the actual state may have additional fields. |
 | `artifactsContain` | `Artifact[]` | If present, asserts that `output.artifacts` contains (at minimum) these entries. |
+| `finishReason` | `string` | If present, `output.finishReason` must equal this value exactly (e.g. `stop` on a normal completion, `interrupted` on a tool pause, `failed` on a graceful failure). |
+| `errorContains` | `object` (partial) | If present, asserts `output.error` contains these fields. `status` is matched exactly; `message` is matched as a substring. Set by the graceful-failure path when `finishReason` is `failed`. |
+
 
 ### Snapshot Assertions
 
@@ -104,10 +112,14 @@ steps.
 |-------|------|-------------|
 | `parentId` | `string` | Expected `parentId`. Supports `{{name}}` references. |
 | `status` | `string` | Expected `status` (e.g. `"done"`, `"pending"`, `"failed"`, `"aborted"`). |
+| `finishReason` | `string` | Expected `snapshot.finishReason` (e.g. `failed`). Distinct from `status` — a failed run records `finishReason: failed` in addition to `status: failed`. |
+| `hasSessionId` | `boolean` | If `true`, asserts `snapshot.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | Subset match on `snapshot.state`. |
 | `errorContains` | `object` (partial) | If present, asserts that `snapshot.error` contains (at minimum) these fields. Uses "contains" / subset matching. |
 
+
 ---
+
 
 ### Template References
 
@@ -134,7 +146,8 @@ Only simple `{{name}}` syntax is supported — no dot-paths or expressions.
 
 | Assertion Type | Semantics |
 |----------------|-----------|
-| `expectChunks` | **Semi-strict**: the actual and expected chunk lists must have the same length and order. Individual chunks are matched with type-aware logic: `turnEnd` chunks only assert the key is present (the `snapshotId` is dynamic); `modelChunk` and `artifact` chunks use partial/contains matching on their payload. |
+| `expectChunks` | **Semi-strict**: the actual and expected chunk lists must have the same length and order. Individual chunks are matched with type-aware logic: `turnEnd` chunks assert the key is present (the `snapshotId` is dynamic) and, when the spec specifies `turnEnd.finishReason`, assert that field matches exactly; `modelChunk` and `artifact` chunks use partial/contains matching on their payload. |
+
 | `stateContains` | **Partial**: each specified field must be present and match. Additional fields in the actual state are ignored. For `messages`, the listed messages must appear in the same relative order but need not be contiguous (ordered subsequence matching). |
 | `artifactsContain` | **Partial**: each specified artifact must be present (matched by name). |
 | `message` | **Strict**: deep-equality on the message object. |
@@ -225,7 +238,7 @@ _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
 ## 5. Test Coverage
 
-The spec currently covers the following categories (30 tests total):
+The spec currently covers the following categories (36 tests total):
 
 | Category | Tests |
 |----------|-------|
@@ -238,6 +251,7 @@ The spec currently covers the following categories (30 tests total):
 | Resume validation | Forged restart inputs rejected, non-existent tool respond rejected |
 | Snapshot chaining | Parent chain across steps |
 | Snapshot branching | Forking from a snapshot into independent histories |
+| Server-managed sessions by sessionId | Resume by `sessionId`, fetch latest snapshot by `sessionId`, branching session lookup rejected, non-UUID rejected, client-managed agent rejects `sessionId`, `snapshotId`+`sessionId` together rejected |
 | Client-managed state | State seeding across steps |
 | Server-managed state | Init state rejected for server-managed agents |
 | Detach | Background completion, background failure, pure detach without payload |
@@ -245,6 +259,8 @@ The spec currently covers the following categories (30 tests total):
 | Error details | Failed snapshot includes error message |
 | Artifacts | Streamed chunks, deduplication by name, persistence across invocations (server-managed) |
 | Custom state | Update during execution, persistence across steps (client-managed), persistence via snapshots (server-managed) |
+| Finish reasons & graceful errors | `finishReason` `stop` on normal completions (output + `turnEnd`), `interrupted` on tool pauses, `failed` on rejected/failed turns; `failed` recorded on failure snapshots; structured `error` (`status` + `message`) surfaced on graceful failures instead of throwing |
+
 
 ## 6. Future Extensions
 

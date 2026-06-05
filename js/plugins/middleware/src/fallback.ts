@@ -15,8 +15,12 @@
  */
 
 import {
+  GENKIT_UI_METADATA,
+  GENKIT_UI_WIDGETS,
   GenkitError,
   ModelReferenceSchema,
+  StatusNameSchema,
+  annotateSchema,
   generateMiddleware,
   z,
   type GenerateMiddleware,
@@ -40,15 +44,18 @@ export const FallbackOptionsSchema = z
     /**
      * An array of models to try in order.
      */
-    models: z
-      .array(ModelReferenceSchema)
-      .describe('An array of models to try in order.'),
+    models: annotateSchema(
+      z
+        .array(ModelReferenceSchema)
+        .describe('An array of models to try in order.'),
+      { [GENKIT_UI_METADATA.WIDGET]: GENKIT_UI_WIDGETS.MODEL_LIST }
+    ),
     /**
      * An array of `StatusName` values that should trigger a fallback.
      * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']
      */
     statuses: z
-      .array(z.string())
+      .array(StatusNameSchema)
       .optional()
       .describe(
         'An array of StatusName values that should trigger a fallback.'

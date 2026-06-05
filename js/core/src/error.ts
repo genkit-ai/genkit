@@ -15,8 +15,13 @@
  */
 
 import type { Registry } from './registry.js';
-import { httpStatusCode, type StatusName } from './statusTypes.js';
+import {
+  StatusNameSchema,
+  httpStatusCode,
+  type StatusName,
+} from './statusTypes.js';
 
+export { StatusNameSchema };
 export type { StatusName };
 
 export interface HttpErrorWireFormat {

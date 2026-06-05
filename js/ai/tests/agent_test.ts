@@ -72,7 +72,7 @@ function waitForSnapshotStatus<S>(
     });
 
     // Check in case already at the target status.
-    store.getSnapshot(snapshotId).then((snap) => {
+    store.getSnapshot({ snapshotId: snapshotId }).then((snap) => {
       if (snap?.status === targetStatus) {
         clearTimeout(timer);
         if (typeof unsubscribeFn === 'function') unsubscribeFn();
@@ -197,13 +197,13 @@ describe('Agent', () => {
       };
       await store.saveSnapshot('snap-123', () => snapshot);
 
-      const got = await store.getSnapshot('snap-123');
+      const got = await store.getSnapshot({ snapshotId: 'snap-123' });
       assert.deepStrictEqual(got, snapshot);
     });
 
     it('should return undefined for missing snapshot', async () => {
       const store = new InMemorySessionStore();
-      const got = await store.getSnapshot('missing');
+      const got = await store.getSnapshot({ snapshotId: 'missing' });
       assert.strictEqual(got, undefined);
     });
 
@@ -221,7 +221,7 @@ describe('Agent', () => {
       // Mutate local state
       state.foo = 'baz';
 
-      const got = await store.getSnapshot('snap-123');
+      const got = await store.getSnapshot({ snapshotId: 'snap-123' });
       assert.strictEqual(got?.state.custom?.foo, 'bar');
     });
   });
@@ -283,7 +283,7 @@ describe('Agent', () => {
       assert.ok(turnEnded);
       assert.ok(turnSnapshotId);
 
-      const saved = await store.getSnapshot(turnSnapshotId!);
+      const saved = await store.getSnapshot({ snapshotId: turnSnapshotId! });
       assert.ok(saved);
       assert.strictEqual(saved?.snapshotId, turnSnapshotId);
     });
@@ -661,7 +661,9 @@ describe('Agent', () => {
       assert.ok(output.snapshotId, 'should have snapshotId');
 
       // Read snapshot and verify sessionId is persisted in the state
-      const snapshot = await store.getSnapshot(output.snapshotId!);
+      const snapshot = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.ok(snapshot, 'snapshot should exist');
       assert.ok(
         snapshot!.state.sessionId,
@@ -697,7 +699,9 @@ describe('Agent', () => {
       const output1 = await session1.output;
       const firstSnapshotId = output1.snapshotId!;
 
-      const snapshot1 = await store.getSnapshot(firstSnapshotId);
+      const snapshot1 = await store.getSnapshot({
+        snapshotId: firstSnapshotId,
+      });
       const firstSessionId = snapshot1!.state.sessionId!;
       assert.ok(firstSessionId, 'First turn should have sessionId');
 
@@ -711,7 +715,9 @@ describe('Agent', () => {
       }
       const output2 = await session2.output;
 
-      const snapshot2 = await store.getSnapshot(output2.snapshotId!);
+      const snapshot2 = await store.getSnapshot({
+        snapshotId: output2.snapshotId!,
+      });
       assert.strictEqual(
         snapshot2!.state.sessionId,
         firstSessionId,
@@ -784,7 +790,7 @@ describe('Agent', () => {
       const snapshotId = output.snapshotId;
       assert.ok(snapshotId);
 
-      const snapPending = await store.getSnapshot(snapshotId!);
+      const snapPending = await store.getSnapshot({ snapshotId: snapshotId! });
       assert.strictEqual(snapPending?.status, 'pending');
 
       resolvePromise();
@@ -833,7 +839,7 @@ describe('Agent', () => {
       const previousStatus = await flow.abort(snapshotId!);
 
       assert.strictEqual(previousStatus, 'pending');
-      const snapAborted = await store.getSnapshot(snapshotId!);
+      const snapAborted = await store.getSnapshot({ snapshotId: snapshotId! });
       assert.strictEqual(snapAborted?.status, 'aborted');
       // AbortController.abort() fires onabort synchronously, so no delay needed.
       assert.strictEqual(aborted, true);
@@ -866,7 +872,9 @@ describe('Agent', () => {
       assert.ok(output.snapshotId);
 
       // Snapshot should be 'done' now
-      const snapBefore = await store.getSnapshot(output.snapshotId!);
+      const snapBefore = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.strictEqual(snapBefore?.status, 'done');
 
       // Abort returns the previous status but does not override terminal states
@@ -874,7 +882,9 @@ describe('Agent', () => {
       assert.strictEqual(previousStatus, 'done');
 
       // Snapshot should still be 'done' — the mutator skips terminal states
-      const snapAfter = await store.getSnapshot(output.snapshotId!);
+      const snapAfter = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.strictEqual(snapAfter?.status, 'done');
     });
 
@@ -1022,12 +1032,12 @@ describe('Agent', () => {
       const snapshotId = output.snapshotId;
 
       // Snapshot should be 'pending' since the flow is still blocked
-      const snapBefore = await store.getSnapshot(snapshotId!);
+      const snapBefore = await store.getSnapshot({ snapshotId: snapshotId! });
       assert.strictEqual(snapBefore?.status, 'pending');
 
       await flow.abort(snapshotId!);
 
-      const snapshot = await store.getSnapshot(snapshotId!);
+      const snapshot = await store.getSnapshot({ snapshotId: snapshotId! });
       assert.strictEqual(snapshot?.status, 'aborted');
 
       // Release the flow so it doesn't hang
@@ -1044,6 +1054,8 @@ describe('Agent', () => {
           store,
         },
         async (sess) => {
+          // Mutate session state so a snapshot is persisted on turn end.
+          await sess.run(async () => {});
           return {
             artifacts: [],
             message: { role: 'model', content: [{ text: 'hi' }] },
@@ -1058,7 +1070,10 @@ describe('Agent', () => {
       session.close();
       const output = await session.output;
 
-      const snapData = await flow.getSnapshotData(output.snapshotId!);
+      assert.ok(output.snapshotId, 'should have a snapshotId');
+      const snapData = await flow.getSnapshotData({
+        snapshotId: output.snapshotId!,
+      });
       assert.strictEqual(snapData?.snapshotId, output.snapshotId);
     });
 
@@ -1096,7 +1111,9 @@ describe('Agent', () => {
       session2.close();
       const output2 = await session2.output;
 
-      const snapshot2 = await store.getSnapshot(output2.snapshotId!);
+      const snapshot2 = await store.getSnapshot({
+        snapshotId: output2.snapshotId!,
+      });
       assert.strictEqual(snapshot2?.parentId, output1.snapshotId);
     });
 
@@ -1136,7 +1153,9 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
-      const snapshot = await store.getSnapshot(output.snapshotId!);
+      const snapshot = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.strictEqual(snapshot?.status, 'pending');
 
       releasePromise();
@@ -1926,7 +1945,9 @@ describe('Agent', () => {
       assert.ok(output.snapshotId);
 
       // getSnapshotData should return transformed state
-      const snapshot = await flow.getSnapshotData(output.snapshotId!);
+      const snapshot = await flow.getSnapshotData({
+        snapshotId: output.snapshotId!,
+      });
       assert.ok(snapshot);
       assert.strictEqual(
         (snapshot!.state.custom as any).publicField,
@@ -1940,7 +1961,9 @@ describe('Agent', () => {
       assert.strictEqual(snapshot!.state.messages, undefined);
 
       // But the raw store should still have the full state
-      const rawSnapshot = await store.getSnapshot(output.snapshotId!);
+      const rawSnapshot = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.ok(rawSnapshot);
       assert.strictEqual(rawSnapshot!.state.custom?.secretField, 'top-secret');
       assert.ok(rawSnapshot!.state.messages);
@@ -1990,7 +2013,9 @@ describe('Agent', () => {
       assert.ok(output.snapshotId);
 
       // Invoke the companion action directly
-      const actionResult = await flow.getSnapshotDataAction(output.snapshotId!);
+      const actionResult = await flow.getSnapshotDataAction({
+        snapshotId: output.snapshotId!,
+      });
       assert.ok(actionResult);
       assert.strictEqual(
         (actionResult as any).state.custom.publicField,
@@ -2051,7 +2076,9 @@ describe('Agent', () => {
       assert.ok(output.snapshotId);
       // Server-managed agents don't return state in output (state is undefined)
       // but the snapshot should have the transformed state
-      const snapshot = await flow.getSnapshotData(output.snapshotId!);
+      const snapshot = await flow.getSnapshotData({
+        snapshotId: output.snapshotId!,
+      });
       assert.ok(snapshot);
       assert.strictEqual(
         (snapshot!.state.custom as any).publicField,
@@ -2706,7 +2733,9 @@ Now respond to the latest message.`,
 
       const output = await session.output;
       assert.ok(output.snapshotId);
-      const snapshot = await store.getSnapshot(output.snapshotId!);
+      const snapshot = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.strictEqual(snapshot?.finishReason, 'interrupted');
     });
 
@@ -2749,7 +2778,9 @@ Now respond to the latest message.`,
       // The failed turn's snapshot records the failure.
       const turnEndSnapshotId = turnEndChunk?.turnEnd?.snapshotId;
       assert.ok(turnEndSnapshotId);
-      const snapshot = await store.getSnapshot(turnEndSnapshotId!);
+      const snapshot = await store.getSnapshot({
+        snapshotId: turnEndSnapshotId!,
+      });
       assert.strictEqual(snapshot?.finishReason, 'failed');
       assert.strictEqual(snapshot?.status, 'failed');
 
@@ -2842,11 +2873,118 @@ Now respond to the latest message.`,
       // A recovery snapshot id is returned so the client can resume.
       assert.ok(output.snapshotId);
 
-      const snapshot = await store.getSnapshot(output.snapshotId!);
+      const snapshot = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
       assert.ok(snapshot, 'recovery snapshot should exist in the store');
       assert.strictEqual(snapshot!.status, 'done');
       // The recovery snapshot holds the last-good state (turn 1 only).
       assert.strictEqual((snapshot!.state.custom as any).count, 1);
+    });
+
+    it('server-managed: recovery snapshot holds last-good state and chains from the failed snapshot (default callback)', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      let turn = 0;
+
+      // Default snapshotCallback — every turn (including the failed one) is
+      // persisted. The retroactive recovery snapshot must still be written as a
+      // distinct 'done' snapshot holding the last-good state, separate from the
+      // failed turn's snapshot.
+      const flow = defineCustomAgent<unknown, { count: number }>(
+        new Registry(),
+        { name: 'frServerRecoveryDefault', store },
+        async (sess) => {
+          await sess.run(async () => {
+            turn++;
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            if (turn === 2) {
+              throw new Error('default cb boom');
+            }
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+      });
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.snapshotId);
+
+      // The failed turn's snapshot records the partial (failed-turn) state.
+      const turnEndChunks = chunks.filter((c) => !!c.turnEnd);
+      const failedTurnSnapshotId =
+        turnEndChunks[turnEndChunks.length - 1]?.turnEnd?.snapshotId;
+      assert.ok(failedTurnSnapshotId);
+      const failedSnap = await store.getSnapshot({
+        snapshotId: failedTurnSnapshotId!,
+      });
+      assert.strictEqual(failedSnap?.status, 'failed');
+      assert.strictEqual((failedSnap!.state.custom as any).count, 2);
+
+      // The recovery snapshot is a distinct, 'done' snapshot holding the
+      // last-good state (turn 1 only) and chains from the failed snapshot.
+      assert.notStrictEqual(output.snapshotId, failedTurnSnapshotId);
+      const recovery = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(recovery?.status, 'done');
+      assert.strictEqual((recovery!.state.custom as any).count, 1);
+      assert.strictEqual(recovery?.parentId, failedTurnSnapshotId);
+    });
+
+    it('server-managed: recovery snapshot falls back to the seed state when the first turn fails', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+
+      // The very first turn fails — there is no prior successful turn, so the
+      // last-good state is the seed state captured at construction (before the
+      // failed turn's user message and mutations were applied).
+      const flow = defineCustomAgent<unknown, { count: number }>(
+        new Registry(),
+        { name: 'frServerRecoveryFirstTurn', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            throw new Error('first turn boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.snapshotId);
+
+      const recovery = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.ok(recovery, 'recovery snapshot should exist in the store');
+      assert.strictEqual(recovery!.status, 'done');
+      // No successful turn ran, so the seed state has no count mutation and no
+      // history from the failed turn.
+      assert.strictEqual((recovery!.state.custom as any)?.count, undefined);
+      assert.strictEqual(recovery!.state.messages?.length ?? 0, 0);
     });
 
     it('surfaces the generate finishReason from a prompt agent', async () => {

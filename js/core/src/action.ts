@@ -658,11 +658,11 @@ export function action<
               break;
             }
           }
+          return await invocationPromise;
         } finally {
-          await reader.cancel();
-          reader.releaseLock();
+          // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+          reader.cancel().catch(() => {});
         }
-        return await invocationPromise;
       })(),
     };
   };

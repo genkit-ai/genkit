@@ -70,14 +70,22 @@ import {
  */
 export const AgentInitSchema = z.object({
   snapshotId: z.string().optional(),
+  sessionId: z.string().optional(),
   state: SessionStateSchema.optional(),
 });
 
 /**
  * Initialization options for an agent turn.
+ *
+ * For server-managed agents (with a `store`) provide *either* a `snapshotId`
+ * (resume an exact snapshot, required for branching/snapshotting clients) *or*
+ * a `sessionId` (resume the session's latest snapshot — the simple case used
+ * by `useChat`-style clients). For client-managed agents (no store) provide
+ * the full `state`.
  */
 export interface AgentInit<S = unknown> {
   snapshotId?: string;
+  sessionId?: string;
   newSnapshotId?: string;
   state?: SessionState<S>;
 }
@@ -207,11 +215,91 @@ export interface AgentOutput<S = unknown> {
 }
 
 /**
+ * Structured error details surfaced on the failure path.
+ */
+interface AgentErrorDetails {
+  status: string;
+  message: string;
+  details?: any;
+}
+
+/**
+ * Normalizes a thrown value into the structured error shape used across the
+ * agent (in `AgentOutput.error` and `SessionRunner.lastTurnError`).
+ */
+function toErrorDetails(e: any): AgentErrorDetails {
+  return {
+    status: e?.status || 'INTERNAL',
+    message: e?.message || 'Internal failure',
+    details: e?.detail || e?.details || e,
+  };
+}
+
+/**
+ * Builds an abort-aware `saveSnapshot` mutator: it skips the write (returns
+ * `null`) when the current snapshot was concurrently aborted, otherwise writes
+ * `input`. This prevents a "done"/"failed" write from clobbering an "aborted"
+ * status set by a concurrent abort.
+ */
+function abortAwareMutator<S>(input: SessionSnapshotInput<S>) {
+  return (current: SessionSnapshot<S> | undefined) =>
+    current?.status === 'aborted' ? null : input;
+}
+
+/**
+ * Asserts that an operation requiring a persistent store is not being invoked
+ * on a store-less (client-managed) agent.
+ */
+function requireStore<S>(
+  store: SessionStore<S> | undefined,
+  operation: string,
+  agentName: string
+): asserts store is SessionStore<S> {
+  if (!store) {
+    throw new GenkitError({
+      status: 'FAILED_PRECONDITION',
+      message: `${operation} requires a persistent store. Provide a 'store' when defining '${agentName}'.`,
+    });
+  }
+}
+
+/**
+ * Sets a snapshot's status to `aborted` (unless it already reached a terminal
+ * state) and returns its previous status, or `undefined` when the snapshot
+ * does not exist.
+ */
+async function abortSnapshotInStore<S>(
+  store: SessionStore<S>,
+  snapshotId: string,
+  options?: SessionStoreOptions
+): Promise<SessionSnapshot['status'] | undefined> {
+  let previousStatus: SessionSnapshot['status'] | undefined;
+  await store.saveSnapshot(
+    snapshotId,
+    (current) => {
+      if (!current) return null;
+      previousStatus = current.status;
+      if (
+        current.status === 'done' ||
+        current.status === 'failed' ||
+        current.status === 'aborted'
+      ) {
+        return null; // Already terminal — don't override.
+      }
+      return { ...current, status: 'aborted' };
+    },
+    options
+  );
+  return previousStatus;
+}
+
+/**
  * Executor responsible for running turns over input streams and persisting state.
  */
 export class SessionRunner<State = unknown> {
   readonly session: Session<State>;
   readonly inputCh: AsyncIterable<AgentInput>;
+
   turnIndex: number = 0;
   public onEndTurn?: (
     snapshotId?: string,
@@ -225,7 +313,7 @@ export class SessionRunner<State = unknown> {
    * Error details of the most recent failed turn. Set when a turn throws and
    * the runner resolves gracefully instead of propagating the exception.
    */
-  public lastTurnError?: { status: string; message: string; details?: any };
+  public lastTurnError?: AgentErrorDetails;
   /**
    * The state the most recently *successful* turn left behind, captured
    * regardless of whether the `snapshotCallback` chose to persist it. On a
@@ -320,6 +408,18 @@ export class SessionRunner<State = unknown> {
     this.session.addArtifacts(artifacts);
   }
 
+  /** Invokes the end-of-turn callback, absorbing errors from a closed stream. */
+  private notifyEndTurn(
+    snapshotId: string | undefined,
+    finishReason?: AgentFinishReason
+  ): void {
+    try {
+      this.onEndTurn?.(snapshotId, finishReason);
+    } catch {
+      // Stream was closed, absorb exception.
+    }
+  }
+
   /**
    * Executes the flow handler against incoming input messages sequentially.
    *
@@ -360,28 +460,15 @@ export class SessionRunner<State = unknown> {
           this.lastGoodStateVersion = this.session.getVersion();
           this.lastGoodFinishReason = finishReason;
 
-          try {
-            if (this.onEndTurn) {
-              this.onEndTurn(snapshotId, finishReason);
-            }
-          } catch (e) {
-            // Stream was closed, absorb exception
-          }
+          this.notifyEndTurn(snapshotId, finishReason);
           return {
             lastSnapshot: this.lastSnapshot,
           };
         });
         this.turnIndex++;
       } catch (e: any) {
-        const errStatus = e.status || 'INTERNAL';
-        const errMessage = e.message || 'Internal failure';
-        const errDetails = e.detail || e.details || e;
         this.lastTurnFinishReason = 'failed';
-        this.lastTurnError = {
-          status: errStatus,
-          message: errMessage,
-          details: errDetails,
-        };
+        this.lastTurnError = toErrorDetails(e);
         const snapshotId = await this.maybeSnapshot(
           'turnEnd',
           'failed',
@@ -389,13 +476,7 @@ export class SessionRunner<State = unknown> {
           turnSnapshotId,
           'failed'
         );
-        try {
-          if (this.onEndTurn) {
-            this.onEndTurn(snapshotId, 'failed');
-          }
-        } catch (_) {
-          // Stream was closed, absorb exception
-        }
+        this.notifyEndTurn(snapshotId, 'failed');
 
         // Graceful failure: rather than propagating the exception (which would
         // discard the action's final return — and with it the last-good state
@@ -445,12 +526,7 @@ export class SessionRunner<State = unknown> {
 
     const assignedId = await this.store.saveSnapshot(
       undefined,
-      (current) => {
-        if (current?.status === 'aborted') {
-          return null; // Respect a concurrent abort — skip the write.
-        }
-        return snapshotInput;
-      },
+      abortAwareMutator(snapshotInput),
       { context: getContext() }
     );
     if (assignedId === null) {
@@ -526,12 +602,7 @@ export class SessionRunner<State = unknown> {
     // the mutator returns null and the write is skipped.
     const assignedId = await this.store.saveSnapshot(
       effectiveId,
-      (current) => {
-        if (current?.status === 'aborted') {
-          return null; // Respect the abort — skip the write.
-        }
-        return snapshotInput;
-      },
+      abortAwareMutator(snapshotInput),
       { context: getContext() }
     );
     if (assignedId === null) {
@@ -568,8 +639,28 @@ export type AgentFn<Stream, State> = (
   }
 ) => Promise<AgentResult>;
 
+/**
+ * Lookup input for the `getSnapshotData` action / method.
+ *
+ * Mirrors {@link GetSnapshotOptions}: provide exactly one of `snapshotId`
+ * (an exact snapshot) or `sessionId` (the session's latest leaf snapshot).
+ */
+export const GetSnapshotDataInputSchema = z.object({
+  snapshotId: z.string().optional(),
+  sessionId: z.string().optional(),
+});
+
+/**
+ * Lookup input for `getSnapshotData`.
+ */
+export interface GetSnapshotDataInput {
+  snapshotId?: string;
+  sessionId?: string;
+  context?: ActionContext;
+}
+
 export type GetSnapshotDataAction<S = unknown> = Action<
-  z.ZodString,
+  typeof GetSnapshotDataInputSchema,
   z.ZodType<SessionSnapshot<S>>
 >;
 
@@ -584,8 +675,7 @@ export interface Agent<State = unknown>
     typeof AgentInitSchema
   > {
   getSnapshotData(
-    snapshotId: string,
-    options?: SessionStoreOptions
+    opts: GetSnapshotDataInput
   ): Promise<SessionSnapshot<State> | undefined>;
 
   abort(
@@ -595,6 +685,175 @@ export interface Agent<State = unknown>
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
   readonly abortAgentAction: Action<z.ZodString, z.ZodType<string | undefined>>;
+}
+
+/**
+ * Resolves the {@link Session} (and originating snapshot, if any) for an agent
+ * turn from its {@link AgentInit}, validating that the init strategy matches
+ * the agent's state-management mode.
+ *
+ * Server-managed agents (with a store) resume via a `snapshotId` (an exact
+ * snapshot) or a `sessionId` (the session's latest snapshot); client-managed
+ * agents (no store) supply the full `state` blob. Throws a {@link GenkitError}
+ * on any mismatch, missing snapshot, or invalid custom state — the caller is
+ * expected to translate that into a graceful `finishReason: 'failed'` result.
+ */
+async function resolveSession<State>(
+  config: { name: string; store?: SessionStore<State> },
+  store: SessionStore<State>,
+  init: AgentInit | undefined,
+  validateCustomState: (custom: unknown) => void
+): Promise<{ session: Session<State>; snapshot?: SessionSnapshot<State> }> {
+  if ((init?.snapshotId || init?.sessionId) && !config.store) {
+    throw new GenkitError({
+      status: 'FAILED_PRECONDITION',
+      message:
+        `Cannot use '${init.snapshotId ? 'snapshotId' : 'sessionId'}' with ` +
+        `agent '${config.name}': this agent has no store configured ` +
+        `(client-managed state). Send 'state' instead.`,
+    });
+  }
+  if (init?.state && config.store) {
+    throw new GenkitError({
+      status: 'FAILED_PRECONDITION',
+      message:
+        `Cannot send 'state' to agent '${config.name}': this agent uses ` +
+        `a server-managed store. Send 'snapshotId' or 'sessionId' instead.`,
+    });
+  }
+  if (init?.snapshotId && init?.sessionId) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        `Cannot send both 'snapshotId' and 'sessionId' to agent ` +
+        `'${config.name}'. Provide exactly one (snapshotId for an exact ` +
+        `snapshot, sessionId for the session's latest snapshot).`,
+    });
+  }
+
+  if (init?.snapshotId) {
+    const snapshot = await store.getSnapshot({
+      snapshotId: init.snapshotId,
+      context: getContext(),
+    });
+    if (!snapshot) {
+      throw new GenkitError({
+        status: 'NOT_FOUND',
+        message: `Snapshot ${init.snapshotId} not found`,
+      });
+    }
+    validateCustomState(snapshot.state?.custom);
+    return {
+      snapshot,
+      session: new Session<State>(snapshot.state as SessionState<State>),
+    };
+  }
+
+  if (init?.sessionId) {
+    // Resume the session's latest (leaf) snapshot. When the session has no
+    // snapshots yet (first turn) seed a fresh session bound to the requested
+    // sessionId so subsequent turns can find it.
+    const snapshot = await store.getSnapshot({
+      sessionId: init.sessionId,
+      context: getContext(),
+    });
+    if (snapshot) {
+      validateCustomState(snapshot.state?.custom);
+      return {
+        snapshot,
+        session: new Session<State>(snapshot.state as SessionState<State>),
+      };
+    }
+    return {
+      session: new Session<State>({
+        custom: {} as State,
+        artifacts: [],
+        messages: [],
+        sessionId: init.sessionId,
+      }),
+    };
+  }
+
+  if (init?.state && !config.store) {
+    validateCustomState(init.state.custom);
+    return {
+      session: new Session<State>(init.state as SessionState<State>),
+    };
+  }
+
+  return {
+    session: new Session<State>({
+      custom: {} as State,
+      artifacts: [],
+      messages: [],
+    }),
+  };
+}
+
+/**
+ * Pumps the action's raw input stream into the runner's input channel while
+ * intercepting `detach: true` directives.
+ *
+ * Running this proxy concurrently lets a detach directive take effect
+ * immediately rather than waiting for the runner to drain a backlog of
+ * pre-queued inputs. A detach-only message (no payload) is consumed here and
+ * not forwarded, since it has no turn to process.
+ */
+function pipeInputWithDetach<State>(
+  inputStream: AsyncIterable<AgentInput>,
+  target: Channel<AgentInput>,
+  getRunner: () => SessionRunner<State>,
+  storeEnabled: boolean,
+  rejectDetach: (reason: any) => void
+): void {
+  (async () => {
+    try {
+      for await (const input of inputStream) {
+        if (input.detach) {
+          if (!storeEnabled) {
+            rejectDetach(
+              new GenkitError({
+                status: 'FAILED_PRECONDITION',
+                message:
+                  'Detach is only supported when a session store is provided.',
+              })
+            );
+          } else {
+            const runner = getRunner();
+            const turnSnapshotId =
+              runner.newSnapshotId || globalThis.crypto.randomUUID();
+            runner.newSnapshotId = turnSnapshotId;
+            await runner.maybeSnapshot(
+              'turnEnd',
+              'pending',
+              undefined,
+              turnSnapshotId
+            );
+            runner.isDetached = true;
+
+            if (runner.onDetach) {
+              runner.onDetach(turnSnapshotId);
+            }
+          }
+          // Only forward to the runner if the input carries a payload beyond
+          // the detach directive; a detach-only message has no turn to process.
+          const hasPayload = !!(
+            input.messages?.length ||
+            input.resume?.restart?.length ||
+            input.resume?.respond?.length
+          );
+          if (hasPayload) {
+            target.send(input);
+          }
+        } else {
+          target.send(input);
+        }
+      }
+      target.close();
+    } catch (e) {
+      target.error(e);
+    }
+  })();
 }
 
 /**
@@ -638,7 +897,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
    * Validates the `custom` field of a session state against the configured
    * `stateSchema`.  No-ops when no schema was provided.
    */
-  const validateCustomState = (custom: unknown, label: string): void => {
+  const validateCustomState = (custom: unknown): void => {
     if (config.stateSchema && custom !== undefined) {
       parseSchema(custom, { schema: config.stateSchema });
     }
@@ -672,51 +931,12 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       let snapshot: SessionSnapshot<State> | undefined;
 
       try {
-        // Validate that the init strategy matches the agent's state management
-        // mode.  Server-managed agents (with a store) expect a snapshotId;
-        // client-managed agents (no store) expect the full state blob.
-        if (init?.snapshotId && !config.store) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message:
-              `Cannot use 'snapshotId' with agent '${config.name}': this agent ` +
-              `has no store configured (client-managed state). Send 'state' instead.`,
-          });
-        }
-        if (init?.state && config.store) {
-          throw new GenkitError({
-            status: 'FAILED_PRECONDITION',
-            message:
-              `Cannot send 'state' to agent '${config.name}': this agent uses ` +
-              `a server-managed store. Send 'snapshotId' instead.`,
-          });
-        }
-
-        if (init?.snapshotId) {
-          snapshot = await store.getSnapshot(init.snapshotId, {
-            context: getContext(),
-          });
-          if (!snapshot) {
-            throw new GenkitError({
-              status: 'NOT_FOUND',
-              message: `Snapshot ${init.snapshotId} not found`,
-            });
-          }
-          validateCustomState(
-            snapshot.state?.custom,
-            `snapshot ${init.snapshotId}`
-          );
-          session = new Session<State>(snapshot.state as SessionState<State>);
-        } else if (init?.state && !config.store) {
-          validateCustomState(init.state.custom, 'client-supplied init.state');
-          session = new Session<State>(init.state as SessionState<State>);
-        } else {
-          session = new Session<State>({
-            custom: {} as State,
-            artifacts: [],
-            messages: [],
-          });
-        }
+        ({ session, snapshot } = await resolveSession<State>(
+          config,
+          store,
+          init,
+          validateCustomState
+        ));
       } catch (e: any) {
         // Pre-turn / setup failure (state-vs-store mismatch, missing snapshot,
         // invalid client state). Resolve gracefully with `finishReason: 'failed'`
@@ -725,11 +945,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
         // last-good turn yet; echo back the client-supplied state when present.
         return {
           finishReason: 'failed' as AgentFinishReason,
-          error: {
-            status: e.status || 'INTERNAL',
-            message: e.message || 'Internal failure',
-            details: e.detail || e.details || e,
-          },
+          error: toErrorDetails(e),
           ...(!config.store &&
             init?.state && { state: init.state as SessionState }),
         };
@@ -761,55 +977,13 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       // a backlog of pre-queued inputs would have to be resolved sequentially by the runner first.
       const runnerInputChannel = new Channel<AgentInput>();
 
-      (async () => {
-        try {
-          for await (const input of arg.inputStream) {
-            if (input.detach) {
-              if (!config.store) {
-                if (rejectDetach) {
-                  rejectDetach(
-                    new GenkitError({
-                      status: 'FAILED_PRECONDITION',
-                      message:
-                        'Detach is only supported when a session store is provided.',
-                    })
-                  );
-                }
-              } else {
-                const turnSnapshotId =
-                  runner.newSnapshotId || globalThis.crypto.randomUUID();
-                runner.newSnapshotId = turnSnapshotId;
-                await runner.maybeSnapshot(
-                  'turnEnd',
-                  'pending',
-                  undefined,
-                  turnSnapshotId
-                );
-                runner.isDetached = true;
-
-                if (runner.onDetach) {
-                  runner.onDetach(turnSnapshotId);
-                }
-              }
-              // Only forward to runner if the input carries a payload beyond the
-              // detach directive; a detach-only message has no turn to process.
-              const hasPayload = !!(
-                input.messages?.length ||
-                input.resume?.restart?.length ||
-                input.resume?.respond?.length
-              );
-              if (hasPayload) {
-                runnerInputChannel.send(input);
-              }
-            } else {
-              runnerInputChannel.send(input);
-            }
-          }
-          runnerInputChannel.close();
-        } catch (e) {
-          runnerInputChannel.error(e);
-        }
-      })();
+      pipeInputWithDetach(
+        arg.inputStream,
+        runnerInputChannel,
+        () => runner,
+        !!config.store,
+        (reason) => rejectDetach?.(reason)
+      );
 
       runner = new SessionRunner<State>(session, runnerInputChannel, {
         store,
@@ -952,19 +1126,15 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     registry,
     {
       name: config.name,
-      description: `Gets snapshot data for ${config.name} by snapshotId`,
+      description: `Gets snapshot data for ${config.name} by snapshotId or sessionId`,
       actionType: 'agent-snapshot',
-      inputSchema: z.string(),
+      inputSchema: GetSnapshotDataInputSchema,
       outputSchema: z.any(), // SessionSnapshot Schema
     },
-    async (snapshotId) => {
-      if (!config.store) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
-        });
-      }
-      const snapshot = await config.store.getSnapshot(snapshotId, {
+    async (lookup) => {
+      requireStore(config.store, 'getSnapshotData', config.name);
+      const snapshot = await config.store.getSnapshot({
+        ...lookup,
         context: getContext(),
       });
       return snapshot ? toClientSnapshot(snapshot) : undefined;
@@ -981,72 +1151,22 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       outputSchema: z.string().optional(),
     },
     async (snapshotId) => {
-      if (!config.store) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message: `abort requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
-        });
-      }
-      let previousStatus: SessionSnapshot['status'] | undefined;
-      await config.store.saveSnapshot(
-        snapshotId,
-        (current) => {
-          if (!current) return null;
-          previousStatus = current.status;
-          if (
-            current.status === 'done' ||
-            current.status === 'failed' ||
-            current.status === 'aborted'
-          ) {
-            return null; // Already terminal — don't override.
-          }
-          return { ...current, status: 'aborted' };
-        },
-        { context: getContext() }
-      );
-      return previousStatus;
+      requireStore(config.store, 'abort', config.name);
+      return abortSnapshotInStore(config.store, snapshotId, {
+        context: getContext(),
+      });
     }
   );
 
   const composite = Object.assign(primaryAction, {
-    getSnapshotData: async (
-      snapshotId: string,
-      options?: SessionStoreOptions
-    ) => {
-      if (!config.store) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message: `getSnapshotData requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
-        });
-      }
-      const snapshot = await config.store.getSnapshot(snapshotId, options);
+    getSnapshotData: async (opts: GetSnapshotDataInput) => {
+      requireStore(config.store, 'getSnapshotData', config.name);
+      const snapshot = await config.store.getSnapshot(opts);
       return snapshot ? toClientSnapshot(snapshot) : undefined;
     },
     abort: async (snapshotId: string, options?: SessionStoreOptions) => {
-      if (!config.store) {
-        throw new GenkitError({
-          status: 'FAILED_PRECONDITION',
-          message: `abort requires a persistent store. Provide a 'store' when defining '${config.name}'.`,
-        });
-      }
-      let previousStatus: SessionSnapshot['status'] | undefined;
-      await config.store.saveSnapshot(
-        snapshotId,
-        (current) => {
-          if (!current) return null;
-          previousStatus = current.status;
-          if (
-            current.status === 'done' ||
-            current.status === 'failed' ||
-            current.status === 'aborted'
-          ) {
-            return null; // Already terminal — don't override.
-          }
-          return { ...current, status: 'aborted' };
-        },
-        options
-      );
-      return previousStatus;
+      requireStore(config.store, 'abort', config.name);
+      return abortSnapshotInStore(config.store, snapshotId, options);
     },
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,

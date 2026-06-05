@@ -16,7 +16,7 @@
 
 """Genkit — Build AI-powered applications."""
 
-from genkit._ai._aio import ActionKind, ActionRunContext, Genkit
+from genkit._ai._aio import ActionKind, Genkit
 from genkit._ai._prompt import (
     ExecutablePrompt,
     ModelStreamResponse,
@@ -30,7 +30,7 @@ from genkit._ai._tools import (
     restart_tool,
     tool,
 )
-from genkit._core._action import Action, StreamResponse
+from genkit._core._action import Action, ActionRunContext, StreamResponse
 from genkit._core._error import GenkitError, PublicError
 from genkit._core._model import Document
 from genkit._core._plugin import Plugin
@@ -41,6 +41,8 @@ from genkit._core._typing import (
     Media,
     MediaPart,
     Metadata,
+    MiddlewareRef,
+    MultipartToolResponse,
     Part,
     ReasoningPart,
     Role,
@@ -99,6 +101,7 @@ __all__ = [
     # Errors
     'GenkitError',
     'PublicError',
+    # Tools
     'Interrupt',
     'Tool',
     'respond_to_interrupt',
@@ -115,6 +118,7 @@ __all__ = [
     'Media',
     'MediaPart',
     'Message',
+    'MultipartToolResponse',
     'Part',
     'Role',
     'Stage',
@@ -131,6 +135,8 @@ __all__ = [
     'DocumentPart',
     # Plugin interface
     'Plugin',
+    # Middleware references (wire form for use= parameter)
+    'MiddlewareRef',
     # AI runtime
     'ActionKind',
     'ActionRunContext',
