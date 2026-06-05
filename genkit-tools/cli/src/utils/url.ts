@@ -15,6 +15,9 @@
  */
 
 export function formatHostForUrl(host: string): string {
+  if (host === '0.0.0.0' || host === '::') {
+    return 'localhost';
+  }
   if (host.includes(':') && !host.startsWith('[')) {
     return `[${host}]`;
   }

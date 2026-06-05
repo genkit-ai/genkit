@@ -49,6 +49,9 @@ export interface StartServerOptions {
 }
 
 function formatHostForUrl(host: string): string {
+  if (host === '0.0.0.0' || host === '::') {
+    return 'localhost';
+  }
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 

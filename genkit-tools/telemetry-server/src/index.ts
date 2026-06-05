@@ -37,6 +37,9 @@ const broadcastManager = new BroadcastManager();
 const DEFAULT_TELEMETRY_HOST = 'localhost';
 
 function formatHostForUrl(host: string): string {
+  if (host === '0.0.0.0' || host === '::') {
+    return 'localhost';
+  }
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
