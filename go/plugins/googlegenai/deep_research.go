@@ -145,11 +145,12 @@ type modalityTokens struct {
 }
 
 // newDeepResearchModel defines a Deep Research background model using the Google AI interactions API.
+//
+// Deep Research is a Gemini Developer API feature: it is served only from the
+// generativelanguage endpoint and is not exposed on Vertex AI, so the model is
+// always registered under the Google AI provider (matching the JS plugin).
 func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOptions) ai.BackgroundModel {
 	provider := googleAIProvider
-	if client != nil && client.ClientConfig().Backend == genai.BackendVertexAI {
-		provider = vertexAIProvider
-	}
 
 	startFunc := func(ctx context.Context, req *ai.ModelRequest) (*ai.ModelOperation, error) {
 		config, err := deepResearchConfigFromRequest(req)
@@ -172,8 +173,13 @@ func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOption
 		if op.Metadata == nil {
 			op.Metadata = make(map[string]any)
 		}
-		op.Metadata["clientOptions"] = clientOptions
-		op.Metadata["inputRequest"] = req
+		// Persist only non-secret routing for later check/cancel calls. The API
+		// key is deliberately omitted: operation metadata is serialized back to
+		// the caller and persisted, so the key is re-derived from the live client
+		// rather than written into the operation.
+		routing := clientOptions
+		routing.APIKey = ""
+		op.Metadata["clientOptions"] = routing
 		op.Metadata["startTime"] = time.Now()
 		return op, nil
 	}
@@ -194,11 +200,9 @@ func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOption
 		updatedOp := fromDeepResearchInteraction(interaction)
 		restoreDeepResearchMetadata(updatedOp, op)
 		if updatedOp.Done && updatedOp.Output != nil {
-			if req, ok := updatedOp.Metadata["inputRequest"].(*ai.ModelRequest); ok {
-				ai.CalculateInputOutputUsage(req, updatedOp.Output)
-			} else {
-				ai.CalculateInputOutputUsage(nil, updatedOp.Output)
-			}
+			// Token usage comes from the interaction's own usage block; this only
+			// backfills any output char/media counts the API left unset.
+			ai.CalculateInputOutputUsage(nil, updatedOp.Output)
 			if startTime, ok := updatedOp.Metadata["startTime"].(time.Time); ok && updatedOp.Output.LatencyMs == 0 {
 				updatedOp.Output.LatencyMs = float64(time.Since(startTime).Nanoseconds()) / 1e6
 			}
@@ -291,17 +295,30 @@ func deepResearchOptionsFromConfig(client *genai.Client, config *DeepResearchCon
 }
 
 func deepResearchOptionsFromOperation(client *genai.Client, op *ai.ModelOperation) deepResearchClientOptions {
-	if op != nil && op.Metadata != nil {
-		if stored, ok := op.Metadata["clientOptions"].(deepResearchClientOptions); ok {
-			return stored
-		}
-		if storedMap, ok := op.Metadata["clientOptions"].(map[string]any); ok {
-			if stored, err := base.MapToStruct[deepResearchClientOptions](storedMap); err == nil {
-				return stored
-			}
+	// The API key always comes from the live client, never from operation
+	// metadata (which is serialized and persisted). Only non-secret routing
+	// pinned at start time is restored from metadata.
+	opts := deepResearchOptionsFromConfig(client, nil)
+	if op == nil || op.Metadata == nil {
+		return opts
+	}
+
+	var stored deepResearchClientOptions
+	switch raw := op.Metadata["clientOptions"].(type) {
+	case deepResearchClientOptions:
+		stored = raw
+	case map[string]any:
+		if s, err := base.MapToStruct[deepResearchClientOptions](raw); err == nil {
+			stored = s
 		}
 	}
-	return deepResearchOptionsFromConfig(client, nil)
+	if stored.BaseURL != "" {
+		opts.BaseURL = stored.BaseURL
+	}
+	if stored.APIVersion != "" {
+		opts.APIVersion = stored.APIVersion
+	}
+	return opts
 }
 
 func toDeepResearchInteractionRequest(model string, req *ai.ModelRequest, config *DeepResearchConfig) (*interactionRequest, error) {
@@ -565,7 +582,7 @@ func doDeepResearchRequest(ctx context.Context, client *genai.Client, opts deepR
 	if client == nil {
 		return nil, core.NewError(core.FAILED_PRECONDITION, "Deep Research client is nil")
 	}
-	url, err := deepResearchURL(opts, resourcePath)
+	reqURL, err := deepResearchURL(opts, resourcePath)
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +596,7 @@ func doDeepResearchRequest(ctx context.Context, client *genai.Client, opts deepR
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, err
 	}
@@ -608,8 +625,13 @@ func doDeepResearchRequest(ctx context.Context, client *genai.Client, opts deepR
 	if err != nil {
 		return nil, err
 	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, core.NewError(core.StatusFromHTTPCode(resp.StatusCode), "deep research request failed: %s", strings.TrimSpace(string(respBody)))
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, core.NewError(core.StatusFromHTTPCode(resp.StatusCode), "deep research request failed: %s", msg)
 	}
 
 	var interaction geminiInteraction
