@@ -2739,7 +2739,7 @@ Now respond to the latest message.`,
       assert.strictEqual(snapshot?.finishReason, 'interrupted');
     });
 
-    it('resolves gracefully with finishReason failed when a turn throws', async () => {
+    it('reports failed as the finishReason when a turn throws', async () => {
       const store = new InMemorySessionStore<{}>();
 
       const flow = defineCustomAgent<unknown, {}>(
