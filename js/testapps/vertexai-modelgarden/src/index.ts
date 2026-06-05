@@ -159,15 +159,15 @@ export const thinkingFlow = ai.defineFlow(
   }
 );
 
-export const anthropicOpus47Model = ai.defineFlow(
+export const anthropicOpus48Model = ai.defineFlow(
   {
-    name: 'claude-opus-4-7 - basic',
+    name: 'claude-opus-4-8 - basic',
     outputSchema: z.string(),
     streamSchema: z.any(),
   },
   async (_input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexModelGarden.model('claude-opus-4-7'),
+      model: vertexModelGarden.model('claude-opus-4-8'),
       config: {
         location: 'global',
         thinking: {

@@ -200,6 +200,71 @@ describe('action', () => {
     ]);
   });
 
+  it('cancels the underlying stream when the consumer stops reading early', async () => {
+    // The producer keeps sending chunks until it is told to stop. Before the
+    // fix, abandoning the stream early left the reader holding the lock and
+    // never cancelled the underlying stream, so the producer happily kept
+    // pushing chunks. After the fix, the generator's `finally` cancels the
+    // reader, which closes the chunk stream and surfaces back to the producer
+    // as a failing `sendChunk`.
+    const totalChunks = 20;
+    let producedCount = 0;
+    let sendChunkError: unknown;
+    let releaseProducer: () => void;
+    const producerDone = new Promise<void>((resolve) => {
+      releaseProducer = resolve;
+    });
+
+    const act = defineAction(
+      registry,
+      { name: 'streamer', actionType: 'custom' },
+      async (input, { sendChunk }) => {
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            // Yield to the event loop so the consumer can interleave / bail out.
+            await new Promise((r) => setTimeout(r, 1));
+            producedCount = i + 1;
+            sendChunk({ count: i + 1 });
+          }
+        } catch (e) {
+          sendChunkError = e;
+          throw e;
+        } finally {
+          releaseProducer();
+        }
+        return `hi ${input}`;
+      }
+    );
+
+    const response = act.stream('Pavel');
+    // The action throws once the stream is cancelled, so its output rejects.
+    // Swallow it to avoid an unhandled rejection failing the test runner.
+    response.output.catch(() => {});
+
+    const gotChunks: any[] = [];
+    for await (const chunk of response.stream) {
+      gotChunks.push(chunk);
+      if (gotChunks.length === 2) {
+        break; // consumer abandons the stream early
+      }
+    }
+
+    await producerDone;
+
+    // Consumer only ever saw the first two chunks.
+    assert.deepStrictEqual(gotChunks, [{ count: 1 }, { count: 2 }]);
+    // The producer was stopped well before emitting all 20 chunks.
+    assert.ok(
+      producedCount < totalChunks,
+      `expected producer to be cancelled early, but it produced ${producedCount}/${totalChunks} chunks`
+    );
+    // Cancelling the reader closed the chunk stream, so the next sendChunk threw.
+    assert.ok(
+      sendChunkError,
+      'expected sendChunk to throw after the consumer abandoned the stream'
+    );
+  });
+
   it('should inherit context from parent action invocation', async () => {
     const child = defineAction(
       registry,
