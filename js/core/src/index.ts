@@ -65,6 +65,7 @@ export {
 } from './dynamic-action-provider.js';
 export {
   GenkitError,
+  StatusNameSchema,
   UnstableApiError,
   UserFacingError,
   assertUnstable,

@@ -41,9 +41,12 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from pydantic import BaseModel, Field
 from websockets.asyncio.server import serve
 
+from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._middleware import BaseMiddleware
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
@@ -249,6 +252,133 @@ async def test_reflection_server_v2_list_values(fake_manager: FakeReflectionMana
 
 
 @pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Registered middleware comes back as a JSON object, not pydantic's repr.
+
+    Without explicit serialization the response would fall through to
+    ``json.dumps(default=str)`` and the dev-ui would receive the string
+    ``"name='concise_reply_mw' description=None ..."`` instead of the
+    ``GenerateMiddleware`` wire shape.
+    """
+
+    ai = Genkit()
+
+    @ai.middleware(name='concise_reply_mw')
+    class _NoOpMiddleware(BaseMiddleware):
+        pass
+
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2b',
+        })
+        resp = await fake_manager.read_rpc()
+        assert resp.get('id') == '2b'
+        values = resp['result']['values']
+        assert values == {
+            'concise_reply_mw': {
+                'name': 'concise_reply_mw',
+                'configSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'additionalProperties': True,
+                },
+            }
+        }
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_includes_derived_config_schema(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """Middleware registered via ``GenerateMiddleware(cls=...)`` exposes a derived configSchema.
+
+    The Dev UI uses this schema to render a config form for each registered
+    middleware.
+    """
+
+    ai = Genkit()
+
+    class _FallbackConfig(BaseModel):
+        models: list[str] = Field(default_factory=list)
+        statuses: list[str] = Field(default_factory=list)
+        isolate_config: bool = False
+
+    @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
+    class _Fallback(BaseMiddleware[_FallbackConfig]):
+        pass
+
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2c',
+        })
+        resp = await fake_manager.read_rpc()
+        assert resp.get('id') == '2c'
+        entry = resp['result']['values']['fallback']
+        assert entry['name'] == 'fallback'
+        assert entry['description'] == 'Falls back to alternative models on failure'
+        config_schema = entry['configSchema']
+        assert config_schema['type'] == 'object'
+        # Author-defined fields show up; framework-injected ones (registry,
+        # custom_context / on_chunk) must not leak into the form.
+        props = config_schema['properties']
+        assert set(props.keys()) == {'models', 'statuses', 'isolate_config'}
+        assert props['models']['type'] == 'array'
+        assert props['statuses']['type'] == 'array'
+        assert props['isolate_config']['type'] == 'boolean'
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
+    fake_manager: FakeReflectionManager,
+) -> None:
+    """A middleware with no config knobs still gets an (empty) object schema.
+
+    The Dev UI renders an empty config form, signalling registered.
+    """
+
+    ai = Genkit()
+
+    @ai.middleware(name='no_op')
+    class _NoOp(BaseMiddleware):
+        pass
+
+    client, task = await _run_client_lifecycle(ai.registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'listValues',
+            'params': {'type': 'middleware'},
+            'id': '2d',
+        })
+        resp = await fake_manager.read_rpc()
+        entry = resp['result']['values']['no_op']
+        assert entry['configSchema'] == {
+            'type': 'object',
+            'properties': {},
+            'additionalProperties': True,
+        }
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
 async def test_reflection_server_v2_list_values_rejects_unsupported_type(
     fake_manager: FakeReflectionManager,
 ) -> None:
@@ -436,7 +566,7 @@ async def test_reflection_server_v2_input_stream_not_implemented_js_style(
     fake_manager: FakeReflectionManager,
     stream_method: str,
 ) -> None:
-    """Unimplemented input-stream methods return -32000 + data.stack when id is set (JS parity)."""
+    """Unimplemented input-stream methods return -32000 + data.stack when id is set."""
     registry = Registry()
     client, task = await _run_client_lifecycle(registry, fake_manager)
     try:
