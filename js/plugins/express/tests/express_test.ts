@@ -422,14 +422,15 @@ describe('expressHandler', async () => {
       }
     });
 
-    it('detects streaming when Accept lists multiple media types', async () => {
-      // Clients can send e.g. "text/event-stream, */*"; the handler should
-      // still stream rather than fall back to a single JSON response.
+    it('detects streaming for a multi-value, mixed-case Accept header', async () => {
+      // Clients/proxies can send a media-type list and mixed casing, e.g.
+      // "Text/Event-Stream, */*"; the handler should still stream rather than
+      // fall back to a single JSON response.
       const response = await fetch(`http://localhost:${port}/streamingFlow`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'text/event-stream, */*',
+          Accept: 'Text/Event-Stream, */*',
         },
         body: JSON.stringify({ data: { question: 'hi' } }),
       });

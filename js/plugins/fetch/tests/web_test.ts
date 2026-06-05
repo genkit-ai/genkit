@@ -328,7 +328,7 @@ describe('fetchHandler (single action)', () => {
       assert.ok(response.headers.get('x-genkit-span-id'));
     });
 
-    it('streams when Accept lists multiple media types', async () => {
+    it('streams for a multi-value, mixed-case Accept header', async () => {
       const ai = genkit({});
       defineEchoModel(ai);
       const flow = ai.defineFlow(
@@ -345,13 +345,14 @@ describe('fetchHandler (single action)', () => {
           return text;
         }
       );
-      // Clients can send e.g. "text/event-stream, */*"; the handler should
-      // still stream rather than fall back to a single JSON response.
+      // Clients/proxies can send a media-type list and mixed casing, e.g.
+      // "Text/Event-Stream, */*"; the handler should still stream rather than
+      // fall back to a single JSON response.
       const request = new Request('http://localhost/streamingFlow', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'text/event-stream, */*',
+          Accept: 'Text/Event-Stream, */*',
         },
         body: JSON.stringify({ data: { question: 'hi' } }),
       });

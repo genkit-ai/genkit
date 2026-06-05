@@ -362,7 +362,7 @@ async function handleActionRequest<
 
   const acceptHeader = request.headers.get('Accept') || '';
   const isStreaming =
-    acceptHeader.includes('text/event-stream') || shouldStream;
+    acceptHeader.toLowerCase().includes('text/event-stream') || shouldStream;
 
   if (isStreaming) {
     const streamManager = options?.streamManager;

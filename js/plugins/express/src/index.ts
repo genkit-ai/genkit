@@ -110,7 +110,7 @@ export function expressHandler<
     });
 
     if (
-      request.get('Accept')?.includes('text/event-stream') ||
+      request.get('Accept')?.toLowerCase().includes('text/event-stream') ||
       stream === 'true'
     ) {
       const streamManager = opts?.streamManager;
