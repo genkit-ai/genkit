@@ -146,8 +146,9 @@ function appRoute<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   opts?: {
     contextProvider?: ContextProvider<C, I>;
     streamManager?: StreamManager;
