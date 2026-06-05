@@ -119,10 +119,30 @@ export default function ClientState() {
         const result = await response.output;
         setStreamingText('');
 
-        // Store the state blob for the next turn.
+        // Store the state blob for the next turn. On a failed turn this is
+        // the *last-good* state (what the failed turn started with), so the
+        // conversation can continue from a clean point instead of being lost.
         if (result?.state) {
           stateRef.current = result.state;
           setStateDisplay(JSON.stringify(result.state, null, 2));
+        }
+
+        // A turn can now fail gracefully: instead of throwing, the agent
+        // resolves with `finishReason: 'failed'` and a structured `error`,
+        // while preserving the last-good `state` above. Surface the error but
+        // keep the session usable.
+        if (result?.finishReason === 'failed') {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'system',
+              text:
+                `⚠️ Turn failed (${result.error?.status ?? 'INTERNAL'}): ` +
+                `${result.error?.message ?? 'Unknown error'}. ` +
+                `Your session state was preserved — you can keep chatting.`,
+            },
+          ]);
+          return;
         }
 
         const replyText = extractText(result);
@@ -131,10 +151,12 @@ export default function ClientState() {
           { role: 'model', text: replyText || accumulated },
         ]);
       } catch (err: any) {
+        // Only transport/connection errors reach here now — turn-level
+        // failures resolve gracefully via `finishReason: 'failed'` above.
         setStreamingText('');
         setMessages((prev) => [
           ...prev,
-          { role: 'system', text: `Error: ${err.message}` },
+          { role: 'system', text: `Connection error: ${err.message}` },
         ]);
       } finally {
         setLoading(false);
