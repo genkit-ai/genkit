@@ -52,6 +52,18 @@ var (
 		Output:      []string{"media"},
 		LongRunning: true,
 	}
+
+	// TTSSupports describes model capabilities for text-to-speech models
+	// (gemini-*-tts). They emit audio and, unlike conversational Gemini models,
+	// do not support tools, multi-turn history, or system roles.
+	TTSSupports = ai.ModelSupports{
+		Multiturn:  false,
+		Media:      false,
+		Tools:      false,
+		ToolChoice: false,
+		SystemRole: false,
+		Output:     []string{"audio"},
+	}
 )
 
 // Default options for unknown models of each type.
@@ -92,6 +104,10 @@ const (
 
 	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
 	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
+
+	gemini25FlashPreviewTTS = "gemini-2.5-flash-preview-tts"
+	gemini25ProPreviewTTS   = "gemini-2.5-pro-preview-tts"
+	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
 	imagen3Generate001     = "imagen-3.0-generate-001"
 	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
@@ -143,6 +159,10 @@ var (
 		gemini25Pro,
 		gemini31FlashLitePreview,
 		gemini31FlashImagePreview,
+
+		gemini25FlashPreviewTTS,
+		gemini25ProPreviewTTS,
+		gemini31FlashTTSPreview,
 
 		veo20Generate001,
 		veo30Generate001,
@@ -196,6 +216,24 @@ var (
 			Label:    "Gemini 3.1 Flash Image Preview",
 			Versions: []string{},
 			Supports: &Multimodal,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini25FlashPreviewTTS: {
+			Label:    "Gemini 2.5 Flash Preview TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini25ProPreviewTTS: {
+			Label:    "Gemini 2.5 Pro Preview TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini31FlashTTSPreview: {
+			Label:    "Gemini 3.1 Flash TTS Preview",
+			Versions: []string{},
+			Supports: &TTSSupports,
 			Stage:    ai.ModelStageUnstable,
 		},
 	}
