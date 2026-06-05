@@ -132,7 +132,7 @@ export function fastifyHandler<
     });
 
     if (
-      request.headers['accept']?.includes('text/event-stream') ||
+      request.headers['accept']?.toLowerCase().includes('text/event-stream') ||
       stream === 'true'
     ) {
       // Headers set by earlier hooks/plugins (e.g. @fastify/cors) live on the
