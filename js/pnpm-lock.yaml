@@ -857,6 +857,9 @@ importers:
 
   plugins/middleware:
     dependencies:
+      '@genkit-ai/ai':
+        specifier: workspace:*
+        version: link:../../ai
       genkit:
         specifier: workspace:^
         version: link:../../genkit

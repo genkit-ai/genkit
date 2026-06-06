@@ -31,6 +31,7 @@ import { Channel } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { setCustomMetadataAttributes } from '@genkit-ai/core/tracing';
+import { LocalFilesystemBackend } from './backends/index.js';
 import { generateStream } from './generate.js';
 import {
   MessageData,
@@ -950,6 +951,9 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
             init?.state && { state: init.state as SessionState }),
         };
       }
+      session.attachBackend(
+        new LocalFilesystemBackend({ cwd: process.cwd() })
+      );
 
       // Tag the current trace span with the sessionId so that traces
       // belonging to the same agent conversation can be correlated.

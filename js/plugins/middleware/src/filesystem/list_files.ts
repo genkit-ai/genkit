@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs/promises';
+import type { AgentBackend } from '@genkit-ai/ai/backends';
 import { ToolAction, z } from 'genkit';
 import { tool } from 'genkit/beta';
-import * as path from 'path';
 
 export function defineListFileTool(
-  resolvePath: (requestedPath: string) => string,
+  getBackend: () => AgentBackend,
+  resolveBackendPath: (requestedPath: string) => string,
   prefix?: string
 ): ToolAction {
   return tool(
@@ -43,29 +43,13 @@ export function defineListFileTool(
       ),
     },
     async (input) => {
-      const targetDir = resolvePath(input.dirPath);
-
-      async function list(dir: string, recursive: boolean, base: string = '') {
-        const results: { path: string; isDirectory: boolean }[] = [];
-        const entries = await fs.readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const relativePath = path.join(base, entry.name);
-          results.push({
-            path: relativePath,
-            isDirectory: entry.isDirectory(),
-          });
-          if (entry.isDirectory() && recursive) {
-            const subResults = await list(
-              path.join(dir, entry.name),
-              true,
-              relativePath
-            );
-            results.push(...subResults);
-          }
-        }
-        return results;
+      const result = await getBackend().ls(resolveBackendPath(input.dirPath), {
+        recursive: input.recursive,
+      });
+      if (result.error) {
+        throw new Error(result.error);
       }
-      return await list(targetDir, input.recursive);
+      return result.files ?? [];
     }
   );
 }
