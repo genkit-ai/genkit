@@ -1014,12 +1014,14 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		}
 
 		toolReq := revisedMsg.Content[res.index].ToolRequest
-		toolResps = append(toolResps, NewToolResponsePart(&ToolResponse{
+		newToolResp := NewToolResponsePart(&ToolResponse{
 			Name:    toolReq.Name,
 			Ref:     toolReq.Ref,
 			Output:  res.value.Output,
 			Content: res.value.Content,
-		}))
+		})
+		newToolResp.Metadata = res.value.Metadata
+		toolResps = append(toolResps, newToolResp)
 	}
 
 	if hasInterrupts {
@@ -1469,6 +1471,7 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					Output:  multipartResp.Output,
 					Content: multipartResp.Content,
 				})
+				newToolResp.Metadata = multipartResp.Metadata
 
 				return &resumedToolRequestOutput{
 					toolRequest:  newToolReq,
