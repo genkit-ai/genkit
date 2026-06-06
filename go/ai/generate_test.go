@@ -1933,6 +1933,31 @@ func TestGenerateStream(t *testing.T) {
 			t.Error("expected error from cancelled context")
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		streamModel := DefineModel(r, "test/breakStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn: true,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("done"),
+			}, nil
+		})
+
+		for _, err := range GenerateStream(t.Context(), r, WithModel(streamModel)) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
 func TestGenerateDataStream(t *testing.T) {
@@ -2224,6 +2249,35 @@ func TestGenerateDataStream(t *testing.T) {
 
 		if receivedErr == nil {
 			t.Error("expected parsing error to be propagated")
+		}
+	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		streamModel := DefineModel(r, "test/breakDataStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for i := range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"name":"chunk","value":%d}`, i))}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"name":"done","value":4}`)},
+				},
+			}, nil
+		})
+
+		for _, err := range GenerateDataStream[streamingTestData](t.Context(), r, WithModel(streamModel)) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
 		}
 	})
 }

@@ -757,8 +757,8 @@ type StreamValue[Out, Stream any] struct {
 // Out is never set because the output is already available in the Response field.
 type ModelStreamValue = StreamValue[struct{}, *ModelResponseChunk]
 
-// errGenerateStop is a sentinel error used to signal early termination of streaming.
-var errGenerateStop = errors.New("stop")
+// errStop is a sentinel error used to signal early termination of streaming.
+var errStop = errors.New("stop")
 
 // GenerateStream generates a model response and streams the output.
 // It returns an iterator that yields streaming results.
@@ -773,12 +773,17 @@ var errGenerateStop = errors.New("stop")
 // Otherwise the Chunk field of the passed [ModelStreamValue] holds a streamed chunk.
 func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*ModelStreamValue, error] {
 	return func(yield func(*ModelStreamValue, error) bool) {
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&ModelStreamValue{Chunk: chunk}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
@@ -786,6 +791,9 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 		allOpts := append(slices.Clone(opts), WithStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 		} else {
@@ -807,13 +815,18 @@ func GenerateStream(ctx context.Context, r api.Registry, opts ...GenerateOption)
 // Otherwise the Chunk field of the passed [StreamValue] holds a streamed chunk.
 func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...GenerateOption) iter.Seq2[*StreamValue[Out, Out], error] {
 	return func(yield func(*StreamValue[Out, Out], error) bool) {
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			var streamValue Out
 			if err := chunk.Output(&streamValue); err != nil {
 				yield(nil, err)
+				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
@@ -821,7 +834,8 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
@@ -832,6 +846,9 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 		allOpts = append(allOpts, WithStreaming(cb))
 
 		resp, err := Generate(ctx, r, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return
