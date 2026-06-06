@@ -945,7 +945,7 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 		return nil, nil, nil
 	}
 
-	resultChan := make(chan result[*MultipartToolResponse])
+	resultChan := make(chan result[*MultipartToolResponse], toolCount)
 	toolMsg := &Message{Role: RoleTool}
 	revisedMsg := clone(resp.Message)
 
@@ -1522,16 +1522,21 @@ func handleResumeOption(ctx context.Context, r api.Registry, genOpts *GenerateAc
 		return nil, core.NewError(core.FAILED_PRECONDITION, "handleResumeOption: cannot resume generation unless the last message is by a model with at least one tool request")
 	}
 
-	resultChan := make(chan result[*resumedToolRequestOutput])
-	newContent := make([]*Part, len(lastMessage.Content))
 	toolReqCount := 0
+	for _, part := range lastMessage.Content {
+		if part.IsToolRequest() {
+			toolReqCount++
+		}
+	}
+
+	resultChan := make(chan result[*resumedToolRequestOutput], toolReqCount)
+	newContent := make([]*Part, len(lastMessage.Content))
 
 	for i, part := range lastMessage.Content {
 		if !part.IsToolRequest() {
 			newContent[i] = part
 			continue
 		}
-		toolReqCount++
 
 		go func(idx int, p *Part) {
 			output, err := handleResumedToolRequest(ctx, r, genOpts, p, runTool)

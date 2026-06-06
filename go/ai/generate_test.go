@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -2485,4 +2487,65 @@ func TestGenerateWithMarkdownJSON(t *testing.T) {
 			t.Errorf("Unexpected output: %+v", out)
 		}
 	})
+}
+
+func TestGenerateNoGoroutineLeak(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(t.Context(), r)
+
+	done := make(chan struct{})
+
+	slowTool := DefineTool(r, "slow", "slow",
+		func(*ToolContext, any) (any, error) {
+			<-done
+			return nil, nil
+		},
+	)
+
+	failTool := DefineTool(r, "fail", "fail",
+		func(*ToolContext, any) (any, error) {
+			return nil, errors.New("boom")
+		},
+	)
+
+	testModel := DefineModel(r, "test/testModel", &ModelOptions{
+		Supports: &ModelSupports{
+			Multiturn: true,
+			Tools:     true,
+		},
+	}, func(_ context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{
+			Request: req,
+			Message: &Message{
+				Role: RoleModel,
+				Content: []*Part{
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "a"}),
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "b"}),
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "c"}),
+					NewToolRequestPart(&ToolRequest{Name: "fail", Input: map[string]any{}, Ref: "d"}),
+				},
+			},
+		}, nil
+	})
+
+	before := runtime.NumGoroutine()
+
+	if _, err := Generate(t.Context(), r,
+		WithModel(testModel),
+		WithTools(slowTool, failTool),
+	); err == nil {
+		t.Fatal("expected tool error")
+	}
+
+	close(done)
+
+	for i := 0; i < 100; i++ {
+		if runtime.NumGoroutine() <= before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("goroutines leaked: %d", runtime.NumGoroutine()-before)
 }
