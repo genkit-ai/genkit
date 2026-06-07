@@ -330,21 +330,30 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *prompt) Desc() api.ActionDesc {
 	desc := p.ActionDef.Desc()
-	promptMeta := desc.Metadata["prompt"].(map[string]any)
-	if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
-		if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
-				inputMeta["schema"] = resolved
+	descMeta := maps.Clone(desc.Metadata)
+	if promptMeta, ok := descMeta["prompt"].(map[string]any); ok {
+		promptMeta = maps.Clone(promptMeta)
+		if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
+			inputMeta = maps.Clone(inputMeta)
+			if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
+					inputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["input"] = inputMeta
 		}
-	}
-	if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
-		if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
-				outputMeta["schema"] = resolved
+		if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
+			outputMeta = maps.Clone(outputMeta)
+			if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
+					outputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["output"] = outputMeta
 		}
+		descMeta["prompt"] = promptMeta
 	}
+	desc.Metadata = descMeta
 	return desc
 }
 
