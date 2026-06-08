@@ -507,7 +507,10 @@ class OllamaModel:
                     if extra_value is not None:
                         options_kwargs[to_snake(extra_key)] = extra_value
             return {k: v for k, v in options_kwargs.items() if v is not None}
-        return cast(dict[str, Any], config)
+        # Raw dict passed straight through by the caller. Snake-case keys so a
+        # camelCase knob (e.g. topP) maps to the server field (top_p) instead
+        # of being silently ignored by the Ollama API.
+        return {to_snake(k): v for k, v in cast(dict[str, Any], config).items()}
 
     @staticmethod
     def build_request_kwargs(

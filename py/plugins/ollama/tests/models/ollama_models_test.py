@@ -761,6 +761,13 @@ class TestBuildRequestOptions:
 
         assert OllamaModel.build_request_kwargs(_MC(temperature=0.5)) == {}
 
+    def test_raw_dict_keys_are_snake_cased(self) -> None:
+        """camelCase keys in a raw dict config map to server field names."""
+        from genkit.plugins.ollama.models import OllamaModel
+
+        options = cast(dict[str, Any], OllamaModel.build_request_options({'topP': 0.9, 'top_k': 40}))
+        assert options == {'top_p': 0.9, 'top_k': 40}
+
     def test_none_config_returns_empty_options(self) -> None:
         """None config still produces a usable Options instance."""
         from genkit.plugins.ollama.models import OllamaModel
