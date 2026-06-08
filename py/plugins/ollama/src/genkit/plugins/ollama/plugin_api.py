@@ -173,7 +173,7 @@ class Ollama(Plugin):
         if source is None:
             return {}
         if isinstance(source, dict):
-            return dict(cast(dict[str, str], source))
+            return {str(k): str(v) for k, v in source.items()}
         result = source()
         if inspect.isawaitable(result):
             result = await result

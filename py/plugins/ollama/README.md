@@ -153,7 +153,7 @@ with the URL it tried. Start the daemon (`ollama serve`) or set
 
 ## Sample
 
-See [`py/samples/ollama`](../../samples/ollama) for a runnable sample covering
+See [`py/samples/ollama-sample`](../../samples/ollama-sample) for a runnable sample covering
 chat, streaming, tool calling, and embeddings with a local Ollama server.
 
 ## Notes

@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-01T15:30:01.818135Z"
+exclude-newer = "2026-06-01T16:41:32.001484Z"
 exclude-newer-span = "P7D"
 
 [manifest]
@@ -4330,7 +4330,7 @@ wheels = [
 [[package]]
 name = "ollama-sample"
 version = "0.1.0"
-source = { editable = "samples/ollama" }
+source = { editable = "samples/ollama-sample" }
 dependencies = [
     { name = "genkit" },
     { name = "genkit-plugin-ollama" },
