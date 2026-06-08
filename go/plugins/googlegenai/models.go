@@ -62,7 +62,7 @@ var (
 		Tools:      false,
 		ToolChoice: false,
 		SystemRole: false,
-		Output:     []string{"audio"},
+		Output:     []string{"media"},
 	}
 )
 
