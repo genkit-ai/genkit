@@ -134,10 +134,12 @@ Example:
     # Configure with model name and optional server URL
     ai = Genkit(
         plugins=[
-            Ollama(models=[
-                ModelDefinition(name='llama3.2'),
-                ModelDefinition(name='mistral'),
-            ]),
+            Ollama(
+                models=[
+                    ModelDefinition(name='llama3.2'),
+                    ModelDefinition(name='mistral'),
+                ]
+            ),
         ],
         model='ollama/llama3.2',
     )

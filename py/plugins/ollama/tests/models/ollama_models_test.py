@@ -707,10 +707,7 @@ class TestBuildRequestOptions:
 
     def test_model_config_keys_map_to_snake_case(self) -> None:
         """Regression: top_p was previously emitted as topP and silently dropped."""
-        from genkit.plugins.ollama.models import OllamaModel
-        from genkit import ModelConfig as _MC
-
-        cfg = _MC(temperature=0.5, top_p=0.9, top_k=40, max_output_tokens=128, stop_sequences=['STOP'])
+        cfg = ModelConfig(temperature=0.5, top_p=0.9, top_k=40, max_output_tokens=128, stop_sequences=['STOP'])
         options = cast(dict[str, Any], OllamaModel.build_request_options(cfg))
         assert options['temperature'] == 0.5
         assert options['top_p'] == 0.9
@@ -756,10 +753,7 @@ class TestBuildRequestOptions:
 
     def test_request_kwargs_empty_for_plain_model_config(self) -> None:
         """ModelConfig (non-Ollama) yields no request-level kwargs."""
-        from genkit.plugins.ollama.models import OllamaModel
-        from genkit import ModelConfig as _MC
-
-        assert OllamaModel.build_request_kwargs(_MC(temperature=0.5)) == {}
+        assert OllamaModel.build_request_kwargs(ModelConfig(temperature=0.5)) == {}
 
     def test_raw_dict_keys_are_snake_cased(self) -> None:
         """camelCase keys in a raw dict config map to server field names."""

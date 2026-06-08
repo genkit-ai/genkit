@@ -88,6 +88,7 @@ from typing import Any, ClassVar, Literal, cast
 
 import structlog
 from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel, to_snake
 
 import ollama as ollama_api
 from genkit import (
@@ -107,8 +108,6 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
-from pydantic.alias_generators import to_camel, to_snake
-
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, get_cached_client
 
@@ -711,7 +710,7 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
         return None
     if schema_type != 'object':
         raise ValueError(
-            f"Ollama tools must declare an object-typed input schema; got type={schema_type!r}. "
+            f'Ollama tools must declare an object-typed input schema; got type={schema_type!r}. '
             'Wrap primitive inputs in an object schema (e.g. {"type": "object", "properties": {...}}).'
         )
 

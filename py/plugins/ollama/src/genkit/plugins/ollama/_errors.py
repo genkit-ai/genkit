@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
@@ -32,7 +33,7 @@ class OllamaConnectionError(ConnectionError):
 
 
 @asynccontextmanager
-async def wrap_connection_errors(server_address: str):
+async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
     """Translate raw httpx connection failures into actionable errors.
 
     Yields control to the wrapped block. On :class:`httpx.ConnectError`

@@ -23,13 +23,20 @@ from typing import Any, cast
 import structlog
 
 import ollama as ollama_api
-from genkit import Constrained, ModelInfo, Supports
-from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit import Constrained, ModelInfo, ModelRequest, ModelResponse, Supports
+from genkit.embedder import (
+    EmbedderOptions,
+    EmbedderSupports,
+    EmbedRequest,
+    EmbedResponse,
+    embedder_action_metadata,
+)
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
     ActionMetadata,
+    ActionRunContext,
     Plugin,
     loop_local_client,
     to_json_schema,
@@ -121,7 +128,7 @@ class Ollama(Plugin):
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
         self._request_headers_source = request_headers
         # Static dicts are usable immediately; callables resolve during init().
-        self.request_headers: dict[str, str] = dict(request_headers) if isinstance(request_headers, dict) else {}
+        self.request_headers: dict[str, str] = {**request_headers} if isinstance(request_headers, dict) else {}
         self.timeout = timeout
 
         self.client = loop_local_client(self._make_client)
@@ -166,7 +173,7 @@ class Ollama(Plugin):
         if source is None:
             return {}
         if isinstance(source, dict):
-            return dict(source)
+            return dict(cast(dict[str, str], source))
         result = source()
         if inspect.isawaitable(result):
             result = await result
@@ -224,7 +231,7 @@ class Ollama(Plugin):
 
         server_address = self.server_address
 
-        async def _run(request: Any, ctx: Any = None) -> Any:
+        async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
             async with wrap_connection_errors(server_address):
                 return await model.generate(request, ctx)
 
@@ -258,7 +265,7 @@ class Ollama(Plugin):
 
         server_address = self.server_address
 
-        async def _run(request: Any) -> Any:
+        async def _run(request: EmbedRequest) -> EmbedResponse:
             async with wrap_connection_errors(server_address):
                 return await embedder.embed(request)
 

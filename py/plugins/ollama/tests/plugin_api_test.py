@@ -250,9 +250,7 @@ async def test_async_request_headers_callback_resolved_on_init(monkeypatch: pyte
 @pytest.mark.asyncio
 async def test_sync_request_headers_callback(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sync callable headers should also be resolved during init()."""
-    monkeypatch.setattr(
-        'genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', MagicMock(spec=type)
-    )
+    monkeypatch.setattr('genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', MagicMock(spec=type))
     plugin = Ollama(request_headers=lambda: {'X-Tenant': 'acme'})
     await plugin.init()
     assert plugin.request_headers == {'X-Tenant': 'acme'}
