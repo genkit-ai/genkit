@@ -107,7 +107,7 @@ from genkit import (
     ToolRequestPart,
     ToolResponsePart,
 )
-from pydantic.alias_generators import to_camel
+from pydantic.alias_generators import to_camel, to_snake
 
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, get_cached_client
@@ -500,6 +500,12 @@ class OllamaModel:
                     options_kwargs['min_p'] = config.min_p
                 if config.seed is not None:
                     options_kwargs['seed'] = config.seed
+                # OllamaConfig is extra='allow'; forward any additional sampler
+                # knobs the user set (e.g. repeat_penalty) instead of dropping
+                # them. Snake-case so camelCase aliases reach the server.
+                for extra_key, extra_value in (config.__pydantic_extra__ or {}).items():
+                    if extra_value is not None:
+                        options_kwargs[to_snake(extra_key)] = extra_value
             return {k: v for k, v in options_kwargs.items() if v is not None}
         return cast(dict[str, Any], config)
 

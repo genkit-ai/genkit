@@ -729,6 +729,15 @@ class TestBuildRequestOptions:
         assert options['seed'] == 7
         assert options['num_predict'] == 64
 
+    def test_ollama_config_forwards_extra_options(self) -> None:
+        """extra='allow' sampler knobs are forwarded (snake-cased), not dropped."""
+        from genkit.plugins.ollama.models import OllamaConfig, OllamaModel
+
+        cfg = OllamaConfig(temperature=0.2, repeat_penalty=1.3, repeatLastN=64)  # type: ignore[call-arg]
+        options = cast(dict[str, Any], OllamaModel.build_request_options(cfg))
+        assert options['repeat_penalty'] == 1.3
+        assert options['repeat_last_n'] == 64
+
     def test_ollama_config_num_predict_wins_over_max_output_tokens(self) -> None:
         """When both are set, num_predict overrides the inherited max_output_tokens."""
         from genkit.plugins.ollama.models import OllamaConfig, OllamaModel
