@@ -100,6 +100,7 @@ from genkit import (
     ModelResponseChunk,
     ModelUsage,
     Part,
+    ReasoningPart,
     Role,
     TextPart,
     ToolRequest,
@@ -420,6 +421,13 @@ class OllamaModel:
         """
         content = []
         chat_response_message = chat_response.message
+        # Reasoning models (think=True) return chain-of-thought in a separate
+        # ``thinking`` field. Surface it as a ReasoningPart (leading the
+        # content) rather than dropping it. Streaming chunks carry incremental
+        # thinking, so this also emits reasoning chunks during the think phase.
+        thinking = getattr(chat_response_message, 'thinking', None)
+        if thinking:
+            content.append(Part(root=ReasoningPart(reasoning=thinking)))
         if chat_response_message.content:
             content.append(Part(root=TextPart(text=chat_response.message.content or '')))
         if chat_response_message.images:

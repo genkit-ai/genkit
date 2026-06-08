@@ -761,6 +761,36 @@ class TestBuildRequestOptions:
         assert result.top_p is None
 
 
+class TestBuildMultimodalChatResponse:
+    """Reasoning (think) output is surfaced rather than dropped."""
+
+    def test_thinking_becomes_leading_reasoning_part(self) -> None:
+        """A message with a ``thinking`` field yields a ReasoningPart before the text."""
+        from genkit import ReasoningPart
+
+        resp = ollama_api.ChatResponse(
+            model='qwen3',
+            message=ollama_api.Message(role='assistant', content='43', thinking='17 + 26 = 43'),
+        )
+        parts = OllamaModel._build_multimodal_chat_response(chat_response=resp)
+        roots = [p.root for p in parts]
+        assert isinstance(roots[0], ReasoningPart)
+        assert roots[0].reasoning == '17 + 26 = 43'
+        assert isinstance(roots[1], TextPart)
+        assert roots[1].text == '43'
+
+    def test_no_thinking_yields_no_reasoning_part(self) -> None:
+        """Plain responses produce no ReasoningPart."""
+        from genkit import ReasoningPart
+
+        resp = ollama_api.ChatResponse(
+            model='llama3.2',
+            message=ollama_api.Message(role='assistant', content='hi'),
+        )
+        parts = OllamaModel._build_multimodal_chat_response(chat_response=resp)
+        assert not any(isinstance(p.root, ReasoningPart) for p in parts)
+
+
 class TestResolveImage(unittest.IsolatedAsyncioTestCase):
     """Tests for OllamaModel._resolve_image."""
 
