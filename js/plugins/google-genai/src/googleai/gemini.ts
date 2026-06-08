@@ -845,6 +845,15 @@ export function defineModel(
         if (!generationConfig.responseModalities) {
           generationConfig.responseModalities = ['AUDIO'];
         }
+        // TTS generateContent requires a speechConfig with a voice; the API
+        // rejects audio requests without one. Supply a default voice so the
+        // dedicated TTS models are runnable from a bare prompt (e.g. the dev
+        // UI), while still letting callers override it via config.
+        if (!generationConfig.speechConfig) {
+          generationConfig.speechConfig = {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Algenib' } },
+          };
+        }
       } else if (isImageModelName(modelVersion)) {
         if (!generationConfig.responseModalities) {
           generationConfig.responseModalities = ['TEXT', 'IMAGE'];

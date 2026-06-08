@@ -559,6 +559,60 @@ describe('Google AI Gemini', () => {
         );
       });
 
+      it('defaults speechConfig voice for TTS models', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-tts-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generationConfig?.speechConfig, {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Algenib' } },
+        });
+      });
+
+      it('does not override speechConfig if specified for TTS models', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-tts-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiTtsConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            speechConfig: {
+              voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generationConfig?.speechConfig, {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+        });
+      });
+
+      it('does not default speechConfig for non-TTS models', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.generationConfig?.speechConfig,
+          undefined
+        );
+      });
+
       it('does not override responseModalities if specified for TTS models', async () => {
         const model = defineModel(
           'gemini-2.5-flash-preview-tts',
