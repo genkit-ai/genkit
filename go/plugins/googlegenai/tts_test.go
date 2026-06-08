@@ -40,9 +40,9 @@ func TestTTSModelOptions(t *testing.T) {
 			if opts.Supports != &TTSSupports {
 				t.Errorf("Supports = %p, want &TTSSupports (%p)", opts.Supports, &TTSSupports)
 			}
-			// TTS models emit audio and do not converse or call tools.
-			if got := opts.Supports.Output; len(got) != 1 || got[0] != "audio" {
-				t.Errorf("Output = %v, want [audio]", got)
+			// TTS models emit media and do not converse or call tools.
+			if got := opts.Supports.Output; len(got) != 1 || got[0] != "media" {
+				t.Errorf("Output = %v, want [media]", got)
 			}
 			if opts.Supports.Tools {
 				t.Error("Tools = true, want false")
