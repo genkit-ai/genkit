@@ -13,6 +13,13 @@ import (
 	"google.golang.org/genai"
 )
 
+const (
+	modalityMedia = "media"
+	modalityText  = "text"
+	modalityImage = "image"
+	modalityVideo = "video"
+)
+
 // Model capability definitions - these describe what different model types support.
 var (
 	// BasicText describes model capabilities for text-only Gemini models.
@@ -40,7 +47,7 @@ var (
 		Tools:      false,
 		SystemRole: false,
 		Media:      true,
-		Output:     []string{"media"},
+		Output:     []string{modalityMedia},
 	}
 
 	// VeoSupports describes model capabilities for video generation models (Veo).
@@ -49,7 +56,7 @@ var (
 		Multiturn:   false,
 		Tools:       false,
 		SystemRole:  false,
-		Output:      []string{"media"},
+		Output:      []string{modalityMedia},
 		LongRunning: true,
 	}
 
@@ -62,7 +69,7 @@ var (
 		Tools:      false,
 		ToolChoice: false,
 		SystemRole: false,
-		Output:     []string{"media"},
+		Output:     []string{modalityMedia},
 	}
 )
 
@@ -87,7 +94,7 @@ var (
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
-		Supports:   &ai.EmbedderSupports{Input: []string{"text"}},
+		Supports:   &ai.EmbedderSupports{Input: []string{modalityText}},
 		Dimensions: 768,
 	}
 )
@@ -303,42 +310,42 @@ var (
 			Dimensions: 768,
 			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{modalityText},
 			},
 		},
 		textembeddinggecko003: {
 			Dimensions: 768,
 			Label:      "Google Gen AI - Text Embedding Gecko 003",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{modalityText},
 			},
 		},
 		textembeddinggecko002: {
 			Dimensions: 768,
 			Label:      "Vertex AI - Text Embedding Gecko 002",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{modalityText},
 			},
 		},
 		textembeddinggecko001: {
 			Dimensions: 768,
 			Label:      "Vertex AI - Text Embedding Gecko 001",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{modalityText},
 			},
 		},
 		textembeddinggeckomultilingual001: {
 			Dimensions: 768,
 			Label:      "Vertex AI - Text Embedding Gecko Multilingual 001",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{modalityText},
 			},
 		},
 		textmultilingualembedding002: {
 			Dimensions: 768,
 			Label:      "Vertex AI - Text Multilingual Embedding 001",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{modalityText},
 			},
 		},
 		multimodalembedding: {
@@ -346,9 +353,9 @@ var (
 			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
 			Supports: &ai.EmbedderSupports{
 				Input: []string{
-					"text",
-					"image",
-					"video",
+					modalityText,
+					modalityImage,
+					modalityVideo,
 				},
 			},
 		},
