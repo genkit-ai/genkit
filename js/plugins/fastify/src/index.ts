@@ -113,7 +113,8 @@ export function fastifyHandler<
           headers: Object.fromEntries(
             Object.entries(request.headers).map(([key, value]) => [
               key.toLowerCase(),
-              Array.isArray(value) ? value.join(' ') : String(value),
+              // RFC 9110 5.3: combine repeated field lines with a comma.
+              Array.isArray(value) ? value.join(', ') : String(value),
             ])
           ),
           input,
@@ -130,6 +131,10 @@ export function fastifyHandler<
     request.raw.on('close', () => {
       abortController.abort();
     });
+    // When/if a request timeout is configured, the socket emits 'timeout'.
+    request.raw.on('timeout', () => {
+      abortController.abort();
+    });
 
     if (
       request.headers['accept']?.toLowerCase().includes('text/event-stream') ||
@@ -144,36 +149,61 @@ export function fastifyHandler<
       // to serialize and send a reply while we stream raw SSE bytes.
       reply.hijack();
       const raw = reply.raw;
-      for (const [key, value] of Object.entries(pendingHeaders)) {
-        if (value !== undefined) {
-          raw.setHeader(key, value);
+      // hijack() also bypasses Fastify's error handling, so an error thrown
+      // while setting up the stream (e.g. streamManager.open, or a rethrow from
+      // subscribeToStream) would leave the socket open and leak the connection.
+      // Catch it here and close the response cleanly.
+      try {
+        for (const [key, value] of Object.entries(pendingHeaders)) {
+          if (value !== undefined) {
+            raw.setHeader(key, value);
+          }
+        }
+
+        const streamManager = opts?.streamManager;
+        if (streamManager && streamId) {
+          await subscribeToStream(streamManager, streamId, raw);
+          return;
+        }
+
+        const streamIdToUse = randomUUID();
+        const headers: Record<string, string> = {
+          'Content-Type': 'text/plain',
+          'Transfer-Encoding': 'chunked',
+        };
+        if (streamManager) {
+          headers['x-genkit-stream-id'] = streamIdToUse;
+        }
+        raw.writeHead(200, headers);
+        await runActionWithDurableStreaming(
+          action,
+          streamManager,
+          streamIdToUse,
+          input,
+          context,
+          raw,
+          abortController.signal
+        );
+      } catch (e) {
+        logger.error(
+          `Streaming request failed with error: ${getErrorMessage(e)}\n${getErrorStack(e)}`
+        );
+        if (raw.destroyed) {
+          // Client already gone; nothing to send.
+        } else if (raw.headersSent) {
+          // Streaming already started: emit a trailing SSE error frame.
+          raw.write(
+            `error: ${JSON.stringify({ error: getCallableJSON(e) })}${streamDelimiter}`
+          );
+          raw.end();
+        } else {
+          // Nothing sent yet: respond with a normal API error.
+          raw.writeHead(getHttpStatus(e), {
+            'Content-Type': 'application/json',
+          });
+          raw.end(JSON.stringify(getCallableJSON(e)));
         }
       }
-
-      const streamManager = opts?.streamManager;
-      if (streamManager && streamId) {
-        await subscribeToStream(streamManager, streamId, raw);
-        return;
-      }
-
-      const streamIdToUse = randomUUID();
-      const headers: Record<string, string> = {
-        'Content-Type': 'text/plain',
-        'Transfer-Encoding': 'chunked',
-      };
-      if (streamManager) {
-        headers['x-genkit-stream-id'] = streamIdToUse;
-      }
-      raw.writeHead(200, headers);
-      await runActionWithDurableStreaming(
-        action,
-        streamManager,
-        streamIdToUse,
-        input,
-        context,
-        raw,
-        abortController.signal
-      );
     } else {
       try {
         const result = await action.run(input, {

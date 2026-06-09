@@ -182,6 +182,18 @@ describe('fastifyHandler', async () => {
       fastifyHandler(echoModel, { contextProvider })
     );
     app.post('/abortableFlow', fastifyHandler(abortableFlow));
+    // A stream manager whose open() rejects, to exercise the error path after
+    // reply.hijack() (the response must still be closed, not leaked).
+    const throwingStreamManager = {
+      open: async () => {
+        throw new Error('open failed');
+      },
+      subscribe: async () => {},
+    } as unknown as InMemoryStreamManager;
+    app.post(
+      '/streamSetupThrows',
+      fastifyHandler(streamingFlow, { streamManager: throwingStreamManager })
+    );
 
     await app.listen({ port });
   });
@@ -484,6 +496,24 @@ describe('fastifyHandler', async () => {
       });
       const text = await response.text();
       assert.match(text, /^data: /m); // SSE frames, not a single JSON body
+    });
+
+    it('closes the hijacked response if stream setup throws', async () => {
+      // streamManager.open() rejects after reply.hijack(); the handler must
+      // close the response with an error rather than leak the open socket.
+      const response = await fetch(
+        `http://localhost:${port}/streamSetupThrows`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({ data: { question: 'hi' } }),
+        }
+      );
+      const text = await response.text(); // resolves (no hang)
+      assert.match(text, /error:/);
     });
 
     it('should return 204 for a non-existent stream', async () => {
