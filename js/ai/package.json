@@ -117,6 +117,18 @@
       "import": "./lib/session.mjs",
       "default": "./lib/session.js"
     },
+    "./agent-core": {
+      "types": "./lib/agent-core.d.ts",
+      "require": "./lib/agent-core.js",
+      "import": "./lib/agent-core.mjs",
+      "default": "./lib/agent-core.js"
+    },
+    "./json-patch": {
+      "types": "./lib/json-patch.d.ts",
+      "require": "./lib/json-patch.js",
+      "import": "./lib/json-patch.mjs",
+      "default": "./lib/json-patch.js"
+    },
     "./formats": {
       "types": "./lib/formats/index.d.ts",
       "require": "./lib/formats/index.js",
@@ -155,6 +167,12 @@
       ],
       "session": [
         "lib/session"
+      ],
+      "agent-core": [
+        "lib/agent-core"
+      ],
+      "json-patch": [
+        "lib/json-patch"
       ],
       "formats": [
         "lib/formats"
