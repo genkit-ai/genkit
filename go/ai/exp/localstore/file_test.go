@@ -476,3 +476,40 @@ func TestFileSessionStore(t *testing.T) {
 		}
 	})
 }
+
+// TestFileSessionStore_FinishReasonPersistsAcrossReopen verifies that a
+// snapshot's finish reason survives the disk round-trip: a second store
+// opened on the same directory (as after a process restart) reads it back.
+func TestFileSessionStore_FinishReasonPersistsAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	saved, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{
+				Status:       exp.SnapshotStatusSucceeded,
+				FinishReason: exp.AgentFinishReasonInterrupted,
+				State:        &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	reopened, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("reopen NewFileSessionStore: %v", err)
+	}
+	got, err := reopened.GetSnapshot(context.Background(), saved.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("snapshot %q missing after reopen", saved.SnapshotID)
+	}
+	if got.FinishReason != exp.AgentFinishReasonInterrupted {
+		t.Errorf("FinishReason = %q, want %q", got.FinishReason, exp.AgentFinishReasonInterrupted)
+	}
+}

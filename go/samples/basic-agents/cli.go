@@ -352,6 +352,12 @@ repl:
 				fmt.Print(chunk.ModelChunk.Text())
 			}
 			if chunk.TurnEnd != nil {
+				// finishReason rides the turn-end signal, so the client
+				// learns how the turn ended without scanning the message
+				// content (e.g. it could pause here on "interrupted").
+				if r := chunk.TurnEnd.FinishReason; r != "" {
+					fmt.Printf("\n  [turn: %s]", r)
+				}
 				if chunk.TurnEnd.SnapshotID != "" {
 					fmt.Printf("\n  [snapshot %s]", shortID(chunk.TurnEnd.SnapshotID))
 				}
@@ -374,7 +380,7 @@ repl:
 		fmt.Println("agent again from the list to wait for it to finalize and")
 		fmt.Println("resume from the cumulative final state.")
 	case out != nil && out.SnapshotID != "":
-		fmt.Printf("Done. Final snapshot: %s.\n", shortID(out.SnapshotID))
+		fmt.Printf("Done (%s). Final snapshot: %s.\n", out.FinishReason, shortID(out.SnapshotID))
 	}
 
 	if quit {

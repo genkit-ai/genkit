@@ -161,7 +161,7 @@ func defineCustomAgent(g *genkit.Genkit) sampleAgent {
 	return sampleAgent{
 		Agent: genkit.DefineCustomAgent(g, name,
 			func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
-				if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) error {
+				if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 					for chunk, err := range genkit.GenerateStream(ctx, g,
 						ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 							ThinkingConfig: &genai.ThinkingConfig{
@@ -172,15 +172,20 @@ func defineCustomAgent(g *genkit.Genkit) sampleAgent {
 						ai.WithMessages(sess.Messages()...),
 					) {
 						if err != nil {
-							return err
+							return nil, err
 						}
 						if chunk.Done {
 							sess.AddMessages(chunk.Response.Message)
-							break
+							// Report how the turn ended so the framework can
+							// forward it on the TurnEnd chunk and persist it
+							// on the snapshot.
+							return &aix.TurnResult{
+								FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
+							}, nil
 						}
 						resp.SendModelChunk(chunk.Chunk)
 					}
-					return nil
+					return nil, nil
 				}); err != nil {
 					return nil, err
 				}

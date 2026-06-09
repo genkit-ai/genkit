@@ -50,7 +50,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "basicFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendStatus(testStatus{Phase: "generating"})
 				// Echo back the user's message.
 				if input.Message != nil {
@@ -62,7 +62,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 					return s
 				})
 				resp.SendStatus(testStatus{Phase: "complete"})
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -126,7 +126,7 @@ func TestAgent_WithSessionStore(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "snapshotFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -134,7 +134,7 @@ func TestAgent_WithSessionStore(t *testing.T) {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -196,7 +196,7 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "resumeFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -204,7 +204,7 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -285,7 +285,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "clientStateFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
@@ -293,7 +293,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -348,7 +348,7 @@ func TestAgent_Artifacts(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "artifactFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 
 				resp.SendArtifact(&Artifact{
 					Name:  "code.go",
@@ -368,7 +368,7 @@ func TestAgent_Artifacts(t *testing.T) {
 				})
 
 				sess.AddMessages(ai.NewModelTextMessage("done"))
-				return nil
+				return nil, nil
 			})
 			if err != nil {
 				return nil, err
@@ -421,13 +421,13 @@ func TestAgent_SnapshotCallback(t *testing.T) {
 	callbackCalls := 0
 	af := DefineCustomAgent(reg, "callbackFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -477,8 +477,8 @@ func TestAgent_SendMessage(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "sendMsgFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				return nil
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, nil
 			})
 		},
 	)
@@ -521,19 +521,19 @@ func TestAgent_SessionContext(t *testing.T) {
 	var retrievedCounter int
 	af := DefineCustomAgent(reg, "contextFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				// Session should be retrievable from context.
 				ctxSess := SessionFromContext[testState](ctx)
 				if ctxSess == nil {
 					t.Error("expected session from context")
-					return nil
+					return nil, nil
 				}
 				ctxSess.UpdateCustom(func(s testState) testState {
 					s.Counter = 42
 					return s
 				})
 				retrievedCounter = ctxSess.Custom().Counter
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -566,8 +566,8 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "errorFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				return fmt.Errorf("turn failed")
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, fmt.Errorf("turn failed")
 			})
 		},
 	)
@@ -592,10 +592,10 @@ func TestAgent_SetMessages(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "setMsgsFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				// Replace all messages with just one.
 				sess.SetMessages([]*ai.Message{ai.NewModelTextMessage("replaced")})
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -643,7 +643,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 				return output
 			}
 
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendStatus(testStatus{Phase: "thinking"})
 				resp.SendModelChunk(&ai.ModelResponseChunk{
 					Content: []*ai.Part{ai.NewTextPart("reply")},
@@ -653,7 +653,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 					Parts: []*ai.Part{ai.NewTextPart("content")},
 				})
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -721,10 +721,10 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 				return output
 			}
 
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendStatus(testStatus{Phase: "working"})
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1203,7 +1203,7 @@ func TestAgent_RunText(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "runTextFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Message.Content[0].Text))
 				}
@@ -1211,7 +1211,7 @@ func TestAgent_RunText(t *testing.T) {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -1236,11 +1236,11 @@ func TestAgent_Run(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "runFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
 				}
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -1266,13 +1266,13 @@ func TestAgent_RunText_WithState(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "runStateFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 	)
@@ -1307,13 +1307,13 @@ func TestAgent_RunText_WithSnapshot(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "runSnapshotFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1447,13 +1447,13 @@ func TestAgent_SingleTurnSnapshotDedup(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "dedupFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1491,13 +1491,13 @@ func TestAgent_MultiTurnSnapshotDedup(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "multiDedupFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1553,9 +1553,9 @@ func TestAgent_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "postRunMutateFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil
+				return nil, nil
 			}); err != nil {
 				return nil, err
 			}
@@ -1606,7 +1606,7 @@ func TestAgent_FnPanicReturnsError(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "panicFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendStatus(testStatus{Phase: "before-panic"})
 				panic("boom")
 			})
@@ -1661,7 +1661,7 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 	af := DefineCustomAgent(reg, "cancelFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
 			defer close(fnDone)
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				close(emitting)
 				// Emit until ctx cancels. Without the goroutine's
 				// ctx-aware drain, this would deadlock once the consumer
@@ -1669,7 +1669,7 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 				for {
 					select {
 					case <-ctx.Done():
-						return ctx.Err()
+						return nil, ctx.Err()
 					default:
 					}
 					resp.SendStatus(testStatus{Phase: "tick"})
@@ -1724,6 +1724,25 @@ func waitForSnapshot[State any](
 	return nil
 }
 
+// nextTurnEnd consumes conn's stream until the next TurnEnd chunk and returns
+// a copy of it, failing the test if the stream errors or ends first. Use it
+// in tests that only need to advance to a turn boundary; tests that must
+// inspect intermediate chunks should range over Receive directly.
+func nextTurnEnd[Stream, State any](t *testing.T, conn *AgentConnection[Stream, State]) *TurnEnd {
+	t.Helper()
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		if chunk.TurnEnd != nil {
+			te := *chunk.TurnEnd
+			return &te
+		}
+	}
+	t.Fatal("no TurnEnd chunk observed")
+	return nil
+}
+
 func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 	// Sanity: each TurnEnd chunk carries the snapshot ID of the turn-end
 	// snapshot, and the snapshots themselves are persisted.
@@ -1732,9 +1751,9 @@ func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "turnEndSnapshotFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1798,7 +1817,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachInFlight",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				entered <- struct{}{}
 				<-release
 				sess.AddMessages(ai.NewModelTextMessage("reply-" + input.Message.Text()))
@@ -1806,7 +1825,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1897,11 +1916,11 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachChainParent",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				enter <- struct{}{}
 				<-release
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -1975,8 +1994,8 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachNoStore",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
-				return nil
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, nil
 			})
 		},
 	)
@@ -2010,7 +2029,7 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachComplete",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
 				case <-ctx.Done():
@@ -2021,7 +2040,7 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 					s.Counter = 42
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -2105,7 +2124,7 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachArtifact",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendArtifact(&Artifact{
 					Name:  "before.txt",
 					Parts: []*ai.Part{ai.NewTextPart("pre-detach")},
@@ -2113,14 +2132,14 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 				select {
 				case <-detached:
 				case <-ctx.Done():
-					return ctx.Err()
+					return nil, ctx.Err()
 				}
 				resp.SendArtifact(&Artifact{
 					Name:  "after.txt",
 					Parts: []*ai.Part{ai.NewTextPart("post-detach")},
 				})
 				<-release
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -2182,13 +2201,13 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachErr",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
 				case <-time.After(time.Second):
 				}
 				<-release
-				return boom
+				return nil, boom
 			})
 		},
 		WithSessionStore(store),
@@ -2252,13 +2271,13 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "detachAbort",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
 				case <-time.After(time.Second):
 				}
 				<-ctx.Done()
-				return ctx.Err()
+				return nil, ctx.Err()
 			})
 		},
 		WithSessionStore(store),
@@ -2323,9 +2342,9 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "syncStillWorks",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -2381,13 +2400,13 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "syncCancel",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
 				case <-ctx.Done():
 				}
 				<-ctx.Done()
-				return ctx.Err()
+				return nil, ctx.Err()
 			})
 			exited <- err
 			return nil, err
@@ -2478,9 +2497,9 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "transformedFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("the secret is out"))
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -2538,6 +2557,44 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	}
 	if !foundRaw {
 		t.Error("expected stored snapshot to retain the original 'secret' text")
+	}
+}
+
+// TestAgent_GetSnapshotAction_ReturnsFinishReason verifies the remote
+// getSnapshot companion action surfaces the persisted finish reason, so a
+// non-Go client or the Dev UI polling a detached/background invocation can
+// report how it ended without re-deriving it from the messages.
+func TestAgent_GetSnapshotAction_ReturnsFinishReason(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := DefineCustomAgent(reg, "finishReasonActionFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	action := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+		reg, api.ActionTypeAgentSnapshot, "finishReasonActionFlow")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+	resp, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot action: %v", err)
+	}
+	if resp.FinishReason != AgentFinishReasonStop {
+		t.Errorf("GetSnapshotResponse.FinishReason = %q, want %q", resp.FinishReason, AgentFinishReasonStop)
 	}
 }
 
@@ -2832,12 +2889,12 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "clientXformFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter = 7
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithStateTransform[testState](transform),
@@ -2863,13 +2920,13 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "resumeDetachedFlow",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -3008,7 +3065,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "raceFinalize",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
 				case <-time.After(time.Second):
@@ -3017,7 +3074,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 				// Return cleanly without observing ctx. Without the
 				// subscriber/recheck, this would land status=succeeded and
 				// clobber the abort.
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -3140,9 +3197,9 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "abortNoop",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil
+				return nil, nil
 			})
 		},
 		WithSessionStore(store),
@@ -3191,13 +3248,13 @@ func TestAgent_ResultAndOutput_IsolatedFromSession(t *testing.T) {
 
 	af := DefineCustomAgent(reg, "isolation",
 		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
-			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("session-msg"))
 				sess.AddArtifacts(&Artifact{
 					Name:  "orig",
 					Parts: []*ai.Part{ai.NewTextPart("orig-part")},
 				})
-				return nil
+				return nil, nil
 			}); err != nil {
 				return nil, err
 			}
@@ -3269,5 +3326,674 @@ func TestAgent_Name(t *testing.T) {
 		})
 	if got := a.Name(); got != "name-accessor" {
 		t.Errorf("Name() = %q, want %q", got, "name-accessor")
+	}
+}
+
+// --- Finish reasons ---------------------------------------------------------
+
+// TestAgent_FinishReason_TurnAndInvocation verifies that the reason a custom
+// agent reports per turn (via TurnResult) rides the TurnEnd chunk, is
+// persisted on the turn-end snapshot, and defaults the invocation's reason on
+// AgentOutput.
+func TestAgent_FinishReason_TurnAndInvocation(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := DefineCustomAgent(reg, "finishReasonFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+
+	turnEnd := nextTurnEnd(t, conn)
+	if turnEnd.FinishReason != AgentFinishReasonStop {
+		t.Errorf("TurnEnd.FinishReason = %q, want %q", turnEnd.FinishReason, AgentFinishReasonStop)
+	}
+
+	// The turn-end snapshot records the reason.
+	snap, err := store.GetSnapshot(context.Background(), turnEnd.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap == nil {
+		t.Fatalf("turn-end snapshot %q missing", turnEnd.SnapshotID)
+	}
+	if snap.FinishReason != AgentFinishReasonStop {
+		t.Errorf("snapshot.FinishReason = %q, want %q", snap.FinishReason, AgentFinishReasonStop)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonStop {
+		t.Errorf("AgentOutput.FinishReason = %q, want %q (defaulted from last turn)", out.FinishReason, AgentFinishReasonStop)
+	}
+}
+
+// TestAgent_FinishReason_OmittedWhenNil verifies that returning a nil
+// TurnResult performs no implicit inference: the reason is omitted on both the
+// turn-end signal and the invocation output.
+func TestAgent_FinishReason_OmittedWhenNil(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "noReasonFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return nil, nil
+			})
+		},
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	turnEnd := nextTurnEnd(t, conn)
+	if turnEnd.FinishReason != "" {
+		t.Errorf("TurnEnd.FinishReason = %q, want empty", turnEnd.FinishReason)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != "" {
+		t.Errorf("AgentOutput.FinishReason = %q, want empty", out.FinishReason)
+	}
+}
+
+// TestAgent_FinishReason_InvocationOverride verifies that a custom agent can
+// override the invocation's finish reason via AgentResult.FinishReason without
+// affecting the per-turn reason on TurnEnd.
+func TestAgent_FinishReason_InvocationOverride(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "overrideReasonFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			}); err != nil {
+				return nil, err
+			}
+			res := sess.Result()
+			res.FinishReason = AgentFinishReasonOther
+			return res, nil
+		},
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	turnEnd := nextTurnEnd(t, conn)
+	if turnEnd.FinishReason != AgentFinishReasonStop {
+		t.Errorf("TurnEnd.FinishReason = %q, want %q (per-turn, unaffected by override)", turnEnd.FinishReason, AgentFinishReasonStop)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonOther {
+		t.Errorf("AgentOutput.FinishReason = %q, want %q (override)", out.FinishReason, AgentFinishReasonOther)
+	}
+}
+
+// TestAgent_FinishReason_MultiTurnDistinct verifies that each turn's TurnEnd
+// carries that turn's own reason, and the invocation defaults to the last
+// turn's reason.
+func TestAgent_FinishReason_MultiTurnDistinct(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	// Turn 0 reports "stop"; turn 1 reports "interrupted".
+	reasons := []AgentFinishReason{AgentFinishReasonStop, AgentFinishReasonInterrupted}
+
+	af := DefineCustomAgent(reg, "multiReasonFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return &TurnResult{FinishReason: reasons[sess.TurnIndex]}, nil
+			})
+		},
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	var got []AgentFinishReason
+	for i := 0; i < len(reasons); i++ {
+		if err := conn.SendText("turn"); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		got = append(got, nextTurnEnd(t, conn).FinishReason)
+	}
+	for i, want := range reasons {
+		if got[i] != want {
+			t.Errorf("turn %d TurnEnd.FinishReason = %q, want %q", i, got[i], want)
+		}
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonInterrupted {
+		t.Errorf("AgentOutput.FinishReason = %q, want %q (last turn)", out.FinishReason, AgentFinishReasonInterrupted)
+	}
+}
+
+// TestPromptAgent_ForwardsFinishReason verifies that a prompt-backed agent
+// forwards the underlying generate response's finish reason automatically.
+func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+	ai.DefineModel(reg, "test/length", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{
+				Request:      req,
+				Message:      ai.NewModelTextMessage("partial"),
+				FinishReason: ai.FinishReasonLength,
+			}, nil
+		},
+	)
+	ai.DefineGenerateAction(ctx, reg)
+	ai.DefinePrompt(reg, "lengthPrompt", ai.WithModelName("test/length"))
+
+	af := DefineAgent[testState](reg, "lengthPrompt", FromPrompt())
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	turnEnd := nextTurnEnd(t, conn)
+	if turnEnd.FinishReason != AgentFinishReasonLength {
+		t.Errorf("TurnEnd.FinishReason = %q, want %q", turnEnd.FinishReason, AgentFinishReasonLength)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonLength {
+		t.Errorf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonLength)
+	}
+}
+
+// TestAgent_Detach_FinishReasons covers the three detach outcomes: the output
+// returned to the detaching client always reports "detached", while the
+// persisted snapshot records how the background work actually ended
+// (succeeded -> last turn's reason, failed, or aborted).
+func TestAgent_Detach_FinishReasons(t *testing.T) {
+	t.Run("complete", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+		release := make(chan struct{})
+		entered := make(chan struct{})
+
+		af := DefineCustomAgent(reg, "detachReasonComplete",
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					select {
+					case entered <- struct{}{}:
+					case <-ctx.Done():
+					}
+					<-release
+					sess.AddMessages(ai.NewModelTextMessage("done"))
+					return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.StreamBidi(context.Background())
+		if err != nil {
+			t.Fatalf("StreamBidi: %v", err)
+		}
+		go func() {
+			for _, err := range conn.Receive() {
+				if err != nil {
+					return
+				}
+			}
+		}()
+		if err := conn.SendText("go"); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		<-entered
+
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if out.FinishReason != AgentFinishReasonDetached {
+			t.Errorf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+		}
+
+		close(release)
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusSucceeded
+		})
+		if snap.FinishReason != AgentFinishReasonStop {
+			t.Errorf("finalized snapshot.FinishReason = %q, want %q", snap.FinishReason, AgentFinishReasonStop)
+		}
+	})
+
+	t.Run("failed", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+		release := make(chan struct{})
+		entered := make(chan struct{})
+
+		af := DefineCustomAgent(reg, "detachReasonFailed",
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					select {
+					case entered <- struct{}{}:
+					case <-time.After(time.Second):
+					}
+					<-release
+					return nil, errors.New("kaboom")
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.StreamBidi(context.Background())
+		if err != nil {
+			t.Fatalf("StreamBidi: %v", err)
+		}
+		go func() {
+			for _, err := range conn.Receive() {
+				if err != nil {
+					return
+				}
+			}
+		}()
+		if err := conn.SendText("go"); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		<-entered
+
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if out.FinishReason != AgentFinishReasonDetached {
+			t.Errorf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+		}
+
+		close(release)
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusFailed
+		})
+		if snap.FinishReason != AgentFinishReasonFailed {
+			t.Errorf("finalized snapshot.FinishReason = %q, want %q", snap.FinishReason, AgentFinishReasonFailed)
+		}
+	})
+
+	t.Run("aborted", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+		entered := make(chan struct{})
+
+		af := DefineCustomAgent(reg, "detachReasonAborted",
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					select {
+					case entered <- struct{}{}:
+					case <-time.After(time.Second):
+					}
+					<-ctx.Done()
+					return nil, ctx.Err()
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.StreamBidi(context.Background())
+		if err != nil {
+			t.Fatalf("StreamBidi: %v", err)
+		}
+		go func() {
+			for _, err := range conn.Receive() {
+				if err != nil {
+					return
+				}
+			}
+		}()
+		if err := conn.SendText("go"); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("Detach: %v", err)
+		}
+		<-entered
+
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if _, err := store.AbortSnapshot(context.Background(), out.SnapshotID); err != nil {
+			t.Fatalf("AbortSnapshot: %v", err)
+		}
+		// AbortSnapshot flips status=aborted (finishReason still empty); the
+		// finalizer then annotates the row with finishReason=aborted. Wait
+		// for that second write rather than the bare status flip.
+		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusAborted && s.FinishReason == AgentFinishReasonAborted
+		})
+		if snap.Status != SnapshotStatusAborted {
+			t.Errorf("finalized snapshot.Status = %q, want %q", snap.Status, SnapshotStatusAborted)
+		}
+	})
+}
+
+// TestAgent_FinishReason_InvocationOverride_Persisted verifies that when a
+// custom agent overrides the invocation reason (differing from the last
+// turn's), the dedup does not collapse it onto the turn-end snapshot: a
+// distinct invocation-end snapshot is written carrying the override, so the
+// snapshot AgentOutput points at agrees with AgentOutput.FinishReason.
+func TestAgent_FinishReason_InvocationOverride_Persisted(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := DefineCustomAgent(reg, "overridePersistedFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			}); err != nil {
+				return nil, err
+			}
+			res := sess.Result()
+			res.FinishReason = AgentFinishReasonOther
+			return res, nil
+		},
+		WithSessionStore(store),
+	)
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonOther {
+		t.Fatalf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonOther)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected a snapshot ID")
+	}
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.FinishReason != out.FinishReason {
+		t.Errorf("persisted snapshot.FinishReason = %q, want %q (must agree with AgentOutput)", snap.FinishReason, out.FinishReason)
+	}
+	// The override must be a fresh invocation-end snapshot, not the turn-end
+	// row mutated or reused: the divergent reason busts the dedup.
+	if snap.Event != SnapshotEventInvocationEnd {
+		t.Errorf("snapshot.Event = %q, want %q (a distinct invocation-end snapshot)", snap.Event, SnapshotEventInvocationEnd)
+	}
+}
+
+// TestAgent_FinishReason_MultiTurnDistinct_Persisted verifies each turn-end
+// snapshot persists that turn's own reason and chains to its parent.
+func TestAgent_FinishReason_MultiTurnDistinct_Persisted(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	reasons := []AgentFinishReason{AgentFinishReasonStop, AgentFinishReasonInterrupted}
+
+	af := DefineCustomAgent(reg, "multiReasonPersistedFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return &TurnResult{FinishReason: reasons[sess.TurnIndex]}, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	var ids []string
+	for i := 0; i < len(reasons); i++ {
+		if err := conn.SendText("turn"); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		te := nextTurnEnd(t, conn)
+		if te.FinishReason != reasons[i] {
+			t.Errorf("turn %d TurnEnd.FinishReason = %q, want %q", i, te.FinishReason, reasons[i])
+		}
+		ids = append(ids, te.SnapshotID)
+	}
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+
+	for i, id := range ids {
+		snap, err := store.GetSnapshot(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetSnapshot[%d]: %v", i, err)
+		}
+		if snap.FinishReason != reasons[i] {
+			t.Errorf("snapshot[%d].FinishReason = %q, want %q", i, snap.FinishReason, reasons[i])
+		}
+	}
+	// The second turn's snapshot chains to the first.
+	snap1, _ := store.GetSnapshot(context.Background(), ids[1])
+	if snap1.ParentID != ids[0] {
+		t.Errorf("snapshot[1].ParentID = %q, want %q", snap1.ParentID, ids[0])
+	}
+}
+
+// TestAgent_FinishReason_OmittedPersisted verifies a turn that reports no
+// reason persists an empty finishReason (no implicit inference at rest).
+func TestAgent_FinishReason_OmittedPersisted(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := DefineCustomAgent(reg, "noReasonPersistedFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("ok"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	snapID := nextTurnEnd(t, conn).SnapshotID
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	snap, err := store.GetSnapshot(context.Background(), snapID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.FinishReason != "" {
+		t.Errorf("snapshot.FinishReason = %q, want empty", snap.FinishReason)
+	}
+}
+
+// TestPromptAgent_ForwardsInterruptedFinishReason drives a real interrupted
+// generate response through the prompt-backed loop: the turn must stream the
+// interrupt parts AND report finishReason=interrupted (the proposal's
+// motivating case), without the client scanning message content.
+func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
+	ctx := context.Background()
+	reg := registry.New()
+	ai.ConfigureFormats(reg)
+
+	interruptTool := ai.DefineTool(reg, "interruptor", "always interrupts",
+		func(tc *ai.ToolContext, input any) (any, error) {
+			return nil, tc.Interrupt(&ai.InterruptOptions{
+				Metadata: map[string]any{"reason": "needs approval"},
+			})
+		},
+	)
+	ai.DefineModel(reg, "test/interrupt", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{
+				Request: req,
+				Message: &ai.Message{
+					Role:    ai.RoleModel,
+					Content: []*ai.Part{ai.NewToolRequestPart(&ai.ToolRequest{Name: "interruptor"})},
+				},
+			}, nil
+		})
+	ai.DefineGenerateAction(ctx, reg)
+	ai.DefinePrompt(reg, "interruptPrompt",
+		ai.WithModelName("test/interrupt"),
+		ai.WithTools(interruptTool),
+	)
+
+	af := DefineAgent[testState](reg, "interruptPrompt", FromPrompt())
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("do it"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	var (
+		turnEnd      *TurnEnd
+		gotToolChunk bool
+	)
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		if chunk.ModelChunk != nil && chunk.ModelChunk.Role == ai.RoleTool {
+			gotToolChunk = true
+		}
+		if chunk.TurnEnd != nil {
+			te := *chunk.TurnEnd
+			turnEnd = &te
+			break
+		}
+	}
+	if !gotToolChunk {
+		t.Error("expected a tool-role chunk carrying the interrupt parts")
+	}
+	if turnEnd == nil || turnEnd.FinishReason != AgentFinishReasonInterrupted {
+		t.Fatalf("TurnEnd.FinishReason = %v, want %q", turnEnd, AgentFinishReasonInterrupted)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonInterrupted {
+		t.Errorf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonInterrupted)
+	}
+}
+
+// TestAgent_Detach_SucceededHonorsResultOverride verifies the detach finalizer
+// applies an AgentResult.FinishReason override on clean success, matching the
+// synchronous path (the override does not leak into the failed/aborted cases,
+// which are covered by TestAgent_Detach_FinishReasons).
+func TestAgent_Detach_SucceededHonorsResultOverride(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+
+	af := DefineCustomAgent(reg, "detachOverride",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			}); err != nil {
+				return nil, err
+			}
+			res := sess.Result()
+			res.FinishReason = AgentFinishReasonOther
+			return res, nil
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	<-entered
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonDetached {
+		t.Errorf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+	}
+
+	close(release)
+	snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusSucceeded
+	})
+	if snap.FinishReason != AgentFinishReasonOther {
+		t.Errorf("finalized snapshot.FinishReason = %q, want %q (AgentResult override)", snap.FinishReason, AgentFinishReasonOther)
 	}
 }

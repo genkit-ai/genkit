@@ -59,6 +59,16 @@ type SessionRunner[State any] struct {
 	lastSnapshotVersion uint64
 	collectTurnOutput   func() any
 
+	// lastTurnFinishReason is the finish reason reported by the most recent
+	// turn (via the [TurnResult] its callback returned), or "" if the turn
+	// reported none. It is written by Run before [SessionRunner.onEndTurn]
+	// and read by the runtime when emitting the turn-end signal and when
+	// defaulting the invocation's finish reason. All accesses are confined
+	// to the fn goroutine (Run and its synchronous onEndTurn callback) until
+	// fn completes, after which the terminal paths read it with a
+	// happens-before edge through the fnDone channel, so no lock is needed.
+	lastTurnFinishReason AgentFinishReason
+
 	// intake is the source of truth for in-flight tracking, queue state,
 	// and suspended state. The session consults it via beginTurnEnd (in
 	// maybeSnapshot) so per-turn snapshot writes and detach captures
@@ -76,11 +86,29 @@ func (s *SessionRunner[State]) parentSnapshotID() string {
 	return s.lastSnapshot.SnapshotID
 }
 
+// TurnResult is the optional return value of a [SessionRunner.Run] per-turn
+// callback. It lets a custom agent report how the turn ended; the framework
+// forwards the reason on the turn's [TurnEnd] chunk, persists it on the
+// turn-end snapshot, and uses it to default the invocation's finish reason.
+//
+// Returning nil (or a zero TurnResult) omits the reason: the framework
+// performs no implicit inference. A prompt-backed agent populates it
+// automatically from the underlying generate response.
+type TurnResult struct {
+	// FinishReason is why this turn ended (e.g. [AgentFinishReasonStop],
+	// [AgentFinishReasonInterrupted]). Empty to report no reason.
+	FinishReason AgentFinishReason
+}
+
 // Run loops over the input channel, calling fn for each turn. Each turn is
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
 // TurnEnd chunk is sent and a snapshot check is triggered.
-func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) error) error {
+//
+// fn may return a [TurnResult] to report how the turn ended (e.g. its finish
+// reason); returning nil reports nothing. The reason rides the turn's
+// [TurnEnd] chunk and is persisted on the turn-end snapshot.
+func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) (*TurnResult, error)) error {
 	for input := range s.InputCh {
 		spanMeta := &tracing.SpanMetadata{
 			Name:    fmt.Sprintf("agent/turn/%d", s.TurnIndex),
@@ -92,8 +120,15 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 				if input.Message != nil {
 					s.AddMessages(input.Message)
 				}
-				if err := fn(ctx, input); err != nil {
+				tr, err := fn(ctx, input)
+				if err != nil {
 					return nil, err
+				}
+				// Reset each turn; a returned TurnResult sets the reason,
+				// nil reports none.
+				s.lastTurnFinishReason = ""
+				if tr != nil {
+					s.lastTurnFinishReason = tr.FinishReason
 				}
 				s.onEndTurn(ctx)
 				s.TurnIndex++
@@ -131,16 +166,28 @@ func (s *SessionRunner[State]) Result() *AgentResult {
 	return result
 }
 
+// invocationReason resolves the finish reason for the whole invocation: the
+// last turn's reason, unless the agent's result overrides it with a non-empty
+// one. Shared by the synchronous-completion and detach-finalize paths.
+func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinishReason {
+	if result != nil && result.FinishReason != "" {
+		return result.FinishReason
+	}
+	return s.lastTurnFinishReason
+}
+
 // maybeSnapshot creates a snapshot if conditions are met (store configured,
 // callback approves, state changed, detach has not suspended snapshots).
-// Returns the snapshot ID or empty string.
+// Returns the snapshot ID or empty string. finishReason is recorded on the
+// snapshot so a resumed or background task can report how the captured turn
+// or invocation ended.
 //
 // For turn-end events, the session asks the intake whether snapshots
 // have been suspended (i.e. detach has landed). If so, the session skips
 // the turn-end snapshot — the pending row already captures the
 // invocation and a single finalize rewrite will record the cumulative
 // state once the queued inputs drain.
-func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent) string {
+func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent, finishReason AgentFinishReason) string {
 	if event == SnapshotEventTurnEnd && s.intake != nil {
 		if suspended := s.intake.beginTurnEnd(); suspended {
 			return ""
@@ -156,11 +203,16 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 	currentState := s.copyStateLocked()
 	s.mu.RUnlock()
 
-	// Skip if state hasn't changed since the last snapshot. This avoids
-	// redundant snapshots, e.g. the invocation-end snapshot after a
-	// single-turn Run where the turn-end snapshot already captured the
-	// same state.
-	if s.lastSnapshot != nil && currentVersion == s.lastSnapshotVersion {
+	// Skip only if this snapshot would be identical to the last one: same
+	// state AND same finish reason. This dedups the common invocation-end
+	// snapshot after a single-turn Run (the turn-end snapshot already
+	// captured the same state and reason), but still writes when the
+	// invocation reports a different reason than the last turn (e.g. a
+	// custom agent overrode it on its AgentResult) — that snapshot is not
+	// redundant, it carries a new reason.
+	if s.lastSnapshot != nil &&
+		currentVersion == s.lastSnapshotVersion &&
+		finishReason == s.lastSnapshot.FinishReason {
 		return ""
 	}
 
@@ -184,10 +236,11 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 	saved, err := s.store.SaveSnapshot(ctx, "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
-				ParentID: parentID,
-				Event:    event,
-				Status:   SnapshotStatusSucceeded,
-				State:    &currentState,
+				ParentID:     parentID,
+				Event:        event,
+				Status:       SnapshotStatusSucceeded,
+				FinishReason: finishReason,
+				State:        &currentState,
 			}, nil
 		})
 	if err != nil {
@@ -439,9 +492,11 @@ func newAgentRuntime[Stream, State any](
 // a turn-end snapshot (if applicable) and forwards the resulting [TurnEnd]
 // chunk through the router so clients see it on the output stream.
 func (rt *agentRuntime[Stream, State]) emitTurnEnd(ctx context.Context) {
-	snapshotID := rt.sess.maybeSnapshot(ctx, SnapshotEventTurnEnd)
+	reason := rt.sess.lastTurnFinishReason
+	snapshotID := rt.sess.maybeSnapshot(ctx, SnapshotEventTurnEnd, reason)
 	rt.router.sendChunk(ctx, &AgentStreamChunk[Stream]{TurnEnd: &TurnEnd{
-		SnapshotID: snapshotID,
+		SnapshotID:   snapshotID,
+		FinishReason: reason,
 	}})
 }
 
@@ -573,14 +628,19 @@ func (rt *agentRuntime[Stream, State]) handleFnDone(
 		return nil, res.err
 	}
 
-	snapshotID := rt.sess.maybeSnapshot(ctx, SnapshotEventInvocationEnd)
+	invocationReason := rt.sess.invocationReason(res.result)
+	snapshotID := rt.sess.maybeSnapshot(ctx, SnapshotEventInvocationEnd, invocationReason)
 	if snapshotID == "" && rt.sess.lastSnapshot != nil {
-		// State unchanged since the last turn-end snapshot — reuse it so
-		// the response always carries an ID when a store is configured.
+		// No new row was written; reuse the last snapshot so the response
+		// always carries an ID when a store is configured. On the dedup path
+		// the reused row is genuinely identical (same state and reason). If
+		// the snapshot callback declined the write or the save failed, the
+		// reused row is the last turn-end snapshot, whose reason (and state)
+		// may lag what this output reports.
 		snapshotID = rt.sess.lastSnapshot.SnapshotID
 	}
 
-	out := &AgentOutput[State]{SnapshotID: snapshotID}
+	out := &AgentOutput[State]{SnapshotID: snapshotID, FinishReason: invocationReason}
 	if res.result != nil {
 		// Deep-copy at the framework boundary so the caller cannot
 		// mutate session contents through the returned output, even
@@ -657,11 +717,17 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 		stopSub()
 		rt.intake.stopAndWait()
 		rt.router.close()
-		rt.finalizePendingSnapshot(finalizeCtx, pending, res.err, abortedByUser.Load())
+		rt.finalizePendingSnapshot(finalizeCtx, pending, res.result, res.err, abortedByUser.Load())
 		cancelWork()
 	}()
 
-	return &AgentOutput[State]{SnapshotID: pending.SnapshotID}, nil
+	// The invocation, from the client's perspective, ended by detaching. The
+	// pending snapshot is finalized later with how the background work
+	// actually ended (see finalizePendingSnapshot).
+	return &AgentOutput[State]{
+		SnapshotID:   pending.SnapshotID,
+		FinishReason: AgentFinishReasonDetached,
+	}, nil
 }
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
@@ -674,37 +740,58 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 func (rt *agentRuntime[Stream, State]) finalizePendingSnapshot(
 	ctx context.Context,
 	pending *SessionSnapshot[State],
+	result *AgentResult,
 	fnErr error,
 	abortedByUser bool,
 ) {
 	finalState := *rt.session.State()
+	// Captured outside the SaveSnapshot callback (which must stay pure): the
+	// finalizer runs after fn returned, so this is stable. The abort/error
+	// branches below own their reasons and ignore this clean-success default.
+	succeededReason := rt.sess.invocationReason(result)
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
-			// Late abort wins over the terminal we were about to land.
+			// Late abort wins over the terminal we were about to land: keep
+			// the aborted status and whatever state the abort left, but
+			// stamp the aborted finish reason so the snapshot is
+			// self-describing. (AbortSnapshot only flips status; the runtime
+			// owns the semantic reason.) Skip the write once already stamped.
 			if existing != nil && existing.Status == SnapshotStatusAborted {
-				return nil, nil
+				if existing.FinishReason == AgentFinishReasonAborted {
+					return nil, nil
+				}
+				annotated := *existing
+				annotated.FinishReason = AgentFinishReasonAborted
+				return &annotated, nil
 			}
 
 			status := SnapshotStatusSucceeded
+			// The persisted finish reason records how the background work
+			// actually ended, distinct from the detached reason the client
+			// already saw on AgentOutput.
+			finishReason := succeededReason
 			var snapErr *core.GenkitError
 			switch {
 			case abortedByUser:
 				status = SnapshotStatusAborted
+				finishReason = AgentFinishReasonAborted
 				if fnErr != nil {
 					snapErr = core.AsGenkitError(fnErr) // aborted wins, preserve text
 				}
 			case fnErr != nil:
 				status = SnapshotStatusFailed
+				finishReason = AgentFinishReasonFailed
 				snapErr = core.AsGenkitError(fnErr)
 			}
 
 			return &SessionSnapshot[State]{
-				ParentID: pending.ParentID,
-				Event:    SnapshotEventDetach,
-				Status:   status,
-				Error:    snapErr,
-				State:    &finalState,
+				ParentID:     pending.ParentID,
+				Event:        SnapshotEventDetach,
+				Status:       status,
+				FinishReason: finishReason,
+				Error:        snapErr,
+				State:        &finalState,
 			}, nil
 		})
 	if err != nil {
@@ -1218,14 +1305,14 @@ func validateUserMessage(m *ai.Message) error {
 // input.
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
 	return func(ctx context.Context, resp Responder[any], sess *SessionRunner[State]) (*AgentResult, error) {
-		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) error {
+		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 			if err := validateUserMessage(input.Message); err != nil {
-				return err
+				return nil, err
 			}
 
 			actionOpts, err := prompt.Render(ctx, defaultInput)
 			if err != nil {
-				return fmt.Errorf("prompt render: %w", err)
+				return nil, fmt.Errorf("prompt render: %w", err)
 			}
 
 			// Tag base messages so they can be filtered out of session
@@ -1257,7 +1344,7 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				},
 			)
 			if err != nil {
-				return fmt.Errorf("generate: %w", err)
+				return nil, fmt.Errorf("generate: %w", err)
 			}
 
 			// Replace session messages with the full history minus base
@@ -1288,7 +1375,11 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 				}
 			}
 
-			return nil
+			// Forward the generate response's finish reason verbatim: the
+			// agent enum is a superset of the model enum for these values,
+			// so the turn (and a single-turn invocation) reports e.g.
+			// "interrupted" without the client scanning message content.
+			return &TurnResult{FinishReason: AgentFinishReason(modelResp.FinishReason)}, nil
 		}); err != nil {
 			return nil, err
 		}

@@ -34,6 +34,20 @@ warnings.filterwarnings(
 )
 
 
+class AgentFinishReason(StrEnum):
+    """AgentFinishReason data type class."""
+
+    STOP = 'stop'
+    LENGTH = 'length'
+    BLOCKED = 'blocked'
+    INTERRUPTED = 'interrupted'
+    OTHER = 'other'
+    UNKNOWN = 'unknown'
+    ABORTED = 'aborted'
+    DETACHED = 'detached'
+    FAILED = 'failed'
+
+
 class AgentStateManagement(StrEnum):
     """AgentStateManagement data type class."""
 
@@ -151,6 +165,7 @@ class AgentOutput(GenkitModel):
     state: SessionState | None = None
     message: MessageData | None = None
     artifacts: list[Artifact] | None = None
+    finish_reason: AgentFinishReason | None = None
 
 
 class AgentResult(GenkitModel):
@@ -159,6 +174,7 @@ class AgentResult(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     message: MessageData | None = None
     artifacts: list[Artifact] | None = None
+    finish_reason: AgentFinishReason | None = None
 
 
 class AgentStreamChunk(GenkitModel):
@@ -195,6 +211,7 @@ class GetSnapshotResponse(GenkitModel):
     created_at: str | None = None
     updated_at: str | None = None
     status: SnapshotStatus | None = None
+    finish_reason: AgentFinishReason | None = None
     error: Any | None = Field(default=None)
     state: SessionState | None = None
 
@@ -209,6 +226,7 @@ class SessionSnapshot(GenkitModel):
     updated_at: str | None = None
     event: SnapshotEvent = Field(...)
     status: SnapshotStatus | None = None
+    finish_reason: AgentFinishReason | None = None
     error: Error | None = None
     state: SessionState | None = None
 
@@ -227,6 +245,7 @@ class TurnEnd(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str | None = None
+    finish_reason: AgentFinishReason | None = None
 
 
 class DocumentData(GenkitModel):

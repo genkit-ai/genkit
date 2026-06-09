@@ -522,22 +522,26 @@ func DefineAgent[State any](
 //	chatAgent := genkit.DefineCustomAgent(g, "chat",
 //		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 //			var lastMessage *ai.Message
-//			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) error {
+//			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+//				var reason aix.AgentFinishReason
 //				for result, err := range genkit.GenerateStream(ctx, g,
 //					ai.WithModelName("googleai/gemini-3-flash-preview"),
 //					ai.WithMessages(sess.Messages()...),
 //				) {
 //					if err != nil {
-//						return err
+//						return nil, err
 //					}
 //					if result.Done {
 //						lastMessage = result.Response.Message
+//						reason = aix.AgentFinishReason(result.Response.FinishReason)
 //						sess.AddMessages(lastMessage)
 //					} else {
 //						resp.SendModelChunk(result.Chunk)
 //					}
 //				}
-//				return nil
+//				// Report how the turn ended; the framework forwards it on
+//				// the TurnEnd chunk and persists it on the snapshot.
+//				return &aix.TurnResult{FinishReason: reason}, nil
 //			})
 //			if err != nil {
 //				return nil, err

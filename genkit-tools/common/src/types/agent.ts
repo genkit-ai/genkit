@@ -74,6 +74,42 @@ export const SnapshotStatusSchema = z.enum([
 export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
 
 /**
+ * Zod schema for the reason an agent turn or invocation finished.
+ *
+ * The first group mirrors the model-level `FinishReasonSchema` so a turn
+ * backed by a single `generate` call can forward its reason verbatim:
+ *
+ * - `stop`: the model stopped naturally.
+ * - `length`: generation hit the token limit.
+ * - `blocked`: generation was blocked (e.g. safety).
+ * - `interrupted`: the model paused on a tool request awaiting input
+ *   (e.g. human approval); the turn can be resumed with a `resume` payload.
+ * - `other` / `unknown`: anything else / unspecified.
+ *
+ * The remaining values are agent-specific outcomes with no `generate`-level
+ * equivalent (they never arise from forwarding a model finish reason):
+ *
+ * - `aborted`: the turn or invocation was aborted (e.g. a detached
+ *   invocation aborted via the `abortSnapshot` companion action).
+ * - `detached`: the invocation was moved to the background (the client
+ *   detached). The returned output reports `detached`; the persisted
+ *   snapshot is later finalized with how the background work actually ended.
+ * - `failed`: the turn or invocation terminated with an error.
+ */
+export const AgentFinishReasonSchema = z.enum([
+  'stop',
+  'length',
+  'blocked',
+  'interrupted',
+  'other',
+  'unknown',
+  'aborted',
+  'detached',
+  'failed',
+]);
+export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
+
+/**
  * Zod schema for session state.
  */
 export const SessionStateSchema = z.object({
@@ -131,6 +167,11 @@ export const AgentResultSchema = z.object({
   message: MessageSchema.optional(),
   /** Artifacts produced during the session. */
   artifacts: z.array(ArtifactSchema).optional(),
+  /**
+   * Why the invocation finished. Set by a custom agent to override the
+   * default (the last turn's reason); omitted to accept the default.
+   */
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 export type AgentResult = z.infer<typeof AgentResultSchema>;
 
@@ -146,6 +187,12 @@ export const AgentOutputSchema = z.object({
   message: MessageSchema.optional(),
   /** Artifacts produced during the session. */
   artifacts: z.array(ArtifactSchema).optional(),
+  /**
+   * Why the invocation finished. `detached` when the client detached and
+   * the work continues in the background; otherwise the last turn's reason
+   * (or the value a custom agent set on its result).
+   */
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
@@ -164,6 +211,12 @@ export const TurnEndSchema = z.object({
    * snapshots were suspended after detach).
    */
   snapshotId: z.string().optional(),
+  /**
+   * Why this turn finished (e.g. `stop`, `length`, `interrupted`). Lets a
+   * caller react to a turn boundary (e.g. pause on `interrupted`) without
+   * scanning the message content. Omitted when the turn reported no reason.
+   */
+  finishReason: AgentFinishReasonSchema.optional(),
 });
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
@@ -204,6 +257,19 @@ export const SessionSnapshotSchema = z.object({
   event: SnapshotEventSchema,
   /** Lifecycle state of this snapshot. Empty is treated as `succeeded`. */
   status: SnapshotStatusSchema.optional(),
+  /**
+   * Semantic reason the turn or invocation captured here ended (e.g.
+   * `stop`, `interrupted`, `failed`, `aborted`). Complements `status` (the
+   * persistence lifecycle) so a resumed or background task can report how it
+   * ended without re-deriving it from the messages.
+   *
+   * On an aborted snapshot this is best-effort and may briefly lag `status`:
+   * `abortSnapshot` flips `status` to `aborted` immediately, while the
+   * `aborted` finish reason is stamped by a subsequent finalizer write. If
+   * the process running the invocation never finalizes, the reason can
+   * remain empty even though `status` is `aborted`.
+   */
+  finishReason: AgentFinishReasonSchema.optional(),
   /** Structured failure information for a snapshot in `failed` status. */
   error: z
     .object({
@@ -249,6 +315,13 @@ export const GetSnapshotResponseSchema = z.object({
   updatedAt: z.string().optional(),
   /** Lifecycle state of the snapshot. */
   status: SnapshotStatusSchema.optional(),
+  /**
+   * Semantic reason the captured turn or invocation ended (e.g. `stop`,
+   * `interrupted`, `failed`, `aborted`). Lets a remote or background poller
+   * report how a detached/resumed invocation ended without re-deriving it.
+   * Empty on a pending snapshot.
+   */
+  finishReason: AgentFinishReasonSchema.optional(),
   /** Structured failure information; populated when status is `error`. */
   error: z.any().optional(),
   /**

@@ -28,6 +28,20 @@
       ],
       "additionalProperties": false
     },
+    "AgentFinishReason": {
+      "type": "string",
+      "enum": [
+        "stop",
+        "length",
+        "blocked",
+        "interrupted",
+        "other",
+        "unknown",
+        "aborted",
+        "detached",
+        "failed"
+      ]
+    },
     "AgentInit": {
       "type": "object",
       "properties": {
@@ -103,6 +117,9 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
         }
       },
       "additionalProperties": false
@@ -118,6 +135,9 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
         }
       },
       "additionalProperties": false
@@ -194,6 +214,9 @@
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
         },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        },
         "error": {},
         "state": {
           "$ref": "#/$defs/SessionState"
@@ -224,6 +247,9 @@
         },
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
         },
         "error": {
           "type": "object",
@@ -293,6 +319,9 @@
       "properties": {
         "snapshotId": {
           "type": "string"
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
         }
       },
       "additionalProperties": false

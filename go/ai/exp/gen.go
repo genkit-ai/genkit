@@ -41,6 +41,48 @@ type AbortSnapshotResponse struct {
 	Status SnapshotStatus `json:"status,omitempty"`
 }
 
+// AgentFinishReason is why an agent turn or invocation finished.
+//
+// The first group mirrors the model-level [ai.FinishReason] so a turn backed
+// by a single generate call can forward its reason verbatim:
+// [AgentFinishReasonStop], [AgentFinishReasonLength],
+// [AgentFinishReasonBlocked], [AgentFinishReasonInterrupted],
+// [AgentFinishReasonOther] and [AgentFinishReasonUnknown].
+//
+// The remaining values are agent-specific outcomes with no generate-level
+// equivalent (they never arise from forwarding a model finish reason):
+// [AgentFinishReasonAborted], [AgentFinishReasonDetached] and
+// [AgentFinishReasonFailed].
+type AgentFinishReason string
+
+const (
+	// AgentFinishReasonStop indicates the model stopped naturally.
+	AgentFinishReasonStop AgentFinishReason = "stop"
+	// AgentFinishReasonLength indicates generation hit the token limit.
+	AgentFinishReasonLength AgentFinishReason = "length"
+	// AgentFinishReasonBlocked indicates generation was blocked (e.g. safety).
+	AgentFinishReasonBlocked AgentFinishReason = "blocked"
+	// AgentFinishReasonInterrupted indicates the model paused on a tool request
+	// awaiting input (e.g. human approval). The turn can be resumed by sending an
+	// [AgentInput] with a Resume payload.
+	AgentFinishReasonInterrupted AgentFinishReason = "interrupted"
+	// AgentFinishReasonOther indicates generation stopped for some other reason.
+	AgentFinishReasonOther AgentFinishReason = "other"
+	// AgentFinishReasonUnknown indicates the reason was unspecified.
+	AgentFinishReasonUnknown AgentFinishReason = "unknown"
+	// AgentFinishReasonAborted indicates the turn or invocation was aborted
+	// (e.g. a detached invocation aborted via the abortSnapshot companion action).
+	AgentFinishReasonAborted AgentFinishReason = "aborted"
+	// AgentFinishReasonDetached indicates the invocation was moved to the
+	// background because the client detached. The returned [AgentOutput] reports
+	// this reason; the persisted snapshot is later finalized with how the
+	// background work actually ended.
+	AgentFinishReasonDetached AgentFinishReason = "detached"
+	// AgentFinishReasonFailed indicates the turn or invocation terminated with an
+	// error.
+	AgentFinishReasonFailed AgentFinishReason = "failed"
+)
+
 // AgentInit is the input for starting an agent invocation.
 // Exactly one of SnapshotID or State may be set, and the choice must match
 // the agent's state management:
@@ -108,6 +150,11 @@ type AgentMetadata struct {
 type AgentOutput[State any] struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
+	// FinishReason is why the invocation finished. It is
+	// [AgentFinishReasonDetached] when the client detached and the work continues
+	// in the background; otherwise it is the last turn's reason (or the value a
+	// custom agent set on its [AgentResult]).
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
 	// SnapshotID is the ID of the snapshot created at the end of this invocation.
@@ -123,6 +170,10 @@ type AgentOutput[State any] struct {
 type AgentResult struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
+	// FinishReason is why the invocation finished. A custom agent may set it to
+	// override the default (the last turn's reason); leave it empty to accept the
+	// default.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
 }
@@ -193,6 +244,12 @@ type GetSnapshotResponse[State any] struct {
 	// Error is the structured failure information; populated when Status
 	// is [SnapshotStatusFailed].
 	Error *core.GenkitError `json:"error,omitempty"`
+	// FinishReason is the semantic reason the captured turn or invocation ended
+	// (e.g. [AgentFinishReasonStop], [AgentFinishReasonInterrupted],
+	// [AgentFinishReasonFailed], [AgentFinishReasonAborted]). It lets a remote or
+	// background poller report how a detached or resumed invocation ended without
+	// re-deriving it. Empty on a pending snapshot.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// SnapshotID echoes the requested snapshot ID.
 	SnapshotID string `json:"snapshotId"`
 	// State is the session state captured by the snapshot, after any
@@ -215,6 +272,19 @@ type SessionSnapshot[State any] struct {
 	Error *core.GenkitError `json:"error,omitempty"`
 	// Event is what triggered this snapshot.
 	Event SnapshotEvent `json:"event"`
+	// FinishReason is the semantic reason the turn or invocation captured here
+	// ended (e.g. [AgentFinishReasonStop], [AgentFinishReasonInterrupted],
+	// [AgentFinishReasonFailed], [AgentFinishReasonAborted]). It complements
+	// [SessionSnapshot.Status] (the persistence lifecycle) so a resumed or
+	// background task can report how it ended without re-deriving it from the
+	// messages.
+	//
+	// On an aborted snapshot this is best-effort and may briefly lag Status:
+	// AbortSnapshot flips Status to [SnapshotStatusAborted] immediately, while the
+	// [AgentFinishReasonAborted] finish reason is stamped by a subsequent finalizer
+	// write. If the process running the invocation never finalizes, the reason can
+	// remain empty even though Status is [SnapshotStatusAborted].
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// ParentID is the ID of the previous snapshot in this timeline.
 	ParentID string `json:"parentId,omitempty"`
 	// SnapshotID is the unique identifier for this snapshot (UUID).
@@ -294,6 +364,11 @@ const (
 // A TurnEnd value is emitted exactly once per turn, regardless of whether a
 // snapshot was persisted.
 type TurnEnd struct {
+	// FinishReason is why this turn finished (e.g. [AgentFinishReasonStop],
+	// [AgentFinishReasonInterrupted]). It lets a caller react to a turn boundary
+	// (such as pausing on an interrupt) without scanning the message content.
+	// Empty when the turn reported no reason.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
 	// Empty if no snapshot was created (callback returned false or no store
 	// configured, or snapshots were suspended after detach).

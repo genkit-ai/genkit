@@ -234,11 +234,12 @@ func registerSnapshotActions[State any](
 			}
 
 			resp := &GetSnapshotResponse[State]{
-				SnapshotID: snap.SnapshotID,
-				CreatedAt:  snap.CreatedAt,
-				UpdatedAt:  updatedAt,
-				Status:     status,
-				Error:      snap.Error,
+				SnapshotID:   snap.SnapshotID,
+				CreatedAt:    snap.CreatedAt,
+				UpdatedAt:    updatedAt,
+				Status:       status,
+				FinishReason: snap.FinishReason,
+				Error:        snap.Error,
 			}
 			if status != SnapshotStatusFailed && status != SnapshotStatusPending {
 				resp.State = applyTransform(ctx, transform, snap.State)
