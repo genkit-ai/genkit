@@ -38,6 +38,21 @@ export {
 } from '@genkit-ai/ai';
 export { Session, type Artifact } from '@genkit-ai/ai/session';
 export {
+  AgentError,
+  remoteAgent,
+  type AgentAPI,
+  type AgentChat,
+  type AgentChunk,
+  type AgentInterrupt,
+  type AgentResponse,
+  type AgentTurn,
+  type DetachedTask,
+  type RemoteAgentOptions,
+} from './client/agent.js';
+
+export type { AgentFinishReason } from './client/types.js';
+
+export {
   InMemoryStreamManager,
   StreamNotFoundError,
   type ActionStreamInput,

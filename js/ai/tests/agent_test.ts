@@ -20,6 +20,7 @@ import * as assert from 'assert';
 import { describe, it } from 'node:test';
 
 import { z } from '@genkit-ai/core';
+import { AgentError } from '../src/agent-core.js';
 import {
   AgentStreamChunk,
   SessionRunner,
@@ -3023,6 +3024,251 @@ Now respond to the latest message.`,
 
       const output = await session.output;
       assert.strictEqual(output.finishReason, 'stop');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // AgentAPI surface (`chat`, `loadChat`, `getSnapshot`, `abort`) — the same
+  // ergonomic interface returned by `remoteAgent` on the client, but driven
+  // in-process over the agent action.
+  // -------------------------------------------------------------------------
+  describe('AgentAPI (server-side chat)', () => {
+    it('streams text and resolves a response (client-managed)', async () => {
+      const agent = defineCustomAgent(
+        new Registry(),
+        { name: 'apiStream' },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'Hello ' }] },
+            });
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'world' }] },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'Hello world' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const turn = chat.sendStream('hi');
+
+      const seen: string[] = [];
+
+      for await (const chunk of turn.stream) {
+        if (chunk.text) seen.push(chunk.accumulatedText);
+      }
+      assert.deepEqual(seen, ['Hello ', 'Hello world']);
+
+      const res = await turn.response;
+      assert.strictEqual(res.text, 'Hello world');
+      assert.strictEqual(res.finishReason, 'stop');
+    });
+
+    it('carries state across multi-turn (client-managed)', async () => {
+      const agent = defineCustomAgent<unknown, { count: number }>(
+        new Registry(),
+        { name: 'apiState' },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const res1 = await chat.send('one');
+      assert.deepEqual(res1.state, { count: 1 });
+      assert.deepEqual(chat.state, { count: 1 });
+      const res2 = await chat.send('two');
+      assert.deepEqual(res2.state, { count: 2 });
+
+      assert.deepEqual(chat.state, { count: 2 });
+    });
+
+    it('carries snapshotId across multi-turn (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'apiSnap', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.send('one');
+      const firstSnapshotId = chat.snapshotId;
+      assert.ok(firstSnapshotId);
+      await chat.send('two');
+      assert.ok(chat.snapshotId);
+      assert.notStrictEqual(chat.snapshotId, firstSnapshotId);
+    });
+
+    it('exposes interrupts and builds resume parts', async () => {
+      const agent = defineCustomAgent(
+        new Registry(),
+        { name: 'apiInterrupt' },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'interrupted' as const };
+          });
+          return {
+            message: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    name: 'userApproval',
+                    ref: 'r1',
+                    input: { action: 'transfer' },
+                  },
+                  metadata: { interrupt: true },
+                },
+              ],
+            },
+            finishReason: 'interrupted' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const res = await chat.send('Transfer $500');
+      assert.strictEqual(res.finishReason, 'interrupted');
+
+      assert.strictEqual(res.interrupts.length, 1);
+      const approval = res.interrupts[0];
+      assert.strictEqual(approval.name, 'userApproval');
+      assert.deepEqual(approval.input, { action: 'transfer' });
+
+      assert.deepEqual(approval.respond({ approved: true }), {
+        toolResponse: {
+          name: 'userApproval',
+          ref: 'r1',
+          output: { approved: true },
+        },
+      });
+      assert.deepEqual(approval.restart(), {
+        toolRequest: {
+          name: 'userApproval',
+          ref: 'r1',
+          input: { action: 'transfer' },
+        },
+      });
+    });
+
+    it('throws AgentError on a failed turn', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'apiFailed', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new Error('boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'ok' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      await assert.rejects(
+        () => chat.send('hi'),
+        (err: unknown) => {
+          assert.ok(err instanceof AgentError);
+          assert.strictEqual(err.status, 'INTERNAL');
+          assert.ok(err.message.includes('boom'));
+          return true;
+        }
+      );
+    });
+
+    it('loadChat() restores history from a snapshot (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'apiLoad', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'reply' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.send('earlier');
+      const snapshotId = chat.snapshotId!;
+      assert.ok(snapshotId);
+
+      const restored = await agent.loadChat({ snapshotId });
+      assert.strictEqual(restored.snapshotId, snapshotId);
+      assert.ok(restored.messages.length >= 1);
+      assert.strictEqual(restored.messages[0].content[0].text, 'earlier');
+    });
+
+    it('getSnapshot reads a snapshot (server-managed)', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'apiGetSnap', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.send('hi');
+      const snapshotId = chat.snapshotId!;
+      const snap = await agent.getSnapshot(snapshotId);
+
+      assert.strictEqual(snap?.snapshotId, snapshotId);
+    });
+
+    it('detach submits a background task that completes', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<unknown, {}>(
+        new Registry(),
+        { name: 'apiDetach', store },
+        async (sess) => {
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const task = await chat.detach('long job');
+      assert.ok(task.snapshotId);
+      const snap = await task.wait({ intervalMs: 1 });
+      assert.ok(snap.status);
     });
   });
 });
