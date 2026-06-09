@@ -163,7 +163,15 @@ func (s *testInMemStore[State]) removeSub(snapshotID string, ch chan SnapshotSta
 }
 
 func (s *testInMemStore[State]) notifyLocked(snapshotID string, status SnapshotStatus) {
+	// Coalesce to the latest status, mirroring localstore's coalesceSend: drop
+	// a stale unread value before sending so a newer status is never dropped
+	// while the seed sits in the size-1 buffer. (Can't share that helper here:
+	// localstore imports exp, so exp's test fixture can't import localstore.)
 	for _, ch := range s.subs[snapshotID] {
+		select {
+		case <-ch:
+		default:
+		}
 		select {
 		case ch <- status:
 		default:

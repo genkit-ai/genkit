@@ -206,15 +206,29 @@ func (s *InMemorySessionStore[State]) removeSub(snapshotID string, ch chan exp.S
 }
 
 // notifyLocked publishes status to all live subscribers of snapshotID.
-// Caller must hold s.mu. Sends are best-effort: a slow subscriber may miss
-// intermediate values, but the store guarantees the latest value visible
-// to the subscription is the one persisted at notify time.
+// Caller must hold s.mu. A slow subscriber may miss intermediate values, but
+// the latest value is always delivered (see [coalesceSend]).
 func (s *InMemorySessionStore[State]) notifyLocked(snapshotID string, status exp.SnapshotStatus) {
 	for _, ch := range s.subs[snapshotID] {
-		select {
-		case ch <- status:
-		default:
-		}
+		coalesceSend(ch, status)
+	}
+}
+
+// coalesceSend delivers status on a size-1 buffered subscriber channel,
+// guaranteeing the latest value stays observable even if an earlier value is
+// still unread. Each channel is seeded at subscription time, so a plain
+// non-blocking send would drop a newer status while the seed (or a prior
+// status) sits in the buffer. Drop any stale unread value first; the caller
+// holds the store mutex and is the only sender, so after the drain the send
+// always has room. Shared by [InMemorySessionStore] and [FileSessionStore].
+func coalesceSend(ch chan exp.SnapshotStatus, status exp.SnapshotStatus) {
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- status:
+	default:
 	}
 }
 

@@ -330,15 +330,11 @@ func (s *FileSessionStore[State]) removeSub(snapshotID string, ch chan exp.Snaps
 }
 
 // notifyLocked publishes status to all live subscribers of snapshotID.
-// Caller must hold s.mu. Sends are best-effort: a slow subscriber may miss
-// intermediate values, but the latest value visible to the subscription is
-// always one of the values persisted to disk.
+// Caller must hold s.mu. A slow subscriber may miss intermediate values, but
+// the latest value is always delivered (see [coalesceSend]).
 func (s *FileSessionStore[State]) notifyLocked(snapshotID string, status exp.SnapshotStatus) {
 	for _, ch := range s.subs[snapshotID] {
-		select {
-		case ch <- status:
-		default:
-		}
+		coalesceSend(ch, status)
 	}
 }
 
