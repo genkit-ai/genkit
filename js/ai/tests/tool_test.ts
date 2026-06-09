@@ -22,6 +22,7 @@ import { afterEach, describe, it } from 'node:test';
 import {
   defineInterrupt,
   defineTool,
+  interrupt,
   isDynamicTool,
   isMultipartTool,
   respondTool,
@@ -96,6 +97,26 @@ describe('defineInterrupt', () => {
       },
       { foo: 'bar' }
     );
+  });
+
+  it('should set restartable to false in metadata for interrupts and preserve other metadata', () => {
+    const registered = defineInterrupt(registry, {
+      name: 'registered',
+      description: 'registered interrupt',
+      metadata: { custom: 'value', tool: { existing: 'prop' } },
+    });
+    assert.strictEqual(registered.__action.metadata.tool?.restartable, false);
+    assert.strictEqual(registered.__action.metadata.tool?.existing, 'prop');
+    assert.strictEqual(registered.__action.metadata.custom, 'value');
+
+    const dynamic = interrupt({
+      name: 'dynamic',
+      description: 'dynamic interrupt',
+      metadata: { custom: 'value', tool: { existing: 'prop' } },
+    });
+    assert.strictEqual(dynamic.__action.metadata.tool?.restartable, false);
+    assert.strictEqual(dynamic.__action.metadata.tool?.existing, 'prop');
+    assert.strictEqual(dynamic.__action.metadata.custom, 'value');
   });
 
   it('should register the reply schema / json schema as the output schema of the tool', () => {
@@ -173,6 +194,43 @@ describe('defineInterrupt', () => {
       assert.deepStrictEqual(result, {
         content: [{ text: 'part 1' }],
       });
+    });
+
+    it('should preserve existing metadata.tool properties on multipart tools', () => {
+      // registered multipart with prior tool metadata
+      const registered = defineTool(
+        registry,
+        {
+          name: 'test_preserve',
+          description: 'test',
+          multipart: true,
+          metadata: { tool: { restartable: false } },
+        },
+        async () => ({})
+      );
+      assert.strictEqual(registered.__action.metadata.tool.multipart, true);
+      assert.strictEqual(registered.__action.metadata.tool.restartable, false);
+
+      // registered multipart without prior tool metadata
+      const noMeta = defineTool(
+        registry,
+        { name: 'test_no_meta', description: 'test', multipart: true },
+        async () => ({})
+      );
+      assert.deepStrictEqual(noMeta.__action.metadata.tool, {
+        multipart: true,
+      });
+
+      // dynamic multipart with prior tool metadata
+      const dynamic = tool({
+        name: 'dynamic_preserve',
+        description: 'test',
+        multipart: true,
+        metadata: { tool: { restartable: false, custom: 'value' } },
+      });
+      assert.strictEqual(dynamic.__action.metadata.tool.multipart, true);
+      assert.strictEqual(dynamic.__action.metadata.tool.restartable, false);
+      assert.strictEqual(dynamic.__action.metadata.tool.custom, 'value');
     });
   });
 });
@@ -438,6 +496,29 @@ describe('defineTool', () => {
         }
       );
     });
+  });
+
+  it('should preserve metadata.tool properties on non-multipart tools', () => {
+    const registered = defineTool(
+      registry,
+      {
+        name: 'test_restartable',
+        description: 'test',
+        metadata: { tool: { restartable: false } },
+      },
+      async () => {}
+    );
+    assert.strictEqual(registered.__action.metadata.tool.restartable, false);
+    assert.strictEqual(registered.__action.metadata.type, 'tool');
+
+    const dynamic = tool({
+      name: 'dynamic_restartable',
+      description: 'test',
+      metadata: { tool: { restartable: false, custom: 'val' } },
+    });
+    assert.strictEqual(dynamic.__action.metadata.tool.restartable, false);
+    assert.strictEqual(dynamic.__action.metadata.tool.custom, 'val');
+    assert.strictEqual(dynamic.__action.metadata.type, 'tool');
   });
 
   it('should register a v1 tool as v2 as well', async () => {
