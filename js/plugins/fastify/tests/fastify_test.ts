@@ -444,6 +444,33 @@ describe('fastifyHandler', async () => {
       assert.strictEqual(await subscription.output, 'Echo: durable');
     });
 
+    it('sends streaming headers when subscribing to a durable stream', async () => {
+      // The subscribe path must still set Content-Type/Transfer-Encoding so
+      // clients and proxies treat the response as a stream.
+      const result = streamFlow({
+        url: `http://localhost:${port}/streamingFlowDurable`,
+        input: { question: 'durable' },
+      });
+      const streamId = await result.streamId;
+      assert.ok(streamId);
+
+      const response = await fetch(
+        `http://localhost:${port}/streamingFlowDurable`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+            'x-genkit-stream-id': streamId!,
+          },
+          body: JSON.stringify({ data: { question: 'durable' } }),
+        }
+      );
+      assert.match(response.headers.get('content-type') ?? '', /text\/plain/);
+      await response.text(); // drain
+      await result.output;
+    });
+
     it('stream a flow (v2 model)', async () => {
       const result = streamFlow<string, GenerateResponseChunkData>({
         url: `http://localhost:${port}/streamingFlowV2`,
@@ -690,6 +717,37 @@ describe('genkitFastify', async () => {
 
     assert.strictEqual(await result.output, 'Echo: olleh');
   });
+});
+
+describe('genkitFastify path normalization', async () => {
+  let app: FastifyInstance;
+  let port: number;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  // A prefix without a leading slash or with stray slashes would otherwise
+  // throw when Fastify registers the route.
+  for (const prefix of ['api', '/api/', 'api//']) {
+    it(`normalizes pathPrefix "${prefix}" to a valid route`, async () => {
+      const ai = genkit({});
+      const voidInput = ai.defineFlow('voidInput', async () => 'banana');
+
+      app = Fastify();
+      port = await getPort();
+      await app.register(genkitFastify, {
+        pathPrefix: prefix,
+        flows: [voidInput],
+      });
+      await app.listen({ port });
+
+      const result = await runFlow({
+        url: `http://localhost:${port}/api/voidInput`,
+      });
+      assert.strictEqual(result, 'banana');
+    });
+  }
 });
 
 export function defineEchoModel(ai: Genkit): ModelAction {

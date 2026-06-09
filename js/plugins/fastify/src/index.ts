@@ -111,11 +111,15 @@ export function fastifyHandler<
         (await opts?.contextProvider?.({
           method: request.method as RequestData['method'],
           headers: Object.fromEntries(
-            Object.entries(request.headers).map(([key, value]) => [
-              key.toLowerCase(),
-              // RFC 9110 5.3: combine repeated field lines with a comma.
-              Array.isArray(value) ? value.join(', ') : String(value),
-            ])
+            Object.entries(request.headers)
+              // Skip headers explicitly set to undefined so they don't become
+              // the literal string "undefined" via String(value).
+              .filter(([, value]) => value !== undefined)
+              .map(([key, value]) => [
+                key.toLowerCase(),
+                // RFC 9110 5.3: combine repeated field lines with a comma.
+                Array.isArray(value) ? value.join(', ') : String(value),
+              ])
           ),
           input,
         })) || {};
@@ -301,18 +305,32 @@ async function subscribeToStream(
   streamId: string,
   response: ServerResponse
 ): Promise<void> {
+  // Send the streaming headers lazily on the first event so that a
+  // StreamNotFoundError can still respond with a clean 204. Without this the
+  // subscribe path would emit body bytes with no Content-Type, which some
+  // clients and proxies refuse to treat as a stream.
+  const ensureHeaders = () => {
+    if (!response.headersSent) {
+      response.writeHead(200, {
+        'Content-Type': 'text/plain',
+        'Transfer-Encoding': 'chunked',
+      });
+    }
+  };
   try {
     await streamManager.subscribe(streamId, {
       onChunk: (chunk) => {
         // The subscribing client may have disconnected; skip writes to a
         // destroyed response to avoid throwing.
         if (response.destroyed) return;
+        ensureHeaders();
         response.write(
           'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
         );
       },
       onDone: (output) => {
         if (response.destroyed) return;
+        ensureHeaders();
         response.write(
           'data: ' + JSON.stringify({ result: output }) + streamDelimiter
         );
@@ -323,6 +341,7 @@ async function subscribeToStream(
           `Streaming request failed with error: ${getErrorMessage(err)}\n${getErrorStack(err)}`
         );
         if (response.destroyed) return;
+        ensureHeaders();
         response.write(
           `error: ${JSON.stringify({
             error: getCallableJSON(err),
@@ -332,12 +351,14 @@ async function subscribeToStream(
       },
     });
   } catch (e: any) {
+    if (response.destroyed) return;
     if (e instanceof StreamNotFoundError) {
       response.writeHead(204);
       response.end();
       return;
     }
     if (e.status === 'DEADLINE_EXCEEDED') {
+      ensureHeaders();
       response.write(
         `error: ${JSON.stringify({
           error: getCallableJSON(e),
@@ -468,17 +489,23 @@ export const genkitFastify: FastifyPluginAsync<GenkitFastifyOptions> = async (
   opts
 ) => {
   const pathPrefix = opts.pathPrefix ?? '';
+  // Fastify requires route paths to start with a single '/'. Normalize so a
+  // prefix without a leading slash ('api') or with stray slashes ('/api/')
+  // still produces a valid route.
+  const cleanPath = (p: string) => ('/' + p).replace(/\/+/g, '/');
   logger.debug('Registering Genkit flow routes:');
   for (const flow of opts.flows ?? []) {
     if ('flow' in flow) {
-      const flowPath = `${pathPrefix}/${
-        ('options' in flow && flow.options.path) || flow.flow.__action.name
-      }`;
+      const flowPath = cleanPath(
+        `${pathPrefix}/${
+          ('options' in flow && flow.options.path) || flow.flow.__action.name
+        }`
+      );
       const options =
         'options' in flow ? flow.options : { contextProvider: flow.context };
       registerFlow(instance, flowPath, fastifyHandler(flow.flow, options));
     } else {
-      const flowPath = `${pathPrefix}/${flow.__action.name}`;
+      const flowPath = cleanPath(`${pathPrefix}/${flow.__action.name}`);
       registerFlow(instance, flowPath, fastifyHandler(flow));
     }
   }
