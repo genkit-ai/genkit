@@ -22,9 +22,9 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 // Workspace Builder — artifacts alongside chat
 //
 // Demonstrates:
-//   • chat.send() with artifact production
-//   • Reading `res.artifacts` (or `chat.artifacts`) from the agent response
-//   • Multi-turn session — the chat tracks state automatically
+//   • The `remoteAgent` client with artifact production
+//   • Reading streamed `chunk.artifact` and the final `chat.artifacts`
+//   • Multi-turn session — the client threads state across turns for us
 //   • Displaying generated code artifacts in a side panel
 // ---------------------------------------------------------------------------
 
@@ -41,11 +41,10 @@ export default function WorkspaceBuilder() {
   const [loading, setLoading] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
 
-  // The agent client and the live chat that tracks state/artifacts.
-  const agent = useMemo(
-    () => remoteAgent({ url: ENDPOINT, stateManagement: 'client' }),
-    []
-  );
+  // Typed HTTP client. Tracks session state across turns for us.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send and reused for follow-up turns.
   const chatRef = useRef<AgentChat | null>(null);
 
   const handleSend = useCallback(
@@ -56,33 +55,32 @@ export default function WorkspaceBuilder() {
       setLoading(true);
       setStreamingText('');
 
-      // Lazily create the chat on the first turn.
       if (!chatRef.current) {
         chatRef.current = agent.chat();
       }
       const chat = chatRef.current;
 
       try {
-        // ── Stream the response ────────────────────────────────────────
         const turn = chat.sendStream(text);
 
         let accumulated = '';
         for await (const chunk of turn.stream) {
+          // ── Artifacts stream in as they're emitted ──
+          if (chunk.artifact) {
+            setArtifacts([...chat.artifacts] as Artifact[]);
+          }
+          // ── Model text chunks ──
           if (chunk.text) {
-            accumulated += chunk.text;
+            accumulated = chunk.accumulatedText;
             setStreamingText(accumulated);
           }
         }
 
-        // ── Read the final result ──────────────────────────────────────
         const res = await turn.response;
         setStreamingText('');
 
-        // Update artifacts — the workspace agent emits artifacts whenever the
-        // emitArtifact tool was called. The chat aggregates them across turns.
-        if (res.artifacts?.length) {
-          setArtifacts(res.artifacts as Artifact[]);
-        }
+        // Reflect the authoritative final artifact set.
+        setArtifacts([...res.artifacts] as Artifact[]);
 
         setMessages((prev) => [
           ...prev,
@@ -98,8 +96,9 @@ export default function WorkspaceBuilder() {
         setLoading(false);
       }
     },
-    [loading, agent]
+    [agent, loading]
   );
+
 
   return (
     <div className="workspace-layout">
@@ -141,3 +140,4 @@ export default function WorkspaceBuilder() {
     </div>
   );
 }
+

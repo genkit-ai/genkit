@@ -25,11 +25,11 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //   • `session.updateCustom()` / `session.getCustom()` — typed custom state
 //     maintained alongside message history inside the session
 //   • Tools that mutate structured state inside the session
-//   • Reading `res.state` (the agent's typed custom state) to display
-//     structured state alongside chat
+//   • Reading `chat.state` to display structured state alongside chat
 //   • Uses `defineAgent` (not defineCustomAgent) — custom state works
 //     seamlessly with the standard agent API
-//   • Client-managed multi-turn — the chat tracks state automatically
+//   • Client-managed multi-turn — the `remoteAgent` client threads state
+//     across turns automatically
 //
 // The user chats naturally ("Add buy groceries", "Mark task 1 done") and
 // the model uses tools to manage a typed task list stored in session.custom.
@@ -53,14 +53,14 @@ export default function TaskTracker() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Task state — extracted from res.state each turn
+  // Task state — extracted from chat.state each turn
   const [tasks, setTasks] = useState<TaskItem[]>([]);
 
-  // A typed agent client; the chat tracks the session state automatically.
-  const agent = useMemo(
-    () => remoteAgent<TaskState>({ url: ENDPOINT, stateManagement: 'client' }),
-    []
-  );
+  // Typed HTTP client. Tracks session state across turns for us.
+  const agent = useMemo(() => remoteAgent<TaskState>({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send (seeding the initial custom state)
+  // and reused for follow-up turns so history is threaded automatically.
   const chatRef = useRef<AgentChat<TaskState> | null>(null);
 
   const handleSend = useCallback(
@@ -71,8 +71,8 @@ export default function TaskTracker() {
       setLoading(true);
       setStreamingText('');
 
-      // On the first turn, seed the custom state so the tools have something
-      // to work with. Subsequent turns reuse the chat (state auto-tracked).
+      // Lazily create the chat, seeding the initial custom state so the tools
+      // have something to work with on the very first turn.
       if (!chatRef.current) {
         chatRef.current = agent.chat({
           state: {
@@ -85,27 +85,22 @@ export default function TaskTracker() {
       const chat = chatRef.current;
 
       try {
-        // ── Stream the response ────────────────────────────────────────
         const turn = chat.sendStream(text);
 
         let accumulated = '';
         for await (const chunk of turn.stream) {
-          if (chunk.text) {
-            accumulated += chunk.text;
-            setStreamingText(accumulated);
-          }
-          for (const tr of chunk.toolRequests) {
-            const req = tr.toolRequest;
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: 'tool',
-                text: `🔧 ${req.name}(${JSON.stringify(req.input)})`,
-              },
-            ]);
-          }
-          for (const part of chunk.raw.modelChunk?.content || []) {
-            if (part.toolResponse) {
+          // ── Tool calls/responses — render inline from the raw chunk ──
+          for (const part of chunk.raw.modelChunk?.content ?? []) {
+            if (part.toolRequest) {
+              const tr = part.toolRequest;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'tool',
+                  text: `🔧 ${tr.name}(${JSON.stringify(tr.input)})`,
+                },
+              ]);
+            } else if (part.toolResponse) {
               const tr = part.toolResponse;
               setMessages((prev) => [
                 ...prev,
@@ -116,15 +111,20 @@ export default function TaskTracker() {
               ]);
             }
           }
+
+          // ── Model text chunks ──
+          if (chunk.text) {
+            accumulated = chunk.accumulatedText;
+            setStreamingText(accumulated);
+          }
         }
 
-        // ── Read the final result ──────────────────────────────────────
         const res = await turn.response;
         setStreamingText('');
 
-        // Read the typed custom state directly off the response.
-        if (res.state?.tasks) {
-          setTasks([...res.state.tasks]);
+        // Reflect the authoritative final custom state in the sidebar.
+        if (chat.state?.tasks) {
+          setTasks([...chat.state.tasks]);
         }
 
         setMessages((prev) => [
@@ -141,7 +141,7 @@ export default function TaskTracker() {
         setLoading(false);
       }
     },
-    [loading, agent]
+    [agent, loading]
   );
 
   const doneCount = tasks.filter((t) => t.done).length;
@@ -167,8 +167,8 @@ export default function TaskTracker() {
       <aside className="task-sidebar">
         <h3>📋 Task List</h3>
         <p className="task-sidebar-hint">
-          Live view of <code>session.custom</code> — updated each turn from{' '}
-          <code>res.state</code>.
+          Live view of <code>session.custom</code> — read from{' '}
+          <code>chat.state</code> after each turn.
         </p>
 
         {tasks.length === 0 ? (
@@ -211,8 +211,8 @@ export default function TaskTracker() {
         <details className="task-state-raw" open={false}>
           <summary>🔍 Raw Custom State JSON</summary>
           <pre className="task-state-json">
-            {chatRef.current?.state
-              ? JSON.stringify(chatRef.current.state, null, 2)
+            {tasks.length > 0
+              ? JSON.stringify(tasks, null, 2)
               : '(no state yet)'}
           </pre>
         </details>
@@ -232,12 +232,12 @@ export default function TaskTracker() {
             <code>ai.currentSession().updateCustom()</code>.
           </li>
           <li>
-            After each turn, the client reads <code>res.state</code> to update
+            After each turn, the client reads <code>chat.state</code> to update
             the task list panel.
           </li>
           <li>
-            The <code>chat</code> tracks the full session state and sends it
-            back on the next turn automatically.
+            The <code>remoteAgent</code> client threads the full session state
+            (messages + custom) across turns automatically.
           </li>
         </ol>
 
@@ -249,9 +249,11 @@ session.updateCustom((state) => {
   return state;
 });
 
-// Client — read custom state from the response
-const res = await chat.send(text);
-setTasks(res.state.tasks);`}</pre>
+// Client — read custom state from the chat
+const agent = remoteAgent<TaskState>({ url: '/api/taskAgent' });
+const chat = agent.chat({ state: { custom: { tasks: [], nextId: 1 } } });
+await chat.send('Add buy groceries');
+setTasks(chat.state.tasks);`}</pre>
       </aside>
     </div>
   );

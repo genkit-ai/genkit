@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { AgentError, remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
@@ -22,15 +22,15 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 // Client-Managed State — weather chat with NO server store
 //
 // Demonstrates:
-//   • remoteAgent({ stateManagement: 'client' }) — no server-side store
-//   • The chat owns the `state` blob: it's returned by the server, tracked
-//     by the chat, and sent back automatically on every subsequent turn
+//   • The `remoteAgent` client with client-managed state (no server store)
+//   • The client owns the session state: the `remoteAgent` client tracks it
+//     across turns and round-trips it to the stateless server automatically
 //   • Tool calling works identically to the server-stored variant
 //   • A "State Inspector" panel shows the raw state JSON so you can
 //     see exactly what's being round-tripped (including message history)
 //
 // Compare with WeatherChat — same UX, but here the server is fully
-// stateless. All session state lives in the blob the chat round-trips.
+// stateless. All session state lives in the blob the client round-trips.
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/weatherAgentStateless';
@@ -40,17 +40,17 @@ export default function ClientState() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // The chat owns the state blob. It's returned by the server on every turn
-  // and sent back automatically on the next turn. We display the raw blob.
+  // A human-readable view of the client-owned state blob, refreshed each turn.
   const [stateDisplay, setStateDisplay] = useState<string>(
     '(no state yet — first turn will create it)'
   );
 
-  // A client-managed chat: state is round-tripped, never a snapshotId.
-  const agent = useMemo(
-    () => remoteAgent({ url: ENDPOINT, stateManagement: 'client' }),
-    []
-  );
+  // Typed HTTP client. With a stateless server, the client owns and
+  // round-trips the full session state on every turn.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send and reused for follow-up turns so
+  // state (messages + custom + artifacts) is threaded automatically.
   const chatRef = useRef<AgentChat | null>(null);
 
   const handleSend = useCallback(
@@ -61,34 +61,29 @@ export default function ClientState() {
       setLoading(true);
       setStreamingText('');
 
-      // Lazily create the chat on the first turn.
+      // Lazily create the chat. No initial state — the first turn creates it.
       if (!chatRef.current) {
         chatRef.current = agent.chat();
       }
       const chat = chatRef.current;
 
       try {
-        // ── Stream the response ────────────────────────────────────────
         const turn = chat.sendStream(text);
 
         let accumulated = '';
         for await (const chunk of turn.stream) {
-          if (chunk.text) {
-            accumulated += chunk.text;
-            setStreamingText(accumulated);
-          }
-          for (const tr of chunk.toolRequests) {
-            const req = tr.toolRequest;
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: 'tool',
-                text: `🔧 Calling ${req.name}(${JSON.stringify(req.input)})`,
-              },
-            ]);
-          }
-          for (const part of chunk.raw.modelChunk?.content || []) {
-            if (part.toolResponse) {
+          // ── Tool calls/responses — render inline from the raw chunk ──
+          for (const part of chunk.raw.modelChunk?.content ?? []) {
+            if (part.toolRequest) {
+              const tr = part.toolRequest;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'tool',
+                  text: `🔧 Calling ${tr.name}(${JSON.stringify(tr.input)})`,
+                },
+              ]);
+            } else if (part.toolResponse) {
               const tr = part.toolResponse;
               setMessages((prev) => [
                 ...prev,
@@ -99,52 +94,44 @@ export default function ClientState() {
               ]);
             }
           }
+
+          // ── Model text chunks ──
+          if (chunk.text) {
+            accumulated = chunk.accumulatedText;
+            setStreamingText(accumulated);
+          }
         }
 
-        // ── Read the final result ──────────────────────────────────────
         const res = await turn.response;
         setStreamingText('');
 
-        // Show the full state blob the client round-trips. `res.raw.state` is
-        // the complete SessionState (messages + custom + artifacts).
-        if (res.raw.state) {
-          setStateDisplay(JSON.stringify(res.raw.state, null, 2));
-        }
+        // Surface the full client-owned state blob in the inspector. We show
+        // the complete state (messages + custom + artifacts) round-tripped by
+        // the client.
+        setStateDisplay(JSON.stringify(res.raw.state ?? null, null, 2));
 
         setMessages((prev) => [
           ...prev,
           { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: any) {
+        // The turn failed. The client preserves the last-good state, so the
+        // session stays usable — surface the error but keep chatting.
         setStreamingText('');
-        // A turn can fail gracefully: it throws an AgentError but the chat
-        // keeps the last-good state, so the conversation can continue.
-        if (err instanceof AgentError) {
-          if (err.state !== undefined || chat.state !== undefined) {
-            setStateDisplay(
-              JSON.stringify(err.response.raw.state ?? chat.state, null, 2)
-            );
-          }
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: 'system',
-              text:
-                `⚠️ Turn failed (${err.status}): ${err.message}. ` +
-                `Your session state was preserved — you can keep chatting.`,
-            },
-          ]);
-          return;
-        }
         setMessages((prev) => [
           ...prev,
-          { role: 'system', text: `Connection error: ${err.message}` },
+          {
+            role: 'system',
+            text:
+              `⚠️ Turn failed (${err.status ?? 'INTERNAL'}): ${err.message}. ` +
+              `Your session state was preserved — you can keep chatting.`,
+          },
         ]);
       } finally {
         setLoading(false);
       }
     },
-    [loading, agent]
+    [agent, loading]
   );
 
   return (
@@ -165,10 +152,10 @@ export default function ClientState() {
       <aside className="state-inspector">
         <h3>📦 Session State (client-owned)</h3>
         <p className="state-inspector-hint">
-          This is the raw <code>state</code> blob returned by the server. It
+          This is the raw <code>state</code> blob the client round-trips. It
           contains the full message history, custom data, and artifacts. The{' '}
-          <code>chat</code> stores it and sends it back automatically on every
-          subsequent turn.
+          <code>remoteAgent</code> client stores it and sends it back on every
+          subsequent turn automatically.
         </p>
         <pre className="state-inspector-json">{stateDisplay}</pre>
       </aside>

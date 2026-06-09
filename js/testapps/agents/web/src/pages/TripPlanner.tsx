@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import type { MessageData, Part } from 'genkit/beta';
-import { AgentError, remoteAgent, type AgentChat } from 'genkit/beta/client';
+import type { Part } from 'genkit/beta';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+
 
 // ---------------------------------------------------------------------------
 // Trip Planner — demonstrates definePromptAgent with a .prompt file
@@ -30,8 +31,8 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 // Demonstrates:
 //   • Agent whose prompt lives in a .prompt file (dotprompt)
 //   • definePromptAgent — prompt file + agent wiring separated
-//   • Streaming multi-turn chat with tool calls via the remoteAgent client
-//   • Session restore via snapshotId in URL (agent.loadChat)
+//   • Streaming multi-turn chat with tool calls
+//   • Session restore via snapshotId in URL
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/tripPlannerAgent';
@@ -44,11 +45,13 @@ export default function TripPlanner() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
-  const [hasSession, setHasSession] = useState(!!urlSnapshotId);
 
-  // The agent client and the live chat that tracks snapshotId/state/messages.
+  // Typed HTTP client for the agent (server-managed FileSessionStore).
   const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The live conversation. Reused across turns so history is threaded for us.
   const chatRef = useRef<AgentChat | null>(null);
+  const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
   // ── Restore session from snapshotId on mount ───────────────────────
   useEffect(() => {
@@ -58,12 +61,40 @@ export default function TripPlanner() {
 
     async function restore() {
       try {
+        // Load the chat from the server snapshot — history is restored for us.
         const chat = await agent.loadChat({ snapshotId: urlSnapshotId! });
+
         if (cancelled) return;
 
+        const restored: ChatMessage[] = [];
+        for (const msg of chat.messages) {
+          const role = msg.role as ChatMessage['role'];
+          const textParts = (msg.content || [])
+            .filter((p: Part) => p.text)
+            .map((p: Part) => p.text);
+
+          if (textParts.length > 0) {
+            restored.push({ role, text: textParts.join('') });
+          }
+
+          for (const p of (msg.content as Part[]) || []) {
+            if (p.toolRequest) {
+              restored.push({
+                role: 'tool',
+                text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+              });
+            }
+            if (p.toolResponse) {
+              restored.push({
+                role: 'tool',
+                text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+              });
+            }
+          }
+        }
+        setMessages(restored);
         chatRef.current = chat;
-        setMessages(messagesToChat(chat.messages));
-        setHasSession(true);
+        snapshotIdRef.current = chat.snapshotId;
       } catch (err: any) {
         if (!cancelled) {
           setMessages([
@@ -82,7 +113,7 @@ export default function TripPlanner() {
     return () => {
       cancelled = true;
     };
-  }, [agent]); // Only run on mount
+  }, []); // Only run on mount
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -92,7 +123,7 @@ export default function TripPlanner() {
       setLoading(true);
       setStreamingText('');
 
-      // Lazily create the chat on the first turn.
+      // Lazily create the chat (fresh session) the first time we send.
       if (!chatRef.current) {
         chatRef.current = agent.chat();
       }
@@ -103,38 +134,38 @@ export default function TripPlanner() {
 
         let accumulated = '';
         for await (const chunk of turn.stream) {
-          if (chunk.text) {
-            accumulated += chunk.text;
-            setStreamingText(accumulated);
-          }
-          for (const tr of chunk.toolRequests) {
-            const req = tr.toolRequest;
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: 'tool',
-                text: `🔧 Calling ${req.name}(${JSON.stringify(req.input)})`,
-              },
-            ]);
-          }
-          for (const part of toolResponses(chunk.raw.modelChunk?.content)) {
-            const tr = part.toolResponse!;
-            setMessages((prev) => [
-              ...prev,
-              {
-                role: 'tool',
-                text: `✅ ${tr.name} → ${JSON.stringify(tr.output)}`,
-              },
-            ]);
+          for (const part of chunk.raw.modelChunk?.content || []) {
+            if (part.text) {
+              accumulated += part.text;
+              setStreamingText(accumulated);
+            } else if (part.toolRequest) {
+              const tr = part.toolRequest;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'tool',
+                  text: `🔧 Calling ${tr.name}(${JSON.stringify(tr.input)})`,
+                },
+              ]);
+            } else if (part.toolResponse) {
+              const tr = part.toolResponse;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  role: 'tool',
+                  text: `✅ ${tr.name} → ${JSON.stringify(tr.output)}`,
+                },
+              ]);
+            }
           }
         }
 
         const res = await turn.response;
         setStreamingText('');
 
-        if (chat.snapshotId) {
-          setHasSession(true);
-          navigate(`/trip-planner/${chat.snapshotId}`, { replace: true });
+        if (res.snapshotId) {
+          snapshotIdRef.current = res.snapshotId;
+          navigate(`/trip-planner/${res.snapshotId}`, { replace: true });
         }
 
         setMessages((prev) => [
@@ -143,20 +174,6 @@ export default function TripPlanner() {
         ]);
       } catch (err: any) {
         setStreamingText('');
-        if (err instanceof AgentError) {
-          if (chat.snapshotId) {
-            setHasSession(true);
-            navigate(`/trip-planner/${chat.snapshotId}`, { replace: true });
-          }
-          setMessages((prev) => [
-            ...prev,
-            {
-              role: 'system',
-              text: `⚠️ Turn failed (${err.status}): ${err.message}.`,
-            },
-          ]);
-          return;
-        }
         setMessages((prev) => [
           ...prev,
           { role: 'system', text: `Error: ${err.message}` },
@@ -165,8 +182,9 @@ export default function TripPlanner() {
         setLoading(false);
       }
     },
-    [loading, navigate, agent]
+    [agent, loading, navigate]
   );
+
 
   if (restoring) {
     return (
@@ -205,7 +223,7 @@ export default function TripPlanner() {
         loading={loading}
         onSend={handleSend}
         headerAction={
-          hasSession ? (
+          snapshotIdRef.current ? (
             <Link
               to="/trip-planner"
               className="btn btn-new-session"
@@ -274,9 +292,9 @@ const agent = remoteAgent({
 });
 const chat = agent.chat();
 
-const turn = chat.sendStream('Plan a trip to Paris');
+const turn = chat.sendStream(text);
 for await (const chunk of turn.stream) {
-  // chunk.text, chunk.toolRequests
+  if (chunk.text) appendText(chunk.text);
 }
 
 const res = await turn.response;`}</pre>
@@ -285,42 +303,3 @@ const res = await turn.response;`}</pre>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Filter the toolResponse parts out of a content array. */
-function toolResponses(content?: Part[]): Part[] {
-  return (content || []).filter((p) => p.toolResponse);
-}
-
-/** Rebuild displayable chat messages from restored session history. */
-function messagesToChat(history: MessageData[]): ChatMessage[] {
-  const restored: ChatMessage[] = [];
-  for (const msg of history) {
-    const role = msg.role as ChatMessage['role'];
-    const textParts = (msg.content || [])
-      .filter((p: Part) => p.text)
-      .map((p: Part) => p.text);
-
-    if (textParts.length > 0) {
-      restored.push({ role, text: textParts.join('') });
-    }
-
-    for (const p of msg.content || []) {
-      if (p.toolRequest) {
-        restored.push({
-          role: 'tool',
-          text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
-        });
-      }
-      if (p.toolResponse) {
-        restored.push({
-          role: 'tool',
-          text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
-        });
-      }
-    }
-  }
-  return restored;
-}

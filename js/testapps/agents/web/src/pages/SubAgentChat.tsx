@@ -23,9 +23,9 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //
 // Demonstrates:
 //   • The `agents` middleware for sub-agent delegation
-//   • chat.send() for streaming orchestrator responses
+//   • The `remoteAgent` client for streaming orchestrator responses
 //   • Inline rendering of `call_agent` tool calls showing delegation
-//   • Multi-turn session — the chat tracks state automatically
+//   • Multi-turn session — the client threads state across turns for us
 //   • Markdown rendering for code-heavy responses
 // ---------------------------------------------------------------------------
 
@@ -36,11 +36,10 @@ export default function SubAgentChat() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // The agent client and the live chat that tracks state across turns.
-  const agent = useMemo(
-    () => remoteAgent({ url: ENDPOINT, stateManagement: 'client' }),
-    []
-  );
+  // Typed HTTP client. Tracks session state across turns for us.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send and reused for follow-up turns.
   const chatRef = useRef<AgentChat | null>(null);
 
   const handleSend = useCallback(
@@ -51,7 +50,6 @@ export default function SubAgentChat() {
       setLoading(true);
       setStreamingText('');
 
-      // Lazily create the chat on the first turn.
       if (!chatRef.current) {
         chatRef.current = agent.chat();
       }
@@ -62,34 +60,35 @@ export default function SubAgentChat() {
 
         let accumulated = '';
         for await (const chunk of turn.stream) {
+          for (const part of chunk.raw.modelChunk?.content ?? []) {
+            if (part.toolRequest) {
+              const tr = part.toolRequest;
+              // Format call_agent delegations nicely
+              const inp = tr.input as
+                | { agent?: string; task?: string }
+                | undefined;
+              const label =
+                tr.name === 'call_agent' && inp?.agent
+                  ? `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`
+                  : `🔧 ${tr.name}(${JSON.stringify(tr.input)})`;
+              setMessages((prev) => [...prev, { role: 'tool', text: label }]);
+            } else if (part.toolResponse) {
+              const tr = part.toolResponse;
+              // Format call_agent responses nicely
+              const out = tr.output as
+                | { response?: string; agentName?: string }
+                | undefined;
+              const label =
+                tr.name === 'call_agent' && out?.agentName
+                  ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`
+                  : `✅ ${tr.name} → ${JSON.stringify(tr.output)}`;
+              setMessages((prev) => [...prev, { role: 'tool', text: label }]);
+            }
+          }
+
           if (chunk.text) {
-            accumulated += chunk.text;
+            accumulated = chunk.accumulatedText;
             setStreamingText(accumulated);
-          }
-          // Format call_agent delegations nicely.
-          for (const tr of chunk.toolRequests) {
-            const req = tr.toolRequest;
-            const inp = req.input as
-              | { agent?: string; task?: string }
-              | undefined;
-            const label =
-              req.name === 'call_agent' && inp?.agent
-                ? `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`
-                : `🔧 ${req.name}(${JSON.stringify(req.input)})`;
-            setMessages((prev) => [...prev, { role: 'tool', text: label }]);
-          }
-          // Tool responses live on the raw chunk content.
-          for (const part of chunk.raw.modelChunk?.content || []) {
-            if (!part.toolResponse) continue;
-            const tr = part.toolResponse;
-            const out = tr.output as
-              | { response?: string; agentName?: string }
-              | undefined;
-            const label =
-              tr.name === 'call_agent' && out?.agentName
-                ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`
-                : `✅ ${tr.name} → ${JSON.stringify(tr.output)}`;
-            setMessages((prev) => [...prev, { role: 'tool', text: label }]);
           }
         }
 
@@ -111,8 +110,9 @@ export default function SubAgentChat() {
         setLoading(false);
       }
     },
-    [loading, agent]
+    [agent, loading]
   );
+
 
   return (
     <div className="page-with-sidebar">
@@ -210,3 +210,4 @@ const orchestrator = ai.defineAgent({
     </div>
   );
 }
+

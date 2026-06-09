@@ -15,11 +15,10 @@
  */
 
 import {
-  AgentError,
   remoteAgent,
   type AgentChat,
   type AgentInterrupt,
-  type AgentTurn,
+  type AgentResponse,
 } from 'genkit/beta/client';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
@@ -27,19 +26,21 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 // ---------------------------------------------------------------------------
 // Banking Interrupt — interrupt/approval workflow
 //
-// Demonstrates the ergonomic `remoteAgent` interrupt API:
-//   • chat.send() pauses with `res.interrupts` instead of a final answer
-//   • Each interrupt exposes `.name`, `.input`, and a `.respond()` builder
-//   • chat.resume({ respond: [...] }) continues the paused flow
+// Demonstrates:
+//   • The `remoteAgent` client with a server-side session store
+//   • Detecting an interrupt: `response.interrupts` is non-empty when the
+//     agent pauses for approval (the `userApproval` tool request)
+//   • Resuming after interrupt: `chat.resumeStream(interrupt.respond(output))`
+//     continues the flow from the exact point it paused
 //   • Inline approval dialog
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/bankingAgent';
 
 interface PendingInterrupt {
+  interrupt: AgentInterrupt;
   action: string;
   details: string;
-  interrupt: AgentInterrupt<{ action?: string; details?: string }>;
 }
 
 export default function BankingInterrupt() {
@@ -49,9 +50,12 @@ export default function BankingInterrupt() {
   const [interrupt, setInterrupt] = useState<PendingInterrupt | null>(null);
   const [feedback, setFeedback] = useState('');
 
-  // The agent client and the live chat. The chat tracks the snapshot the flow
-  // paused on, so resuming works without manual snapshotId threading.
+  // Typed HTTP client. This agent uses a server-side store; the client tracks
+  // the snapshot across turns and resumes interrupts for us.
   const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send and reused for follow-up turns
+  // (and to resume interrupts).
   const chatRef = useRef<AgentChat | null>(null);
 
   // ── Send a regular user message ──────────────────────────────────────
@@ -66,23 +70,34 @@ export default function BankingInterrupt() {
       if (!chatRef.current) {
         chatRef.current = agent.chat();
       }
+      const chat = chatRef.current;
 
       try {
-        await runTurn(chatRef.current.sendStream(text));
+        const res = await streamAndCollect(chat.sendStream(text));
+        processResult(res);
       } catch (err: any) {
-        handleTurnError(err);
+        setStreamingText('');
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'system',
+            text:
+              `⚠️ Turn failed (${err.status ?? 'INTERNAL'}): ${err.message}.`,
+          },
+        ]);
       } finally {
         setLoading(false);
       }
     },
-    [loading, interrupt, agent]
+    [agent, loading, interrupt]
   );
 
   // ── Respond to an interrupt (approve or deny) ────────────────────────
   const handleInterruptResponse = useCallback(
     async (approved: boolean) => {
       if (!interrupt || !chatRef.current) return;
-      const current = interrupt;
+      const chat = chatRef.current;
+      const currentInterrupt = interrupt;
       setInterrupt(null);
       setLoading(true);
       setStreamingText('');
@@ -95,21 +110,27 @@ export default function BankingInterrupt() {
         },
       ]);
 
+      // Build the resume payload from the interrupt itself: `respond` returns a
+      // toolResponse part matching the interrupt's ref/name and our output.
+      const respond = currentInterrupt.interrupt.respond({
+        approved,
+        feedback: feedback || undefined,
+      });
+
       try {
-        // Resume the paused flow with the interrupt's `respond` builder. The
-        // chat resumes from the snapshot it's tracking.
-        await runTurn(
-          chatRef.current.resumeStream({
-            respond: [
-              current.interrupt.respond({
-                approved,
-                feedback: feedback || undefined,
-              }),
-            ],
-          })
+        const res = await streamAndCollect(
+          chat.resumeStream({ respond: [respond] })
         );
+        processResult(res);
       } catch (err: any) {
-        handleTurnError(err, 'resuming');
+        setStreamingText('');
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'system',
+            text: `Error resuming (${err.status ?? 'INTERNAL'}): ${err.message}`,
+          },
+        ]);
       } finally {
         setLoading(false);
         setFeedback('');
@@ -118,12 +139,14 @@ export default function BankingInterrupt() {
     [interrupt, feedback]
   );
 
-  // ── Shared: stream a turn, render text, and detect interrupts ────────
-  async function runTurn(turn: AgentTurn): Promise<void> {
+  // ── Shared: stream a turn and collect chunks ─────────────────────────
+  async function streamAndCollect(
+    turn: ReturnType<AgentChat['sendStream']>
+  ): Promise<AgentResponse> {
     let accumulated = '';
     for await (const chunk of turn.stream) {
       if (chunk.text) {
-        accumulated += chunk.text;
+        accumulated = chunk.accumulatedText;
         setStreamingText(accumulated);
       }
     }
@@ -131,48 +154,36 @@ export default function BankingInterrupt() {
     const res = await turn.response;
     setStreamingText('');
 
-    // The turn paused for approval — surface the dialog.
-    const approval = res.interrupts.find((i) => i.name === 'userApproval') as
-      | AgentInterrupt<{ action?: string; details?: string }>
-      | undefined;
-    if (approval) {
-      setInterrupt({
-        action: approval.input?.action || 'Unknown',
-        details: approval.input?.details || '',
-        interrupt: approval,
-      });
-      return;
+    // Don't render a model bubble for an interrupted turn — the approval dialog
+    // shows the tool-request details instead.
+    if (res.interrupts.length === 0) {
+      const replyText = res.text;
+      if (accumulated || replyText) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'model', text: replyText || accumulated },
+        ]);
+      }
     }
 
-    // Otherwise show the model's reply.
-    const replyText = res.text || accumulated;
-    if (replyText) {
-      setMessages((prev) => [...prev, { role: 'model', text: replyText }]);
-    }
+    return res;
   }
 
-  // ── Shared: surface a turn-level or transport error ──────────────────
-  function handleTurnError(err: any, verb = '') {
-    setStreamingText('');
-    if (err instanceof AgentError) {
-      // A turn (including a resume) can fail gracefully — the chat keeps the
-      // last-good snapshot so the user can retry the approval.
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'system',
-          text: `⚠️ Turn failed (${err.status}): ${err.message}.`,
-        },
-      ]);
-      return;
+  // ── Process a result: detect interrupts ──────────────────────────────
+  function processResult(res: AgentResponse) {
+    // The turn paused for approval — surface the first interrupt's details in
+    // the dialog.
+    const pending = res.interrupts.find((i) => i.name === 'userApproval');
+    if (pending) {
+      const input = pending.input as
+        | { action?: string; details?: string }
+        | undefined;
+      setInterrupt({
+        interrupt: pending,
+        action: input?.action || 'Unknown',
+        details: input?.details || '',
+      });
     }
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: 'system',
-        text: `Error${verb ? ` ${verb}` : ''}: ${err.message}`,
-      },
-    ]);
   }
 
   return (
@@ -228,12 +239,12 @@ export default function BankingInterrupt() {
         <ol>
           <li>
             User sends a request like <em>"Transfer $500 to savings"</em> via{' '}
-            <code>chat.send()</code>.
+            <code>chat.sendStream()</code>.
           </li>
           <li>
             The model decides to call the <code>userApproval</code> tool.
-            Instead of a final answer, <code>res.interrupts</code> contains the
-            paused tool request with the action details.
+            Instead of a final answer, the response carries an entry in{' '}
+            <code>response.interrupts</code> with the action details.
           </li>
           <li>
             The client detects the interrupt and shows an inline approval dialog
@@ -241,9 +252,8 @@ export default function BankingInterrupt() {
           </li>
           <li>
             When the user approves or denies, the client calls{' '}
-            <code>chat.resume()</code> with the interrupt's{' '}
-            <code>respond()</code> output to <strong>resume</strong> from the
-            exact point where the flow paused.
+            <code>chat.resumeStream(interrupt.respond(output))</code> to{' '}
+            <strong>resume</strong> from the exact point where the flow paused.
           </li>
           <li>
             The model processes the approval result and returns a final
@@ -253,17 +263,15 @@ export default function BankingInterrupt() {
 
         <h4>Key APIs</h4>
         <pre>{`// Detect interrupt in the response
-const res = await chat.send(text);
-const approval = res.interrupts.find(
+const res = await turn.response;
+const pending = res.interrupts.find(
   (i) => i.name === 'userApproval'
 );
+// pending.input → action details
 
 // Resume after approval
-await chat.resume({
-  respond: [
-    approval.respond({ approved: true }),
-  ],
-});`}</pre>
+const respond = pending.respond({ approved: true });
+const turn = chat.resumeStream({ respond: [respond] });`}</pre>
 
         <h4>Interrupt Pattern</h4>
         <p>
