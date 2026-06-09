@@ -541,6 +541,40 @@ function composeSnapshotId(convoId: string, suffix: string): string {
 }
 
 /**
+ * Mints a new, store-compatible `snapshotId` *ahead of time* (before the
+ * snapshot it identifies is actually written).
+ *
+ * The runtime normally lets the store assign an id at write time, but some
+ * flows need the id earlier - e.g. an agent turn that wants to know the
+ * snapshotId at turn *start* (to name a git branch / worktree after it) and
+ * have the snapshot persisted at turn end reuse that very id, or the detach
+ * path which pre-reserves the in-flight snapshot's id.
+ *
+ * The id uses the same `s_{convoId}_{suffix}` format the stores assign, so it
+ * round-trips through both {@link InMemorySessionStore} and
+ * {@link FileSessionStore} (whose `parseSnapshotId` requires that shape). The
+ * convoId is derived from `sessionId` when provided (so all snapshots of a
+ * session group together), falling back to the parent's convoId, then to a
+ * fresh UUID.
+ */
+export function reserveSnapshotId(
+  sessionId?: string,
+  parentId?: string
+): string {
+  let convoId: string;
+  if (sessionId) {
+    assertValidSessionId(sessionId);
+    convoId = sessionId;
+  } else if (parentId) {
+    convoId = parseSnapshotId(parentId).convoId;
+  } else {
+    convoId = globalThis.crypto.randomUUID();
+  }
+  return composeSnapshotId(convoId, generateSnapshotSuffix());
+}
+
+
+/**
  * Parses a composite snapshot ID into its conversation ID and file-name suffix.
  *
  * The id is `s_{convoId}_{suffix}` where convoId is a UUID (36 chars with

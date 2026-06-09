@@ -46,10 +46,15 @@ import {
   testCodingAgent,
 } from './coding-agent.js';
 import {
+  gitSnapshotAgent,
+  testGitSnapshotAgent,
+} from './git-snapshot-agent.js';
+import {
   orchestratorAgent,
   testOrchestratorAgent,
   testOrchestratorAgentSimple,
 } from './orchestrator-agent.js';
+
 import { taskAgent, testTaskAgent } from './task-agent.js';
 import {
   testTripPlannerAgent,
@@ -90,7 +95,10 @@ void [
   testCodingAgent,
   listWorkspaceFiles,
   readWorkspaceFile,
+  gitSnapshotAgent,
+  testGitSnapshotAgent,
 ];
+
 
 export * from './background-agent.js';
 export * from './banking-agent.js';
@@ -155,6 +163,13 @@ app.post(
   expressHandler(codingAgent.getSnapshotDataAction)
 );
 app.post('/api/testCodingAgent', expressHandler(testCodingAgent));
+app.post('/api/gitSnapshotAgent', expressHandler(gitSnapshotAgent));
+app.post(
+  '/api/gitSnapshotAgent/state',
+  expressHandler(gitSnapshotAgent.getSnapshotDataAction)
+);
+app.post('/api/testGitSnapshotAgent', expressHandler(testGitSnapshotAgent));
+
 
 // Workspace browser — exposed as Genkit flows via expressHandler
 app.post('/api/workspace/files', expressHandler(listWorkspaceFiles));

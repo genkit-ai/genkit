@@ -31,9 +31,11 @@ import {
 import { definePrompt } from '../src/prompt.js';
 import {
   InMemorySessionStore,
+  reserveSnapshotId,
   Session,
   type SessionSnapshot,
 } from '../src/session.js';
+
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import {
   defineEchoModel,
@@ -324,7 +326,147 @@ describe('Agent', () => {
       // Only the snapshot from the second (non-callback) runner should exist.
       assert.ok(keys.every((k) => k === onEndTurnSnapshotId));
     });
+
+    it('reserves the turn snapshotId at turn start and persists under it', async () => {
+      const store = new InMemorySessionStore();
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        };
+      }
+
+      let ctxSnapshotId: string | undefined;
+      let ctxParentSnapshotId: string | undefined;
+      let ctxTurnIndex: number | undefined;
+      let endTurnSnapshotId: string | undefined;
+
+      const runner = new SessionRunner(session, inputGen(), {
+        store,
+        onEndTurn: (snapshotId) => {
+          endTurnSnapshotId = snapshotId;
+        },
+      });
+
+      await runner.run(async (_input, ctx) => {
+        ctxSnapshotId = ctx.snapshotId;
+        ctxParentSnapshotId = ctx.parentSnapshotId;
+        ctxTurnIndex = ctx.turnIndex;
+      });
+
+      // The id is reserved at turn start and made available to the handler.
+      assert.ok(ctxSnapshotId, 'handler should receive a reserved snapshotId');
+      // First turn of a fresh session has no parent.
+      assert.strictEqual(ctxParentSnapshotId, undefined);
+      assert.strictEqual(ctxTurnIndex, 0);
+
+      // The snapshot persisted at turn end reuses the reserved id.
+      assert.strictEqual(endTurnSnapshotId, ctxSnapshotId);
+      const saved = await store.getSnapshot({ snapshotId: ctxSnapshotId! });
+      assert.ok(saved);
+      assert.strictEqual(saved?.snapshotId, ctxSnapshotId);
+    });
+
+    it('passes the prior snapshotId as parentSnapshotId on subsequent turns', async () => {
+      const store = new InMemorySessionStore();
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        };
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+        };
+      }
+
+      const snapshotIds: string[] = [];
+      const parentIds: Array<string | undefined> = [];
+
+      const runner = new SessionRunner(session, inputGen(), { store });
+
+      await runner.run(async (_input, ctx) => {
+        snapshotIds.push(ctx.snapshotId);
+        parentIds.push(ctx.parentSnapshotId);
+      });
+
+      assert.strictEqual(snapshotIds.length, 2);
+      // First turn: no parent. Second turn: parent is the first turn's snapshot.
+      assert.strictEqual(parentIds[0], undefined);
+      assert.strictEqual(parentIds[1], snapshotIds[0]);
+    });
+
+    it('does not reserve a snapshotId when no store is configured', async () => {
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        };
+      }
+
+      let ctxSnapshotId: string | undefined = 'sentinel';
+      const runner = new SessionRunner(session, inputGen());
+      await runner.run(async (_input, ctx) => {
+        ctxSnapshotId = ctx.snapshotId;
+      });
+
+      // Without a store there is nothing to reserve, so snapshotId is undefined.
+      assert.strictEqual(ctxSnapshotId, undefined);
+    });
   });
+
+  describe('reserveSnapshotId', () => {
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const SNAPSHOT = /^s_(.+)_\d+_[a-z0-9]+$/;
+
+    it('mints a store-compatible id with a fresh convoId when given nothing', () => {
+      const id = reserveSnapshotId();
+      const m = SNAPSHOT.exec(id);
+      assert.ok(m, `id should match snapshot shape: ${id}`);
+      assert.match(m![1], UUID, 'convoId should be a fresh UUID');
+    });
+
+    it('derives the convoId from a provided sessionId', () => {
+      const sessionId = globalThis.crypto.randomUUID();
+      const id = reserveSnapshotId(sessionId);
+      const m = SNAPSHOT.exec(id);
+      assert.ok(m);
+      assert.strictEqual(m![1], sessionId);
+    });
+
+    it('derives the convoId from a parent snapshotId when no sessionId is given', () => {
+      const sessionId = globalThis.crypto.randomUUID();
+      const parentId = reserveSnapshotId(sessionId);
+      const childId = reserveSnapshotId(undefined, parentId);
+      const m = SNAPSHOT.exec(childId);
+      assert.ok(m);
+      // Child shares the parent's convoId so all snapshots group together.
+      assert.strictEqual(m![1], sessionId);
+    });
+
+    it('prefers sessionId over parentId when both are provided', () => {
+      const sessionId = globalThis.crypto.randomUUID();
+      const otherSessionId = globalThis.crypto.randomUUID();
+      const parentId = reserveSnapshotId(otherSessionId);
+      const id = reserveSnapshotId(sessionId, parentId);
+      const m = SNAPSHOT.exec(id);
+      assert.ok(m);
+      assert.strictEqual(m![1], sessionId);
+    });
+
+    it('throws on an invalid sessionId', () => {
+      assert.throws(() => reserveSnapshotId('not-a-uuid'));
+    });
+
+    it('produces unique ids on successive calls', () => {
+      const a = reserveSnapshotId();
+      const b = reserveSnapshotId();
+      assert.notStrictEqual(a, b);
+    });
+  });
+
 
   describe('defineCustomAgent', () => {
     it('should set client stateManagement and abortable=false when no store is provided', () => {
