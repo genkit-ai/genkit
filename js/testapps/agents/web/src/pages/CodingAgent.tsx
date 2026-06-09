@@ -26,7 +26,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
-
 // ---------------------------------------------------------------------------
 // Coding Agent — AI coding assistant with filesystem access
 //
@@ -57,7 +56,6 @@ const API_BASE = 'http://localhost:8080';
 const ENDPOINT = `${API_BASE}/api/codingAgent`;
 const WORKSPACE_FILES_ENDPOINT = `${API_BASE}/api/workspace/files`;
 const WORKSPACE_FILE_ENDPOINT = `${API_BASE}/api/workspace/file`;
-
 
 // ---------------------------------------------------------------------------
 // Types
@@ -122,7 +120,6 @@ export default function CodingAgent() {
   // history + snapshotId are threaded for us.
   const chatRef = useRef<AgentChat | null>(null);
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
-
 
   // ── Fetch workspace file tree via runFlow() ────────────────────────────
   const refreshFiles = useCallback(async () => {
@@ -252,7 +249,6 @@ export default function CodingAgent() {
       }
     }
 
-
     restore();
     return () => {
       cancelled = true;
@@ -312,7 +308,6 @@ export default function CodingAgent() {
     [agent, loading, approval, question, refreshFiles]
   );
 
-
   // ── Respond to a tool approval interrupt ──────────────────────────────
   const handleApprovalResponse = useCallback(
     async (approved: boolean) => {
@@ -334,7 +329,9 @@ export default function CodingAgent() {
       ]);
 
       // Resume on the live chat — it threads the snapshotId for us.
-      const chat = chatRef.current ?? agent.chat({ snapshotId: currentApproval.snapshotId });
+      const chat =
+        chatRef.current ??
+        agent.chat({ snapshotId: currentApproval.snapshotId });
       chatRef.current = chat;
 
       let turn: AgentTurn;
@@ -383,7 +380,6 @@ export default function CodingAgent() {
         const result = await streamAndCollect(turn);
         processResult(result);
       } catch (err: unknown) {
-
         setStreamingText('');
         const errMsg = err instanceof Error ? err.message : String(err);
         setMessages((prev) => [
@@ -472,7 +468,6 @@ export default function CodingAgent() {
     return result;
   }
 
-
   // ── Respond to an ask_user interrupt ───────────────────────────────────
   const handleQuestionResponse = useCallback(
     async (answer: string) => {
@@ -491,7 +486,8 @@ export default function CodingAgent() {
 
       // Resume on the live chat — it threads the snapshotId for us.
       const chat =
-        chatRef.current ?? agent.chat({ snapshotId: currentQuestion.snapshotId });
+        chatRef.current ??
+        agent.chat({ snapshotId: currentQuestion.snapshotId });
       chatRef.current = chat;
 
       // Use the respond pattern — send the tool response via resume.respond.
@@ -512,7 +508,6 @@ export default function CodingAgent() {
         const result = await streamAndCollect(turn);
         processResult(result);
       } catch (err: unknown) {
-
         setStreamingText('');
         const errMsg = err instanceof Error ? err.message : String(err);
         setMessages((prev) => [
@@ -538,7 +533,6 @@ export default function CodingAgent() {
     // Check for interrupts
     const interrupt = findToolInterrupt(result.raw);
     if (interrupt && result.snapshotId) {
-
       if (interrupt.name === 'ask_user') {
         // ask_user interrupt — show question dialog
         setQuestion({

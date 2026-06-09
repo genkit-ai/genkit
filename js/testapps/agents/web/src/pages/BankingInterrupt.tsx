@@ -81,8 +81,7 @@ export default function BankingInterrupt() {
           ...prev,
           {
             role: 'system',
-            text:
-              `⚠️ Turn failed (${err.status ?? 'INTERNAL'}): ${err.message}.`,
+            text: `⚠️ Turn failed (${err.status ?? 'INTERNAL'}): ${err.message}.`,
           },
         ]);
       } finally {
