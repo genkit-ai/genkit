@@ -105,3 +105,23 @@ async def test_tool_approval_empty_allowed_list(ctx: GenerateMiddlewareContext) 
 
     with pytest.raises(Interrupt):
         await approval.wrap_tool(params, ctx, next_fn)
+
+
+@pytest.mark.asyncio
+async def test_tool_approval_resumed_with_snake_case_approval(ctx: GenerateMiddlewareContext) -> None:
+    """Test that resumed tools with tool_approved snake_case metadata pass through."""
+    approval = ToolApproval(allowed_tools=[])
+
+    async def next_fn(params, ctx):
+        return MultipartToolResponse(output='approved')
+
+    tool = _make_tool('some_tool')
+    tool_request = ToolRequest(name='some_tool', input={})
+    tool_request_part = ToolRequestPart(
+        tool_request=tool_request,
+        metadata={'resumed': {'tool_approved': True}},
+    )
+    params = ToolHookParams(tool_request_part=tool_request_part, tool=tool)
+
+    result = await approval.wrap_tool(params, ctx, next_fn)
+    assert result is not None
