@@ -113,7 +113,6 @@ export default function SubAgentChat() {
     [agent, loading]
   );
 
-
   return (
     <div className="page-with-sidebar">
       <ChatUI
@@ -210,4 +209,3 @@ const orchestrator = ai.defineAgent({
     </div>
   );
 }
-

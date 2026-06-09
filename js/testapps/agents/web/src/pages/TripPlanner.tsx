@@ -20,7 +20,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
-
 // ---------------------------------------------------------------------------
 // Trip Planner — demonstrates definePromptAgent with a .prompt file
 //
@@ -185,7 +184,6 @@ export default function TripPlanner() {
     [agent, loading, navigate]
   );
 
-
   if (restoring) {
     return (
       <div className="page-with-sidebar">
@@ -302,4 +300,3 @@ const res = await turn.response;`}</pre>
     </div>
   );
 }
-

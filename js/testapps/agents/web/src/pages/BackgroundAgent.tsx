@@ -155,7 +155,6 @@ export default function BackgroundAgent() {
     setPollCount(0);
   }, [stopPolling]);
 
-
   return (
     <div className="background-layout">
       <div className="background-panel">
@@ -307,7 +306,6 @@ for await (
 
 // Abort
 await task.abort();`}</pre>
-
       </aside>
     </div>
   );
