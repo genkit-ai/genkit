@@ -272,6 +272,9 @@ async function subscribeToStream(
       },
     });
   } catch (e: any) {
+    // The subscribing client may have disconnected; skip writes to a
+    // destroyed response to avoid throwing.
+    if (response.destroyed) return;
     if (e instanceof StreamNotFoundError) {
       response.status(204).end();
       return;
