@@ -38,42 +38,27 @@ export const testFileStoreAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (userName) => {
-    // Run Turn 1
-    const turn1 = await fileStoreAgent.run(
-      {
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                text: 'Hello! Please log this note: I started studying Genkit today.',
-              },
-            ],
-          },
-        ],
-      },
-      {}
-    );
+    // A single chat persists to the FileSessionStore and carries the snapshot
+    // forward across turns automatically.
+    const chat = fileStoreAgent.chat();
 
-    const snapshotId1 = turn1.result.snapshotId!;
-
-    // Now simulate Turn 2 by resuming from the written File snapshot
-    const turn2 = await fileStoreAgent.run(
-      {
-        messages: [
-          { role: 'user', content: [{ text: 'What did I study today?' }] },
-        ],
-      },
-      { init: { snapshotId: snapshotId1 } }
+    // Turn 1
+    const res1 = await chat.send(
+      'Hello! Please log this note: I started studying Genkit today.'
     );
+    const snapshotId1 = res1.snapshotId!;
+
+    // Turn 2 — continues from the persisted snapshot automatically.
+    const res2 = await chat.send('What did I study today?');
 
     return {
       snapshotId1,
-      reply1: turn1.result.message?.content?.map((c) => c.text || '').join(''),
-      reply2: turn2.result.message?.content?.map((c) => c.text || '').join(''),
+      reply1: res1.text,
+      reply2: res2.text,
     };
   }
 );
+
 export const pruningStore = new FileSessionStore<any>('./.snapshots-pruning', {
   maxPersistedChainLength: 3,
 });
@@ -92,49 +77,22 @@ export const testFileStoreChainPruningAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (userName) => {
-    // Run Turn 1
-    const turn1 = await pruningAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text: 'Turn 1' }] }],
-      },
-      {}
-    );
-    const snap1 = turn1.result.snapshotId!;
+    // A single chat builds up a snapshot chain. We capture each turn's
+    // snapshotId to assert which ones get pruned.
+    const chat = pruningAgent.chat();
 
-    // Run Turn 2
-    const turn2 = await pruningAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text: 'Turn 2' }] }],
-      },
-      { init: { snapshotId: snap1 } }
-    );
-    const snap2 = turn2.result.snapshotId!;
-
-    // Run Turn 3
-    const turn3 = await pruningAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text: 'Turn 3' }] }],
-      },
-      { init: { snapshotId: snap2 } }
-    );
-    const snap3 = turn3.result.snapshotId!;
-
-    // Run Turn 4 (Snap 1 should be deleted here since max chain length is 3)
-    const turn4 = await pruningAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text: 'Turn 4' }] }],
-      },
-      { init: { snapshotId: snap3 } }
-    );
+    const snap1 = (await chat.send('Turn 1')).snapshotId!;
+    const snap2 = (await chat.send('Turn 2')).snapshotId!;
+    const snap3 = (await chat.send('Turn 3')).snapshotId!;
+    // Turn 4 (Snap 1 should be deleted here since max chain length is 3)
+    const snap4 = (await chat.send('Turn 4')).snapshotId!;
 
     // Snapshots are stored under <dirPath>/global/<snapshotId>.json
     const snapshotDir = path.join('./.snapshots-pruning', 'global');
     const snap1Exists = fs.existsSync(path.join(snapshotDir, `${snap1}.json`));
     const snap2Exists = fs.existsSync(path.join(snapshotDir, `${snap2}.json`));
     const snap3Exists = fs.existsSync(path.join(snapshotDir, `${snap3}.json`));
-    const snap4Exists = fs.existsSync(
-      path.join(snapshotDir, `${turn4.result.snapshotId}.json`)
-    );
+    const snap4Exists = fs.existsSync(path.join(snapshotDir, `${snap4}.json`));
 
     return {
       snap1Exists,

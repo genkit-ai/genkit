@@ -42,63 +42,26 @@ export const demonstrateBranching = ai.defineFlow(
     outputSchema: z.any(),
   },
   async () => {
-    const turn1 = await branchingAgent.run(
-      {
-        messages: [{ role: 'user' as const, content: [{ text: 'Hello!' }] }],
-      },
-      { init: {} }
-    );
+    // A single chat carries state forward automatically. To *branch*, we open
+    // a new chat attached to an earlier snapshot via `chat({ snapshotId })`.
+    const root = branchingAgent.chat();
+    const res1 = await root.send('Hello!');
+    const snapshot1 = res1.snapshotId;
 
-    const snapshot1 = turn1.result.snapshotId;
+    // Branch A: Bob.
+    const branchA = branchingAgent.chat({ snapshotId: snapshot1 });
+    await branchA.send('My name is Bob.');
+    const resA = await branchA.send('What is my name?');
 
-    const turn2A = await branchingAgent.run(
-      {
-        messages: [
-          { role: 'user' as const, content: [{ text: 'My name is Bob.' }] },
-        ],
-      },
-      { init: { snapshotId: snapshot1 } }
-    );
-
-    const snapshot2A = turn2A.result.snapshotId;
-
-    const turn3A = await branchingAgent.run(
-      {
-        messages: [
-          { role: 'user' as const, content: [{ text: 'What is my name?' }] },
-        ],
-      },
-      { init: { snapshotId: snapshot2A } }
-    );
-
-    const turn2B = await branchingAgent.run(
-      {
-        messages: [
-          { role: 'user' as const, content: [{ text: 'My name is John.' }] },
-        ],
-      },
-      { init: { snapshotId: snapshot1 } }
-    );
-
-    const snapshot2B = turn2B.result.snapshotId;
-
-    const turn3B = await branchingAgent.run(
-      {
-        messages: [
-          { role: 'user' as const, content: [{ text: 'What is my name?' }] },
-        ],
-      },
-      { init: { snapshotId: snapshot2B } }
-    );
+    // Branch B: John — forks from the SAME snapshot1.
+    const branchB = branchingAgent.chat({ snapshotId: snapshot1 });
+    await branchB.send('My name is John.');
+    const resB = await branchB.send('What is my name?');
 
     return {
       snapshotUsedForBranching: snapshot1,
-      branchAResponse: turn3A.result.message?.content
-        ?.map((c) => c.text || '')
-        .join(''),
-      branchBResponse: turn3B.result.message?.content
-        ?.map((c) => c.text || '')
-        .join(''),
+      branchAResponse: resA.text,
+      branchBResponse: resB.text,
     };
   }
 );

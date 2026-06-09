@@ -14,15 +14,9 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  Part,
-  SessionSnapshot,
-} from 'genkit/beta';
-import { runFlow } from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Part } from 'genkit/beta';
+import { remoteAgent } from 'genkit/beta/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
@@ -31,14 +25,14 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 // Demonstrates:
 //   • Session branching via snapshotId — forking a conversation into
 //     two independent timelines from the same checkpoint
-//   • Parallel `runFlow()` calls from the same snapshotId
+//   • Two parallel `chat.send()` calls from the same snapshotId
 //   • The user picks which variant to continue from, selecting a branch
 //   • Abandoned branches remain in the store (immutable snapshots)
-//   • URL-based session persistence + restore on reload
+//   • URL-based session persistence + restore on reload via getSnapshot
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/branchingAgent';
-const STATE_ENDPOINT = '/api/branchingAgent/state';
+
 
 /** A settled chat message (user or chosen model response). */
 interface ChatMessage {
@@ -63,6 +57,9 @@ export default function BranchingChat() {
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
 
+  // Typed HTTP client for the branching agent (server-side store).
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
   // The snapshotId of the current branch point.
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
@@ -74,10 +71,8 @@ export default function BranchingChat() {
 
     async function restore() {
       try {
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: { snapshotId: urlSnapshotId },
-        });
+        // Read the snapshot without starting a chat — we only need its history.
+        const snapshot = await agent.getSnapshot(urlSnapshotId!);
 
         if (cancelled) return;
 
@@ -111,6 +106,7 @@ export default function BranchingChat() {
     };
   }, []); // Only run on mount
 
+
   // ── Send a message and generate two variants ─────────────────────────
   const handleSend = useCallback(
     async (text: string) => {
@@ -122,36 +118,24 @@ export default function BranchingChat() {
       setError(null);
       setVariants(null);
 
-      const msgInput: AgentInput = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
-      };
-
-      // Both calls branch from the same snapshotId (or fresh session).
-      const init: AgentInit = snapshotIdRef.current
-        ? { snapshotId: snapshotIdRef.current }
-        : {};
+      // Each variant gets its own chat that branches from the same snapshot
+      // (or a fresh session when there is no branch point yet). Branching is
+      // simply two independent turns started from the same checkpoint.
+      const makeChat = () =>
+        snapshotIdRef.current
+          ? agent.chat({ snapshotId: snapshotIdRef.current })
+          : agent.chat();
 
       try {
         // Fire two requests in parallel from the same branch point.
         const [resultA, resultB] = await Promise.all([
-          runFlow<AgentOutput, AgentInit>({
-            url: ENDPOINT,
-            input: msgInput,
-            init,
-          }),
-          runFlow<AgentOutput, AgentInit>({
-            url: ENDPOINT,
-            input: msgInput,
-            init,
-          }),
+          makeChat().send(text),
+          makeChat().send(text),
         ]);
 
-        const textA = extractText(resultA);
-        const textB = extractText(resultB);
-
         setVariants({
-          a: { text: textA, snapshotId: resultA?.snapshotId ?? '' },
-          b: { text: textB, snapshotId: resultB?.snapshotId ?? '' },
+          a: { text: resultA.text, snapshotId: resultA.snapshotId ?? '' },
+          b: { text: resultB.text, snapshotId: resultB.snapshotId ?? '' },
         });
       } catch (err: any) {
         setError(err.message);
@@ -159,8 +143,9 @@ export default function BranchingChat() {
         setLoading(false);
       }
     },
-    [loading, variants]
+    [agent, loading, variants]
   );
+
 
   // ── User picks a variant ─────────────────────────────────────────────
   const handlePick = useCallback(
@@ -317,9 +302,10 @@ export default function BranchingChat() {
         <ol>
           <li>
             User sends a message. The client fires <strong>two parallel</strong>{' '}
-            <code>runFlow()</code> calls, both with the same{' '}
-            <code>{'init: { snapshotId }'}</code>.
+            <code>chat.send()</code> turns, both branching from the same{' '}
+            <code>snapshotId</code>.
           </li>
+
           <li>
             Each call creates an <strong>independent branch</strong> from the
             same conversation checkpoint. The LLM's non-determinism produces
@@ -345,18 +331,16 @@ export default function BranchingChat() {
         </p>
 
         <h4>Key APIs</h4>
-        <pre>{`// Branch: two calls from same snapshot
+        <pre>{`// Branch: two chats from the same snapshot
+const agent = remoteAgent({
+  url: '/api/branchingAgent',
+});
+const makeChat = () =>
+  agent.chat({ snapshotId });
+
 const [a, b] = await Promise.all([
-  runFlow({
-    url: '/api/branchingAgent',
-    input: { messages: [...] },
-    init: { snapshotId },
-  }),
-  runFlow({
-    url: '/api/branchingAgent',
-    input: { messages: [...] },
-    init: { snapshotId },
-  }),
+  makeChat().send(text),
+  makeChat().send(text),
 ]);
 
 // a.snapshotId !== b.snapshotId
@@ -367,16 +351,3 @@ const [a, b] = await Promise.all([
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
-}

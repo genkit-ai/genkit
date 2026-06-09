@@ -149,14 +149,13 @@ export const testTripPlannerAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await tripPlannerAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text }] }],
-      },
-      {
-        onChunk: sendChunk,
-      }
-    );
-    return res.result;
+    const chat = tripPlannerAgent.chat();
+    const turn = chat.sendStream(text);
+
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );

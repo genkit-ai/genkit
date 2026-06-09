@@ -58,10 +58,12 @@ export const testWorkspaceAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await workspaceAgent.run(
-      { messages: [{ role: 'user' as const, content: [{ text }] }] },
-      { init: {}, onChunk: sendChunk }
-    );
-    return res.result;
+    const chat = workspaceAgent.chat();
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );

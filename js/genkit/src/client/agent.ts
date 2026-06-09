@@ -43,6 +43,10 @@ export {
   type DetachedTask,
 } from '@genkit-ai/ai/agent-core';
 
+// Re-export the JSON Patch helper so apps can apply a chunk's `customPatch` to
+// their own locally tracked copy of the agent's custom state.
+export { applyPatch, type JsonPatch } from '@genkit-ai/ai/json-patch';
+
 /**
  * Options for {@link remoteAgent}.
  */
@@ -71,7 +75,7 @@ export interface RemoteAgentOptions {
  * ```ts
  * import { remoteAgent } from 'genkit/beta/client';
  *
- * const agent = remoteAgent<WeatherState, WeatherStatus>({
+ * const agent = remoteAgent<WeatherState>({
  *   url: '/api/weatherAgent',
  * });
  * const chat = agent.chat();
@@ -79,9 +83,9 @@ export interface RemoteAgentOptions {
  * console.log(res.text);
  * ```
  */
-export function remoteAgent<State = unknown, Stream = unknown>(
+export function remoteAgent<State = unknown>(
   options: RemoteAgentOptions
-): AgentAPI<State, Stream> {
+): AgentAPI<State> {
   const { url } = options;
   const stateUrl = options.stateUrl ?? `${url}/state`;
   const abortUrl = options.abortUrl ?? `${url}/abort`;
@@ -163,5 +167,5 @@ export function remoteAgent<State = unknown, Stream = unknown>(
     },
   };
 
-  return createAgentAPI<State, Stream>(transport);
+  return createAgentAPI<State>(transport);
 }
