@@ -64,6 +64,8 @@ export const MediaSchema = z.object({
   url: z.string(),
 });
 
+export type Media = z.infer<typeof MediaSchema>;
+
 /**
  * Zod schema of a media part.
  */

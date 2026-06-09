@@ -39,4 +39,32 @@
  *
  * @module beta/client
  */
+export {
+  AgentError,
+  remoteAgent,
+  type AgentAPI,
+  type AgentChat,
+  type AgentChunk,
+  type AgentInterrupt,
+  type AgentResponse,
+  type AgentTurn,
+  type DetachedTask,
+  type RemoteAgentOptions,
+} from './agent.js';
+
 export { runFlow, streamFlow } from './client.js';
+export type {
+  AgentFinishReason,
+  AgentInit,
+  AgentInput,
+  AgentOutput,
+  AgentStreamChunk,
+  Artifact,
+  GenerationUsage,
+  MessageData,
+  Part,
+  SessionSnapshot,
+  SessionState,
+  ToolRequestPart,
+  ToolResponsePart,
+} from './types.js';
