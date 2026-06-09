@@ -75,81 +75,173 @@ func ReadJSONFile(filename string, pvalue any) error {
 	return json.NewDecoder(f).Decode(pvalue)
 }
 
-var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
-
 // InferJSONSchema infers a JSON schema from a Go value.
 //
-// Recursion is detected by stack: while a struct type T is being reflected, T
-// is marked in-progress. Any nested encounter of T (a self-reference) returns
-// an "any" schema; T is unmarked when its reflection completes. Each top-level
-// occurrence of T (siblings, repeats) gets its own full reflection — so a
-// struct used in multiple fields produces the correct schema each time.
-//
-// We can't observe reflection completion through the library's Mapper hook
-// alone, so each struct type is reflected via a sub-Reflector. The Mapper's
-// defer fires when the sub-Reflector returns, which is the exit point.
+// Named struct types are reflected with references enabled, so the raw result
+// uses `$ref`/`$defs`. Call [InferJSONSchemaMap] (or [InlineAcyclicDefs] on the
+// marshaled map) to inline the acyclic definitions; only genuinely recursive
+// types retain `$ref`/`$defs`, which lets self-referential Go types round-trip
+// as proper recursive JSON Schema rather than collapsing to an "any" schema.
 func InferJSONSchema(x any) *jsonschema.Schema {
-	inProgress := make(map[reflect.Type]bool)
-	var mapper func(reflect.Type) *jsonschema.Schema
-	mapper = func(t reflect.Type) *jsonschema.Schema {
-		// []any reflects to `{ type: "array", items: true }` which is not valid JSON schema.
-		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Interface {
-			return &jsonschema.Schema{
-				Type:  "array",
-				Items: &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema},
-			}
-		}
-		baseType := t
-		if t.Kind() == reflect.Ptr {
-			baseType = t.Elem()
-		}
-		if baseType.Kind() != reflect.Struct {
-			return nil
-		}
-		if inProgress[baseType] {
-			return anyStructSchema(baseType)
-		}
-
-		inProgress[baseType] = true
-		defer delete(inProgress, baseType)
-
-		// The sub-Reflector's first Mapper call is for baseType itself: return
-		// nil so the library reflects it. All nested calls (fields, including
-		// recursive self-references) delegate back to the outer mapper, where
-		// inProgress[baseType] is set and recursion is broken.
-		firstCall := true
-		sub := jsonschema.Reflector{
-			DoNotReference: true,
-			Anonymous:      true, // suppress $id on this nested schema
-			Mapper: func(st reflect.Type) *jsonschema.Schema {
-				if firstCall && st == baseType {
-					firstCall = false
-					return nil
+	r := jsonschema.Reflector{
+		// References are required so recursive types can express recursion via
+		// $ref; acyclic definitions are inlined afterwards by InlineAcyclicDefs.
+		DoNotReference: false,
+		Anonymous:      true, // suppress $id
+		Mapper: func(t reflect.Type) *jsonschema.Schema {
+			// []any reflects to `{ type: "array", items: true }` which is not valid JSON schema.
+			if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Interface {
+				return &jsonschema.Schema{
+					Type:  "array",
+					Items: &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema},
 				}
-				return mapper(st)
-			},
-		}
-		s := sub.ReflectFromType(baseType)
-		s.Version = "" // suppress $schema on this nested schema
-		return s
+			}
+			return nil
+		},
 	}
-
-	r := jsonschema.Reflector{DoNotReference: true, Anonymous: true, Mapper: mapper}
 	s := r.Reflect(x)
-	s.Version = ""
+	s.Version = "" // suppress $schema
 	return s
 }
 
-// anyStructSchema returns the "any" schema used to break recursion. Types
-// that implement json.Marshaler may serialize to a non-object, so we omit
-// `type: object` for them.
-func anyStructSchema(t reflect.Type) *jsonschema.Schema {
-	if t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
-		return &jsonschema.Schema{AdditionalProperties: jsonschema.TrueSchema}
+// InferJSONSchemaMap infers a JSON schema from a Go value as a map, inlining
+// all non-recursive `$defs` so that only genuinely recursive types keep
+// `$ref`/`$defs`.
+func InferJSONSchemaMap(x any) map[string]any {
+	return InlineAcyclicDefs(SchemaAsMap(InferJSONSchema(x)))
+}
+
+// InlineAcyclicDefs rewrites a JSON schema document so that every non-recursive
+// definition in `$defs` is inlined into the sites that reference it, leaving
+// only definitions that participate in a reference cycle. Acyclic schemas come
+// out fully inlined with no `$defs`/`$ref`; recursive types keep a `$defs`
+// entry referenced via `$ref`, which is the recursion the Gemini
+// `responseJsonSchema` field unrolls server-side.
+func InlineAcyclicDefs(root map[string]any) map[string]any {
+	defsAny, ok := root["$defs"].(map[string]any)
+	if !ok || len(defsAny) == 0 {
+		return root
 	}
-	return &jsonschema.Schema{
-		Type:                 "object",
-		AdditionalProperties: jsonschema.TrueSchema,
+
+	defs := make(map[string]map[string]any, len(defsAny))
+	for name, v := range defsAny {
+		if m, ok := v.(map[string]any); ok {
+			defs[name] = m
+		}
+	}
+
+	// Build the def-reference graph and determine which defs are recursive
+	// (reachable from themselves).
+	edges := make(map[string]map[string]bool, len(defs))
+	for name, body := range defs {
+		refs := map[string]bool{}
+		collectRefs(body, refs)
+		edges[name] = refs
+	}
+	recursive := map[string]bool{}
+	for name := range defs {
+		if canReach(name, name, edges, map[string]bool{}) {
+			recursive[name] = true
+		}
+	}
+
+	// Only non-recursive defs are inlined; recursive refs are preserved.
+	inlineable := map[string]map[string]any{}
+	for name, body := range defs {
+		if !recursive[name] {
+			inlineable[name] = body
+		}
+	}
+
+	// Resolve the root schema (root minus its $defs container).
+	rootSchema := map[string]any{}
+	for k, v := range root {
+		if k == "$defs" {
+			continue
+		}
+		rootSchema[k] = v
+	}
+	result, _ := inlineRefs(rootSchema, inlineable).(map[string]any)
+	if result == nil {
+		result = map[string]any{}
+	}
+
+	// Keep recursive defs, with their own non-recursive refs inlined.
+	newDefs := map[string]any{}
+	for name := range recursive {
+		newDefs[name] = inlineRefs(defs[name], inlineable)
+	}
+	if len(newDefs) > 0 {
+		result["$defs"] = newDefs
+	}
+	return result
+}
+
+// refName extracts the definition name from a "#/$defs/Name" reference.
+func refName(ref string) string {
+	tkns := strings.Split(ref, "/")
+	return tkns[len(tkns)-1]
+}
+
+// collectRefs records the name of every $ref found anywhere within node.
+func collectRefs(node any, out map[string]bool) {
+	switch n := node.(type) {
+	case map[string]any:
+		if ref, ok := n["$ref"].(string); ok {
+			out[refName(ref)] = true
+		}
+		for _, v := range n {
+			collectRefs(v, out)
+		}
+	case []any:
+		for _, v := range n {
+			collectRefs(v, out)
+		}
+	}
+}
+
+// canReach reports whether target is reachable from start in the ref graph.
+func canReach(start, target string, edges map[string]map[string]bool, seen map[string]bool) bool {
+	for next := range edges[start] {
+		if next == target {
+			return true
+		}
+		if !seen[next] {
+			seen[next] = true
+			if canReach(next, target, edges, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inlineRefs returns a copy of node with every $ref to an inlineable
+// definition replaced by that definition's (recursively inlined) body. Refs to
+// definitions not in inlineable (i.e. recursive ones) are left untouched, which
+// terminates the recursion.
+func inlineRefs(node any, inlineable map[string]map[string]any) any {
+	switch n := node.(type) {
+	case map[string]any:
+		if ref, ok := n["$ref"].(string); ok {
+			if body, ok := inlineable[refName(ref)]; ok {
+				return inlineRefs(body, inlineable)
+			}
+			return n
+		}
+		out := make(map[string]any, len(n))
+		for k, v := range n {
+			out[k] = inlineRefs(v, inlineable)
+		}
+		return out
+	case []any:
+		out := make([]any, len(n))
+		for i, v := range n {
+			out[i] = inlineRefs(v, inlineable)
+		}
+		return out
+	default:
+		return node
 	}
 }
 
