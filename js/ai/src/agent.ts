@@ -29,6 +29,13 @@ import {
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
+import {
+  createAgentAPI,
+  type AgentAPI,
+  type AgentTransport,
+  type SnapshotLookup,
+} from './agent-core.js';
+
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { setCustomMetadataAttributes } from '@genkit-ai/core/tracing';
 import { generateStream } from './generate.js';
@@ -666,14 +673,23 @@ export type GetSnapshotDataAction<S = unknown> = Action<
 
 /**
  * Represents a configured, registered Agent.
+ *
+ * An `Agent` exposes two surfaces:
+ *
+ * 1. The ergonomic, transport-agnostic {@link AgentAPI} (`chat`, `loadChat`,
+ *    `getSnapshot`, `abort`) — the same surface returned by `remoteAgent` on
+ *    the client, so server- and client-side code share one interface.
+ * 2. The lower-level {@link BidiAction} surface (`run`, `streamBidi`, …) for
+ *    advanced use and for serving over HTTP.
  */
-export interface Agent<State = unknown>
+export interface Agent<State = unknown, Stream = unknown>
   extends BidiAction<
-    typeof AgentInputSchema,
-    typeof AgentOutputSchema,
-    typeof AgentStreamChunkSchema,
-    typeof AgentInitSchema
-  > {
+      typeof AgentInputSchema,
+      typeof AgentOutputSchema,
+      typeof AgentStreamChunkSchema,
+      typeof AgentInitSchema
+    >,
+    AgentAPI<State, Stream> {
   getSnapshotData(
     opts: GetSnapshotDataInput
   ): Promise<SessionSnapshot<State> | undefined>;
@@ -875,7 +891,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     clientStateTransform?: ClientStateTransform<State>;
   },
   fn: AgentFn<Stream, State>
-): Agent<State> {
+): Agent<State, Stream> {
   // Helper that applies the optional transform before exposing state to the
   // client.  When no transform is configured it returns the raw state.
   const toClientState = (
@@ -1176,7 +1192,51 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     >,
   });
 
-  return composite as unknown as Agent<State>;
+  // In-process transport: drives the agent action directly (no HTTP). This lets
+  // the server-side agent expose the same ergonomic AgentAPI (`chat`,
+  // `loadChat`, `getSnapshot`, `abort`) as the HTTP `remoteAgent` client.
+  const transport: AgentTransport = {
+    stateManagement: config.store ? 'server' : 'client',
+
+    runTurn(input, init, opts) {
+      const bidi = primaryAction.streamBidi(init, {
+        abortSignal: opts.abortSignal,
+      });
+      bidi.send(input);
+      bidi.close();
+      return { stream: bidi.stream, output: bidi.output };
+    },
+
+    async run(input, init, opts) {
+      const bidi = primaryAction.streamBidi(init, {
+        abortSignal: opts.abortSignal,
+      });
+      bidi.send(input);
+      bidi.close();
+      return bidi.output;
+    },
+
+    async getSnapshot(lookup: SnapshotLookup) {
+      return composite.getSnapshotData(lookup);
+    },
+
+    abort(snapshotId: string) {
+      return composite.abort(snapshotId);
+    },
+  };
+
+  const agentApi = createAgentAPI<State, Stream>(transport);
+
+  // Expose the AgentAPI surface on the composite. `abort`/`getSnapshotData`
+  // already exist on the composite (richer signatures); we add `chat`,
+  // `loadChat`, and `getSnapshot`.
+  Object.assign(composite, {
+    chat: agentApi.chat,
+    loadChat: agentApi.loadChat,
+    getSnapshot: agentApi.getSnapshot,
+  });
+
+  return composite as unknown as Agent<State, Stream>;
 }
 
 /**
