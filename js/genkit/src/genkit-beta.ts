@@ -103,7 +103,7 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineCustomAgent<Stream = unknown, State = unknown>(
+  defineCustomAgent<State = unknown>(
     config: {
       name: string;
       description?: string;
@@ -111,9 +111,9 @@ export class GenkitBeta extends Genkit {
       store?: SessionStore<State>;
       snapshotCallback?: SnapshotCallback<State>;
     },
-    fn: AgentFn<Stream, State>
+    fn: AgentFn<State>
   ) {
-    return defineCustomAgent<Stream, State>(this.registry, config, fn);
+    return defineCustomAgent<State>(this.registry, config, fn);
   }
 
   /**

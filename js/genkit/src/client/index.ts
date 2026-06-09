@@ -41,6 +41,7 @@
  */
 export {
   AgentError,
+  applyPatch,
   remoteAgent,
   type AgentAPI,
   type AgentChat,
@@ -49,6 +50,7 @@ export {
   type AgentResponse,
   type AgentTurn,
   type DetachedTask,
+  type JsonPatch,
   type RemoteAgentOptions,
 } from './agent.js';
 
