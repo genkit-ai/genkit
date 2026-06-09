@@ -19,7 +19,8 @@ import type { ChatTransport, UIMessage, UIMessageChunk } from 'ai';
 // keeps this module browser-safe (no Node-only runtime code is pulled in)
 // while staying in sync with the canonical agent protocol types.
 import type { AgentOutput, AgentStreamChunk } from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
+import { applyPatch, streamFlow } from 'genkit/beta/client';
+
 import {
   asRestartInterrupt,
   currentTurnResolvedTools,
@@ -293,7 +294,13 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
         let textBlockId: string | null = null;
         let reasoningBlockId: string | null = null;
         let inStep = false;
+        // Locally tracked agent custom state, kept live by applying each
+        // streamed RFC 6902 JSON Patch (`chunk.customPatch`). The first patch
+        // of a turn is a whole-document replace that re-bases us onto the
+        // server's current baseline.
+        let customState: unknown;
         const emittedToolInputs = new Set<string>();
+
         // Deterministic fallback for tool calls that arrive without a `ref`.
         // The model may omit refs, in which case the request and its matching
         // response must still share the same `toolCallId`.
@@ -371,6 +378,23 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
           for await (const chunk of response.stream) {
             // If aborted during iteration, break out cleanly.
             if (aborted) break;
+
+            // Agent custom-state update. The runtime auto-emits a `customPatch`
+            // (RFC 6902 JSON Patch) whenever the session's custom state
+            // mutates. Apply it to our locally tracked copy and surface the
+            // full, post-patch state as a transient `data-custom` UI chunk so
+            // the React app can render live progress. Must run BEFORE the
+            // `modelChunk` early-continue below, since custom-only chunks carry
+            // no `modelChunk`.
+            if (chunk?.customPatch) {
+              customState = applyPatch(customState, chunk.customPatch);
+              ensureStarted();
+              enqueue({
+                type: 'data-custom',
+                data: customState,
+                transient: true,
+              } as UIMessageChunk);
+            }
 
             const mc = chunk?.modelChunk;
             if (!mc?.content) continue;
