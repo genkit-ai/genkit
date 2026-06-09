@@ -34,6 +34,14 @@ export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types';
 
 let server: http.Server;
 const broadcastManager = new BroadcastManager();
+const DEFAULT_TELEMETRY_HOST = 'localhost';
+
+function formatHostForUrl(host: string): string {
+  if (host === '0.0.0.0' || host === '::') {
+    return 'localhost';
+  }
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+}
 
 /**
  * Starts the telemetry server with the provided params
@@ -51,9 +59,11 @@ export async function startTelemetryServer(params: {
    */
   maxRequestBodySize?: string | number;
   corsOrigin?: string | RegExp;
+  host?: string;
 }) {
   await params.traceStore.init();
   await params.logStore.init();
+  const host = params.host ?? DEFAULT_TELEMETRY_HOST;
 
   const api = express();
   // Allow all origins and expose trace ID header
@@ -312,8 +322,10 @@ export async function startTelemetryServer(params: {
     res.status(500).json(errorResponse);
   });
 
-  server = api.listen(params.port, () => {
-    logger.info(`Telemetry API running on http://localhost:${params.port}`);
+  server = api.listen(params.port, host, () => {
+    logger.info(
+      `Telemetry API running on http://${formatHostForUrl(host)}:${params.port}`
+    );
   });
 
   server.on('error', (error) => {

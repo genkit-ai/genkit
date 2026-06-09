@@ -49,6 +49,12 @@ import {
   StreamingCallback,
 } from './types';
 
+const DEFAULT_REFLECTION_HOST = 'localhost';
+
+function getReflectionHost(): string {
+  return process.env.GENKIT_REFLECTION_HOST || DEFAULT_REFLECTION_HOST;
+}
+
 interface JsonRpcRequest {
   jsonrpc: '2.0';
   method: string;
@@ -133,7 +139,8 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     if (!port) {
       port = await getPort({ port: makeRange(3200, 3400) });
     }
-    this.wss = new WebSocketServer({ port });
+    const host = getReflectionHost();
+    this.wss = new WebSocketServer({ port, host });
 
     this._port = port;
     logger.info(`Starting reflection server: ws://localhost:${port}`);

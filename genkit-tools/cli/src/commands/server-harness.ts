@@ -38,7 +38,8 @@ export const SERVER_HARNESS_COMMAND = '__server-harness' as const;
 export const serverHarness = new Command('__server-harness')
   .argument('<port>', 'Port to serve on')
   .argument('<logFile>', 'Log file path')
-  .action(async (port: string, logFile: string) => {
+  .argument('[host]', 'Host to serve on', 'localhost')
+  .action(async (port: string, logFile: string, host: string) => {
     redirectStdoutToFile(logFile);
 
     process.on('error', (error): void => {
@@ -56,5 +57,5 @@ export const serverHarness = new Command('__server-harness')
       projectRoot: await findProjectRoot(),
       manageHealth: true,
     });
-    await startServer(manager, portNum);
+    await startServer(manager, portNum, { host });
   });
