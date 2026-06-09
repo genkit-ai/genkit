@@ -87,7 +87,8 @@ export function expressHandler<
           headers: Object.fromEntries(
             Object.entries(request.headers).map(([key, value]) => [
               key.toLowerCase(),
-              Array.isArray(value) ? value.join(' ') : String(value),
+              // RFC 9110 5.3: combine repeated field lines with a comma.
+              Array.isArray(value) ? value.join(', ') : String(value),
             ])
           ),
           input,
