@@ -83,6 +83,7 @@ export {
   type GenerateResponseChunkData,
   type GenerateResponseData,
   type GenerationUsage,
+  type Media,
   type MediaPart,
   type MessageData,
   type MiddlewareRef,
