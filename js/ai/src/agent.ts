@@ -1202,6 +1202,25 @@ export function defineCustomAgent<State = unknown>(
     };
   };
 
+  // Shared snapshot/abort implementations, reused by both the `defineAction`
+  // surfaces (which inject the ambient request context) and the ergonomic
+  // composite methods (which accept caller-supplied options).
+  const resolveSnapshot = async (
+    lookup: GetSnapshotDataInput
+  ): Promise<SessionSnapshot | undefined> => {
+    requireStore(config.store, 'getSnapshotData', config.name);
+    const snapshot = await config.store.getSnapshot(lookup);
+    return snapshot ? toClientSnapshot(snapshot) : undefined;
+  };
+
+  const runAbort = (
+    snapshotId: string,
+    options?: SessionStoreOptions
+  ): Promise<SessionSnapshot['status'] | undefined> => {
+    requireStore(config.store, 'abort', config.name);
+    return abortSnapshotInStore(config.store, snapshotId, options);
+  };
+
   const getSnapshotDataAction = defineAction(
     registry,
     {
@@ -1211,14 +1230,7 @@ export function defineCustomAgent<State = unknown>(
       inputSchema: GetSnapshotDataInputSchema,
       outputSchema: z.any(), // SessionSnapshot Schema
     },
-    async (lookup) => {
-      requireStore(config.store, 'getSnapshotData', config.name);
-      const snapshot = await config.store.getSnapshot({
-        ...lookup,
-        context: getContext(),
-      });
-      return snapshot ? toClientSnapshot(snapshot) : undefined;
-    }
+    async (lookup) => resolveSnapshot({ ...lookup, context: getContext() })
   );
 
   const abortAgentAction = defineAction(
@@ -1230,24 +1242,13 @@ export function defineCustomAgent<State = unknown>(
       inputSchema: z.string(),
       outputSchema: z.string().optional(),
     },
-    async (snapshotId) => {
-      requireStore(config.store, 'abort', config.name);
-      return abortSnapshotInStore(config.store, snapshotId, {
-        context: getContext(),
-      });
-    }
+    async (snapshotId) => runAbort(snapshotId, { context: getContext() })
   );
 
   const composite = Object.assign(primaryAction, {
-    getSnapshotData: async (opts: GetSnapshotDataInput) => {
-      requireStore(config.store, 'getSnapshotData', config.name);
-      const snapshot = await config.store.getSnapshot(opts);
-      return snapshot ? toClientSnapshot(snapshot) : undefined;
-    },
-    abort: async (snapshotId: string, options?: SessionStoreOptions) => {
-      requireStore(config.store, 'abort', config.name);
-      return abortSnapshotInStore(config.store, snapshotId, options);
-    },
+    getSnapshotData: (opts: GetSnapshotDataInput) => resolveSnapshot(opts),
+    abort: (snapshotId: string, options?: SessionStoreOptions) =>
+      runAbort(snapshotId, options),
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
     abortAgentAction: abortAgentAction as unknown as Action<
@@ -1256,6 +1257,21 @@ export function defineCustomAgent<State = unknown>(
     >,
   });
 
+  // Opens a single-turn bidi stream: send the input, close the send side, and
+  // hand back the live `{ stream, output }` handle.
+  const startBidi = (
+    input: AgentInput,
+    init: AgentInit,
+    opts: { abortSignal: AbortSignal }
+  ) => {
+    const bidi = primaryAction.streamBidi(init, {
+      abortSignal: opts.abortSignal,
+    });
+    bidi.send(input);
+    bidi.close();
+    return bidi;
+  };
+
   // In-process transport: drives the agent action directly (no HTTP). This lets
   // the server-side agent expose the same ergonomic AgentAPI (`chat`,
   // `loadChat`, `getSnapshot`, `abort`) as the HTTP `remoteAgent` client.
@@ -1263,21 +1279,12 @@ export function defineCustomAgent<State = unknown>(
     stateManagement: config.store ? 'server' : 'client',
 
     runTurn(input, init, opts) {
-      const bidi = primaryAction.streamBidi(init, {
-        abortSignal: opts.abortSignal,
-      });
-      bidi.send(input);
-      bidi.close();
+      const bidi = startBidi(input, init, opts);
       return { stream: bidi.stream, output: bidi.output };
     },
 
     async run(input, init, opts) {
-      const bidi = primaryAction.streamBidi(init, {
-        abortSignal: opts.abortSignal,
-      });
-      bidi.send(input);
-      bidi.close();
-      return bidi.output;
+      return startBidi(input, init, opts).output;
     },
 
     async getSnapshot(lookup: SnapshotLookup) {

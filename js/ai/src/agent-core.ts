@@ -606,13 +606,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       this.snapshotId = connectInit.snapshotId;
     }
     if (connectInit?.state) {
-      this.clientState = connectInit.state;
-      this.messages = connectInit.state.messages
-        ? [...connectInit.state.messages]
-        : [];
-      this.artifacts = connectInit.state.artifacts
-        ? [...connectInit.state.artifacts]
-        : [];
+      this.hydrateFromState(connectInit.state);
     }
   }
 
@@ -620,16 +614,20 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     return this.clientState?.custom as State | undefined;
   }
 
+  /**
+   * Replaces the tracked `clientState`/`messages`/`artifacts` aggregates with
+   * (copies of) those carried by a session state.
+   */
+  private hydrateFromState(state: SessionState<State>): void {
+    this.clientState = state;
+    this.messages = state?.messages ? [...state.messages] : [];
+    this.artifacts = state?.artifacts ? [...state.artifacts] : [];
+  }
+
   /** Loads aggregates from a server snapshot (used by `loadChat`). */
   _loadFromSnapshot(snapshot: SessionSnapshot<State>): void {
     this.snapshotId = snapshot.snapshotId;
-    this.clientState = snapshot.state;
-    this.messages = snapshot.state?.messages
-      ? [...snapshot.state.messages]
-      : [];
-    this.artifacts = snapshot.state?.artifacts
-      ? [...snapshot.state.artifacts]
-      : [];
+    this.hydrateFromState(snapshot.state);
   }
 
   /**
