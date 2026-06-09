@@ -50,6 +50,13 @@ func newTestInMemStore[State any]() *testInMemStore[State] {
 	}
 }
 
+// snapshotCount reports the number of stored snapshot rows.
+func (s *testInMemStore[State]) snapshotCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.snapshots)
+}
+
 func (s *testInMemStore[State]) GetSnapshot(_ context.Context, snapshotID string) (*SessionSnapshot[State], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

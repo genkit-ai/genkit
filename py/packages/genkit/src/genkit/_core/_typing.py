@@ -61,6 +61,7 @@ class SnapshotEvent(StrEnum):
     TURNEND = 'turnEnd'
     INVOCATIONEND = 'invocationEnd'
     DETACH = 'detach'
+    RECOVERY = 'recovery'
 
 
 class SnapshotStatus(StrEnum):
@@ -132,6 +133,15 @@ class AbortSnapshotResponse(GenkitModel):
     status: SnapshotStatus | None = None
 
 
+class AgentError(GenkitModel):
+    """Model for agenterror data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    status: str | None = None
+    message: str = Field(...)
+    details: Any | None = Field(default=None)
+
+
 class AgentInit(GenkitModel):
     """Model for agentinit data."""
 
@@ -166,6 +176,7 @@ class AgentOutput(GenkitModel):
     message: MessageData | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
+    error: AgentError | None = None
 
 
 class AgentResult(GenkitModel):
@@ -227,7 +238,7 @@ class SessionSnapshot(GenkitModel):
     event: SnapshotEvent = Field(...)
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: Error | None = None
+    error: AgentError | None = None
     state: SessionState | None = None
 
 
@@ -955,15 +966,6 @@ class Resume(GenkitModel):
     metadata: Metadata | None = None
 
 
-class Error(GenkitModel):
-    """Model for error data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-    status: str | None = None
-    message: str = Field(...)
-    details: Any | None = Field(default=None)
-
-
 class Details(GenkitModel):
     """Model for details data."""
 
@@ -1001,6 +1003,13 @@ class Supports(GenkitModel):
     constrained: Constrained | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None
+
+
+class Error(GenkitModel):
+    """Model for error data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    message: str = Field(...)
 
 
 class Resource(GenkitModel):

@@ -28,6 +28,22 @@
       ],
       "additionalProperties": false
     },
+    "AgentError": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {}
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
     "AgentFinishReason": {
       "type": "string",
       "enum": [
@@ -120,6 +136,9 @@
         },
         "finishReason": {
           "$ref": "#/$defs/AgentFinishReason"
+        },
+        "error": {
+          "$ref": "#/$defs/AgentError"
         }
       },
       "additionalProperties": false
@@ -252,20 +271,7 @@
           "$ref": "#/$defs/AgentFinishReason"
         },
         "error": {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string"
-            },
-            "message": {
-              "type": "string"
-            },
-            "details": {}
-          },
-          "required": [
-            "message"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/AgentError"
         },
         "state": {
           "$ref": "#/$defs/SessionState"
@@ -302,7 +308,8 @@
       "enum": [
         "turnEnd",
         "invocationEnd",
-        "detach"
+        "detach",
+        "recovery"
       ]
     },
     "SnapshotStatus": {

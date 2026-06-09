@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -580,9 +581,511 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 	conn.SendText("trigger error")
 	conn.Close()
 
-	_, err = conn.Output()
-	if err == nil {
-		t.Fatal("expected error from failed turn")
+	// A failed turn resolves the invocation gracefully rather than
+	// failing the action: the outcome is on the output.
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil || !strings.Contains(out.Error.Message, "turn failed") {
+		t.Errorf("expected output error containing %q, got %+v", "turn failed", out.Error)
+	}
+	// Client-managed: the last-good state rides the output. No turn
+	// succeeded, so it is the initial empty state — excluding the failed
+	// turn's partial mutations (the user message added before fn ran).
+	if out.State == nil {
+		t.Fatal("expected last-good state on failed output")
+	}
+	if got := len(out.State.Messages); got != 0 {
+		t.Errorf("expected 0 messages in last-good state, got %d", got)
+	}
+}
+
+// defineLastGoodTestAgent defines a client- or server-managed echo agent
+// whose turn fails (with partial session mutations) when the user sends
+// "boom". Successful turns report [AgentFinishReasonStop].
+func defineLastGoodTestAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testStatus, testState] {
+	return DefineCustomAgent(reg, name,
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				text := input.Message.Content[0].Text
+				if text == "boom" {
+					// Partial mutations of the failing turn: these must not
+					// leak into the recovered last-good state.
+					sess.AddMessages(ai.NewModelTextMessage("partial reply"))
+					sess.UpdateCustom(func(s testState) testState {
+						s.Counter = 999
+						return s
+					})
+					return nil, core.NewError(core.UNAVAILABLE, "model timeout")
+				}
+				sess.AddMessages(ai.NewModelTextMessage("echo: " + text))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			}); err != nil {
+				return nil, err
+			}
+			return sess.Result(), nil
+		},
+		opts...,
+	)
+}
+
+func TestAgent_FailedTurn_ClientManagedReturnsLastGoodState(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineLastGoodTestAgent(reg, "lastGoodClient")
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	for _, text := range []string{"one", "two", "boom"} {
+		if err := conn.SendText(text); err != nil {
+			t.Fatalf("SendText(%q): %v", text, err)
+		}
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil {
+		t.Fatal("expected error on failed output")
+	}
+	if out.Error.Status != core.UNAVAILABLE {
+		t.Errorf("expected original status %q preserved, got %q", core.UNAVAILABLE, out.Error.Status)
+	}
+	if !strings.Contains(out.Error.Message, "model timeout") {
+		t.Errorf("expected error message to contain %q, got %q", "model timeout", out.Error.Message)
+	}
+
+	// The last-good state holds both successful turns (user + echo each)
+	// and excludes the failed turn entirely: no "boom" user message, no
+	// partial reply, no counter clobber.
+	if out.State == nil {
+		t.Fatal("expected last-good state on failed output")
+	}
+	if got := len(out.State.Messages); got != 4 {
+		t.Fatalf("expected 4 messages in last-good state, got %d", got)
+	}
+	if got := out.State.Messages[3].Content[0].Text; got != "echo: two" {
+		t.Errorf("expected last message %q, got %q", "echo: two", got)
+	}
+	if got := out.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2 in last-good state, got %d", got)
+	}
+}
+
+func TestAgent_FailedTurn_LastGoodStateIsResumable(t *testing.T) {
+	// On failure, the client resumes a fresh invocation from the
+	// last-good state in the failed output.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineLastGoodTestAgent(reg, "lastGoodResume")
+
+	out, err := af.RunText(ctx, "boom", WithState(&SessionState[testState]{
+		Messages: []*ai.Message{
+			ai.NewUserTextMessage("one"),
+			ai.NewModelTextMessage("echo: one"),
+		},
+		Custom: testState{Counter: 1},
+	}))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Fatalf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	// The failed output echoes back the state the failed turn started
+	// with: exactly what the client sent.
+	if got := len(out.State.Messages); got != 2 {
+		t.Fatalf("expected 2 messages in last-good state, got %d", got)
+	}
+
+	retry, err := af.RunText(ctx, "two", WithState(out.State))
+	if err != nil {
+		t.Fatalf("RunText(retry): %v", err)
+	}
+	if retry.FinishReason != AgentFinishReasonStop {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonStop, retry.FinishReason)
+	}
+	if retry.Error != nil {
+		t.Errorf("expected no error on retry, got %+v", retry.Error)
+	}
+	if got := len(retry.State.Messages); got != 4 {
+		t.Errorf("expected 4 messages after retry, got %d", got)
+	}
+	if got := retry.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2 after retry, got %d", got)
+	}
+}
+
+func TestAgent_FailedTurn_RecoverySnapshotBypassesCallback(t *testing.T) {
+	// Server-managed agent with a selective snapshot callback that only
+	// persists the first turn. The second (successful) turn is skipped by
+	// the callback, so when the third turn fails, the runtime must write a
+	// retroactive recovery snapshot of the last-good state — bypassing the
+	// callback — or the skipped turn would be lost.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	// The callback runs on the fn goroutine; the assertions below run
+	// after Output() returns, which happens-after fn completes, so no
+	// locking is needed.
+	var cbEvents []SnapshotEvent
+	af := defineLastGoodTestAgent(reg, "recoverySnapshot",
+		WithSessionStore[testState](store),
+		WithSnapshotCallback(func(_ context.Context, sc *SnapshotContext[testState]) bool {
+			cbEvents = append(cbEvents, sc.Event)
+			return sc.Event == SnapshotEventTurnEnd && sc.TurnIndex == 0
+		}),
+	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	var turnEnds []*TurnEnd
+	for _, text := range []string{"one", "two"} {
+		if err := conn.SendText(text); err != nil {
+			t.Fatalf("SendText(%q): %v", text, err)
+		}
+		turnEnds = append(turnEnds, nextTurnEnd(t, conn))
+	}
+	if turnEnds[0].SnapshotID == "" {
+		t.Fatal("expected turn 0 snapshot to be persisted")
+	}
+	if turnEnds[1].SnapshotID != "" {
+		t.Fatalf("expected turn 1 snapshot to be skipped by callback, got %q", turnEnds[1].SnapshotID)
+	}
+
+	if err := conn.SendText("boom"); err != nil {
+		t.Fatalf("SendText(boom): %v", err)
+	}
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil || out.Error.Status != core.UNAVAILABLE {
+		t.Fatalf("expected error with status %q, got %+v", core.UNAVAILABLE, out.Error)
+	}
+	if out.State != nil {
+		t.Errorf("server-managed failed output must not carry inline state, got %+v", out.State)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected recovery snapshot ID on failed output")
+	}
+	if out.SnapshotID == turnEnds[0].SnapshotID {
+		t.Fatal("expected a fresh recovery snapshot, got the turn-0 snapshot")
+	}
+
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil || snap == nil {
+		t.Fatalf("GetSnapshot(%q): %v, %v", out.SnapshotID, snap, err)
+	}
+	if snap.Status != SnapshotStatusSucceeded {
+		t.Errorf("expected recovery snapshot status %q, got %q", SnapshotStatusSucceeded, snap.Status)
+	}
+	if snap.Event != SnapshotEventRecovery {
+		t.Errorf("expected recovery snapshot event %q, got %q", SnapshotEventRecovery, snap.Event)
+	}
+	if snap.FinishReason != AgentFinishReasonStop {
+		t.Errorf("expected recovery snapshot to carry the last good turn's reason %q, got %q",
+			AgentFinishReasonStop, snap.FinishReason)
+	}
+	if snap.ParentID != turnEnds[0].SnapshotID {
+		t.Errorf("expected recovery snapshot parent %q, got %q", turnEnds[0].SnapshotID, snap.ParentID)
+	}
+	// State through the last successful turn, excluding the failed turn.
+	if got := len(snap.State.Messages); got != 4 {
+		t.Fatalf("expected 4 messages in recovery snapshot, got %d", got)
+	}
+	if got := snap.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2 in recovery snapshot, got %d", got)
+	}
+
+	// The recovery write bypassed the callback: it was consulted once per
+	// successful turn only (the failed turn and the recovery write never
+	// ask).
+	if want := []SnapshotEvent{SnapshotEventTurnEnd, SnapshotEventTurnEnd}; !slices.Equal(cbEvents, want) {
+		t.Errorf("expected callback events %v, got %v", want, cbEvents)
+	}
+}
+
+func TestAgent_FailedTurn_LastGoodAlreadyPersisted_NoRecoveryWrite(t *testing.T) {
+	// With the default always-snapshot cadence, the last-good state is
+	// already in the store when a turn fails: the output reuses that
+	// snapshot's ID and no extra row is written.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := defineLastGoodTestAgent(reg, "recoveryDedup", WithSessionStore[testState](store))
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("one"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	turn0 := nextTurnEnd(t, conn)
+	if turn0.SnapshotID == "" {
+		t.Fatal("expected turn 0 snapshot")
+	}
+
+	if err := conn.SendText("boom"); err != nil {
+		t.Fatalf("SendText(boom): %v", err)
+	}
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.SnapshotID != turn0.SnapshotID {
+		t.Errorf("expected failed output to reuse the persisted last-good snapshot %q, got %q",
+			turn0.SnapshotID, out.SnapshotID)
+	}
+	if rows := store.snapshotCount(); rows != 1 {
+		t.Errorf("expected no recovery row when last-good is already persisted, got %d rows", rows)
+	}
+}
+
+func TestAgent_FailedFirstTurn_AfterResume_ReturnsParentSnapshotID(t *testing.T) {
+	// Resuming from a snapshot and failing before any turn completes:
+	// the parent snapshot already captures the last-good state, so the
+	// failed output points back at it and no recovery row is written.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	parent, err := store.SaveSnapshot(ctx, "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Event:  SnapshotEventInvocationEnd,
+				Status: SnapshotStatusSucceeded,
+				State: &SessionState[testState]{
+					Messages: []*ai.Message{
+						ai.NewUserTextMessage("one"),
+						ai.NewModelTextMessage("echo: one"),
+					},
+					Custom: testState{Counter: 1},
+				},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	af := defineLastGoodTestAgent(reg, "resumeFailFirst", WithSessionStore[testState](store))
+
+	out, err := af.RunText(ctx, "boom", WithSnapshotID[testState](parent.SnapshotID))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.SnapshotID != parent.SnapshotID {
+		t.Errorf("expected failed output to return parent snapshot %q, got %q",
+			parent.SnapshotID, out.SnapshotID)
+	}
+	if rows := store.snapshotCount(); rows != 1 {
+		t.Errorf("expected no new rows on first-turn failure after resume, got %d", rows)
+	}
+}
+
+func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	// Hold the agent fn open until the client has consumed the failed
+	// TurnEnd, so the chunk delivery is deterministic (the runtime stops
+	// forwarding chunks once fn returns with an error).
+	turnEndSeen := make(chan struct{})
+	af := DefineCustomAgent(reg, "failedTurnEnd",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, fmt.Errorf("boom")
+			})
+			select {
+			case <-turnEndSeen:
+			case <-time.After(2 * time.Second):
+			}
+			return nil, err
+		},
+	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("hi"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+
+	turnEnd := nextTurnEnd(t, conn)
+	close(turnEndSeen)
+
+	if turnEnd.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected TurnEnd finish reason %q, got %q", AgentFinishReasonFailed, turnEnd.FinishReason)
+	}
+	if turnEnd.SnapshotID != "" {
+		t.Errorf("failed turn must not snapshot its partial state, got snapshot %q", turnEnd.SnapshotID)
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+}
+
+func TestAgent_CustomAgentContinuesAfterFailedTurn(t *testing.T) {
+	// A custom agent may treat a turn failure as recoverable: swallow the
+	// error from Run and keep processing queued inputs. The intake must
+	// keep pacing inputs after a failed turn for this to work.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "continueAfterFail",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			for {
+				err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					text := input.Message.Content[0].Text
+					if text == "boom" {
+						return nil, fmt.Errorf("recoverable failure")
+					}
+					sess.AddMessages(ai.NewModelTextMessage("echo: " + text))
+					return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+				})
+				if err == nil {
+					break // input channel closed
+				}
+			}
+			return sess.Result(), nil
+		},
+	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	for _, text := range []string{"one", "boom", "two"} {
+		if err := conn.SendText(text); err != nil {
+			t.Fatalf("SendText(%q): %v", text, err)
+		}
+	}
+
+	// A hang here means intake pacing after a failed turn is broken.
+	out, err := outputWithin(t, conn, 2*time.Second)
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	// The agent recovered: the invocation succeeds with the live state
+	// (including the failed turn's user message, which the agent chose
+	// to keep by continuing).
+	if out.FinishReason != AgentFinishReasonStop {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonStop, out.FinishReason)
+	}
+	if out.Error != nil {
+		t.Errorf("expected no error on recovered invocation, got %+v", out.Error)
+	}
+	// user one, echo one, user boom, user two, echo two.
+	if got := len(out.State.Messages); got != 5 {
+		t.Errorf("expected 5 messages, got %d", got)
+	}
+}
+
+func TestAgent_InitFailure_ResolvesFailedOutputWithStatus(t *testing.T) {
+	// Pre-turn precondition/validation failures resolve as failed outputs
+	// carrying the original error status, rather than failing the action.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	echo := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			return nil, nil
+		})
+	}
+	serverManaged := DefineCustomAgent(reg, "initFailServer", echo, WithSessionStore[testState](store))
+	clientManaged := DefineCustomAgent(reg, "initFailClient", echo)
+
+	tests := []struct {
+		name       string
+		run        func() (*AgentOutput[testState], error)
+		wantStatus core.StatusName
+		wantMsg    string
+	}{
+		{
+			name: "state rejected when server-managed",
+			run: func() (*AgentOutput[testState], error) {
+				return serverManaged.RunText(ctx, "hi", WithState(&SessionState[testState]{}))
+			},
+			wantStatus: core.FAILED_PRECONDITION,
+			wantMsg:    "session store",
+		},
+		{
+			name: "snapshot ID rejected when client-managed",
+			run: func() (*AgentOutput[testState], error) {
+				return clientManaged.RunText(ctx, "hi", WithSnapshotID[testState]("some-id"))
+			},
+			wantStatus: core.FAILED_PRECONDITION,
+			wantMsg:    "no session store",
+		},
+		{
+			name: "missing snapshot",
+			run: func() (*AgentOutput[testState], error) {
+				return serverManaged.RunText(ctx, "hi", WithSnapshotID[testState]("nope"))
+			},
+			wantStatus: core.NOT_FOUND,
+			wantMsg:    "not found",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := tc.run()
+			if err != nil {
+				t.Fatalf("expected graceful failed output, got error: %v", err)
+			}
+			if out.FinishReason != AgentFinishReasonFailed {
+				t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+			}
+			if out.Error == nil {
+				t.Fatal("expected error on output")
+			}
+			if out.Error.Status != tc.wantStatus {
+				t.Errorf("expected status %q, got %q", tc.wantStatus, out.Error.Status)
+			}
+			if !strings.Contains(out.Error.Message, tc.wantMsg) {
+				t.Errorf("expected error message to contain %q, got %q", tc.wantMsg, out.Error.Message)
+			}
+			if out.SnapshotID != "" || out.State != nil {
+				t.Errorf("init failures carry no state, got snapshotId=%q state=%+v", out.SnapshotID, out.State)
+			}
+		})
 	}
 }
 
@@ -1379,17 +1882,26 @@ func TestPromptAgent_RejectsNonUserRole(t *testing.T) {
 	ai.DefinePrompt(reg, "rejectRolePrompt", ai.WithModelName("test/echo"))
 	af := DefineAgent[testState](reg, "rejectRolePrompt", FromPrompt())
 
-	_, err := af.Run(ctx, &AgentInput{
+	out, err := af.Run(ctx, &AgentInput{
 		Message: &ai.Message{
 			Role:    ai.RoleModel,
 			Content: []*ai.Part{ai.NewTextPart("hi")},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error for non-user role, got nil")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(err.Error(), "role") {
-		t.Errorf("expected role-related error, got %v", err)
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil {
+		t.Fatal("expected output error for non-user role, got nil")
+	}
+	if out.Error.Status != core.INVALID_ARGUMENT {
+		t.Errorf("expected status %q, got %q", core.INVALID_ARGUMENT, out.Error.Status)
+	}
+	if !strings.Contains(out.Error.Message, "role") {
+		t.Errorf("expected role-related error, got %v", out.Error)
 	}
 }
 
@@ -1400,7 +1912,7 @@ func TestPromptAgent_RejectsToolRequestPart(t *testing.T) {
 	ai.DefinePrompt(reg, "rejectToolReqPrompt", ai.WithModelName("test/echo"))
 	af := DefineAgent[testState](reg, "rejectToolReqPrompt", FromPrompt())
 
-	_, err := af.Run(ctx, &AgentInput{
+	out, err := af.Run(ctx, &AgentInput{
 		Message: &ai.Message{
 			Role: ai.RoleUser,
 			Content: []*ai.Part{
@@ -1409,11 +1921,14 @@ func TestPromptAgent_RejectsToolRequestPart(t *testing.T) {
 			},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error for tool request part, got nil")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(err.Error(), "tool request") {
-		t.Errorf("expected tool-request error, got %v", err)
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil || !strings.Contains(out.Error.Message, "tool request") {
+		t.Errorf("expected tool-request error, got %+v", out.Error)
 	}
 }
 
@@ -1424,7 +1939,7 @@ func TestPromptAgent_RejectsToolResponsePart(t *testing.T) {
 	ai.DefinePrompt(reg, "rejectToolRespPrompt", ai.WithModelName("test/echo"))
 	af := DefineAgent[testState](reg, "rejectToolRespPrompt", FromPrompt())
 
-	_, err := af.Run(ctx, &AgentInput{
+	out, err := af.Run(ctx, &AgentInput{
 		Message: &ai.Message{
 			Role: ai.RoleUser,
 			Content: []*ai.Part{
@@ -1432,11 +1947,14 @@ func TestPromptAgent_RejectsToolResponsePart(t *testing.T) {
 			},
 		},
 	})
-	if err == nil {
-		t.Fatal("expected error for tool response part, got nil")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(err.Error(), "tool") {
-		t.Errorf("expected tool-related error, got %v", err)
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil || !strings.Contains(out.Error.Message, "tool") {
+		t.Errorf("expected tool-related error, got %+v", out.Error)
 	}
 }
 
@@ -1600,7 +2118,7 @@ func TestAgent_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
 // TestAgent_FnPanicReturnsError verifies that a panic inside the agent
 // function is recovered and surfaced as an error, rather than crashing the
 // process or hanging the streaming goroutine.
-func TestAgent_FnPanicReturnsError(t *testing.T) {
+func TestAgent_FnPanicResolvesAsFailedOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
@@ -1621,32 +2139,20 @@ func TestAgent_FnPanicReturnsError(t *testing.T) {
 		t.Fatalf("SendText: %v", err)
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		for chunk, err := range conn.Receive() {
-			_ = chunk
-			if err != nil {
-				done <- err
-				return
-			}
-		}
-		_, outErr := conn.Output()
-		done <- outErr
-	}()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("expected error from panicking fn")
-		}
-		if !strings.Contains(err.Error(), "panicked") {
-			t.Errorf("expected panic error, got: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Receive/Output hung; streaming goroutine likely leaked")
+	// A hang here means the streaming goroutine leaked.
+	out, err := outputWithin(t, conn, 2*time.Second)
+	if err != nil {
+		t.Fatalf("expected panic to resolve as failed output, got error: %v", err)
 	}
-
-	conn.Close()
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil || !strings.Contains(out.Error.Message, "panicked") {
+		t.Errorf("expected panic error on output, got: %+v", out.Error)
+	}
+	if out.Error != nil && out.Error.Status != core.INTERNAL {
+		t.Errorf("expected status %q, got %q", core.INTERNAL, out.Error.Status)
+	}
 }
 
 // TestAgent_CancelDuringStreamReleasesGoroutine verifies that cancelling the
@@ -1741,6 +2247,29 @@ func nextTurnEnd[Stream, State any](t *testing.T, conn *AgentConnection[Stream, 
 	}
 	t.Fatal("no TurnEnd chunk observed")
 	return nil
+}
+
+// outputWithin finalizes conn and returns its output, failing the test if
+// finalization does not complete within d. Use it in tests where a
+// regression would make Output hang rather than fail.
+func outputWithin[Stream, State any](t *testing.T, conn *AgentConnection[Stream, State], d time.Duration) (*AgentOutput[State], error) {
+	t.Helper()
+	type outcome struct {
+		out *AgentOutput[State]
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		out, err := conn.Output()
+		done <- outcome{out, err}
+	}()
+	select {
+	case oc := <-done:
+		return oc.out, oc.err
+	case <-time.After(d):
+		t.Fatal("Output did not complete in time; the runtime likely hung")
+		return nil, nil
+	}
 }
 
 func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
@@ -2009,12 +2538,18 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 	}
 	conn.Close()
 
-	_, err = conn.Output()
-	if err == nil {
-		t.Fatal("expected error when detaching without a session store")
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
 	}
-	if !strings.Contains(err.Error(), "detach requires a session store") {
-		t.Errorf("unexpected error: %v", err)
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil || !strings.Contains(out.Error.Message, "detach requires a session store") {
+		t.Errorf("unexpected output error: %+v", out.Error)
+	}
+	if out.Error != nil && out.Error.Status != core.FAILED_PRECONDITION {
+		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, out.Error.Status)
 	}
 }
 
@@ -2250,13 +2785,17 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 		t.Errorf("expected snapshot.Error.Message to contain %q, got %+v", "kaboom", snap.Error)
 	}
 
-	// Resuming from an errored detached snapshot is rejected.
-	_, err = af.RunText(context.Background(), "retry", WithSnapshotID[testState](out.SnapshotID))
-	if err == nil {
-		t.Fatal("expected error when resuming from errored snapshot")
+	// Resuming from an errored detached snapshot is rejected; the
+	// rejection resolves as a failed output carrying the original error.
+	resumeOut, err := af.RunText(context.Background(), "retry", WithSnapshotID[testState](out.SnapshotID))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
 	}
-	if !strings.Contains(err.Error(), "kaboom") {
-		t.Errorf("unexpected resume error: %v", err)
+	if resumeOut.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, resumeOut.FinishReason)
+	}
+	if resumeOut.Error == nil || !strings.Contains(resumeOut.Error.Message, "kaboom") {
+		t.Errorf("unexpected resume error: %+v", resumeOut.Error)
 	}
 }
 
@@ -2470,12 +3009,21 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	_, err := af.RunText(context.Background(), "hi", WithSnapshotID[testState](erroredID))
-	if err == nil {
-		t.Fatal("expected error when resuming from errored snapshot")
+	out, err := af.RunText(context.Background(), "hi", WithSnapshotID[testState](erroredID))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
 	}
-	if !strings.Contains(err.Error(), "underlying failure") {
-		t.Errorf("expected error to surface underlying failure, got: %v", err)
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	}
+	if out.Error == nil {
+		t.Fatal("expected output error when resuming from errored snapshot")
+	}
+	if out.Error.Status != core.FAILED_PRECONDITION {
+		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, out.Error.Status)
+	}
+	if !strings.Contains(out.Error.Message, "underlying failure") {
+		t.Errorf("expected error to surface underlying failure, got: %v", out.Error)
 	}
 }
 

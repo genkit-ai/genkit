@@ -363,6 +363,11 @@ repl:
 				}
 				fmt.Println()
 				fmt.Println()
+				if chunk.TurnEnd.FinishReason == aix.AgentFinishReasonFailed {
+					// A failed turn ends the invocation; Output below
+					// reports the error and the last-good snapshot.
+					break repl
+				}
 				break
 			}
 		}
@@ -379,6 +384,16 @@ repl:
 		fmt.Println("The agent keeps processing in the background. Pick this")
 		fmt.Println("agent again from the list to wait for it to finalize and")
 		fmt.Println("resume from the cumulative final state.")
+	case out != nil && out.FinishReason == aix.AgentFinishReasonFailed:
+		// A failed invocation resolves with the error and a last-good
+		// snapshot to resume from.
+		if out.Error != nil {
+			fmt.Fprintf(os.Stderr, "Agent failed (%s): %s\n", out.Error.Status, out.Error.Message)
+		}
+		if out.SnapshotID != "" {
+			fmt.Printf("Last-good snapshot: %s. Pick this agent again to resume from it.\n",
+				shortID(out.SnapshotID))
+		}
 	case out != nil && out.SnapshotID != "":
 		fmt.Printf("Done (%s). Final snapshot: %s.\n", out.FinishReason, shortID(out.SnapshotID))
 	}

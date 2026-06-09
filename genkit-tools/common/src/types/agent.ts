@@ -45,11 +45,17 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   `pending` status (and empty state) and rewritten with a terminal
  *   status and the final cumulative state once the background work
  *   finishes.
+ * - `recovery`: snapshot was written retroactively by the failure path to
+ *   preserve the last-good state (everything through the last successful
+ *   turn) when a selective snapshot callback had skipped persisting it.
+ *   It is a normal `succeeded` row carrying the last good turn's
+ *   `finishReason`, resumable like any other; the callback is bypassed.
  */
 export const SnapshotEventSchema = z.enum([
   'turnEnd',
   'invocationEnd',
   'detach',
+  'recovery',
 ]);
 export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
 
@@ -176,12 +182,36 @@ export const AgentResultSchema = z.object({
 export type AgentResult = z.infer<typeof AgentResultSchema>;
 
 /**
+ * Zod schema for the canonical Genkit error wire shape
+ * (`{status, message, details}`), carried on agent outputs and snapshots.
+ */
+export const AgentErrorSchema = z.object({
+  /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
+  status: z.string().optional(),
+  /** Human-readable error message. */
+  message: z.string(),
+  /** Optional structured details describing the failure. */
+  details: z.any().optional(),
+});
+export type AgentError = z.infer<typeof AgentErrorSchema>;
+
+/**
  * Zod schema for agent output.
  */
 export const AgentOutputSchema = z.object({
-  /** ID of the snapshot created at the end of this invocation. */
+  /**
+   * ID of the snapshot created at the end of this invocation. When
+   * `finishReason` is `failed` (and a store is configured), this is the
+   * most recent snapshot capturing the last-good state: everything
+   * through the last successful turn (see the `recovery` snapshot event).
+   */
   snapshotId: z.string().optional(),
-  /** Final conversation state (only when client-managed). */
+  /**
+   * Final conversation state (only when client-managed). When
+   * `finishReason` is `failed`, this is the last-good state: everything
+   * through the last successful turn, excluding the failed turn's
+   * partial mutations.
+   */
   state: SessionStateSchema.optional(),
   /** Last model response message from the conversation. */
   message: MessageSchema.optional(),
@@ -189,10 +219,18 @@ export const AgentOutputSchema = z.object({
   artifacts: z.array(ArtifactSchema).optional(),
   /**
    * Why the invocation finished. `detached` when the client detached and
-   * the work continues in the background; otherwise the last turn's reason
+   * the work continues in the background; `failed` when the invocation
+   * ended in failure (see `error`); otherwise the last turn's reason
    * (or the value a custom agent set on its result).
    */
   finishReason: AgentFinishReasonSchema.optional(),
+  /**
+   * Structured failure information when the invocation ended in failure
+   * (`finishReason` is `failed`). `status` preserves the original error
+   * category (e.g. `INVALID_ARGUMENT`, `FAILED_PRECONDITION`,
+   * `INTERNAL`) so callers can still branch on it.
+   */
+  error: AgentErrorSchema.optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
@@ -215,6 +253,10 @@ export const TurnEndSchema = z.object({
    * Why this turn finished (e.g. `stop`, `length`, `interrupted`). Lets a
    * caller react to a turn boundary (e.g. pause on `interrupted`) without
    * scanning the message content. Omitted when the turn reported no reason.
+   *
+   * `failed` reports a failed turn; unless the agent recovers and keeps
+   * processing, the invocation then resolves with a failed output carrying
+   * the error and the last-good state.
    */
   finishReason: AgentFinishReasonSchema.optional(),
 });
@@ -262,25 +304,10 @@ export const SessionSnapshotSchema = z.object({
    * `stop`, `interrupted`, `failed`, `aborted`). Complements `status` (the
    * persistence lifecycle) so a resumed or background task can report how it
    * ended without re-deriving it from the messages.
-   *
-   * On an aborted snapshot this is best-effort and may briefly lag `status`:
-   * `abortSnapshot` flips `status` to `aborted` immediately, while the
-   * `aborted` finish reason is stamped by a subsequent finalizer write. If
-   * the process running the invocation never finalizes, the reason can
-   * remain empty even though `status` is `aborted`.
    */
   finishReason: AgentFinishReasonSchema.optional(),
   /** Structured failure information for a snapshot in `failed` status. */
-  error: z
-    .object({
-      /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
-      status: z.string().optional(),
-      /** Human-readable error message. */
-      message: z.string(),
-      /** Optional structured details describing the failure. */
-      details: z.any().optional(),
-    })
-    .optional(),
+  error: AgentErrorSchema.optional(),
   /**
    * Conversation state captured at this point. Empty on a pending snapshot
    * (the live state is not yet committed); populated on terminal snapshots
