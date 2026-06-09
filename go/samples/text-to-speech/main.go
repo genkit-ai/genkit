@@ -127,18 +127,18 @@ func main() {
 	// Config parameter, the Google AI plugin will get the API key from the
 	// GEMINI_API_KEY or GOOGLE_API_KEY environment variable, which is the recommended
 	// practice.
-	g1 := genkit.Init(ctx,
+	g := genkit.Init(ctx,
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithDefaultModel("googleai/gemini-2.5-flash-preview-tts"),
 	)
 
 	// Define a simple flow that generates an audio from a given text
-	genkit.DefineFlow(g1, "text-to-speech-flow", func(ctx context.Context, input *ttsInput) (string, error) {
+	genkit.DefineFlow(g, "text-to-speech-flow", func(ctx context.Context, input *ttsInput) (string, error) {
 		prompt := "Say: Genkit is the best Gen AI library!"
 		if input != nil && input.Text != "" {
 			prompt = fmt.Sprintf("Say: %s", input.Text)
 		}
-		resp, err := genkit.Generate(ctx, g1,
+		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature:        genai.Ptr[float32](1.0),
 				ResponseModalities: []string{"AUDIO"},
@@ -159,18 +159,14 @@ func main() {
 		return resp.Media(), nil
 	})
 
-	g2 := genkit.Init(ctx,
-		genkit.WithPlugins(&googlegenai.GoogleAI{}),
-		genkit.WithDefaultModel("googleai/gemini-3.1-flash-tts-preview"),
-	)
-
 	// Define a simple flow that generates an audio from input text
-	genkit.DefineFlow(g2, "text-to-speech-flow-with-gemini-3.1-model", func(ctx context.Context, input *ttsInput) (*ttsOutput, error) {
+	genkit.DefineFlow(g, "text-to-speech-flow-with-gemini-3.1-model", func(ctx context.Context, input *ttsInput) (*ttsOutput, error) {
 		prompt := "Say: Genkit is the best Gen AI library!"
 		if input != nil && input.Text != "" {
 			prompt = fmt.Sprintf("Say: %s", input.Text)
 		}
-		resp, err := genkit.Generate(ctx, g2,
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName("googleai/gemini-3.1-flash-tts-preview"),
 			ai.WithConfig(&genai.GenerateContentConfig{
 				Temperature:        genai.Ptr[float32](1.0),
 				ResponseModalities: []string{"AUDIO"},
@@ -208,7 +204,7 @@ func main() {
 	})
 
 	// Define a simple flow that generates audio transcripts from a given audio
-	genkit.DefineFlow(g1, "speech-to-text-flow", func(ctx context.Context, input any) (string, error) {
+	genkit.DefineFlow(g, "speech-to-text-flow", func(ctx context.Context, input any) (string, error) {
 		audio, err := os.Open("./genkit.wav")
 		if err != nil {
 			return "", err
@@ -219,7 +215,7 @@ func main() {
 		if err != nil {
 			return "", err
 		}
-		resp, err := genkit.Generate(ctx, g1,
+		resp, err := genkit.Generate(ctx, g,
 			ai.WithModelName("googleai/gemini-2.5-flash"),
 			ai.WithMessages(ai.NewUserMessage(
 				ai.NewTextPart("Can you transcribe the next audio?"),
