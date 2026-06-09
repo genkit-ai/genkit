@@ -33,6 +33,12 @@ const (
 type GoogleAI struct {
 	APIKey string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
 
+	// LegacyResponseSchema uses the GenerateContentConfig.ResponseSchema field
+	// instead of the newer ResponseJsonSchema for constrained output. The
+	// default (false) sends the raw JSON schema via ResponseJsonSchema, which
+	// supports recursion via $ref/$defs.
+	LegacyResponseSchema bool
+
 	gclient *genai.Client // Client for the Google AI service.
 	mu      sync.Mutex    // Mutex to control access.
 	initted bool          // Whether the plugin has been initialized.
@@ -42,6 +48,12 @@ type GoogleAI struct {
 type VertexAI struct {
 	ProjectID string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
 	Location  string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order.
+
+	// LegacyResponseSchema uses the GenerateContentConfig.ResponseSchema field
+	// instead of the newer ResponseJsonSchema for constrained output. The
+	// default (false) sends the raw JSON schema via ResponseJsonSchema, which
+	// supports recursion via $ref/$defs.
+	LegacyResponseSchema bool
 
 	gclient *genai.Client // Client for the Vertex AI service.
 	mu      sync.Mutex    // Mutex to control access.
@@ -200,7 +212,7 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 		opts = &modelOpts
 	}
 
-	return newModel(ga.gclient, name, *opts), nil
+	return newModel(ga.gclient, name, *opts, ga.LegacyResponseSchema), nil
 }
 
 // DefineModel defines an unknown model with the given name.
@@ -227,7 +239,7 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpti
 		opts = &modelOpts
 	}
 
-	return newModel(v.gclient, name, *opts), nil
+	return newModel(v.gclient, name, *opts, v.LegacyResponseSchema), nil
 }
 
 // DefineEmbedder defines an embedder with a given name.

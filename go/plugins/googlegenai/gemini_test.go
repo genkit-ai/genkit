@@ -121,7 +121,7 @@ func TestConvertRequest(t *testing.T) {
 		},
 	}
 	t.Run("convert request", func(t *testing.T) {
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +203,7 @@ func TestConvertRequest(t *testing.T) {
 		req := ai.ModelRequest{
 			Config: badCfg,
 		}
-		_, err := toGeminiRequest(&req, nil)
+		_, err := toGeminiRequest(&req, nil, false)
 		if err != nil {
 			t.Fatalf("expected nil, got: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestConvertRequest(t *testing.T) {
 				req := ai.ModelRequest{
 					Config: tc.cfg,
 				}
-				_, err := toGeminiRequest(&req, nil)
+				_, err := toGeminiRequest(&req, nil, false)
 				if err == nil {
 					t.Fatalf("expected an error: '%v' but got nil", tc.err)
 				}
@@ -279,7 +279,7 @@ func TestConvertRequest(t *testing.T) {
 				"temperature": "not a number", // This should fail map->struct conversion
 			},
 		}
-		_, err := toGeminiRequest(&req, nil)
+		_, err := toGeminiRequest(&req, nil, false)
 		if err == nil {
 			t.Fatal("expected error for invalid config map")
 		}
@@ -358,7 +358,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -402,7 +402,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -434,7 +434,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -474,7 +474,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -524,7 +524,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -571,7 +571,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -619,7 +619,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		if _, err := toGeminiRequest(req, nil); err == nil {
+		if _, err := toGeminiRequest(req, nil, false); err == nil {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
@@ -645,7 +645,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequest(req, nil, false)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -1216,4 +1216,57 @@ func TestFinishReasonMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConstrainedResponseSchemaField verifies which GenerateContentConfig field
+// carries the output schema: ResponseJsonSchema by default (raw JSON schema with
+// recursion support) and ResponseSchema in legacy mode.
+func TestConstrainedResponseSchemaField(t *testing.T) {
+	outputSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+		},
+	}
+	newReq := func() *ai.ModelRequest {
+		return &ai.ModelRequest{
+			Config: genai.GenerateContentConfig{},
+			Output: &ai.ModelOutputConfig{
+				Constrained: true,
+				ContentType: "application/json",
+				Format:      "json",
+				Schema:      outputSchema,
+			},
+		}
+	}
+
+	t.Run("default uses ResponseJsonSchema", func(t *testing.T) {
+		gcc, err := toGeminiRequest(newReq(), nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.ResponseSchema != nil {
+			t.Errorf("ResponseSchema should be nil in default mode, got %#v", gcc.ResponseSchema)
+		}
+		got, ok := gcc.ResponseJsonSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("ResponseJsonSchema should be the raw schema map, got %T", gcc.ResponseJsonSchema)
+		}
+		if got["type"] != "object" {
+			t.Errorf("ResponseJsonSchema should carry the raw schema, got %#v", got)
+		}
+	})
+
+	t.Run("legacy uses ResponseSchema", func(t *testing.T) {
+		gcc, err := toGeminiRequest(newReq(), nil, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.ResponseJsonSchema != nil {
+			t.Errorf("ResponseJsonSchema should be nil in legacy mode, got %#v", gcc.ResponseJsonSchema)
+		}
+		if gcc.ResponseSchema == nil || gcc.ResponseSchema.Type != genai.TypeObject {
+			t.Errorf("ResponseSchema should be the converted object schema, got %#v", gcc.ResponseSchema)
+		}
+	})
 }

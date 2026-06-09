@@ -15,16 +15,16 @@ import (
 
 // ListActions lists all the actions supported by the Google AI plugin.
 func (ga *GoogleAI) ListActions(ctx context.Context) []api.ActionDesc {
-	return listActions(ctx, ga.gclient, googleAIProvider)
+	return listActions(ctx, ga.gclient, googleAIProvider, ga.LegacyResponseSchema)
 }
 
 // ListActions lists all the actions supported by the Vertex AI plugin.
 func (v *VertexAI) ListActions(ctx context.Context) []api.ActionDesc {
-	return listActions(ctx, v.gclient, vertexAIProvider)
+	return listActions(ctx, v.gclient, vertexAIProvider, v.LegacyResponseSchema)
 }
 
 // listActions is the shared implementation for listing actions.
-func listActions(ctx context.Context, client *genai.Client, provider string) []api.ActionDesc {
+func listActions(ctx context.Context, client *genai.Client, provider string, legacyResponseSchema bool) []api.ActionDesc {
 	models, err := listGenaiModels(ctx, client)
 	if err != nil {
 		return nil
@@ -35,7 +35,7 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	// Gemini models
 	for _, name := range models.gemini {
 		opts := GetModelOptions(name, provider)
-		model := newModel(client, name, opts)
+		model := newModel(client, name, opts, legacyResponseSchema)
 		if actionDef, ok := model.(api.Action); ok {
 			actions = append(actions, actionDef.Desc())
 		}
@@ -44,7 +44,7 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 	// Imagen models
 	for _, name := range models.imagen {
 		opts := GetModelOptions(name, provider)
-		model := newModel(client, name, opts)
+		model := newModel(client, name, opts, legacyResponseSchema)
 		if actionDef, ok := model.(api.Action); ok {
 			actions = append(actions, actionDef.Desc())
 		}
@@ -73,16 +73,16 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 
 // ResolveAction resolves an action with the given name.
 func (ga *GoogleAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	return resolveAction(ga.gclient, googleAIProvider, atype, name)
+	return resolveAction(ga.gclient, googleAIProvider, atype, name, ga.LegacyResponseSchema)
 }
 
 // ResolveAction resolves an action with the given name.
 func (v *VertexAI) ResolveAction(atype api.ActionType, name string) api.Action {
-	return resolveAction(v.gclient, vertexAIProvider, atype, name)
+	return resolveAction(v.gclient, vertexAIProvider, atype, name, v.LegacyResponseSchema)
 }
 
 // resolveAction is the shared implementation for resolving actions.
-func resolveAction(client *genai.Client, provider string, atype api.ActionType, name string) api.Action {
+func resolveAction(client *genai.Client, provider string, atype api.ActionType, name string, legacyResponseSchema bool) api.Action {
 	mt := ClassifyModel(name)
 
 	switch atype {
@@ -96,7 +96,7 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 			return nil
 		}
 		opts := GetModelOptions(name, provider)
-		return newModel(client, name, opts).(api.Action)
+		return newModel(client, name, opts, legacyResponseSchema).(api.Action)
 
 	case api.ActionTypeBackgroundModel:
 		if mt != ModelTypeVeo {

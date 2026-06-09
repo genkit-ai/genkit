@@ -88,7 +88,7 @@ func configFromRequest(input *ai.ModelRequest) (*genai.GenerateContentConfig, er
 }
 
 // newModel creates a model without registering it.
-func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model {
+func newModel(client *genai.Client, name string, opts ai.ModelOptions, legacyResponseSchema bool) ai.Model {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
@@ -119,7 +119,7 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 		case ModelTypeImagen:
 			return generateImage(ctx, client, name, input, cb)
 		default:
-			return generate(ctx, client, name, input, cb)
+			return generate(ctx, client, name, input, cb, legacyResponseSchema)
 		}
 	}
 
@@ -154,6 +154,7 @@ func generate(
 	model string,
 	input *ai.ModelRequest,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
+	legacyResponseSchema bool,
 ) (*ai.ModelResponse, error) {
 	if model == "" {
 		return nil, errors.New("model not provided")
@@ -164,7 +165,7 @@ func generate(
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, cache)
+	gcc, err := toGeminiRequest(input, cache, legacyResponseSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +274,7 @@ func generate(
 
 // toGeminiRequest translates an [*ai.ModelRequest] to
 // *genai.GenerateContentConfig
-func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai.GenerateContentConfig, error) {
+func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, legacyResponseSchema bool) (*genai.GenerateContentConfig, error) {
 	gcc, err := configFromRequest(input)
 	if err != nil {
 		return nil, err
@@ -325,11 +326,17 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	}
 
 	if input.Output != nil && input.Output.Constrained && gcc.ResponseMIMEType != "" {
-		schema, err := toGeminiSchema(input.Output.Schema, input.Output.Schema)
-		if err != nil {
-			return nil, err
+		if legacyResponseSchema {
+			schema, err := toGeminiSchema(input.Output.Schema, input.Output.Schema)
+			if err != nil {
+				return nil, err
+			}
+			gcc.ResponseSchema = schema
+		} else {
+			// ResponseJsonSchema accepts the raw JSON schema, including
+			// $ref/$defs for recursive types, which the API unrolls server-side.
+			gcc.ResponseJsonSchema = input.Output.Schema
 		}
-		gcc.ResponseSchema = schema
 	}
 
 	// Add tool configuration from input.Tools and input.ToolChoice directly
