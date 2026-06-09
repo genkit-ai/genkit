@@ -146,7 +146,7 @@ Only simple `{{name}}` syntax is supported — no dot-paths or expressions.
 
 | Assertion Type | Semantics |
 |----------------|-----------|
-| `expectChunks` | **Semi-strict**: the actual and expected chunk lists must have the same length and order. Individual chunks are matched with type-aware logic: `turnEnd` chunks assert the key is present (the `snapshotId` is dynamic) and, when the spec specifies `turnEnd.finishReason`, assert that field matches exactly; `modelChunk` and `artifact` chunks use partial/contains matching on their payload. |
+| `expectChunks` | **Semi-strict**: the actual and expected chunk lists must have the same length and order. Individual chunks are matched with type-aware logic: `turnEnd` chunks assert the key is present (the `snapshotId` is dynamic) and, when the spec specifies `turnEnd.finishReason`, assert that field matches exactly; `modelChunk`, `artifact`, and `customPatch` chunks use partial/contains matching on their payload. For `customPatch`, this means each expected JSON Patch operation must appear (in order) and match on the fields it specifies (e.g. `op` + `path`), so incremental diff ops can be asserted without pinning their exact `value` shape. |
 
 | `stateContains` | **Partial**: each specified field must be present and match. Additional fields in the actual state are ignored. For `messages`, the listed messages must appear in the same relative order but need not be contiguous (ordered subsequence matching). |
 | `artifactsContain` | **Partial**: each specified artifact must be present (matched by name). |
@@ -193,6 +193,7 @@ is not needed for tests targeting these agents.
 | `customAgentFailing` | Server-managed. Throws `Error('intentional failure')` during processing. Used for detach + background failure tests. |
 | `customAgentWithArtifacts` | Client-managed. Adds artifact `doc1` (v1), updates it to `doc1` (v2), then adds `doc2`. Returns all artifacts. |
 | `customAgentWithCustomState` | Client-managed. Reads `custom.counter`, increments it (default 0→1), and persists it. Returns `{ text: 'done' }`. |
+| `customAgentWithMultiCustomState` | Client-managed. Performs three sequential custom-state updates in a single turn (`{ counter: 1, status: 'working' }`, then `counter: 2`, then `status: 'done'`). Used to verify the `customPatch` streaming contract (first patch is a whole-document replace, subsequent patches are incremental diffs). |
 | `customAgentWithArtifactsStore` | Server-managed. Adds a numbered artifact (`doc1`, `doc2`, …) on each invocation based on existing artifact count. Returns all accumulated artifacts. Used for artifact persistence across snapshots. |
 | `customAgentWithCustomStateStore` | Server-managed. Same counter logic as `customAgentWithCustomState` but with a server-managed store. Used for custom state persistence via snapshots. |
 
@@ -238,7 +239,7 @@ _(Coming soon — implement a Go harness that reads the same YAML spec.)_
 
 ## 5. Test Coverage
 
-The spec currently covers the following categories (36 tests total):
+The spec currently covers the following categories (39 tests total):
 
 | Category | Tests |
 |----------|-------|
@@ -259,6 +260,7 @@ The spec currently covers the following categories (36 tests total):
 | Error details | Failed snapshot includes error message |
 | Artifacts | Streamed chunks, deduplication by name, persistence across invocations (server-managed) |
 | Custom state | Update during execution, persistence across steps (client-managed), persistence via snapshots (server-managed) |
+| Custom state streaming (`customPatch`) | Single mutation streamed as a whole-document replace at root; multiple mutations stream a whole-document replace followed by incremental diffs; detached runs emit no `customPatch` chunks (mutation still persisted) |
 | Finish reasons & graceful errors | `finishReason` `stop` on normal completions (output + `turnEnd`), `interrupted` on tool pauses, `failed` on rejected/failed turns; `failed` recorded on failure snapshots; structured `error` (`status` + `message`) surfaced on graceful failures instead of throwing |
 
 

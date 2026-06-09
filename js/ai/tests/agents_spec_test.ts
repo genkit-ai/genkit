@@ -458,7 +458,33 @@ function setupHarness(
     }
   );
 
+  // customAgentWithMultiCustomState: client-managed, performs several
+  // sequential custom-state updates within a single turn. Used to verify the
+  // customPatch streaming contract: the first patch of a turn is a
+  // whole-document replace, and subsequent patches are incremental diffs.
+  const customAgentWithMultiCustomState = defineCustomAgent(
+    registry,
+    {
+      name: 'customAgentWithMultiCustomState',
+    },
+    async (sess) => {
+      await sess.run(async () => {
+        sess.session.updateCustom(() => ({ counter: 1, status: 'working' }));
+        sess.session.updateCustom(
+          (prev: any) => ({ ...prev, counter: 2 }) as any
+        );
+        sess.session.updateCustom(
+          (prev: any) => ({ ...prev, status: 'done' }) as any
+        );
+      });
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+      };
+    }
+  );
+
   // customAgentWithArtifactsStore: server-managed, adds a numbered artifact
+
   // on each invocation. Used for verifying artifact persistence across
   // snapshot-based invocations.
   const customAgentWithArtifactsStore = defineCustomAgent(
@@ -512,6 +538,7 @@ function setupHarness(
     customAgentFailing,
     customAgentWithArtifacts,
     customAgentWithCustomState,
+    customAgentWithMultiCustomState,
     customAgentWithArtifactsStore,
     customAgentWithCustomStateStore,
   };
@@ -613,6 +640,12 @@ async function executeSendInvocation(
           actual.artifact,
           expected.artifact,
           `chunk[${i}].artifact`
+        );
+      } else if (expected.customPatch !== undefined) {
+        assertContains(
+          actual.customPatch,
+          expected.customPatch,
+          `chunk[${i}].customPatch`
         );
       } else {
         // Generic deep comparison for other chunk types

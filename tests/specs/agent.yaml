@@ -743,6 +743,94 @@ tests:
               - { role: user, content: [{ text: first }] }
               - { role: user, content: [{ text: second }] }
 
+  # ---------------------------------------------------------------------------
+  # Custom state streamed live as customPatch chunks
+  # ---------------------------------------------------------------------------
+  - name: custom state streamed as customPatch chunk
+    description: >
+      A single custom-state mutation during a turn is auto-emitted to the
+      client as a `customPatch` stream chunk. The first (and here only) patch
+      of a turn is a whole-document replace at the root pointer ('') carrying
+      the full transformed custom state. The final output state still reflects
+      the same custom data.
+    agent: customAgentWithCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: go }] }]
+        expectChunks:
+          - customPatch:
+              - { op: replace, path: '', value: { counter: 1 } }
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            custom: { counter: 1 }
+
+  - name: customPatch first chunk is whole-document replace then incremental
+    description: >
+      Multiple custom-state mutations within a single turn produce multiple
+      `customPatch` chunks. The first patch is a whole-document replace at the
+      root pointer ('') re-basing the client with the full custom state.
+      Subsequent patches are incremental RFC 6902 diffs targeting only the
+      changed members (matched on op + path; values are partially asserted).
+      The final output state contains the fully accumulated custom data.
+    agent: customAgentWithMultiCustomState
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: go }] }]
+        expectChunks:
+          # First mutation -> whole-document replace at root.
+          - customPatch:
+              - op: replace
+                path: ''
+                value: { counter: 1, status: working }
+          # Second mutation -> incremental replace of /counter.
+          - customPatch:
+              - op: replace
+                path: /counter
+                value: 2
+          # Third mutation -> incremental replace of /status.
+          - customPatch:
+              - op: replace
+                path: /status
+                value: done
+          - turnEnd: {}
+        expectOutput:
+          message: { role: model, content: [{ text: done }] }
+          stateContains:
+            custom: { counter: 2, status: done }
+
+  - name: detached run emits no customPatch chunks
+    description: >
+      A detached run streams no chunks to the connection (it returns a pending
+      snapshot immediately and continues in the background). In particular no
+      `customPatch` chunks are emitted even though the agent mutates custom
+      state. The mutation is still persisted and observable on the completed
+      snapshot.
+    agent: customAgentWithCustomStateStore
+    steps:
+      - type: send
+        init: {}
+        inputs:
+          - messages: [{ role: user, content: [{ text: go }] }]
+            detach: true
+        # No customPatch (or any) chunks are streamed for a detached run.
+        expectChunks: []
+        expectOutput:
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: waitUntilCompleted
+        snapshotId: '{{snap1}}'
+        expectSnapshot:
+          status: done
+          stateContains:
+            custom: { counter: 1 }
+
   # ===========================================================================
   # Phase 3: Additional API Coverage
   # ===========================================================================
