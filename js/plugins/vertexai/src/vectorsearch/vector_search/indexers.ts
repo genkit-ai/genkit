@@ -20,8 +20,8 @@ import {
   Datapoint,
   VertexAIVectorIndexerOptionsSchema,
   type VertexVectorSearchOptions,
-} from './types';
-import { upsertDatapoints } from './upsert_datapoints';
+} from './types.js';
+import { upsertDatapoints } from './upsert_datapoints.js';
 
 /**
  * Creates a reference to a Vertex AI indexer.

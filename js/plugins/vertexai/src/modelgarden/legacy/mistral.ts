@@ -28,7 +28,7 @@ import {
   type ToolCall,
   type ToolMessage,
   type UserMessage,
-} from '@mistralai/mistralai-gcp/models/components';
+} from '@mistralai/mistralai-gcp/models/components/index.js';
 import {
   GenerationCommonConfigSchema,
   z,

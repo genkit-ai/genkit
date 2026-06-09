@@ -16,7 +16,7 @@
  */
 import { z } from 'genkit';
 import { ModelInfo } from 'genkit/model';
-import { compatOaiSpeechModelRef, SpeechConfigSchema } from '../audio';
+import { compatOaiSpeechModelRef, SpeechConfigSchema } from '../audio.js';
 
 /** OpenAI speech ModelRef helper, same as the OpenAI-compatible spec. */
 export function openAISpeechModelRef<

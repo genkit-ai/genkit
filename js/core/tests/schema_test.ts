@@ -169,50 +169,44 @@ describe('toJsonSchema', () => {
 describe('annotateSchema()', () => {
   it('should merge annotations into the JSON schema', () => {
     const schema = annotateSchema(z.string(), {
-      'x-genkit-data-source': 'my-action',
+      'x-test': 'foo',
     });
 
     const json = toJsonSchema({ schema });
-    assert.strictEqual(json['x-genkit-data-source'], 'my-action');
+    assert.strictEqual(json['x-test'], 'foo');
   });
 
   it('should merge annotations for nested fields', () => {
     const schema = z.object({
       field: annotateSchema(z.string(), {
-        'x-genkit-data-source': 'nested-action',
+        'x-test': 'bar',
       }),
     });
 
     const json = toJsonSchema({ schema });
-    assert.strictEqual(
-      json.properties.field['x-genkit-data-source'],
-      'nested-action'
-    );
+    assert.strictEqual(json.properties.field['x-test'], 'bar');
   });
 
   it('should merge annotations for array items', () => {
     const schema = z.array(
       annotateSchema(z.string(), {
-        'x-genkit-data-source': 'array-action',
+        'x-test': 'baz',
       })
     );
 
     const json = toJsonSchema({ schema });
-    assert.strictEqual(json.items['x-genkit-data-source'], 'array-action');
+    assert.strictEqual(json.items['x-test'], 'baz');
   });
 
   it('should merge annotations for optional fields', () => {
     const schema = z.object({
       field: annotateSchema(z.string(), {
-        'x-genkit-data-source': 'optional-action',
+        'x-test': 'qux',
       }).optional(),
     });
 
     const json = toJsonSchema({ schema });
-    assert.strictEqual(
-      json.properties.field['x-genkit-data-source'],
-      'optional-action'
-    );
+    assert.strictEqual(json.properties.field['x-test'], 'qux');
   });
 
   it('should favor outer annotations over inner ones', () => {
@@ -268,14 +262,14 @@ describe('annotateSchema()', () => {
   });
 
   it('should merge annotations for ZodRecord (additionalProperties)', () => {
-    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'value' }));
+    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'foo' }));
 
     const json = toJsonSchema({ schema });
     assert.ok(
       json.additionalProperties,
       'JSON schema should have additionalProperties'
     );
-    assert.strictEqual(json.additionalProperties['x-hint'], 'value');
+    assert.strictEqual(json.additionalProperties['x-hint'], 'foo');
   });
 
   it('should merge annotations for ZodTuple (items array)', () => {

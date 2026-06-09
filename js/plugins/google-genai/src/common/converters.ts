@@ -17,6 +17,7 @@
 import { GenkitError, ToolRequest, z } from 'genkit';
 import {
   CandidateData,
+  MediaPart,
   MessageData,
   ModelReference,
   Part,
@@ -109,9 +110,9 @@ function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
   }
 }
 
-function toGeminiMedia(part: Part): GeminiPart {
+function toGeminiMedia(part: MediaPart): GeminiPart {
   let media: GeminiPart;
-  if (part.media?.url.startsWith('data:')) {
+  if (part.media.url.startsWith('data:')) {
     // Inline data
     const dataUrl = part.media.url;
     const b64Data = dataUrl.substring(dataUrl.indexOf(',')! + 1);
@@ -121,15 +122,10 @@ function toGeminiMedia(part: Part): GeminiPart {
     media = { inlineData: { mimeType: contentType, data: b64Data } };
   } else {
     // File data
-    if (!part.media?.contentType) {
-      throw Error(
-        'Must supply a `contentType` when sending File URIs to Gemini.'
-      );
-    }
     media = {
       fileData: {
-        mimeType: part.media.contentType,
         fileUri: part.media.url,
+        ...(part.media.contentType ? { mimeType: part.media.contentType } : {}),
       },
     };
   }
@@ -476,11 +472,7 @@ function fromGeminiInlineData(part: GeminiPart): Part {
 }
 
 function fromGeminiFileData(part: GeminiPart): Part {
-  if (
-    !part.fileData ||
-    !part.fileData.hasOwnProperty('mimeType') ||
-    !part.fileData.hasOwnProperty('fileUri')
-  ) {
+  if (!part.fileData || !part.fileData.fileUri) {
     throw new Error(
       'Invalid Gemini File Data Part: missing required properties'
     );
@@ -488,8 +480,10 @@ function fromGeminiFileData(part: GeminiPart): Part {
 
   return maybeAddThoughtSignatureAndMetadata(part, {
     media: {
-      url: part.fileData?.fileUri,
-      contentType: part.fileData?.mimeType,
+      url: part.fileData.fileUri,
+      ...(part.fileData.mimeType
+        ? { contentType: part.fileData.mimeType }
+        : {}),
     },
   });
 }

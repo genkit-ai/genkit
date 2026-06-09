@@ -1206,6 +1206,9 @@
         "name": {
           "type": "string"
         },
+        "key": {
+          "type": "string"
+        },
         "description": {
           "type": "string"
         },

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { logger } from './logging';
+import { logger } from './logging.js';
 
 const CONFIG_KEY = '__GENKIT_RUNTIME_CONFIG__';
 
