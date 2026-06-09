@@ -103,6 +103,10 @@ describe('remoteAgent', () => {
     };
   }
 
+  function customChunk(customPatch: any) {
+    return { message: { customPatch } };
+  }
+
   function turnEndResult(out: any) {
     return { result: out };
   }
@@ -145,6 +149,54 @@ describe('remoteAgent', () => {
     assert.deepEqual(mock.requests[0].body.data, {
       messages: [{ role: 'user', content: [{ text: 'Weather in Tokyo?' }] }],
     });
+  });
+
+  it('surfaces streamed custom-state updates as chunk.custom (post-patch)', async () => {
+    mock.onNext(() =>
+      sseResponse([
+        // First patch of a turn is a whole-document replace re-basing onto the
+        // server baseline.
+        customChunk([
+          { op: 'replace', path: '', value: { status: 'Decomposing…' } },
+        ]),
+        modelChunk('Answer '),
+        // Subsequent patches are incremental, bare-rooted diffs.
+        customChunk([{ op: 'replace', path: '/status', value: 'Done' }]),
+        turnEndResult({
+          snapshotId: 'snap-1',
+          state: { custom: { status: 'Done' }, messages: [] },
+          message: { role: 'model', content: [{ text: 'Answer ' }] },
+          finishReason: 'stop',
+        }),
+      ])
+    );
+
+    const agent = remoteAgent<{ status: string }>({
+      url: '/api/researchAgent',
+    });
+    const chat = agent.chat();
+    const turn = chat.sendStream('Research X');
+
+    const customs: Array<{ status: string } | undefined> = [];
+    const texts: string[] = [];
+    for await (const chunk of turn.stream) {
+      if (chunk.custom) {
+        customs.push(chunk.custom);
+        // chunk.custom mirrors the live chat.state at yield time.
+        assert.deepEqual(chunk.custom, chat.state);
+      } else if (chunk.text) {
+        texts.push(chunk.text);
+      }
+    }
+
+    assert.deepEqual(customs, [{ status: 'Decomposing…' }, { status: 'Done' }]);
+    assert.deepEqual(texts, ['Answer ']);
+    // Distinct, fresh object references for `===` change detection.
+    assert.notStrictEqual(customs[0], customs[1]);
+
+    const res = await turn.response;
+    assert.deepEqual(res.state, { status: 'Done' });
+    assert.deepEqual(chat.state, { status: 'Done' });
   });
 
   it('carries snapshotId across multi-turn (server-managed)', async () => {

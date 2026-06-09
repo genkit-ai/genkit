@@ -123,6 +123,12 @@
       "import": "./lib/agent-core.mjs",
       "default": "./lib/agent-core.js"
     },
+    "./json-patch": {
+      "types": "./lib/json-patch.d.ts",
+      "require": "./lib/json-patch.js",
+      "import": "./lib/json-patch.mjs",
+      "default": "./lib/json-patch.js"
+    },
     "./formats": {
       "types": "./lib/formats/index.d.ts",
       "require": "./lib/formats/index.js",
@@ -164,6 +170,9 @@
       ],
       "agent-core": [
         "lib/agent-core"
+      ],
+      "json-patch": [
+        "lib/json-patch"
       ],
       "formats": [
         "lib/formats"

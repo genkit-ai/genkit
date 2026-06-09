@@ -149,7 +149,7 @@ export interface SessionSnapshot<S = unknown> {
  * Identical to {@link SessionSnapshot} except that `snapshotId` is optional.
  * When omitted the store is responsible for assigning a new identifier
  * (enabling stores to encode grouping or routing information in the ID).
- * When provided the store performs an upsert — updating the existing snapshot.
+ * When provided the store performs an upsert - updating the existing snapshot.
  */
 export type SessionSnapshotInput<S = unknown> = Omit<
   SessionSnapshot<S>,
@@ -171,13 +171,13 @@ export interface SessionStoreOptions {
  * Exactly one of `snapshotId` or `sessionId` must be provided:
  *
  * - `snapshotId` loads that specific snapshot.
- * - `sessionId` loads the *latest* (leaf) snapshot of the session — the most
+ * - `sessionId` loads the *latest* (leaf) snapshot of the session - the most
  *   recent snapshot that no other snapshot points to as its parent. This is
  *   the common case for simple session storage (e.g. `useChat`) where the
  *   client only tracks a stable session id and lets the server remember the
  *   conversation. A session with *branching* snapshots (more than one leaf,
  *   e.g. after a regenerate) has no single "latest", so the store rejects the
- *   lookup with `FAILED_PRECONDITION` — resume by `snapshotId` instead.
+ *   lookup with `FAILED_PRECONDITION` - resume by `snapshotId` instead.
  */
 export interface GetSnapshotOptions {
   snapshotId?: string;
@@ -310,6 +310,7 @@ export class Session<S = unknown> extends EventEmitter {
   updateCustom(fn: (custom?: S) => S) {
     this.state.custom = fn(this.state.custom);
     this.version++;
+    this.emit('customChanged');
   }
 
   /**
@@ -522,7 +523,7 @@ export function assertValidSessionId(sessionId: string): void {
 /**
  * Generates a short, unique suffix for a snapshot ID.
  *
- * Format: `{epochMs}_{random4}` — e.g. `1747000878123_k9m2`
+ * Format: `{epochMs}_{random4}` - e.g. `1747000878123_k9m2`
  */
 function generateSnapshotSuffix(): string {
   const timestamp = Date.now();
@@ -631,7 +632,7 @@ function deriveConvoId<S>(snapshot: SessionSnapshotInput<S>): string {
  * session.
  *
  * A "leaf" is a snapshot that no other snapshot points to as its `parentId`.
- * A healthy linear session has exactly one leaf — the latest turn.
+ * A healthy linear session has exactly one leaf - the latest turn.
  *
  * - Returns `undefined` when `snapshots` is empty.
  * - Returns the single leaf when the history is linear.
@@ -654,7 +655,7 @@ function selectLeafSnapshot<S>(
   if (leaves.length === 1) return leaves[0];
 
   if (leaves.length === 0) {
-    // Cyclic / corrupt history — every snapshot is someone's parent.
+    // Cyclic / corrupt history - every snapshot is someone's parent.
     throw new GenkitError({
       status: 'FAILED_PRECONDITION',
       message:
@@ -828,12 +829,12 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     // Determine the final ID.
     let id: string;
     if (snapshotId) {
-      // Upsert — the caller supplied an ID.
+      // Upsert - the caller supplied an ID.
       id = snapshotId;
     } else if (snapshot.snapshotId) {
       id = snapshot.snapshotId;
     } else {
-      // New snapshot — derive the convoId from the session id (so all
+      // New snapshot - derive the convoId from the session id (so all
       // snapshots of a session group under one directory), falling back to
       // the parent's convoId or a fresh conversation.
       id = composeSnapshotId(deriveConvoId(snapshot), generateSnapshotSuffix());

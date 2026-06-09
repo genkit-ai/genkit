@@ -39,6 +39,7 @@ import {
 import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
 import { setCustomMetadataAttributes } from '@genkit-ai/core/tracing';
 import { generateStream } from './generate.js';
+import { diff, type JsonPatch } from './json-patch.js';
 import {
   MessageData,
   MessageSchema,
@@ -86,7 +87,7 @@ export const AgentInitSchema = z.object({
  *
  * For server-managed agents (with a `store`) provide *either* a `snapshotId`
  * (resume an exact snapshot, required for branching/snapshotting clients) *or*
- * a `sessionId` (resume the session's latest snapshot — the simple case used
+ * a `sessionId` (resume the session's latest snapshot - the simple case used
  * by `useChat`-style clients). For client-managed agents (no store) provide
  * the full `state`.
  */
@@ -132,23 +133,43 @@ export const TurnEndSchema = z.object({
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
 /**
+ * Schema for a single RFC 6902 (JSON Patch) operation.
+ */
+export const JsonPatchOperationSchema = z.object({
+  op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test']),
+  /** A JSON Pointer (RFC 6901) to the target location, e.g. `"/agentStatus"`. */
+  path: z.string(),
+  /** Source pointer; required for `move` and `copy`. */
+  from: z.string().optional(),
+  /** New value; required for `add`, `replace`, and `test`. */
+  value: z.any().optional(),
+});
+
+/**
+ * Schema for an RFC 6902 JSON Patch: an ordered list of operations.
+ */
+export const JsonPatchSchema = z.array(JsonPatchOperationSchema);
+
+/**
  * Schema for stream chunks emitted during agent execution.
  */
 export const AgentStreamChunkSchema = z.object({
   modelChunk: ModelResponseChunkSchema.optional(),
-  status: z.any().optional(),
+  /**
+   * An RFC 6902 JSON Patch describing a delta applied to the session's
+   * `custom` state. The runtime auto-emits these whenever custom state is
+   * mutated during a turn; clients apply them to keep their tracked custom
+   * state live mid-stream.
+   */
+  customPatch: JsonPatchSchema.optional(),
   artifact: ArtifactSchema.optional(),
   turnEnd: TurnEndSchema.optional(),
 });
 
 /**
  * Streamed chunk emitted during agent execution.
- * The `Stream` parameter types the `status` field for custom status payloads.
  */
-export type AgentStreamChunk<Stream = unknown> = Omit<
-  z.infer<typeof AgentStreamChunkSchema>,
-  'status'
-> & { status?: Stream };
+export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
 
 /**
  * Result returned by a single turn handler passed to {@link SessionRunner.run}.
@@ -189,7 +210,7 @@ export const AgentOutputSchema = z.object({
   /**
    * Present when `finishReason` is `failed`. Carries the original error
    * details (the runtime resolves gracefully instead of throwing). The
-   * accompanying `state`/`snapshotId` hold the last-good state — the state
+   * accompanying `state`/`snapshotId` hold the last-good state - the state
    * the failed turn started with.
    */
   error: z
@@ -291,7 +312,7 @@ async function abortSnapshotInStore<S>(
         current.status === 'failed' ||
         current.status === 'aborted'
       ) {
-        return null; // Already terminal — don't override.
+        return null; // Already terminal - don't override.
       }
       return { ...current, status: 'aborted' };
     },
@@ -324,7 +345,7 @@ export class SessionRunner<State = unknown> {
   /**
    * The state the most recently *successful* turn left behind, captured
    * regardless of whether the `snapshotCallback` chose to persist it. On a
-   * failed turn this is the state the failed turn started with — the
+   * failed turn this is the state the failed turn started with - the
    * last-good state returned to the caller.
    */
   public lastGoodState?: SessionState<State>;
@@ -338,6 +359,13 @@ export class SessionRunner<State = unknown> {
   private lastSnapshotVersion: number = 0;
   private store?: SessionStore<State>;
   public isDetached: boolean = false;
+  /**
+   * True until the first `customPatch` chunk of the current turn has been
+   * emitted. The first patch of every turn is a whole-document replace
+   * (re-basing clients that may not share the server's baseline); reset to
+   * `true` at the start of each turn.
+   */
+  public firstCustomPatchInTurn: boolean = true;
 
   constructor(
     session: Session<State>,
@@ -442,6 +470,10 @@ export class SessionRunner<State = unknown> {
         this.session.addMessages(input.messages);
       }
 
+      // The first customPatch of every turn is a whole-document replace that
+      // re-bases clients which may not share the server's baseline.
+      this.firstCustomPatchInTurn = true;
+
       const turnSnapshotId = this.newSnapshotId;
       this.newSnapshotId = undefined;
 
@@ -461,7 +493,7 @@ export class SessionRunner<State = unknown> {
           );
 
           // Capture the state this successful turn produced. This becomes the
-          // last-good state to fall back to if a later turn fails — captured
+          // last-good state to fall back to if a later turn fails - captured
           // regardless of whether the snapshotCallback chose to persist it.
           this.lastGoodState = this.session.getState();
           this.lastGoodStateVersion = this.session.getVersion();
@@ -486,7 +518,7 @@ export class SessionRunner<State = unknown> {
         this.notifyEndTurn(snapshotId, 'failed');
 
         // Graceful failure: rather than propagating the exception (which would
-        // discard the action's final return — and with it the last-good state
+        // discard the action's final return - and with it the last-good state
         // and all prior successful turns), stop processing further inputs and
         // let the invocation resolve with `finishReason: 'failed'`. The caller
         // recovers the last-good state from the returned AgentOutput.
@@ -520,6 +552,15 @@ export class SessionRunner<State = unknown> {
       return this.lastSnapshot?.snapshotId;
     }
 
+    // First-turn failure: no successful turn ran (turnIndex only advances after
+    // a turn succeeds), so the last-good state is the initial/seed state the
+    // client already has. Writing a recovery snapshot here would be a redundant
+    // no-diff write - skip it and leave snapshotId unset. The client resumes
+    // from the seed it already holds.
+    if (this.turnIndex === 0) {
+      return undefined;
+    }
+
     const snapshotInput: SessionSnapshotInput<State> = {
       createdAt: new Date().toISOString(),
       event: 'turnEnd',
@@ -551,7 +592,7 @@ export class SessionRunner<State = unknown> {
    * Evaluates whether to save a snapshot to the persistent store.
    *
    * Uses the mutator-based `saveSnapshot` to atomically check that the
-   * snapshot has not been concurrently aborted before writing — preventing
+   * snapshot has not been concurrently aborted before writing - preventing
    * a race where a "done" write could overwrite a concurrent "aborted"
    * status.
    */
@@ -637,10 +678,10 @@ export type ClientStateTransform<S = unknown> = (
 /**
  * Function handler definition for custom agent actions.
  */
-export type AgentFn<Stream, State> = (
+export type AgentFn<State> = (
   sess: SessionRunner<State>,
   options: {
-    sendChunk: (chunk: AgentStreamChunk<Stream>) => void;
+    sendChunk: (chunk: AgentStreamChunk) => void;
     abortSignal?: AbortSignal;
     context?: ActionContext;
   }
@@ -677,19 +718,19 @@ export type GetSnapshotDataAction<S = unknown> = Action<
  * An `Agent` exposes two surfaces:
  *
  * 1. The ergonomic, transport-agnostic {@link AgentAPI} (`chat`, `loadChat`,
- *    `getSnapshot`, `abort`) — the same surface returned by `remoteAgent` on
+ *    `getSnapshot`, `abort`) - the same surface returned by `remoteAgent` on
  *    the client, so server- and client-side code share one interface.
  * 2. The lower-level {@link BidiAction} surface (`run`, `streamBidi`, …) for
  *    advanced use and for serving over HTTP.
  */
-export interface Agent<State = unknown, Stream = unknown>
+export interface Agent<State = unknown>
   extends BidiAction<
       typeof AgentInputSchema,
       typeof AgentOutputSchema,
       typeof AgentStreamChunkSchema,
       typeof AgentInitSchema
     >,
-    AgentAPI<State, Stream> {
+    AgentAPI<State> {
   getSnapshotData(
     opts: GetSnapshotDataInput
   ): Promise<SessionSnapshot<State> | undefined>;
@@ -711,7 +752,7 @@ export interface Agent<State = unknown, Stream = unknown>
  * Server-managed agents (with a store) resume via a `snapshotId` (an exact
  * snapshot) or a `sessionId` (the session's latest snapshot); client-managed
  * agents (no store) supply the full `state` blob. Throws a {@link GenkitError}
- * on any mismatch, missing snapshot, or invalid custom state — the caller is
+ * on any mismatch, missing snapshot, or invalid custom state - the caller is
  * expected to translate that into a graceful `finishReason: 'failed'` result.
  */
 async function resolveSession<State>(
@@ -880,7 +921,7 @@ function pipeInputWithDetach<State>(
  * JSON Schema representation is included in the action metadata so that
  * tooling (e.g. the Dev UI) can inspect / validate the state shape.
  */
-export function defineCustomAgent<Stream = unknown, State = unknown>(
+export function defineCustomAgent<State = unknown>(
   registry: Registry,
   config: {
     name: string;
@@ -890,8 +931,8 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     snapshotCallback?: SnapshotCallback<State>;
     clientStateTransform?: ClientStateTransform<State>;
   },
-  fn: AgentFn<Stream, State>
-): Agent<State, Stream> {
+  fn: AgentFn<State>
+): Agent<State> {
   // Helper that applies the optional transform before exposing state to the
   // client.  When no transform is configured it returns the raw state.
   const toClientState = (
@@ -956,7 +997,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       } catch (e: any) {
         // Pre-turn / setup failure (state-vs-store mismatch, missing snapshot,
         // invalid client state). Resolve gracefully with `finishReason: 'failed'`
-        // — preserving the original `error.status` — rather than throwing, so
+        // - preserving the original `error.status` - rather than throwing, so
         // the caller gets a structured, inspectable result. There is no
         // last-good turn yet; echo back the client-supplied state when present.
         return {
@@ -1046,9 +1087,35 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
       session.on('artifactAdded', sendArtifactChunk);
       session.on('artifactUpdated', sendArtifactChunk);
 
-      const sendChunk = (chunk: AgentStreamChunk<Stream>) => {
+      // Auto-emit a `customPatch` chunk whenever custom state is mutated.
+      // The diff is computed AFTER the clientStateTransform so streamed deltas
+      // honor redaction and stay consistent with the transformed full state in
+      // snapshots / final output. The first patch of every turn is a
+      // whole-document replace (re-basing clients that may lack the baseline);
+      // subsequent patches are incremental diffs against the last sent value.
+      let lastSentCustom: unknown;
+      const sendCustomPatch = () => {
+        if (runner.isDetached) return;
+        const transformed = toClientState(session.getState())?.custom;
+        let patch: JsonPatch;
+        if (runner.firstCustomPatchInTurn) {
+          patch = [
+            { op: 'replace', path: '', value: structuredClone(transformed) },
+          ];
+          runner.firstCustomPatchInTurn = false;
+        } else {
+          patch = diff(lastSentCustom, transformed);
+        }
+        lastSentCustom = structuredClone(transformed);
+        if (patch.length) {
+          arg.sendChunk({ customPatch: patch });
+        }
+      };
+      session.on('customChanged', sendCustomPatch);
+
+      const sendChunk = (chunk: AgentStreamChunk) => {
         if (!runner.isDetached) {
-          arg.sendChunk(chunk as AgentStreamChunk);
+          arg.sendChunk(chunk);
         }
       };
 
@@ -1067,6 +1134,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
           if (unsubscribe) unsubscribe();
           session.off('artifactAdded', sendArtifactChunk);
           session.off('artifactUpdated', sendArtifactChunk);
+          session.off('customChanged', sendCustomPatch);
         }
       })();
 
@@ -1225,7 +1293,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     },
   };
 
-  const agentApi = createAgentAPI<State, Stream>(transport);
+  const agentApi = createAgentAPI<State>(transport);
 
   // Expose the AgentAPI surface on the composite. `abort`/`getSnapshotData`
   // already exist on the composite (richer signatures); we add `chat`,
@@ -1236,7 +1304,7 @@ export function defineCustomAgent<Stream = unknown, State = unknown>(
     getSnapshot: agentApi.getSnapshot,
   });
 
-  return composite as unknown as Agent<State, Stream>;
+  return composite as unknown as Agent<State>;
 }
 
 /**
@@ -1254,10 +1322,7 @@ export function definePromptAgent<State = unknown>(
 ) {
   let cachedPromptAction: PromptAction | undefined;
 
-  const fn: AgentFn<unknown, State> = async (
-    sess,
-    { sendChunk, abortSignal }
-  ) => {
+  const fn: AgentFn<State> = async (sess, { sendChunk, abortSignal }) => {
     await sess.run(async (input) => {
       const promptInput = {};
 
@@ -1291,7 +1356,7 @@ export function definePromptAgent<State = unknown>(
 
       // After render: tag everything that is NOT history as a prompt
       // message so we can strip it after generation.  Also strip the
-      // internal history tag — it is an implementation detail that
+      // internal history tag - it is an implementation detail that
       // should not leak to the model.
       if (genOpts.messages) {
         genOpts.messages = genOpts.messages.map((m) => {
@@ -1332,7 +1397,7 @@ export function definePromptAgent<State = unknown>(
       const res = await result.response;
 
       // Keep everything that is NOT a prompt-template message:
-      //   • history messages (clean — history tag was stripped before generate)
+      //   • history messages (clean - history tag was stripped before generate)
       //   • new messages from tool loops (untagged)
       //   • model response
       if (res.request?.messages) {
@@ -1376,7 +1441,7 @@ export function definePromptAgent<State = unknown>(
     };
   };
 
-  return defineCustomAgent<unknown, State>(
+  return defineCustomAgent<State>(
     registry,
     {
       name: config.promptName,
@@ -1390,7 +1455,7 @@ export function definePromptAgent<State = unknown>(
 }
 
 // ---------------------------------------------------------------------------
-// Resume validation — ensure restart/respond entries match session history
+// Resume validation - ensure restart/respond entries match session history
 // ---------------------------------------------------------------------------
 
 /**
@@ -1398,7 +1463,7 @@ export function definePromptAgent<State = unknown>(
  * a tool request that actually exists in the session history.
  *
  * For **restart** entries, also validates that the `input` has not been modified
- * compared to the original tool request — preventing a malicious client from
+ * compared to the original tool request - preventing a malicious client from
  * forging tool inputs.
  *
  * For **respond** entries, validates that a matching tool request (by name + ref)
@@ -1481,7 +1546,7 @@ export function validateResumeAgainstHistory(
 }
 
 // ---------------------------------------------------------------------------
-// defineAgent — shortcut that combines definePrompt + definePromptAgent
+// defineAgent - shortcut that combines definePrompt + definePromptAgent
 // ---------------------------------------------------------------------------
 
 /**
