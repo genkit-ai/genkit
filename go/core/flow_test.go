@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -360,9 +361,13 @@ func TestBidiActionWithConfig(t *testing.T) {
 func TestBidiConnectionSendAfterClose(t *testing.T) {
 	ctx := context.Background()
 
+	// Hold the action open so the only Send failure mode is the closed
+	// input side (a completed action would race in ErrActionCompleted).
+	release := make(chan struct{})
 	action := NewBidiAction(
 		"test", api.ActionTypeCustom, nil,
 		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			<-release
 			for range inCh {
 			}
 			return "", nil
@@ -375,11 +380,41 @@ func TestBidiConnectionSendAfterClose(t *testing.T) {
 	}
 
 	conn.Close()
-	// Wait for completion so we know the state is settled.
+	if err := conn.Send("after close"); !errors.Is(err, ErrConnectionClosed) {
+		t.Errorf("expected error matching ErrConnectionClosed, got %v", err)
+	}
+
+	close(release)
+	<-conn.Done()
+}
+
+func TestBidiConnectionSendAfterCompletion(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"quick", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			return "done", nil // return without consuming inputs
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	<-conn.Done()
 
-	if err := conn.Send("after close"); err == nil {
-		t.Error("expected error sending after close")
+	// The input channel is buffered, so the first send after completion
+	// may still be accepted (and dropped); once the buffer is full a send
+	// must fail with the sentinel.
+	var sendErr error
+	for range 3 {
+		if sendErr = conn.Send("late"); sendErr != nil {
+			break
+		}
+	}
+	if !errors.Is(sendErr, ErrActionCompleted) {
+		t.Errorf("expected error matching ErrActionCompleted, got %v", sendErr)
 	}
 }
 

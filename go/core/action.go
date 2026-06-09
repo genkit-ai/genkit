@@ -19,6 +19,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"iter"
 	"reflect"
 	"sync"
@@ -538,8 +539,19 @@ type BidiConnection[StreamIn, StreamOut, Out any] struct {
 	closed   bool
 }
 
-// Send sends an input message to the bidi action.
-// Returns an error if the connection is closed or the context is cancelled.
+// ErrConnectionClosed indicates a Send on a connection whose input side
+// was closed with [BidiConnection.Close]. Test with [errors.Is].
+var ErrConnectionClosed = errors.New("connection is closed")
+
+// ErrActionCompleted indicates a Send on a connection whose action has
+// already returned. Test with [errors.Is]; the action's result is
+// available via [BidiConnection.Output].
+var ErrActionCompleted = errors.New("action has completed")
+
+// Send sends an input message to the bidi action. It fails with an error
+// matching [ErrConnectionClosed] after [BidiConnection.Close], with one
+// matching [ErrActionCompleted] once the action has returned, or with the
+// context's error if the connection's context is cancelled.
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Send(input StreamIn) (err error) {
 	// Recover from "send on closed channel" panic. A check-then-send under the
 	// mutex would race with Close, and holding the mutex across the send would
@@ -548,7 +560,7 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Send(input StreamIn) (err err
 	// canonical `for ... range inputCh` idiom.
 	defer func() {
 		if r := recover(); r != nil {
-			err = NewError(FAILED_PRECONDITION, "connection is closed")
+			err = NewError(FAILED_PRECONDITION, "%v", ErrConnectionClosed)
 		}
 	}()
 
@@ -558,7 +570,7 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Send(input StreamIn) (err err
 	case <-c.ctx.Done():
 		return c.ctx.Err()
 	case <-c.doneCh:
-		return NewError(FAILED_PRECONDITION, "action has completed")
+		return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
 	}
 }
 
