@@ -14,15 +14,10 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  Part,
-  SessionSnapshot,
-} from 'genkit/beta';
-import { runFlow } from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Part } from 'genkit/beta';
+
+import { remoteAgent, type AgentAPI } from 'genkit/beta/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
@@ -31,14 +26,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 // Demonstrates:
 //   • Session branching via snapshotId — forking a conversation into
 //     two independent timelines from the same checkpoint
-//   • Parallel `runFlow()` calls from the same snapshotId
+//   • Parallel chats started from the same snapshotId (agent.chat({ snapshotId }))
 //   • The user picks which variant to continue from, selecting a branch
 //   • Abandoned branches remain in the store (immutable snapshots)
-//   • URL-based session persistence + restore on reload
+//   • URL-based session persistence + restore on reload (agent.loadChat)
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/branchingAgent';
-const STATE_ENDPOINT = '/api/branchingAgent/state';
 
 /** A settled chat message (user or chosen model response). */
 interface ChatMessage {
@@ -62,6 +56,10 @@ export default function BranchingChat() {
   const [variants, setVariants] = useState<VariantPair | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
+  const [hasSession, setHasSession] = useState(!!urlSnapshotId);
+
+  // The agent client. We branch by starting fresh chats from a snapshotId.
+  const agent: AgentAPI = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
 
   // The snapshotId of the current branch point.
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
@@ -74,28 +72,23 @@ export default function BranchingChat() {
 
     async function restore() {
       try {
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: { snapshotId: urlSnapshotId },
-        });
-
+        const chat = await agent.loadChat({ snapshotId: urlSnapshotId! });
         if (cancelled) return;
 
-        if (snapshot?.state?.messages) {
-          const restored: ChatMessage[] = [];
-          for (const msg of snapshot.state.messages) {
-            const role = msg.role as ChatMessage['role'];
-            if (role !== 'user' && role !== 'model') continue;
-            const textParts = (msg.content || [])
-              .filter((p: Part) => p.text)
-              .map((p: Part) => p.text);
-            if (textParts.length > 0) {
-              restored.push({ role, text: textParts.join('') });
-            }
+        const restored: ChatMessage[] = [];
+        for (const msg of chat.messages) {
+          const role = msg.role as ChatMessage['role'];
+          if (role !== 'user' && role !== 'model') continue;
+          const textParts = (msg.content || [])
+            .filter((p: Part) => p.text)
+            .map((p: Part) => p.text);
+          if (textParts.length > 0) {
+            restored.push({ role, text: textParts.join('') });
           }
-          setMessages(restored);
-          snapshotIdRef.current = snapshot.snapshotId ?? urlSnapshotId;
         }
+        setMessages(restored);
+        snapshotIdRef.current = chat.snapshotId ?? urlSnapshotId;
+        setHasSession(true);
       } catch (err: any) {
         if (!cancelled) {
           setError(`Failed to restore session: ${err.message}`);
@@ -109,7 +102,7 @@ export default function BranchingChat() {
     return () => {
       cancelled = true;
     };
-  }, []); // Only run on mount
+  }, [agent]); // Only run on mount
 
   // ── Send a message and generate two variants ─────────────────────────
   const handleSend = useCallback(
@@ -122,36 +115,22 @@ export default function BranchingChat() {
       setError(null);
       setVariants(null);
 
-      const msgInput: AgentInput = {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
-      };
-
-      // Both calls branch from the same snapshotId (or fresh session).
-      const init: AgentInit = snapshotIdRef.current
+      // Both branches start from the same snapshotId (or a fresh session).
+      const init = snapshotIdRef.current
         ? { snapshotId: snapshotIdRef.current }
-        : {};
+        : undefined;
 
       try {
-        // Fire two requests in parallel from the same branch point.
-        const [resultA, resultB] = await Promise.all([
-          runFlow<AgentOutput, AgentInit>({
-            url: ENDPOINT,
-            input: msgInput,
-            init,
-          }),
-          runFlow<AgentOutput, AgentInit>({
-            url: ENDPOINT,
-            input: msgInput,
-            init,
-          }),
+        // Fire two independent chats in parallel from the same branch point.
+        // Each chat tracks its own resulting snapshotId.
+        const [resA, resB] = await Promise.all([
+          agent.chat(init).send(text),
+          agent.chat(init).send(text),
         ]);
 
-        const textA = extractText(resultA);
-        const textB = extractText(resultB);
-
         setVariants({
-          a: { text: textA, snapshotId: resultA?.snapshotId ?? '' },
-          b: { text: textB, snapshotId: resultB?.snapshotId ?? '' },
+          a: { text: resA.text, snapshotId: resA.snapshotId ?? '' },
+          b: { text: resB.text, snapshotId: resB.snapshotId ?? '' },
         });
       } catch (err: any) {
         setError(err.message);
@@ -159,7 +138,7 @@ export default function BranchingChat() {
         setLoading(false);
       }
     },
-    [loading, variants]
+    [loading, variants, agent]
   );
 
   // ── User picks a variant ─────────────────────────────────────────────
@@ -169,6 +148,7 @@ export default function BranchingChat() {
 
       const chosen = variants[which];
       snapshotIdRef.current = chosen.snapshotId;
+      setHasSession(true);
 
       // Push the chosen snapshotId into the URL for persistence.
       navigate(`/branching/${chosen.snapshotId}`, { replace: true });
@@ -214,7 +194,7 @@ export default function BranchingChat() {
         <div className="chat-header">
           <div className="chat-header-top">
             <h2>🔀 Branching Chat</h2>
-            {snapshotIdRef.current && (
+            {hasSession && (
               <Link
                 to="/branching"
                 className="btn btn-new-session"
@@ -316,12 +296,12 @@ export default function BranchingChat() {
         <h3>📋 How It Works</h3>
         <ol>
           <li>
-            User sends a message. The client fires <strong>two parallel</strong>{' '}
-            <code>runFlow()</code> calls, both with the same{' '}
-            <code>{'init: { snapshotId }'}</code>.
+            User sends a message. The client starts{' '}
+            <strong>two parallel</strong> chats, both from the same{' '}
+            <code>{'{ snapshotId }'}</code>.
           </li>
           <li>
-            Each call creates an <strong>independent branch</strong> from the
+            Each chat creates an <strong>independent branch</strong> from the
             same conversation checkpoint. The LLM's non-determinism produces
             different responses.
           </li>
@@ -331,8 +311,8 @@ export default function BranchingChat() {
             point for the next turn and is pushed into the URL for persistence.
           </li>
           <li>
-            On reload, the client calls <code>/state</code> with the URL's
-            snapshotId to restore the conversation history.
+            On reload, the client calls <code>agent.loadChat()</code> with the
+            URL's snapshotId to restore the conversation history.
           </li>
         </ol>
 
@@ -345,18 +325,12 @@ export default function BranchingChat() {
         </p>
 
         <h4>Key APIs</h4>
-        <pre>{`// Branch: two calls from same snapshot
+        <pre>{`// Branch: two chats from same snapshot
 const [a, b] = await Promise.all([
-  runFlow({
-    url: '/api/branchingAgent',
-    input: { messages: [...] },
-    init: { snapshotId },
-  }),
-  runFlow({
-    url: '/api/branchingAgent',
-    input: { messages: [...] },
-    init: { snapshotId },
-  }),
+  agent.chat({ snapshotId })
+    .send(text),
+  agent.chat({ snapshotId })
+    .send(text),
 ]);
 
 // a.snapshotId !== b.snapshotId
@@ -365,18 +339,4 @@ const [a, b] = await Promise.all([
       </aside>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helper: extract text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
 }

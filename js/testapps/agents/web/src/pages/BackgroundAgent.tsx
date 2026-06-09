@@ -14,33 +14,24 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  MessageData,
-  Part,
-} from 'genkit/beta';
-import { runFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import type { MessageData, Part } from 'genkit/beta';
+import { remoteAgent, type DetachedTask } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 
 // ---------------------------------------------------------------------------
 // Background Agent — fire-and-forget with polling
 //
-// Demonstrates:
-//   • `detach: true` — submit a task to run in the background
-//   • Polling `getSnapshotDataAction` for status updates
-//   • Aborting a background task via `abortAgentAction`
+// Demonstrates the ergonomic `remoteAgent` detached-task API:
+//   • chat.detach(topic) — submit a task to run in the background; resolves to
+//     a `DetachedTask` with the snapshotId
+//   • task.poll({ intervalMs }) — an async iterator that yields snapshots until
+//     the task reaches a terminal status (done/failed/aborted)
+//   • task.abort() — cancel the background task
 //   • Non-chat UI: task submission → status polling → result display
-//
-// The key pattern: the server returns a snapshotId immediately, then the
-// client polls a /state endpoint until the snapshot status is 'done'.
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/backgroundAgent';
-const STATE_ENDPOINT = '/api/backgroundAgent/state';
-const ABORT_ENDPOINT = '/api/backgroundAgent/abort';
 
 type TaskStatus =
   | 'idle'
@@ -58,64 +49,10 @@ export default function BackgroundAgent() {
   const [error, setError] = useState<string | null>(null);
   const [pollCount, setPollCount] = useState(0);
 
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── Stop polling ─────────────────────────────────────────────────────
-  const stopPolling = useCallback(() => {
-    if (pollTimerRef.current) {
-      clearInterval(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-  }, []);
-
-  // ── Poll for task completion ─────────────────────────────────────────
-  const startPolling = useCallback(
-    (id: string) => {
-      stopPolling();
-      setPollCount(0);
-
-      pollTimerRef.current = setInterval(async () => {
-        try {
-          setPollCount((c) => c + 1);
-          const snapshot = (await runFlow({
-            url: STATE_ENDPOINT,
-            input: { snapshotId: id },
-          })) as any;
-
-          if (!snapshot) return;
-
-          const s = snapshot.status as TaskStatus;
-
-          if (s === 'done') {
-            stopPolling();
-            setStatus('done');
-            // Extract the model's response from the snapshot state
-            const messages: MessageData[] = snapshot.state?.messages || [];
-            const modelMessages = messages.filter(
-              (m: MessageData) => m.role === 'model'
-            );
-            const lastModel = modelMessages[modelMessages.length - 1];
-            const text = (lastModel?.content || [])
-              .filter((p: Part) => p.text)
-              .map((p: Part) => p.text)
-              .join('');
-            setReport(text || '(empty report)');
-          } else if (s === 'failed') {
-            stopPolling();
-            setStatus('failed');
-            setError('The background task failed on the server.');
-          } else if (s === 'aborted') {
-            stopPolling();
-            setStatus('aborted');
-          }
-        } catch (err: any) {
-          // Don't stop polling on transient errors
-          console.error('Poll error:', err.message);
-        }
-      }, 2000);
-    },
-    [stopPolling]
-  );
+  // The agent client and the live detached task we're polling.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+  const taskRef = useRef<DetachedTask | null>(null);
+  const cancelledRef = useRef(false);
 
   // ── Submit task to background ────────────────────────────────────────
   const handleSubmit = useCallback(async () => {
@@ -126,60 +63,77 @@ export default function BackgroundAgent() {
     setReport(null);
     setError(null);
     setSnapshotId(null);
+    setPollCount(0);
+    cancelledRef.current = false;
 
     try {
-      // Send the message with `detach: true`. The server will start
-      // processing in the background and return a snapshotId immediately.
-      const result = await runFlow<AgentOutput, AgentInit>({
-        url: ENDPOINT,
-        input: {
-          messages: [{ role: 'user', content: [{ text: topic.trim() }] }],
-          detach: true,
-        } satisfies AgentInput,
-        init: {},
-      });
+      // chat.detach() submits the turn in the background. The server starts
+      // processing and the promise resolves with a handle as soon as the
+      // snapshot is created.
+      const chat = agent.chat();
+      const task = await chat.detach(topic.trim());
+      taskRef.current = task;
 
-      const id = result?.snapshotId;
-      if (!id) {
-        setStatus('failed');
-        setError(
-          'Server did not return a snapshotId. Detach may not be supported.'
-        );
-        return;
-      }
-
-      setSnapshotId(id);
+      setSnapshotId(task.snapshotId);
       setStatus('pending');
-      startPolling(id);
+
+      // task.poll() yields a snapshot every `intervalMs` until the task
+      // reaches a terminal status. The iterator completes on its own.
+      for await (const snapshot of task.poll({ intervalMs: 2000 })) {
+        if (cancelledRef.current) break;
+        setPollCount((c) => c + 1);
+
+        const s = snapshot.status as TaskStatus | undefined;
+        if (s === 'done') {
+          setStatus('done');
+          // Extract the model's response from the snapshot's message history.
+          const messages: MessageData[] = snapshot.state?.messages || [];
+          const modelMessages = messages.filter((m) => m.role === 'model');
+          const lastModel = modelMessages[modelMessages.length - 1];
+          const text = (lastModel?.content || [])
+            .filter((p: Part) => p.text)
+            .map((p: Part) => p.text)
+            .join('');
+          setReport(text || '(empty report)');
+        } else if (s === 'failed') {
+          setStatus('failed');
+          setError('The background task failed on the server.');
+        } else if (s === 'aborted') {
+          setStatus('aborted');
+        }
+      }
     } catch (err: any) {
+      if (cancelledRef.current) return;
       setStatus('failed');
       setError(err.message);
     }
-  }, [topic, status, startPolling]);
+  }, [topic, status, agent]);
 
   // ── Abort the background task ────────────────────────────────────────
   const handleAbort = useCallback(async () => {
-    if (!snapshotId) return;
-    stopPolling();
+    const task = taskRef.current;
+    if (!task) return;
+    cancelledRef.current = true;
 
     try {
-      await runFlow({ url: ABORT_ENDPOINT, input: snapshotId });
+      await task.abort();
       setStatus('aborted');
     } catch (err: any) {
       setError(`Abort failed: ${err.message}`);
     }
-  }, [snapshotId, stopPolling]);
+  }, []);
 
   // ── Reset to submit a new task ───────────────────────────────────────
   const handleReset = useCallback(() => {
-    stopPolling();
+    cancelledRef.current = true;
+    taskRef.current = null;
     setStatus('idle');
     setReport(null);
     setError(null);
     setSnapshotId(null);
     setTopic('');
     setPollCount(0);
-  }, [stopPolling]);
+  }, []);
 
   return (
     <div className="background-layout">
@@ -277,23 +231,24 @@ export default function BackgroundAgent() {
         <h3>📋 How It Works</h3>
         <ol>
           <li>
-            Client sends <code>{'{ detach: true }'}</code> with the input
-            message.
+            Client calls <code>chat.detach(topic)</code> — the turn runs in the
+            background on the server.
           </li>
           <li>
-            Server saves a snapshot with status <code>"pending"</code> and
-            returns the <code>snapshotId</code> immediately.
+            The server saves a snapshot with status <code>"pending"</code> and
+            the promise resolves with a <code>DetachedTask</code> handle (with
+            the <code>snapshotId</code>) immediately.
           </li>
           <li>
             The LLM request continues running in the background on the server.
           </li>
           <li>
-            Client polls <code>/state</code> endpoint with the snapshotId every
-            2 seconds.
+            Client iterates <code>task.poll(&#123; intervalMs &#125;)</code>,
+            which yields a snapshot every 2 seconds.
           </li>
           <li>
             When <code>status === "done"</code>, the report is extracted from
-            the snapshot's message history.
+            the snapshot's message history and the iterator completes.
           </li>
         </ol>
 
@@ -314,29 +269,20 @@ export default function BackgroundAgent() {
         </ul>
 
         <h4>Key APIs</h4>
-        <pre className="background-code">{`// Submit with detach
-runFlow({
-  url: '/api/backgroundAgent',
-  input: {
-    messages: [...],
-    detach: true,
-  },
-});
-// → { snapshotId: '...' }
+        <pre className="background-code">{`// Submit in the background
+const chat = agent.chat();
+const task = await chat.detach(topic);
+// → task.snapshotId
 
 // Poll for status
-runFlow({
-  url: '/api/.../state',
-  input: { snapshotId },
-});
-// → { status, state }
-
+for await (const snap of task.poll({
+  intervalMs: 2000,
+})) {
+  // snap.status, snap.state
+}
 
 // Abort
-runFlow({
-  url: '/api/.../abort',
-  input: snapshotId,
-});`}</pre>
+await task.abort();`}</pre>
       </aside>
     </div>
   );

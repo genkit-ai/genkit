@@ -14,15 +14,8 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -30,7 +23,7 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //
 // Demonstrates capabilities that REQUIRE defineCustomAgent:
 //   • Multi-step orchestration — multiple sequential model calls
-//   • Custom status streaming — sendChunk({ status }) for progress updates
+//   • Custom status streaming — sendChunk({ status }) surfaces as chunk.status
 //   • Multiple models — fast model for decomposition, main model for research
 //   • Direct session control — manually managing messages and custom state
 //
@@ -58,13 +51,22 @@ export default function ResearchAgent() {
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
 
-  // Research state — extracted from result.state.custom each turn
+  // Research state — extracted from res.state each turn
   const [researchState, setResearchState] = useState<ResearchState | null>(
     null
   );
 
-  // Session state — round-tripped to the server each turn
-  const stateRef = useRef<SessionState | undefined>(undefined);
+  // A typed agent client. `Stream` is `string` because the orchestrator emits
+  // status strings via sendChunk({ status }).
+  const agent = useMemo(
+    () =>
+      remoteAgent<ResearchState, string>({
+        url: ENDPOINT,
+        stateManagement: 'client',
+      }),
+    []
+  );
+  const chatRef = useRef<AgentChat<ResearchState, string> | null>(null);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -76,68 +78,49 @@ export default function ResearchAgent() {
       setStatusText(null);
       setResearchState(null);
 
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {
-            state: {
-              custom: { subQuestions: [], subAnswers: [] } as ResearchState,
-              messages: [],
-              artifacts: [],
-            },
-          };
+      // On the first turn, seed the custom state. Subsequent turns reuse the
+      // chat, which tracks state automatically.
+      if (!chatRef.current) {
+        chatRef.current = agent.chat({
+          state: {
+            custom: { subQuestions: [], subAnswers: [] },
+            messages: [],
+            artifacts: [],
+          },
+        });
+      }
+      const chat = chatRef.current;
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          // ── Status chunks — progress indicators from the orchestrator ──
-          if (chunk?.status) {
-            setStatusText(chunk.status as string);
+        for await (const chunk of turn.stream) {
+          // Status chunks — progress indicators from the orchestrator.
+          if (chunk.status) {
+            setStatusText(chunk.status);
           }
-
-          // ── Model text chunks — the final synthesis ────────────────────
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            }
+          // Model text chunks — the final synthesis.
+          if (chunk.text) {
+            accumulated += chunk.text;
+            setStreamingText(accumulated);
           }
         }
 
         // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
         setStatusText(null);
 
-        // Save session state for the next turn.
-        if (result?.state) {
-          stateRef.current = result.state;
-
-          // Extract the research state for the sidebar.
-          const custom = result.state.custom as ResearchState | undefined;
-          if (custom) {
-            setResearchState(custom);
-          }
+        // Read the research state directly off the response.
+        if (res.state) {
+          setResearchState(res.state);
         }
 
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: any) {
         setStreamingText('');
@@ -150,7 +133,7 @@ export default function ResearchAgent() {
         setLoading(false);
       }
     },
-    [loading]
+    [loading, agent]
   );
 
   return (
@@ -267,18 +250,4 @@ sess.addMessages([response.message]);`}</pre>
       </aside>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helper: extract displayable text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
 }

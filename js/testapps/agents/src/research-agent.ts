@@ -181,21 +181,19 @@ export const testResearchAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await researchAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text }] }],
+    // Seed the chat with the initial custom research state, then stream.
+    const chat = researchAgent.chat({
+      state: {
+        custom: { subQuestions: [], subAnswers: [] } as ResearchState,
+        messages: [],
+        artifacts: [],
       },
-      {
-        init: {
-          state: {
-            custom: { subQuestions: [], subAnswers: [] } as ResearchState,
-            messages: [],
-            artifacts: [],
-          },
-        },
-        onChunk: sendChunk,
-      }
-    );
-    return res.result;
+    });
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );

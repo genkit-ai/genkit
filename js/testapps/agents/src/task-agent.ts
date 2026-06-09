@@ -181,25 +181,24 @@ export const testTaskAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await taskAgent.run(
-      {
-        messages: [{ role: 'user' as const, content: [{ text }] }],
+    // Seed the chat with the initial custom state, then send the message.
+    const chat = taskAgent.chat({
+      state: {
+        custom: { tasks: [], nextId: 1 } as TaskState,
+        messages: [],
+        artifacts: [],
       },
-      {
-        init: {
-          state: {
-            custom: { tasks: [], nextId: 1 } as TaskState,
-            messages: [],
-            artifacts: [],
-          },
-        },
-        onChunk: sendChunk,
-      }
-    );
+    });
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
 
     return {
-      message: res.result.message,
-      customState: res.result.state?.custom,
+      message: res.message,
+      // `res.state` returns the custom state directly.
+      customState: res.state,
     };
   }
 );

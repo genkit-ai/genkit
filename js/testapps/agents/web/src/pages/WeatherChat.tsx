@@ -14,33 +14,23 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  Part,
-  SessionSnapshot,
-  SessionState,
-} from 'genkit/beta';
-import { runFlow, streamFlow } from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MessageData, Part } from 'genkit/beta';
+import { AgentError, remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Weather Chat — multi-turn streaming chat with tool-calling + session restore
 //
-// Demonstrates:
-//   • streamFlow() for streaming responses
-//   • Multi-turn session via `init: { state }` round-tripping
-//   • Rendering streamed tool calls and tool responses in real time
-//   • Restoring a session from a snapshotId (URL-based session persistence)
-//   • Using the `/state` endpoint to fetch snapshot data on page load
+// Demonstrates the ergonomic `remoteAgent` client:
+//   • agent.chat() — a stateful conversation that tracks snapshotId/state
+//   • chat.send(text) — returns a turn with `.stream` and `.response`
+//   • agent.loadChat({ snapshotId }) — restore a session from the URL
+//   • Graceful failures surface as `AgentError` while the session stays usable
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/weatherAgent';
-const STATE_ENDPOINT = '/api/weatherAgent/state';
 
 export default function WeatherChat() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
@@ -50,10 +40,11 @@ export default function WeatherChat() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
+  const [hasSession, setHasSession] = useState(!!urlSnapshotId);
 
-  // Session tracking
-  const stateRef = useRef<SessionState | undefined>(undefined);
-  const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
+  // The agent client and the live chat that tracks snapshotId/state/messages.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+  const chatRef = useRef<AgentChat | null>(null);
 
   // ── Restore session from snapshotId on mount ───────────────────────
   useEffect(() => {
@@ -63,53 +54,14 @@ export default function WeatherChat() {
 
     async function restore() {
       try {
-        // Call the /state endpoint to fetch the snapshot data.
-        // The getSnapshotDataAction takes a { snapshotId } object as input
-        // and returns a SessionSnapshot with the full session state.
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: { snapshotId: urlSnapshotId },
-        });
-
+        // loadChat fetches the snapshot and returns a chat with history +
+        // state restored, ready to continue the conversation.
+        const chat = await agent.loadChat({ snapshotId: urlSnapshotId! });
         if (cancelled) return;
 
-        if (snapshot?.state?.messages) {
-          // Reconstruct chat messages from the session history.
-          const restored: ChatMessage[] = [];
-          for (const msg of snapshot.state.messages) {
-            const role = msg.role as ChatMessage['role'];
-            const textParts = (msg.content || [])
-              .filter((p: Part) => p.text)
-              .map((p: Part) => p.text);
-
-            if (textParts.length > 0) {
-              restored.push({ role, text: textParts.join('') });
-            }
-
-            // Also show tool calls/responses from history
-            for (const p of (msg.content as Part[]) || []) {
-              if (p.toolRequest) {
-                restored.push({
-                  role: 'tool',
-                  text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
-                });
-              }
-              if (p.toolResponse) {
-                restored.push({
-                  role: 'tool',
-                  text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
-                });
-              }
-            }
-          }
-          setMessages(restored);
-
-          // Use the snapshot's state for continuing the conversation.
-          // Since the weatherAgent uses a server store, we can use snapshotId.
-          snapshotIdRef.current = snapshot.snapshotId;
-          // Also keep the state for the `state` init path.
-          stateRef.current = snapshot.state;
-        }
+        chatRef.current = chat;
+        setMessages(messagesToChat(chat.messages));
+        setHasSession(true);
       } catch (err: any) {
         if (!cancelled) {
           setMessages([
@@ -128,7 +80,7 @@ export default function WeatherChat() {
     return () => {
       cancelled = true;
     };
-  }, []); // Only run on mount
+  }, [agent]); // Only run on mount
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -138,102 +90,82 @@ export default function WeatherChat() {
       setLoading(true);
       setStreamingText('');
 
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      // Prefer state over snapshotId for multi-turn.
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : snapshotIdRef.current
-          ? { snapshotId: snapshotIdRef.current }
-          : {};
+      // Lazily create the chat on the first turn.
+      if (!chatRef.current) {
+        chatRef.current = agent.chat();
+      }
+      const chat = chatRef.current;
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          const c = chunk;
-          const mc = c?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
-              const tr = part.toolRequest;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `🔧 Calling ${tr.name}(${JSON.stringify(tr.input)})`,
-                },
-              ]);
-            } else if (part.toolResponse) {
-              const tr = part.toolResponse;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `✅ ${tr.name} → ${JSON.stringify(tr.output)}`,
-                },
-              ]);
-            }
+        for await (const chunk of turn.stream) {
+          if (chunk.text) {
+            accumulated += chunk.text;
+            setStreamingText(accumulated);
+          }
+          // Tool requests are exposed directly on the chunk.
+          for (const tr of chunk.toolRequests) {
+            const req = tr.toolRequest;
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'tool',
+                text: `🔧 Calling ${req.name}(${JSON.stringify(req.input)})`,
+              },
+            ]);
+          }
+          // Tool responses live on the raw chunk content.
+          for (const part of toolResponses(chunk.raw.modelChunk?.content)) {
+            const tr = part.toolResponse!;
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'tool',
+                text: `✅ ${tr.name} → ${JSON.stringify(tr.output)}`,
+              },
+            ]);
           }
         }
 
         // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
 
-        // Save session state for the next turn. On a failed turn this is the
-        // *last-good* state (what the failed turn started with).
-        if (result?.state) stateRef.current = result.state;
-
-        // Update the snapshotId and push it into the URL. On a failed turn
-        // the server writes a recovery snapshot of the last-good state and
-        // returns its id, so the session stays restorable.
-        if (result?.snapshotId) {
-          snapshotIdRef.current = result.snapshotId;
-          // Update URL so the user can bookmark or hard-reload this session.
-          navigate(`/weather/${result.snapshotId}`, { replace: true });
+        // The chat tracks the latest snapshotId — push it into the URL so
+        // the user can bookmark or hard-reload this session.
+        if (chat.snapshotId) {
+          setHasSession(true);
+          navigate(`/weather/${chat.snapshotId}`, { replace: true });
         }
 
-        // A turn can now fail gracefully: instead of throwing, the agent
-        // resolves with `finishReason: 'failed'` and a structured `error`,
-        // while preserving the last-good state/snapshot above. Surface the
-        // error but keep the session usable.
-        if (result?.finishReason === 'failed') {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'model', text: res.text || accumulated },
+        ]);
+      } catch (err: any) {
+        setStreamingText('');
+        // A turn can fail gracefully: it throws an AgentError but the chat
+        // keeps the last-good snapshot/state, so the session stays usable.
+        if (err instanceof AgentError) {
+          if (chat.snapshotId) {
+            setHasSession(true);
+            navigate(`/weather/${chat.snapshotId}`, { replace: true });
+          }
           setMessages((prev) => [
             ...prev,
             {
               role: 'system',
               text:
-                `⚠️ Turn failed (${result.error?.status ?? 'INTERNAL'}): ` +
-                `${result.error?.message ?? 'Unknown error'}. ` +
+                `⚠️ Turn failed (${err.status}): ${err.message}. ` +
                 `The last-good snapshot was preserved — you can keep chatting.`,
             },
           ]);
           return;
         }
-
-        const replyText = extractText(result);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'model', text: replyText || accumulated },
-        ]);
-      } catch (err: any) {
-        // Only transport/connection errors reach here now — turn-level
-        // failures resolve gracefully via `finishReason: 'failed'` above.
-        setStreamingText('');
+        // Only transport/connection errors reach here.
         setMessages((prev) => [
           ...prev,
           { role: 'system', text: `Connection error: ${err.message}` },
@@ -242,7 +174,7 @@ export default function WeatherChat() {
         setLoading(false);
       }
     },
-    [loading, navigate]
+    [loading, navigate, agent]
   );
 
   if (restoring) {
@@ -282,7 +214,7 @@ export default function WeatherChat() {
         loading={loading}
         onSend={handleSend}
         headerAction={
-          snapshotIdRef.current ? (
+          hasSession ? (
             <Link to="/weather" className="btn btn-new-session" reloadDocument>
               ✨ New Session
             </Link>
@@ -294,8 +226,8 @@ export default function WeatherChat() {
         <h3>📋 How It Works</h3>
         <ol>
           <li>
-            Client sends user message via <code>streamFlow()</code> — responses
-            arrive as they're generated.
+            Client sends user message via <code>chat.send()</code> — responses
+            arrive as they're generated on <code>turn.stream</code>.
           </li>
           <li>
             The model can invoke <strong>tools</strong> (e.g.{' '}
@@ -303,50 +235,47 @@ export default function WeatherChat() {
             the chat.
           </li>
           <li>
-            Each response returns a <code>state</code> object and a{' '}
-            <code>snapshotId</code>. The state is sent back on the next turn via{' '}
-            <code>{'init: { state }'}</code> for multi-turn context.
+            The <code>chat</code> tracks <code>snapshotId</code> and{' '}
+            <code>state</code> automatically across turns — no manual threading.
           </li>
           <li>
-            The <code>snapshotId</code> is pushed into the URL, so you can
+            The <code>chat.snapshotId</code> is pushed into the URL, so you can
             bookmark or share the session link.
           </li>
           <li>
             On page load with a <code>:snapshotId</code> in the URL, the client
-            calls the <code>/state</code> endpoint to restore the full
-            conversation history.
+            calls <code>agent.loadChat()</code> to restore the full conversation
+            history.
           </li>
         </ol>
 
         <h4>Key APIs</h4>
-        <pre>{`// Streaming multi-turn
-const response = streamFlow({
+        <pre>{`// Create a client + chat
+const agent = remoteAgent({
   url: '/api/weatherAgent',
-  input: { messages: [...] },
-  init: { state },
 });
+const chat = agent.chat();
 
-for await (const chunk of response.stream) {
-  // chunk.modelChunk.content[]
-  // → .text, .toolRequest, .toolResponse
+// Streaming multi-turn
+const turn = chat.sendStream('Weather in Tokyo?');
+for await (const chunk of turn.stream) {
+  // chunk.text, chunk.toolRequests
 }
 
-const result = await response.output;
-// result.state → send back next turn
-// result.snapshotId → push to URL
+const res = await turn.response;
+// res.text, res.snapshotId, res.state
+// chat.snapshotId → push to URL
 
 // Restore session
-runFlow({
-  url: '/api/weatherAgent/state',
-  input: { snapshotId },
-});`}</pre>
+const chat =
+  await agent.loadChat({ snapshotId });`}</pre>
 
         <h4>Session Persistence</h4>
         <p>
           This demo uses a <strong>server-side session store</strong>. The{' '}
           <code>snapshotId</code> is a key into the store — the full message
-          history lives on the server. The client also receives{' '}
-          <code>state</code> for stateless round-tripping as a fallback.
+          history lives on the server and the <code>chat</code> tracks it for
+          you.
         </p>
       </aside>
     </div>
@@ -354,15 +283,41 @@ runFlow({
 }
 
 // ---------------------------------------------------------------------------
-// Helper: pull displayable text out of an agent result
+// Helpers
 // ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
+
+/** Filter the toolResponse parts out of a content array. */
+function toolResponses(content?: Part[]): Part[] {
+  return (content || []).filter((p) => p.toolResponse);
+}
+
+/** Rebuild displayable chat messages from restored session history. */
+function messagesToChat(history: MessageData[]): ChatMessage[] {
+  const restored: ChatMessage[] = [];
+  for (const msg of history) {
+    const role = msg.role as ChatMessage['role'];
+    const textParts = (msg.content || [])
+      .filter((p: Part) => p.text)
+      .map((p: Part) => p.text);
+
+    if (textParts.length > 0) {
+      restored.push({ role, text: textParts.join('') });
+    }
+
+    for (const p of msg.content || []) {
+      if (p.toolRequest) {
+        restored.push({
+          role: 'tool',
+          text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+        });
+      }
+      if (p.toolResponse) {
+        restored.push({
+          role: 'tool',
+          text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+        });
+      }
+    }
   }
-  return parts.join('') || JSON.stringify(result, null, 2);
+  return restored;
 }

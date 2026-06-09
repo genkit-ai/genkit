@@ -14,14 +14,8 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -29,9 +23,9 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //
 // Demonstrates:
 //   • The `agents` middleware for sub-agent delegation
-//   • streamFlow() for streaming orchestrator responses
+//   • chat.send() for streaming orchestrator responses
 //   • Inline rendering of `call_agent` tool calls showing delegation
-//   • Multi-turn session via state round-tripping
+//   • Multi-turn session — the chat tracks state automatically
 //   • Markdown rendering for code-heavy responses
 // ---------------------------------------------------------------------------
 
@@ -42,8 +36,12 @@ export default function SubAgentChat() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Session tracking
-  const stateRef = useRef<AgentOutput['state']>(undefined);
+  // The agent client and the live chat that tracks state across turns.
+  const agent = useMemo(
+    () => remoteAgent({ url: ENDPOINT, stateManagement: 'client' }),
+    []
+  );
+  const chatRef = useRef<AgentChat | null>(null);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -53,65 +51,54 @@ export default function SubAgentChat() {
       setLoading(true);
       setStreamingText('');
 
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {};
+      // Lazily create the chat on the first turn.
+      if (!chatRef.current) {
+        chatRef.current = agent.chat();
+      }
+      const chat = chatRef.current;
 
       try {
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
-              const tr = part.toolRequest;
-              // Format call_agent delegations nicely
-              const inp = tr.input as
-                | { agent?: string; task?: string }
-                | undefined;
-              const label =
-                tr.name === 'call_agent' && inp?.agent
-                  ? `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`
-                  : `🔧 ${tr.name}(${JSON.stringify(tr.input)})`;
-              setMessages((prev) => [...prev, { role: 'tool', text: label }]);
-            } else if (part.toolResponse) {
-              const tr = part.toolResponse;
-              // Format call_agent responses nicely
-              const out = tr.output as
-                | { response?: string; agentName?: string }
-                | undefined;
-              const label =
-                tr.name === 'call_agent' && out?.agentName
-                  ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`
-                  : `✅ ${tr.name} → ${JSON.stringify(tr.output)}`;
-              setMessages((prev) => [...prev, { role: 'tool', text: label }]);
-            }
+        for await (const chunk of turn.stream) {
+          if (chunk.text) {
+            accumulated += chunk.text;
+            setStreamingText(accumulated);
+          }
+          // Format call_agent delegations nicely.
+          for (const tr of chunk.toolRequests) {
+            const req = tr.toolRequest;
+            const inp = req.input as
+              | { agent?: string; task?: string }
+              | undefined;
+            const label =
+              req.name === 'call_agent' && inp?.agent
+                ? `🤝 Delegating to "${inp.agent}": ${inp.task ?? ''}`
+                : `🔧 ${req.name}(${JSON.stringify(req.input)})`;
+            setMessages((prev) => [...prev, { role: 'tool', text: label }]);
+          }
+          // Tool responses live on the raw chunk content.
+          for (const part of chunk.raw.modelChunk?.content || []) {
+            if (!part.toolResponse) continue;
+            const tr = part.toolResponse;
+            const out = tr.output as
+              | { response?: string; agentName?: string }
+              | undefined;
+            const label =
+              tr.name === 'call_agent' && out?.agentName
+                ? `✅ "${out.agentName}" responded: ${out.response ?? ''}`
+                : `✅ ${tr.name} → ${JSON.stringify(tr.output)}`;
+            setMessages((prev) => [...prev, { role: 'tool', text: label }]);
           }
         }
 
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
 
-        if (result?.state) stateRef.current = result.state;
-
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: unknown) {
         setStreamingText('');
@@ -124,7 +111,7 @@ export default function SubAgentChat() {
         setLoading(false);
       }
     },
-    [loading]
+    [loading, agent]
   );
 
   return (
@@ -222,18 +209,4 @@ const orchestrator = ai.defineAgent({
       </aside>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helper: pull displayable text out of an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
 }

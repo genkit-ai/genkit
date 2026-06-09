@@ -47,15 +47,15 @@ export const testWeatherAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await weatherAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text }] }],
-      },
-      {
-        onChunk: sendChunk,
-      }
-    );
-    return res.result;
+    // The ergonomic agent API: start a chat, send a message, stream the
+    // chunks, and await the final response.
+    const chat = weatherAgent.chat();
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );
 
@@ -66,24 +66,22 @@ export const testWeatherAgentStream = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const session = weatherAgent.streamBidi({});
-    session.send({
-      messages: [{ role: 'user' as const, content: [{ text }] }],
-    });
-    session.send({
-      messages: [
-        {
-          role: 'user' as const,
-          content: [{ text: 'now say that in French' }],
-        },
-      ],
-    });
-    session.close();
+    // Multi-turn: a single `chat` carries state across turns automatically,
+    // so we just call `send` again for the follow-up.
+    const chat = weatherAgent.chat();
 
-    for await (const chunk of session.stream) {
-      sendChunk(chunk);
+    const turn1 = chat.sendStream(text);
+    for await (const chunk of turn1.stream) {
+      sendChunk(chunk.raw);
     }
+    await turn1.response;
 
-    return await session.output;
+    const turn2 = chat.sendStream('now say that in French');
+    for await (const chunk of turn2.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn2.response;
+
+    return res.raw;
   }
 );

@@ -14,15 +14,8 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -32,10 +25,11 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //   • `session.updateCustom()` / `session.getCustom()` — typed custom state
 //     maintained alongside message history inside the session
 //   • Tools that mutate structured state inside the session
-//   • Reading `result.state.custom` to display structured state alongside chat
+//   • Reading `res.state` (the agent's typed custom state) to display
+//     structured state alongside chat
 //   • Uses `defineAgent` (not defineCustomAgent) — custom state works
 //     seamlessly with the standard agent API
-//   • Client-managed multi-turn via `init: { state }` round-tripping
+//   • Client-managed multi-turn — the chat tracks state automatically
 //
 // The user chats naturally ("Add buy groceries", "Mark task 1 done") and
 // the model uses tools to manage a typed task list stored in session.custom.
@@ -59,11 +53,15 @@ export default function TaskTracker() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Task state — extracted from result.state.custom each turn
+  // Task state — extracted from res.state each turn
   const [tasks, setTasks] = useState<TaskItem[]>([]);
 
-  // Session state — round-tripped to the server each turn
-  const stateRef = useRef<SessionState | undefined>(undefined);
+  // A typed agent client; the chat tracks the session state automatically.
+  const agent = useMemo(
+    () => remoteAgent<TaskState>({ url: ENDPOINT, stateManagement: 'client' }),
+    []
+  );
+  const chatRef = useRef<AgentChat<TaskState> | null>(null);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -73,52 +71,41 @@ export default function TaskTracker() {
       setLoading(true);
       setStreamingText('');
 
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      // On first turn init is empty; subsequent turns send back state.
-      // We ensure the custom state is initialised so the tools have
-      // something to work with on the very first turn.
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {
-            state: {
-              custom: { tasks: [], nextId: 1 } as TaskState,
-              messages: [],
-              artifacts: [],
-            },
-          };
+      // On the first turn, seed the custom state so the tools have something
+      // to work with. Subsequent turns reuse the chat (state auto-tracked).
+      if (!chatRef.current) {
+        chatRef.current = agent.chat({
+          state: {
+            custom: { tasks: [], nextId: 1 },
+            messages: [],
+            artifacts: [],
+          },
+        });
+      }
+      const chat = chatRef.current;
 
       try {
         // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          // ── Model text/tool chunks ──────────────────────────────────
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
-              const tr = part.toolRequest;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'tool',
-                  text: `🔧 ${tr.name}(${JSON.stringify(tr.input)})`,
-                },
-              ]);
-            } else if (part.toolResponse) {
+        for await (const chunk of turn.stream) {
+          if (chunk.text) {
+            accumulated += chunk.text;
+            setStreamingText(accumulated);
+          }
+          for (const tr of chunk.toolRequests) {
+            const req = tr.toolRequest;
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: 'tool',
+                text: `🔧 ${req.name}(${JSON.stringify(req.input)})`,
+              },
+            ]);
+          }
+          for (const part of chunk.raw.modelChunk?.content || []) {
+            if (part.toolResponse) {
               const tr = part.toolResponse;
               setMessages((prev) => [
                 ...prev,
@@ -132,24 +119,17 @@ export default function TaskTracker() {
         }
 
         // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
 
-        // Save session state for the next turn.
-        if (result?.state) {
-          stateRef.current = result.state;
-
-          // Extract and display the custom task state.
-          const custom = result.state.custom as TaskState | undefined;
-          if (custom?.tasks) {
-            setTasks([...custom.tasks]);
-          }
+        // Read the typed custom state directly off the response.
+        if (res.state?.tasks) {
+          setTasks([...res.state.tasks]);
         }
 
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: any) {
         setStreamingText('');
@@ -161,7 +141,7 @@ export default function TaskTracker() {
         setLoading(false);
       }
     },
-    [loading]
+    [loading, agent]
   );
 
   const doneCount = tasks.filter((t) => t.done).length;
@@ -188,7 +168,7 @@ export default function TaskTracker() {
         <h3>📋 Task List</h3>
         <p className="task-sidebar-hint">
           Live view of <code>session.custom</code> — updated each turn from{' '}
-          <code>result.state.custom</code>.
+          <code>res.state</code>.
         </p>
 
         {tasks.length === 0 ? (
@@ -231,8 +211,8 @@ export default function TaskTracker() {
         <details className="task-state-raw" open={false}>
           <summary>🔍 Raw Custom State JSON</summary>
           <pre className="task-state-json">
-            {stateRef.current?.custom
-              ? JSON.stringify(stateRef.current.custom, null, 2)
+            {chatRef.current?.state
+              ? JSON.stringify(chatRef.current.state, null, 2)
               : '(no state yet)'}
           </pre>
         </details>
@@ -252,12 +232,12 @@ export default function TaskTracker() {
             <code>ai.currentSession().updateCustom()</code>.
           </li>
           <li>
-            After each turn, the client reads <code>result.state.custom</code>{' '}
-            to update the task list panel.
+            After each turn, the client reads <code>res.state</code> to update
+            the task list panel.
           </li>
           <li>
-            The full <code>state</code> blob (messages + custom) is sent back on
-            the next turn via <code>{'init: { state }'}</code>.
+            The <code>chat</code> tracks the full session state and sends it
+            back on the next turn automatically.
           </li>
         </ol>
 
@@ -269,24 +249,10 @@ session.updateCustom((state) => {
   return state;
 });
 
-// Client — read custom state from result
-const custom = result.state.custom;
-setTasks(custom.tasks);`}</pre>
+// Client — read custom state from the response
+const res = await chat.send(text);
+setTasks(res.state.tasks);`}</pre>
       </aside>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helper: extract displayable text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
 }

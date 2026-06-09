@@ -51,22 +51,20 @@ export const testWeatherAgentStateless = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (input, { sendChunk }) => {
-    const res = await weatherAgentStateless.run(
-      {
-        messages: [{ role: 'user' as const, content: [{ text: input.text }] }],
-      },
-      {
-        init: {
-          // Resume from the state returned by the previous turn, or start fresh.
-          state: input.state,
-        },
-        onChunk: sendChunk,
-      }
+    // Resume from the state returned by the previous turn, or start fresh.
+    // With no server store the chat round-trips the client-owned state blob.
+    const chat = weatherAgentStateless.chat(
+      input.state ? { state: input.state } : undefined
     );
+    const turn = chat.sendStream(input.text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
     // Return the updated state so the caller can pass it back on the next turn.
     return {
-      state: res.result.state,
-      message: res.result.message,
+      state: res.raw.state,
+      message: res.message,
     };
   }
 );

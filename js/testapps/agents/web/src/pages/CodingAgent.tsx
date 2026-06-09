@@ -14,18 +14,16 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  Part,
-  SessionSnapshot,
-  SessionState,
-  ToolRequest,
-} from 'genkit/beta';
-import { runFlow, streamFlow } from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MessageData, Part } from 'genkit/beta';
+import {
+  AgentError,
+  remoteAgent,
+  runFlow,
+  type AgentChat,
+  type AgentResponse,
+  type AgentTurn,
+} from 'genkit/beta/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
@@ -41,23 +39,23 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //   • `defineTool` with AI-powered safety gate and manual interrupt
 //   • `defineFlow` for workspace browser (listWorkspaceFiles, readWorkspaceFile)
 //   • `FileSessionStore` for persistent sessions & interrupt resumption
-//   • `getSnapshotDataAction` for restoring sessions from URL
 //
-// Client APIs demonstrated:
-//   • `streamFlow()` for streaming agent responses
-//   • `runFlow()` for non-streaming workspace file operations
-//   • Two interrupt resumption patterns:
-//     - **Restart pattern** (resume.restart) — for write_file, search_and_replace,
-//       run_shell. Re-executes the tool with `{ toolApproved: true }` metadata.
-//     - **Respond pattern** (resume.respond) — for ask_user. Sends the
-//       user's answer directly without re-executing the tool.
-//   • Session continuity via snapshotId
-//   • Streaming reasoning/thinking content
+// Client APIs demonstrated (the ergonomic `remoteAgent` client):
+//   • `agent.chat()` — a stateful conversation that tracks snapshotId/state
+//   • `chat.send()` / `turn.stream` / `turn.response` for streaming turns
+//   • `agent.loadChat({ snapshotId })` to restore a session from the URL
+//   • `res.interrupts` to detect paused tool requests (ask_user + approvals)
+//   • Two interrupt resumption patterns via `chat.resume()`:
+//     - **Restart pattern** (resume.restart) — for write_file,
+//       search_and_replace, run_shell. Re-executes the tool with
+//       `{ toolApproved: true }` metadata.
+//     - **Respond pattern** (resume.respond) — for ask_user. Sends the user's
+//       answer directly without re-executing the tool.
+//   • `runFlow()` for non-streaming workspace file operations (plain flows)
 // ---------------------------------------------------------------------------
 
 const API_BASE = 'http://localhost:8080';
 const ENDPOINT = `${API_BASE}/api/codingAgent`;
-const STATE_ENDPOINT = `${API_BASE}/api/codingAgent/state`;
 const WORKSPACE_FILES_ENDPOINT = `${API_BASE}/api/workspace/files`;
 const WORKSPACE_FILE_ENDPOINT = `${API_BASE}/api/workspace/file`;
 
@@ -76,14 +74,12 @@ interface PendingApproval {
   toolName: string;
   ref?: string;
   input: any;
-  snapshotId: string;
 }
 
 interface PendingQuestion {
   question: string;
   options: string[];
   ref?: string;
-  snapshotId: string;
 }
 
 /** Extended part type for parts that carry filesystem middleware metadata. */
@@ -117,9 +113,11 @@ export default function CodingAgent() {
   const [fileContent, setFileContent] = useState<string>('');
   const [fileLoading, setFileLoading] = useState(false);
 
-  // Session tracking
-  const stateRef = useRef<SessionState | undefined>(undefined);
-  const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
+  // The agent client and the live chat that tracks snapshotId/state/messages.
+  // The coding agent uses a server-managed FileSessionStore, so the chat
+  // threads the snapshotId for us across turns and resumes.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+  const chatRef = useRef<AgentChat | null>(null);
 
   // ── Fetch workspace file tree via runFlow() ────────────────────────────
   const refreshFiles = useCallback(async () => {
@@ -146,99 +144,43 @@ export default function CodingAgent() {
 
     async function restore() {
       try {
-        // Call the /state endpoint to fetch the snapshot data.
-        // getSnapshotDataAction takes a { snapshotId } object as input
-        // and returns a SessionSnapshot with the full message history.
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: { snapshotId: urlSnapshotId },
-        });
-
+        // loadChat fetches the snapshot and returns a chat with the full
+        // message history + state restored, ready to continue.
+        const chat = await agent.loadChat({ snapshotId: urlSnapshotId! });
         if (cancelled) return;
 
-        if (snapshot?.state?.messages) {
-          // Reconstruct chat messages from the session history.
-          const restored: ChatMessage[] = [];
-          const allMessages = snapshot.state.messages;
+        chatRef.current = chat;
+        setMessages(messagesToChat(chat.messages));
 
-          for (const msg of allMessages) {
-            const role = msg.role as ChatMessage['role'];
-
-            // Filter out filesystem middleware read_file text parts
-            // (same filtering we apply during streaming).
-            const textParts = (msg.content || [])
-              .filter((p: PartWithMetadata) => {
-                if (!p.text) return false;
-                // Skip read_file content injected by filesystem middleware
-                if (p.metadata?.filesystemMiddlewareTool) return false;
-                return true;
-              })
-              .map((p: Part) => p.text);
-
-            if (textParts.length > 0) {
-              restored.push({ role, text: textParts.join('') });
-            }
-
-            // Show tool calls/responses from history, but skip:
-            //   • read_file responses (the raw file content is too verbose)
-            //   • read_file requests are shown as "📖 Reading {path}" bubbles
-            for (const p of (msg.content as Part[]) || []) {
-              if (p.toolRequest) {
-                const tmsg = formatToolRequest(
-                  p.toolRequest.name,
-                  p.toolRequest.input
-                );
-                restored.push({ role: 'tool', ...tmsg });
-              }
-              if (p.toolResponse) {
-                if (p.toolResponse.name === 'read_file') continue;
-                const tmsg = formatToolResponse(
-                  p.toolResponse.name,
-                  p.toolResponse.output
-                );
-                restored.push({ role: 'tool', ...tmsg });
-              }
-            }
-          }
-          setMessages(restored);
-
-          // Use the snapshot for continuing the conversation.
-          snapshotIdRef.current = snapshot.snapshotId;
-          stateRef.current = snapshot.state;
-
-          // If the last message has a pending interrupt (e.g. ask_user,
-          // write_file approval), trigger the dialog so the user can respond.
-          if (allMessages.length > 0 && snapshot.snapshotId) {
-            const lastMsg = allMessages[allMessages.length - 1];
-            for (const p of lastMsg.content || []) {
-              if (p.toolRequest) {
-                const tr = p.toolRequest;
-                if (tr.name === 'ask_user') {
-                  const askInput = tr.input as
-                    | { question?: string; options?: string[] }
-                    | undefined;
-                  setQuestion({
-                    question:
-                      askInput?.question || 'What would you like to do?',
-                    options: askInput?.options || [],
-                    ref: tr.ref,
-                    snapshotId: snapshot.snapshotId,
-                  });
-                  break;
-                } else if (
-                  tr.name === 'write_file' ||
-                  tr.name === 'search_and_replace' ||
-                  tr.name === 'run_shell'
-                ) {
-                  setApproval({
-                    toolName: tr.name,
-                    ref: tr.ref,
-                    input: tr.input,
-                    snapshotId: snapshot.snapshotId,
-                  });
-                  break;
-                }
-              }
+        // If the last message has a pending interrupt (e.g. ask_user,
+        // write_file approval), trigger the dialog so the user can respond.
+        const allMessages = chat.messages;
+        if (allMessages.length > 0) {
+          const lastMsg = allMessages[allMessages.length - 1];
+          for (const p of lastMsg.content || []) {
+            if (!p.toolRequest) continue;
+            const tr = p.toolRequest;
+            if (tr.name === 'ask_user') {
+              const askInput = tr.input as
+                | { question?: string; options?: string[] }
+                | undefined;
+              setQuestion({
+                question: askInput?.question || 'What would you like to do?',
+                options: askInput?.options || [],
+                ref: tr.ref,
+              });
+              break;
+            } else if (
+              tr.name === 'write_file' ||
+              tr.name === 'search_and_replace' ||
+              tr.name === 'run_shell'
+            ) {
+              setApproval({
+                toolName: tr.name,
+                ref: tr.ref,
+                input: tr.input,
+              });
+              break;
             }
           }
         }
@@ -289,39 +231,30 @@ export default function CodingAgent() {
       setStreamingText('');
       setStreamingReasoning('');
 
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      // The coding agent uses a server-managed FileSessionStore,
-      // so we always use snapshotId (not client-side state).
-      const init: AgentInit = snapshotIdRef.current
-        ? { snapshotId: snapshotIdRef.current }
-        : {};
+      if (!chatRef.current) {
+        chatRef.current = agent.chat();
+      }
+      const chat = chatRef.current;
 
       try {
-        const result = await streamAndCollect(input, init);
-        processResult(result);
+        const res = await streamTurn(chat.sendStream(text));
+        processResult(res);
       } catch (err: unknown) {
-        setStreamingText('');
-        const errMsg = err instanceof Error ? err.message : String(err);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error: ${errMsg}` },
-        ]);
+        handleTurnError(err);
       } finally {
         setLoading(false);
         refreshFiles();
       }
     },
-    [loading, approval, question, refreshFiles]
+    [loading, approval, question, refreshFiles, agent]
   );
 
   // ── Respond to a tool approval interrupt ──────────────────────────────
   const handleApprovalResponse = useCallback(
     async (approved: boolean) => {
-      if (!approval) return;
+      if (!approval || !chatRef.current) return;
       const currentApproval = approval;
+      const chat = chatRef.current;
       setApproval(null);
       setLoading(true);
       setStreamingText('');
@@ -337,62 +270,47 @@ export default function CodingAgent() {
         },
       ]);
 
-      const init: AgentInit = { snapshotId: currentApproval.snapshotId };
-      let input: AgentInput;
-
-      if (approved) {
-        // Use resume.restart to resume the interrupted tool.
-        // This maps to generate()'s resume: { restart: [...] } in definePromptAgent.
-        // The metadata.resumed.toolApproved flag is checked by:
-        //   • toolApproval middleware (for write_file, search_and_replace)
-        //   • run_shell tool handler (for risky shell commands)
-        input = {
-          resume: {
-            restart: [
-              {
-                toolRequest: {
-                  name: currentApproval.toolName,
-                  ref: currentApproval.ref,
-                  input: currentApproval.input,
-                },
-                metadata: { resumed: { toolApproved: true } },
-              },
-            ],
-          },
-        };
-      } else {
-        // For denial, send a user message so the model knows the tool was rejected.
-        // We don't use resume.restart for denial because that would re-trigger the
-        // interrupt in a loop.
-        input = {
-          messages: [
-            {
-              role: 'user',
-              content: [
+      try {
+        let res: AgentResponse;
+        if (approved) {
+          // Restart pattern — resume the interrupted tool by re-issuing the
+          // original tool request tagged with `{ toolApproved: true }`. This
+          // metadata is checked by:
+          //   • toolApproval middleware (write_file, search_and_replace)
+          //   • run_shell tool handler (risky shell commands)
+          res = await streamTurn(
+            chat.resumeStream({
+              restart: [
                 {
-                  text:
-                    `I denied the "${currentApproval.toolName}" tool call` +
-                    (currentApproval.toolName === 'run_shell'
-                      ? ` for command: "${currentApproval.input?.command}".`
-                      : ` for file: "${currentApproval.input?.filePath}".`) +
-                    ` Please continue without executing it, or suggest an alternative.`,
+                  toolRequest: {
+                    name: currentApproval.toolName,
+                    ref: currentApproval.ref,
+                    input: currentApproval.input,
+                  },
+                  metadata: { resumed: { toolApproved: true } },
                 },
               ],
-            },
-          ],
-        };
-      }
-
-      try {
-        const result = await streamAndCollect(input, init);
-        processResult(result);
+            })
+          );
+        } else {
+          // For denial, send a user message so the model knows the tool was
+          // rejected. We don't restart for denial because that would re-trigger
+          // the interrupt in a loop.
+          const denialText =
+            `I denied the "${currentApproval.toolName}" tool call` +
+            (currentApproval.toolName === 'run_shell'
+              ? ` for command: "${currentApproval.input?.command}".`
+              : ` for file: "${currentApproval.input?.filePath}".`) +
+            ` Please continue without executing it, or suggest an alternative.`;
+          res = await streamTurn(
+            chat.sendStream({
+              messages: [{ role: 'user', content: [{ text: denialText }] }],
+            })
+          );
+        }
+        processResult(res);
       } catch (err: unknown) {
-        setStreamingText('');
-        const errMsg = err instanceof Error ? err.message : String(err);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error resuming: ${errMsg}` },
-        ]);
+        handleTurnError(err, 'resuming');
       } finally {
         setLoading(false);
         refreshFiles();
@@ -401,24 +319,62 @@ export default function CodingAgent() {
     [approval, refreshFiles]
   );
 
-  // ── Shared: stream a request and collect chunks ──────────────────────
-  async function streamAndCollect(
-    input: AgentInput,
-    init: AgentInit
-  ): Promise<AgentOutput> {
-    const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-      url: ENDPOINT,
-      input,
-      init,
-    });
+  // ── Respond to an ask_user interrupt ───────────────────────────────────
+  const handleQuestionResponse = useCallback(
+    async (answer: string) => {
+      if (!question || !chatRef.current) return;
+      const currentQuestion = question;
+      const chat = chatRef.current;
+      setQuestion(null);
+      setCustomAnswer('');
+      setLoading(true);
+      setStreamingText('');
+      setStreamingReasoning('');
 
+      setMessages((prev) => [
+        ...prev,
+        { role: 'system', text: `💬 Answer: ${answer}` },
+      ]);
+
+      try {
+        // Respond pattern — send the tool response directly via resume.respond.
+        // The tool never executes; we provide the output ourselves.
+        const res = await streamTurn(
+          chat.resumeStream({
+            respond: [
+              {
+                toolResponse: {
+                  name: 'ask_user',
+                  ref: currentQuestion.ref,
+                  output: { answer },
+                },
+              },
+            ],
+          })
+        );
+        processResult(res);
+      } catch (err: unknown) {
+        handleTurnError(err, 'resuming');
+      } finally {
+        setLoading(false);
+        refreshFiles();
+      }
+    },
+    [question, refreshFiles]
+  );
+
+  // ── Shared: stream a turn, render chunks, and append the model reply ──
+  async function streamTurn(turn: AgentTurn): Promise<AgentResponse> {
     let accumulated = '';
     let accumulatedReasoning = '';
-    for await (const chunk of response.stream) {
-      const mc = chunk?.modelChunk;
-      if (!mc) continue;
 
-      for (const part of mc.content || []) {
+    for await (const chunk of turn.stream) {
+      const content = chunk.raw.modelChunk?.content as
+        | PartWithMetadata[]
+        | undefined;
+      if (!content) continue;
+
+      for (const part of content) {
         const p = part as PartWithMetadata;
         if (p.reasoning) {
           // Accumulate reasoning/thinking content
@@ -464,11 +420,11 @@ export default function CodingAgent() {
       }
     }
 
-    const result = await response.output;
+    const res = await turn.response;
     setStreamingText('');
     setStreamingReasoning('');
 
-    const replyText = extractText(result);
+    const replyText = res.text;
     if (accumulated || replyText || accumulatedReasoning) {
       setMessages((prev) => [
         ...prev,
@@ -480,91 +436,64 @@ export default function CodingAgent() {
       ]);
     }
 
-    return result;
+    return res;
   }
 
-  // ── Respond to an ask_user interrupt ───────────────────────────────────
-  const handleQuestionResponse = useCallback(
-    async (answer: string) => {
-      if (!question) return;
-      const currentQuestion = question;
-      setQuestion(null);
-      setCustomAnswer('');
-      setLoading(true);
-      setStreamingText('');
-      setStreamingReasoning('');
+  // ── Process a result: update the URL & detect interrupts ─────────────
+  function processResult(res: AgentResponse) {
+    // The chat tracks the latest snapshotId — push it into the URL so the
+    // user can bookmark or reload.
+    const snapshotId = chatRef.current?.snapshotId;
+    if (snapshotId) {
+      navigate(`/coding-agent/${snapshotId}`, { replace: true });
+    }
 
+    // res.interrupts surfaces all paused tool requests — both ask_user
+    // (defineInterrupt) and the toolApproval-middleware approvals.
+    const interrupt = res.interrupts[0];
+    if (!interrupt) return;
+
+    if (interrupt.name === 'ask_user') {
+      const input = interrupt.input as
+        | { question?: string; options?: string[] }
+        | undefined;
+      setQuestion({
+        question: input?.question || 'What would you like to do?',
+        options: input?.options || [],
+        ref: interrupt.ref,
+      });
+    } else {
+      // Tool approval interrupt (write_file, search_and_replace, run_shell)
+      setApproval({
+        toolName: interrupt.name,
+        ref: interrupt.ref,
+        input: interrupt.input,
+      });
+    }
+  }
+
+  // ── Shared: surface a turn-level or transport error ──────────────────
+  function handleTurnError(err: unknown, verb = '') {
+    setStreamingText('');
+    setStreamingReasoning('');
+    const prefix = verb ? `Error ${verb}` : 'Error';
+    if (err instanceof AgentError) {
+      // A turn (including a resume) can fail gracefully — the chat keeps the
+      // last-good snapshot so the user can keep working.
       setMessages((prev) => [
         ...prev,
-        { role: 'system', text: `💬 Answer: ${answer}` },
-      ]);
-
-      const init: AgentInit = { snapshotId: currentQuestion.snapshotId };
-
-      // Use the respond pattern — send the tool response via resume.respond.
-      // The tool never executes; we provide the output directly.
-      const input: AgentInput = {
-        resume: {
-          respond: [
-            {
-              toolResponse: {
-                name: 'ask_user',
-                ref: currentQuestion.ref,
-                output: { answer },
-              },
-            },
-          ],
+        {
+          role: 'system',
+          text: `${prefix} (${err.status}): ${err.message}`,
         },
-      };
-
-      try {
-        const result = await streamAndCollect(input, init);
-        processResult(result);
-      } catch (err: unknown) {
-        setStreamingText('');
-        const errMsg = err instanceof Error ? err.message : String(err);
-        setMessages((prev) => [
-          ...prev,
-          { role: 'system', text: `Error resuming: ${errMsg}` },
-        ]);
-      } finally {
-        setLoading(false);
-        refreshFiles();
-      }
-    },
-    [question, refreshFiles]
-  );
-
-  // ── Process a result: update session tracking & detect interrupts ────
-  function processResult(result: AgentOutput) {
-    if (result?.state) stateRef.current = result.state;
-    if (result?.snapshotId) {
-      snapshotIdRef.current = result.snapshotId;
-      // Push snapshotId into the URL so the user can bookmark or reload.
-      navigate(`/coding-agent/${result.snapshotId}`, { replace: true });
+      ]);
+      return;
     }
-
-    // Check for interrupts
-    const interrupt = findToolInterrupt(result);
-    if (interrupt && result.snapshotId) {
-      if (interrupt.name === 'ask_user') {
-        // ask_user interrupt — show question dialog
-        setQuestion({
-          question: interrupt.input?.question || 'What would you like to do?',
-          options: interrupt.input?.options || [],
-          ref: interrupt.ref,
-          snapshotId: result.snapshotId,
-        });
-      } else {
-        // Tool approval interrupt (write_file, search_and_replace, run_shell)
-        setApproval({
-          toolName: interrupt.name,
-          ref: interrupt.ref,
-          input: interrupt.input,
-          snapshotId: result.snapshotId,
-        });
-      }
-    }
+    const errMsg = err instanceof Error ? err.message : String(err);
+    setMessages((prev) => [
+      ...prev,
+      { role: 'system', text: `${prefix}: ${errMsg}` },
+    ]);
   }
 
   // ── Restoring state — show loading UI while fetching snapshot ──────────
@@ -991,50 +920,43 @@ function formatToolResponse(name: string, output: any): ToolMsg {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function extractText(result: AgentOutput): string {
-  if (!result) return '';
-  const msg = result.message;
-  if (!msg) return '';
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-    // Skip interrupt tool requests — they're handled by the question/approval dialogs
-    if (
-      p.toolRequest &&
-      p.toolRequest.name !== 'ask_user' &&
-      p.toolRequest.name !== 'write_file' &&
-      p.toolRequest.name !== 'search_and_replace' &&
-      p.toolRequest.name !== 'run_shell'
-    ) {
-      parts.push(
-        `[Tool Request: ${p.toolRequest.name}]\n${JSON.stringify(p.toolRequest.input, null, 2)}`
-      );
-    }
-  }
-  return parts.join('');
-}
+/** Rebuild displayable chat messages from a restored session history. */
+function messagesToChat(history: MessageData[]): ChatMessage[] {
+  const restored: ChatMessage[] = [];
+  for (const msg of history) {
+    const role = msg.role as ChatMessage['role'];
 
-function findToolInterrupt(
-  result: AgentOutput
-): { name: string; ref?: string; input: any } | null {
-  const msg = result?.message;
-  if (!msg) return null;
-  for (const p of msg.content || []) {
-    if (p.toolRequest) {
-      const tr = p.toolRequest as ToolRequest;
-      // These tools can trigger interrupts:
-      //   • write_file, search_and_replace — from toolApproval middleware
-      //   • run_shell — from the AI safety gate in the tool handler
-      //   • ask_user — always interrupts (defineInterrupt)
-      if (
-        tr.name === 'write_file' ||
-        tr.name === 'search_and_replace' ||
-        tr.name === 'run_shell' ||
-        tr.name === 'ask_user'
-      ) {
-        return { name: tr.name, ref: tr.ref, input: tr.input };
+    // Filter out filesystem middleware read_file text parts
+    // (same filtering we apply during streaming).
+    const textParts = (msg.content || [])
+      .filter((p: PartWithMetadata) => {
+        if (!p.text) return false;
+        // Skip read_file content injected by filesystem middleware
+        if (p.metadata?.filesystemMiddlewareTool) return false;
+        return true;
+      })
+      .map((p: Part) => p.text);
+
+    if (textParts.length > 0) {
+      restored.push({ role, text: textParts.join('') });
+    }
+
+    // Show tool calls/responses from history, but skip read_file responses
+    // (the raw file content is too verbose).
+    for (const p of (msg.content as Part[]) || []) {
+      if (p.toolRequest) {
+        const tmsg = formatToolRequest(p.toolRequest.name, p.toolRequest.input);
+        restored.push({ role: 'tool', ...tmsg });
+      }
+      if (p.toolResponse) {
+        if (p.toolResponse.name === 'read_file') continue;
+        const tmsg = formatToolResponse(
+          p.toolResponse.name,
+          p.toolResponse.output
+        );
+        restored.push({ role: 'tool', ...tmsg });
       }
     }
   }
-  return null;
+  return restored;
 }
