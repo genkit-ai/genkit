@@ -21,7 +21,8 @@
     "dev:stable:tools": "genkit start -- npx tsx --watch src/stable/tools.ts",
     "dev:stable:vision": "genkit start -- npx tsx --watch src/stable/vision.ts",
     "dev:stable:prompt-caching": "genkit start -- npx tsx --watch src/stable/prompt_caching.ts",
-    "genkit:dev": "cross-env GENKIT_ENV=dev npm run dev:stable",
+    "genkit:dev:stable": "cross-env GENKIT_ENV=dev npm run dev:stable",
+    "genkit:dev:beta": "cross-env GENKIT_ENV=dev npm run dev:beta",
     "genkit:start": "cross-env GENKIT_ENV=dev genkit start -- tsx --watch src/stable/basic.ts",
     "dev": "export GENKIT_RUNTIME_ID=$(openssl rand -hex 8) && node lib/stable/basic.js 2>&1"
   },
