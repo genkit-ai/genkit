@@ -69,6 +69,7 @@ export {
   genkit,
   type AgentFn,
   type AgentStreamChunk,
+  type ClientTransform,
   type GenkitBetaOptions,
   type SessionSnapshot,
   type SessionSnapshotInput,

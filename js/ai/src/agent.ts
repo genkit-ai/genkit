@@ -664,13 +664,39 @@ export class SessionRunner<State = unknown> {
 }
 
 /**
- * Optional transform applied to session state before it is exposed to the
- * client (e.g. in `AgentOutput.state` or via `getSnapshotData`).  This lets
- * agents redact sensitive fields or reshape the state for the client.
+ * Projects an agent's server-side data onto the view a client should see.
+ *
+ * Every member is optional; an omitted member passes the corresponding data
+ * through unchanged. Use this to redact sensitive fields or reshape data
+ * before it leaves the server - covering both data at rest and data in flight:
+ *
+ * - `state` reshapes/redacts session state at rest. Applied to
+ *   `AgentOutput.state` (client-managed agents), to snapshots returned by
+ *   `getSnapshotData`, and as the baseline for streamed `customPatch` diffs
+ *   (so streamed custom-state deltas stay consistent with the transformed
+ *   full state). Note: `state.artifacts` is part of session state, so artifact
+ *   redaction at rest happens here too.
+ * - `chunk` reshapes/redacts each stream chunk in flight (`modelChunk`,
+ *   `artifact`, `customPatch`, `turnEnd`) - e.g. filtering "internal" tool
+ *   request/response parts out of model chunks, or redacting streamed
+ *   artifacts. Return `null`/`undefined` to drop the chunk entirely.
+ *
+ * When both `state` and `chunk` touch the same data (e.g. artifacts), keeping
+ * the two projections consistent is the author's responsibility.
  */
-export type ClientStateTransform<S = unknown> = (
-  state: SessionState<S>
-) => SessionState;
+export interface ClientTransform<S = unknown> {
+  /**
+   * Reshapes/redacts session state before it is exposed to the client (at
+   * rest: `AgentOutput.state`, snapshots, and the streamed `customPatch`
+   * baseline).
+   */
+  state?: (state: SessionState<S>) => SessionState;
+  /**
+   * Reshapes/redacts each stream chunk before it is sent to the client.
+   * Return `null`/`undefined` to drop the chunk entirely.
+   */
+  chunk?: (chunk: AgentStreamChunk) => AgentStreamChunk | null | undefined;
+}
 
 /**
  * Function handler definition for custom agent actions.
@@ -926,23 +952,24 @@ export function defineCustomAgent<State = unknown>(
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
-    clientStateTransform?: ClientStateTransform<State>;
+    clientTransform?: ClientTransform<State>;
   },
   fn: AgentFn<State>
 ): Agent<State> {
-  // Helper that applies the optional transform before exposing state to the
-  // client.  When no transform is configured it returns the raw state.
+  // Helper that applies the optional state transform before exposing state to
+  // the client.  When no transform is configured it returns the raw state.
   const toClientState = (
     state: SessionState<State>
   ): SessionState | undefined => {
-    if (config.clientStateTransform) {
-      return config.clientStateTransform(state);
+    if (config.clientTransform?.state) {
+      return config.clientTransform.state(state);
     }
     return state as SessionState;
   };
 
   // If a state schema was provided, pre-compute the JSON schema once so it
   // can be embedded in metadata and reused for validation.
+
   const stateJsonSchema = config.stateSchema
     ? toJsonSchema({ schema: config.stateSchema })
     : undefined;
@@ -1026,6 +1053,19 @@ export function defineCustomAgent<State = unknown>(
 
       let runner!: SessionRunner<State>;
 
+      // Centralized chunk emitter: every stream chunk passes through here so
+      // the optional `clientTransform.chunk` can reshape/redact it (or drop it
+      // by returning a nullish value) before it reaches the client.
+      const emitChunk = (chunk: AgentStreamChunk) => {
+        if (config.clientTransform?.chunk) {
+          const transformed = config.clientTransform.chunk(chunk);
+          if (!transformed) return;
+          arg.sendChunk(transformed);
+          return;
+        }
+        arg.sendChunk(chunk);
+      };
+
       // We construct an asynchronous proxy channel over the inputStream.
       // This enables immediate interception of `detach: true` directives. Without this proxy,
       // a backlog of pre-queued inputs would have to be resolved sequentially by the runner first.
@@ -1065,7 +1105,7 @@ export function defineCustomAgent<State = unknown>(
 
         onEndTurn: (snapshotId, finishReason) => {
           if (!runner.isDetached) {
-            arg.sendChunk({
+            emitChunk({
               turnEnd: {
                 ...(config.store && { snapshotId }),
                 ...(finishReason && { finishReason }),
@@ -1077,9 +1117,10 @@ export function defineCustomAgent<State = unknown>(
 
       const sendArtifactChunk = (a: Artifact) => {
         if (!runner.isDetached) {
-          arg.sendChunk({ artifact: a });
+          emitChunk({ artifact: a });
         }
       };
+
       session.on('artifactAdded', sendArtifactChunk);
       session.on('artifactUpdated', sendArtifactChunk);
 
@@ -1104,14 +1145,14 @@ export function defineCustomAgent<State = unknown>(
         }
         lastSentCustom = structuredClone(transformed);
         if (patch.length) {
-          arg.sendChunk({ customPatch: patch });
+          emitChunk({ customPatch: patch });
         }
       };
       session.on('customChanged', sendCustomPatch);
 
       const sendChunk = (chunk: AgentStreamChunk) => {
         if (!runner.isDetached) {
-          arg.sendChunk(chunk);
+          emitChunk(chunk);
         }
       };
 
@@ -1188,17 +1229,17 @@ export function defineCustomAgent<State = unknown>(
     }
   );
 
-  // Helper that applies the clientStateTransform to a snapshot's state,
-  // returning a new snapshot object with the transformed state.
+  // Helper that applies the clientTransform.state projection to a snapshot's
+  // state, returning a new snapshot object with the transformed state.
   const toClientSnapshot = (
     snapshot: SessionSnapshot<State>
   ): SessionSnapshot => {
-    if (!config.clientStateTransform) {
+    if (!config.clientTransform?.state) {
       return snapshot as SessionSnapshot;
     }
     return {
       ...snapshot,
-      state: config.clientStateTransform(snapshot.state),
+      state: config.clientTransform.state(snapshot.state),
     };
   };
 
@@ -1320,7 +1361,7 @@ export function definePromptAgent<State = unknown>(
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
     snapshotCallback?: SnapshotCallback<State>;
-    clientStateTransform?: ClientStateTransform<State>;
+    clientTransform?: ClientTransform<State>;
   }
 ) {
   let cachedPromptAction: PromptAction | undefined;
@@ -1451,7 +1492,7 @@ export function definePromptAgent<State = unknown>(
       stateSchema: config.stateSchema,
       store: config.store,
       snapshotCallback: config.snapshotCallback,
-      clientStateTransform: config.clientStateTransform,
+      clientTransform: config.clientTransform,
     },
     fn
   );
@@ -1570,7 +1611,7 @@ export interface AgentConfig<State = unknown> extends PromptConfig {
   stateSchema?: z.ZodType<State>;
   store?: SessionStore<State>;
   snapshotCallback?: SnapshotCallback<State>;
-  clientStateTransform?: ClientStateTransform<State>;
+  clientTransform?: ClientTransform<State>;
 }
 
 /**
@@ -1593,7 +1634,7 @@ export function defineAgent<State = unknown>(
     stateSchema,
     store,
     snapshotCallback,
-    clientStateTransform,
+    clientTransform,
     ...promptConfig
   } = config;
 
@@ -1606,6 +1647,6 @@ export function defineAgent<State = unknown>(
     stateSchema,
     store,
     snapshotCallback,
-    clientStateTransform,
+    clientTransform,
   });
 }
