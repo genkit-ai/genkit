@@ -28,6 +28,7 @@ import {
   type AgentConfig,
   type AgentFn,
   type AgentStreamChunk,
+  type ClientTransform,
   type InterruptConfig,
   type PromptConfig,
   type ResourceAction,
@@ -61,6 +62,7 @@ export { FileSessionStore, InMemorySessionStore, SessionRunner };
 export type {
   AgentFn,
   AgentStreamChunk,
+  ClientTransform,
   GenkitOptions as GenkitBetaOptions,
   PromptConfig,
   SessionSnapshot,

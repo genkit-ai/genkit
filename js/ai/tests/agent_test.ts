@@ -1818,7 +1818,7 @@ describe('Agent', () => {
     });
   });
 
-  describe('clientStateTransform', () => {
+  describe('clientTransform', () => {
     it('should transform state in AgentOutput for client-managed agents', async () => {
       const registry = new Registry();
 
@@ -1829,11 +1829,14 @@ describe('Agent', () => {
         registry,
         {
           name: 'clientTransformTest',
-          clientStateTransform: (state) => ({
-            custom: { publicField: (state.custom as any)?.publicField },
-            // Strip messages and artifacts
-          }),
+          clientTransform: {
+            state: (state) => ({
+              custom: { publicField: (state.custom as any)?.publicField },
+              // Strip messages and artifacts
+            }),
+          },
         },
+
         async (sess) => {
           sess.session.updateCustom(() => ({
             publicField: 'visible',
@@ -1917,10 +1920,13 @@ describe('Agent', () => {
         {
           name: 'snapshotTransformTest',
           store,
-          clientStateTransform: (state) => ({
-            custom: { publicField: (state.custom as any)?.publicField },
-          }),
+          clientTransform: {
+            state: (state) => ({
+              custom: { publicField: (state.custom as any)?.publicField },
+            }),
+          },
         },
+
         async (sess) => {
           sess.session.updateCustom(() => ({
             publicField: 'visible',
@@ -1985,10 +1991,13 @@ describe('Agent', () => {
         {
           name: 'snapshotActionTransformTest',
           store,
-          clientStateTransform: (state) => ({
-            custom: { publicField: (state.custom as any)?.publicField },
-          }),
+          clientTransform: {
+            state: (state) => ({
+              custom: { publicField: (state.custom as any)?.publicField },
+            }),
+          },
         },
+
         async (sess) => {
           sess.session.updateCustom(() => ({
             publicField: 'visible',
@@ -2048,10 +2057,13 @@ describe('Agent', () => {
         {
           name: 'detachTransformTest',
           store,
-          clientStateTransform: (state) => ({
-            custom: { publicField: (state.custom as any)?.publicField },
-          }),
+          clientTransform: {
+            state: (state) => ({
+              custom: { publicField: (state.custom as any)?.publicField },
+            }),
+          },
         },
+
         async (sess) => {
           sess.session.updateCustom(() => ({
             publicField: 'visible',
@@ -2094,7 +2106,7 @@ describe('Agent', () => {
       session.close();
     });
 
-    it('should pass clientStateTransform through definePromptAgent', async () => {
+    it('should pass clientTransform through definePromptAgent', async () => {
       const registry = new Registry();
       defineEchoModel(registry);
       definePrompt(registry, {
@@ -2105,10 +2117,12 @@ describe('Agent', () => {
 
       const flow = definePromptAgent<{ secret: string }>(registry, {
         promptName: 'transformPromptAgent',
-        clientStateTransform: (state) => ({
-          // strip custom state entirely, keep messages
-          messages: state.messages,
-        }),
+        clientTransform: {
+          state: (state) => ({
+            // strip custom state entirely, keep messages
+            messages: state.messages,
+          }),
+        },
       });
 
       const session = flow.streamBidi({});
@@ -2129,7 +2143,7 @@ describe('Agent', () => {
       assert.ok(output.state!.messages!.length > 0);
     });
 
-    it('should pass clientStateTransform through defineAgent', async () => {
+    it('should pass clientTransform through defineAgent', async () => {
       const registry = new Registry();
       defineEchoModel(registry);
 
@@ -2137,10 +2151,12 @@ describe('Agent', () => {
         name: 'transformDefineAgent',
         model: 'echoModel',
         config: { temperature: 1 },
-        clientStateTransform: (state) => ({
-          // strip custom state entirely, keep messages
-          messages: state.messages,
-        }),
+        clientTransform: {
+          state: (state) => ({
+            // strip custom state entirely, keep messages
+            messages: state.messages,
+          }),
+        },
       });
 
       const session = flow.streamBidi({});
@@ -2159,6 +2175,159 @@ describe('Agent', () => {
       // Messages should be present
       assert.ok(output.state!.messages);
       assert.ok(output.state!.messages!.length > 0);
+    });
+
+    it('should reshape stream chunks via clientTransform.chunk', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        {
+          name: 'chunkReshapeTest',
+          clientTransform: {
+            // Redact any text content out of streamed model chunks.
+            chunk: (chunk) => {
+              if (chunk.modelChunk) {
+                return {
+                  ...chunk,
+                  modelChunk: {
+                    ...chunk.modelChunk,
+                    content: chunk.modelChunk.content.map((p) =>
+                      p.text ? { text: '[redacted]' } : p
+                    ),
+                  },
+                };
+              }
+              return chunk;
+            },
+          },
+        },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'secret' }] },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const modelChunks = chunks.filter((c) => !!c.modelChunk);
+      assert.ok(modelChunks.length > 0);
+      // The text content was redacted by the chunk transform.
+      assert.strictEqual(
+        modelChunks[0].modelChunk?.content[0].text,
+        '[redacted]'
+      );
+    });
+
+    it('should drop stream chunks when clientTransform.chunk returns nullish', async () => {
+      const registry = new Registry();
+
+      const flow = defineCustomAgent(
+        registry,
+        {
+          name: 'chunkDropTest',
+          clientTransform: {
+            // Drop artifact chunks entirely, keep everything else.
+            chunk: (chunk) => (chunk.artifact ? null : chunk),
+          },
+        },
+        async (sess, { sendChunk }) => {
+          await sess.run(async () => {
+            sess.session.addArtifacts([
+              { name: 'internalArt', parts: [{ text: 'secret' }] },
+            ]);
+            sendChunk({
+              modelChunk: { role: 'model', content: [{ text: 'visible' }] },
+            });
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      // Artifact chunks were dropped by the transform.
+      assert.strictEqual(chunks.filter((c) => !!c.artifact).length, 0);
+      // Model chunks were preserved.
+      assert.ok(chunks.filter((c) => !!c.modelChunk).length > 0);
+    });
+
+    it('should pass clientTransform.chunk through defineAgent', async () => {
+      const registry = new Registry();
+      defineEchoModel(registry);
+
+      const flow = defineAgent(registry, {
+        name: 'chunkDefineAgentTest',
+        model: 'echoModel',
+        config: { temperature: 1 },
+        clientTransform: {
+          chunk: (chunk) => {
+            if (chunk.modelChunk) {
+              return {
+                ...chunk,
+                modelChunk: {
+                  ...chunk.modelChunk,
+                  content: chunk.modelChunk.content.map((p) =>
+                    p.text ? { text: '[redacted]' } : p
+                  ),
+                },
+              };
+            }
+            return chunk;
+          },
+        },
+      });
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+
+      const modelChunks = chunks.filter((c) => !!c.modelChunk);
+      assert.ok(modelChunks.length > 0);
+      for (const c of modelChunks) {
+        for (const p of c.modelChunk!.content) {
+          if ('text' in p && p.text !== undefined) {
+            assert.strictEqual(p.text, '[redacted]');
+          }
+        }
+      }
     });
   });
 
