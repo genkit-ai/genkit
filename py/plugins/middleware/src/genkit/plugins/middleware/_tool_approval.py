@@ -51,7 +51,7 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
 
         metadata = params.tool_request_part.metadata or {}
         resumed = metadata.get('resumed')
-        if isinstance(resumed, dict) and resumed.get('toolApproved'):
+        if isinstance(resumed, dict) and (resumed.get('toolApproved') or resumed.get('tool_approved')):
             return await next_fn(params, ctx)
 
         tool_input = params.tool_request_part.tool_request.input
