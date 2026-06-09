@@ -33,7 +33,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 const ENDPOINT = '/api/branchingAgent';
 
-
 /** A settled chat message (user or chosen model response). */
 interface ChatMessage {
   role: 'user' | 'model';
@@ -106,7 +105,6 @@ export default function BranchingChat() {
     };
   }, []); // Only run on mount
 
-
   // ── Send a message and generate two variants ─────────────────────────
   const handleSend = useCallback(
     async (text: string) => {
@@ -145,7 +143,6 @@ export default function BranchingChat() {
     },
     [agent, loading, variants]
   );
-
 
   // ── User picks a variant ─────────────────────────────────────────────
   const handlePick = useCallback(
@@ -350,4 +347,3 @@ const [a, b] = await Promise.all([
     </div>
   );
 }
-

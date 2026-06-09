@@ -99,7 +99,6 @@ export default function WorkspaceBuilder() {
     [agent, loading]
   );
 
-
   return (
     <div className="workspace-layout">
       <ChatUI
@@ -140,4 +139,3 @@ export default function WorkspaceBuilder() {
     </div>
   );
 }
-
