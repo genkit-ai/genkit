@@ -69,30 +69,17 @@ export const testBackgroundAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async () => {
-    const session = backgroundAgent.streamBidi({});
-    session.send({
-      messages: [
-        {
-          role: 'user',
-          content: [{ text: 'Write a report on renewable energy trends' }],
-        },
-      ],
-      detach: true,
-    });
+    // `chat.detach(...)` submits a background turn and returns immediately with
+    // a DetachedTask handle carrying the snapshotId.
+    const chat = backgroundAgent.chat();
+    const task = await chat.detach('Write a report on renewable energy trends');
 
-    const output = await session.output;
-    const snapshotId = output.snapshotId!;
-
-    // Poll until done, failed, or aborted
-    let snapshot: any;
-    for (let i = 0; i < 60; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      snapshot = await store.getSnapshot({ snapshotId: snapshotId });
-      if (snapshot?.status && snapshot.status !== 'pending') break;
-    }
+    // `wait()` polls the server store until the task reaches a terminal state
+    // (done / failed / aborted) and resolves with the final snapshot.
+    const snapshot = await task.wait({ intervalMs: 2000 });
 
     return {
-      snapshotId,
+      snapshotId: task.snapshotId,
       status: snapshot?.status,
       messagePreview: snapshot?.state?.messages
         ?.slice(-1)?.[0]

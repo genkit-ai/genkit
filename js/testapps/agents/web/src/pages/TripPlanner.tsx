@@ -14,19 +14,12 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  Part,
-  SessionSnapshot,
-  SessionState,
-} from 'genkit/beta';
-import { runFlow, streamFlow } from 'genkit/beta/client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Part } from 'genkit/beta';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
+
 
 // ---------------------------------------------------------------------------
 // Trip Planner — demonstrates definePromptAgent with a .prompt file
@@ -43,7 +36,6 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = '/api/tripPlannerAgent';
-const STATE_ENDPOINT = '/api/tripPlannerAgent/state';
 
 export default function TripPlanner() {
   const { snapshotId: urlSnapshotId } = useParams<{ snapshotId: string }>();
@@ -54,8 +46,11 @@ export default function TripPlanner() {
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState(!!urlSnapshotId);
 
-  // Session tracking
-  const stateRef = useRef<SessionState | undefined>(undefined);
+  // Typed HTTP client for the agent (server-managed FileSessionStore).
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The live conversation. Reused across turns so history is threaded for us.
+  const chatRef = useRef<AgentChat | null>(null);
   const snapshotIdRef = useRef<string | undefined>(urlSnapshotId);
 
   // ── Restore session from snapshotId on mount ───────────────────────
@@ -66,44 +61,40 @@ export default function TripPlanner() {
 
     async function restore() {
       try {
-        const snapshot = await runFlow<SessionSnapshot>({
-          url: STATE_ENDPOINT,
-          input: { snapshotId: urlSnapshotId },
-        });
+        // Load the chat from the server snapshot — history is restored for us.
+        const chat = await agent.loadChat({ snapshotId: urlSnapshotId! });
 
         if (cancelled) return;
 
-        if (snapshot?.state?.messages) {
-          const restored: ChatMessage[] = [];
-          for (const msg of snapshot.state.messages) {
-            const role = msg.role as ChatMessage['role'];
-            const textParts = (msg.content || [])
-              .filter((p: Part) => p.text)
-              .map((p: Part) => p.text);
+        const restored: ChatMessage[] = [];
+        for (const msg of chat.messages) {
+          const role = msg.role as ChatMessage['role'];
+          const textParts = (msg.content || [])
+            .filter((p: Part) => p.text)
+            .map((p: Part) => p.text);
 
-            if (textParts.length > 0) {
-              restored.push({ role, text: textParts.join('') });
+          if (textParts.length > 0) {
+            restored.push({ role, text: textParts.join('') });
+          }
+
+          for (const p of (msg.content as Part[]) || []) {
+            if (p.toolRequest) {
+              restored.push({
+                role: 'tool',
+                text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
+              });
             }
-
-            for (const p of (msg.content as Part[]) || []) {
-              if (p.toolRequest) {
-                restored.push({
-                  role: 'tool',
-                  text: `🔧 ${p.toolRequest.name}(${JSON.stringify(p.toolRequest.input)})`,
-                });
-              }
-              if (p.toolResponse) {
-                restored.push({
-                  role: 'tool',
-                  text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
-                });
-              }
+            if (p.toolResponse) {
+              restored.push({
+                role: 'tool',
+                text: `✅ ${p.toolResponse.name} → ${JSON.stringify(p.toolResponse.output)}`,
+              });
             }
           }
-          setMessages(restored);
-          snapshotIdRef.current = snapshot.snapshotId;
-          stateRef.current = snapshot.state;
         }
+        setMessages(restored);
+        chatRef.current = chat;
+        snapshotIdRef.current = chat.snapshotId;
       } catch (err: any) {
         if (!cancelled) {
           setMessages([
@@ -132,30 +123,18 @@ export default function TripPlanner() {
       setLoading(true);
       setStreamingText('');
 
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : snapshotIdRef.current
-          ? { snapshotId: snapshotIdRef.current }
-          : {};
+      // Lazily create the chat (fresh session) the first time we send.
+      if (!chatRef.current) {
+        chatRef.current = agent.chat();
+      }
+      const chat = chatRef.current;
 
       try {
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          const c = chunk;
-          const mc = c?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
+        for await (const chunk of turn.stream) {
+          for (const part of chunk.raw.modelChunk?.content || []) {
             if (part.text) {
               accumulated += part.text;
               setStreamingText(accumulated);
@@ -181,20 +160,17 @@ export default function TripPlanner() {
           }
         }
 
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
 
-        if (result?.state) stateRef.current = result.state;
-
-        if (result?.snapshotId) {
-          snapshotIdRef.current = result.snapshotId;
-          navigate(`/trip-planner/${result.snapshotId}`, { replace: true });
+        if (res.snapshotId) {
+          snapshotIdRef.current = res.snapshotId;
+          navigate(`/trip-planner/${res.snapshotId}`, { replace: true });
         }
 
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: any) {
         setStreamingText('');
@@ -206,8 +182,9 @@ export default function TripPlanner() {
         setLoading(false);
       }
     },
-    [loading, navigate]
+    [agent, loading, navigate]
   );
+
 
   if (restoring) {
     return (
@@ -310,32 +287,19 @@ const tripPlannerAgent =
 
         <h4>Key APIs</h4>
         <pre>{`// Client-side streaming
-const response = streamFlow({
+const agent = remoteAgent({
   url: '/api/tripPlannerAgent',
-  input: { messages: [...] },
-  init: { snapshotId },
 });
+const chat = agent.chat();
 
-for await (const chunk of response.stream) {
-  // chunk.modelChunk.content[]
+const turn = chat.sendStream(text);
+for await (const chunk of turn.stream) {
+  if (chunk.text) appendText(chunk.text);
 }
 
-const result = await response.output;`}</pre>
+const res = await turn.response;`}</pre>
       </aside>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: pull displayable text out of an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
-}

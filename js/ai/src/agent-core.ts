@@ -33,6 +33,7 @@ import type {
   AgentOutput,
   AgentStreamChunk,
 } from './agent.js';
+import { applyPatch, type JsonPatch } from './json-patch.js';
 import type { GenerationUsage, MessageData } from './model-types.js';
 import type {
   Media,
@@ -63,16 +64,16 @@ export type SnapshotLookup = { snapshotId: string } | { sessionId: string };
  * the client.
  */
 
-export interface AgentAPI<State = unknown, Stream = unknown> {
+export interface AgentAPI<State = unknown> {
   /** Starts a new chat, or attaches to one via init. */
-  chat(init?: AgentInit<State>): AgentChat<State, Stream>;
+  chat(init?: AgentInit<State>): AgentChat<State>;
 
   /**
    * Loads a server snapshot and returns a chat with history restored. Accepts
    * either a `snapshotId` (an exact snapshot) or a `sessionId` (the session's
    * latest snapshot).
    */
-  loadChat(opts: SnapshotLookup): Promise<AgentChat<State, Stream>>;
+  loadChat(opts: SnapshotLookup): Promise<AgentChat<State>>;
 
   /**
    * Reads a snapshot without starting a chat. Requires a server store. Accepts
@@ -91,7 +92,7 @@ export interface AgentAPI<State = unknown, Stream = unknown> {
  * A stateful conversation with an agent. Tracks state across turns so callers
  * do not have to thread `snapshotId`/`state` by hand.
  */
-export interface AgentChat<State = unknown, Stream = unknown> {
+export interface AgentChat<State = unknown> {
   /**
    * Runs a single turn and resolves with the completed {@link AgentResponse}.
    * The non-streaming analog of {@link generate}; for incremental chunks use
@@ -109,7 +110,7 @@ export interface AgentChat<State = unknown, Stream = unknown> {
   sendStream(
     input: string | AgentInput,
     opts?: { abortSignal?: AbortSignal }
-  ): AgentTurn<State, Stream>;
+  ): AgentTurn<State>;
 
   /** Resumes after an interrupt. Sugar for `send({ resume })`. */
   resume(
@@ -121,7 +122,7 @@ export interface AgentChat<State = unknown, Stream = unknown> {
   resumeStream(
     resume: AgentInput['resume'],
     opts?: { abortSignal?: AbortSignal }
-  ): AgentTurn<State, Stream>;
+  ): AgentTurn<State>;
 
   /** Submits a detached (background) turn. */
   detach(input: string | AgentInput): Promise<DetachedTask<State>>;
@@ -136,12 +137,12 @@ export interface AgentChat<State = unknown, Stream = unknown> {
 }
 
 /**
- * A single in-flight turn — the analog of `ai.generateStream`'s
+ * A single in-flight turn - the analog of `ai.generateStream`'s
  * `{ stream, response }`.
  */
-export interface AgentTurn<State = unknown, Stream = unknown, O = unknown> {
+export interface AgentTurn<State = unknown, O = unknown> {
   /** Chunks as the turn progresses. */
-  readonly stream: AsyncIterable<AgentChunk<Stream>>;
+  readonly stream: AsyncIterable<AgentChunk<State>>;
 
   /** The completed turn, with generate-style accessors. */
   readonly response: Promise<AgentResponse<State, O>>;
@@ -176,9 +177,9 @@ export interface AgentResponse<State = unknown, O = unknown> {
 
 /**
  * A streamed chunk. Mirrors `GenerateResponseChunk` and adds the agent fields
- * (`artifact`, `status`).
+ * (`artifact`, `custom`).
  */
-export interface AgentChunk<Stream = unknown> {
+export interface AgentChunk<State = unknown> {
   readonly text: string;
   readonly reasoning: string;
   readonly accumulatedText: string;
@@ -187,7 +188,15 @@ export interface AgentChunk<Stream = unknown> {
   readonly media: Media | null;
 
   readonly artifact?: Artifact;
-  readonly status?: Stream;
+  /**
+   * The full, post-patch custom state. Present only on chunks that carry a
+   * custom-state update; `undefined` on text / model chunks. Each value is a
+   * fresh object reference (the client applies the streamed RFC 6902 JSON Patch
+   * onto a clone), so it is safe to use for `===` change detection in UI
+   * frameworks. Equivalent to the value {@link AgentChat.state} returns at the
+   * moment this chunk is yielded.
+   */
+  readonly custom?: State;
   readonly raw: AgentStreamChunk;
 }
 
@@ -472,11 +481,23 @@ class AgentResponseImpl<State = unknown, O = unknown>
 // AgentChunk
 // ---------------------------------------------------------------------------
 
-class AgentChunkImpl<Stream = unknown> implements AgentChunk<Stream> {
+class AgentChunkImpl<State = unknown> implements AgentChunk<State> {
+  /**
+   * The post-patch custom state, set by the {@link AgentChatImpl.sendStream}
+   * generator after it applies this chunk's `customPatch`. Left `undefined` on
+   * chunks that do not carry a custom-state update.
+   */
+  private _custom?: State;
+
   constructor(
-    private readonly _raw: AgentStreamChunk<Stream>,
+    private readonly _raw: AgentStreamChunk,
     private readonly _previousText: string
   ) {}
+
+  /** Internal: records the post-patch custom state this chunk reports. */
+  _setCustom(custom: State | undefined): void {
+    this._custom = custom;
+  }
 
   private get _content(): Part[] | undefined {
     return this._raw.modelChunk?.content as Part[] | undefined;
@@ -510,12 +531,12 @@ class AgentChunkImpl<Stream = unknown> implements AgentChunk<Stream> {
     return this._raw.artifact;
   }
 
-  get status(): Stream | undefined {
-    return this._raw.status;
+  get custom(): State | undefined {
+    return this._custom;
   }
 
   get raw(): AgentStreamChunk {
-    return this._raw as AgentStreamChunk;
+    return this._raw;
   }
 }
 
@@ -570,9 +591,7 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
 // AgentChat
 // ---------------------------------------------------------------------------
 
-export class AgentChatImpl<State = unknown, Stream = unknown>
-  implements AgentChat<State, Stream>
-{
+export class AgentChatImpl<State = unknown> implements AgentChat<State> {
   snapshotId?: string;
   messages: MessageData[] = [];
   artifacts: Artifact[] = [];
@@ -587,13 +606,7 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
       this.snapshotId = connectInit.snapshotId;
     }
     if (connectInit?.state) {
-      this.clientState = connectInit.state;
-      this.messages = connectInit.state.messages
-        ? [...connectInit.state.messages]
-        : [];
-      this.artifacts = connectInit.state.artifacts
-        ? [...connectInit.state.artifacts]
-        : [];
+      this.hydrateFromState(connectInit.state);
     }
   }
 
@@ -601,22 +614,26 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
     return this.clientState?.custom as State | undefined;
   }
 
+  /**
+   * Replaces the tracked `clientState`/`messages`/`artifacts` aggregates with
+   * (copies of) those carried by a session state.
+   */
+  private hydrateFromState(state: SessionState<State>): void {
+    this.clientState = state;
+    this.messages = state?.messages ? [...state.messages] : [];
+    this.artifacts = state?.artifacts ? [...state.artifacts] : [];
+  }
+
   /** Loads aggregates from a server snapshot (used by `loadChat`). */
   _loadFromSnapshot(snapshot: SessionSnapshot<State>): void {
     this.snapshotId = snapshot.snapshotId;
-    this.clientState = snapshot.state;
-    this.messages = snapshot.state?.messages
-      ? [...snapshot.state.messages]
-      : [];
-    this.artifacts = snapshot.state?.artifacts
-      ? [...snapshot.state.artifacts]
-      : [];
+    this.hydrateFromState(snapshot.state);
   }
 
   /**
    * Builds the init for the next turn from tracked aggregates. Always returns
    * an object (never `undefined`) because the agent validates `init` against
-   * `AgentInitSchema` — an empty object is the valid "fresh session" init.
+   * `AgentInitSchema` - an empty object is the valid "fresh session" init.
    */
   private buildInit(): AgentInit<State> {
     if (this.snapshotId) {
@@ -752,7 +769,7 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
   sendStream(
     input: string | AgentInput,
     opts?: { abortSignal?: AbortSignal }
-  ): AgentTurn<State, Stream> {
+  ): AgentTurn<State> {
     const agentInput = toAgentInput(input);
     if (agentInput.messages?.length) {
       this.messages.push(...agentInput.messages);
@@ -772,15 +789,22 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
     responsePromise.catch(() => {});
 
     const self = this;
-    const stream = (async function* (): AsyncIterable<AgentChunk<Stream>> {
+    const stream = (async function* (): AsyncIterable<AgentChunk<State>> {
       let previousText = '';
       try {
         for await (const raw of rawStream) {
-          const chunk = new AgentChunkImpl<Stream>(
-            raw as AgentStreamChunk<Stream>,
-            previousText
-          );
+          const chunk = new AgentChunkImpl<State>(raw, previousText);
           previousText = chunk.accumulatedText;
+          // Keep the locally tracked custom state live mid-stream by applying
+          // each streamed JSON Patch to it, then surface the resulting
+          // post-patch custom state on the chunk as `chunk.custom` so consumers
+          // get an explicit change notification (with a fresh object reference
+          // for `===`-based change detection). The first patch of a turn is a
+          // whole-document replace that re-bases us onto the server baseline.
+          if (raw.customPatch) {
+            self.applyCustomPatch(raw.customPatch);
+            chunk._setCustom(self.state);
+          }
           yield chunk;
         }
       } catch (e) {
@@ -813,8 +837,24 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
   resumeStream(
     resume: AgentInput['resume'],
     opts?: { abortSignal?: AbortSignal }
-  ): AgentTurn<State, Stream> {
+  ): AgentTurn<State> {
     return this.sendStream({ resume }, opts);
+  }
+
+  /**
+   * Applies a streamed RFC 6902 JSON Patch to the locally tracked custom
+   * state, keeping {@link state} live as the turn streams. The first patch of
+   * a turn is a whole-document replace (rooted at `""`) that re-bases the
+   * client onto the server's current baseline.
+   */
+  private applyCustomPatch(patch: JsonPatch): void {
+    const current = this.clientState?.custom;
+    const next = applyPatch(current, patch) as State;
+    if (this.clientState) {
+      this.clientState = { ...this.clientState, custom: next };
+    } else {
+      this.clientState = { custom: next } as SessionState<State>;
+    }
   }
 
   async detach(input: string | AgentInput): Promise<DetachedTask<State>> {
@@ -866,7 +906,7 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
 }
 
 // ---------------------------------------------------------------------------
-// createAgentAPI — builds the AgentAPI surface over any transport.
+// createAgentAPI - builds the AgentAPI surface over any transport.
 // ---------------------------------------------------------------------------
 
 /**
@@ -874,15 +914,15 @@ export class AgentChatImpl<State = unknown, Stream = unknown>
  * `abort`) over a {@link AgentTransport}. Shared by the in-process server agent
  * and the HTTP `remoteAgent`.
  */
-export function createAgentAPI<State = unknown, Stream = unknown>(
+export function createAgentAPI<State = unknown>(
   transport: AgentTransport
-): AgentAPI<State, Stream> {
+): AgentAPI<State> {
   return {
-    chat(init?: AgentInit<State>): AgentChat<State, Stream> {
-      return new AgentChatImpl<State, Stream>(transport, init);
+    chat(init?: AgentInit<State>): AgentChat<State> {
+      return new AgentChatImpl<State>(transport, init);
     },
 
-    async loadChat(opts: SnapshotLookup): Promise<AgentChat<State, Stream>> {
+    async loadChat(opts: SnapshotLookup): Promise<AgentChat<State>> {
       const snapshot = (await transport.getSnapshot(opts)) as
         | SessionSnapshot<State>
         | undefined;
@@ -891,7 +931,7 @@ export function createAgentAPI<State = unknown, Stream = unknown>(
           'snapshotId' in opts ? opts.snapshotId : `session ${opts.sessionId}`;
         throw new Error(`Snapshot ${id} not found.`);
       }
-      const chat = new AgentChatImpl<State, Stream>(transport);
+      const chat = new AgentChatImpl<State>(transport);
       chat._loadFromSnapshot(snapshot);
       return chat;
     },

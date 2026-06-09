@@ -1539,11 +1539,13 @@ body {
 
 .research-layout {
   display: flex;
+  flex: 1;
   gap: 0;
-  height: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.research-layout > .chat-container {
+.research-layout > .chat-panel {
   flex: 1;
   min-width: 0;
 }

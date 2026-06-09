@@ -146,11 +146,13 @@ export const testOrchestratorAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await orchestratorAgent.run(
-      { messages: [{ role: 'user' as const, content: [{ text }] }] },
-      { init: {}, onChunk: sendChunk }
-    );
-    return res.result;
+    const chat = orchestratorAgent.chat();
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );
 
@@ -167,10 +169,12 @@ export const testOrchestratorAgentSimple = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await orchestratorAgent.run(
-      { messages: [{ role: 'user' as const, content: [{ text }] }] },
-      { init: {}, onChunk: sendChunk }
-    );
-    return res.result;
+    const chat = orchestratorAgent.chat();
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );

@@ -128,11 +128,37 @@ export const TurnEndSchema = z.object({
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
 /**
+ * Schema for a single RFC 6902 (JSON Patch) operation.
+ */
+export const JsonPatchOperationSchema = z.object({
+  op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test']),
+  /** A JSON Pointer (RFC 6901) to the target location, e.g. `"/agentStatus"`. */
+  path: z.string(),
+  /** Source pointer; required for `move` and `copy`. */
+  from: z.string().optional(),
+  /** New value; required for `add`, `replace`, and `test`. */
+  value: z.any().optional(),
+});
+export type JsonPatchOperation = z.infer<typeof JsonPatchOperationSchema>;
+
+/**
+ * Schema for an RFC 6902 JSON Patch: an ordered list of operations.
+ */
+export const JsonPatchSchema = z.array(JsonPatchOperationSchema);
+export type JsonPatch = z.infer<typeof JsonPatchSchema>;
+
+/**
  * Schema for stream chunks emitted during agent execution.
  */
 export const AgentStreamChunkSchema = z.object({
   modelChunk: ModelResponseChunkSchema.optional(),
-  status: z.any().optional(),
+  /**
+   * An RFC 6902 JSON Patch describing a delta applied to the session's
+   * `custom` state. The runtime auto-emits these whenever custom state is
+   * mutated during a turn; clients apply them to keep their tracked custom
+   * state live mid-stream.
+   */
+  customPatch: JsonPatchSchema.optional(),
   artifact: ArtifactSchema.optional(),
   turnEnd: TurnEndSchema.optional(),
 });

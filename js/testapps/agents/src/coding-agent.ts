@@ -252,13 +252,14 @@ When showing file changes, use diff-style formatting when helpful.`,
 // ---------------------------------------------------------------------------
 // Test flow — for programmatic / CLI testing
 //
-// Uses agent.run() consistently with other test flows. Auto-approves all
-// tool interrupts so the agent can complete its task without user input.
+// Uses the ergonomic chat API. Auto-approves all tool interrupts so the
+// agent can complete its task without user input.
 // ---------------------------------------------------------------------------
 
 export const testCodingAgent = ai.defineFlow(
   {
     name: 'testCodingAgent',
+
     inputSchema: z
       .string()
       .default(
@@ -267,72 +268,59 @@ export const testCodingAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    let result = await codingAgent.run(
-      { messages: [{ role: 'user', content: [{ text }] }] },
-      { onChunk: sendChunk }
-    );
+    const chat = codingAgent.chat();
 
-    // Auto-approve all tool interrupts for testing.
+    let turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    let res = await turn.response;
+
+    // Auto-approve all tool interrupts for testing. `res.interrupts` surfaces
+    // each paused tool request with `respond`/`restart` builders.
     let maxResumes = 10;
     while (maxResumes-- > 0) {
-      const interrupt = findToolInterrupt(result.result);
+      const interrupt = res.interrupts[0];
       if (!interrupt) break;
 
       if (interrupt.name === 'ask_user') {
-        // Respond pattern: provide the tool output directly via resume.respond.
-        // The tool never re-executes — we supply the answer as a ToolResponsePart.
-        const firstOption = interrupt.input?.options?.[0] || 'Yes';
+        // Respond pattern: provide the tool output directly via the interrupt's
+        // `respond` builder. The tool never re-executes.
+        const firstOption =
+          (interrupt.input as { options?: string[] })?.options?.[0] || 'Yes';
         sendChunk({ status: `Auto-answering ask_user: "${firstOption}"` });
 
-        result = await codingAgent.run(
-          {
-            resume: {
-              respond: [
-                {
-                  toolResponse: {
-                    name: interrupt.name,
-                    ref: interrupt.ref,
-                    output: { answer: firstOption },
-                  },
-                  metadata: { interruptResponse: true },
-                },
-              ],
+        turn = chat.resumeStream({
+          respond: [
+            {
+              ...interrupt.respond({ answer: firstOption }),
+              metadata: { interruptResponse: true },
             },
-          },
-          {
-            init: { snapshotId: result.result.snapshotId },
-            onChunk: sendChunk,
-          }
-        );
+          ],
+        });
       } else {
-        // Restart pattern: use resume.restart to re-execute the tool with
-        // approval metadata (write_file, search_and_replace, run_shell).
+        // Restart pattern: re-issue the original tool request via the
+        // interrupt's `restart` builder, tagging it as approved so the tool
+        // (write_file, search_and_replace, run_shell) executes this time.
         sendChunk({ status: `Auto-approving tool: ${interrupt.name}` });
 
-        result = await codingAgent.run(
-          {
-            resume: {
-              restart: [
-                {
-                  toolRequest: {
-                    name: interrupt.name,
-                    ref: interrupt.ref,
-                    input: interrupt.input,
-                  },
-                  metadata: { resumed: { toolApproved: true } },
-                },
-              ],
+        turn = chat.resumeStream({
+          restart: [
+            {
+              ...interrupt.restart(),
+              metadata: { resumed: { toolApproved: true } },
             },
-          },
-          {
-            init: { snapshotId: result.result.snapshotId },
-            onChunk: sendChunk,
-          }
-        );
+          ],
+        });
       }
+
+      for await (const chunk of turn.stream) {
+        sendChunk(chunk.raw);
+      }
+      res = await turn.response;
     }
 
-    return result.result;
+    return res.raw;
   }
 );
 
@@ -395,24 +383,8 @@ export const readWorkspaceFile = ai.defineFlow(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function findToolInterrupt(
-  output: any
-): { name: string; ref?: string; input?: any } | null {
-  const msg = output?.message;
-  if (!msg) return null;
-  for (const p of msg.content || []) {
-    if (p.toolRequest) {
-      return {
-        name: p.toolRequest.name,
-        ref: p.toolRequest.ref,
-        input: p.toolRequest.input,
-      };
-    }
-  }
-  return null;
-}
-
 /** Recursively list files in a directory, sorted (directories first). */
+
 async function walkDirectory(
   dir: string,
   rootDir: string

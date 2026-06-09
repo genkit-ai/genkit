@@ -14,15 +14,8 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -30,7 +23,10 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //
 // Demonstrates capabilities that REQUIRE defineCustomAgent:
 //   • Multi-step orchestration — multiple sequential model calls
-//   • Custom status streaming — sendChunk({ status }) for progress updates
+//   • Custom-state streaming — the backend mutates a typed `status` field on
+//     the session's custom state; the runtime auto-emits a custom-state update.
+//     The `remoteAgent` client applies it for us and surfaces the full,
+//     post-patch state as `chunk.custom`, so we never touch JSON Patch directly.
 //   • Multiple models — fast model for decomposition, main model for research
 //   • Direct session control — manually managing messages and custom state
 //
@@ -48,6 +44,8 @@ interface SubAnswer {
 }
 
 interface ResearchState {
+  /** Human-readable progress indicator, driven by streamed custom updates. */
+  status?: string;
   subQuestions: string[];
   subAnswers: SubAnswer[];
 }
@@ -58,13 +56,21 @@ export default function ResearchAgent() {
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
 
-  // Research state — extracted from result.state.custom each turn
+  // Research state — kept live from each chunk's `custom` payload.
   const [researchState, setResearchState] = useState<ResearchState | null>(
     null
   );
 
-  // Session state — round-tripped to the server each turn
-  const stateRef = useRef<SessionState | undefined>(undefined);
+  // Typed HTTP client for the agent. The client tracks session state across
+  // turns and applies streamed custom-state updates for us.
+  const agent = useMemo(
+    () => remoteAgent<ResearchState>({ url: ENDPOINT }),
+    []
+  );
+
+  // The conversation. Created on first send (seeding the initial custom state)
+  // and reused for follow-up turns so history is threaded automatically.
+  const chatRef = useRef<AgentChat<ResearchState> | null>(null);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -76,68 +82,46 @@ export default function ResearchAgent() {
       setStatusText(null);
       setResearchState(null);
 
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {
-            state: {
-              custom: { subQuestions: [], subAnswers: [] } as ResearchState,
-              messages: [],
-              artifacts: [],
-            },
-          };
+      // Lazily create the chat, seeding the initial custom state.
+      if (!chatRef.current) {
+        chatRef.current = agent.chat({
+          state: {
+            custom: { subQuestions: [], subAnswers: [] },
+            messages: [],
+            artifacts: [],
+          },
+        });
+      }
+      const chat = chatRef.current;
 
       try {
-        // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          // ── Status chunks — progress indicators from the orchestrator ──
-          if (chunk?.status) {
-            setStatusText(chunk.status as string);
-          }
-
-          // ── Model text chunks — the final synthesis ────────────────────
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            }
+        for await (const chunk of turn.stream) {
+          // ── Custom-state updates — fresh, post-patch state each time ──
+          if (chunk.custom) {
+            setResearchState(chunk.custom);
+            setStatusText(chunk.custom.status ?? null);
+          } else if (chunk.text) {
+            // ── Model text chunks — the final synthesis ──
+            accumulated = chunk.accumulatedText;
+            setStreamingText(accumulated);
           }
         }
 
-        // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
         setStatusText(null);
 
-        // Save session state for the next turn.
-        if (result?.state) {
-          stateRef.current = result.state;
-
-          // Extract the research state for the sidebar.
-          const custom = result.state.custom as ResearchState | undefined;
-          if (custom) {
-            setResearchState(custom);
-          }
+        // Reflect the authoritative final custom state in the sidebar.
+        if (chat.state) {
+          setResearchState(chat.state);
         }
 
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: any) {
         setStreamingText('');
@@ -150,7 +134,7 @@ export default function ResearchAgent() {
         setLoading(false);
       }
     },
-    [loading]
+    [agent, loading]
   );
 
   return (
@@ -236,7 +220,7 @@ export default function ResearchAgent() {
           </li>
           <li>
             <strong>Step 1:</strong> Fast model decomposes the question →{' '}
-            <code>sendChunk({'{ status }'})</code>
+            <code>session.updateCustom({'{ status }'})</code>
           </li>
           <li>
             <strong>Step 2:</strong> Main model researches each sub-question →{' '}
@@ -252,6 +236,22 @@ export default function ResearchAgent() {
           </li>
         </ol>
 
+        <h4>Client: read chunk.custom</h4>
+        <pre className="research-code">{`const agent = remoteAgent<ResearchState>({
+  url: '/api/researchAgent',
+});
+const chat = agent.chat();
+
+const turn = chat.sendStream(text);
+for await (const chunk of turn.stream) {
+  if (chunk.custom) {
+    // full, post-patch custom state (fresh ref)
+    setResearchState(chunk.custom);
+  } else if (chunk.text) {
+    appendStreamingText(chunk.text);
+  }
+}`}</pre>
+
         <h4>Why defineCustomAgent?</h4>
         <pre className="research-code">{`// Can't do this with defineAgent:
 // 1. Multiple sequential model calls
@@ -259,26 +259,13 @@ const decompose = await ai.generate({ model: 'fast', ... });
 const research = await ai.generate({ model: 'main', ... });
 const synthesis = ai.generateStream({ model: 'main', ... });
 
-// 2. Custom status streaming between steps
-sendChunk({ status: 'Researching...' });
+// 2. Custom-state streaming between steps — mutate custom
+//    state; the runtime auto-emits a custom-state update.
+session.updateCustom((s) => ({ ...s, status: 'Researching...' }));
 
 // 3. Direct session & message management
 sess.addMessages([response.message]);`}</pre>
       </aside>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helper: extract displayable text from an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
 }

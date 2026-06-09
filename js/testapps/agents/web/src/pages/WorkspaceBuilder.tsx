@@ -14,24 +14,17 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-  SessionState,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
 // Workspace Builder — artifacts alongside chat
 //
 // Demonstrates:
-//   • streamFlow() with artifact production
-//   • Reading `result.artifacts` from the agent response
-//   • Multi-turn session via `init: { state }` round-tripping
+//   • The `remoteAgent` client with artifact production
+//   • Reading streamed `chunk.artifact` and the final `chat.artifacts`
+//   • Multi-turn session — the client threads state across turns for us
 //   • Displaying generated code artifacts in a side panel
 // ---------------------------------------------------------------------------
 
@@ -48,8 +41,11 @@ export default function WorkspaceBuilder() {
   const [loading, setLoading] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
 
-  // Session state — returned by the server, sent back on the next turn.
-  const stateRef = useRef<SessionState | undefined>(undefined);
+  // Typed HTTP client. Tracks session state across turns for us.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send and reused for follow-up turns.
+  const chatRef = useRef<AgentChat | null>(null);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -59,52 +55,36 @@ export default function WorkspaceBuilder() {
       setLoading(true);
       setStreamingText('');
 
-      // ── Build the request ──────────────────────────────────────────────
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {};
+      if (!chatRef.current) {
+        chatRef.current = agent.chat();
+      }
+      const chat = chatRef.current;
 
       try {
-        // ── Stream the response ────────────────────────────────────────
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          if (chunk?.modelChunk?.content) {
-            for (const part of chunk.modelChunk.content) {
-              if (part.text) {
-                accumulated += part.text;
-                setStreamingText(accumulated);
-              }
-            }
+        for await (const chunk of turn.stream) {
+          // ── Artifacts stream in as they're emitted ──
+          if (chunk.artifact) {
+            setArtifacts([...chat.artifacts] as Artifact[]);
+          }
+          // ── Model text chunks ──
+          if (chunk.text) {
+            accumulated = chunk.accumulatedText;
+            setStreamingText(accumulated);
           }
         }
 
-        // ── Read the final result ──────────────────────────────────────
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
 
-        // Save session state for the next turn.
-        if (result?.state) stateRef.current = result.state;
+        // Reflect the authoritative final artifact set.
+        setArtifacts([...res.artifacts] as Artifact[]);
 
-        // Update artifacts — the workspace agent returns an `artifacts`
-        // array in the result whenever the emitArtifact tool was called.
-        if (result?.artifacts) {
-          setArtifacts(result.artifacts);
-        }
-
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: any) {
         setStreamingText('');
@@ -116,8 +96,9 @@ export default function WorkspaceBuilder() {
         setLoading(false);
       }
     },
-    [loading]
+    [agent, loading]
   );
+
 
   return (
     <div className="workspace-layout">
@@ -160,13 +141,3 @@ export default function WorkspaceBuilder() {
   );
 }
 
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
-}

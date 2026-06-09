@@ -67,55 +67,33 @@ export const testBankingAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    let session = bankingAgent.streamBidi({});
-    session.send({
-      messages: [{ role: 'user', content: [{ text }] }],
-    });
-    session.close();
-
-    for await (const chunk of session.stream) {
-      sendChunk(chunk);
+    // Start a chat and send the user's request.
+    const chat = bankingAgent.chat();
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
     }
+    let res = await turn.response;
 
-    let output = await session.output;
+    // Check if the agent paused on the userApproval interrupt. `res.interrupts`
+    // surfaces the paused tool requests with `respond`/`restart` builders.
+    const approval = res.interrupts.find((i) => i.name === 'userApproval');
 
-    // Check if the agent paused for approval
-    const lastMessage = output.message;
-    const approvalRequest = lastMessage?.content.find(
-      (p) => p.toolRequest?.name === 'userApproval'
-    );
-
-    if (approvalRequest && approvalRequest.toolRequest) {
+    if (approval) {
       sendChunk({ status: 'Agent interrupted! Requesting user approval...' });
 
-      // Simulate user approval
-      const approvalResponse = {
-        toolResponse: {
-          name: 'userApproval',
-          ref: approvalRequest.toolRequest.ref,
-          output: { approved: true, feedback: 'Looks good' },
-        },
-      };
-
-      // Create a new session attached to the interrupted flow's snapshot
-      session = bankingAgent.streamBidi({ snapshotId: output.snapshotId });
-
-      // Send the approval back to the flow using resume.respond.
-      // This provides the tool output directly without re-executing the tool.
-      session.send({
-        resume: {
-          respond: [approvalResponse],
-        },
+      // Resume the same chat (it tracks the snapshot automatically). Use the
+      // interrupt's `respond` builder to provide the tool output directly
+      // without re-executing the tool.
+      const resumeTurn = chat.resumeStream({
+        respond: [approval.respond({ approved: true, feedback: 'Looks good' })],
       });
-      session.close();
-
-      for await (const chunk of session.stream) {
-        sendChunk(chunk);
+      for await (const chunk of resumeTurn.stream) {
+        sendChunk(chunk.raw);
       }
-
-      output = await session.output;
+      res = await resumeTurn.response;
     }
 
-    return output;
+    return res.raw;
   }
 );

@@ -14,14 +14,8 @@
  * limitations under the License.
  */
 
-import type {
-  AgentInit,
-  AgentInput,
-  AgentOutput,
-  AgentStreamChunk,
-} from 'genkit/beta';
-import { streamFlow } from 'genkit/beta/client';
-import { useCallback, useRef, useState } from 'react';
+import { remoteAgent, type AgentChat } from 'genkit/beta/client';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChatUI, type ChatMessage } from '../components/ChatUI';
 
 // ---------------------------------------------------------------------------
@@ -29,9 +23,9 @@ import { ChatUI, type ChatMessage } from '../components/ChatUI';
 //
 // Demonstrates:
 //   • The `agents` middleware for sub-agent delegation
-//   • streamFlow() for streaming orchestrator responses
+//   • The `remoteAgent` client for streaming orchestrator responses
 //   • Inline rendering of `call_agent` tool calls showing delegation
-//   • Multi-turn session via state round-tripping
+//   • Multi-turn session — the client threads state across turns for us
 //   • Markdown rendering for code-heavy responses
 // ---------------------------------------------------------------------------
 
@@ -42,8 +36,11 @@ export default function SubAgentChat() {
   const [streamingText, setStreamingText] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Session tracking
-  const stateRef = useRef<AgentOutput['state']>(undefined);
+  // Typed HTTP client. Tracks session state across turns for us.
+  const agent = useMemo(() => remoteAgent({ url: ENDPOINT }), []);
+
+  // The conversation. Created on first send and reused for follow-up turns.
+  const chatRef = useRef<AgentChat | null>(null);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -53,31 +50,18 @@ export default function SubAgentChat() {
       setLoading(true);
       setStreamingText('');
 
-      const input: AgentInput = {
-        messages: [{ role: 'user', content: [{ text }] }],
-      };
-
-      const init: AgentInit = stateRef.current
-        ? { state: stateRef.current }
-        : {};
+      if (!chatRef.current) {
+        chatRef.current = agent.chat();
+      }
+      const chat = chatRef.current;
 
       try {
-        const response = streamFlow<AgentOutput, AgentStreamChunk, AgentInit>({
-          url: ENDPOINT,
-          input,
-          init,
-        });
+        const turn = chat.sendStream(text);
 
         let accumulated = '';
-        for await (const chunk of response.stream) {
-          const mc = chunk?.modelChunk;
-          if (!mc) continue;
-
-          for (const part of mc.content || []) {
-            if (part.text) {
-              accumulated += part.text;
-              setStreamingText(accumulated);
-            } else if (part.toolRequest) {
+        for await (const chunk of turn.stream) {
+          for (const part of chunk.raw.modelChunk?.content ?? []) {
+            if (part.toolRequest) {
               const tr = part.toolRequest;
               // Format call_agent delegations nicely
               const inp = tr.input as
@@ -101,17 +85,19 @@ export default function SubAgentChat() {
               setMessages((prev) => [...prev, { role: 'tool', text: label }]);
             }
           }
+
+          if (chunk.text) {
+            accumulated = chunk.accumulatedText;
+            setStreamingText(accumulated);
+          }
         }
 
-        const result = await response.output;
+        const res = await turn.response;
         setStreamingText('');
 
-        if (result?.state) stateRef.current = result.state;
-
-        const replyText = extractText(result);
         setMessages((prev) => [
           ...prev,
-          { role: 'model', text: replyText || accumulated },
+          { role: 'model', text: res.text || accumulated },
         ]);
       } catch (err: unknown) {
         setStreamingText('');
@@ -124,8 +110,9 @@ export default function SubAgentChat() {
         setLoading(false);
       }
     },
-    [loading]
+    [agent, loading]
   );
+
 
   return (
     <div className="page-with-sidebar">
@@ -224,16 +211,3 @@ const orchestrator = ai.defineAgent({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helper: pull displayable text out of an agent result
-// ---------------------------------------------------------------------------
-function extractText(result: AgentOutput): string {
-  if (!result) return '(no result)';
-  const msg = result.message;
-  if (!msg) return JSON.stringify(result, null, 2);
-  const parts: string[] = [];
-  for (const p of msg.content || []) {
-    if (p.text) parts.push(p.text);
-  }
-  return parts.join('') || JSON.stringify(result, null, 2);
-}

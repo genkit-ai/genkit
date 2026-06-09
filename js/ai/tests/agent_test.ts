@@ -360,7 +360,7 @@ describe('Agent', () => {
       const registry = new Registry();
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         registry,
         { name: 'rejectInitStateTest', store },
         async (sess) => {
@@ -372,7 +372,7 @@ describe('Agent', () => {
         }
       );
 
-      // Pass init.state — should fail gracefully with finishReason 'failed' and
+      // Pass init.state - should fail gracefully with finishReason 'failed' and
       // a FAILED_PRECONDITION error for server-managed agents.
       const session = flow.streamBidi({
         state: {
@@ -402,7 +402,7 @@ describe('Agent', () => {
     it('should use init.state for client-managed agents (no store)', async () => {
       const registry = new Registry();
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         registry,
         { name: 'useInitStateTest' },
         async (sess) => {
@@ -414,7 +414,7 @@ describe('Agent', () => {
         }
       );
 
-      // Pass init.state — it should be used because no store is set
+      // Pass init.state - it should be used because no store is set
       const session = flow.streamBidi({
         state: {
           custom: { foo: 'seeded' },
@@ -764,7 +764,7 @@ describe('Agent', () => {
         resolvePromise = resolve;
       });
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'detachTest',
@@ -805,7 +805,7 @@ describe('Agent', () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let aborted = false;
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'abortTest',
@@ -849,7 +849,7 @@ describe('Agent', () => {
     it('should not override terminal status when aborting an already-completed flow', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'abortDoneTest',
@@ -882,7 +882,7 @@ describe('Agent', () => {
       const previousStatus = await flow.abort(output.snapshotId!);
       assert.strictEqual(previousStatus, 'done');
 
-      // Snapshot should still be 'done' — the mutator skips terminal states
+      // Snapshot should still be 'done' - the mutator skips terminal states
       const snapAfter = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
@@ -892,7 +892,7 @@ describe('Agent', () => {
     it('should return undefined when aborting a non-existent snapshot', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'abortMissingTest',
@@ -912,7 +912,7 @@ describe('Agent', () => {
     });
 
     it('should throw error when detach is requested without session store', async () => {
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'noStoreTest',
@@ -950,7 +950,7 @@ describe('Agent', () => {
         resolvePromise = resolve;
       });
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'detachErrorTest',
@@ -1006,7 +1006,7 @@ describe('Agent', () => {
         resolveBlock = resolve;
       });
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'legacyStoreTest',
@@ -1048,7 +1048,7 @@ describe('Agent', () => {
 
     it('should fetch snapshot data via companion action', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'companionActionFlow',
@@ -1080,7 +1080,7 @@ describe('Agent', () => {
 
     it('should chain parentId properly across session snapshots', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'lineageTest',
@@ -1125,7 +1125,7 @@ describe('Agent', () => {
         releasePromise = resolve;
       });
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'immediateDetachTest',
@@ -1165,7 +1165,7 @@ describe('Agent', () => {
 
     it('should process messages even when detach is present in the same payload', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'mixedPayloadTest',
@@ -1392,7 +1392,7 @@ describe('Agent', () => {
           lastResumedMetadata = resumed;
 
           if (!resumed) {
-            // First call — interrupt to ask for user confirmation
+            // First call - interrupt to ask for user confirmation
             throw new ToolInterruptError({ requiresConfirmation: true });
           }
           // Restarted with confirmation metadata
@@ -1452,7 +1452,7 @@ describe('Agent', () => {
         'dangerousTool'
       );
 
-      // Phase 2: Client resumes with restart — re-execute the tool with metadata
+      // Phase 2: Client resumes with restart - re-execute the tool with metadata
       toolCallCount = 0; // Reset counter
 
       pm.handleResponse = async (req) => {
@@ -1776,7 +1776,7 @@ describe('Agent', () => {
       const store = new InMemorySessionStore<{ foo: string }>();
       let processedCount = 0;
 
-      const flow = defineCustomAgent<unknown, { foo: string }>(
+      const flow = defineCustomAgent<{ foo: string }>(
         new Registry(),
         {
           name: 'sequentialBackgroundTest',
@@ -1805,7 +1805,7 @@ describe('Agent', () => {
       const output = await session.output;
       assert.ok(output.snapshotId);
 
-      // Detach-only messages are not forwarded to the runner — 2 turns, not 3.
+      // Detach-only messages are not forwarded to the runner - 2 turns, not 3.
       const snapDone = await waitForSnapshotStatus(
         store,
         output.snapshotId!,
@@ -1822,10 +1822,10 @@ describe('Agent', () => {
     it('should transform state in AgentOutput for client-managed agents', async () => {
       const registry = new Registry();
 
-      const flow = defineCustomAgent<
-        unknown,
-        { publicField: string; secretField: string }
-      >(
+      const flow = defineCustomAgent<{
+        publicField: string;
+        secretField: string;
+      }>(
         registry,
         {
           name: 'clientTransformTest',
@@ -1867,10 +1867,10 @@ describe('Agent', () => {
     it('should return full state when no clientStateTransform is provided', async () => {
       const registry = new Registry();
 
-      const flow = defineCustomAgent<
-        unknown,
-        { publicField: string; secretField: string }
-      >(registry, { name: 'noTransformTest' }, async (sess) => {
+      const flow = defineCustomAgent<{
+        publicField: string;
+        secretField: string;
+      }>(registry, { name: 'noTransformTest' }, async (sess) => {
         sess.session.updateCustom(() => ({
           publicField: 'visible',
           secretField: 'top-secret',
@@ -1909,10 +1909,10 @@ describe('Agent', () => {
         secretField: string;
       }>();
 
-      const flow = defineCustomAgent<
-        unknown,
-        { publicField: string; secretField: string }
-      >(
+      const flow = defineCustomAgent<{
+        publicField: string;
+        secretField: string;
+      }>(
         new Registry(),
         {
           name: 'snapshotTransformTest',
@@ -1977,10 +1977,10 @@ describe('Agent', () => {
         secretField: string;
       }>();
 
-      const flow = defineCustomAgent<
-        unknown,
-        { publicField: string; secretField: string }
-      >(
+      const flow = defineCustomAgent<{
+        publicField: string;
+        secretField: string;
+      }>(
         registry,
         {
           name: 'snapshotActionTransformTest',
@@ -2040,10 +2040,10 @@ describe('Agent', () => {
 
       // Client-managed (no store in config), but we need a store for detach;
       // use a server-managed config to test detach transform path
-      const flow = defineCustomAgent<
-        unknown,
-        { publicField: string; secretField: string }
-      >(
+      const flow = defineCustomAgent<{
+        publicField: string;
+        secretField: string;
+      }>(
         new Registry(),
         {
           name: 'detachTransformTest',
@@ -2712,7 +2712,7 @@ Now respond to the latest message.`,
     it('persists the finishReason in the session snapshot', async () => {
       const store = new InMemorySessionStore<{}>();
 
-      const flow = defineCustomAgent<unknown, {}>(
+      const flow = defineCustomAgent<{}>(
         new Registry(),
         { name: 'frPersist', store },
         async (sess) => {
@@ -2743,7 +2743,7 @@ Now respond to the latest message.`,
     it('reports failed as the finishReason when a turn throws', async () => {
       const store = new InMemorySessionStore<{}>();
 
-      const flow = defineCustomAgent<unknown, {}>(
+      const flow = defineCustomAgent<{}>(
         new Registry(),
         { name: 'frFailed', store },
         async (sess) => {
@@ -2760,7 +2760,7 @@ Now respond to the latest message.`,
       });
       session.close();
 
-      // The agent no longer throws on an in-band turn failure — it resolves
+      // The agent no longer throws on an in-band turn failure - it resolves
       // gracefully with finishReason 'failed' and a structured error.
       const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
@@ -2785,13 +2785,15 @@ Now respond to the latest message.`,
       assert.strictEqual(snapshot?.finishReason, 'failed');
       assert.strictEqual(snapshot?.status, 'failed');
 
-      // A recovery snapshot of the last-good state is returned for resumption.
-      assert.ok(output.snapshotId);
+      // First-turn failure: no prior successful turn ran, so the last-good
+      // state is the seed the client already has. No redundant recovery
+      // snapshot is written and snapshotId is left unset.
+      assert.strictEqual(output.snapshotId, undefined);
     });
 
     it('client-managed: preserves prior-turn state when a later turn fails', async () => {
       let turn = 0;
-      const flow = defineCustomAgent<unknown, { count: number }>(
+      const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
         { name: 'frClientPreserve' },
         async (sess) => {
@@ -2835,12 +2837,12 @@ Now respond to the latest message.`,
       const store = new InMemorySessionStore<{ count: number }>();
       let turn = 0;
 
-      const flow = defineCustomAgent<unknown, { count: number }>(
+      const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
         {
           name: 'frServerRecovery',
           store,
-          // Never persist a turn snapshot — forces the retroactive recovery
+          // Never persist a turn snapshot - forces the retroactive recovery
           // snapshot path on failure.
           snapshotCallback: () => false,
         },
@@ -2887,11 +2889,11 @@ Now respond to the latest message.`,
       const store = new InMemorySessionStore<{ count: number }>();
       let turn = 0;
 
-      // Default snapshotCallback — every turn (including the failed one) is
+      // Default snapshotCallback - every turn (including the failed one) is
       // persisted. The retroactive recovery snapshot must still be written as a
       // distinct 'done' snapshot holding the last-good state, separate from the
       // failed turn's snapshot.
-      const flow = defineCustomAgent<unknown, { count: number }>(
+      const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
         { name: 'frServerRecoveryDefault', store },
         async (sess) => {
@@ -2946,13 +2948,14 @@ Now respond to the latest message.`,
       assert.strictEqual(recovery?.parentId, failedTurnSnapshotId);
     });
 
-    it('server-managed: recovery snapshot falls back to the seed state when the first turn fails', async () => {
+    it('server-managed: no redundant recovery snapshot when the first turn fails', async () => {
       const store = new InMemorySessionStore<{ count: number }>();
 
-      // The very first turn fails — there is no prior successful turn, so the
-      // last-good state is the seed state captured at construction (before the
-      // failed turn's user message and mutations were applied).
-      const flow = defineCustomAgent<unknown, { count: number }>(
+      // The very first turn fails - there is no prior successful turn, so the
+      // last-good state is the seed the client already has. Writing a recovery
+      // snapshot would be a redundant no-diff write, so none is created and
+      // snapshotId is left unset.
+      const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
         { name: 'frServerRecoveryFirstTurn', store },
         async (sess) => {
@@ -2970,22 +2973,26 @@ Now respond to the latest message.`,
       });
       session.close();
 
-      for await (const _ of session.stream) {
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
       }
       const output = await session.output;
 
       assert.strictEqual(output.finishReason, 'failed');
-      assert.ok(output.snapshotId);
+      // No recovery snapshot is returned for a first-turn failure.
+      assert.strictEqual(output.snapshotId, undefined);
 
-      const recovery = await store.getSnapshot({
-        snapshotId: output.snapshotId!,
+      // The only snapshot in the store is the failed turn's own snapshot - no
+      // separate 'done' seed recovery snapshot was written.
+      const turnEndChunks = chunks.filter((c) => !!c.turnEnd);
+      const failedTurnSnapshotId =
+        turnEndChunks[turnEndChunks.length - 1]?.turnEnd?.snapshotId;
+      assert.ok(failedTurnSnapshotId);
+      const failedSnap = await store.getSnapshot({
+        snapshotId: failedTurnSnapshotId!,
       });
-      assert.ok(recovery, 'recovery snapshot should exist in the store');
-      assert.strictEqual(recovery!.status, 'done');
-      // No successful turn ran, so the seed state has no count mutation and no
-      // history from the failed turn.
-      assert.strictEqual((recovery!.state.custom as any)?.count, undefined);
-      assert.strictEqual(recovery!.state.messages?.length ?? 0, 0);
+      assert.strictEqual(failedSnap?.status, 'failed');
     });
 
     it('surfaces the generate finishReason from a prompt agent', async () => {
@@ -3028,7 +3035,7 @@ Now respond to the latest message.`,
   });
 
   // -------------------------------------------------------------------------
-  // AgentAPI surface (`chat`, `loadChat`, `getSnapshot`, `abort`) — the same
+  // AgentAPI surface (`chat`, `loadChat`, `getSnapshot`, `abort`) - the same
   // ergonomic interface returned by `remoteAgent` on the client, but driven
   // in-process over the agent action.
   // -------------------------------------------------------------------------
@@ -3070,7 +3077,7 @@ Now respond to the latest message.`,
     });
 
     it('carries state across multi-turn (client-managed)', async () => {
-      const agent = defineCustomAgent<unknown, { count: number }>(
+      const agent = defineCustomAgent<{ count: number }>(
         new Registry(),
         { name: 'apiState' },
         async (sess) => {
@@ -3097,7 +3104,7 @@ Now respond to the latest message.`,
 
     it('carries snapshotId across multi-turn (server-managed)', async () => {
       const store = new InMemorySessionStore<{}>();
-      const agent = defineCustomAgent<unknown, {}>(
+      const agent = defineCustomAgent<{}>(
         new Registry(),
         { name: 'apiSnap', store },
         async (sess) => {
@@ -3174,7 +3181,7 @@ Now respond to the latest message.`,
 
     it('throws AgentError on a failed turn', async () => {
       const store = new InMemorySessionStore<{}>();
-      const agent = defineCustomAgent<unknown, {}>(
+      const agent = defineCustomAgent<{}>(
         new Registry(),
         { name: 'apiFailed', store },
         async (sess) => {
@@ -3199,7 +3206,7 @@ Now respond to the latest message.`,
 
     it('loadChat() restores history from a snapshot (server-managed)', async () => {
       const store = new InMemorySessionStore<{}>();
-      const agent = defineCustomAgent<unknown, {}>(
+      const agent = defineCustomAgent<{}>(
         new Registry(),
         { name: 'apiLoad', store },
         async (sess) => {
@@ -3226,7 +3233,7 @@ Now respond to the latest message.`,
 
     it('getSnapshot reads a snapshot (server-managed)', async () => {
       const store = new InMemorySessionStore<{}>();
-      const agent = defineCustomAgent<unknown, {}>(
+      const agent = defineCustomAgent<{}>(
         new Registry(),
         { name: 'apiGetSnap', store },
         async (sess) => {
@@ -3250,7 +3257,7 @@ Now respond to the latest message.`,
 
     it('detach submits a background task that completes', async () => {
       const store = new InMemorySessionStore<{}>();
-      const agent = defineCustomAgent<unknown, {}>(
+      const agent = defineCustomAgent<{}>(
         new Registry(),
         { name: 'apiDetach', store },
         async (sess) => {

@@ -22,8 +22,9 @@
  *
  *   • Multi-step orchestration — multiple sequential model calls with
  *     custom logic between them
- *   • Custom status streaming — sendChunk({ status }) to stream typed
- *     progress indicators to the client between model calls
+ *   • Custom status streaming — `session.updateCustom` mutates a typed
+ *     `status` field; the runtime auto-emits a `customPatch` chunk so the
+ *     client's tracked custom state stays live mid-stream
  *   • Direct session control — manually managing messages and custom state
  *   • Multiple models — using a fast model for decomposition and a capable
  *     model for research and synthesis
@@ -43,6 +44,12 @@ import { ai, liteModel } from './genkit.js';
 // ---------------------------------------------------------------------------
 
 interface ResearchState {
+  /**
+   * A human-readable progress indicator. Mutating it via
+   * `session.updateCustom` auto-emits a `customPatch` chunk, so the client's
+   * tracked custom state (and thus the displayed status) stays live mid-stream.
+   */
+  status?: string;
   subQuestions: string[];
   subAnswers: Array<{ question: string; answer: string }>;
 }
@@ -55,6 +62,8 @@ export const researchAgent = ai.defineCustomAgent(
   { name: 'researchAgent' },
   async (sess, { sendChunk }) => {
     let lastMessage: any;
+
+    const session = ai.currentSession<ResearchState>();
 
     await sess.run(async (input) => {
       const userText =
@@ -78,7 +87,11 @@ export const researchAgent = ai.defineCustomAgent(
           : '';
 
       // ── Step 1: Decompose the question ────────────────────────────────
-      sendChunk({ status: 'Decomposing question into sub-topics…' });
+      // Mutating custom state auto-emits a `customPatch` chunk to the client.
+      session.updateCustom((state) => ({
+        ...state!,
+        status: 'Decomposing question into sub-topics…',
+      }));
 
       const decompose = await ai.generate({
         model: liteModel,
@@ -91,8 +104,8 @@ User question: "${userText}"`,
       const subQuestions: string[] = decompose.output ?? [userText];
 
       // Store decomposition in custom state
-      const session = ai.currentSession<ResearchState>();
-      session.updateCustom(() => ({
+      session.updateCustom((state) => ({
+        ...state!,
         subQuestions,
         subAnswers: [],
       }));
@@ -102,9 +115,10 @@ User question: "${userText}"`,
 
       for (let i = 0; i < subQuestions.length; i++) {
         const q = subQuestions[i];
-        sendChunk({
+        session.updateCustom((state) => ({
+          ...state!,
           status: `Researching (${i + 1}/${subQuestions.length}): ${q}`,
-        });
+        }));
 
         const research = await ai.generate({
           prompt: `Answer this question concisely but thoroughly in 2-3 paragraphs. Be specific and factual.
@@ -122,7 +136,10 @@ Question: ${q}`,
       }));
 
       // ── Step 3: Synthesize final response ─────────────────────────────
-      sendChunk({ status: 'Synthesizing final response…' });
+      session.updateCustom((state) => ({
+        ...state!,
+        status: 'Synthesizing final response…',
+      }));
 
       const researchContext = subAnswers
         .map(
@@ -154,7 +171,7 @@ Write a clear, cohesive response that integrates all the research findings. Don'
         sess.addMessages([lastMessage]);
       }
 
-      sendChunk({ status: 'Done' });
+      session.updateCustom((state) => ({ ...state!, status: 'Done' }));
     });
 
     return {
@@ -181,21 +198,19 @@ export const testResearchAgent = ai.defineFlow(
     outputSchema: z.any(),
   },
   async (text, { sendChunk }) => {
-    const res = await researchAgent.run(
-      {
-        messages: [{ role: 'user', content: [{ text }] }],
+    // Seed the chat with the initial custom research state, then stream.
+    const chat = researchAgent.chat({
+      state: {
+        custom: { subQuestions: [], subAnswers: [] } as ResearchState,
+        messages: [],
+        artifacts: [],
       },
-      {
-        init: {
-          state: {
-            custom: { subQuestions: [], subAnswers: [] } as ResearchState,
-            messages: [],
-            artifacts: [],
-          },
-        },
-        onChunk: sendChunk,
-      }
-    );
-    return res.result;
+    });
+    const turn = chat.sendStream(text);
+    for await (const chunk of turn.stream) {
+      sendChunk(chunk.raw);
+    }
+    const res = await turn.response;
+    return res.raw;
   }
 );
