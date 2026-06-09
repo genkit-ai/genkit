@@ -68,6 +68,16 @@ var (
 		SystemRole: false,
 		Output:     []string{ai.OutputFormatMedia},
 	}
+
+	// AntigravitySupports describes model capabilities for Antigravity preview models.
+	AntigravitySupports = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      false,
+		ToolChoice: false,
+		SystemRole: false,
+		Media:      true,
+		Output:     []string{"text"},
+	}
 )
 
 // Config schemas advertised for each generation modality. Reflecting the SDK
@@ -100,6 +110,12 @@ var (
 		Supports:     &VeoSupports,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: veoConfigSchema,
+	}
+
+	defaultAntigravityOpts = ai.ModelOptions{
+		Supports:     &AntigravitySupports,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: configToMap(genai.GenerateContentConfig{}),
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
@@ -152,6 +168,8 @@ const (
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 	veo31LiteGeneratePreview = "veo-3.1-lite-generate-preview"
+
+	antigravityPreview052026 = "antigravity-preview-05-2026"
 
 	textembedding005             = "text-embedding-005"
 	textembedding004             = "text-embedding-004"
@@ -215,6 +233,8 @@ var (
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
 		veo31LiteGeneratePreview,
+
+		antigravityPreview052026,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
@@ -391,6 +411,15 @@ var (
 		},
 	}
 
+	supportedAntigravityModels = map[string]ai.ModelOptions{
+		antigravityPreview052026: {
+			Label:    "Antigravity Preview 05 2026",
+			Versions: []string{},
+			Supports: &AntigravitySupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+	}
+
 	embedderConfig = map[string]ai.EmbedderOptions{
 		textembedding005: {
 			Dimensions: 768,
@@ -469,6 +498,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		opts, ok = supportedVideoModels[name]
 		if !ok {
 			opts = defaultVeoOpts
+		}
+	case ModelTypeAntigravity:
+		opts, ok = supportedAntigravityModels[name]
+		if !ok {
+			opts = defaultAntigravityOpts
 		}
 	default:
 		opts = defaultGeminiOpts
@@ -562,8 +596,10 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 			continue
 		}
 
-		// Only include models with known generative prefixes.
-		if strings.HasPrefix(name, "gemini") || strings.HasPrefix(name, "gemma") {
+		// Only include models with known regular generation prefixes.
+		if strings.HasPrefix(name, "gemini") ||
+			strings.HasPrefix(name, "gemma") ||
+			strings.HasPrefix(name, "antigravity") {
 			models.gemini = append(models.gemini, name)
 		}
 	}
