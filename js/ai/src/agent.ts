@@ -94,7 +94,6 @@ export const AgentInitSchema = z.object({
 export interface AgentInit<S = unknown> {
   snapshotId?: string;
   sessionId?: string;
-  newSnapshotId?: string;
   state?: SessionState<S>;
 }
 
@@ -379,7 +378,6 @@ export class SessionRunner<State = unknown> {
         finishReason?: AgentFinishReason
       ) => void;
       onDetach?: (snapshotId: string) => void;
-      newSnapshotId?: string;
     }
   ) {
     this.session = session;
@@ -390,7 +388,6 @@ export class SessionRunner<State = unknown> {
     this.store = options?.store;
     this.onEndTurn = options?.onEndTurn;
     this.onDetach = options?.onDetach;
-    this.newSnapshotId = options?.newSnapshotId;
 
     // Seed the last-good state with the initial session state so that a
     // failure on the very first turn still has a valid state to fall back to
@@ -1046,7 +1043,6 @@ export function defineCustomAgent<State = unknown>(
         store,
         snapshotCallback: config.snapshotCallback,
         lastSnapshot: snapshot,
-        newSnapshotId: init?.newSnapshotId,
         onDetach: (snapshotId) => {
           detachedSnapshotId = snapshotId;
           if (resolveDetach) {
