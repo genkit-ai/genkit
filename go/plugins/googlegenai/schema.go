@@ -15,6 +15,14 @@ import (
 // toGeminiSchema translates a map representing a standard JSON schema to a more
 // limited [genai.Schema].
 func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) (*genai.Schema, error) {
+	return toGeminiSchemaRec(originalSchema, genkitSchema, map[string]bool{})
+}
+
+// toGeminiSchemaRec is the recursive worker for [toGeminiSchema]. visited holds
+// the $ref names currently being resolved on the active path; re-entering one
+// indicates a cycle, which [genai.Schema] cannot express, so it is collapsed to
+// a generic object schema rather than recursing forever.
+func toGeminiSchemaRec(originalSchema map[string]any, genkitSchema map[string]any, visited map[string]bool) (*genai.Schema, error) {
 	// this covers genkitSchema == nil and {}
 	// genkitSchema will be {} if it's any
 	if len(genkitSchema) == 0 {
@@ -25,11 +33,18 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		if !ok {
 			return nil, fmt.Errorf("invalid $ref value: not a string")
 		}
+		name := refName(ref)
+		if visited[name] {
+			// Cyclic reference: emit a generic object to break the cycle.
+			return &genai.Schema{Type: genai.TypeObject}, nil
+		}
 		s, err := resolveRef(originalSchema, ref)
 		if err != nil {
 			return nil, err
 		}
-		return toGeminiSchema(originalSchema, s)
+		visited[name] = true
+		defer delete(visited, name)
+		return toGeminiSchemaRec(originalSchema, s, visited)
 	}
 
 	// Handle "anyOf" subschemas by finding the first valid schema definition.
@@ -56,7 +71,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 			if description, ok := genkitSchema["description"]; ok {
 				subSchema["description"] = description
 			}
-			res, err := toGeminiSchema(originalSchema, subSchema)
+			res, err := toGeminiSchemaRec(originalSchema, subSchema, visited)
 			if err == nil && res != nil && res.Type != "" {
 				return res, nil
 			}
@@ -160,7 +175,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		schema.Enum = castToStringArray(v)
 	}
 	if v, ok := genkitSchema["items"]; ok {
-		items, err := toGeminiSchema(originalSchema, v.(map[string]any))
+		items, err := toGeminiSchemaRec(originalSchema, v.(map[string]any), visited)
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +184,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	if val, ok := genkitSchema["properties"]; ok {
 		props := map[string]*genai.Schema{}
 		for k, v := range val.(map[string]any) {
-			p, err := toGeminiSchema(originalSchema, v.(map[string]any))
+			p, err := toGeminiSchemaRec(originalSchema, v.(map[string]any), visited)
 			if err != nil {
 				return nil, err
 			}
@@ -182,11 +197,16 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	return schema, nil
 }
 
+// refName returns the definition name from a "#/$defs/foo" reference.
+func refName(ref string) string {
+	tkns := strings.Split(ref, "/")
+	return tkns[len(tkns)-1]
+}
+
 // resolveRef resolves a $ref reference in a JSON schema.
 func resolveRef(originalSchema map[string]any, ref string) (map[string]any, error) {
-	tkns := strings.Split(ref, "/")
-	// refs look like: $/ref/foo -- we need the foo part
-	name := tkns[len(tkns)-1]
+	// refs look like: #/$defs/foo -- we need the foo part
+	name := refName(ref)
 	if defs, ok := originalSchema["$defs"].(map[string]any); ok {
 		if def, ok := defs[name].(map[string]any); ok {
 			return def, nil

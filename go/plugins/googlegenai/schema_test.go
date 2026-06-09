@@ -189,3 +189,42 @@ func TestToGeminiSchema(t *testing.T) {
 		})
 	}
 }
+
+// TestToGeminiSchemaCyclic ensures a recursive schema (the shape now produced
+// by schema inference for self-referential Go types) does not send
+// toGeminiSchema into infinite recursion; the cycle is collapsed to a generic
+// object.
+func TestToGeminiSchemaCyclic(t *testing.T) {
+	// Mirrors InferJSONSchemaMap output for type Node{ Value string; Children []*Node }.
+	schema := map[string]any{
+		"$ref": "#/$defs/Node",
+		"$defs": map[string]any{
+			"Node": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"value": map[string]any{"type": "string"},
+					"children": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"$ref": "#/$defs/Node"},
+					},
+				},
+			},
+		},
+	}
+
+	got, err := toGeminiSchema(schema, schema)
+	if err != nil {
+		t.Fatalf("toGeminiSchema() error = %v", err)
+	}
+	if got == nil || got.Type != genai.TypeObject {
+		t.Fatalf("expected object schema, got %#v", got)
+	}
+	children, ok := got.Properties["children"]
+	if !ok || children.Type != genai.TypeArray {
+		t.Fatalf("expected children array, got %#v", got.Properties)
+	}
+	// The recursive items reference is collapsed to a generic object.
+	if children.Items == nil || children.Items.Type != genai.TypeObject {
+		t.Errorf("expected children.items to collapse to object, got %#v", children.Items)
+	}
+}
