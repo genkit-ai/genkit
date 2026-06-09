@@ -57,6 +57,7 @@ func TestConvertRequest(t *testing.T) {
 		ToolChoice: ai.ToolChoiceAuto,
 		Output: &ai.ModelOutputConfig{
 			Constrained: true,
+			Format:      "json",
 			Schema: map[string]any{
 				"type": string("object"),
 				"properties": map[string]any{
@@ -157,11 +158,14 @@ func TestConvertRequest(t *testing.T) {
 		if gcc.TopK == nil {
 			t.Errorf("topK: got: nil, want %d", ogCfg.TopK)
 		}
-		if gcc.ResponseMIMEType != "" {
-			t.Errorf("ResponseMIMEType should be empty if tools are present")
+		// Constrained JSON output is now compatible with tools: the request sets
+		// Output.Format "json" and Constrained, so we expect both the JSON MIME
+		// type and the response schema to be populated even though tools are present.
+		if gcc.ResponseMIMEType != "application/json" {
+			t.Errorf("ResponseMIMEType: got %q, want %q", gcc.ResponseMIMEType, "application/json")
 		}
-		if gcc.ResponseSchema != nil {
-			t.Errorf("ResponseSchema should be nil when tools are present (JSON mode is not compatible with tools)")
+		if gcc.ResponseSchema == nil {
+			t.Error("ResponseSchema should be set for constrained JSON output, even when tools are present")
 		}
 		if gcc.ThinkingConfig == nil {
 			t.Errorf("ThinkingConfig should not be empty")
