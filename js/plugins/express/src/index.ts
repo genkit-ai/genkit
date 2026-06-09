@@ -85,11 +85,15 @@ export function expressHandler<
         (await opts?.contextProvider?.({
           method: request.method as RequestData['method'],
           headers: Object.fromEntries(
-            Object.entries(request.headers).map(([key, value]) => [
-              key.toLowerCase(),
-              // RFC 9110 5.3: combine repeated field lines with a comma.
-              Array.isArray(value) ? value.join(', ') : String(value),
-            ])
+            Object.entries(request.headers)
+              // Skip headers explicitly set to undefined so they don't become
+              // the literal string "undefined" via String(value).
+              .filter(([, value]) => value !== undefined)
+              .map(([key, value]) => [
+                key.toLowerCase(),
+                // RFC 9110 5.3: combine repeated field lines with a comma.
+                Array.isArray(value) ? value.join(', ') : String(value),
+              ])
           ),
           input,
         })) || {};
