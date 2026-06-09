@@ -1,6 +1,310 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
+    "AgentFinishReason": {
+      "type": "string",
+      "enum": [
+        "stop",
+        "length",
+        "blocked",
+        "aborted",
+        "interrupted",
+        "other",
+        "unknown",
+        "detached",
+        "failed"
+      ]
+    },
+    "AgentInit": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentInput": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "resume": {
+          "type": "object",
+          "properties": {
+            "respond": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ToolResponsePart"
+              }
+            },
+            "restart": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ToolRequestPart"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "detach": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentOutput": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "details": {}
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentResult": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStreamChunk": {
+      "type": "object",
+      "properties": {
+        "modelChunk": {
+          "$ref": "#/$defs/ModelResponseChunk"
+        },
+        "customPatch": {
+          "$ref": "#/$defs/JsonPatch"
+        },
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        },
+        "turnEnd": {
+          "$ref": "#/$defs/TurnEnd"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Artifact": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Part"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "parts"
+      ],
+      "additionalProperties": false
+    },
+    "GetSnapshotDataInput": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "JsonPatchOperation": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "add",
+            "remove",
+            "replace",
+            "move",
+            "copy",
+            "test"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "op",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "JsonPatch": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/JsonPatchOperation"
+      }
+    },
+    "SessionSnapshot": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/SnapshotEvent"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "done",
+            "failed",
+            "aborted"
+          ]
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "details": {}
+          },
+          "required": [
+            "status",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "snapshotId",
+        "createdAt",
+        "event",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "SessionState": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          }
+        },
+        "custom": {},
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SnapshotEvent": {
+      "type": "string",
+      "enum": [
+        "turnEnd",
+        "invocationEnd"
+      ]
+    },
+    "TurnEnd": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        }
+      },
+      "additionalProperties": false
+    },
     "DocumentData": {
       "type": "object",
       "properties": {
