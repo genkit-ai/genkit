@@ -93,8 +93,11 @@ const (
 	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
 	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
 
-	imagen3Generate001     = "imagen-3.0-generate-001"
-	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
+	imagen3Generate001       = "imagen-3.0-generate-001"
+	imagen3FastGenerate001   = "imagen-3.0-fast-generate-001"
+	imagen40FastGenerate001  = "imagen-4.0-fast-generate-001"
+	imagen40Generate001      = "imagen-4.0-generate-001"
+	imagen40UltraGenerate001 = "imagen-4.0-ultra-generate-001"
 
 	veo20Generate001         = "veo-2.0-generate-001"
 	veo30Generate001         = "veo-3.0-generate-001"
@@ -143,6 +146,10 @@ var (
 		gemini25Pro,
 		gemini31FlashLitePreview,
 		gemini31FlashImagePreview,
+
+		imagen40FastGenerate001,
+		imagen40Generate001,
+		imagen40UltraGenerate001,
 
 		veo20Generate001,
 		veo30Generate001,
@@ -209,6 +216,24 @@ var (
 		},
 		imagen3FastGenerate001: {
 			Label:    "Imagen 3 Fast Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40FastGenerate001: {
+			Label:    "Imagen 4 Fast Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40Generate001: {
+			Label:    "Imagen 4 Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40UltraGenerate001: {
+			Label:    "Imagen 4 Ultra Generate 001",
 			Versions: []string{},
 			Supports: &Media,
 			Stage:    ai.ModelStageStable,
