@@ -18,6 +18,7 @@ package googlegenai_test
 
 import (
 	"context"
+	"encoding/base64"
 	"math"
 	"os"
 	"strings"
@@ -299,6 +300,56 @@ func TestVertexAILive(t *testing.T) {
 			t.Error("no media found in the response message")
 		}
 	})
+	t.Run("virtual try-on registration", func(t *testing.T) {
+		m := googlegenai.VertexAIModel(g, "virtual-try-on-001")
+		if m == nil {
+			t.Fatal("virtual-try-on-001 model was not registered")
+		}
+	})
+
+	t.Run("virtual try-on generation", func(t *testing.T) {
+		personPath := os.Getenv("GENKIT_VERTEX_VTO_PERSON_IMAGE")
+		productPath := os.Getenv("GENKIT_VERTEX_VTO_PRODUCT_IMAGE")
+		if personPath == "" || productPath == "" {
+			t.Skip("GENKIT_VERTEX_VTO_PERSON_IMAGE and GENKIT_VERTEX_VTO_PRODUCT_IMAGE must point to local JPEG/PNG files")
+		}
+		personData, err := os.ReadFile(personPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		productData, err := os.ReadFile(productPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mime := "image/jpeg"
+		if strings.HasSuffix(strings.ToLower(personPath), ".png") {
+			mime = "image/png"
+		}
+		personPart := ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(personData))
+		personPart.Metadata = map[string]any{"type": googlegenai.PartMetadataTypePersonImage}
+		productPart := ai.NewMediaPart(mime, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(productData))
+		productPart.Metadata = map[string]any{"type": googlegenai.PartMetadataTypeProductImage}
+
+		m := googlegenai.VertexAIModel(g, "virtual-try-on-001")
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserMessage(personPart, productPart)),
+			ai.WithConfig(&googlegenai.VirtualTryOnConfig{SampleCount: 1}),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundImage := false
+		for _, part := range resp.Message.Content {
+			if part.Kind == ai.PartMedia && strings.HasPrefix(part.ContentType, "image/") {
+				foundImage = true
+			}
+		}
+		if !foundImage {
+			t.Error("no image media part found in VTO response")
+		}
+	})
+
 	t.Run("constrained generation", func(t *testing.T) {
 		type outFormat struct {
 			Country string

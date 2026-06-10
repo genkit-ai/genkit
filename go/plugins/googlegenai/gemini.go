@@ -118,6 +118,8 @@ func newModel(client *genai.Client, name string, opts ai.ModelOptions) ai.Model 
 		switch mt {
 		case ModelTypeImagen:
 			return generateImage(ctx, client, name, input, cb)
+		case ModelTypeVirtualTryOn:
+			return generateVirtualTryOn(ctx, client, name, input, cb)
 		default:
 			return generate(ctx, client, name, input, cb)
 		}
