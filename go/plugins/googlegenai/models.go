@@ -34,6 +34,17 @@ var (
 		Constrained: ai.ConstrainedSupportAll,
 	}
 
+	// GemmaSupports describes model capabilities for Gemma models. Unlike
+	// Gemini, Gemma models do not support a system role or tool calling.
+	GemmaSupports = ai.ModelSupports{
+		Multiturn:   true,
+		Tools:       false,
+		ToolChoice:  false,
+		SystemRole:  false,
+		Media:       true,
+		Constrained: ai.ConstrainedSupportNoTools,
+	}
+
 	// Media describes model capabilities for image generation models (Imagen).
 	Media = ai.ModelSupports{
 		Multiturn:  false,
@@ -97,6 +108,9 @@ const (
 	gemini31FlashLite  = "gemini-3.1-flash-lite"
 	gemini31FlashImage = "gemini-3.1-flash-image"
 	gemini3ProImage    = "gemini-3-pro-image"
+
+	gemma426bA4bIT = "gemma-4-26b-a4b-it"
+	gemma431bIT    = "gemma-4-31b-it"
 
 	imagen3Generate001       = "imagen-3.0-generate-001"
 	imagen3FastGenerate001   = "imagen-3.0-fast-generate-001"
@@ -163,6 +177,9 @@ var (
 		imagen40FastGenerate001,
 		imagen40Generate001,
 		imagen40UltraGenerate001,
+
+		gemma426bA4bIT,
+		gemma431bIT,
 
 		veo20Generate001,
 		veo30Generate001,
@@ -240,6 +257,18 @@ var (
 			Label:    "Gemini 3 Pro Image",
 			Versions: []string{},
 			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemma426bA4bIT: {
+			Label:    "Gemma 4 26B",
+			Versions: []string{},
+			Supports: &GemmaSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		gemma431bIT: {
+			Label:    "Gemma 4 31B",
+			Versions: []string{},
+			Supports: &GemmaSupports,
 			Stage:    ai.ModelStageStable,
 		},
 	}
