@@ -194,9 +194,10 @@ async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock
     actions = await plugin.init()
 
     imagen_actions = [a for a in actions if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
-    assert imagen_actions[0].kind == ActionKind.MODEL
+    names = {a.name for a in imagen_actions}
+    assert names == {'googleai/imagen-3.0-generate-002'}
+    for a in imagen_actions:
+        assert a.kind == ActionKind.MODEL
 
 
 @patch('genkit.plugins.google_genai.google.genai.client.Client')
@@ -212,8 +213,16 @@ async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock
     actions_list = await plugin.list_actions()
 
     imagen_actions = [a for a in actions_list if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
+    names = {a.name for a in imagen_actions}
+    assert names == {'googleai/imagen-3.0-generate-002'}
+    for action in imagen_actions:
+        custom_options = action.metadata['model']['customOptions']
+        assert set(custom_options['properties']) == {
+            'numberOfImages',
+            'aspectRatio',
+            'personGeneration',
+            'imageSize',
+        }
 
 
 @patch('genkit.plugins.google_genai.google.genai.client.Client')

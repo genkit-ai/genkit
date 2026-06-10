@@ -33,7 +33,12 @@ from genkit import (
     Role,
     TextPart,
 )
-from genkit.plugins.google_genai.models.imagen import ImagenModel, ImagenVersion
+from genkit.plugin_api import to_json_schema
+from genkit.plugins.google_genai.models.imagen import (
+    ImagenConfigSchema,
+    ImagenModel,
+    ImagenVersion,
+)
 
 
 @pytest.mark.asyncio
@@ -72,8 +77,10 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     response = await imagen.generate(request, ctx)
 
     googleai_client_mock.assert_has_calls([
-        mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=None)
+        mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=mocker.ANY)
     ])
+    config = googleai_client_mock.aio.models.generate_images.call_args.kwargs['config']
+    assert config is None
     assert isinstance(response, ModelResponse)
     assert response.message is not None
     content = response.message.content[0]
@@ -87,3 +94,106 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     assert data_url.startswith(f'data:{response_mimetype};base64,')
     encoded_data = data_url.split(',', 1)[1]
     assert base64.b64decode(encoded_data) == response_byte_string
+
+
+def test_imagen_config_schema_exposes_supported_options() -> None:
+    """Test Imagen config options are visible in action metadata."""
+    schema = to_json_schema(ImagenConfigSchema)
+    properties = schema['properties']
+    number_of_images = properties['numberOfImages']
+    assert set(properties) == {
+        'numberOfImages',
+        'imageSize',
+        'aspectRatio',
+        'personGeneration',
+    }
+    assert number_of_images.get('default') is None
+    assert number_of_images['anyOf'][0]['maximum'] == 4
+    assert properties['aspectRatio']['anyOf'][0]['type'] == 'string'
+    assert 'enum' not in properties['aspectRatio']
+    assert properties['personGeneration']['enum'] == ['dont_allow', 'allow_adult', 'allow_all']
+    assert properties['imageSize']['enum'] == ['1K', '2K']
+
+
+def test_imagen_config_accepts_custom_aspect_ratio(mocker: MockerFixture) -> None:
+    """Test aspect ratio accepts any string supported by the API."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={'aspect_ratio': '21:9'},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config['aspect_ratio'] == '21:9'
+
+
+def test_imagen_config_does_not_set_image_count_when_omitted(mocker: MockerFixture) -> None:
+    """Test omitted image count lets the backend choose its default."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config is None
+
+
+def test_imagen_config_preserves_requested_image_count(mocker: MockerFixture) -> None:
+    """Test explicit image count is not overwritten by default."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={'number_of_images': 2},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN4, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config['number_of_images'] == 2
+
+
+def test_imagen_config_allows_vertexai_extra_options(mocker: MockerFixture) -> None:
+    """Test Vertex AI Imagen options not shown in Google AI metadata still pass through."""
+    request = ModelRequest(
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part(root=TextPart(text='draw a fox')),
+                ],
+            ),
+        ],
+        config={'safety_filter_level': 'BLOCK_LOW_AND_ABOVE'},
+    )
+    googleai_client_mock = mocker.AsyncMock()
+    imagen = ImagenModel(ImagenVersion.IMAGEN3, googleai_client_mock)
+
+    config = imagen._get_config(request)
+
+    assert config['safety_filter_level'] == 'BLOCK_LOW_AND_ABOVE'

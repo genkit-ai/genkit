@@ -218,7 +218,12 @@ from genkit.plugins.google_genai.models.gemini import (
     GoogleAIGeminiVersion,
     VertexAIGeminiVersion,
 )
-from genkit.plugins.google_genai.models.imagen import ImagenVersion
+from genkit.plugins.google_genai.models.imagen import (
+    ImagenConfigSchema,
+    ImagenImageSize,
+    ImagenPersonGeneration,
+    ImagenVersion,
+)
 from genkit.plugins.google_genai.models.lyria import LyriaConfig, LyriaVersion
 from genkit.plugins.google_genai.models.veo import VeoConfig, VeoVersion
 
@@ -244,6 +249,9 @@ __all__ = [
     GeminiConfigSchema.__name__,
     GeminiImageConfigSchema.__name__,
     GeminiTtsConfigSchema.__name__,
+    ImagenConfigSchema.__name__,
+    ImagenImageSize.__name__,
+    ImagenPersonGeneration.__name__,
     ImagenVersion.__name__,
     VeoVersion.__name__,
     VeoConfig.__name__,
