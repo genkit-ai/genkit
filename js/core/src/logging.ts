@@ -116,29 +116,94 @@ class Logger {
     }
   }
 
+  private _log(level: string, ...args: any[]) {
+    const currentLevel = getLogger().level || 'info';
+    if (LOG_LEVELS.indexOf(currentLevel) > LOG_LEVELS.indexOf(level)) {
+      return;
+    }
+
+    if (args.length === 0) return;
+
+    let msg = args[0];
+    let metadata: any = {};
+
+    if (typeof msg === 'object' && msg !== null && !(msg instanceof Error)) {
+      metadata = this._mergeErrorMetadata(msg.metadata, msg.error);
+      msg = msg.message;
+    } else if (msg instanceof Error) {
+      metadata = this._mergeErrorMetadata(undefined, msg);
+      msg = msg.message || String(msg);
+    } else if (typeof msg === 'string') {
+      const second = args[1];
+      const third = args[2];
+      if (second instanceof Error) {
+        metadata = this._mergeErrorMetadata(undefined, second);
+      } else if (
+        second &&
+        typeof second === 'object' &&
+        !Array.isArray(second)
+      ) {
+        metadata = this._mergeErrorMetadata(
+          second,
+          third instanceof Error ? third : undefined
+        );
+      } else if (args.length > 1) {
+        getLogger()[level].apply(getLogger(), args);
+        this._emitOtel(level, args);
+        return;
+      }
+    }
+
+    getLogger()[level](msg, metadata);
+    this._emitOtel(level, [], msg, metadata);
+  }
+
   init(fn: any) {
     global[loggerKey] = fn;
   }
 
-  info(...args: any) {
-    // eslint-disable-next-line prefer-spread
-    getLogger().info.apply(getLogger(), args);
-    this._emitOtel('info', args);
+  info(payload: {
+    message: string;
+    metadata?: Record<string, any>;
+    error?: any;
+  }): void;
+  info(message: string, metadata: Record<string, any>, error?: any): void;
+  info(message: any, ...args: any[]): void;
+  info(...args: any[]) {
+    this._log('info', ...args);
   }
-  debug(...args: any) {
-    // eslint-disable-next-line prefer-spread
-    getLogger().debug.apply(getLogger(), args);
-    this._emitOtel('debug', args);
+
+  debug(payload: {
+    message: string;
+    metadata?: Record<string, any>;
+    error?: any;
+  }): void;
+  debug(message: string, metadata: Record<string, any>, error?: any): void;
+  debug(message: any, ...args: any[]): void;
+  debug(...args: any[]) {
+    this._log('debug', ...args);
   }
-  error(...args: any) {
-    // eslint-disable-next-line prefer-spread
-    getLogger().error.apply(getLogger(), args);
-    this._emitOtel('error', args);
+
+  error(payload: {
+    message: string;
+    metadata?: Record<string, any>;
+    error?: any;
+  }): void;
+  error(message: string, metadata: Record<string, any>, error?: any): void;
+  error(message: any, ...args: any[]): void;
+  error(...args: any[]) {
+    this._log('error', ...args);
   }
-  warn(...args: any) {
-    // eslint-disable-next-line prefer-spread
-    getLogger().warn.apply(getLogger(), args);
-    this._emitOtel('warn', args);
+
+  warn(payload: {
+    message: string;
+    metadata?: Record<string, any>;
+    error?: any;
+  }): void;
+  warn(message: string, metadata: Record<string, any>, error?: any): void;
+  warn(message: any, ...args: any[]): void;
+  warn(...args: any[]) {
+    this._log('warn', ...args);
   }
 
   setLogLevel(level: 'error' | 'warn' | 'info' | 'debug') {
@@ -158,31 +223,23 @@ class Logger {
   }
 
   logStructuredInfo(msg: string, metadata: any, err?: any) {
-    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
-    getLogger().info(msg, mergedMetadata);
-    this._emitOtel('info', [], msg, mergedMetadata);
+    this.info(msg, metadata, err);
   }
 
   logStructured(msg: string, metadata: any, err?: any) {
-    this.logStructuredInfo(msg, metadata, err);
+    this.info(msg, metadata, err);
   }
 
   logStructuredError(msg: string, metadata: any, err?: any) {
-    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
-    getLogger().error(msg, mergedMetadata);
-    this._emitOtel('error', [], msg, mergedMetadata);
+    this.error(msg, metadata, err);
   }
 
   logStructuredWarn(msg: string, metadata: any, err?: any) {
-    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
-    getLogger().warn(msg, mergedMetadata);
-    this._emitOtel('warn', [], msg, mergedMetadata);
+    this.warn(msg, metadata, err);
   }
 
   logStructuredDebug(msg: string, metadata: any, err?: any) {
-    const mergedMetadata = this._mergeErrorMetadata(metadata, err);
-    getLogger().debug(msg, mergedMetadata);
-    this._emitOtel('debug', [], msg, mergedMetadata);
+    this.debug(msg, metadata, err);
   }
 }
 
