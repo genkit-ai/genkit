@@ -259,6 +259,19 @@ describe('jsonSchemaToPicoschema', () => {
     const arraySchema = { type: 'array', items: { type: 'string' } };
     expect(jsonSchemaToPicoschema(arraySchema)).toBe(arraySchema);
   });
+
+  it('does not crash on a null or malformed property', () => {
+    const schema = {
+      type: 'object',
+      properties: { id: { type: 'string' }, broken: null, items: {} },
+      required: ['id'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      id: 'string',
+      'broken?': 'any',
+      'items?': 'any',
+    });
+  });
 });
 
 describe('toFrontmatterOutput', () => {

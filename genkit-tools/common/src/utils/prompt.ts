@@ -21,8 +21,8 @@ import type { PromptFrontmatter } from '../types/prompt';
 /** A JSON Schema-ish object. */
 type JsonSchema = Record<string, any>;
 
-function scalarType(schema: JsonSchema): string {
-  switch (schema.type) {
+function scalarType(schema: JsonSchema | null | undefined): string {
+  switch (schema?.type) {
     case 'string':
     case 'integer':
     case 'number':
