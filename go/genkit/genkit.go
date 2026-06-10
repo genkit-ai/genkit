@@ -509,9 +509,10 @@ func DefineAgent[State any](
 //
 // # Options
 //
-//   - [aix.WithSessionStore]: Enable snapshot persistence with a [aix.SessionStore]
+//   - [aix.WithSessionStore]: Enable snapshot persistence
 //   - [aix.WithSnapshotCallback]: Control when snapshots are created
 //   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
+//   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
 // Type parameters:
 //   - Stream: Type for custom status updates sent via [aix.Responder.SendStatus]

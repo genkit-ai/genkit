@@ -23,6 +23,7 @@ package localstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -65,8 +66,37 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 	return copySnapshot(snap)
 }
 
+// GetLatestSnapshot returns the session's most recently updated snapshot
+// that is not a failed/aborted dead end, per the
+// [exp.SnapshotReader.GetLatestSnapshot] contract. Ties on UpdatedAt are
+// broken by SnapshotID so resolution is deterministic. The scan runs
+// under the read lock, so the stored rows (which other calls mutate in
+// place) never escape it; the winner is returned as a deep copy.
+func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
+	if sessionID == "" {
+		return nil, errors.New("InMemorySessionStore: session ID is empty")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var latest *exp.SessionSnapshot[State]
+	for _, snap := range s.snapshots {
+		if snap.SessionID != sessionID ||
+			snap.Status == exp.SnapshotStatusFailed || snap.Status == exp.SnapshotStatusAborted {
+			continue
+		}
+		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) ||
+			(snap.UpdatedAt.Equal(latest.UpdatedAt) && snap.SnapshotID > latest.SnapshotID) {
+			latest = snap
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	return copySnapshot(latest)
+}
+
 // LatestSnapshot returns the snapshot with the most recent
-// [SessionSnapshot.UpdatedAt] in the store, or nil if there are none.
+// [exp.SessionSnapshot.UpdatedAt] in the store, or nil if there are none.
 //
 // This is not part of the [exp.SessionStore] interface; it is an
 // InMemorySessionStore-specific convenience that mirrors
@@ -142,6 +172,9 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	now := time.Now()
 	if existing != nil {
 		next.CreatedAt = existing.CreatedAt
+		if existing.SessionID != "" {
+			next.SessionID = existing.SessionID // a row's session never changes
+		}
 	} else {
 		next.CreatedAt = now
 	}

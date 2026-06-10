@@ -63,8 +63,9 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  * Zod schema for a snapshot's lifecycle status.
  *
  * - `pending`: a detached invocation is still processing the queued inputs.
- *   The snapshot's state is empty until the flow exits, at which point it
- *   is rewritten with the cumulative final state and a terminal status.
+ *   The snapshot's state is empty until the background work finishes, at
+ *   which point it is rewritten with the cumulative final state and a
+ *   terminal status.
  * - `succeeded`: the snapshot captures a settled state.
  * - `aborted`: the snapshot's invocation was aborted via the
  *   `abortSnapshot` companion action while detached.
@@ -119,6 +120,15 @@ export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
  * Zod schema for session state.
  */
 export const SessionStateSchema = z.object({
+  /**
+   * ID of the session (conversation) this state belongs to.
+   * Framework-owned: assigned when the conversation's first invocation
+   * starts and re-stamped on outbound state, so client-managed callers
+   * can round-trip the state object opaquely without tracking a separate
+   * identifier. For server-managed agents the snapshot row's `sessionId`
+   * is canonical and this field mirrors it.
+   */
+  sessionId: z.string().optional(),
   /** Conversation history (user/model exchanges). */
   messages: z.array(MessageSchema).optional(),
   /** User-defined state associated with this conversation. */
@@ -158,9 +168,35 @@ export type AgentInput = z.infer<typeof AgentInputSchema>;
  * Zod schema for agent initialization.
  */
 export const AgentInitSchema = z.object({
-  /** Loads state from a persisted snapshot. Mutually exclusive with state. */
+  /**
+   * Identifies the session (conversation) to resume. Only valid when the
+   * agent is server-managed (a session store is configured); mutually
+   * exclusive with state (a client-managed conversation carries its
+   * identity inside `state.sessionId`). Alone it resumes the session
+   * from its latest snapshot: the most recently updated one that is not
+   * a failed/aborted dead end. A pending latest snapshot (a detached
+   * invocation still running) rejects the resume rather than racing the
+   * background work; if the session's history was forked by re-resuming
+   * an earlier snapshot, the most recently updated branch wins, and
+   * snapshotId can pick a branch explicitly. Combined with snapshotId,
+   * it asserts which session the snapshot belongs to, and a mismatch is
+   * rejected.
+   */
+  sessionId: z.string().optional(),
+  /**
+   * Loads state from a persisted snapshot (server-managed state only).
+   * May be combined with sessionId to validate that the snapshot belongs
+   * to that session. Mutually exclusive with state.
+   */
   snapshotId: z.string().optional(),
-  /** Direct state for the invocation. Mutually exclusive with snapshotId. */
+  /**
+   * Direct state for the invocation (client-managed state only). The
+   * conversation's identity rides inside it (`state.sessionId`): the
+   * framework mints one on the conversation's first invocation and
+   * echoes it on the output state, so resending the state object keeps
+   * the identity without tracking a separate field. Mutually exclusive
+   * with sessionId and snapshotId.
+   */
   state: SessionStateSchema.optional(),
 });
 export type AgentInit = z.infer<typeof AgentInitSchema>;
@@ -200,10 +236,24 @@ export type AgentError = z.infer<typeof AgentErrorSchema>;
  */
 export const AgentOutputSchema = z.object({
   /**
-   * ID of the snapshot created at the end of this invocation. When
-   * `finishReason` is `failed` (and a store is configured), this is the
-   * most recent snapshot capturing the last-good state: everything
-   * through the last successful turn (see the `recovery` snapshot event).
+   * ID of the session this invocation belongs to, assigned by the
+   * framework when the invocation starts. With server-managed state, a
+   * fresh invocation mints a new ID, resumed invocations inherit the
+   * chain's, and resuming a snapshot from before session IDs existed
+   * mints a fresh one. With client-managed state it echoes the ID
+   * carried inside the state object (`state.sessionId`), minting one on
+   * the conversation's first invocation; only a session with persisted
+   * snapshots can be resumed by this ID.
+   */
+  sessionId: z.string().optional(),
+  /**
+   * ID of the newest snapshot capturing this invocation: the
+   * invocation-end snapshot, or the latest earlier snapshot when that
+   * write was skipped. Empty when no store is configured or the
+   * invocation persisted nothing. When `finishReason` is `detached` it
+   * is the pending detach snapshot; when `failed`, the most recent
+   * snapshot capturing the last-good state: everything through the last
+   * successful turn (see the `recovery` snapshot event).
    */
   snapshotId: z.string().optional(),
   /**
@@ -245,8 +295,9 @@ export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 export const TurnEndSchema = z.object({
   /**
    * ID of the snapshot persisted at the end of this turn. Empty if no
-   * snapshot was created (callback returned false, no store configured, or
-   * snapshots were suspended after detach).
+   * snapshot was written (no store configured, the callback declined,
+   * nothing changed since the last snapshot, or snapshots were suspended
+   * after detach).
    */
   snapshotId: z.string().optional(),
   /**
@@ -289,7 +340,20 @@ export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
 export const SessionSnapshotSchema = z.object({
   /** Unique identifier for this snapshot (UUID). */
   snapshotId: z.string(),
-  /** ID of the previous snapshot in this timeline. */
+  /**
+   * ID of the session this snapshot belongs to. Assigned by the agent
+   * framework when the conversation's first invocation starts and
+   * stamped on every later snapshot in the chain, including across
+   * resumed invocations. Stores preserve it across rewrites; rows
+   * written without one (data from before session IDs existed) belong
+   * to no session.
+   */
+  sessionId: z.string().optional(),
+  /**
+   * ID of the previous snapshot in this timeline. Informational lineage
+   * (for debugging and UI history trees); plays no part in resolving a
+   * session's latest snapshot.
+   */
   parentId: z.string().optional(),
   /** When the snapshot was first written (RFC 3339). */
   createdAt: z.string(),
@@ -319,45 +383,16 @@ export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 
 /**
  * Zod schema for the input of an agent's `getSnapshot` companion action.
- * The action is registered at `{agentName}/getSnapshot` when the agent
- * is defined.
+ * The action is registered under the agent's name (action type
+ * `agent-snapshot`) when the agent has a session store configured. The
+ * action returns the stored `SessionSnapshot`, with any configured state
+ * transform applied to its state.
  */
 export const GetSnapshotRequestSchema = z.object({
   /** Identifies the snapshot to fetch. */
   snapshotId: z.string(),
 });
 export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
-
-/**
- * Zod schema for the output of the `getSnapshot` companion action. It is a
- * client-facing view of the stored snapshot: identifying metadata plus the
- * session state, with `WithStateTransform` applied if configured.
- */
-export const GetSnapshotResponseSchema = z.object({
-  /** Echoes the requested snapshot ID. */
-  snapshotId: z.string(),
-  /** When the snapshot record was first written (RFC 3339). */
-  createdAt: z.string().optional(),
-  /** When the snapshot record was last written (RFC 3339). */
-  updatedAt: z.string().optional(),
-  /** Lifecycle state of the snapshot. */
-  status: SnapshotStatusSchema.optional(),
-  /**
-   * Semantic reason the captured turn or invocation ended (e.g. `stop`,
-   * `interrupted`, `failed`, `aborted`). Lets a remote or background poller
-   * report how a detached/resumed invocation ended without re-deriving it.
-   * Empty on a pending snapshot.
-   */
-  finishReason: AgentFinishReasonSchema.optional(),
-  /** Structured failure information; populated when status is `error`. */
-  error: z.any().optional(),
-  /**
-   * Session state captured by the snapshot, after any configured transform.
-   * Empty when status is `pending` or `error`.
-   */
-  state: SessionStateSchema.optional(),
-});
-export type GetSnapshotResponse = z.infer<typeof GetSnapshotResponseSchema>;
 
 /**
  * Zod schema for the input of the `abortSnapshot` companion action.
@@ -376,7 +411,7 @@ export const AbortSnapshotResponseSchema = z.object({
   snapshotId: z.string(),
   /**
    * Snapshot's status after the abort attempt. For a pending snapshot
-   * this is `canceled`. For an already-terminal snapshot this is the
+   * this is `aborted`. For an already-terminal snapshot this is the
    * existing terminal status (the abort is a no-op).
    */
   status: SnapshotStatusSchema.optional(),

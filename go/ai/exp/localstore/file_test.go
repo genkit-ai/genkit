@@ -513,3 +513,46 @@ func TestFileSessionStore_FinishReasonPersistsAcrossReopen(t *testing.T) {
 		t.Errorf("FinishReason = %q, want %q", got.FinishReason, exp.AgentFinishReasonInterrupted)
 	}
 }
+
+func TestFileSessionStore_SessionIDs(t *testing.T) {
+	runSessionIDStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		store, err := NewFileSessionStore[testState](t.TempDir())
+		if err != nil {
+			t.Fatalf("NewFileSessionStore: %v", err)
+		}
+		return store
+	})
+}
+
+func TestFileSessionStore_GetLatestSnapshot_SkipsUnparseableFiles(t *testing.T) {
+	// A stray unparseable .json file (crash artifact, partial copy,
+	// hand-edited row) must not poison session resolution for the healthy
+	// rows in the directory; it is skipped like the dead end it is.
+	dir := t.TempDir()
+	store, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := store.SaveSnapshot(ctx, "a",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{
+				SessionID: "sess-1",
+				Event:     exp.SnapshotEventTurnEnd,
+				Status:    exp.SnapshotStatusSucceeded,
+			}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "junk.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	tip, err := store.GetLatestSnapshot(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if tip == nil || tip.SnapshotID != "a" {
+		t.Errorf("expected the healthy row as tip, got %+v", tip)
+	}
+}

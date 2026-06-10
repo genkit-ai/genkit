@@ -119,6 +119,9 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	now := time.Now()
 	if existing != nil {
 		next.CreatedAt = existing.CreatedAt
+		if existing.SessionID != "" {
+			next.SessionID = existing.SessionID // a row's session never changes
+		}
 	} else {
 		next.CreatedAt = now
 	}
@@ -136,31 +139,69 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	return next, nil
 }
 
-// LatestSnapshot returns the snapshot whose backing file has the most
-// recent on-disk modification time, or nil if the directory has no
-// snapshots yet.
+// snapshotHeader is the subset of snapshot fields needed to decide
+// whether a row resolves a session resume. Decoding only these avoids
+// materializing every row's full conversation state during the scan.
+type snapshotHeader struct {
+	SessionID string             `json:"sessionId"`
+	Status    exp.SnapshotStatus `json:"status"`
+}
+
+// GetLatestSnapshot returns the session's most recently updated snapshot
+// that is not a failed/aborted dead end, per the
+// [exp.SnapshotReader.GetLatestSnapshot] contract.
 //
-// Selecting by file mtime (rather than parsing every file to compare
-// [SessionSnapshot.UpdatedAt]) makes the operation O(N) stats plus a
-// single read of the winner in the common case, rather than O(N)
-// reads + JSON parses. For snapshots written by this package mtime
-// and UpdatedAt advance together (each save creates a fresh temp
-// file and renames it into place), so the result is identical to a
-// sort by UpdatedAt. If a snapshot file is touched externally, mtime
-// wins.
-//
-// Files that fail to stat (e.g. removed between the directory read
-// and the stat) or fail to parse are skipped silently and the scan
-// falls back to the next-newest candidate, so a single corrupted
-// file does not poison the result. The directory listing is not
-// atomic with respect to concurrent writes — a snapshot that appears
-// or disappears mid-scan may or may not be observed.
-//
-// This is not part of the [exp.SessionStore] interface; it is a
-// FileSessionStore-specific convenience for UIs and CLIs that need to
-// surface "where did I leave off" without indexing the directory
-// themselves.
-func (s *FileSessionStore[State]) LatestSnapshot(ctx context.Context) (*exp.SessionSnapshot[State], error) {
+// Recency is judged by file mtime, which for snapshots written by this
+// package advances with [exp.SessionSnapshot.UpdatedAt] (each save
+// creates a fresh temp file and renames it into place); if a file is
+// touched externally, mtime wins. The scan walks files newest first and
+// stops at the first row that matches, so resolving the most recently
+// active session costs one read in the common case. Only header fields
+// are decoded per candidate (the winner is the only full parse), the
+// store lock is held per file rather than across the whole scan, and a
+// file that vanishes mid-scan or fails to parse is skipped so one
+// corrupted row cannot poison every session in the directory.
+func (s *FileSessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
+	if sessionID == "" {
+		return nil, errors.New("FileSessionStore: session ID is empty")
+	}
+	names, err := s.snapshotFilesNewestFirst()
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		s.mu.Lock()
+		data, err := os.ReadFile(filepath.Join(s.dir, name))
+		s.mu.Unlock()
+		if err != nil {
+			continue
+		}
+		var h snapshotHeader
+		if err := json.Unmarshal(data, &h); err != nil {
+			continue
+		}
+		if h.SessionID != sessionID ||
+			h.Status == exp.SnapshotStatusFailed || h.Status == exp.SnapshotStatusAborted {
+			continue
+		}
+		var snap exp.SessionSnapshot[State]
+		if err := json.Unmarshal(data, &snap); err != nil {
+			continue
+		}
+		return &snap, nil
+	}
+	return nil, nil
+}
+
+// snapshotFilesNewestFirst returns the names of the directory's snapshot
+// files (non-directory *.json entries; writeLocked's "<id>.*.tmp" temp
+// files never match) sorted by modification time, newest first, with
+// name as a deterministic tie-break. Entries that vanish between the
+// directory read and the stat are skipped. Returns nil if the directory
+// does not exist. The listing is not atomic with respect to concurrent
+// writes; a snapshot that appears or disappears mid-scan may or may not
+// be observed.
+func (s *FileSessionStore[State]) snapshotFilesNewestFirst() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -168,7 +209,6 @@ func (s *FileSessionStore[State]) LatestSnapshot(ctx context.Context) (*exp.Sess
 		}
 		return nil, fmt.Errorf("FileSessionStore: list dir: %w", err)
 	}
-
 	type candidate struct {
 		name    string
 		modTime time.Time
@@ -180,18 +220,41 @@ func (s *FileSessionStore[State]) LatestSnapshot(ctx context.Context) (*exp.Sess
 		}
 		info, err := e.Info()
 		if err != nil {
-			// Entry vanished between ReadDir and Info; ignore and keep
-			// scanning. Any caller-visible inconsistency is bounded to
-			// "a snapshot disappeared mid-scan" which the doc allows.
 			continue
 		}
 		cands = append(cands, candidate{e.Name(), info.ModTime()})
 	}
 	slices.SortFunc(cands, func(a, b candidate) int {
-		return b.modTime.Compare(a.modTime) // newest first
+		if c := b.modTime.Compare(a.modTime); c != 0 { // newest first
+			return c
+		}
+		return strings.Compare(b.name, a.name)
 	})
-	for _, c := range cands {
-		snap, err := s.GetSnapshot(ctx, strings.TrimSuffix(c.name, ".json"))
+	names := make([]string, len(cands))
+	for i, c := range cands {
+		names[i] = c.name
+	}
+	return names, nil
+}
+
+// LatestSnapshot returns the snapshot whose backing file has the most
+// recent on-disk modification time, or nil if the directory has no
+// snapshots yet. It is not part of the [exp.SessionStore] interface; it
+// is a convenience for UIs and CLIs that need to surface "where did I
+// leave off" without indexing the directory themselves.
+//
+// Selecting by mtime avoids parsing every file: for snapshots written by
+// this package, mtime and [exp.SessionSnapshot.UpdatedAt] advance
+// together, so the result matches a sort by UpdatedAt; if a file is
+// touched externally, mtime wins. Files that fail to stat or parse are
+// skipped and the scan falls back to the next-newest candidate.
+func (s *FileSessionStore[State]) LatestSnapshot(ctx context.Context) (*exp.SessionSnapshot[State], error) {
+	names, err := s.snapshotFilesNewestFirst()
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		snap, err := s.GetSnapshot(ctx, strings.TrimSuffix(name, ".json"))
 		if err != nil || snap == nil {
 			continue
 		}

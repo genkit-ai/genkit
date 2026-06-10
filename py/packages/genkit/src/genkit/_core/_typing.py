@@ -146,6 +146,7 @@ class AgentInit(GenkitModel):
     """Model for agentinit data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    session_id: str | None = None
     snapshot_id: str | None = None
     state: SessionState | None = None
 
@@ -171,6 +172,7 @@ class AgentOutput(GenkitModel):
     """Model for agentoutput data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    session_id: str | None = None
     snapshot_id: str | None = None
     state: SessionState | None = None
     message: MessageData | None = None
@@ -214,24 +216,12 @@ class GetSnapshotRequest(GenkitModel):
     snapshot_id: str = Field(...)
 
 
-class GetSnapshotResponse(GenkitModel):
-    """Model for getsnapshotresponse data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    snapshot_id: str = Field(...)
-    created_at: str | None = None
-    updated_at: str | None = None
-    status: SnapshotStatus | None = None
-    finish_reason: AgentFinishReason | None = None
-    error: Any | None = Field(default=None)
-    state: SessionState | None = None
-
-
 class SessionSnapshot(GenkitModel):
     """Model for sessionsnapshot data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     snapshot_id: str = Field(...)
+    session_id: str | None = None
     parent_id: str | None = None
     created_at: str = Field(...)
     updated_at: str | None = None
@@ -246,6 +236,7 @@ class SessionState(GenkitModel):
     """Model for sessionstate data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    session_id: str | None = None
     messages: list[MessageData] | None = None
     custom: Any | None = Field(default=None)
     artifacts: list[Artifact] | None = None

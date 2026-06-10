@@ -751,7 +751,8 @@ type extraField struct {
 //	type EXPR
 //	    use EXPR for the type expression (for fields only)
 //	doc
-//	    doc is following lines until the line "."
+//	    doc is following lines until the line "."; leading whitespace
+//	    is preserved so godoc lists survive generation
 //	pkg
 //	    package path, relative to outdir (last component is package name)
 //	import
@@ -790,7 +791,10 @@ func parseConfigFile(filename string) (config, error) {
 			if line == "." {
 				docItem = nil
 			} else {
-				docItem.docLines = append(docItem.docLines, line)
+				// Keep leading whitespace: doc blocks may contain godoc
+				// lists, whose items and continuation lines must stay
+				// indented to render as lists.
+				docItem.docLines = append(docItem.docLines, strings.TrimRight(string(ln), " \t"))
 			}
 			continue
 		}

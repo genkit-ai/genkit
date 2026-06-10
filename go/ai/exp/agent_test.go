@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1018,9 +1019,11 @@ func TestAgent_CustomAgentContinuesAfterFailedTurn(t *testing.T) {
 	}
 }
 
-func TestAgent_InitFailure_ResolvesFailedOutputWithStatus(t *testing.T) {
-	// Pre-turn precondition/validation failures resolve as failed outputs
-	// carrying the original error status, rather than failing the action.
+func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
+	// Pre-turn precondition/validation failures fail the action outright
+	// (no failed-AgentOutput conversion, no snapshot): the invocation never
+	// reached the input phase, so there is no conversation state to hand
+	// back. The error keeps its original status.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -1067,23 +1070,18 @@ func TestAgent_InitFailure_ResolvesFailedOutputWithStatus(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := tc.run()
-			if err != nil {
-				t.Fatalf("expected graceful failed output, got error: %v", err)
+			if err == nil {
+				t.Fatalf("expected error, got output: %+v", out)
 			}
-			if out.FinishReason != AgentFinishReasonFailed {
-				t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+			if out != nil {
+				t.Errorf("expected nil output on init failure, got %+v", out)
 			}
-			if out.Error == nil {
-				t.Fatal("expected error on output")
+			ge := core.AsGenkitError(err)
+			if ge.Status != tc.wantStatus {
+				t.Errorf("expected status %q, got %q (err: %v)", tc.wantStatus, ge.Status, err)
 			}
-			if out.Error.Status != tc.wantStatus {
-				t.Errorf("expected status %q, got %q", tc.wantStatus, out.Error.Status)
-			}
-			if !strings.Contains(out.Error.Message, tc.wantMsg) {
-				t.Errorf("expected error message to contain %q, got %q", tc.wantMsg, out.Error.Message)
-			}
-			if out.SnapshotID != "" || out.State != nil {
-				t.Errorf("init failures carry no state, got snapshotId=%q state=%+v", out.SnapshotID, out.State)
+			if !strings.Contains(ge.Message, tc.wantMsg) {
+				t.Errorf("expected error message to contain %q, got %q", tc.wantMsg, ge.Message)
 			}
 		})
 	}
@@ -2785,17 +2783,14 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 		t.Errorf("expected snapshot.Error.Message to contain %q, got %+v", "kaboom", snap.Error)
 	}
 
-	// Resuming from an errored detached snapshot is rejected; the
-	// rejection resolves as a failed output carrying the original error.
+	// Resuming from an errored detached snapshot is rejected before the
+	// invocation starts, so the action fails with the original error.
 	resumeOut, err := af.RunText(context.Background(), "retry", WithSnapshotID[testState](out.SnapshotID))
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
+	if err == nil {
+		t.Fatalf("expected error resuming errored snapshot, got output: %+v", resumeOut)
 	}
-	if resumeOut.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, resumeOut.FinishReason)
-	}
-	if resumeOut.Error == nil || !strings.Contains(resumeOut.Error.Message, "kaboom") {
-		t.Errorf("unexpected resume error: %+v", resumeOut.Error)
+	if !strings.Contains(err.Error(), "kaboom") {
+		t.Errorf("expected resume error to surface the original failure, got: %v", err)
 	}
 }
 
@@ -3010,20 +3005,15 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 	)
 
 	out, err := af.RunText(context.Background(), "hi", WithSnapshotID[testState](erroredID))
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
+	if err == nil {
+		t.Fatalf("expected error when resuming from errored snapshot, got output: %+v", out)
 	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
+	ge := core.AsGenkitError(err)
+	if ge.Status != core.FAILED_PRECONDITION {
+		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, ge.Status)
 	}
-	if out.Error == nil {
-		t.Fatal("expected output error when resuming from errored snapshot")
-	}
-	if out.Error.Status != core.FAILED_PRECONDITION {
-		t.Errorf("expected status %q, got %q", core.FAILED_PRECONDITION, out.Error.Status)
-	}
-	if !strings.Contains(out.Error.Message, "underlying failure") {
-		t.Errorf("expected error to surface underlying failure, got: %v", out.Error)
+	if !strings.Contains(ge.Message, "underlying failure") {
+		t.Errorf("expected error to surface underlying failure, got: %v", err)
 	}
 }
 
@@ -3031,7 +3021,9 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	// Transform that scrubs a specific word from all messages.
+	// Transform that scrubs a specific word from all messages. It also
+	// (incorrectly) drops the framework-owned session ID, which the
+	// action must re-stamp on the way out.
 	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
 		for _, msg := range s.Messages {
 			for _, p := range msg.Content {
@@ -3040,6 +3032,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 				}
 			}
 		}
+		s.SessionID = ""
 		return s
 	}
 
@@ -3062,7 +3055,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 
 	// Transform is action-layer behavior: invoke the registered action
 	// directly the way a non-Go client would.
-	action := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
 		reg, api.ActionTypeAgentSnapshot, "transformedFlow")
 	if action == nil {
 		t.Fatal("getSnapshot action not registered")
@@ -3087,6 +3080,11 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 				t.Errorf("message %d still contains 'secret': %q", i, p.Text)
 			}
 		}
+	}
+	// The transform dropped the state-carried session ID; the action
+	// re-stamps it from the row so outbound state stays self-describing.
+	if resp.State.SessionID != resp.SessionID {
+		t.Errorf("state-carried session ID = %q, want re-stamped %q", resp.State.SessionID, resp.SessionID)
 	}
 
 	// The stored snapshot must remain untransformed so the flow can be
@@ -3132,7 +3130,7 @@ func TestAgent_GetSnapshotAction_ReturnsFinishReason(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 
-	action := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
 		reg, api.ActionTypeAgentSnapshot, "finishReasonActionFlow")
 	if action == nil {
 		t.Fatal("getSnapshot action not registered")
@@ -3142,7 +3140,7 @@ func TestAgent_GetSnapshotAction_ReturnsFinishReason(t *testing.T) {
 		t.Fatalf("getSnapshot action: %v", err)
 	}
 	if resp.FinishReason != AgentFinishReasonStop {
-		t.Errorf("GetSnapshotResponse.FinishReason = %q, want %q", resp.FinishReason, AgentFinishReasonStop)
+		t.Errorf("getSnapshot FinishReason = %q, want %q", resp.FinishReason, AgentFinishReasonStop)
 	}
 }
 
@@ -3169,7 +3167,7 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 		},
 	)
 
-	getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+	getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
 		reg, api.ActionTypeAgentSnapshot, "noStoreFlow")
 	if getAction != nil {
 		t.Error("getSnapshot action should NOT be registered without a store")
@@ -3183,14 +3181,30 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 
 func TestLoadSession_AgentInitValidation(t *testing.T) {
 	// loadSession enforces the AgentInit invariants:
-	//   - snapshotId and state are mutually exclusive,
-	//   - snapshotId requires a store (server-managed state),
-	//   - state requires the absence of a store (client-managed state).
+	//   - state is mutually exclusive with sessionId and snapshotId (a
+	//     client-managed conversation's identity rides inside the state),
+	//   - sessionId and snapshotId require a store (server-managed state),
+	//   - state requires the absence of a store (client-managed state),
+	//   - sessionId composes with snapshotId as an integrity assertion on
+	//     the loaded snapshot.
 	ctx := context.Background()
 	store := newTestInMemStore[testState]()
 	state := &SessionState[testState]{Custom: testState{Counter: 1}}
 
-	cases := []struct {
+	// A persisted snapshot belonging to session "sess-1", for the
+	// sessionId+snapshotId match and mismatch cases.
+	saved, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{
+			SessionID: "sess-1",
+			Event:     SnapshotEventInvocationEnd,
+			State:     state,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	errCases := []struct {
 		name    string
 		init    *AgentInit[testState]
 		store   SessionStore[testState]
@@ -3198,7 +3212,7 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 	}{
 		{
 			name:    "both snapshotId and state set",
-			init:    &AgentInit[testState]{SnapshotID: "snap-1", State: state},
+			init:    &AgentInit[testState]{SnapshotID: saved.SnapshotID, State: state},
 			store:   store,
 			wantErr: "mutually exclusive",
 		},
@@ -3206,6 +3220,18 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 			name:    "both set, no store",
 			init:    &AgentInit[testState]{SnapshotID: "snap-1", State: state},
 			store:   nil,
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "sessionId and state set",
+			init:    &AgentInit[testState]{SessionID: "sess-1", State: state},
+			store:   nil,
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "all three set",
+			init:    &AgentInit[testState]{SessionID: "sess-1", SnapshotID: saved.SnapshotID, State: state},
+			store:   store,
 			wantErr: "mutually exclusive",
 		},
 		{
@@ -3220,9 +3246,27 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 			store:   nil,
 			wantErr: "client-managed state",
 		},
+		{
+			name:    "sessionId with client-managed agent",
+			init:    &AgentInit[testState]{SessionID: "sess-1"},
+			store:   nil,
+			wantErr: "client-managed state",
+		},
+		{
+			name:    "sessionId with no matching snapshots",
+			init:    &AgentInit[testState]{SessionID: "sess-unknown"},
+			store:   store,
+			wantErr: "no resumable snapshot",
+		},
+		{
+			name:    "sessionId mismatching the loaded snapshot",
+			init:    &AgentInit[testState]{SessionID: "sess-other", SnapshotID: saved.SnapshotID},
+			store:   store,
+			wantErr: "does not belong to session",
+		},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range errCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := loadSession(ctx, tc.init, tc.store)
 			if err == nil {
@@ -3234,31 +3278,76 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 		})
 	}
 
-	t.Run("empty init with server store is allowed", func(t *testing.T) {
-		sess, snap, err := loadSession(ctx, &AgentInit[testState]{}, store)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if sess == nil {
-			t.Fatal("expected session, got nil")
-		}
-		if snap != nil {
-			t.Errorf("expected no snapshot, got %+v", snap)
-		}
-	})
+	okCases := []struct {
+		name     string
+		init     *AgentInit[testState]
+		store    SessionStore[testState]
+		wantSnap bool
+	}{
+		{
+			name:  "empty init with server store",
+			init:  &AgentInit[testState]{},
+			store: store,
+		},
+		{
+			name: "empty init with no store",
+			init: &AgentInit[testState]{},
+		},
+		{
+			name: "state carrying its session ID with client-managed agent",
+			init: &AgentInit[testState]{State: &SessionState[testState]{SessionID: "client-sess", Custom: testState{Counter: 1}}},
+		},
+		{
+			name:     "sessionId matching the loaded snapshot",
+			init:     &AgentInit[testState]{SessionID: "sess-1", SnapshotID: saved.SnapshotID},
+			store:    store,
+			wantSnap: true,
+		},
+	}
 
-	t.Run("empty init with no store is allowed", func(t *testing.T) {
-		sess, snap, err := loadSession(ctx, &AgentInit[testState]{}, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	for _, tc := range okCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, snap, err := loadSession(ctx, tc.init, tc.store)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if sess == nil {
+				t.Fatal("expected session, got nil")
+			}
+			if tc.wantSnap != (snap != nil) {
+				t.Errorf("snapshot presence = %v, want %v (snap: %+v)", snap != nil, tc.wantSnap, snap)
+			}
+			if tc.init.State != nil && sess.State().Custom.Counter != tc.init.State.Custom.Counter {
+				t.Errorf("state not loaded: got %+v", sess.State())
+			}
+		})
+	}
+
+	t.Run("latest-snapshot lookup validates the store's answer", func(t *testing.T) {
+		// A non-conforming store that resolves a session to a snapshot from
+		// a different session must be caught rather than silently resuming
+		// the wrong conversation.
+		_, _, err := loadSession(ctx, &AgentInit[testState]{SessionID: "sess-lied-about"},
+			wrongSessionStore[testState]{SessionStore: store, snapshotID: saved.SnapshotID})
+		if err == nil {
+			t.Fatal("expected error, got nil")
 		}
-		if sess == nil {
-			t.Fatal("expected session, got nil")
-		}
-		if snap != nil {
-			t.Errorf("expected no snapshot, got %+v", snap)
+		if !strings.Contains(err.Error(), "violates the GetLatestSnapshot contract") {
+			t.Errorf("error %q does not mention the contract violation", err.Error())
 		}
 	})
+}
+
+// wrongSessionStore wraps a SessionStore but resolves every
+// GetLatestSnapshot call to a fixed snapshot, regardless of the requested
+// session: a deliberately non-conforming implementation.
+type wrongSessionStore[State any] struct {
+	SessionStore[State]
+	snapshotID string
+}
+
+func (s wrongSessionStore[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
+	return s.SessionStore.GetSnapshot(ctx, s.snapshotID)
 }
 
 // minimalStore is a SessionStore that does NOT implement SnapshotAborter.
@@ -3267,6 +3356,9 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 type minimalStore[State any] struct{}
 
 func (minimalStore[State]) GetSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
+	return nil, nil
+}
+func (minimalStore[State]) GetLatestSnapshot(context.Context, string) (*SessionSnapshot[State], error) {
 	return nil, nil
 }
 func (minimalStore[State]) SaveSnapshot(
@@ -3361,7 +3453,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 			},
 			WithSessionStore(store),
 		)
-		getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
 			reg, api.ActionTypeAgentSnapshot, "fullCaps")
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered")
@@ -3381,7 +3473,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 			},
 			WithSessionStore[testState](minimalStore[testState]{}),
 		)
-		getAction := core.ResolveActionFor[*GetSnapshotRequest, *GetSnapshotResponse[testState], struct{}, struct{}](
+		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
 			reg, api.ActionTypeAgentSnapshot, "minCaps")
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered even when store lacks SnapshotAborter")
@@ -4543,5 +4635,838 @@ func TestAgent_Detach_SucceededHonorsResultOverride(t *testing.T) {
 	})
 	if snap.FinishReason != AgentFinishReasonOther {
 		t.Errorf("finalized snapshot.FinishReason = %q, want %q (AgentResult override)", snap.FinishReason, AgentFinishReasonOther)
+	}
+}
+
+// --- Session ID tests ---
+
+func TestAgent_SessionID_AssignedAndStable(t *testing.T) {
+	// The runtime assigns the session ID when the invocation starts; every
+	// snapshot the invocation persists carries it and the output reports it.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionAssignFlow", WithSessionStore(store))
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	var snapshotIDs []string
+	for _, text := range []string{"turn one", "turn two"} {
+		if err := conn.SendText(text); err != nil {
+			t.Fatalf("SendText: %v", err)
+		}
+		te := nextTurnEnd(t, conn)
+		if te.SnapshotID != "" {
+			snapshotIDs = append(snapshotIDs, te.SnapshotID)
+		}
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected session ID on output")
+	}
+	if len(snapshotIDs) != 2 {
+		t.Fatalf("expected 2 turn-end snapshots, got %d", len(snapshotIDs))
+	}
+
+	for _, id := range append(snapshotIDs, out.SnapshotID) {
+		snap, err := store.GetSnapshot(ctx, id)
+		if err != nil {
+			t.Fatalf("GetSnapshot(%q): %v", id, err)
+		}
+		if snap.SessionID != out.SessionID {
+			t.Errorf("snapshot %q SessionID = %q, want %q", id, snap.SessionID, out.SessionID)
+		}
+		// The persisted state blob is self-describing: it mirrors the
+		// row's session ID.
+		if snap.State == nil || snap.State.SessionID != out.SessionID {
+			t.Errorf("snapshot %q state-carried session ID = %v, want %q", id, snap.State, out.SessionID)
+		}
+	}
+}
+
+func TestAgent_SessionID_AssignedBeforeFirstSnapshot(t *testing.T) {
+	// The session ID exists from invocation start, not from the first
+	// snapshot write: an invocation whose callback declines every write
+	// still reports the session it belongs to and exposes it to the agent
+	// fn, with no snapshot to show for it yet.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	var fnSawSessionID, ctxSawSessionID string
+	af := DefineCustomAgent(reg, "sessionAlwaysAssigned",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			fnSawSessionID = sess.SessionID()
+			// The ID lives on the session itself, so code holding only the
+			// context-carried session (e.g. a tool) can read it too.
+			if s := SessionFromContext[testState](ctx); s != nil {
+				ctxSawSessionID = s.SessionID()
+			}
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+		WithSnapshotCallback(func(context.Context, *SnapshotContext[testState]) bool { return false }),
+	)
+
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("invocation failed: %+v", out.Error)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected session ID assigned at invocation start")
+	}
+	if fnSawSessionID != out.SessionID {
+		t.Errorf("fn saw session ID %q, output reports %q", fnSawSessionID, out.SessionID)
+	}
+	if ctxSawSessionID != out.SessionID {
+		t.Errorf("context-carried session saw ID %q, output reports %q", ctxSawSessionID, out.SessionID)
+	}
+	if out.SnapshotID != "" {
+		t.Errorf("expected no snapshot (callback declined every write), got %q", out.SnapshotID)
+	}
+
+	// A session with no persisted snapshots cannot be resumed by its ID;
+	// the init-level rejection fails the action.
+	out2, err := af.RunText(ctx, "again", WithSessionID[testState](out.SessionID))
+	if err == nil {
+		t.Fatalf("expected NOT_FOUND error for snapshot-less session, got output: %+v", out2)
+	}
+	if ge := core.AsGenkitError(err); ge.Status != core.NOT_FOUND {
+		t.Fatalf("expected NOT_FOUND, got %q (err: %v)", ge.Status, err)
+	}
+}
+
+func TestAgent_SessionID_StableAcrossSnapshotResume(t *testing.T) {
+	// Resuming from a snapshot keeps extending the same session: rows
+	// written by the resumed invocation inherit the chain's session ID.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionStableFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out1.SessionID == "" {
+		t.Fatal("expected session ID from first invocation")
+	}
+
+	out2, err := af.RunText(ctx, "second", WithSnapshotID[testState](out1.SnapshotID))
+	if err != nil {
+		t.Fatalf("RunText resume: %v", err)
+	}
+	if out2.SessionID != out1.SessionID {
+		t.Errorf("resumed invocation SessionID = %q, want %q", out2.SessionID, out1.SessionID)
+	}
+	snap2, err := store.GetSnapshot(ctx, out2.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap2.SessionID != out1.SessionID {
+		t.Errorf("resumed snapshot SessionID = %q, want %q", snap2.SessionID, out1.SessionID)
+	}
+}
+
+func TestAgent_ResumeFromSessionID(t *testing.T) {
+	// WithSessionID resolves the session's latest snapshot and continues
+	// the conversation from it.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionResumeFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	out2, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("RunText session resume: %v", err)
+	}
+	if out2.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("session resume failed: %+v", out2.Error)
+	}
+	if out2.SessionID != out1.SessionID {
+		t.Errorf("SessionID = %q, want %q", out2.SessionID, out1.SessionID)
+	}
+
+	snap2, err := store.GetSnapshot(ctx, out2.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	// Continued the conversation: both invocations' messages and both
+	// counter increments, chained off the first invocation's snapshot.
+	if got := len(snap2.State.Messages); got != 4 {
+		t.Errorf("expected 4 messages after session resume, got %d", got)
+	}
+	if got := snap2.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2 after session resume, got %d", got)
+	}
+	if snap2.ParentID != out1.SnapshotID {
+		t.Errorf("resumed snapshot ParentID = %q, want %q", snap2.ParentID, out1.SnapshotID)
+	}
+}
+
+func TestAgent_ResumeFromSessionID_ForkContinuesLatestBranch(t *testing.T) {
+	// Re-invoking the agent from a non-tip snapshot forks the session.
+	// Session-ID init does not care: the most recently updated branch
+	// wins, so the conversation continues where activity last happened.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionForkFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	// Two sibling branches off the same parent: a fork.
+	var branches []*AgentOutput[testState]
+	for _, text := range []string{"branch b", "branch c"} {
+		time.Sleep(2 * time.Millisecond) // order branches unambiguously by UpdatedAt
+		out, err := af.RunText(ctx, text, WithSnapshotID[testState](out1.SnapshotID))
+		if err != nil {
+			t.Fatalf("RunText branch: %v", err)
+		}
+		if out.SessionID != out1.SessionID {
+			t.Fatalf("branch SessionID = %q, want %q", out.SessionID, out1.SessionID)
+		}
+		branches = append(branches, out)
+	}
+
+	out, err := af.RunText(ctx, "which branch?", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("RunText session resume: %v", err)
+	}
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("session resume failed: %+v", out.Error)
+	}
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if want := branches[1].SnapshotID; snap.ParentID != want {
+		t.Errorf("resumed snapshot ParentID = %q, want most recent branch %q", snap.ParentID, want)
+	}
+}
+
+func TestAgent_ResumeFromSessionID_SkipsDeadEnds(t *testing.T) {
+	// A failed (or aborted) row is a permanent dead end: even as the
+	// session's newest row it never blocks session-ID init. The session
+	// resumes from the last good snapshot.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionDeadEndFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	// A failed detach-style row chained off the tip, as a background
+	// invocation that failed would leave behind.
+	if _, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{
+			SessionID:    out1.SessionID,
+			ParentID:     out1.SnapshotID,
+			Event:        SnapshotEventDetach,
+			Status:       SnapshotStatusFailed,
+			FinishReason: AgentFinishReasonFailed,
+		}, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot failed row: %v", err)
+	}
+
+	out2, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("RunText session resume: %v", err)
+	}
+	if out2.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("session resume failed: %+v", out2.Error)
+	}
+	snap2, err := store.GetSnapshot(ctx, out2.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap2.ParentID != out1.SnapshotID {
+		t.Errorf("resumed snapshot ParentID = %q, want last good %q", snap2.ParentID, out1.SnapshotID)
+	}
+	if got := snap2.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2 (resumed from last good state), got %d", got)
+	}
+
+	// The dead end keeps being skipped on subsequent resumes.
+	out3, err := af.RunText(ctx, "third", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("RunText second session resume: %v", err)
+	}
+	if out3.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("second session resume failed: %+v", out3.Error)
+	}
+}
+
+func TestAgent_ResumeFromSessionID_AfterFailureResumesRecovery(t *testing.T) {
+	// After an invocation fails, the session's newest non-dead-end row is
+	// the recovery snapshot (a normal succeeded row, event=recovery)
+	// holding the last-good state. Resuming by session ID continues from
+	// it like any other snapshot.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionRecoveryFlow",
+		WithSessionStore[testState](store),
+		// Persist only the first turn so the failure path must write a
+		// genuine recovery-event row (rather than reusing a turn-end row).
+		WithSnapshotCallback(func(_ context.Context, sc *SnapshotContext[testState]) bool {
+			return sc.Event == SnapshotEventTurnEnd && sc.TurnIndex == 0
+		}),
+	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	for _, text := range []string{"one", "two", "boom"} {
+		if err := conn.SendText(text); err != nil {
+			t.Fatalf("SendText(%q): %v", text, err)
+		}
+	}
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Fatalf("expected failed invocation, got %q", out.FinishReason)
+	}
+	recovery, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil || recovery == nil {
+		t.Fatalf("GetSnapshot(%q): %v, %v", out.SnapshotID, recovery, err)
+	}
+	if recovery.Event != SnapshotEventRecovery {
+		t.Fatalf("expected recovery snapshot, got event %q", recovery.Event)
+	}
+
+	out2, err := af.RunText(ctx, "three", WithSessionID[testState](out.SessionID))
+	if err != nil {
+		t.Fatalf("RunText session resume: %v", err)
+	}
+	if out2.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("session resume failed: %+v", out2.Error)
+	}
+	snap2, err := store.GetSnapshot(ctx, out2.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap2.ParentID != recovery.SnapshotID {
+		t.Errorf("resumed snapshot ParentID = %q, want recovery row %q", snap2.ParentID, recovery.SnapshotID)
+	}
+	// Last-good state (two successful turns, counter=2) plus the resumed
+	// turn: the failed turn's partial mutations never made it in.
+	if got := snap2.State.Custom.Counter; got != 3 {
+		t.Errorf("expected counter=3 after resuming recovery state, got %d", got)
+	}
+	if got := len(snap2.State.Messages); got != 6 {
+		t.Errorf("expected 6 messages after resuming recovery state, got %d", got)
+	}
+}
+
+func TestAgent_ResumeFromSessionID_PendingTipRejected(t *testing.T) {
+	// A pending tip means a detached invocation is still running; resuming
+	// the session would race the background writer, so it is rejected
+	// until the row finalizes.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionPendingFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if _, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{
+			SessionID: out1.SessionID,
+			ParentID:  out1.SnapshotID,
+			Event:     SnapshotEventDetach,
+			Status:    SnapshotStatusPending,
+		}, nil
+	}); err != nil {
+		t.Fatalf("SaveSnapshot pending row: %v", err)
+	}
+
+	out, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
+	if err == nil {
+		t.Fatalf("expected error for pending tip, got output: %+v", out)
+	}
+	ge := core.AsGenkitError(err)
+	if ge.Status != core.FAILED_PRECONDITION {
+		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
+	}
+	if !strings.Contains(ge.Message, "still pending") {
+		t.Errorf("expected error message to mention pending, got %q", ge.Message)
+	}
+}
+
+func TestAgent_ClientManagedState_MintsSessionID(t *testing.T) {
+	// With no store configured and a state object that carries no session
+	// ID, the framework mints one and stamps it inside the output state,
+	// so the client's opaque round-trip picks up a stable conversation
+	// identity without tracking a separate field.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	af := defineLastGoodTestAgent(reg, "clientSessionFlow")
+
+	out, err := af.RunText(ctx, "hi", WithState(&SessionState[testState]{Custom: testState{Counter: 1}}))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected minted SessionID for client-managed agent")
+	}
+	if out.State == nil || out.State.Custom.Counter != 2 {
+		t.Fatalf("expected state passthrough with counter=2, got %+v", out.State)
+	}
+	if out.State.SessionID != out.SessionID {
+		t.Errorf("state-carried session ID %q, want output's %q", out.State.SessionID, out.SessionID)
+	}
+}
+
+func TestAgent_ClientManagedState_SessionIDRoundTrip(t *testing.T) {
+	// With no store, the conversation's identity rides inside the state
+	// object: an ID carried on SessionState is kept, the fn can read it,
+	// and the output echoes it both top-level and inside the state, so
+	// resending the state object preserves it across invocations.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	var fnSawSessionID string
+	af := DefineCustomAgent(reg, "clientPassthroughFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			fnSawSessionID = sess.SessionID()
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil, nil
+			})
+		},
+	)
+
+	out, err := af.RunText(ctx, "hi",
+		WithState(&SessionState[testState]{SessionID: "client-chosen-id", Custom: testState{Counter: 1}}))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SessionID != "client-chosen-id" {
+		t.Errorf("output SessionID = %q, want %q", out.SessionID, "client-chosen-id")
+	}
+	if fnSawSessionID != "client-chosen-id" {
+		t.Errorf("fn saw session ID %q, want %q", fnSawSessionID, "client-chosen-id")
+	}
+	if out.State == nil || out.State.Custom.Counter != 2 {
+		t.Fatalf("expected state passthrough with counter=2, got %+v", out.State)
+	}
+	if out.State.SessionID != "client-chosen-id" {
+		t.Errorf("state-carried session ID = %q, want %q", out.State.SessionID, "client-chosen-id")
+	}
+
+	// Resending the output state opaquely keeps the identity.
+	out2, err := af.RunText(ctx, "again", WithState(out.State))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out2.SessionID != "client-chosen-id" {
+		t.Errorf("round-tripped SessionID = %q, want %q", out2.SessionID, "client-chosen-id")
+	}
+	if out2.State == nil || out2.State.Custom.Counter != 3 {
+		t.Errorf("expected continued state with counter=3, got %+v", out2.State)
+	}
+}
+
+func TestAgent_ClientManagedState_WithSessionIDRejected(t *testing.T) {
+	// WithSessionID is a store lookup; a client-managed agent has no store
+	// and carries the conversation's identity inside the state object, so
+	// the option is rejected up front.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	af := defineLastGoodTestAgent(reg, "clientNoSessionLookupFlow")
+
+	_, err := af.RunText(ctx, "hi", WithSessionID[testState]("some-id"))
+	if err == nil {
+		t.Fatal("expected error for WithSessionID on a client-managed agent")
+	}
+	if !strings.Contains(err.Error(), "SessionState.SessionID") {
+		t.Errorf("expected error to point at SessionState.SessionID, got %q", err.Error())
+	}
+}
+
+func TestAgent_ResumeFromSnapshotID_WithSessionID(t *testing.T) {
+	// A session ID sent alongside a snapshot ID asserts which conversation
+	// the snapshot belongs to: a match resumes normally, a mismatch is
+	// rejected before the invocation starts.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "snapshotWithSessionFlow", WithSessionStore(store))
+
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	out2, err := af.RunText(ctx, "second",
+		WithSnapshotID[testState](out1.SnapshotID),
+		WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("RunText resume with matching session ID: %v", err)
+	}
+	if out2.SessionID != out1.SessionID {
+		t.Errorf("SessionID = %q, want %q", out2.SessionID, out1.SessionID)
+	}
+
+	out3, err := af.RunText(ctx, "third",
+		WithSnapshotID[testState](out2.SnapshotID),
+		WithSessionID[testState]("not-the-right-session"))
+	if err == nil {
+		t.Fatalf("expected mismatch error, got output: %+v", out3)
+	}
+	ge := core.AsGenkitError(err)
+	if ge.Status != core.INVALID_ARGUMENT {
+		t.Errorf("expected status %q, got %q (err: %v)", core.INVALID_ARGUMENT, ge.Status, err)
+	}
+	if !strings.Contains(ge.Message, "does not belong to session") {
+		t.Errorf("expected mismatch message, got %q", ge.Message)
+	}
+}
+
+func TestAgent_Detach_AssignsSessionID(t *testing.T) {
+	// A detach on a fresh conversation carries the runtime-assigned session
+	// ID on the pending row; the detached output reports it and the
+	// finalized row keeps it.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	af := DefineCustomAgent(reg, "detachSessionFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("finished"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	if err := conn.SendText("go"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	<-entered
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected session ID on detached output")
+	}
+	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if pending.SessionID != out.SessionID {
+		t.Errorf("pending row SessionID = %q, want %q", pending.SessionID, out.SessionID)
+	}
+
+	close(release)
+	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusSucceeded
+	})
+	if final.SessionID != out.SessionID {
+		t.Errorf("finalized row SessionID = %q, want %q", final.SessionID, out.SessionID)
+	}
+}
+
+// blockingSaveStore wraps testInMemStore so a test can hold the first
+// SaveSnapshot call open: the agent's turn-end write blocks until release
+// is closed, modeling a slow store at the exact moment a detach lands.
+type blockingSaveStore[State any] struct {
+	*testInMemStore[State]
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingSaveStore[State]) SaveSnapshot(
+	ctx context.Context,
+	id string,
+	fn func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error),
+) (*SessionSnapshot[State], error) {
+	blocked := false
+	s.once.Do(func() { blocked = true })
+	if blocked {
+		close(s.entered)
+		<-s.release
+	}
+	return s.testInMemStore.SaveSnapshot(ctx, id, fn)
+}
+
+func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
+	// A detach that lands while a turn-end snapshot write is still in
+	// flight must wait for it: the pending row chains off the just-written
+	// row instead of becoming its sibling (which would fork the session and
+	// permanently break resume-by-session-ID), and the conversation stays
+	// in one session.
+	reg := newTestRegistry(t)
+	store := &blockingSaveStore[testState]{
+		testInMemStore: newTestInMemStore[testState](),
+		entered:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	af := defineLastGoodTestAgent(reg, "detachMidWrite", WithSessionStore[testState](store))
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+	if err := conn.SendText("one"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	// Wait until the turn-end snapshot write is in flight, then detach
+	// while it is still blocked inside the store.
+	<-store.entered
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	close(store.release)
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonDetached {
+		t.Fatalf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonDetached)
+	}
+
+	final := waitForSnapshot[testState](t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusSucceeded
+	})
+
+	// Find the turn-end row (the only row besides the detach row).
+	var turnRowID, turnRowSession string
+	others := 0
+	store.testInMemStore.mu.RLock()
+	for _, r := range store.testInMemStore.snapshots {
+		if r.SnapshotID == out.SnapshotID {
+			continue
+		}
+		others++
+		turnRowID, turnRowSession = r.SnapshotID, r.SessionID
+	}
+	store.testInMemStore.mu.RUnlock()
+	if others != 1 {
+		t.Fatalf("expected exactly one turn-end row besides the detach row, got %d", others)
+	}
+	if final.ParentID != turnRowID {
+		t.Errorf("detach row ParentID = %q, want turn-end row %q (a sibling row forks the session)", final.ParentID, turnRowID)
+	}
+	if final.SessionID != out.SessionID || turnRowSession != out.SessionID {
+		t.Errorf("conversation split across sessions: turn=%q detach=%q output=%q", turnRowSession, final.SessionID, out.SessionID)
+	}
+	// The session stays linear and resolves to the finalized detach row.
+	tip, err := store.GetLatestSnapshot(context.Background(), out.SessionID)
+	if err != nil {
+		t.Fatalf("GetLatestSnapshot: %v", err)
+	}
+	if tip == nil || tip.SnapshotID != out.SnapshotID {
+		t.Errorf("session tip = %+v, want %q", tip, out.SnapshotID)
+	}
+}
+
+func TestAgent_FailedTurn_OutputCarriesSessionID(t *testing.T) {
+	// A failed invocation still reports the session it belongs to, next to
+	// the last-good snapshot ID.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "failedSessionFlow", WithSessionStore(store))
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	if err := conn.SendText("turn one"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	nextTurnEnd(t, conn)
+	if err := conn.SendText("boom"); err != nil && !errors.Is(err, core.ErrActionCompleted) {
+		t.Fatalf("SendText: %v", err)
+	}
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonFailed {
+		t.Fatalf("expected failed output, got %q", out.FinishReason)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected session ID on failed output")
+	}
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.SessionID != out.SessionID {
+		t.Errorf("last-good snapshot SessionID = %q, want %q", snap.SessionID, out.SessionID)
+	}
+}
+
+func TestAgent_ResumeFromLegacySnapshot_MintsFreshSessionID(t *testing.T) {
+	// Snapshots written before session IDs existed have none; resuming one
+	// starts a fresh session, assigned at invocation start and stamped on
+	// every new row.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "legacySessionFlow", WithSessionStore(store))
+
+	legacy := &SessionSnapshot[testState]{
+		SnapshotID: "legacy-1",
+		Event:      SnapshotEventInvocationEnd,
+		Status:     SnapshotStatusSucceeded,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		State:      &SessionState[testState]{Custom: testState{Counter: 5}},
+	}
+	store.mu.Lock()
+	store.snapshots[legacy.SnapshotID] = legacy
+	store.mu.Unlock()
+
+	out, err := af.RunText(ctx, "continue", WithSnapshotID[testState]("legacy-1"))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("resume failed: %+v", out.Error)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected freshly minted session ID after legacy resume")
+	}
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.SessionID != out.SessionID {
+		t.Errorf("snapshot SessionID = %q, want %q", snap.SessionID, out.SessionID)
+	}
+	if got := snap.State.Custom.Counter; got != 6 {
+		t.Errorf("expected counter=6 (legacy state + 1), got %d", got)
+	}
+}
+
+func TestAgent_WithSessionID_OptionValidation(t *testing.T) {
+	// The invocation-option layer rejects empty session IDs, duplicate
+	// options, and conflicting state sources before the action is ever
+	// invoked. WithSessionID composes with either state source, so those
+	// combinations pass the option layer and the init-level checks take
+	// over from there.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionOptFlow", WithSessionStore(store))
+
+	if _, err := af.StreamBidi(ctx, WithState(&SessionState[testState]{}), WithSnapshotID[testState]("x")); err == nil ||
+		!strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("WithState+WithSnapshotID: expected mutual-exclusion error, got %v", err)
+	}
+	if _, err := af.StreamBidi(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
+		!strings.Contains(err.Error(), "more than once") {
+		t.Errorf("WithSessionID twice: expected duplicate-option error, got %v", err)
+	}
+	// An empty session ID is an explicit error, not a silent no-op: a
+	// pipelined AgentOutput.SessionID from a storeless invocation must not
+	// quietly start a fresh conversation.
+	if _, err := af.StreamBidi(ctx, WithSessionID[testState]("")); err == nil ||
+		!strings.Contains(err.Error(), "session ID is empty") {
+		t.Errorf("WithSessionID(\"\"): expected empty-ID error, got %v", err)
+	}
+	// WithSessionID composes with WithSnapshotID: the option layer accepts
+	// the pair and the init-level checks (here: unknown snapshot) decide.
+	conn, err := af.StreamBidi(ctx, WithSessionID[testState]("s"), WithSnapshotID[testState]("x"))
+	if err != nil {
+		t.Fatalf("WithSessionID+WithSnapshotID: expected option layer to accept, got %v", err)
+	}
+	if _, err := conn.Output(); err == nil {
+		t.Error("expected init-level error for unknown snapshot, got nil")
+	}
+}
+
+func TestAgent_GetSnapshotAction_ReturnsSessionID(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionActionFlow", WithSessionStore(store))
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "hi")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected session ID on output")
+	}
+
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+		reg, api.ActionTypeAgentSnapshot, "sessionActionFlow")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+	resp, err := action.Run(ctx, &GetSnapshotRequest{SnapshotID: out.SnapshotID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot action: %v", err)
+	}
+	if resp.SessionID != out.SessionID {
+		t.Errorf("getSnapshot SessionID = %q, want %q", resp.SessionID, out.SessionID)
 	}
 }

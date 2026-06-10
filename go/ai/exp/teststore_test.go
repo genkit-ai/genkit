@@ -26,6 +26,7 @@ package exp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -65,6 +66,29 @@ func (s *testInMemStore[State]) GetSnapshot(_ context.Context, snapshotID string
 		return nil, nil
 	}
 	return testCopySnapshot(snap)
+}
+
+func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*SessionSnapshot[State], error) {
+	if sessionID == "" {
+		return nil, errors.New("testInMemStore: session ID is empty")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var latest *SessionSnapshot[State]
+	for _, snap := range s.snapshots {
+		if snap.SessionID != sessionID ||
+			snap.Status == SnapshotStatusFailed || snap.Status == SnapshotStatusAborted {
+			continue
+		}
+		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) ||
+			(snap.UpdatedAt.Equal(latest.UpdatedAt) && snap.SnapshotID > latest.SnapshotID) {
+			latest = snap
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+	return testCopySnapshot(latest)
 }
 
 func (s *testInMemStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (SnapshotStatus, error) {
@@ -115,6 +139,9 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	now := time.Now()
 	if existing != nil {
 		next.CreatedAt = existing.CreatedAt
+		if existing.SessionID != "" {
+			next.SessionID = existing.SessionID // a row's session never changes
+		}
 	} else {
 		next.CreatedAt = now
 	}

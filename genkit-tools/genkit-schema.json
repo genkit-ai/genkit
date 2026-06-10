@@ -61,6 +61,9 @@
     "AgentInit": {
       "type": "object",
       "properties": {
+        "sessionId": {
+          "type": "string"
+        },
         "snapshotId": {
           "type": "string"
         },
@@ -119,6 +122,9 @@
     "AgentOutput": {
       "type": "object",
       "properties": {
+        "sessionId": {
+          "type": "string"
+        },
         "snapshotId": {
           "type": "string"
         },
@@ -218,38 +224,13 @@
       ],
       "additionalProperties": false
     },
-    "GetSnapshotResponse": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "createdAt": {
-          "type": "string"
-        },
-        "updatedAt": {
-          "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/SnapshotStatus"
-        },
-        "finishReason": {
-          "$ref": "#/$defs/AgentFinishReason"
-        },
-        "error": {},
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        }
-      },
-      "required": [
-        "snapshotId"
-      ],
-      "additionalProperties": false
-    },
     "SessionSnapshot": {
       "type": "object",
       "properties": {
         "snapshotId": {
+          "type": "string"
+        },
+        "sessionId": {
           "type": "string"
         },
         "parentId": {
@@ -287,6 +268,9 @@
     "SessionState": {
       "type": "object",
       "properties": {
+        "sessionId": {
+          "type": "string"
+        },
         "messages": {
           "type": "array",
           "items": {

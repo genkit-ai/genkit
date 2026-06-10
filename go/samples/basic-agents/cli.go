@@ -264,6 +264,25 @@ func pickSession(ctx context.Context, inputCh <-chan string, a sampleAgent, late
 	}
 }
 
+// resumeOption picks how to resume the chosen snapshot. Resuming by
+// session ID is the canonical "continue this conversation" flow, so the
+// session is validated against the store first: if it does not resolve
+// to a resumable snapshot (a detached invocation still pending, legacy
+// rows with no session ID, or a store error), fall back to the exact
+// snapshot the user was just shown. Validating up front keeps the chat
+// from opening on a connection whose invocation already failed, which
+// would surface the error only after the user types a message.
+func resumeOption(ctx context.Context, a sampleAgent, resume *aix.SessionSnapshot[any]) aix.InvocationOption[any] {
+	if resume.SessionID != "" {
+		tip, err := a.Store.GetLatestSnapshot(ctx, resume.SessionID)
+		if err == nil && tip != nil && tip.Status != aix.SnapshotStatusPending {
+			return aix.WithSessionID[any](resume.SessionID)
+		}
+		fmt.Println("(this conversation's session can't be resumed as a whole; continuing from the selected snapshot)")
+	}
+	return aix.WithSnapshotID[any](resume.SnapshotID)
+}
+
 // runChat opens the bidi connection (optionally resuming from a
 // snapshot) and runs the per-turn REPL. When resuming, the prior
 // conversation is replayed first so the user sees the context they're
@@ -287,7 +306,7 @@ func runChat(ctx context.Context, inputCh <-chan string, a sampleAgent, resume *
 
 	var opts []aix.InvocationOption[any]
 	if resume != nil {
-		opts = append(opts, aix.WithSnapshotID[any](resume.SnapshotID))
+		opts = append(opts, resumeOption(ctx, a, resume))
 	}
 	conn, err := a.StreamBidi(ctx, opts...)
 	if err != nil {

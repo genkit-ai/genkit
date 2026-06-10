@@ -197,9 +197,8 @@ func FlowNameFromContext(ctx context.Context) string {
 // call [Run] for sub-step tracking and see the flow name in spans —
 // without going through [NewBidiFlow] / [DefineBidiFlow].
 //
-// The Define*Flow constructors call this internally; direct callers
-// only need it when bypassing those constructors to set custom
-// [ActionOptions].
+// The flow constructors attach this context themselves; direct callers
+// only need it when bypassing them, e.g. to set custom [ActionOptions].
 func WithFlowContext(ctx context.Context, flowName string) context.Context {
 	return flowContextKey.NewContext(ctx, &flowContext{flowName: flowName})
 }

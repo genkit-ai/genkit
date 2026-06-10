@@ -34,6 +34,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/google/uuid"
 )
 
 // --- SessionRunner ---
@@ -54,11 +55,19 @@ type SessionRunner[State any] struct {
 	// directly.
 	TurnIndex int
 
-	snapshotCallback    SnapshotCallback[State]
-	onEndTurn           func(ctx context.Context)
+	snapshotCallback  SnapshotCallback[State]
+	onEndTurn         func(ctx context.Context)
+	collectTurnOutput func() any
+
+	// snapMu serializes snapshot persistence with the detach handler's
+	// suspend-and-capture. lastSnapshot and lastSnapshotVersion are
+	// written under it; the terminal paths that read them without it
+	// (handleFnDone, failedOutput) run after fn completes, with a
+	// happens-before edge through the fnDone channel.
+	snapMu              sync.Mutex
+	snapshotsSuspended  bool
 	lastSnapshot        *SessionSnapshot[State]
 	lastSnapshotVersion uint64
-	collectTurnOutput   func() any
 
 	// lastTurnFinishReason is the finish reason reported by the most recent
 	// turn (via the [TurnResult] its callback returned), or "" if the turn
@@ -99,6 +108,21 @@ func (s *SessionRunner[State]) parentSnapshotID() string {
 	return s.lastSnapshot.SnapshotID
 }
 
+// suspendSnapshots stops all further snapshot persistence for this
+// invocation and returns the ID of the newest persisted snapshot. Taking
+// snapMu makes the two steps atomic with respect to an in-flight turn-end
+// write: a write already inside maybeSnapshot completes first (so the
+// returned parent is current, not stale), and any later turn end observes
+// the suspension and skips its write. Called by the detach handler, after
+// which the queued inputs roll into a single finalize rewrite of the
+// pending row.
+func (s *SessionRunner[State]) suspendSnapshots() (parentID string) {
+	s.snapMu.Lock()
+	defer s.snapMu.Unlock()
+	s.snapshotsSuspended = true
+	return s.parentSnapshotID()
+}
+
 // TurnResult is the optional return value of a [SessionRunner.Run] per-turn
 // callback. It lets a custom agent report how the turn ended; the framework
 // forwards the reason on the turn's [TurnEnd] chunk, persists it on the
@@ -116,7 +140,8 @@ type TurnResult struct {
 // Run loops over the input channel, calling fn for each turn. Each turn is
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
-// TurnEnd chunk is sent and a snapshot check is triggered.
+// snapshot check is triggered and a [TurnEnd] chunk (carrying any new
+// snapshot's ID) is sent.
 //
 // fn may return a [TurnResult] to report how the turn ended (e.g. its finish
 // reason); returning nil reports nothing. The reason rides the turn's
@@ -230,11 +255,22 @@ func (s *SessionRunner[State]) invocationReason(result *AgentResult) AgentFinish
 }
 
 // maybeSnapshot creates a snapshot if conditions are met (store configured,
-// callback approves, state changed). Returns the snapshot ID or empty
-// string. finishReason is recorded on the snapshot so a resumed or
-// background task can report how the captured turn or invocation ended.
+// snapshots not suspended by detach, callback approves, state changed).
+// Returns the snapshot ID or empty string. finishReason is recorded on the
+// snapshot so a resumed or background task can report how the captured turn
+// or invocation ended.
+//
+// The body runs under snapMu so the detach handler's suspend-and-capture
+// (suspendSnapshots) cannot interleave with a write: it either waits for
+// this write to commit or suspends before it starts.
 func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event SnapshotEvent, finishReason AgentFinishReason) string {
 	if s.store == nil {
+		return ""
+	}
+
+	s.snapMu.Lock()
+	defer s.snapMu.Unlock()
+	if s.snapshotsSuspended {
 		return ""
 	}
 
@@ -271,22 +307,24 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 		}
 	}
 
-	return s.persistSnapshot(ctx, event, finishReason, &currentState, currentVersion)
+	return s.persistSnapshotLocked(ctx, event, finishReason, &currentState, currentVersion)
 }
 
-// persistSnapshot writes a succeeded snapshot row capturing state (at the
-// given session version), chained to the newest persisted snapshot, and
+// persistSnapshotLocked writes a succeeded snapshot row capturing state (at
+// the given session version), chained to the newest persisted snapshot, and
 // advances the lastSnapshot bookkeeping. Both the routine cadence
 // (maybeSnapshot) and the failure path (recoverySnapshotID) funnel through
-// here so the row shape and bookkeeping live in one place. Persistence is
-// best-effort: a store failure must not kill the in-flight turn, so it is
-// logged and "" is returned.
-func (s *SessionRunner[State]) persistSnapshot(ctx context.Context, event SnapshotEvent, finishReason AgentFinishReason, state *SessionState[State], version uint64) string {
+// here so the row shape and bookkeeping live in one place. Caller must hold
+// snapMu. Persistence is best-effort: a store failure must not kill the
+// in-flight turn, so it is logged and "" is returned.
+func (s *SessionRunner[State]) persistSnapshotLocked(ctx context.Context, event SnapshotEvent, finishReason AgentFinishReason, state *SessionState[State], version uint64) string {
 	parentID := s.parentSnapshotID()
+	sessionID := s.SessionID()
 
 	saved, err := s.store.SaveSnapshot(ctx, "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
+				SessionID:    sessionID,
 				ParentID:     parentID,
 				Event:        event,
 				Status:       SnapshotStatusSucceeded,
@@ -311,9 +349,10 @@ func (s *SessionRunner[State]) persistSnapshot(ctx context.Context, event Snapsh
 // state, writing one (event [SnapshotEventRecovery]) when the newest
 // persisted snapshot is behind it. The write uses the captured
 // lastGoodState, never the live state (which may hold the failed turn's
-// partial mutations), and intentionally bypasses the snapshot callback so
-// a selective cadence cannot lose the conversation. If the write fails,
-// the newest persisted snapshot's ID is returned instead.
+// partial mutations), and intentionally bypasses both the snapshot
+// callback and the post-detach suspension, so neither a selective cadence
+// nor a dying detach can lose the conversation. If the write fails, the
+// newest persisted snapshot's ID is returned instead.
 //
 // Returns "" when no store is configured or there is nothing to recover
 // (no snapshot exists and no turn ever changed state).
@@ -321,6 +360,8 @@ func (s *SessionRunner[State]) recoverySnapshotID(ctx context.Context) string {
 	if s.store == nil {
 		return ""
 	}
+	s.snapMu.Lock()
+	defer s.snapMu.Unlock()
 	// The newest snapshot already captures exactly the last-good state.
 	if s.lastSnapshot != nil && s.lastGoodVersion == s.lastSnapshotVersion {
 		return s.lastSnapshot.SnapshotID
@@ -329,7 +370,7 @@ func (s *SessionRunner[State]) recoverySnapshotID(ctx context.Context) string {
 		return ""
 	}
 
-	if id := s.persistSnapshot(ctx, SnapshotEventRecovery, s.lastGoodFinishReason, s.lastGoodState, s.lastGoodVersion); id != "" {
+	if id := s.persistSnapshotLocked(ctx, SnapshotEventRecovery, s.lastGoodFinishReason, s.lastGoodState, s.lastGoodVersion); id != "" {
 		return id
 	}
 	return s.parentSnapshotID()
@@ -444,12 +485,12 @@ func DefineAgent[State any](
 	}
 }
 
-// DefineCustomAgent defines an agent with full control over the conversation
-// loop and registers it with the registry. The underlying action is created
-// via [core.DefineBidiAction] (rather than [core.DefineBidiFlow]) so the
-// agent capability metadata can be set at construction time — actions
-// must be immutable once registered. The flow-context wrapping that makes
-// [core.Run] work inside fn is preserved via [core.WithFlowContext].
+// DefineCustomAgent defines an agent with full control over the
+// conversation loop and registers it with the registry. fn receives a
+// [Responder] for streaming output and a [SessionRunner] for turn and
+// state management; call [SessionRunner.Run] to enter the per-turn loop.
+//
+// For agents backed by a prompt, use [DefineAgent] instead.
 func DefineCustomAgent[Stream, State any](
 	r api.Registry,
 	name string,
@@ -463,6 +504,10 @@ func DefineCustomAgent[Stream, State any](
 		}
 	}
 
+	// Built on DefineBidiAction (rather than DefineBidiFlow) so the agent
+	// capability metadata can be set at construction time; actions must be
+	// immutable once registered. WithFlowContext below preserves the
+	// flow-context wrapping that makes core.Run work inside fn.
 	action := core.DefineBidiAction(r, name, api.ActionTypeFlow,
 		&core.ActionOptions{
 			Metadata: map[string]any{"agent": agentMetadataFor(cfg.store)},
@@ -476,13 +521,13 @@ func DefineCustomAgent[Stream, State any](
 			ctx = core.WithFlowContext(ctx, name)
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
 			if err != nil {
-				// Init validation failures resolve as a failed output
-				// too. No state is attached; the invocation never
-				// started, so the caller lost nothing.
-				return &AgentOutput[State]{
-					FinishReason: AgentFinishReasonFailed,
-					Error:        core.AsGenkitError(err),
-				}, nil
+				// Init failures (a rejected init payload, a failed
+				// snapshot load) fail the action outright rather than
+				// resolving as a failed output: the invocation never
+				// reached the input phase of its lifecycle, so there is
+				// no conversation state to hand back and nothing to
+				// snapshot.
+				return nil, err
 			}
 			return rt.run(ctx, fn)
 		})
@@ -547,6 +592,31 @@ func newAgentRuntime[Stream, State any](
 		return nil, err
 	}
 
+	// The session ID is settled up front, before the agent function runs,
+	// so it exists for the whole invocation regardless of when (or
+	// whether) the first snapshot is written. It lives inside the session
+	// state ([SessionState.SessionID]), so it rides along wherever the
+	// state goes: every persisted snapshot's state, and the state
+	// returned to (and resent by) client-managed callers.
+	if cfg.store != nil {
+		// Server-managed: the store row is canonical. Inherit the resumed
+		// chain's ID, overriding whatever the loaded state blob claims (a
+		// third-party writer could have let them drift), or mint one for a
+		// fresh conversation (including one resumed from a snapshot that
+		// predates session IDs).
+		if parent != nil && parent.SessionID != "" {
+			session.state.SessionID = parent.SessionID
+		} else {
+			session.state.SessionID = uuid.New().String()
+		}
+	} else if session.state.SessionID == "" {
+		// Client-managed: the state object is canonical; keep the ID it
+		// carried. Mint one when absent (a fresh conversation) so the
+		// output state is self-describing from the first turn and the
+		// client can round-trip it without tracking a separate field.
+		session.state.SessionID = uuid.New().String()
+	}
+
 	rt := &agentRuntime[Stream, State]{
 		name:    name,
 		cfg:     cfg,
@@ -577,14 +647,15 @@ func newAgentRuntime[Stream, State any](
 // through the router so clients see it on the output stream.
 //
 // The snapshot is skipped when the turn failed (the live state holds the
-// turn's partial mutations) and when detach has landed (the pending row
-// already captures the invocation; a single finalize rewrite records the
-// cumulative state once the queued inputs drain).
+// turn's partial mutations) and when detach has landed (maybeSnapshot
+// observes the suspension under snapMu; the pending row already captures
+// the invocation and a single finalize rewrite records the cumulative
+// state once the queued inputs drain).
 func (rt *agentRuntime[Stream, State]) emitTurnEnd(ctx context.Context) {
-	suspended := rt.intake.beginTurnEnd()
+	rt.intake.releaseForward()
 	reason := rt.sess.lastTurnFinishReason
 	var snapshotID string
-	if !rt.sess.lastTurnFailed && !suspended {
+	if !rt.sess.lastTurnFailed {
 		snapshotID = rt.sess.maybeSnapshot(ctx, SnapshotEventTurnEnd, reason)
 	}
 	rt.router.sendChunk(ctx, &AgentStreamChunk[Stream]{TurnEnd: &TurnEnd{
@@ -743,7 +814,11 @@ func (rt *agentRuntime[Stream, State]) handleFnDone(
 		snapshotID = rt.sess.lastSnapshot.SnapshotID
 	}
 
-	out := &AgentOutput[State]{SnapshotID: snapshotID, FinishReason: invocationReason}
+	out := &AgentOutput[State]{
+		SessionID:    rt.session.SessionID(),
+		SnapshotID:   snapshotID,
+		FinishReason: invocationReason,
+	}
 	if res.result != nil {
 		// Deep-copy at the framework boundary so the caller cannot
 		// mutate session contents through the returned output, even
@@ -753,9 +828,21 @@ func (rt *agentRuntime[Stream, State]) handleFnDone(
 		out.Artifacts = cloneArtifacts(res.result.Artifacts)
 	}
 	if rt.cfg.store == nil {
-		out.State = applyTransform(ctx, rt.cfg.transform, rt.session.State())
+		out.State = rt.outboundState(ctx, rt.session.State())
 	}
 	return out, nil
+}
+
+// outboundState applies the configured state transform and re-stamps the
+// framework-owned SessionID, so the state handed to a client-managed
+// caller always carries the conversation's identity even if a transform
+// rewrote or dropped it. Returns nil if state is nil.
+func (rt *agentRuntime[Stream, State]) outboundState(ctx context.Context, state *SessionState[State]) *SessionState[State] {
+	out := applyTransform(ctx, rt.cfg.transform, state)
+	if out != nil {
+		out.SessionID = rt.session.SessionID()
+	}
+	return out
 }
 
 // failedOutput assembles the output for an invocation that ended in
@@ -769,10 +856,11 @@ func (rt *agentRuntime[Stream, State]) failedOutput(ctx context.Context, cause e
 		Error:        core.AsGenkitError(cause),
 	}
 	if rt.cfg.store == nil {
-		out.State = applyTransform(ctx, rt.cfg.transform, rt.sess.lastGoodState)
+		out.State = rt.outboundState(ctx, rt.sess.lastGoodState)
 	} else {
 		out.SnapshotID = rt.sess.recoverySnapshotID(ctx)
 	}
+	out.SessionID = rt.session.SessionID()
 	return out
 }
 
@@ -792,9 +880,12 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 	// fn completion can cancel workCtx.
 	markDetached()
 
-	rt.intake.suspend()
-
-	parentID := rt.sess.parentSnapshotID()
+	// Atomically suspend per-turn snapshots and capture the chain tip: a
+	// turn-end write already in flight commits first (so the pending row
+	// chains off the real tip instead of becoming its sibling), and any
+	// later turn end skips its write.
+	parentID := rt.sess.suspendSnapshots()
+	sessionID := rt.session.SessionID()
 
 	// Detach intends to outlive the client connection. If clientCtx was
 	// already cancelled (or cancels mid-write), we still want the pending
@@ -802,9 +893,10 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
-				ParentID: parentID,
-				Event:    SnapshotEventDetach,
-				Status:   SnapshotStatusPending,
+				SessionID: sessionID,
+				ParentID:  parentID,
+				Event:     SnapshotEventDetach,
+				Status:    SnapshotStatusPending,
 			}, nil
 		})
 	if err != nil {
@@ -812,7 +904,6 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 		return rt.failedOutput(clientCtx, core.NewError(core.INTERNAL,
 			"agent %q: detach: save pending snapshot: %v", rt.name, err)), nil
 	}
-
 	// The router can no longer write to outCh once we return; the bidi
 	// framework closes it shortly after. The router stops writing and
 	// trashes any further chunks.
@@ -846,6 +937,7 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 	// pending snapshot is finalized later with how the background work
 	// actually ended (see finalizePendingSnapshot).
 	return &AgentOutput[State]{
+		SessionID:    pending.SessionID,
 		SnapshotID:   pending.SnapshotID,
 		FinishReason: AgentFinishReasonDetached,
 	}, nil
@@ -907,6 +999,7 @@ func (rt *agentRuntime[Stream, State]) finalizePendingSnapshot(
 			}
 
 			return &SessionSnapshot[State]{
+				SessionID:    pending.SessionID,
 				ParentID:     pending.ParentID,
 				Event:        SnapshotEventDetach,
 				Status:       status,
@@ -922,8 +1015,15 @@ func (rt *agentRuntime[Stream, State]) finalizePendingSnapshot(
 }
 
 // loadSession constructs a Session from the invocation's init payload,
-// loading from the store when a snapshot ID is provided. Returns the
-// snapshot too so the runtime can chain ParentID off it.
+// loading from the store when a snapshot or session ID is provided.
+// Returns the loaded snapshot too so the runtime can chain ParentID (and
+// carry the session ID) off it.
+//
+// State is mutually exclusive with both SessionID and SnapshotID: it is
+// the client-managed conversation source and carries its own identity
+// ([SessionState.SessionID]), while the two IDs resolve against a store.
+// SessionID and SnapshotID compose: the snapshot picks the exact resume
+// point and the session ID is asserted against it.
 func loadSession[State any](
 	ctx context.Context,
 	init *AgentInit[State],
@@ -934,32 +1034,68 @@ func loadSession[State any](
 		return s, nil, nil
 	}
 
-	if init.SnapshotID != "" && init.State != nil {
-		return nil, nil, core.NewError(core.INVALID_ARGUMENT, "snapshot ID and state are mutually exclusive")
+	if init.State != nil && (init.SessionID != "" || init.SnapshotID != "") {
+		return nil, nil, core.NewError(core.INVALID_ARGUMENT,
+			"state is mutually exclusive with session ID and snapshot ID; a client-managed conversation's identity rides inside the state (SessionState.SessionID)")
 	}
 
-	if init.SnapshotID == "" {
-		if init.State != nil {
-			if store != nil {
-				return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-					"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
-			}
-			s.state = *init.State
+	switch {
+	case init.State != nil:
+		if store != nil {
+			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
+		s.state = *init.State
 		return s, nil, nil
-	}
 
-	if store == nil {
-		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-			"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
+	case init.SnapshotID != "":
+		if store == nil {
+			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+				"snapshot ID %q provided but agent has no session store configured (client-managed state); use state instead", init.SnapshotID)
+		}
+		snap, err := store.GetSnapshot(ctx, init.SnapshotID)
+		if err != nil {
+			return nil, nil, core.NewError(core.INTERNAL, "failed to load snapshot %q: %v", init.SnapshotID, err)
+		}
+		if snap == nil {
+			return nil, nil, core.NewError(core.NOT_FOUND, "snapshot %q not found", init.SnapshotID)
+		}
+		// A session ID sent alongside the snapshot ID asserts which
+		// conversation the snapshot belongs to; a mismatch means the
+		// caller would silently continue the wrong conversation.
+		if init.SessionID != "" && snap.SessionID != init.SessionID {
+			return nil, nil, core.NewError(core.INVALID_ARGUMENT,
+				"snapshot %q does not belong to session %q (snapshot's session: %q)", init.SnapshotID, init.SessionID, snap.SessionID)
+		}
+		return resumeSessionFrom(s, snap)
+
+	case init.SessionID != "":
+		if store == nil {
+			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
+				"session ID %q provided but agent has no session store configured (client-managed state); the conversation's identity rides inside the state object (SessionState.SessionID)", init.SessionID)
+		}
+		snap, err := store.GetLatestSnapshot(ctx, init.SessionID)
+		if err != nil {
+			return nil, nil, core.NewError(core.INTERNAL, "failed to resolve latest snapshot for session %q: %v", init.SessionID, err)
+		}
+		if snap == nil {
+			return nil, nil, core.NewError(core.NOT_FOUND, "no resumable snapshot found for session %q", init.SessionID)
+		}
+		if snap.SessionID != init.SessionID {
+			return nil, nil, core.NewError(core.INTERNAL,
+				"store resolved session %q to snapshot %q, which belongs to session %q; the store violates the GetLatestSnapshot contract", init.SessionID, snap.SnapshotID, snap.SessionID)
+		}
+		return resumeSessionFrom(s, snap)
 	}
-	snap, err := store.GetSnapshot(ctx, init.SnapshotID)
-	if err != nil {
-		return nil, nil, core.NewError(core.INTERNAL, "failed to load snapshot %q: %v", init.SnapshotID, err)
-	}
-	if snap == nil {
-		return nil, nil, core.NewError(core.NOT_FOUND, "snapshot %q not found", init.SnapshotID)
-	}
+	return s, nil, nil
+}
+
+// resumeSessionFrom validates that snap is in a resumable status and loads
+// its state into s. Shared by the snapshot-ID and session-ID init paths;
+// the session-ID path can only hit the pending case (a conforming store's
+// GetLatestSnapshot never resolves to failed/aborted dead ends), but the
+// full switch stays as a defense against non-conforming stores.
+func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State]) (*Session[State], *SessionSnapshot[State], error) {
 	switch snap.Status {
 	case SnapshotStatusFailed:
 		msg := "snapshot recorded an error"
@@ -967,13 +1103,13 @@ func loadSession[State any](
 			msg = snap.Error.Message
 		}
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-			"snapshot %q terminated with error: %s", init.SnapshotID, msg)
+			"snapshot %q terminated with error: %s", snap.SnapshotID, msg)
 	case SnapshotStatusPending:
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-			"snapshot %q is still pending; wait for it to finalize before resuming", init.SnapshotID)
+			"snapshot %q is still pending: its detached invocation is still running; wait for it to finalize or abort it before resuming", snap.SnapshotID)
 	case SnapshotStatusAborted:
 		return nil, nil, core.NewError(core.FAILED_PRECONDITION,
-			"snapshot %q was aborted", init.SnapshotID)
+			"snapshot %q was aborted", snap.SnapshotID)
 	}
 	if snap.State != nil {
 		s.state = *snap.State
@@ -1126,29 +1262,23 @@ func (r *chunkRouter[Stream, State]) close() {
 // The forwarder goroutine pops the queue and writes to dst, blocking on
 // the runner via turnDone so it stays in step with turn pacing.
 //
-// The runtime's emitTurnEnd asks beginTurnEnd at the end of each turn:
-// if suspended (detach has landed), it skips the turn-end snapshot — the
-// pending row already captures the invocation and a single finalize
-// will rewrite it with the cumulative state once the queued inputs
-// drain. If not suspended, a normal turn-end snapshot is written.
-//
-// suspend is called once by the detach handler under the same mutex
-// that beginTurnEnd reads from, ensuring memory ordering: any
-// beginTurnEnd that returns after suspend completes sees suspended=true.
+// Snapshot suspension after detach is not the intake's concern: the
+// runner gates writes itself (see SessionRunner.suspendSnapshots), so a
+// detach can atomically wait out an in-flight turn-end write. The intake
+// only owns input pacing.
 
 type detachIntake struct {
 	src    <-chan *AgentInput
 	dst    chan *AgentInput
 	notify chan struct{} // buffered size 1; wakes forwarder when queue grows
 
-	// turnDone is signaled by beginTurnEnd to release the forwarder so it
-	// may pop the next input. Initialized with one token so the very
+	// turnDone is signaled at each turn end to release the forwarder so
+	// it may pop the next input. Initialized with one token so the very
 	// first turn can start without a preceding turn end.
 	turnDone chan struct{}
 
-	mu        sync.Mutex
-	suspended bool
-	queue     []*AgentInput
+	mu    sync.Mutex
+	queue []*AgentInput
 
 	readDone atomic.Bool
 	detachCh chan struct{} // signaled by reader when detach observed
@@ -1231,8 +1361,8 @@ func (i *detachIntake) enqueue(input *AgentInput) {
 }
 
 // handleDetach drains any buffered src inputs into the queue and signals
-// the detach handler. The detach handler then calls suspend to halt
-// turn-end snapshots while the queued inputs finish processing.
+// the detach handler. The detach handler then suspends turn-end snapshots
+// (via the runner) while the queued inputs finish processing.
 //
 // A pure detach signal (no Messages, no Resume payload) is dropped
 // rather than enqueued: it carries no payload to process, so it would
@@ -1287,9 +1417,9 @@ func hasInputPayload(in *AgentInput) bool {
 }
 
 // forward pops the queue and writes to dst at the runner's pace. The
-// runner signals turnDone via beginTurnEnd when it's ready for the next
-// input; until then the forwarder waits, so it never gets ahead of the
-// runner.
+// runtime signals turnDone via releaseForward when it's ready for the
+// next input; until then the forwarder waits, so it never gets ahead of
+// the runner.
 func (i *detachIntake) forward() {
 	for {
 		// Wait for the previous turn to release us (initial credit lets
@@ -1339,8 +1469,8 @@ func (i *detachIntake) awaitInput() *AgentInput {
 }
 
 // releaseForward releases the forwarder so it can pop the next input.
-// Must be called from beginTurnEnd (and only there) so the forwarder
-// stays in step with the runner's turn pacing.
+// Called by the runtime's emitTurnEnd at each turn end (and only there)
+// so the forwarder stays in step with the runner's turn pacing.
 func (i *detachIntake) releaseForward() {
 	select {
 	case i.turnDone <- struct{}{}:
@@ -1354,31 +1484,6 @@ func (i *detachIntake) out() <-chan *AgentInput {
 
 func (i *detachIntake) detachSignal() <-chan struct{} {
 	return i.detachCh
-}
-
-// beginTurnEnd is called by the runtime's emitTurnEnd at each turn end,
-// before any turn-end snapshot. If the intake has been suspended (detach
-// landed), it returns suspended=true and the caller skips the snapshot.
-//
-// In all cases (including suspended) the forwarder is released so it can
-// pop the next queued input — suspension stops snapshot writing, not
-// processing.
-func (i *detachIntake) beginTurnEnd() (suspended bool) {
-	i.mu.Lock()
-	suspended = i.suspended
-	i.mu.Unlock()
-	i.releaseForward()
-	return suspended
-}
-
-// suspend is called once by the detach handler. It flips suspended=true
-// under the mutex so subsequent beginTurnEnd calls observe the change
-// and skip their turn-end snapshot writes; the queued inputs roll into
-// a single finalize rewrite of the pending row instead.
-func (i *detachIntake) suspend() {
-	i.mu.Lock()
-	i.suspended = true
-	i.mu.Unlock()
 }
 
 // stopAndWait forces the intake to exit and waits for both reader and
@@ -1422,7 +1527,7 @@ func validateUserMessage(m *ai.Message) error {
 // with streaming, and updates the session.
 //
 // defaultInput is the prompt input passed to Render on every turn. It is
-// nil for [DefineAgent], where the inline-defined prompt has no per-turn
+// nil for inline-defined prompts ([FromInline]), which take no per-turn
 // input.
 func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
 	return func(ctx context.Context, resp Responder[any], sess *SessionRunner[State]) (*AgentResult, error) {
@@ -1532,8 +1637,9 @@ func (a *Agent[Stream, State]) StreamBidi(
 // It sends the input, waits for the agent to complete, and returns the output.
 // For multi-turn interactions or streaming, use StreamBidi instead.
 //
-// In-band failures (a failed turn, a rejected init payload) resolve as a
-// failed [AgentOutput] rather than an error; see [AgentConnection.Output].
+// In-band failures (e.g. a failed turn) resolve as a failed [AgentOutput]
+// rather than an error; a rejected init payload fails with an error, since
+// the invocation never starts. See [AgentConnection.Output].
 func (a *Agent[Stream, State]) Run(
 	ctx context.Context,
 	input *AgentInput,
@@ -1544,8 +1650,8 @@ func (a *Agent[Stream, State]) Run(
 		return nil, err
 	}
 	// The invocation may resolve before consuming the input (e.g. an init
-	// validation failure resolves as a failed output); the outcome is on
-	// Output regardless.
+	// validation failure errors out before the first turn); the outcome,
+	// whether output or error, is on Output regardless.
 	if err := conn.Send(input); err != nil && !errors.Is(err, core.ErrActionCompleted) {
 		return nil, err
 	}
@@ -1566,6 +1672,11 @@ func (a *Agent[Stream, State]) RunText(
 }
 
 // resolveOptions applies invocation options and returns the init struct.
+// Mutual exclusivity is checked here, once, after all options are merged:
+// WithState excludes both WithSessionID and WithSnapshotID (a
+// client-managed conversation's identity rides inside the state itself),
+// while WithSessionID and WithSnapshotID compose as an assertion.
+// Per-option duplicate checks live in applyInvocation.
 func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*AgentInit[State], error) {
 	invOpts := &invocationOptions[State]{}
 	for _, opt := range opts {
@@ -1574,7 +1685,15 @@ func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*
 		}
 	}
 
+	if invOpts.state != nil && invOpts.snapshotID != "" {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSnapshotID are mutually exclusive", a.action.Name())
+	}
+	if invOpts.state != nil && invOpts.sessionIDSet {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", a.action.Name())
+	}
+
 	return &AgentInit[State]{
+		SessionID:  invOpts.sessionID,
 		SnapshotID: invOpts.snapshotID,
 		State:      invOpts.state,
 	}, nil
@@ -1655,32 +1774,26 @@ func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[S
 // Output finalizes the connection and returns the agent's result.
 //
 // Output is the single "I'm done" call: it implicitly closes the input
-// side and drains any chunks the caller did not consume via Receive,
-// then blocks until the agent finalizes. The drain is required because
-// the underlying stream buffer is shallow; without it, a producing fn
-// would block on chunk sends and never reach completion. Calling Close
-// before Output is allowed but redundant; both are idempotent.
+// side, drains any chunks the caller did not consume via Receive, and
+// blocks until the agent finalizes. Calling Close first is allowed but
+// redundant. Output is idempotent: subsequent calls return the same
+// (*AgentOutput, error); the returned pointer is shared across calls,
+// so treat it as read-only.
 //
-// In-band failures resolve rather than error: a failed turn or a
-// rejected request returns an [AgentOutput] with
-// [AgentFinishReasonFailed], the error on [AgentOutput.Error] (original
-// status intact), and the last-good state on [AgentOutput.State]
-// (client-managed) or behind [AgentOutput.SnapshotID] (server-managed),
-// so a failure costs the caller only the failed turn, never the
-// session. A non-nil error here means the invocation itself could not
-// run to a result (e.g. the connection's context was cancelled).
+// In-band failures resolve rather than error: a failed turn returns an
+// [AgentOutput] with [AgentFinishReasonFailed], the error on
+// [AgentOutput.Error] (original status intact), and the last-good state
+// on [AgentOutput.State] (client-managed) or behind
+// [AgentOutput.SnapshotID] (server-managed), so a failure costs the
+// caller only the failed turn, never the session. A detached invocation
+// resolves with the pending snapshot ID rather than a cancellation
+// error. A non-nil error here means the invocation never started (a
+// rejected init payload) or could not run to a result (e.g. the
+// connection's context was cancelled).
 //
-// Output is itself idempotent: subsequent calls return the same
-// (*AgentOutput, error) from cache. The returned pointer is shared
-// across calls; treat it as read-only.
-//
-// Detach: when the client sends Detach, the agent function returns
-// promptly with a pending snapshot ID. Output returns that output
-// rather than a context cancellation error.
-//
-// Do not call Output concurrently with a goroutine iterating Receive —
+// Do not call Output concurrently with a goroutine iterating Receive;
 // both consume from the same stream and chunks would be split between
-// them. Sequence the calls: finish Receive first, then call Output.
+// them. Finish Receive first, then call Output.
 func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
 	_ = c.conn.Close()
 

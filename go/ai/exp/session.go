@@ -62,6 +62,30 @@ func applyTransform[State any](ctx context.Context, t StateTransform[State], sta
 type SnapshotReader[State any] interface {
 	// GetSnapshot retrieves a snapshot by ID. Returns nil if not found.
 	GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
+
+	// GetLatestSnapshot resolves the snapshot a session would resume from:
+	// the session's most recently updated row that is not a dead end, as a
+	// full row (the runtime loads its state to resume). Returns nil if the
+	// session has no such row (unknown session ID, or every row is a dead
+	// end), and an error if sessionID is empty.
+	//
+	// "Most recently updated" means the greatest
+	// [SessionSnapshot.UpdatedAt], falling back to CreatedAt on rows that
+	// lack one; ties may be broken arbitrarily but deterministically (e.g.
+	// by SnapshotID). Failed and aborted rows are dead ends (resuming from
+	// them is rejected), so they are skipped and a branch that died never
+	// hides the session's last good snapshot. A pending row is NOT
+	// skipped: it marks a detached invocation that is still running, and
+	// surfacing it lets the agent runtime reject the resume instead of
+	// silently racing the background work.
+	//
+	// The contract is a status-filtered max-timestamp lookup, so stores
+	// can implement it as a single indexed query (e.g. WHERE sessionId = ?
+	// AND status NOT IN ('failed', 'aborted') ORDER BY updatedAt DESC
+	// LIMIT 1). ParentID is informational lineage and plays no part in
+	// resolution: when a session's history was forked by re-resuming an
+	// earlier snapshot, the most recently updated branch simply wins.
+	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
 }
 
 // SnapshotWriter persists snapshots. The minimum any session store must
@@ -74,6 +98,12 @@ type SnapshotWriter[State any] interface {
 	//   - SnapshotID: if id is empty, the store generates a fresh ID;
 	//     otherwise the store uses id (any SnapshotID populated by fn is
 	//     overridden).
+	//   - SessionID: the ID of the session (chain of snapshots) the row
+	//     belongs to: preserved from the existing row on update (a row's
+	//     session never changes once set), otherwise taken from fn's row
+	//     as-is. Stores never mint or infer session IDs; the agent
+	//     runtime assigns one when an invocation starts and stamps it on
+	//     every row it writes.
 	//   - CreatedAt: stamped to the wall clock on first write; preserved
 	//     from the existing row on update.
 	//   - UpdatedAt: stamped to the wall clock on every commit.
@@ -146,7 +176,7 @@ type SnapshotAborter interface {
 // SessionStore is the minimum store interface required by
 // [WithSessionStore]. The abort lifecycle is layered as the optional
 // [SnapshotAborter] capability and checked at runtime: a store wired
-// into a flow that intends to support detach must also implement
+// into an agent that intends to support detach must also implement
 // [SnapshotAborter], or the runtime will reject detach attempts.
 type SessionStore[State any] interface {
 	SnapshotReader[State]
@@ -212,7 +242,7 @@ func registerSnapshotActions[State any](
 		return
 	}
 	core.DefineAction(r, agentName, api.ActionTypeAgentSnapshot, nil, nil,
-		func(ctx context.Context, req *GetSnapshotRequest) (*GetSnapshotResponse[State], error) {
+		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId is required")
 			}
@@ -224,27 +254,27 @@ func registerSnapshotActions[State any](
 				return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", req.SnapshotID)
 			}
 
-			status := snap.Status
-			if status == "" {
-				status = SnapshotStatusSucceeded
+			// Return a normalized copy: the documented defaults (empty
+			// status means succeeded, zero UpdatedAt means CreatedAt) are
+			// resolved server-side so remote clients don't reimplement
+			// them, and the state transform shapes what leaves the server.
+			// A failed snapshot's state is its last-good state, so it is
+			// returned like any other.
+			resp := *snap
+			if resp.Status == "" {
+				resp.Status = SnapshotStatusSucceeded
 			}
-			updatedAt := snap.UpdatedAt
-			if updatedAt.IsZero() {
-				updatedAt = snap.CreatedAt
+			if resp.UpdatedAt.IsZero() {
+				resp.UpdatedAt = resp.CreatedAt
 			}
-
-			resp := &GetSnapshotResponse[State]{
-				SnapshotID:   snap.SnapshotID,
-				CreatedAt:    snap.CreatedAt,
-				UpdatedAt:    updatedAt,
-				Status:       status,
-				FinishReason: snap.FinishReason,
-				Error:        snap.Error,
+			resp.State = applyTransform(ctx, transform, snap.State)
+			if resp.State != nil {
+				// SessionID is framework identity, not user data: re-stamp
+				// it from the row after the transform so outbound state
+				// always agrees with the snapshot it came from.
+				resp.State.SessionID = resp.SessionID
 			}
-			if status != SnapshotStatusFailed && status != SnapshotStatusPending {
-				resp.State = applyTransform(ctx, transform, snap.State)
-			}
-			return resp, nil
+			return &resp, nil
 		})
 
 	aborter, ok := store.(SnapshotAborter)
@@ -271,13 +301,32 @@ func registerSnapshotActions[State any](
 
 // --- Session ---
 
-// Session holds conversation state and provides thread-safe read/write access to messages,
-// input variables, custom state, and artifacts.
+// Session holds conversation state and provides thread-safe read/write
+// access to messages, custom state, and artifacts.
 type Session[State any] struct {
 	mu      sync.RWMutex
 	state   SessionState[State]
 	store   SessionStore[State]
 	version uint64 // incremented on every mutation; used to skip redundant snapshots
+}
+
+// SessionID returns the ID of the session this conversation belongs to.
+// The agent runtime settles it before the agent function runs: a fresh
+// invocation mints a new ID, server-managed resumes inherit the chain's
+// (a snapshot from before session IDs existed gets a fresh one), and a
+// client-managed invocation keeps the ID carried inside the state object
+// it was given ([SessionState.SessionID]), minting one if absent.
+//
+// The ID is stable for the lifetime of the invocation; it lives in
+// [SessionState.SessionID], so it is stamped on every snapshot the
+// invocation persists and rides inside the state returned to
+// client-managed callers. It is safe to use as a key for external
+// resources tied to the conversation, including from code that
+// retrieves the session via [SessionFromContext].
+func (s *Session[State]) SessionID() string {
+	// Written once at construction, before fn runs and before the session
+	// is shared, then never mutated; safe to read without holding mu.
+	return s.state.SessionID
 }
 
 // State returns a copy of the current state.

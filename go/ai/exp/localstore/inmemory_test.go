@@ -210,3 +210,39 @@ func TestInMemorySessionStore(t *testing.T) {
 		}
 	})
 }
+
+func TestInMemorySessionStore_SessionIDs(t *testing.T) {
+	runSessionIDStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		return NewInMemorySessionStore[testState]()
+	})
+
+	t.Run("GetLatestSnapshotReturnsCopy", func(t *testing.T) {
+		store := NewInMemorySessionStore[testState]()
+		if _, err := store.SaveSnapshot(context.Background(), "a",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{
+					SessionID: "sess-1",
+					Status:    exp.SnapshotStatusSucceeded,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+				}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		first, err := store.GetLatestSnapshot(context.Background(), "sess-1")
+		if err != nil {
+			t.Fatalf("GetLatestSnapshot: %v", err)
+		}
+		if first == nil || first.State == nil {
+			t.Fatalf("expected full tip row, got %+v", first)
+		}
+		// Mutating the returned row must not leak into the store.
+		first.State.Custom.Counter = 999
+		second, err := store.GetLatestSnapshot(context.Background(), "sess-1")
+		if err != nil {
+			t.Fatalf("GetLatestSnapshot: %v", err)
+		}
+		if second == nil || second.State == nil || second.State.Custom.Counter != 1 {
+			t.Errorf("expected isolated copy with counter=1, got %+v", second)
+		}
+	})
+}
