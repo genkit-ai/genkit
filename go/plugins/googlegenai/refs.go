@@ -46,6 +46,17 @@ func VideoModelRef(name string, config *genai.GenerateVideosConfig) ai.ModelRef 
 	return ai.NewModelRef(name, config)
 }
 
+// --- Music generation (Lyria) ---
+
+// LyriaModelRef creates a ModelRef for a Lyria music generation model.
+//
+// Lyria is only available through the Vertex AI backend. Initialize
+// Genkit with &googlegenai.VertexAI{}; calls via the Google AI backend
+// will fail with FAILED_PRECONDITION.
+func LyriaModelRef(name string, config *LyriaConfig) ai.ModelRef {
+	return ai.NewModelRef(name, config)
+}
+
 // --- Embedders ---
 
 // EmbedderRef creates an EmbedderRef for an embedding model.

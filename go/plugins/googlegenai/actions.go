@@ -59,6 +59,15 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 		}
 	}
 
+	// Lyria music models
+	for _, name := range models.lyria {
+		opts := GetModelOptions(name, provider)
+		model := newModel(client, name, opts)
+		if actionDef, ok := model.(api.Action); ok {
+			actions = append(actions, actionDef.Desc())
+		}
+	}
+
 	// Embedders
 	for _, name := range models.embedders {
 		opts := GetEmbedderOptions(name, provider)
