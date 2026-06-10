@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { extractJson } from './extract';
+import { extractJson } from './extract.js';
 import type {
   MessageData,
   Part,
   ToolRequestPart,
   ToolResponsePart,
-} from './model';
+} from './model.js';
 
 export type MessageParser<T = unknown> = (message: Message) => T;
 

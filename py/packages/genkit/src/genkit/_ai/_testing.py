@@ -17,20 +17,20 @@
 """Internal testing utilities for Genkit AI (mock models, test_models)."""
 
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._tracing import run_in_new_span
+from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
     Media,
     MediaPart,
     ModelInfo,
     Part,
     Role,
-    SpanMetadata,
     TextPart,
 )
 from genkit.model import Message, ModelRequest, ModelResponse, ModelResponseChunk
@@ -47,6 +47,7 @@ class ProgrammableModel:
         self.responses: list[ModelResponse] = []
         self.chunks: list[list[ModelResponseChunk]] | None = None
         self.last_request: ModelRequest | None = None
+        self.response_cb: Callable[[ModelRequest], ModelResponse] | None = None
 
     def reset(self) -> None:
         self._request_idx = 0
@@ -54,6 +55,7 @@ class ProgrammableModel:
         self.responses = []
         self.chunks = None
         self.last_request = None
+        self.response_cb = None
 
     async def model_fn(
         self,
@@ -63,7 +65,10 @@ class ProgrammableModel:
         self.last_request = deepcopy(request)
         self.request_count += 1
 
-        response = self.responses[self._request_idx]
+        if self.response_cb is not None:
+            response = self.response_cb(request)
+        else:
+            response = self.responses[self._request_idx]
         if self.chunks and self._request_idx < len(self.chunks):
             for chunk in self.chunks[self._request_idx]:
                 ctx.send_chunk(chunk)
@@ -358,9 +363,9 @@ async def test_models(ai: Genkit, models: list[str]) -> TestReport:
 
     report: TestReport = []
 
-    with run_in_new_span(SpanMetadata(name='testModels'), labels={'genkit:type': 'testSuite'}):
+    with run_in_new_span(SpanMetadata(name='testModels', type='testSuite')):
         for test_name, test_fn in tests.items():
-            with run_in_new_span(SpanMetadata(name=test_name), labels={'genkit:type': 'testCase'}):
+            with run_in_new_span(SpanMetadata(name=test_name, type='testCase')):
                 case_report: TestCaseReport = {
                     'description': test_name,
                     'models': [],

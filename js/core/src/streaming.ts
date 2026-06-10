@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError } from './error';
+import { GenkitError } from './error.js';
 
 /**
  * Error thrown when a stream cannot be found.

@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +14,17 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ */
+
+/**
+ * Extraction utilities — helpers for extracting structured JSON from model
+ * output, including partial JSON parsing for streaming.
+ *
+ * ```ts
+ * import { extractJson, parsePartialJson } from 'genkit/extract';
+ * ```
+ *
+ * @module extract
  */
 
 export { extractJson, parsePartialJson } from '@genkit-ai/ai/extract';

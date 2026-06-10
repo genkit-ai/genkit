@@ -65,11 +65,13 @@ export {
 } from './dynamic-action-provider.js';
 export {
   GenkitError,
+  StatusNameSchema,
   UnstableApiError,
   UserFacingError,
   assertUnstable,
   getCallableJSON,
   getHttpStatus,
+  type ErrorResponseMetadata,
   type StatusName,
 } from './error.js';
 export {
@@ -83,7 +85,13 @@ export {
 } from './flow.js';
 export * from './plugin.js';
 export * from './reflection.js';
-export { defineJsonSchema, defineSchema, type JSONSchema } from './schema.js';
+export {
+  annotateSchema,
+  defineJsonSchema,
+  defineSchema,
+  toJsonSchema,
+  type JSONSchema,
+} from './schema.js';
 export * from './telemetryTypes.js';
 export * from './utils.js';
 

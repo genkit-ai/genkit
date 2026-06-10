@@ -301,15 +301,20 @@ function defineOllamaModel(
         const reader = res.body.getReader();
         const textDecoder = new TextDecoder();
         let textResponse = '';
-        for await (const chunk of readChunks(reader)) {
-          const chunkText = textDecoder.decode(chunk);
-          const json = JSON.parse(chunkText);
-          const message = parseMessage(json, type);
-          streamingCallback({
-            index: 0,
-            content: message.content,
-          });
-          textResponse += message.content[0].text;
+        try {
+          for await (const chunk of readChunks(reader)) {
+            const chunkText = textDecoder.decode(chunk);
+            const json = JSON.parse(chunkText);
+            const message = parseMessage(json, type);
+            streamingCallback({
+              index: 0,
+              content: message.content,
+            });
+            textResponse += message.content[0].text;
+          }
+        } finally {
+          // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+          reader.cancel().catch(() => {});
         }
         message = {
           role: 'model',

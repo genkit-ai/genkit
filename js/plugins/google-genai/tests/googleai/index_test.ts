@@ -278,14 +278,6 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
-    it('should have config values for gemma', () => {
-      const modelRef = googleAI.model('gemma-3-12b-it', {
-        temperature: 0.7,
-      });
-      assert.strictEqual(modelRef.name, 'googleai/gemma-3-12b-it');
-      assert.strictEqual(modelRef.config?.temperature, 0.7);
-    });
-
     it('should return an Imagen model reference with correct schema', () => {
       const modelRef = googleAI.model('imagen-new-model');
       assert.strictEqual(
@@ -416,15 +408,15 @@ describe('GoogleAI Plugin', () => {
     });
 
     it('should handle names with googleai/ prefix', () => {
-      const modelName = 'googleai/gemini-2.0-pro';
+      const modelName = 'googleai/gemini-2.5-pro';
       const modelRef = googleAI.model(modelName);
       assert.strictEqual(modelRef.name, modelName);
     });
 
     it('should handle names with models/ prefix', () => {
-      const modelName = 'models/gemini-2.0-pro';
+      const modelName = 'models/gemini-2.5-pro';
       const modelRef = googleAI.model(modelName);
-      assert.strictEqual(modelRef.name, 'googleai/gemini-2.0-pro');
+      assert.strictEqual(modelRef.name, 'googleai/gemini-2.5-pro');
     });
   });
 

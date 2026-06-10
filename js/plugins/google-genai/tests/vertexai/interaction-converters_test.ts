@@ -25,11 +25,11 @@ import {
   toInteractionContent,
   toInteractionRole,
   toInteractionTool,
-} from '../../src/common/interaction-converters.js';
+} from '../../src/vertexai/interaction-converters.js';
 import {
   Content,
   GeminiInteraction,
-} from '../../src/common/interaction-types.js';
+} from '../../src/vertexai/interaction-types.js';
 
 describe('Interaction Converters', () => {
   describe('ensureToolIds', () => {

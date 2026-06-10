@@ -32,30 +32,39 @@ from dotpromptz.typing import (
     PromptMetadata,
 )
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import Unpack
+from typing_extensions import Never, Unpack
 
 from genkit._ai._generate import (
     generate_action,
+    register_middleware,
+    register_tools,
     resolve_tool,
     to_tool_definition,
     tools_to_action_names,
 )
 from genkit._ai._model import (
-    ModelMiddleware,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
 )
 from genkit._ai._tools import Tool
-from genkit._core._action import Action, ActionKind, ActionRunContext, StreamingCallback, create_action_key
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    StreamingCallback,
+    create_action_key,
+    get_current_context,
+)
 from genkit._core._channel import Channel
 from genkit._core._error import GenkitError
 from genkit._core._logger import get_logger
+from genkit._core._middleware import BaseMiddleware, middleware_class_index
 from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     GenerateActionOutputConfig,
+    MiddlewareRef,
     OutputConfig,
     Part,
     Resume,
@@ -133,9 +142,8 @@ class PromptGenerateOptions(TypedDict, total=False):
     return_tool_requests: bool | None
     max_turns: int | None
     on_chunk: ModelStreamingCallback | None
-    use: list[ModelMiddleware] | None
+    use: Sequence[BaseMiddleware | MiddlewareRef] | None
     context: dict[str, Any] | None
-    step_name: str | None
     metadata: dict[str, Any] | None
 
 
@@ -212,7 +220,7 @@ class PromptConfig(BaseModel):
     metadata: dict[str, Any] | None = None
     tools: Sequence[str | Tool] | None = None
     tool_choice: ToolChoice | None = None
-    use: list[ModelMiddleware] | None = None
+    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None
     docs: list[Document] | None = None
     resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None
     resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None
@@ -244,7 +252,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         metadata: dict[str, Any] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: list[ModelMiddleware] | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         resources: list[str] | None = None,
         name: str | None = None,
@@ -331,8 +339,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Args:
             input: Template variables for rendering.
+            **opts: Runtime prompt options (e.g. model, tools, config).
         """
-        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        return await self._call_impl(input, opts)  # ty: ignore[invalid-argument-type]
 
     async def _call_impl(
         self,
@@ -340,29 +350,20 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         opts: PromptGenerateOptions,
     ) -> ModelResponse[OutputT]:
         """Execute the prompt with resolved opts. Used by __call__ and stream."""
-        await self._ensure_resolved()
+        child_registry, gen_options = await _prepare(self, input, opts)
         on_chunk = opts.get('on_chunk')
-        middleware = opts.get('use') or self._use
         context = opts.get('context')
         result = await generate_action(
-            self._registry,
-            await self._render_impl(input, opts),
+            child_registry,
+            gen_options,
             on_chunk=on_chunk,
-            middleware=middleware,
-            context=context if context else ActionRunContext._current_context(),  # pyright: ignore[reportPrivateUsage]
+            context=context if context else get_current_context(),
         )
         return cast(ModelResponse[OutputT], result)
 
-    async def _render_impl(
-        self,
-        input: InputT | dict[str, Any] | None,
-        opts: PromptGenerateOptions,
-    ) -> GenerateActionOptions:
-        """Render the prompt with resolved opts. Used by render() and _call_impl."""
+    def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
+        """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        context = opts.get('context')
-
-        # Config merge requires special handling (dict merge with Pydantic conversion)
         merged_config: dict[str, Any] | ModelConfig | None
         if opts.get('config') is not None:
             base = (
@@ -378,7 +379,6 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         else:
             merged_config = self._config
 
-        # Metadata merge (combine dicts)
         merged_metadata = (
             {**(self._metadata or {}), **(opts.get('metadata') or {})} if opts.get('metadata') else self._metadata
         )
@@ -386,7 +386,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         def _or(opt_val: Any, default: Any) -> Any:  # noqa: ANN401
             return opt_val if opt_val is not None else default
 
-        prompt_config = PromptConfig(
+        return PromptConfig(
             model=opts.get('model') or self._model,
             prompt=self._prompt,
             system=self._system,
@@ -405,91 +405,10 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
             metadata=merged_metadata,
             docs=self._docs,
             resources=opts.get('resources') or self._resources,
+            use=opts.get('use') or self._use,
             resume_respond=opts.get('resume_respond'),
             resume_restart=opts.get('resume_restart'),
             resume_metadata=opts.get('resume_metadata'),
-        )
-
-        model = prompt_config.model or cast(str | None, self._registry.lookup_value('defaultModel', 'defaultModel'))
-        if model is None:
-            raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
-
-        resolved_msgs: list[Message] = []
-        # Convert input to dict for render functions
-        render_input: dict[str, Any]
-        if input is None:
-            render_input = {}
-        elif isinstance(input, dict):
-            render_input = {str(k): v for k, v in input.items()}
-        elif isinstance(input, BaseModel):
-            render_input = input.model_dump()
-        elif hasattr(input, 'dict'):
-            dict_func = getattr(input, 'dict', None)
-            render_input = cast(Callable[[], dict[str, Any]], dict_func)()
-        else:
-            render_input = cast(dict[str, Any], input)
-
-        opts_messages = opts.get('messages')
-        if prompt_config.system:
-            result = await render_system_prompt(
-                self._registry, render_input, prompt_config, self._cache_prompt, context
-            )
-            resolved_msgs.append(result)
-        if prompt_config.messages:
-            resolved_msgs.extend(
-                await render_message_prompt(
-                    self._registry,
-                    render_input,
-                    prompt_config,
-                    self._cache_prompt,
-                    context,
-                    history=opts_messages,
-                )
-            )
-        elif opts_messages:
-            resolved_msgs.extend(opts_messages)
-        if prompt_config.prompt:
-            result = await render_user_prompt(self._registry, render_input, prompt_config, self._cache_prompt, context)
-            resolved_msgs.append(result)
-
-        if prompt_config.output_schema and not prompt_config.output_format:
-            output_format = 'json'
-        else:
-            output_format = prompt_config.output_format
-
-        output = GenerateActionOutputConfig()
-        if output_format:
-            output.format = output_format
-        if prompt_config.output_content_type:
-            output.content_type = prompt_config.output_content_type
-        if prompt_config.output_instructions is not None:
-            output.instructions = prompt_config.output_instructions
-        _resolve_output_schema(self._registry, prompt_config.output_schema, output)
-        if prompt_config.output_constrained is not None:
-            output.constrained = prompt_config.output_constrained
-
-        resume_result = resume_options_to_resume(
-            resume_respond=opts.get('resume_respond'),
-            resume_restart=opts.get('resume_restart'),
-            resume_metadata=opts.get('resume_metadata'),
-        )
-
-        merged_docs = await render_docs(render_input, prompt_config, context)
-        opts_docs = opts.get('docs')
-        if opts_docs:
-            merged_docs = [*merged_docs, *opts_docs] if merged_docs else list(opts_docs)
-
-        return GenerateActionOptions(
-            model=model,
-            messages=resolved_msgs,
-            config=prompt_config.config,
-            tools=tools_to_action_names(prompt_config.tools),
-            return_tool_requests=prompt_config.return_tool_requests,
-            tool_choice=prompt_config.tool_choice,
-            output=output,
-            max_turns=prompt_config.max_turns,
-            docs=merged_docs,  # type: ignore[arg-type]
-            resume=resume_result,
         )
 
     def stream(
@@ -520,8 +439,55 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
 
         Same keyword options as ``__call__`` (see PromptGenerateOptions).
         """
-        await self._ensure_resolved()
-        return await self._render_impl(input, opts)  # ty: ignore[invalid-argument-type]  # ty doesn't infer Unpack[TD] as TD in function body (PEP 692 gap)
+        # ty treats **opts as a plain dict here; callers are still validated against PromptGenerateOptions.
+        call_opts: PromptGenerateOptions = opts  # ty: ignore[invalid-assignment]
+        _child_registry, gen_options = await _prepare(self, input, call_opts)
+        return gen_options
+
+
+def _register_prompt_action_pair(
+    registry: Registry,
+    action_name: str,
+    ep_factory: Callable[[], Awaitable[ExecutablePrompt[Any, Any]]],
+    metadata: dict[str, object],
+) -> tuple[Action[Any, Any, Never], Action[Any, Any, Never]]:
+    """Register the ``(PROMPT, EXECUTABLE_PROMPT)`` action pair for a prompt.
+
+    Args:
+        registry: Registry to register the actions on.
+        action_name: Wire name (already passed through ``registry_definition_key``).
+        ep_factory: Returns the ``ExecutablePrompt``. Either a closure over an
+            already-built instance, or a lazy factory that loads from disk.
+        metadata: Wire metadata to attach to both actions (typically differs
+            only in ``source``/``lazy`` between the two registration paths).
+
+    Returns:
+        ``(prompt_action, executable_prompt_action)`` so callers can attach
+        extra attrs (e.g. ``_async_factory`` for hot-reload on file prompts).
+    """
+
+    async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
+        ep = await ep_factory()
+        child_registry, gen_options = await _prepare(ep, input, {})
+        return await to_generate_request(child_registry, gen_options)
+
+    async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
+        ep = await ep_factory()
+        return await ep.render(input)
+
+    prompt_action = registry.register_action(
+        kind=ActionKind.PROMPT,
+        name=action_name,
+        fn=prompt_action_fn,
+        metadata=metadata,
+    )
+    executable_prompt_action = registry.register_action(
+        kind=ActionKind.EXECUTABLE_PROMPT,
+        name=action_name,
+        fn=executable_prompt_action_fn,
+        metadata=metadata,
+    )
+    return prompt_action, executable_prompt_action
 
 
 def register_prompt_actions(
@@ -535,41 +501,44 @@ def register_prompt_actions(
     This links the executable prompt to actions in the registry, enabling
     lookup and DevUI integration.
     """
-    action_metadata: dict[str, object] = {
+    prompt_block: dict[str, Any] = {'name': name, 'variant': variant or ''}
+    use_metadata = _use_to_wire_metadata(registry, executable_prompt._use)  # pyright: ignore[reportPrivateUsage]
+    if use_metadata is not None:
+        prompt_block['use'] = use_metadata
+    metadata: dict[str, object] = {
         'type': 'prompt',
         'source': 'programmatic',
-        'prompt': {
-            'name': name,
-            'variant': variant or '',
-        },
+        'prompt': prompt_block,
     }
 
-    async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
-        options = await executable_prompt.render(input=input)
-        return await to_generate_request(registry, options)
-
-    async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
-        return await executable_prompt.render(input=input)
+    async def _ep_factory() -> ExecutablePrompt[Any, Any]:
+        # Programmatic prompts hand us the already-built instance; just make
+        # sure resolution finished before the action body inspects it.
+        await executable_prompt._ensure_resolved()
+        return executable_prompt
 
     action_name = registry_definition_key(name, variant)
-    prompt_action = registry.register_action(
-        kind=ActionKind.PROMPT,
-        name=action_name,
-        fn=prompt_action_fn,
-        metadata=action_metadata,
-    )
-
-    executable_prompt_action = registry.register_action(
-        kind=ActionKind.EXECUTABLE_PROMPT,
-        name=action_name,
-        fn=executable_prompt_action_fn,
-        metadata=action_metadata,
-    )
+    prompt_action, executable_prompt_action = _register_prompt_action_pair(registry, action_name, _ep_factory, metadata)
 
     # Link them
     executable_prompt._prompt_action = prompt_action  # pyright: ignore[reportPrivateUsage]
     setattr(prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010
     setattr(executable_prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010
+
+    # Propagate the prompt's input/output schemas onto both actions so the Dev
+    # UI Prompt Runner can render a typed form (otherwise the runner has nothing
+    # to introspect and the user just sees a free-form textarea). Dotprompts do
+    # the equivalent in their lazy factory after rendering frontmatter.
+    input_schema = executable_prompt._input_schema  # pyright: ignore[reportPrivateUsage]
+    if input_schema is not None:
+        in_js = to_json_schema(input_schema)
+        for action in (prompt_action, executable_prompt_action):
+            action.input_schema = in_js
+    output_schema = executable_prompt._output_schema  # pyright: ignore[reportPrivateUsage]
+    if output_schema is not None:
+        out_js = to_json_schema(output_schema)
+        for action in (prompt_action, executable_prompt_action):
+            action.output_schema = out_js
 
 
 def _resolve_output_schema(
@@ -610,23 +579,57 @@ def _resolve_output_schema(
         output.json_schema = to_json_schema(output_schema)
 
 
-async def to_generate_action_options(registry: Registry, options: PromptConfig) -> GenerateActionOptions:
-    """Convert PromptConfig to GenerateActionOptions."""
+async def _prepare(
+    ep: ExecutablePrompt[Any, Any],
+    input: Any,  # noqa: ANN401
+    call_opts: PromptGenerateOptions,
+) -> tuple[Registry, GenerateActionOptions]:
+    """Render an ``ExecutablePrompt`` into resolved generate options + a per-call registry.
+
+    Returns:
+        * ``child_registry`` — fresh child of ``ep._registry`` holding any
+          inline tools and ``use=[Logger()]`` middleware for this call. Pass
+          it to whatever consumes ``gen_options`` (the generate action,
+          ``to_generate_request``, etc.) so name-based lookups resolve those
+          inline entries.
+        * ``gen_options`` — the resolved request the engine consumes.
+    """
+    await ep._ensure_resolved()  # pyright: ignore[reportPrivateUsage]
+    prompt_config = ep._prompt_config_for_call(call_opts)  # pyright: ignore[reportPrivateUsage]
+    child_registry = ep._registry.new_child()  # pyright: ignore[reportPrivateUsage]
+    await register_tools(child_registry, prompt_config.tools)
+    refs = register_middleware(child_registry, prompt_config.use)
+    if prompt_config.use is not None:
+        # `use` may have contained inline BaseMiddleware instances that
+        # register_middleware swapped for refs; rewrite so downstream sees
+        # the registry-resolvable shape. (Skip the copy when `use` is None
+        # — the common path — since refs is None too.)
+        prompt_config = prompt_config.model_copy()
+        prompt_config.use = refs
+
+    gen_options = await executable_prompt_call_to_generate_options(ep, child_registry, prompt_config, input, call_opts)
+    return child_registry, gen_options
+
+
+async def to_generate_action_options(
+    registry: Registry,
+    options: PromptConfig,
+) -> GenerateActionOptions:
+    """Render ``PromptConfig`` into `GenerateActionOptions`."""
     model = options.model or cast(str | None, registry.lookup_value('defaultModel', 'defaultModel'))
     if model is None:
         raise GenkitError(status='INVALID_ARGUMENT', message='No model configured.')
 
+    ri: dict[str, Any] = {}
     cache = PromptCache()
     resolved_msgs: list[Message] = []
-    # Use empty dict instead of None for render functions
-    render_input: dict[str, Any] = {}
     if options.system:
-        result = await render_system_prompt(registry, render_input, options, cache)
+        result = await render_system_prompt(registry, ri, options, cache, None)
         resolved_msgs.append(result)
     if options.messages:
-        resolved_msgs.extend(await render_message_prompt(registry, render_input, options, cache))
+        resolved_msgs.extend(await render_message_prompt(registry, ri, options, cache, None, history=None))
     if options.prompt:
-        result = await render_user_prompt(registry, render_input, options, cache)
+        result = await render_user_prompt(registry, ri, options, cache, None)
         resolved_msgs.append(result)
 
     # If is schema is set but format is not explicitly set, default to
@@ -653,6 +656,8 @@ async def to_generate_action_options(registry: Registry, options: PromptConfig) 
     # Convert tool refs (str name or Tool object) to string names for GenerateActionOptions
     tools_refs = tools_to_action_names(options.tools)
 
+    merged_docs = await render_docs({}, options, None)
+
     return GenerateActionOptions(
         model=model,
         messages=resolved_msgs,  # type: ignore[arg-type]
@@ -662,8 +667,32 @@ async def to_generate_action_options(registry: Registry, options: PromptConfig) 
         tool_choice=options.tool_choice,
         output=output,
         max_turns=options.max_turns,
-        docs=await render_docs(render_input, options),  # type: ignore[arg-type]
+        docs=merged_docs,  # type: ignore[arg-type]
         resume=resume,
+        use=options.use,  # type: ignore[arg-type]
+    )
+
+
+def coerce_prompt_template_input(template_input: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Normalize executable-prompt ``input`` to template data for rendering."""
+    if template_input is None:
+        return {}
+    if isinstance(template_input, dict):
+        return {str(k): v for k, v in template_input.items()}
+    if isinstance(template_input, BaseModel):
+        return template_input.model_dump()
+    if hasattr(template_input, 'dict'):
+        dict_func = getattr(template_input, 'dict', None)
+        return cast(Callable[[], dict[str, Any]], dict_func)()
+    return cast(dict[str, Any], template_input)
+
+
+def resume_from_prompt_call_opts(opts: PromptGenerateOptions) -> Resume | None:
+    """Build a Resume from flat resume_respond / resume_restart / resume_metadata kwargs."""
+    return resume_options_to_resume(
+        resume_respond=opts.get('resume_respond'),
+        resume_restart=opts.get('resume_restart'),
+        resume_metadata=opts.get('resume_metadata'),
     )
 
 
@@ -878,6 +907,67 @@ async def render_docs(
     return options.docs
 
 
+async def render_prompt_config_for_executable_call(
+    executable_prompt: ExecutablePrompt[Any, Any],
+    registry: Registry,
+    prompt_config: PromptConfig,
+    template_input: Any,  # noqa: ANN401
+    opts: PromptGenerateOptions,
+) -> PromptConfig:
+    """Expand dotprompt with the call's input into one merged :class:`PromptConfig`.
+
+    Sets final ``messages``, merged ``docs``, optional ``resume``, and clears template source fields
+    before :func:`to_generate_action_options`.
+    """
+    ri = coerce_prompt_template_input(template_input)
+    render_context = opts.get('context')
+    message_history = opts.get('messages')
+    cache = executable_prompt._cache_prompt
+    extra_docs = opts.get('docs')
+
+    resolved_msgs: list[Message] = []
+    if prompt_config.system:
+        result = await render_system_prompt(registry, ri, prompt_config, cache, render_context)
+        resolved_msgs.append(result)
+    if prompt_config.messages:
+        resolved_msgs.extend(
+            await render_message_prompt(registry, ri, prompt_config, cache, render_context, history=message_history)
+        )
+    elif message_history:
+        resolved_msgs.extend(message_history)
+    if prompt_config.prompt:
+        result = await render_user_prompt(registry, ri, prompt_config, cache, render_context)
+        resolved_msgs.append(result)
+
+    merged_docs = await render_docs(ri, prompt_config, render_context)
+    if extra_docs:
+        merged_docs = [*merged_docs, *extra_docs] if merged_docs else list(extra_docs)
+
+    resume = resume_from_prompt_call_opts(opts)
+    return PromptConfig.model_validate({
+        **prompt_config.model_dump(),
+        'system': None,
+        'prompt': None,
+        'messages': resolved_msgs,
+        'docs': merged_docs,
+        'resume': resume,
+    })
+
+
+async def executable_prompt_call_to_generate_options(
+    executable_prompt: ExecutablePrompt[Any, Any],
+    registry: Registry,
+    prompt_config: PromptConfig,
+    template_input: Any,  # noqa: ANN401
+    opts: PromptGenerateOptions,
+) -> GenerateActionOptions:
+    """Expand executable prompt templates, then build :class:`GenerateActionOptions`."""
+    merged = await render_prompt_config_for_executable_call(
+        executable_prompt, registry, prompt_config, template_input, opts
+    )
+    return await to_generate_action_options(registry, merged)
+
+
 def registry_definition_key(name: str, variant: str | None = None, ns: str | None = None) -> str:
     """Generate a registry definition key for a prompt.
 
@@ -970,11 +1060,88 @@ def define_schema(registry: Registry, name: str, schema: type[BaseModel]) -> Non
     logger.debug(f'Registered schema "{name}"')
 
 
+def _use_to_wire_metadata(
+    registry: Registry,
+    use: Sequence[BaseMiddleware | MiddlewareRef] | None,
+) -> list[dict[str, Any]] | None:
+    """Serialize a prompt's ``use=`` list into the wire-shape the Dev UI reads.
+
+    Produces the ``[{name, config?}]`` list the Prompt Runner sidebar pre-fills
+    from ``metadata.prompt.use``. Inline ``BaseMiddleware`` instances surface
+    their configured fields so the sidebar matches what the prompt will
+    actually run with. The registered name is resolved off ``registry`` so a
+    class can live under multiple names without us tying it to a single
+    identity. Unregistered instances — subclasses passed inline without going
+    through ``@ai.middleware``, ``new_middleware``, or a middleware plugin —
+    are dropped because the Dev UI has no name to address them by.
+    """
+    if use is None:
+        return None
+    out: list[dict[str, Any]] = []
+    cls_index = middleware_class_index(registry)
+    for entry in use:
+        if isinstance(entry, MiddlewareRef):
+            item: dict[str, Any] = {'name': entry.name}
+            if entry.config is not None:
+                item['config'] = entry.config
+            out.append(item)
+            continue
+        if isinstance(entry, BaseMiddleware):
+            name = cls_index.get(type(entry))
+            if not name:
+                continue
+            config = entry.config.model_dump(exclude_none=True, mode='json')
+            item = {'name': name}
+            if config:
+                item['config'] = config
+            out.append(item)
+    return out
+
+
+def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN401
+    """Convert dotprompt frontmatter ``use`` into middleware refs.
+
+    Each entry may be a bare string (middleware name) or a map with ``name`` and
+    optional ``config``, matching the cross-SDK MiddlewareRef shape.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'dotprompt `use` must be a list, got {type(raw).__name__}',
+        )
+    refs: list[MiddlewareRef] = []
+    for i, entry in enumerate(raw):
+        if isinstance(entry, str):
+            if not entry:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'dotprompt `use[{i}]` is an empty string',
+                )
+            refs.append(MiddlewareRef(name=entry))
+        elif isinstance(entry, dict):
+            name = entry.get('name')
+            if not isinstance(name, str) or not name:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'dotprompt `use[{i}]` is missing required `name` field',
+                )
+            refs.append(MiddlewareRef(name=name, config=entry.get('config')))
+        else:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'dotprompt `use[{i}]` must be a string or map, got {type(entry).__name__}',
+            )
+    return refs
+
+
 def _transform_prompt_metadata(
     raw_metadata: Any,  # noqa: ANN401
     variant: str | None,
     template: str,
     registry_key: str,
+    name: str,
 ) -> dict[str, Any]:
     """Transform dotprompt metadata into the format ExecutablePrompt expects."""
     # Convert Pydantic model to dict if needed
@@ -992,7 +1159,7 @@ def _transform_prompt_metadata(
     if variant:
         md['variant'] = variant
 
-    # Clean up null descriptions (matches JS behavior)
+    # Drop description when it is explicitly null so metadata stays minimal for wire/clients.
     output = md.get('output')
     if output and isinstance(output, dict):
         schema = output.get('schema')
@@ -1005,15 +1172,31 @@ def _transform_prompt_metadata(
         if schema and isinstance(schema, dict) and schema.get('description') is None:
             schema.pop('description', None)
 
+    raw = md.get('raw')
+    raw_use = raw.get('use') if isinstance(raw, dict) else None
+    parsed_use = _parse_dotprompt_use(raw_use)
+
+    prompt_block: dict[str, Any] = {**md, 'template': template}
+    # The Dev UI keys its prompt picker off ``metadata.prompt.name`` and opens
+    # the action under that same name, so this has to match the registry key
+    # (filename for dotprompts, the explicit name for ``define_prompt``).
+    prompt_block['name'] = name
+    if parsed_use is not None:
+        prompt_block['use'] = [
+            ({'name': ref.name, 'config': ref.config} if ref.config is not None else {'name': ref.name})
+            for ref in parsed_use
+        ]
+
+    # The Dev UI expects an array here; dotprompt leaves it null when no tools are set.
+    if prompt_block.get('toolDefs') is None:
+        prompt_block['toolDefs'] = []
+
     # Build metadata structure
-    metadata = {
-        **md,
-        **(md.get('metadata', {}) if isinstance(md.get('metadata'), dict) else {}),
+    metadata: dict[str, Any] = {
         'type': 'prompt',
-        'prompt': {**md, 'template': template},
+        'prompt': prompt_block,
     }
 
-    raw = md.get('raw')
     if raw and isinstance(raw, dict) and raw.get('metadata'):
         metadata['metadata'] = {**raw['metadata']}
 
@@ -1035,6 +1218,7 @@ def _transform_prompt_metadata(
         'maxTurns': raw.get('maxTurns') if isinstance(raw, dict) else None,
         'toolChoice': raw.get('toolChoice') if isinstance(raw, dict) else None,
         'returnToolRequests': raw.get('returnToolRequests') if isinstance(raw, dict) else None,
+        'use': parsed_use,
         'messages': template,
     }
 
@@ -1070,7 +1254,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             return _cached_prompt
 
         raw_metadata = await registry.dotprompt.render_metadata(parsed_prompt)
-        metadata = _transform_prompt_metadata(raw_metadata, variant, parsed_prompt.template, registry_key)
+        metadata = _transform_prompt_metadata(raw_metadata, variant, parsed_prompt.template, registry_key, name)
 
         executable_prompt = ExecutablePrompt(
             registry=registry,
@@ -1088,6 +1272,7 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
             return_tool_requests=metadata.get('returnToolRequests'),
             metadata=metadata.get('metadata'),
             tools=metadata.get('tools'),
+            use=metadata.get('use'),
             name=name,
             ns=ns,
         )
@@ -1098,45 +1283,37 @@ def load_prompt(registry: Registry, path: Path, filename: str, prefix: str = '',
         exec_prompt_action = await registry.resolve_action_by_key(
             create_action_key(ActionKind.EXECUTABLE_PROMPT, definition_key)
         )
-
         if prompt_action and prompt_action.kind == ActionKind.PROMPT:
             executable_prompt._prompt_action = prompt_action  # pyright: ignore[reportPrivateUsage]
             setattr(prompt_action, '_executable_prompt', weakref.ref(executable_prompt))  # noqa: B010
 
-        # Update schemas on actions for Dev UI
+        # Update schemas and metadata on actions for Dev UI
         for action in [prompt_action, exec_prompt_action]:
             if action:
                 if metadata.get('input', {}).get('jsonSchema'):
                     action.input_schema = metadata['input']['jsonSchema']
                 if metadata.get('output', {}).get('jsonSchema'):
                     action.output_schema = metadata['output']['jsonSchema']
+                if metadata.get('metadata'):
+                    action._metadata.update(metadata['metadata'])
 
         _cached_prompt = executable_prompt
         return executable_prompt
 
-    action_metadata: dict[str, object] = {
+    metadata: dict[str, object] = {
         'type': 'prompt',
         'lazy': True,
         'source': 'file',
         'prompt': {'name': name, 'variant': variant or ''},
     }
 
-    async def prompt_action_fn(input: Any = None) -> ModelRequest:  # noqa: ANN401
-        prompt = await create_prompt_from_file()
-        return await to_generate_request(registry, await prompt.render(input=input))
-
-    async def executable_prompt_action_fn(input: Any = None) -> GenerateActionOptions:  # noqa: ANN401
-        prompt = await create_prompt_from_file()
-        return await prompt.render(input=input)
-
     action_name = registry_definition_key(name, variant, ns)
-    prompt_action = registry.register_action(
-        kind=ActionKind.PROMPT, name=action_name, fn=prompt_action_fn, metadata=action_metadata
-    )
-    executable_prompt_action = registry.register_action(
-        kind=ActionKind.EXECUTABLE_PROMPT, name=action_name, fn=executable_prompt_action_fn, metadata=action_metadata
+    prompt_action, executable_prompt_action = _register_prompt_action_pair(
+        registry, action_name, create_prompt_from_file, metadata
     )
 
+    # File-loaded prompts expose their async factory so the tooling can
+    # rebuild them on hot-reload without going back through the loader.
     setattr(prompt_action, '_async_factory', create_prompt_from_file)  # noqa: B010
     setattr(executable_prompt_action, '_async_factory', create_prompt_from_file)  # noqa: B010
 

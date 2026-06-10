@@ -167,7 +167,6 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit._core._typing import GenerationCommonConfig
 from genkit.model import Candidate, FinishReason, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
@@ -606,7 +605,7 @@ GEMINI_2_0_FLASH = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -619,7 +618,7 @@ GEMINI_2_0_FLASH_LITE = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -632,7 +631,7 @@ GEMINI_2_0_PRO_EXP_02_05 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -645,7 +644,7 @@ GEMINI_2_0_FLASH_EXP_IMAGEN = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -658,7 +657,7 @@ GEMINI_2_0_FLASH_THINKING_EXP_01_21 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -671,7 +670,7 @@ GEMINI_2_5_PRO_EXP_03_25 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -684,7 +683,7 @@ GEMINI_2_5_PRO_PREVIEW_03_25 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -697,7 +696,7 @@ GEMINI_2_5_PRO_PREVIEW_05_06 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -710,7 +709,59 @@ GEMINI_2_5_FLASH_PREVIEW_04_17 = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_2_5_FLASH_LITE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Lite',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
         constrained=Constrained.NO_TOOLS,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_FLASH_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Flash Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_5_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.5 Flash',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -723,7 +774,7 @@ GENERIC_GEMINI_MODEL = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -736,7 +787,7 @@ GENERIC_TTS_MODEL = ModelInfo(
         tools=False,
         tool_choice=False,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
     ),
 )
 
@@ -748,7 +799,7 @@ GENERIC_IMAGE_MODEL = ModelInfo(
         tools=False,
         tool_choice=False,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['media'],
     ),
 )
@@ -761,7 +812,7 @@ GENERIC_GEMMA_MODEL = ModelInfo(
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
 )
@@ -893,13 +944,39 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
 SUPPORTED_MODELS = {}
 
 
+def _add_model(model_info: ModelInfo, names: list[str]) -> None:
+    for name in names:
+        SUPPORTED_MODELS[name] = model_info
+    if model_info.versions:
+        for version in model_info.versions:
+            SUPPORTED_MODELS[version] = model_info
+
+
+_add_model(GEMINI_1_5_PRO, ['gemini-1.5-pro'])
+_add_model(GEMINI_1_5_FLASH, ['gemini-1.5-flash'])
+_add_model(GEMINI_1_5_FLASH_8B, ['gemini-1.5-flash-8b'])
+_add_model(GEMINI_2_0_FLASH, ['gemini-2.0-flash'])
+_add_model(GEMINI_2_0_FLASH_LITE, ['gemini-2.0-flash-lite'])
+_add_model(GEMINI_2_0_PRO_EXP_02_05, ['gemini-2.0-pro-exp-02-05'])
+_add_model(GEMINI_2_0_FLASH_EXP_IMAGEN, ['gemini-2.0-flash-exp'])
+_add_model(GEMINI_2_0_FLASH_THINKING_EXP_01_21, ['gemini-2.0-flash-thinking-exp-01-21'])
+_add_model(GEMINI_2_5_PRO_EXP_03_25, ['gemini-2.5-pro-exp-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_03_25, ['gemini-2.5-pro-preview-03-25'])
+_add_model(GEMINI_2_5_PRO_PREVIEW_05_06, ['gemini-2.5-pro-preview-05-06'])
+_add_model(GEMINI_2_5_FLASH_PREVIEW_04_17, ['gemini-2.5-flash-preview-04-17'])
+_add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
+_add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
+_add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
+_add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
+
+
 DEFAULT_SUPPORTS_MODEL = Supports(
     multiturn=True,
     media=True,
     tools=True,
     tool_choice=True,
     system_role=True,
-    constrained=Constrained.NO_TOOLS,
+    constrained=Constrained.ALL,
 )
 
 
@@ -1661,12 +1738,30 @@ class GeminiModel:
                 cfg = genai_types.GenerateContentConfig()
 
             if has_output:
+                model_name = self._version
+                if request.config:
+                    if isinstance(request.config, dict):
+                        version = request.config.get('version')
+                    else:
+                        version = getattr(request.config, 'version', None)
+                    if version:
+                        model_name = version
+
+                # Check if the model supports constrained generation with this configuration
+                model_info = google_model_info(model_name)
+                model_supports_constrained = (
+                    model_info.supports.constrained if model_info and model_info.supports else Constrained.NO_TOOLS
+                )
+                supports_constrained = model_supports_constrained == Constrained.ALL or (
+                    model_supports_constrained == Constrained.NO_TOOLS and not request.tools
+                )
+
                 response_mime_type = (
-                    'application/json' if request.output_format == 'json' and not request.tools else None
+                    'application/json' if request.output_format == 'json' and supports_constrained else None
                 )
                 cfg.response_mime_type = response_mime_type
 
-                if request.output_schema and request.output_constrained:
+                if request.output_schema and request.output_constrained and supports_constrained:
                     cfg.response_schema = self._convert_schema_property(request.output_schema)
 
             if tools:
@@ -1690,33 +1785,45 @@ class GeminiModel:
         self,
         config: GeminiConfigSchema | ModelConfig | dict,
     ) -> dict[str, Any] | None:
-        """Normalize any config type into a plain dict for uniform processing.
+        """Return the config as a snake_case dict for the rest of the pipeline.
 
-        Handles three input shapes:
-        - GeminiConfigSchema (and subclasses like TTS/Image): model_dump
-        - ModelConfig: model_dump
-        - dict: route to the appropriate schema first, then model_dump
+        Callers can hand us three shapes: a typed ``GeminiConfigSchema``, the
+        generic ``GenerationCommonConfig`` (which keeps plugin-specific keys
+        as alias-form extras), or a raw dict in either casing. Only the
+        plugin schema knows the alias mapping (e.g. ``codeExecution`` <->
+        ``code_execution``), so we re-validate through it whenever the input
+        isn't already one — that's what folds aliased keys onto their
+        canonical snake_case fields before tool extraction runs.
 
-        Returns:
-            A mutable dict ready for tool extraction and key cleanup,
-            or None if the config is empty after dumping.
+        Returns ``None`` if the config has no meaningful values.
         """
         if isinstance(config, GeminiConfigSchema):
             schema = config
-        elif isinstance(config, (ModelConfig, GenerationCommonConfig)):
-            schema = config
+        elif isinstance(config, ModelConfig):
+            # Re-route through the plugin schema so the alias machinery folds
+            # any plugin-specific extras onto their canonical fields.
+            schema = self._pick_plugin_schema(config.model_dump(exclude_none=True, by_alias=True))
         elif isinstance(config, dict):
-            if 'image_config' in config:
-                schema = GeminiImageConfigSchema(**config)
-            elif 'speech_config' in config:
-                schema = GeminiTtsConfigSchema(**config)
-            else:
-                schema = GeminiConfigSchema(**config)
+            schema = self._pick_plugin_schema(config)
         else:
             return None
 
         dumped = schema.model_dump(exclude_none=True, by_alias=False)
         return dumped or None
+
+    def _pick_plugin_schema(self, data: dict[str, Any]) -> GeminiConfigSchema:
+        """Validate ``data`` through whichever subclass matches the model.
+
+        Routing is purely by model name so each family gets its own
+        validation rules -- most importantly Gemma, which intentionally
+        relaxes the standard Gemini temperature bounds and would otherwise
+        reject valid configs. The per-request ``version`` override (when
+        present) takes precedence over the version this instance is bound
+        to, mirroring how the actual model name is resolved at call time.
+        """
+        model_name = data.get('version') or self._version
+        schema_cls = get_model_config_schema(model_name)
+        return schema_cls.model_validate(data)
 
     def _extract_tools_from_config(
         self,

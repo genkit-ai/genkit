@@ -21,6 +21,7 @@ import * as sinon from 'sinon';
 import { TextEncoder } from 'util';
 import { getGenkitClientHeader } from '../../src/common/utils.js';
 import {
+  TEST_ONLY,
   embedContent,
   generateContent,
   generateContentStream,
@@ -52,6 +53,7 @@ import { NOT_SUPPORTED_IN_EXPRESS_ERROR } from '../../src/vertexai/utils.js';
 
 describe('Vertex AI Client', () => {
   let fetchSpy: sinon.SinonStub;
+  let runInNewSpanSpy: sinon.SinonStub;
   let authMock: sinon.SinonStubbedInstance<GoogleAuth>;
 
   const regionalClientOptions: ClientOptions = {
@@ -78,7 +80,17 @@ describe('Vertex AI Client', () => {
   };
 
   beforeEach(() => {
+    sinon.restore();
     fetchSpy = sinon.stub(global, 'fetch');
+
+    runInNewSpanSpy = sinon
+      .stub(TEST_ONLY.tracingHooks, 'runInNewSpan')
+      .callsFake((async (...args: any[]) => {
+        const fn = args.pop();
+        const options = args[0];
+        return await fn(options.metadata);
+      }) as any);
+
     authMock = sinon.createStubInstance(GoogleAuth);
     authMock.getAccessToken.resolves('test-token');
     (regionalClientOptions as any).authClient =
@@ -501,6 +513,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'GET',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
               });
 
               if (!isExpress) {
@@ -541,8 +554,45 @@ describe('Vertex AI Client', () => {
             sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
               method: 'POST',
               headers: getExpectedHeaders(),
+              redirect: 'manual',
               body: JSON.stringify(request),
             });
+            sinon.assert.notCalled(runInNewSpanSpy);
+          });
+
+          it('should trace generateContent if experimental_debugTraces is true', async () => {
+            const mockResponse: GenerateContentResponse = { candidates: [] };
+            mockFetchResponse(mockResponse);
+
+            const optionsWithTrace: ClientOptions = {
+              ...currentOptions,
+              experimental_debugTraces: true,
+            };
+
+            const result = await generateContent(
+              model,
+              request,
+              optionsWithTrace
+            );
+            assert.deepStrictEqual(result, mockResponse);
+
+            sinon.assert.calledOnce(runInNewSpanSpy);
+
+            const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+            assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+            assert.deepStrictEqual(traceMetadata.input, {
+              apiEndpoint: getResourceUrl(model, 'generateContent'),
+              request: request,
+              model: model,
+              headers: {
+                ...getExpectedHeaders(),
+                ...(isExpress
+                  ? { 'x-goog-api-key': '<REDACTED> (12 characters)' }
+                  : { Authorization: '<REDACTED> (17 characters)' }),
+              },
+            });
+            assert.deepStrictEqual(traceMetadata.output, mockResponse);
           });
 
           it('should return GenerateContentResponse for tuned model', async () => {
@@ -566,6 +616,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             }
@@ -607,8 +658,38 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
+              sinon.assert.notCalled(runInNewSpanSpy);
+            });
+
+            it('should trace embedContent if experimental_debugTraces is true', async () => {
+              const mockResponse: EmbedContentResponse = { predictions: [] };
+              mockFetchResponse(mockResponse);
+
+              const optionsWithTrace: ClientOptions = {
+                ...currentOptions,
+                experimental_debugTraces: true,
+              };
+
+              await embedContent(model, request, optionsWithTrace);
+
+              sinon.assert.calledOnce(runInNewSpanSpy);
+
+              const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+              assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+              assert.deepStrictEqual(traceMetadata.input, {
+                apiEndpoint: getResourceUrl(model, 'predict'),
+                request: request,
+                model: model,
+                headers: {
+                  ...getExpectedHeaders(),
+                  Authorization: '<REDACTED> (17 characters)', // embedContent only runs in Regional/Global mode in tests
+                },
+              });
+              assert.deepStrictEqual(traceMetadata.output, mockResponse);
             });
           } else {
             it('should throw with unsupported for Express', async () => {
@@ -636,6 +717,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -665,6 +747,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -689,15 +772,14 @@ describe('Vertex AI Client', () => {
               const mockResponse: VeoOperation = { name: 'operations/123' };
               mockFetchResponse(mockResponse);
               const result = await veoPredict(model, request, currentOptions);
-              assert.deepStrictEqual(result, {
-                ...mockResponse,
-                clientOptions: currentOptions,
-              });
+
+              assert.deepStrictEqual(result, mockResponse);
 
               const expectedUrl = getResourceUrl(model, 'predictLongRunning');
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -728,10 +810,8 @@ describe('Vertex AI Client', () => {
                 request,
                 currentOptions
               );
-              assert.deepStrictEqual(result, {
-                ...mockResponse,
-                clientOptions: currentOptions,
-              });
+
+              assert.deepStrictEqual(result, mockResponse);
 
               const expectedUrl = getResourceUrl(
                 model,
@@ -740,6 +820,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             });
@@ -789,8 +870,39 @@ describe('Vertex AI Client', () => {
             sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
               method: 'POST',
               headers: getExpectedHeaders(),
+              redirect: 'manual',
               body: JSON.stringify(request),
             });
+            sinon.assert.notCalled(runInNewSpanSpy);
+          });
+
+          it('should trace generateContentStream if experimental_debugTraces is true', async () => {
+            mockStream();
+
+            const optionsWithTrace: ClientOptions = {
+              ...currentOptions,
+              experimental_debugTraces: true,
+            };
+
+            await generateContentStream(model, request, optionsWithTrace);
+
+            sinon.assert.calledOnce(runInNewSpanSpy);
+
+            const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+            assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+            assert.deepStrictEqual(traceMetadata.input, {
+              apiEndpoint: getResourceUrl(model, 'streamGenerateContent'),
+              request: request,
+              model: model,
+              headers: {
+                ...getExpectedHeaders(),
+                ...(isExpress
+                  ? { 'x-goog-api-key': '<REDACTED> (12 characters)' }
+                  : { Authorization: '<REDACTED> (17 characters)' }),
+              },
+            });
+            assert.strictEqual(traceMetadata.output, '[Streaming Response]');
           });
 
           it('should process stream for tuned model', async () => {
@@ -811,6 +923,7 @@ describe('Vertex AI Client', () => {
               sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
                 method: 'POST',
                 headers: getExpectedHeaders(),
+                redirect: 'manual',
                 body: JSON.stringify(request),
               });
             }

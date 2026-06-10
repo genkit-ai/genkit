@@ -24,6 +24,15 @@ const ai = genkit({
   ],
 });
 
+ai.defineFlow('anthropic-opus-4.8', async () => {
+  const { text } = await ai.generate({
+    model: anthropic.model('claude-opus-4-8'),
+    prompt: 'You are a friendly Claude assistant. Greet the user briefly.',
+  });
+
+  return text;
+});
+
 ai.defineFlow('anthropic-stable-hello', async () => {
   const { text } = await ai.generate({
     model: anthropic.model('claude-sonnet-4-5'),

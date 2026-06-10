@@ -627,6 +627,7 @@ class ToolDefinition(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     name: str = Field(...)
+    key: str | None = None
     description: str = Field(...)
     input_schema: Any | dict[str, Any] | None = Field(
         default=None, description='Valid JSON Schema representing the input of the tool.'
@@ -880,19 +881,6 @@ class SpanEndEvent(GenkitModel):
     trace_id: str = Field(...)
     span: SpanData = Field(...)
     type: str = Field(...)
-
-
-class SpanMetadata(GenkitModel):
-    """Model for spanmetadata data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    name: str = Field(...)
-    state: Literal['success', 'error'] | None = None
-    input: Any | None = Field(default=None)
-    output: Any | None = Field(default=None)
-    is_root: bool | None = None
-    metadata: Metadata | None = None
-    path: str | None = None
 
 
 class SpanStartEvent(GenkitModel):

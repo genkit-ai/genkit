@@ -31,7 +31,7 @@ var (
 		ToolChoice:  true,
 		SystemRole:  true,
 		Media:       true,
-		Constrained: ai.ConstrainedSupportNoTools,
+		Constrained: ai.ConstrainedSupportAll,
 	}
 
 	// Media describes model capabilities for image generation models (Imagen).
@@ -90,6 +90,9 @@ const (
 
 	gemini25Pro = "gemini-2.5-pro"
 
+	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
+	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
+
 	imagen3Generate001     = "imagen-3.0-generate-001"
 	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
 
@@ -119,6 +122,8 @@ var (
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
+		gemini31FlashLitePreview,
+		gemini31FlashImagePreview,
 
 		imagen3Generate001,
 		imagen3FastGenerate001,
@@ -136,6 +141,8 @@ var (
 		gemini25Flash,
 		gemini25FlashLite,
 		gemini25Pro,
+		gemini31FlashLitePreview,
+		gemini31FlashImagePreview,
 
 		veo20Generate001,
 		veo30Generate001,
@@ -178,6 +185,18 @@ var (
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashLitePreview: {
+			Label:    "Gemini 3.1 Flash Lite Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini31FlashImagePreview: {
+			Label:    "Gemini 3.1 Flash Image Preview",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageUnstable,
 		},
 	}
 

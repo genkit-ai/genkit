@@ -40,6 +40,7 @@ from websockets.exceptions import ConnectionClosed
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
+from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
@@ -377,9 +378,11 @@ class ReflectionServerV2:
         mapped: dict[str, Any] = {}
         for name in self._registry.list_values(p.type):
             value = self._registry.lookup_value(p.type, name)
-            to_json_fn = getattr(value, 'to_json', None) if value is not None else None
-            if callable(to_json_fn):
-                mapped[name] = to_json_fn()
+            if p.type == 'middleware':
+                assert isinstance(value, GenerateMiddleware), (
+                    f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
+                )
+                mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             else:
                 mapped[name] = value
         await self._send_response(sid, {'values': mapped})
@@ -478,6 +481,10 @@ class ReflectionServerV2:
         if p.telemetry_labels is not None:
             labels = {str(k): v for k, v in p.telemetry_labels.items()}
 
+        async def _drain_chunks() -> None:
+            if stream_chunk_tasks:
+                await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
+
         try:
             output = await action.run(
                 input=p.input,
@@ -486,8 +493,7 @@ class ReflectionServerV2:
                 on_trace_start=on_trace_start,
                 telemetry_labels=labels,
             )
-            if stream_chunk_tasks:
-                await asyncio.gather(*stream_chunk_tasks)
+            await _drain_chunks()
             await self._flush_tracing()
             result_body: object
             if isinstance(output.response, BaseModel):
@@ -501,6 +507,7 @@ class ReflectionServerV2:
                 success_body['telemetry'] = {'traceId': output.trace_id}
             await self._send_response(sid, success_body)
         except asyncio.CancelledError:
+            await _drain_chunks()
             err_details: dict[str, Any] = {}
             if trace_holder[0]:
                 err_details['traceId'] = trace_holder[0]
@@ -514,6 +521,7 @@ class ReflectionServerV2:
             return
         except Exception as e:
             logger.exception('reflection V2: runAction error')
+            await _drain_chunks()
             # Wire contract requires ``details`` to carry only ``stack`` and ``traceId``
             # (see ``GenkitErrorSchema.data.genkitErrorDetails`` in genkit-tools); anything
             # else in ``GenkitError.details`` is runtime-internal and gets dropped.

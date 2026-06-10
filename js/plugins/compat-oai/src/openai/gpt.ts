@@ -17,7 +17,10 @@
 
 import { z } from 'genkit';
 import { ModelInfo, ModelReference } from 'genkit/model';
-import { ChatCompletionCommonConfigSchema, compatOaiModelRef } from '../model';
+import {
+  ChatCompletionCommonConfigSchema,
+  compatOaiModelRef,
+} from '../model.js';
 
 const MULTIMODAL_MODEL_INFO: ModelInfo = {
   supports: {

@@ -63,6 +63,7 @@ export interface ActionMetadata<
   metadata?: Record<string, any>;
 }
 
+/** Zod schema for {@link ActionMetadata}. */
 export const ActionMetadataSchema = z.object({
   key: z.string().optional(),
   actionType: z.string().optional(),
@@ -463,16 +464,21 @@ export function action<
       output: invocationPromise,
       stream: (async function* () {
         const reader = chunkStream.getReader();
-        while (true) {
-          const chunk = await reader.read();
-          if (chunk.value) {
-            yield chunk.value;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.value) {
+              yield chunk.value;
+            }
+            if (chunk.done) {
+              break;
+            }
           }
-          if (chunk.done) {
-            break;
-          }
+          return await invocationPromise;
+        } finally {
+          // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+          reader.cancel().catch(() => {});
         }
-        return await invocationPromise;
       })(),
     };
   };
@@ -559,7 +565,7 @@ export function defineActionAsync<
   return actionPromise;
 }
 
-// Streaming callback function.
+/** Callback function invoked with each streaming chunk during action execution. */
 export type StreamingCallback<T> = (chunk: T) => void;
 
 const streamingAlsKey = 'core.action.streamingCallback';
