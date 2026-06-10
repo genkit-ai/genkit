@@ -92,10 +92,10 @@ func NewGenerateTelemetry() *GenerateTelemetry {
 func (g *GenerateTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, projectID string) {
 	attributes := span.Attributes()
 
-	modelName := truncate(extractStringAttribute(attributes, "genkit:name"), 1024)
-	path := extractStringAttribute(attributes, "genkit:path")
-	inputStr := extractStringAttribute(attributes, "genkit:input")
-	outputStr := extractStringAttribute(attributes, "genkit:output")
+	modelName := truncate(extractStringAttribute(attributes, attrGenkitName), 1024)
+	path := extractStringAttribute(attributes, attrGenkitPath)
+	inputStr := extractStringAttribute(attributes, attrGenkitInput)
+	outputStr := extractStringAttribute(attributes, attrGenkitOutput)
 
 	var input ai.GenerateActionOptions
 	var output ai.ModelResponse
@@ -112,8 +112,8 @@ func (g *GenerateTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool
 
 	featureName := truncate(g.extractFeatureName(attributes, path))
 
-	sessionId := extractStringAttribute(attributes, "genkit:sessionId")
-	threadName := extractStringAttribute(attributes, "genkit:threadName")
+	sessionId := extractStringAttribute(attributes, attrGenkitSessionID)
+	threadName := extractStringAttribute(attributes, attrGenkitThreadName)
 
 	if input.Config != nil {
 		g.recordGenerateActionConfigLogs(span, modelName, featureName, path, &input, projectID, sessionId, threadName)
@@ -126,7 +126,7 @@ func (g *GenerateTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool
 	if outputStr != "" && logInputOutput {
 		g.recordGenerateActionOutputLogs(span, modelName, featureName, path, &output, projectID, sessionId, threadName)
 	}
-	if featureName == "" || featureName == "<unknown>" {
+	if featureName == "" || featureName == unknownValue {
 		featureName = "generate"
 	}
 
@@ -137,18 +137,18 @@ func (g *GenerateTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool
 
 // recordGenerateActionMetrics records all metrics for a generate action
 func (g *GenerateTelemetry) recordGenerateActionMetrics(modelName, featureName, path string, output *ai.ModelResponse, errName string) {
-	status := "success"
+	status := statusSuccess
 	if errName != "" {
-		status = "failure"
+		status = statusFailure
 	}
 
 	attrs := []attribute.KeyValue{
 		attribute.String("modelName", modelName),
-		attribute.String("featureName", featureName),
+		attribute.String(attrFeatureName, featureName),
 		attribute.String("path", path),
 		attribute.String("status", status),
-		attribute.String("source", "go"),
-		attribute.String("sourceVersion", internal.Version),
+		attribute.String(fieldSource, sourceGo),
+		attribute.String(fieldSourceVersion, internal.Version),
 	}
 
 	errorAttrs := attrs
@@ -186,19 +186,19 @@ func (g *GenerateTelemetry) recordGenerateActionConfigLogs(span sdktrace.ReadOnl
 	sharedMetadata := createCommonLogAttributes(span, projectID)
 
 	logData := map[string]interface{}{
-		"model":         model,
-		"path":          path,
-		"qualifiedPath": qualifiedPath,
-		"featureName":   featureName,
-		"source":        "go",
-		"sourceVersion": internal.Version,
+		"model":            model,
+		"path":             path,
+		fieldQualifiedPath: qualifiedPath,
+		attrFeatureName:    featureName,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
 	}
 
 	if sessionID != "" {
-		logData["sessionId"] = sessionID
+		logData[fieldSessionID] = sessionID
 	}
 	if threadName != "" {
-		logData["threadName"] = threadName
+		logData[fieldThreadName] = threadName
 	}
 
 	for k, v := range sharedMetadata {
@@ -216,8 +216,8 @@ func (g *GenerateTelemetry) recordGenerateActionConfigLogs(span sdktrace.ReadOnl
 		}
 	}
 
-	logData["source"] = "go"
-	logData["sourceVersion"] = internal.Version
+	logData[fieldSource] = sourceGo
+	logData[fieldSourceVersion] = internal.Version
 
 	message := fmt.Sprintf("[genkit] Config[%s, %s]", path, model)
 	slog.InfoContext(ctx, message, "data", logData)
@@ -234,17 +234,17 @@ func (g *GenerateTelemetry) recordGenerateActionInputLogs(span sdktrace.ReadOnly
 	sharedMetadata := createCommonLogAttributes(span, projectID)
 
 	baseLogData := map[string]interface{}{
-		"model":         model,
-		"path":          path,
-		"qualifiedPath": qualifiedPath,
-		"featureName":   featureName,
+		"model":            model,
+		"path":             path,
+		fieldQualifiedPath: qualifiedPath,
+		attrFeatureName:    featureName,
 	}
 
 	if sessionID != "" {
-		baseLogData["sessionId"] = sessionID
+		baseLogData[fieldSessionID] = sessionID
 	}
 	if threadName != "" {
-		baseLogData["threadName"] = threadName
+		baseLogData[fieldThreadName] = threadName
 	}
 
 	for k, v := range sharedMetadata {
@@ -261,7 +261,7 @@ func (g *GenerateTelemetry) recordGenerateActionInputLogs(span sdktrace.ReadOnly
 			}
 
 			partCounts := g.toPartCounts(partIdx, parts, msgIdx, messages)
-			logData["content"] = g.toPartLogContent(part)
+			logData[fieldContent] = g.toPartLogContent(part)
 			logData["role"] = msg.Role
 			logData["partIndex"] = partIdx
 			logData["totalParts"] = parts
@@ -281,17 +281,17 @@ func (g *GenerateTelemetry) recordGenerateActionOutputLogs(span sdktrace.ReadOnl
 	sharedMetadata := createCommonLogAttributes(span, projectID)
 
 	baseLogData := map[string]interface{}{
-		"model":         model,
-		"path":          path,
-		"qualifiedPath": qualifiedPath,
-		"featureName":   featureName,
+		"model":            model,
+		"path":             path,
+		fieldQualifiedPath: qualifiedPath,
+		attrFeatureName:    featureName,
 	}
 
 	if sessionID != "" {
-		baseLogData["sessionId"] = sessionID
+		baseLogData[fieldSessionID] = sessionID
 	}
 	if threadName != "" {
-		baseLogData["threadName"] = threadName
+		baseLogData[fieldThreadName] = threadName
 	}
 
 	for k, v := range sharedMetadata {
@@ -317,7 +317,7 @@ func (g *GenerateTelemetry) recordGenerateActionOutputLogs(span sdktrace.ReadOnl
 				logData["finishMessage"] = truncate(output.FinishMessage)
 			}
 
-			logData["content"] = g.toPartLogContent(part)
+			logData[fieldContent] = g.toPartLogContent(part)
 			logData["role"] = message.Role
 			logData["partIndex"] = partIdx
 			logData["totalParts"] = parts
@@ -447,7 +447,7 @@ func (g *GenerateTelemetry) toPartLogToolResponse(tool *ai.ToolResponse) string 
 // Converts /{name1,t:type}/{name2,t:type} to "name1 > name2"
 func toDisplayPath(qualifiedPath string) string {
 	if qualifiedPath == "" {
-		return "<unknown>"
+		return unknownValue
 	}
 
 	re := regexp.MustCompile(`\{([^,}]+),[^}]+\}`)
