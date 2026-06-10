@@ -34,7 +34,7 @@ import type { PromptFrontmatter } from '../types/prompt';
 import { logger } from '../utils';
 import { PageViewEvent, ToolsRequestEvent, record } from '../utils/analytics';
 import { toolsPackage } from '../utils/package';
-import { fromMessages } from '../utils/prompt';
+import { fromMessages, toFrontmatterOutput } from '../utils/prompt';
 
 const t = initTRPC.create({
   errorFormatter(opts) {
@@ -150,6 +150,7 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
           config: input.config,
           tools: input.tools?.map((toolDefinition) => toolDefinition.name),
           use: input.use,
+          output: toFrontmatterOutput(input.output),
         };
         return fromMessages(frontmatter, input.messages);
       }),
