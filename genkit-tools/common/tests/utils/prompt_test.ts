@@ -205,7 +205,7 @@ describe('jsonSchemaToPicoschema', () => {
     });
   });
 
-  it('encodes enums, arrays of scalars, arrays of objects, and nested objects', () => {
+  it('encodes an enum', () => {
     const schema = {
       type: 'object',
       properties: {
@@ -214,11 +214,35 @@ describe('jsonSchemaToPicoschema', () => {
           enum: ['PENDING', 'APPROVED'],
           description: 'approval status',
         },
+      },
+      required: ['status'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'status(enum, approval status)': ['PENDING', 'APPROVED'],
+    });
+  });
+
+  it('encodes an array of scalars', () => {
+    const schema = {
+      type: 'object',
+      properties: {
         tags: {
           type: 'array',
           items: { type: 'string' },
           description: 'relevant tags',
         },
+      },
+      required: ['tags'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'tags(array, relevant tags)': 'string',
+    });
+  });
+
+  it('encodes an array of objects', () => {
+    const schema = {
+      type: 'object',
+      properties: {
         authors: {
           type: 'array',
           items: {
@@ -227,17 +251,25 @@ describe('jsonSchemaToPicoschema', () => {
             required: ['name'],
           },
         },
+      },
+      required: ['authors'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'authors(array)': { name: 'string' },
+    });
+  });
+
+  it('encodes a nested object, marking optional fields', () => {
+    const schema = {
+      type: 'object',
+      properties: {
         metadata: {
           type: 'object',
           properties: { updatedAt: { type: 'string' } },
         },
       },
-      required: ['status', 'tags', 'authors'],
     };
     expect(jsonSchemaToPicoschema(schema)).toEqual({
-      'status(enum, approval status)': ['PENDING', 'APPROVED'],
-      'tags(array, relevant tags)': 'string',
-      'authors(array)': { name: 'string' },
       'metadata?(object)': { 'updatedAt?': 'string' },
     });
   });
@@ -260,7 +292,7 @@ describe('jsonSchemaToPicoschema', () => {
     expect(jsonSchemaToPicoschema(arraySchema)).toBe(arraySchema);
   });
 
-  it('does not crash on a null or malformed property', () => {
+  it('returns any for null or malformed properties', () => {
     const schema = {
       type: 'object',
       properties: { id: { type: 'string' }, broken: null, items: {} },
@@ -304,8 +336,11 @@ describe('toFrontmatterOutput', () => {
     ).toBe('json');
   });
 
-  it('keeps text and media formats', () => {
+  it('keeps the text format', () => {
     expect(toFrontmatterOutput({ format: 'text' })).toEqual({ format: 'text' });
+  });
+
+  it('keeps the media format', () => {
     expect(toFrontmatterOutput({ format: 'media' })).toEqual({
       format: 'media',
     });
