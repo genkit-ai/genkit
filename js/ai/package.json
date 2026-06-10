@@ -117,6 +117,12 @@
       "import": "./lib/session.mjs",
       "default": "./lib/session.js"
     },
+    "./session-stores": {
+      "types": "./lib/session-stores.d.ts",
+      "require": "./lib/session-stores.js",
+      "import": "./lib/session-stores.mjs",
+      "default": "./lib/session-stores.js"
+    },
     "./agent-core": {
       "types": "./lib/agent-core.d.ts",
       "require": "./lib/agent-core.js",
@@ -167,6 +173,9 @@
       ],
       "session": [
         "lib/session"
+      ],
+      "session-stores": [
+        "lib/session-stores"
       ],
       "agent-core": [
         "lib/agent-core"
