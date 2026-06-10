@@ -228,6 +228,70 @@ func TestGenkitErrorUnwrap(t *testing.T) {
 	})
 }
 
+func TestSchemaValidationError(t *testing.T) {
+	t.Run("errors.As matches *SchemaValidationError", func(t *testing.T) {
+		cause := errors.New("value must be a number")
+		err := NewSchemaValidationError("/tool/test", cause)
+
+		var sve *SchemaValidationError
+		if !errors.As(error(err), &sve) {
+			t.Fatal("errors.As failed to find *SchemaValidationError")
+		}
+	})
+
+	t.Run("errors.As still matches *GenkitError", func(t *testing.T) {
+		cause := errors.New("value must be a number")
+		err := NewSchemaValidationError("/tool/test", cause)
+
+		var ge *GenkitError
+		if !errors.As(error(err), &ge) {
+			t.Fatal("errors.As failed to find *GenkitError")
+		}
+		if ge.Status != INVALID_ARGUMENT {
+			t.Errorf("Status = %q, want %q", ge.Status, INVALID_ARGUMENT)
+		}
+	})
+
+	t.Run("errors.Is matches original cause", func(t *testing.T) {
+		cause := errors.New("value must be a number")
+		err := NewSchemaValidationError("/tool/test", cause)
+
+		if !errors.Is(err, cause) {
+			t.Error("errors.Is(err, cause) = false, want true")
+		}
+	})
+
+	t.Run("matches through a fmt.Errorf wrapper", func(t *testing.T) {
+		cause := errors.New("value must be a number")
+		wrapped := fmt.Errorf("error calling tool %q: %w", "test", NewSchemaValidationError("/tool/test", cause))
+
+		var sve *SchemaValidationError
+		if !errors.As(wrapped, &sve) {
+			t.Fatal("errors.As failed to find *SchemaValidationError through wrapper")
+		}
+		var ge *GenkitError
+		if !errors.As(wrapped, &ge) {
+			t.Fatal("errors.As failed to find *GenkitError through wrapper")
+		}
+	})
+
+	t.Run("ToReflectionError maps to 400 with details", func(t *testing.T) {
+		cause := errors.New("value must be a number")
+		re := ToReflectionError(NewSchemaValidationError("/tool/test", cause))
+
+		if re.Code != http.StatusBadRequest {
+			t.Errorf("Code = %d, want %d", re.Code, http.StatusBadRequest)
+		}
+		want := `invalid input to action "/tool/test": value must be a number`
+		if re.Message != want {
+			t.Errorf("Message = %q, want %q", re.Message, want)
+		}
+		if re.Details == nil || re.Details.Stack == nil {
+			t.Error("expected stack in details")
+		}
+	})
+}
+
 func TestToReflectionError(t *testing.T) {
 	t.Run("handles GenkitError directly", func(t *testing.T) {
 		ge := NewError(INVALID_ARGUMENT, "bad input")

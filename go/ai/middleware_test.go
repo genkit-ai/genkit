@@ -595,7 +595,6 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 					}, nil
 				}
 				return resp, err
-
 			},
 		}, nil
 	})
@@ -607,7 +606,7 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		WithUse(errorHandler),
 	)
 	assertNoError(t, err)
-	if resp.FinishReason != "stop" {
+	if resp.FinishReason != FinishReasonStop {
 		t.Errorf("expected FinishReason=stop, got %q", resp.FinishReason)
 	}
 	if c := atomic.LoadInt32(&callCount); c < 3 {
