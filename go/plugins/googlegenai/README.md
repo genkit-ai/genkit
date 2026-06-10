@@ -83,7 +83,7 @@ Genkit automatically discovers available models supported by the [Go GenAI SDK](
 
 Commonly used models include:
 
-- **Gemini Series**: `gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`
+- **Gemini Series**: `gemini-3-flash-preview`, `gemini-2.5-flash`, `gemini-2.5-pro`
 - **Imagen Series**: `imagen-3.0-generate-001`
 - **Veo Series**: `veo-3.0-generate-001`
 

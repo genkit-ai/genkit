@@ -23,6 +23,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -554,6 +555,43 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 
 	if diff := cmp.Diff(wantSchema, got.OutputConfig.Format.Schema); diff != "" {
 		t.Errorf("OutputConfig schema mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestDefineModel_PropagatesStage(t *testing.T) {
+	tests := []struct {
+		name  string
+		stage ai.ModelStage
+	}{
+		{"deprecated", ai.ModelStageDeprecated},
+		{"unstable", ai.ModelStageUnstable},
+		{"unset", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := DefineModel(anthropic.Client{}, "anthropic", "claude-3-haiku@20240307", ai.ModelOptions{
+				Label: "test",
+				Stage: tt.stage,
+			})
+
+			desc, ok := m.(interface{ Desc() api.ActionDesc })
+			if !ok {
+				t.Fatalf("Model does not expose Desc(); cannot read action metadata")
+			}
+
+			modelMeta, ok := desc.Desc().Metadata["model"].(map[string]any)
+			if !ok {
+				t.Fatalf("metadata[\"model\"] not a map[string]any: %T", desc.Desc().Metadata["model"])
+			}
+			got, ok := modelMeta["stage"].(ai.ModelStage)
+			if !ok {
+				t.Fatalf("metadata[\"model\"][\"stage\"] not ai.ModelStage: %T", modelMeta["stage"])
+			}
+			if got != tt.stage {
+				t.Errorf("stage = %q, want %q", got, tt.stage)
+			}
+		})
 	}
 }
 
