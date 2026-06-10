@@ -39,8 +39,6 @@ import {
 
 import { defineFormat } from '@genkit-ai/ai/formats';
 import {
-  FileSessionStore,
-  InMemorySessionStore,
   Session,
   SessionError,
   getCurrentSession,
@@ -53,6 +51,10 @@ import {
   type SnapshotContext,
   type SnapshotMutator,
 } from '@genkit-ai/ai/session';
+import {
+  FileSessionStore,
+  InMemorySessionStore,
+} from '@genkit-ai/ai/session-stores';
 
 import { type Operation, type z } from '@genkit-ai/core';
 import type { Formatter } from './formats.js';
