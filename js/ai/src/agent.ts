@@ -56,17 +56,18 @@ import {
   type PromptAction,
   type PromptConfig,
 } from './prompt.js';
+import { InMemorySessionStore } from './session-stores.js';
 import {
   AgentFinishReasonSchema,
   Artifact,
   ArtifactSchema,
-  InMemorySessionStore,
   Session,
   SessionSnapshot,
   SessionState,
   SessionStateSchema,
   SessionStore,
   SnapshotCallback,
+  reserveSnapshotId,
   runWithSession,
   type AgentFinishReason,
   type SessionSnapshotInput,
@@ -179,6 +180,30 @@ export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
  */
 export interface TurnResult {
   finishReason?: AgentFinishReason;
+}
+
+/**
+ * Per-turn context handed to the handler passed to {@link SessionRunner.run}.
+ *
+ * The `snapshotId` is *reserved at turn start* (before the handler runs) and is
+ * the id the snapshot persisted at turn end will reuse. This lets a handler
+ * name external, snapshot-correlated resources - e.g. a git branch / worktree
+ * named after the snapshot - up front, then commit them under that id, so a
+ * later rollback to the snapshot can restore the external state too.
+ */
+export interface TurnContext {
+  /**
+   * The id the snapshot produced by this turn will be saved under (reserved
+   * ahead of time so it is known before the turn runs).
+   */
+  snapshotId: string;
+  /**
+   * The id of the parent snapshot this turn continues from, or `undefined` on
+   * the first turn of a fresh session.
+   */
+  parentSnapshotId?: string;
+  /** Zero-based index of this turn within the current invocation. */
+  turnIndex: number;
 }
 
 /**
@@ -455,12 +480,18 @@ export class SessionRunner<State = unknown> {
   /**
    * Executes the flow handler against incoming input messages sequentially.
    *
+   * The handler receives the turn's {@link AgentInput} and a {@link TurnContext}
+   * whose `snapshotId` is *reserved up front* - it is the id the snapshot
+   * persisted at turn end will reuse. This lets a handler set up external,
+   * snapshot-correlated state (e.g. a git branch/worktree named after the
+   * snapshot) before generating, then commit it under that id.
+   *
    * The handler may return a {@link TurnResult} carrying an explicit
    * `finishReason` for the just-completed turn. When omitted, no per-turn
    * reason is reported. Failures always report `failed`.
    */
   async run(
-    fn: (input: AgentInput) => Promise<TurnResult | void>
+    fn: (input: AgentInput, ctx: TurnContext) => Promise<TurnResult | void>
   ): Promise<void> {
     for await (const input of this.inputCh) {
       if (input.messages) {
@@ -471,12 +502,29 @@ export class SessionRunner<State = unknown> {
       // re-bases clients which may not share the server's baseline.
       this.firstCustomPatchInTurn = true;
 
+      const parentSnapshotId = this.lastSnapshot?.snapshotId;
+
+      // Reserve the turn's snapshotId up front (when a store is configured) so
+      // the handler can name snapshot-correlated external resources before the
+      // turn runs. The detach path may have already reserved one; reuse it.
+      // The persisted snapshot at turn end reuses this id (maybeSnapshot
+      // prefers `newSnapshotId`).
+      if (this.store && !this.newSnapshotId) {
+        this.newSnapshotId = reserveSnapshotId();
+      }
+
       const turnSnapshotId = this.newSnapshotId;
       this.newSnapshotId = undefined;
 
+      const turnContext: TurnContext = {
+        snapshotId: turnSnapshotId!,
+        parentSnapshotId,
+        turnIndex: this.turnIndex,
+      };
+
       try {
         await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
-          const turnResult = await fn(input);
+          const turnResult = await fn(input, turnContext);
           const finishReason = turnResult?.finishReason;
           this.lastTurnFinishReason = finishReason;
           this.lastTurnError = undefined;
@@ -900,8 +948,9 @@ function pipeInputWithDetach<State>(
             );
           } else {
             const runner = getRunner();
-            const turnSnapshotId =
-              runner.newSnapshotId || globalThis.crypto.randomUUID();
+            // Reserve the in-flight snapshot's id up front so the detached
+            // snapshot and any handler-named external resources share one id.
+            const turnSnapshotId = runner.newSnapshotId || reserveSnapshotId();
             runner.newSnapshotId = turnSnapshotId;
             await runner.maybeSnapshot(
               'turnEnd',

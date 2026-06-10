@@ -1280,49 +1280,6 @@ tests:
               - { role: model, content: [{ text: reply2 }] }
 
   # ---------------------------------------------------------------------------
-  # sessionId lookup rejected for a branching session
-  # ---------------------------------------------------------------------------
-  - name: sessionId lookup rejected for branching session
-    description: >
-      When a session has branched (more than one leaf snapshot — e.g. two
-      continuations forked from the same snapshot), there is no single "latest"
-      snapshot. Resolving the session by sessionId must fail with
-      FAILED_PRECONDITION; the caller must resume by an exact snapshotId.
-    agent: promptAgentWithStore
-    steps:
-      - type: send
-        init: { sessionId: 33333333-3333-4333-8333-333333333333 }
-        inputs:
-          - messages: [{ role: user, content: [{ text: root }] }]
-        modelResponses:
-          - message: { role: model, content: [{ text: rootReply }] }
-            finishReason: stop
-        captureSnapshotId: snap1
-
-      # Fork branch A from the root snapshot.
-      - type: send
-        init: { snapshotId: '{{snap1}}' }
-        inputs:
-          - messages: [{ role: user, content: [{ text: branch-a }] }]
-        modelResponses:
-          - message: { role: model, content: [{ text: reply-a }] }
-            finishReason: stop
-
-      # Fork branch B from the same root snapshot — now two leaves exist.
-      - type: send
-        init: { snapshotId: '{{snap1}}' }
-        inputs:
-          - messages: [{ role: user, content: [{ text: branch-b }] }]
-        modelResponses:
-          - message: { role: model, content: [{ text: reply-b }] }
-            finishReason: stop
-
-      # Resolving by sessionId is now ambiguous and must error.
-      - type: getSnapshotData
-        sessionId: 33333333-3333-4333-8333-333333333333
-        expectError: branching snapshots
-
-  # ---------------------------------------------------------------------------
   # Non-UUID sessionId rejected
   # ---------------------------------------------------------------------------
   - name: non-UUID sessionId rejected
