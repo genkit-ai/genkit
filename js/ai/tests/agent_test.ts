@@ -29,13 +29,12 @@ import {
   definePromptAgent,
 } from '../src/agent.js';
 import { definePrompt } from '../src/prompt.js';
+import { InMemorySessionStore } from '../src/session-stores.js';
 import {
-  InMemorySessionStore,
-  reserveSnapshotId,
   Session,
+  reserveSnapshotId,
   type SessionSnapshot,
 } from '../src/session.js';
-
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import {
   defineEchoModel,
@@ -186,46 +185,6 @@ describe('Agent', () => {
       session.addArtifacts([{ name: 'a', parts: [] }]);
       const v3 = session.getVersion();
       assert.ok(v3 > v2);
-    });
-  });
-
-  describe('InMemorySessionStore', () => {
-    it('should save and get snapshots', async () => {
-      const store = new InMemorySessionStore<{ foo: string }>();
-      const snapshot = {
-        snapshotId: 'snap-123',
-        createdAt: new Date().toISOString(),
-        event: 'turnEnd' as const,
-        state: { custom: { foo: 'bar' } },
-      };
-      await store.saveSnapshot('snap-123', () => snapshot);
-
-      const got = await store.getSnapshot({ snapshotId: 'snap-123' });
-      assert.deepStrictEqual(got, snapshot);
-    });
-
-    it('should return undefined for missing snapshot', async () => {
-      const store = new InMemorySessionStore();
-      const got = await store.getSnapshot({ snapshotId: 'missing' });
-      assert.strictEqual(got, undefined);
-    });
-
-    it('should deep copy on save and get', async () => {
-      const store = new InMemorySessionStore<{ foo: string }>();
-      const state = { foo: 'bar' };
-      const snapshot = {
-        snapshotId: 'snap-123',
-        createdAt: new Date().toISOString(),
-        event: 'turnEnd' as const,
-        state: { custom: state },
-      };
-      await store.saveSnapshot('snap-123', () => snapshot);
-
-      // Mutate local state
-      state.foo = 'baz';
-
-      const got = await store.getSnapshot({ snapshotId: 'snap-123' });
-      assert.strictEqual(got?.state.custom?.foo, 'bar');
     });
   });
 
@@ -418,46 +377,12 @@ describe('Agent', () => {
   });
 
   describe('reserveSnapshotId', () => {
-    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const SNAPSHOT = /^s_(.+)_\d+_[a-z0-9]+$/;
+    const UUID =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    it('mints a store-compatible id with a fresh convoId when given nothing', () => {
+    it('mints a plain UUID snapshotId', () => {
       const id = reserveSnapshotId();
-      const m = SNAPSHOT.exec(id);
-      assert.ok(m, `id should match snapshot shape: ${id}`);
-      assert.match(m![1], UUID, 'convoId should be a fresh UUID');
-    });
-
-    it('derives the convoId from a provided sessionId', () => {
-      const sessionId = globalThis.crypto.randomUUID();
-      const id = reserveSnapshotId(sessionId);
-      const m = SNAPSHOT.exec(id);
-      assert.ok(m);
-      assert.strictEqual(m![1], sessionId);
-    });
-
-    it('derives the convoId from a parent snapshotId when no sessionId is given', () => {
-      const sessionId = globalThis.crypto.randomUUID();
-      const parentId = reserveSnapshotId(sessionId);
-      const childId = reserveSnapshotId(undefined, parentId);
-      const m = SNAPSHOT.exec(childId);
-      assert.ok(m);
-      // Child shares the parent's convoId so all snapshots group together.
-      assert.strictEqual(m![1], sessionId);
-    });
-
-    it('prefers sessionId over parentId when both are provided', () => {
-      const sessionId = globalThis.crypto.randomUUID();
-      const otherSessionId = globalThis.crypto.randomUUID();
-      const parentId = reserveSnapshotId(otherSessionId);
-      const id = reserveSnapshotId(sessionId, parentId);
-      const m = SNAPSHOT.exec(id);
-      assert.ok(m);
-      assert.strictEqual(m![1], sessionId);
-    });
-
-    it('throws on an invalid sessionId', () => {
-      assert.throws(() => reserveSnapshotId('not-a-uuid'));
+      assert.match(id, UUID, `id should be a UUID: ${id}`);
     });
 
     it('produces unique ids on successive calls', () => {
@@ -466,7 +391,6 @@ describe('Agent', () => {
       assert.notStrictEqual(a, b);
     });
   });
-
 
   describe('defineCustomAgent', () => {
     it('should set client stateManagement and abortable=false when no store is provided', () => {

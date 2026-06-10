@@ -37,7 +37,7 @@ import {
   type Agent,
   type AgentStreamChunk,
 } from '../src/agent.js';
-import { InMemorySessionStore } from '../src/session.js';
+import { InMemorySessionStore } from '../src/session-stores.js';
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from './helpers.js';
 

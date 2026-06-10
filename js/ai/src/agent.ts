@@ -56,11 +56,11 @@ import {
   type PromptAction,
   type PromptConfig,
 } from './prompt.js';
+import { InMemorySessionStore } from './session-stores.js';
 import {
   AgentFinishReasonSchema,
   Artifact,
   ArtifactSchema,
-  InMemorySessionStore,
   Session,
   SessionSnapshot,
   SessionState,
@@ -73,7 +73,6 @@ import {
   type SessionSnapshotInput,
   type SessionStoreOptions,
 } from './session.js';
-
 
 /**
  * Schema for initializing an agent turn.
@@ -206,7 +205,6 @@ export interface TurnContext {
   /** Zero-based index of this turn within the current invocation. */
   turnIndex: number;
 }
-
 
 /**
  * Schema for final results of an agent execution.
@@ -512,11 +510,9 @@ export class SessionRunner<State = unknown> {
       // The persisted snapshot at turn end reuses this id (maybeSnapshot
       // prefers `newSnapshotId`).
       if (this.store && !this.newSnapshotId) {
-        this.newSnapshotId = reserveSnapshotId(
-          this.session.sessionId,
-          parentSnapshotId
-        );
+        this.newSnapshotId = reserveSnapshotId();
       }
+
       const turnSnapshotId = this.newSnapshotId;
       this.newSnapshotId = undefined;
 
@@ -529,7 +525,6 @@ export class SessionRunner<State = unknown> {
       try {
         await run(`runTurn-${this.turnIndex + 1}`, input, async () => {
           const turnResult = await fn(input, turnContext);
-
           const finishReason = turnResult?.finishReason;
           this.lastTurnFinishReason = finishReason;
           this.lastTurnError = undefined;
@@ -953,14 +948,10 @@ function pipeInputWithDetach<State>(
             );
           } else {
             const runner = getRunner();
-            // Reserve a store-compatible snapshotId (`s_{uuid}_...`) so the
-            // pre-reserved id round-trips through stores that parse the id
-            // format (e.g. FileSessionStore), not just an opaque UUID.
-            const turnSnapshotId =
-              runner.newSnapshotId ||
-              reserveSnapshotId(runner.session.sessionId);
+            // Reserve the in-flight snapshot's id up front so the detached
+            // snapshot and any handler-named external resources share one id.
+            const turnSnapshotId = runner.newSnapshotId || reserveSnapshotId();
             runner.newSnapshotId = turnSnapshotId;
-
             await runner.maybeSnapshot(
               'turnEnd',
               'pending',
