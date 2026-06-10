@@ -34,16 +34,14 @@ export interface SessionOptions<S = any> {
 }
 
 /**
- * Session encapsulates a statful execution environment for chat.
- * Chat session executed within a session in this environment will have acesss to
- * session session convesation history.
+ * Session encapsulates a stateful execution environment.
  *
- * ```ts
- * const ai = genkit({...});
- * const chat = ai.chat(); // create a Session
- * let response = await chat.send('hi'); // session/history aware conversation
- * response = await chat.send('tell me a story');
- * ```
+ * A session holds shared state and per-thread message history, and provides a
+ * context in which functions can be executed via {@link Session.run} so that
+ * `ai.currentSession()` resolves to this session. State can be read via
+ * {@link Session.state} and updated with {@link Session.updateState}, and
+ * conversation history can be persisted per thread with
+ * {@link Session.updateMessages}.
  */
 export class Session<S = any> {
   readonly id: string;
@@ -114,13 +112,6 @@ export class Session<S = any> {
 
     await this.store.save(this.id, sessionData);
   }
-
-  /**
-   * Create a chat session with the provided options.
-   *
-   * ```ts
-
-
 
   /**
    * Executes provided function within this session context allowing calling
