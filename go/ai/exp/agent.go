@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -1342,6 +1343,13 @@ func (i *detachIntake) read() {
 			if !ok {
 				return
 			}
+			if input == nil {
+				// A nil input (e.g. a JSON null decoded by a transport)
+				// carries nothing to process; dropping it here also keeps
+				// nil out of the queue, where the forwarder would read it
+				// as end-of-input.
+				continue
+			}
 			if input.Detach {
 				i.handleDetach(input)
 				return
@@ -1381,7 +1389,9 @@ drainLoop:
 			if !ok {
 				break drainLoop
 			}
-			drained = append(drained, more)
+			if more != nil {
+				drained = append(drained, more)
+			}
 		default:
 			break drainLoop
 		}
@@ -1542,16 +1552,28 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 			}
 
 			// Tag base messages so they can be filtered out of session
-			// history after generation.
+			// history after generation. Tag copies rather than the
+			// rendered messages themselves: Render can alias message
+			// metadata from shared prompt config (e.g. messages
+			// registered via [ai.WithMessages]), so tagging in place
+			// would leak the tag into the registered prompt and race
+			// with concurrent invocations.
+			base := make([]*ai.Message, 0, len(actionOpts.Messages))
 			for _, m := range actionOpts.Messages {
-				if m.Metadata == nil {
-					m.Metadata = make(map[string]any)
+				if m == nil {
+					continue
 				}
-				m.Metadata[promptMessageKey] = true
+				tagged := *m
+				tagged.Metadata = maps.Clone(tagged.Metadata)
+				if tagged.Metadata == nil {
+					tagged.Metadata = make(map[string]any, 1)
+				}
+				tagged.Metadata[promptMessageKey] = true
+				base = append(base, &tagged)
 			}
 
 			// Append conversation history after the base messages.
-			actionOpts.Messages = append(actionOpts.Messages, sess.Messages()...)
+			actionOpts.Messages = append(base, sess.Messages()...)
 
 			// If a resume payload was provided, forward it to the
 			// generate call so handleResumeOption re-executes the
@@ -1709,13 +1731,16 @@ type AgentConnection[Stream, State any] struct {
 	conn *core.BidiConnection[*AgentInput, *AgentStreamChunk[Stream], *AgentOutput[State]]
 }
 
-// Send sends an AgentInput to the agent.
+// Send sends an AgentInput to the agent. The input must not be nil.
 //
 // Once the invocation has resolved (e.g. a failed turn ended it), Send
 // fails with an error matching [core.ErrActionCompleted]; the outcome is
 // on [AgentConnection.Output]. The same applies to the SendMessage,
 // SendText, SendResume, and Detach helpers.
 func (c *AgentConnection[Stream, State]) Send(input *AgentInput) error {
+	if input == nil {
+		return core.NewError(core.INVALID_ARGUMENT, "agent input must not be nil")
+	}
 	return c.conn.Send(input)
 }
 

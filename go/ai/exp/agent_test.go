@@ -5470,3 +5470,162 @@ func TestAgent_GetSnapshotAction_ReturnsSessionID(t *testing.T) {
 		t.Errorf("getSnapshot SessionID = %q, want %q", resp.SessionID, out.SessionID)
 	}
 }
+
+func TestPromptAgent_InlineMessages_DoesNotMutateSharedMetadata(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	// Render aliases the metadata map of messages registered via
+	// WithMessages, so the agent loop must not tag the rendered
+	// messages in place.
+	shared := ai.NewModelTextMessage("inline context message")
+	shared.Metadata = map[string]any{"origin": "config"}
+
+	af := DefineAgent[testState](reg, "inlineMetaPrompt", FromInline(
+		ai.WithModelName("test/echo"),
+		ai.WithMessages(shared),
+	))
+
+	response, err := af.RunText(ctx, "hello")
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+
+	if _, ok := shared.Metadata[promptMessageKey]; ok {
+		t.Errorf("prompt message tag leaked into shared config message metadata: %v", shared.Metadata)
+	}
+	// The base message must still be filtered out of session history:
+	// 1 user message + 1 model reply = 2.
+	if got := len(response.State.Messages); got != 2 {
+		t.Errorf("expected 2 messages, got %d", got)
+		for i, m := range response.State.Messages {
+			t.Logf("  msg[%d]: role=%s text=%s", i, m.Role, m.Text())
+		}
+	}
+}
+
+func TestPromptAgent_InlineMessages_ConcurrentInvocations(t *testing.T) {
+	ctx := context.Background()
+	reg := setupPromptTestRegistry(t)
+
+	// All invocations render the same inline message whose metadata map
+	// is shared with the registered prompt's config; tagging it in
+	// place is a concurrent map write under the race detector.
+	shared := ai.NewModelTextMessage("inline context message")
+	shared.Metadata = map[string]any{"origin": "config"}
+
+	af := DefineAgent[testState](reg, "inlineConcurrentPrompt", FromInline(
+		ai.WithModelName("test/echo"),
+		ai.WithMessages(shared),
+	))
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := af.RunText(ctx, "hello"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("RunText failed: %v", err)
+	}
+}
+
+func TestAgent_SendNilInput_Rejected(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "nilInputFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				if input.Message != nil {
+					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Message.Text()))
+				}
+				return nil, nil
+			})
+		},
+	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi failed: %v", err)
+	}
+
+	if err := conn.Send(nil); err == nil {
+		t.Error("expected Send(nil) to fail")
+	}
+
+	// The connection must remain usable after the rejected input.
+	if err := conn.SendText("hello"); err != nil {
+		t.Fatalf("SendText failed: %v", err)
+	}
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive error: %v", err)
+		}
+		if chunk.TurnEnd != nil {
+			break
+		}
+	}
+	conn.Close()
+
+	response, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
+	if got := len(response.State.Messages); got != 2 {
+		t.Errorf("expected 2 messages, got %d", got)
+	}
+}
+
+// TestDetachIntake_SkipsNilInputs covers nil inputs that bypass the typed
+// Send API (e.g. a JSON null decoded by a transport): the intake must drop
+// them rather than crash its reader goroutine or end the stream early.
+func TestDetachIntake_SkipsNilInputs(t *testing.T) {
+	t.Run("read path", func(t *testing.T) {
+		src := make(chan *AgentInput, 4)
+		src <- nil
+		src <- &AgentInput{Message: ai.NewUserTextMessage("one")}
+		src <- nil
+		close(src)
+
+		intake := startDetachIntake(src)
+		defer intake.stopAndWait()
+
+		var got []string
+		for in := range intake.out() {
+			got = append(got, in.Message.Text())
+			intake.releaseForward()
+		}
+		if !slices.Equal(got, []string{"one"}) {
+			t.Errorf("expected [one], got %v", got)
+		}
+	})
+
+	t.Run("detach drain path", func(t *testing.T) {
+		src := make(chan *AgentInput, 4)
+		src <- &AgentInput{Detach: true, Message: ai.NewUserTextMessage("final")}
+		src <- nil
+		src <- &AgentInput{Message: ai.NewUserTextMessage("two")}
+		close(src)
+
+		intake := startDetachIntake(src)
+		defer intake.stopAndWait()
+		go func() { <-intake.detachSignal() }()
+
+		var got []string
+		for in := range intake.out() {
+			got = append(got, in.Message.Text())
+			intake.releaseForward()
+		}
+		if !slices.Equal(got, []string{"final", "two"}) {
+			t.Errorf("expected [final two], got %v", got)
+		}
+	})
+}
