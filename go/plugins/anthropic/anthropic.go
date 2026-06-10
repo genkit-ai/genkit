@@ -101,6 +101,22 @@ func (a *Anthropic) DefineModel(g *genkit.Genkit, name string, opts *ai.ModelOpt
 	return ant.DefineModel(a.aclient, provider, name, *opts), nil
 }
 
+// modelOptions returns the ModelOptions for a Claude model name. Known models
+// (see knownModels) carry curated capabilities; any other model falls back to
+// defaultClaudeOpts. The returned options always carry a provider-prefixed
+// label. This is the single source of model capabilities shared by ListActions
+// and ResolveAction, mirroring the JS plugin's claudeModelReference.
+func modelOptions(name string) ai.ModelOptions {
+	opts, ok := knownModels[name]
+	if !ok {
+		opts = defaultClaudeOpts
+	}
+	if opts.Label == "" {
+		opts.Label = fmt.Sprintf("%s - %s", anthropicLabelPrefix, name)
+	}
+	return opts
+}
+
 // ListActions lists all the actions supported by the Anthropic plugin
 func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	actions := []api.ActionDesc{}
@@ -114,7 +130,7 @@ func (a *Anthropic) ListActions(ctx context.Context) []api.ActionDesc {
 	for _, name := range models {
 		// When listing discovered models, the Genkit action name and the
 		// Anthropic API model ID are identical.
-		model := newModel(a.aclient, name, name, defaultClaudeOpts)
+		model := newModel(a.aclient, name, name, modelOptions(name))
 		if actionDef, ok := model.(api.Action); ok {
 			actions = append(actions, actionDef.Desc())
 		}
@@ -151,12 +167,7 @@ func (a *Anthropic) ResolveAction(atype api.ActionType, id string) api.Action {
 
 		// We register the model using the ID requested by the user, but
 		// use the resolved 'realID' (e.g. versioned) for actual API calls.
-		return newModel(a.aclient, id, realID, ai.ModelOptions{
-			Label:    fmt.Sprintf("%s - %s", anthropicLabelPrefix, id),
-			Stage:    ai.ModelStageStable,
-			Versions: []string{},
-			Supports: defaultClaudeOpts.Supports,
-		}).(api.Action)
+		return newModel(a.aclient, id, realID, modelOptions(id)).(api.Action)
 	}
 	return nil
 }
