@@ -28,7 +28,7 @@ func main() {
 
 	g := genkit.Init(ctx, genkit.WithPlugins(&ant.Anthropic{}))
 
-	// Define a simple flow that generates a short story about a given topic
+	// Define a simple flow that generates a short story about a given topic.
 	genkit.DefineStreamingFlow(g, "storyFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithModelName("anthropic/claude-sonnet-4-20250514"),
@@ -50,5 +50,53 @@ func main() {
 		return resp.Text(), nil
 	})
 
+	// Same story flow on the latest Opus model. Opus 4.8 uses adaptive thinking;
+	// note we do NOT set Temperature or a fixed thinking budget — both are
+	// rejected by Opus 4.7+ in favour of adaptive thinking.
+	genkit.DefineStreamingFlow(g, "opusStoryFlow", func(ctx context.Context, input string, cb ai.ModelStreamCallback) (string, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName("anthropic/claude-opus-4-8"),
+			ai.WithConfig(&anthropic.MessageNewParams{
+				MaxTokens: 8000,
+				Thinking: anthropic.ThinkingConfigParamUnion{
+					OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
+				},
+			}),
+			ai.WithStreaming(cb),
+			ai.WithPrompt(`Tell a short story about %s`, input))
+		if err != nil {
+			return "", err
+		}
+
+		return resp.Text(), nil
+	})
+
+	// Structured-output flow on the latest Sonnet model. This exercises the JSON
+	// output capability that the known Claude models now advertise; Genkit
+	// constrains the response to the Character schema.
+	genkit.DefineFlow(g, "characterFlow", func(ctx context.Context, topic string) (*Character, error) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModelName("anthropic/claude-sonnet-4-6"),
+			ai.WithConfig(&anthropic.MessageNewParams{MaxTokens: 2000}),
+			ai.WithOutputType(Character{}),
+			ai.WithPrompt(`Invent a memorable character for a story about %s.`, topic))
+		if err != nil {
+			return nil, err
+		}
+
+		var c Character
+		if err := resp.Output(&c); err != nil {
+			return nil, err
+		}
+		return &c, nil
+	})
+
 	<-ctx.Done()
+}
+
+// Character is the structured output produced by characterFlow.
+type Character struct {
+	Name   string   `json:"name"`
+	Role   string   `json:"role"`
+	Traits []string `json:"traits"`
 }
