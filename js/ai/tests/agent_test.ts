@@ -29,9 +29,10 @@ import {
   definePromptAgent,
 } from '../src/agent.js';
 import { definePrompt } from '../src/prompt.js';
+import { InMemorySessionStore } from '../src/session-stores.js';
 import {
-  InMemorySessionStore,
   Session,
+  reserveSnapshotId,
   type SessionSnapshot,
 } from '../src/session.js';
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
@@ -187,46 +188,6 @@ describe('Agent', () => {
     });
   });
 
-  describe('InMemorySessionStore', () => {
-    it('should save and get snapshots', async () => {
-      const store = new InMemorySessionStore<{ foo: string }>();
-      const snapshot = {
-        snapshotId: 'snap-123',
-        createdAt: new Date().toISOString(),
-        event: 'turnEnd' as const,
-        state: { custom: { foo: 'bar' } },
-      };
-      await store.saveSnapshot('snap-123', () => snapshot);
-
-      const got = await store.getSnapshot({ snapshotId: 'snap-123' });
-      assert.deepStrictEqual(got, snapshot);
-    });
-
-    it('should return undefined for missing snapshot', async () => {
-      const store = new InMemorySessionStore();
-      const got = await store.getSnapshot({ snapshotId: 'missing' });
-      assert.strictEqual(got, undefined);
-    });
-
-    it('should deep copy on save and get', async () => {
-      const store = new InMemorySessionStore<{ foo: string }>();
-      const state = { foo: 'bar' };
-      const snapshot = {
-        snapshotId: 'snap-123',
-        createdAt: new Date().toISOString(),
-        event: 'turnEnd' as const,
-        state: { custom: state },
-      };
-      await store.saveSnapshot('snap-123', () => snapshot);
-
-      // Mutate local state
-      state.foo = 'baz';
-
-      const got = await store.getSnapshot({ snapshotId: 'snap-123' });
-      assert.strictEqual(got?.state.custom?.foo, 'bar');
-    });
-  });
-
   describe('SessionRunner', () => {
     it('should loop over inputs and call handler', async () => {
       const session = new Session({});
@@ -323,6 +284,111 @@ describe('Agent', () => {
       const keys = Array.from((store as any).snapshots.keys()) as string[];
       // Only the snapshot from the second (non-callback) runner should exist.
       assert.ok(keys.every((k) => k === onEndTurnSnapshotId));
+    });
+
+    it('reserves the turn snapshotId at turn start and persists under it', async () => {
+      const store = new InMemorySessionStore();
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        };
+      }
+
+      let ctxSnapshotId: string | undefined;
+      let ctxParentSnapshotId: string | undefined;
+      let ctxTurnIndex: number | undefined;
+      let endTurnSnapshotId: string | undefined;
+
+      const runner = new SessionRunner(session, inputGen(), {
+        store,
+        onEndTurn: (snapshotId) => {
+          endTurnSnapshotId = snapshotId;
+        },
+      });
+
+      await runner.run(async (_input, ctx) => {
+        ctxSnapshotId = ctx.snapshotId;
+        ctxParentSnapshotId = ctx.parentSnapshotId;
+        ctxTurnIndex = ctx.turnIndex;
+      });
+
+      // The id is reserved at turn start and made available to the handler.
+      assert.ok(ctxSnapshotId, 'handler should receive a reserved snapshotId');
+      // First turn of a fresh session has no parent.
+      assert.strictEqual(ctxParentSnapshotId, undefined);
+      assert.strictEqual(ctxTurnIndex, 0);
+
+      // The snapshot persisted at turn end reuses the reserved id.
+      assert.strictEqual(endTurnSnapshotId, ctxSnapshotId);
+      const saved = await store.getSnapshot({ snapshotId: ctxSnapshotId! });
+      assert.ok(saved);
+      assert.strictEqual(saved?.snapshotId, ctxSnapshotId);
+    });
+
+    it('passes the prior snapshotId as parentSnapshotId on subsequent turns', async () => {
+      const store = new InMemorySessionStore();
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        };
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+        };
+      }
+
+      const snapshotIds: string[] = [];
+      const parentIds: Array<string | undefined> = [];
+
+      const runner = new SessionRunner(session, inputGen(), { store });
+
+      await runner.run(async (_input, ctx) => {
+        snapshotIds.push(ctx.snapshotId);
+        parentIds.push(ctx.parentSnapshotId);
+      });
+
+      assert.strictEqual(snapshotIds.length, 2);
+      // First turn: no parent. Second turn: parent is the first turn's snapshot.
+      assert.strictEqual(parentIds[0], undefined);
+      assert.strictEqual(parentIds[1], snapshotIds[0]);
+    });
+
+    it('does not reserve a snapshotId when no store is configured', async () => {
+      const session = new Session({});
+
+      async function* inputGen() {
+        yield {
+          messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        };
+      }
+
+      let ctxSnapshotId: string | undefined = 'sentinel';
+      const runner = new SessionRunner(session, inputGen());
+      await runner.run(async (_input, ctx) => {
+        ctxSnapshotId = ctx.snapshotId;
+      });
+
+      // Without a store there is nothing to reserve, so snapshotId is undefined.
+      assert.strictEqual(ctxSnapshotId, undefined);
+    });
+  });
+
+  describe('reserveSnapshotId', () => {
+    const UUID =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    it('mints a plain UUID snapshotId', () => {
+      const id = reserveSnapshotId();
+      assert.match(id, UUID, `id should be a UUID: ${id}`);
+    });
+
+    it('produces unique ids on successive calls', () => {
+      const a = reserveSnapshotId();
+      const b = reserveSnapshotId();
+      assert.notStrictEqual(a, b);
     });
   });
 
