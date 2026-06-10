@@ -170,7 +170,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                 let reason = '';
                 if (NEVER_RETRY_ERROR_NAMES.includes(error?.name)) {
                   shouldRetry = false;
-                  reason = `error name "${error?.name}" is explicitly non-retryable`;
+                  reason = `error name "${error?.name}" is non-retryable`;
                 } else if (error instanceof GenkitError) {
                   if ((statuses as string[]).includes(error.status)) {
                     shouldRetry = true;
@@ -197,7 +197,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                     delay = delay + 1000 * Math.pow(2, i) * Math.random();
                   }
                   logger.logStructuredWarn(
-                    `Retry attempt ${i + 1} of ${maxRetries} triggered in ${Math.round(delay)}ms due to error: ${error?.message || String(error)}`,
+                    `Retry ${i + 1} of ${maxRetries} in ${Math.round(delay)}ms due to error: ${error?.message || String(error)}`,
                     {
                       'genkit.middleware.name': 'retry',
                       'genkit.middleware.retry.attempt': i + 1,
@@ -214,7 +214,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                   continue;
                 } else {
                   logger.logStructuredWarn(
-                    `Request failed with error: ${error?.message || String(error)}. Skipping retry because ${reason}.`,
+                    `Retry skipped for ${error?.message || String(error)} because of ${reason}`,
                     {
                       'genkit.middleware.name': 'retry',
                       'genkit.middleware.retry.skipped_reason': reason,
@@ -225,7 +225,7 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                 }
               } else {
                 logger.logStructuredWarn(
-                  `All retry attempts exhausted (${maxRetries}). Last error: ${error?.message || String(error)}`,
+                  `Retry attempts exhausted (${maxRetries}). Last error: ${error?.message || String(error)}`,
                   {
                     'genkit.middleware.name': 'retry',
                     'genkit.middleware.retry.max_attempts': maxRetries,
