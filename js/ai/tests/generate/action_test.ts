@@ -89,6 +89,16 @@ describe('spec', () => {
         '/util/generate'
       )) as GenerateAction;
 
+      // Patch the expected response to include key for tools if needed,
+      // as the yaml file shouldn't be updated until all languages support it.
+      if (test.expectResponse?.request?.tools) {
+        test.expectResponse.request.tools =
+          test.expectResponse.request.tools.map((t: any) => ({
+            ...t,
+            key: `/tool/${t.name}`,
+          }));
+      }
+
       if (test.stream) {
         const { output, stream } = action.stream(test.input);
 

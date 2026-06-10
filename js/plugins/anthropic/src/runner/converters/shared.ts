@@ -154,15 +154,6 @@ export function citationsDeltaToPart(delta: {
   return undefined;
 }
 
-/**
- * Error for unsupported input_json_delta in streaming.
- */
-export function inputJsonDeltaError(): Error {
-  return new Error(
-    'Anthropic streaming tool input (input_json_delta) is not yet supported. Please disable streaming or upgrade this plugin.'
-  );
-}
-
 // --- Document block converters (shared between stable and beta APIs) ---
 
 /**

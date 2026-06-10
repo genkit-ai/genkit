@@ -39,7 +39,7 @@ import {
   getExecutablePrompt,
   transportFrom,
 } from '../util';
-import { fetchDynamicResources } from '../util/resource';
+import { fetchDynamicResources } from '../util/resource.js';
 
 interface McpServerRef {
   client: Client;

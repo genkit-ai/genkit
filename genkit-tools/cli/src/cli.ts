@@ -39,6 +39,8 @@ import {
 } from './commands/server-harness';
 import { start } from './commands/start';
 import { startFlutter } from './commands/start-flutter';
+import { traceGet } from './commands/trace-get';
+import { traceList } from './commands/trace-list';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
@@ -68,6 +70,8 @@ const commands: Command[] = [
   docsList,
   docsRead,
   docsSearch,
+  traceGet,
+  traceList,
 ];
 
 /** Main entry point for CLI. */

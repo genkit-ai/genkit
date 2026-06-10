@@ -17,6 +17,7 @@
 import {
   GenerateMiddleware,
   GenkitError,
+  StatusNameSchema,
   generateMiddleware,
   z,
   type StatusName,
@@ -38,7 +39,7 @@ export const RetryOptionsSchema = z
      * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']
      */
     statuses: z
-      .array(z.string())
+      .array(StatusNameSchema)
       .optional()
       .describe('An array of StatusName values that should trigger a retry.'),
     /**
@@ -93,6 +94,13 @@ const DEFAULT_RETRY_STATUSES: StatusName[] = [
   'ABORTED',
   'INTERNAL',
 ];
+
+/**
+ * Error names that should never be retried, even when the error is not a GenkitError.
+ * - AbortError: User explicitly cancelled the operation via AbortController.
+ * - ToolInterruptError: Deliberate control-flow signal for tool interrupt handling.
+ */
+const NEVER_RETRY_ERROR_NAMES = ['AbortError', 'ToolInterruptError'];
 
 let __setTimeout: (
   callback: (...args: any[]) => void,
@@ -158,7 +166,9 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
               const error = e as Error;
               if (i < maxRetries) {
                 let shouldRetry = false;
-                if (error instanceof GenkitError) {
+                if (NEVER_RETRY_ERROR_NAMES.includes(error?.name)) {
+                  shouldRetry = false;
+                } else if (error instanceof GenkitError) {
                   if ((statuses as string[]).includes(error.status)) {
                     shouldRetry = true;
                   }
@@ -168,6 +178,16 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
 
                 if (shouldRetry) {
                   let delay = currentDelay;
+                  // Honor provider's Retry-After if available
+                  if (
+                    error instanceof GenkitError &&
+                    error.responseMetadata?.retryAfterMs
+                  ) {
+                    delay = Math.max(
+                      delay,
+                      error.responseMetadata.retryAfterMs
+                    );
+                  }
                   if (!noJitter) {
                     delay = delay + 1000 * Math.pow(2, i) * Math.random();
                   }

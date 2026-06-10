@@ -29,7 +29,7 @@ _ = load_dotenv()
 # when GENKIT_ENV=dev is set — no lifespan wiring needed.
 ai = Genkit(
     plugins=[GoogleAI()],
-    model='googleai/gemini-2.0-flash',
+    model='googleai/gemini-flash-latest',
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 

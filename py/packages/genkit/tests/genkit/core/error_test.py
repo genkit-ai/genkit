@@ -43,6 +43,16 @@ def test_genkit_error() -> None:
     error_no_source = GenkitError(status='INTERNAL', message='Test message 2')
     assert str(error_no_source) == 'INTERNAL: Test message 2'
 
+    # When wrapping another exception the cause should appear in str(...) too,
+    # so the model and any plain ``f"{e}"`` log line see the real reason.
+    wrapped = GenkitError(
+        status='INTERNAL',
+        message='Error while running action read_file',
+        cause=ValueError("File not found: 'workspace/foo.py'"),
+    )
+    assert str(wrapped) == ("INTERNAL: Error while running action read_file: File not found: 'workspace/foo.py'")
+    assert wrapped.original_message == 'Error while running action read_file'
+
 
 def test_genkit_error_to_json() -> None:
     # NOT_FOUND is a valid gRPC-style status (maps to HTTP 404).

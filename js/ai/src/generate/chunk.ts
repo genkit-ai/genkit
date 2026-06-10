@@ -23,8 +23,14 @@ import type {
   ToolRequestPart,
 } from '../model.js';
 
+/** A function that parses a {@link GenerateResponseChunk} into a typed output value. */
 export type ChunkParser<T = unknown> = (chunk: GenerateResponseChunk<T>) => T;
 
+/**
+ * Represents a single chunk of a streaming model response. Provides convenience
+ * accessors for extracting text, media, tool requests, and accumulated output
+ * from the chunk and all preceding chunks in the stream.
+ */
 export class GenerateResponseChunk<T = unknown>
   implements GenerateResponseChunkData
 {

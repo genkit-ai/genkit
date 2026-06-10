@@ -1,4 +1,6 @@
 /**
+ * @license
+ *
  * Copyright 2024 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,6 +14,17 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ */
+
+/**
+ * Output format types — `Formatter` and `FormatArgument` interfaces used when
+ * defining custom output formats for model generation.
+ *
+ * ```ts
+ * import type { Formatter, FormatArgument } from 'genkit/formats';
+ * ```
+ *
+ * @module formats
  */
 
 export type { FormatArgument, Formatter } from '@genkit-ai/ai/formats';

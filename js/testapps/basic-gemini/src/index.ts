@@ -126,7 +126,7 @@ ai.defineFlow('combine tools and builtins', async () => {
 
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-3.1-flash-lite'),
+    model: googleAI.model('gemini-3.5-flash'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
@@ -896,6 +896,29 @@ async function downloadVideo(video: MediaPart, path: string) {
   Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
 }
 
+ai.defineFlow('video-to-image-generation', async () => {
+  const response = await ai.generate({
+    model: googleAI.model('gemini-3.1-flash-image'),
+    prompt: [
+      {
+        media: {
+          url: 'https://www.youtube.com/watch?v=QO30-W3b_vw',
+        },
+        metadata: {
+          videoMetadata: {
+            fps: 0.5,
+          },
+        },
+      },
+      {
+        text: 'Can you create an image that explains what this video is about?',
+      },
+    ],
+  });
+
+  return response;
+});
+
 // Test external URL with Gemini 3.0 (should pass as fileUri)
 ai.defineFlow('external-url-gemini-3.0', async () => {
   const { text } = await ai.generate({
@@ -979,6 +1002,56 @@ ai.defineFlow('embed-multimodal', async () => {
   });
 
   return embeddings;
+});
+
+ai.defineFlow('antigravity', async () => {
+  const { message } = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Read Hacker News, summarize the top 10 stories.',
+    config: {
+      environment: 'remote',
+      // not specifying tools allows all the default tools
+    },
+  });
+  return message;
+});
+
+ai.defineFlow('antigravity-tools', async () => {
+  const { message } = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Read Hacker News, summarize the top 10 stories.',
+    config: {
+      environment: 'remote',
+      tools: [{ type: 'google_search' }], // This allows ONLY google_search
+    },
+  });
+  return message;
+});
+
+ai.defineFlow('antigravity-multi-turn', async () => {
+  const response1 = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Create a simple python script to print hello world.',
+    config: {
+      environment: 'remote',
+      store: true,
+    },
+  });
+
+  const interactionId = response1.message?.metadata?.interactionId as string;
+  const environmentId = response1.message?.metadata?.environmentId as string;
+
+  const response2 = await ai.generate({
+    model: googleAI.model('antigravity-preview-05-2026'),
+    prompt: 'Now modify the script to print it backwards and run it.',
+    config: {
+      environment: environmentId,
+      previousInteractionId: interactionId,
+      store: true,
+    },
+  });
+
+  return { turn1: response1.message, turn2: response2.message };
 });
 
 ai.defineFlow('embed-multimodal-gemini-embedding-2', async () => {
@@ -1342,15 +1415,6 @@ ai.defineFlow('lyria-foreign-language', async () => {
   });
 
   return response;
-});
-
-// Gemma 3
-ai.defineFlow('gemma-3', async () => {
-  const { text } = await ai.generate({
-    model: googleAI.model('gemma-3-27b-it'),
-    prompt: 'Tell me a short joke about a programmer.',
-  });
-  return text;
 });
 
 // Gemma 4 with thinkingConfig

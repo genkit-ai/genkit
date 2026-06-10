@@ -2149,6 +2149,40 @@ func TestDataPromptExecuteStream(t *testing.T) {
 			t.Errorf("expected error %v, got %v", expectedErr, receivedErr)
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		testModel := DefineModel(r, "test/breakDataPromptStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for i := range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"text":"chunk","index":%d}`, i))}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"text":"done","index":4}`)},
+				},
+			}, nil
+		})
+
+		dp := DefineDataPrompt[StreamInput, StreamOutput](r, "breakStreamPrompt",
+			WithModel(testModel),
+			WithPrompt("Test {{topic}}"),
+		)
+
+		for _, err := range dp.ExecuteStream(t.Context(), StreamInput{Topic: "yielding"}) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
 func TestPromptExecuteStream(t *testing.T) {
@@ -2261,6 +2295,36 @@ func TestPromptExecuteStream(t *testing.T) {
 		}
 		if config.Temperature != 0.9 {
 			t.Errorf("expected temperature 0.9, got %v", config.Temperature)
+		}
+	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		testModel := DefineModel(r, "test/breakPromptStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn: true,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("done"),
+			}, nil
+		})
+
+		p := DefinePrompt(r, "breakStreamTestPrompt",
+			WithModel(testModel),
+			WithPrompt("Test"),
+		)
+
+		for _, err := range p.ExecuteStream(t.Context()) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
 		}
 	})
 }
