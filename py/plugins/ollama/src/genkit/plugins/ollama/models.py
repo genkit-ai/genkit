@@ -114,7 +114,7 @@ from genkit.plugin_api import ActionRunContext, get_cached_client
 from .constants import (
     OllamaAPITypes,
 )
-from .converters import strip_data_uri_prefix
+from .converters import strip_data_uri_prefix, to_ollama_role
 
 logger = structlog.get_logger(__name__)
 
@@ -570,7 +570,7 @@ class OllamaModel:
         messages: list[ollama_api.Message] = []
         for message in request.messages:
             item = ollama_api.Message(
-                role=cls._to_ollama_role(role=cast(Role, message.role)),
+                role=to_ollama_role(cast(Role, message.role)),
                 content='',
                 images=[],
             )
@@ -626,22 +626,6 @@ class OllamaModel:
 
         # Local file path or raw base64 — pass through to Image.
         return url
-
-    @staticmethod
-    def _to_ollama_role(
-        role: Role,
-    ) -> Literal['user', 'assistant', 'system', 'tool']:
-        match role:
-            case Role.USER:
-                return 'user'
-            case Role.MODEL:
-                return 'assistant'
-            case Role.TOOL:
-                return 'tool'
-            case Role.SYSTEM:
-                return 'system'
-            case _:
-                raise ValueError(f'Unknown role: {role}')
 
     @staticmethod
     def _from_ollama_role(role: str) -> Role:
