@@ -622,7 +622,7 @@ func newAgentRuntime[Stream, State any](
 		name:    name,
 		cfg:     cfg,
 		session: session,
-		router:  startChunkRouter(session, outCh),
+		router:  startChunkRouter(ctx, session, outCh),
 		intake:  startDetachIntake(inCh),
 		fnDone:  make(chan fnDoneResult[State], 1),
 	}
@@ -771,14 +771,16 @@ func (rt *agentRuntime[Stream, State]) drainAndWait(cancelWork context.CancelFun
 // an error, the invocation resolves gracefully as a failed output instead
 // (see failedOutput).
 //
-// When fn returns with an error, the Responder's ctx-aware send may have
-// dropped a chunk while the router was still pinned on a downstream send
-// to a slow/gone consumer. router.close blocks on the router's forward
-// goroutine exiting, which can't happen while it's stuck on that send;
-// stopAndWait closes stopWriting first so the router breaks out and
-// enters drain mode. The natural-completion path leaves the router idle
-// (every Send was accepted before fn returned), so close alone is
-// sufficient there and avoids trashing a last in-flight chunk.
+// router.close blocks on the forward goroutine exiting, and fn returning
+// does not imply the router is idle: fn's last accepted chunk may still be
+// in the router's hands, parked on the send to a full out buffer. On the
+// error path stopAndWait closes stopWriting first, deliberately dropping
+// the failed turn's in-flight chunks so close cannot wedge behind a
+// slow/gone consumer. On the success path those chunks are wanted, so
+// close relies on the parked send being released instead: a consuming
+// client drains it, a disconnected client's ctx cancellation trips
+// forward's ctx arm, and a client that stopped receiving unparks it when
+// its Output call drains the stream.
 func (rt *agentRuntime[Stream, State]) handleFnDone(
 	ctx context.Context,
 	cancelWork context.CancelFunc,
@@ -1131,6 +1133,7 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 // send.
 
 type chunkRouter[Stream, State any] struct {
+	ctx     context.Context // action context; ends on client disconnect (or completion)
 	in      chan *AgentStreamChunk[Stream]
 	out     chan<- *AgentStreamChunk[Stream]
 	session *Session[State]
@@ -1144,10 +1147,12 @@ type chunkRouter[Stream, State any] struct {
 }
 
 func startChunkRouter[Stream, State any](
+	ctx context.Context,
 	session *Session[State],
 	out chan<- *AgentStreamChunk[Stream],
 ) *chunkRouter[Stream, State] {
 	r := &chunkRouter[Stream, State]{
+		ctx:           ctx,
 		in:            make(chan *AgentStreamChunk[Stream]),
 		out:           out,
 		session:       session,
@@ -1162,13 +1167,14 @@ func startChunkRouter[Stream, State any](
 func (r *chunkRouter[Stream, State]) run() {
 	defer close(r.done)
 	if !r.forward() {
-		// r.in closed before detach; nothing left to do.
+		// r.in closed while writes were still allowed; nothing left to do.
 		return
 	}
 	close(r.writerStopped)
-	// Detached: keep applying side effects so the user fn's
-	// SendArtifact/SendModelChunk calls behave the same way they did
-	// pre-detach. Only the wire forward to outCh is suppressed.
+	// Writes stopped (detach, shutdown, or client disconnect): keep
+	// applying side effects so the user fn's SendArtifact/SendModelChunk
+	// calls behave the same way they did before. Only the wire forward to
+	// outCh is suppressed.
 	for chunk := range r.in {
 		r.applySideEffects(chunk)
 	}
@@ -1188,8 +1194,10 @@ func (r *chunkRouter[Stream, State]) applySideEffects(chunk *AgentStreamChunk[St
 	}
 }
 
-// forward delivers chunks to outCh and applies side effects until detach
-// or r.in closes. Returns true if it stopped because of detach.
+// forward delivers chunks to outCh and applies side effects until told to
+// stop writing, the action context ends, or r.in closes. Returns true if
+// the router must keep draining side effects (writes stopped), false if
+// r.in closed.
 func (r *chunkRouter[Stream, State]) forward() bool {
 	for {
 		select {
@@ -1201,6 +1209,12 @@ func (r *chunkRouter[Stream, State]) forward() bool {
 			select {
 			case r.out <- chunk:
 			case <-r.stopWriting:
+				return true
+			case <-r.ctx.Done():
+				// The client is gone (disconnect cancels the action
+				// context), so nothing will drain out again and a blocked
+				// forward would wedge close. Drop the chunk and switch to
+				// side-effects-only mode.
 				return true
 			}
 		case <-r.stopWriting:
@@ -1790,8 +1804,9 @@ func (c *AgentConnection[Stream, State]) Close() error {
 // Receive returns an iterator for receiving stream chunks. Breaking out
 // of the iterator does not cancel the connection; multi-turn callers
 // routinely break on [TurnEnd], send the next input, then call Receive
-// again to consume the next batch. Use ctx cancellation or [Close] to
-// terminate the connection.
+// again to consume the next batch. Call [AgentConnection.Output] to
+// finish the invocation, or cancel the ctx passed to StreamBidi to
+// abort it.
 func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[Stream], error] {
 	return c.conn.Receive()
 }
@@ -1821,16 +1836,10 @@ func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[S
 // them. Finish Receive first, then call Output.
 func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
 	_ = c.conn.Close()
-
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		for range c.conn.Receive() {
-		}
-	}()
-
-	<-c.conn.Done()
-	<-drainDone
+	// The core Output drains unconsumed chunks (so the agent is never
+	// wedged publishing to a stream nobody reads) and unblocks on ctx
+	// cancellation while preferring the finalized result when both are
+	// ready.
 	return c.conn.Output()
 }
 

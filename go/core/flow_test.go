@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -439,6 +440,204 @@ func TestBidiConnectionContextCancellation(t *testing.T) {
 	_, err = conn.Output()
 	if err == nil {
 		t.Error("expected error after context cancellation")
+	}
+}
+
+func TestBidiConnectionCompletionReleasesContext(t *testing.T) {
+	ctx := context.Background()
+
+	// Capture the context the action runs under: completion must cancel it
+	// so the connection releases its registration on the parent context
+	// (a long-lived parent would otherwise accumulate one child per
+	// invocation).
+	ctxCh := make(chan context.Context, 1)
+	action := NewBidiAction(
+		"capture", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			ctxCh <- ctx
+			return "done", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-conn.Done()
+	fnCtx := <-ctxCh
+
+	// The cancel fires just after doneCh closes; poll briefly.
+	deadline := time.Now().Add(5 * time.Second)
+	for fnCtx.Err() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("connection context was not cancelled after completion")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestBidiConnectionNoSpuriousErrorAfterCompletion(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"clean", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			outCh <- "chunk"
+			return "done", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-conn.Done()
+
+	// Completion cancels the connection context, so the stream-closed and
+	// ctx-done select arms are both ready; Receive and Output must prefer
+	// the stream's own terminal state over a spurious cancellation error.
+	// Iterate to defeat select randomness.
+	for range 30 {
+		for chunk, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive yielded error on completed connection: %v", err)
+			}
+			if chunk != "chunk" {
+				t.Fatalf("unexpected chunk %q", chunk)
+			}
+		}
+		output, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output errored on completed connection: %v", err)
+		}
+		if output != "done" {
+			t.Fatalf("expected output 'done', got %q", output)
+		}
+	}
+}
+
+func TestBidiConnectionOutputUnblocksAbandonedStream(t *testing.T) {
+	ctx := context.Background()
+
+	// The action is not ctx-aware and emits more chunks than the caller
+	// consumes, so it parks on the full stream buffer when the caller
+	// breaks out of Receive. Output must drain the stream so the action
+	// can run to completion instead of wedging both sides.
+	action := NewBidiAction(
+		"chatty", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range 3 {
+				outCh <- "chunk"
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range conn.Receive() {
+		break // abandon the stream after one chunk
+	}
+	conn.Close()
+
+	type result struct {
+		output string
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		output, err := conn.Output()
+		resultCh <- result{output, err}
+	}()
+
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			t.Fatalf("Output errored: %v", res.err)
+		}
+		if res.output != "done" {
+			t.Fatalf("expected output 'done', got %q", res.output)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Output did not return; action wedged on abandoned stream")
+	}
+}
+
+func TestBidiConnectionCancel(t *testing.T) {
+	ctx := context.Background()
+
+	started := make(chan struct{})
+	action := NewBidiAction(
+		"blocking", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			close(started)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+
+	conn.Cancel()
+
+	if _, err := conn.Output(); err == nil {
+		t.Error("expected error after Cancel")
+	}
+	conn.Cancel() // idempotent
+}
+
+func TestBidiConnectionReceiveResumesAfterBreak(t *testing.T) {
+	ctx := context.Background()
+
+	action := NewBidiAction(
+		"echo", api.ActionTypeCustom, nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			for input := range inCh {
+				outCh <- "echo: " + input
+			}
+			return "done", nil
+		},
+	)
+
+	conn, err := action.StreamBidi(ctx, struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Breaking out of Receive must not terminate the connection: the
+	// send-receive-break cycle is the canonical multi-turn pattern.
+	var chunks []string
+	for _, input := range []string{"one", "two"} {
+		if err := conn.Send(input); err != nil {
+			t.Fatalf("Send(%q) failed: %v", input, err)
+		}
+		for chunk, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive error: %v", err)
+			}
+			chunks = append(chunks, chunk)
+			break
+		}
+	}
+	conn.Close()
+
+	output, err := conn.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "done" {
+		t.Errorf("expected output 'done', got %q", output)
+	}
+	want := []string{"echo: one", "echo: two"}
+	if !slices.Equal(chunks, want) {
+		t.Errorf("expected chunks %v, got %v", want, chunks)
 	}
 }
 

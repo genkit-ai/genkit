@@ -5629,3 +5629,118 @@ func TestDetachIntake_SkipsNilInputs(t *testing.T) {
 		}
 	})
 }
+
+// TestAgent_ClientCancelMidStream reproduces an invocation hang: fn
+// returns nil (the closed input stream ended sess.Run cleanly) while its
+// last accepted chunk is still in the router's hands, parked on the full
+// stream buffer, and the client then cancels instead of draining. The
+// fn-done success path skips stopAndWait, so the router's forward must
+// observe the cancelled action context itself (nothing will drain the
+// stream again) for the invocation to resolve, and Output must unblock
+// rather than waiting on completion unconditionally.
+func TestAgent_ClientCancelMidStream(t *testing.T) {
+	for i := range 10 {
+		t.Run(fmt.Sprintf("iteration%d", i), func(t *testing.T) {
+			reg := newTestRegistry(t)
+
+			af := DefineCustomAgent(reg, "cancelFlow",
+				func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+					return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+						resp.SendStatus(testStatus{Phase: "step0"})
+						resp.SendStatus(testStatus{Phase: "step1"})
+						return nil, nil
+					})
+				},
+			)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			conn, err := af.StreamBidi(ctx)
+			if err != nil {
+				t.Fatalf("StreamBidi failed: %v", err)
+			}
+			if err := conn.SendText("hello"); err != nil {
+				t.Fatalf("SendText failed: %v", err)
+			}
+			// Close the input side so sess.Run ends cleanly and fn returns
+			// nil once its sends are accepted.
+			conn.Close()
+
+			// Consume a single chunk: that frees a buffer slot so the fn's
+			// remaining sends are accepted and fn returns, leaving the
+			// router parked mid-forward on the full stream buffer.
+			for range conn.Receive() {
+				break
+			}
+			// Give the agent time to reach that parked state, then cancel
+			// instead of draining.
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+
+			outputDone := make(chan struct{})
+			go func() {
+				defer close(outputDone)
+				conn.Output()
+			}()
+			select {
+			case <-outputDone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("Output did not return after client cancellation")
+			}
+
+			// The invocation itself must also resolve: a wedged router
+			// would leave the action goroutine (and its trace span) open
+			// forever.
+			select {
+			case <-conn.Done():
+			case <-time.After(10 * time.Second):
+				t.Fatal("invocation did not complete after client cancellation")
+			}
+		})
+	}
+}
+
+// TestAgent_OutputUnblocksOnCancel covers the caller's escape hatch when
+// the agent fn does not observe cancellation: Output must return once the
+// connection's context is cancelled instead of blocking on completion
+// that may never come.
+func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
+	reg := newTestRegistry(t)
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) }) // let the stubborn fn unwind
+
+	af := DefineCustomAgent(reg, "stubbornFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			<-block // ignores ctx
+			return nil, nil
+		},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi failed: %v", err)
+	}
+	cancel()
+
+	type result struct {
+		out *AgentOutput[testState]
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		out, err := conn.Output()
+		resultCh <- result{out, err}
+	}()
+
+	select {
+	case res := <-resultCh:
+		if res.err == nil {
+			t.Errorf("expected an error from Output after cancellation, got output %+v", res.out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Output did not return after cancellation; no context escape")
+	}
+}

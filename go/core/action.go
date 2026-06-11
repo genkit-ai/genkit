@@ -434,6 +434,14 @@ func (a *Action[In, Out, StreamOut, StreamIn]) StreamBidi(ctx context.Context, i
 	}
 
 	go func() {
+		// Cancel the connection's context once the action has returned, so a
+		// completed connection releases its registration on the parent
+		// context (a long-lived parent would otherwise accumulate one child
+		// per invocation). The LIFO defer order guarantees that whenever
+		// ctx.Done is observed because of completion, streamCh and doneCh
+		// are already closed, letting Send/Receive/Output re-check them and
+		// report completion rather than a spurious cancellation.
+		defer conn.cancel()
 		defer close(conn.doneCh)
 		defer close(conn.streamCh)
 		output, err := tracing.RunInNewSpan(conn.ctx, spanMetadata, in,
@@ -568,13 +576,23 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Send(input StreamIn) (err err
 	case c.inputCh <- input:
 		return nil
 	case <-c.ctx.Done():
-		return c.ctx.Err()
+		// The context is also cancelled on completion; report the
+		// completion error when the action has already returned.
+		select {
+		case <-c.doneCh:
+			return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
+		default:
+			return c.ctx.Err()
+		}
 	case <-c.doneCh:
 		return NewError(FAILED_PRECONDITION, "%v", ErrActionCompleted)
 	}
 }
 
-// Close signals that no more inputs will be sent.
+// Close signals that no more inputs will be sent. It does not terminate
+// the connection: the action keeps running until it returns on its own,
+// typically after observing the closed input stream. To abandon a
+// connection and the work behind it, use [BidiConnection.Cancel].
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -586,13 +604,24 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Close() error {
 	return nil
 }
 
+// Cancel terminates the connection: it cancels the context the action
+// runs under and releases callers blocked on Send, Receive, or Output.
+// The action's shutdown is asynchronous; a well-behaved action observes
+// the cancellation and returns promptly. Cancel is safe to call multiple
+// times and after completion, where it has no effect.
+func (c *BidiConnection[StreamIn, StreamOut, Out]) Cancel() {
+	c.cancel()
+}
+
 // Receive returns an iterator for receiving streamed response chunks.
 // The iterator yields chunks until the action finishes, the context is
 // cancelled, or the caller breaks out of the loop. Breaking out does NOT
 // cancel the connection: bidi callers routinely break to switch to
-// sending, then call Receive again to consume the next batch. Use ctx
-// cancellation or [BidiConnection.Close] to terminate the connection
-// (matching gRPC and similar bidi streaming conventions).
+// sending, then call Receive again to consume the next batch (matching
+// gRPC and similar bidi streaming conventions). To finish with the
+// connection, call [BidiConnection.Output]; to abandon it early, use
+// [BidiConnection.Cancel] or cancel the context. A connection that is
+// merely abandoned leaves the action running.
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut, error] {
 	return func(yield func(StreamOut, error) bool) {
 		for {
@@ -605,9 +634,25 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut
 					return
 				}
 			case <-c.ctx.Done():
-				var zero StreamOut
-				yield(zero, c.ctx.Err())
-				return
+				// The context is also cancelled on completion, and chunks
+				// may remain buffered either way. Deliver them, and end
+				// cleanly if the stream closed: cancellation is reported
+				// only while the action is still running.
+				for {
+					select {
+					case chunk, ok := <-c.streamCh:
+						if !ok {
+							return
+						}
+						if !yield(chunk, nil) {
+							return
+						}
+					default:
+						var zero StreamOut
+						yield(zero, c.ctx.Err())
+						return
+					}
+				}
 			}
 		}
 	}
@@ -615,29 +660,47 @@ func (c *BidiConnection[StreamIn, StreamOut, Out]) Receive() iter.Seq2[StreamOut
 
 // Output returns the final output after the action completes.
 // Blocks until done or context cancelled. If the action has finished, its
-// actual output is returned even when the context was cancelled concurrently.
+// actual output is returned even when the context was cancelled concurrently
+// (e.g., session flows backgrounded on client disconnect).
+//
+// Calling Output declares that the caller is done receiving: stream chunks
+// not consumed via Receive are drained and discarded, so an action blocked
+// publishing to the full stream buffer can run to completion instead of
+// wedging both sides. Do not call Output concurrently with a goroutine
+// iterating Receive; both consume from the same stream and chunks would be
+// split between them. Finish Receive first, then call Output.
 func (c *BidiConnection[StreamIn, StreamOut, Out]) Output() (Out, error) {
-	// Fast path: if the action has already finished, return its output
-	// rather than racing with ctx.Done. This matters for callers that
-	// observe a completed action just after cancelling ctx (e.g., session
-	// flows backgrounded on client disconnect).
-	select {
-	case <-c.doneCh:
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.output, c.err
-	default:
+	for {
+		select {
+		case <-c.doneCh:
+			return c.result()
+		case _, ok := <-c.streamCh:
+			if !ok {
+				// The stream closed: the action has returned and doneCh
+				// closes immediately after.
+				<-c.doneCh
+				return c.result()
+			}
+		case <-c.ctx.Done():
+			// The context is also cancelled on completion; prefer the
+			// action's actual output when it has already finished.
+			select {
+			case <-c.doneCh:
+				return c.result()
+			default:
+				var zero Out
+				return zero, c.ctx.Err()
+			}
+		}
 	}
+}
 
-	select {
-	case <-c.doneCh:
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.output, c.err
-	case <-c.ctx.Done():
-		var zero Out
-		return zero, c.ctx.Err()
-	}
+// result returns the stored output and error. Callers must have observed
+// doneCh closed first.
+func (c *BidiConnection[StreamIn, StreamOut, Out]) result() (Out, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.output, c.err
 }
 
 // Done returns a channel that is closed when the connection completes.
