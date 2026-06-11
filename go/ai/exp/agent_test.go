@@ -414,6 +414,205 @@ func TestAgent_Artifacts(t *testing.T) {
 	}
 }
 
+// TestAgent_ClientManagedState_CallerStateIsolated verifies that the
+// framework deep-copies client-managed state at the entry boundary: the
+// invocation must not write into the caller's state object (e.g. via
+// AddArtifacts' in-place replace), and two invocations given the same
+// state object must not share memory.
+func TestAgent_ClientManagedState_CallerStateIsolated(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "stateIsolationFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				// Replace the artifact the caller's state carried (the
+				// in-place replace path) and extend history.
+				resp.SendArtifact(&Artifact{
+					Name:  "code.go",
+					Parts: []*ai.Part{ai.NewTextPart("v2")},
+				})
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				return nil, nil
+			})
+		},
+	)
+
+	callerArtifact := &Artifact{
+		Name:  "code.go",
+		Parts: []*ai.Part{ai.NewTextPart("v1")},
+	}
+	prev := &SessionState[testState]{
+		Artifacts: []*Artifact{callerArtifact},
+		Messages:  []*ai.Message{ai.NewUserTextMessage("previous")},
+	}
+
+	out, err := af.RunText(ctx, "turn 1", WithState(prev))
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+
+	// The caller's state object must be untouched: same artifact pointer
+	// and content, no appended messages.
+	if prev.Artifacts[0] != callerArtifact {
+		t.Error("invocation replaced the artifact inside the caller's state object")
+	}
+	if got := callerArtifact.Parts[0].Text; got != "v1" {
+		t.Errorf("caller's artifact content changed to %q, want %q", got, "v1")
+	}
+	if got := len(prev.Messages); got != 1 {
+		t.Errorf("caller's message slice grew to %d entries, want 1", got)
+	}
+
+	// The output reflects the replace: one artifact with the new content.
+	if got := len(out.State.Artifacts); got != 1 {
+		t.Fatalf("expected 1 artifact in output state, got %d", got)
+	}
+	if got := out.State.Artifacts[0].Parts[0].Text; got != "v2" {
+		t.Errorf("output artifact content = %q, want %q", got, "v2")
+	}
+}
+
+// TestAgent_InputMessageCloned verifies the session stores a private copy
+// of the input message: a caller mutating the message it sent after the
+// turn must not change conversation history.
+func TestAgent_InputMessageCloned(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := DefineCustomAgent(reg, "inputCloneFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, nil
+			})
+		},
+	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi failed: %v", err)
+	}
+
+	sent := ai.NewUserTextMessage("original")
+	if err := conn.SendMessage(sent); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive error: %v", err)
+		}
+		if chunk.TurnEnd != nil {
+			break
+		}
+	}
+
+	// The turn is over, so the message is in session history. Mutating
+	// the caller's copy must not reach it.
+	sent.Content[0].Text = "mutated"
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
+	if got := len(out.State.Messages); got != 1 {
+		t.Fatalf("expected 1 message, got %d", got)
+	}
+	if got := out.State.Messages[0].Content[0].Text; got != "original" {
+		t.Errorf("session history reflects caller's mutation: got %q, want %q", got, "original")
+	}
+}
+
+// TestAgent_SendArtifact_SynchronousAndCloned verifies SendArtifact's two
+// guarantees: the artifact is visible to session reads by the time the
+// call returns (Result right after SendArtifact must include it), and the
+// session holds a private copy, so the sender's retained pointer cannot
+// mutate session state.
+func TestAgent_SendArtifact_SynchronousAndCloned(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	var (
+		resultArtifacts int
+		sessionContent  string
+	)
+	af := DefineCustomAgent(reg, "syncArtifactFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				a := &Artifact{Name: "out.txt", Parts: []*ai.Part{ai.NewTextPart("original")}}
+				resp.SendArtifact(a)
+				// Visible as soon as SendArtifact returns.
+				resultArtifacts = len(sess.Result().Artifacts)
+				// The session holds its own copy.
+				a.Parts[0] = ai.NewTextPart("mutated")
+				if arts := sess.Artifacts(); len(arts) == 1 {
+					sessionContent = arts[0].Parts[0].Text
+				}
+				return nil, nil
+			})
+		},
+	)
+
+	if _, err := af.RunText(ctx, "go"); err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+	if resultArtifacts != 1 {
+		t.Errorf("Result() right after SendArtifact saw %d artifacts, want 1", resultArtifacts)
+	}
+	if sessionContent != "original" {
+		t.Errorf("session artifact content = %q, want %q (sender's mutation must not reach session state)", sessionContent, "original")
+	}
+}
+
+// TestAgent_TurnEndSnapshot_IncludesSameTurnArtifact verifies that a
+// turn-end snapshot captures artifacts sent during that turn: the Send
+// side effect applies before the call returns, so the snapshot taken at
+// turn end cannot miss it. With snapshots restricted to turn end, the
+// invocation output reuses the turn-end row, which therefore must hold
+// the artifact for a later resume.
+func TestAgent_TurnEndSnapshot_IncludesSameTurnArtifact(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := DefineCustomAgent(reg, "turnEndArtifactFlow",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				resp.SendArtifact(&Artifact{
+					Name:  "report.md",
+					Parts: []*ai.Part{ai.NewTextPart("# Report")},
+				})
+				return nil, nil
+			})
+		},
+		WithSessionStore[testState](store),
+		WithSnapshotOn[testState](SnapshotEventTurnEnd),
+	)
+
+	out, err := af.RunText(ctx, "produce the report")
+	if err != nil {
+		t.Fatalf("RunText failed: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected a snapshot ID on the output")
+	}
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if snap == nil {
+		t.Fatalf("snapshot %q not found", out.SnapshotID)
+	}
+	if snap.Event != SnapshotEventTurnEnd {
+		t.Errorf("snapshot event = %q, want %q", snap.Event, SnapshotEventTurnEnd)
+	}
+	if snap.State == nil || len(snap.State.Artifacts) != 1 {
+		t.Fatalf("turn-end snapshot missing the artifact sent during the turn: %+v", snap.State)
+	}
+	if got := snap.State.Artifacts[0].Name; got != "report.md" {
+		t.Errorf("snapshot artifact name = %q, want %q", got, "report.md")
+	}
+}
+
 func TestAgent_SnapshotCallback(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -4183,6 +4382,76 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	}
 	if out.FinishReason != AgentFinishReasonLength {
 		t.Errorf("AgentOutput.FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonLength)
+	}
+}
+
+// TestAgent_Detach_BackgroundWorkSurvivesActionReturn verifies that the
+// detached background work's context stays alive after the invocation
+// returns the detached output and the framework releases the action
+// context. The regression this guards: the pre-detach watcher that
+// mirrors the client context could observe both its wake conditions
+// (client context released, detach landed) at once and randomly pick the
+// cancel arm, killing the background work. The race is scheduler-driven,
+// so the test stacks iterations with a settle window; under
+// single-threaded scheduling (GOMAXPROCS=1) the regression trips within
+// a few iterations.
+func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
+	ctx := context.Background()
+	for i := 0; i < 20; i++ {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+		release := make(chan struct{})
+		fnSaw := make(chan string, 1)
+
+		af := DefineCustomAgent(reg, "detachSurviveFlow",
+			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+					select {
+					case <-release:
+						fnSaw <- "release"
+					case <-ctx.Done():
+						fnSaw <- "ctx"
+					}
+					return nil, nil
+				})
+			},
+			WithSessionStore(store),
+		)
+
+		conn, err := af.StreamBidi(ctx)
+		if err != nil {
+			t.Fatalf("iteration %d: StreamBidi: %v", i, err)
+		}
+		go func() {
+			for _, err := range conn.Receive() {
+				if err != nil {
+					return
+				}
+			}
+		}()
+		if err := conn.SendText("go"); err != nil {
+			t.Fatalf("iteration %d: SendText: %v", i, err)
+		}
+		if err := conn.Detach(); err != nil {
+			t.Fatalf("iteration %d: Detach: %v", i, err)
+		}
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("iteration %d: Output: %v", i, err)
+		}
+
+		// The action has returned, so the framework's release of the
+		// action context is imminent or done. Give a wrongly-cancelling
+		// watcher time to land before letting the turn proceed.
+		time.Sleep(20 * time.Millisecond)
+		close(release)
+		if saw := <-fnSaw; saw != "release" {
+			t.Fatalf("iteration %d: detached background work saw its context cancelled", i)
+		}
+		// Wait out the finalizer so the iteration's goroutines wind down.
+		waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+			return s.Status == SnapshotStatusSucceeded
+		})
 	}
 }
 

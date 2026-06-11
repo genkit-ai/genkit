@@ -157,6 +157,12 @@ type TurnResult struct {
 // than failing the action.
 func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) (*TurnResult, error)) error {
 	for input := range s.InputCh {
+		// Deep-copy at the framework boundary: an in-process caller
+		// retains the pointers it sent (message, resume parts) and may
+		// mutate them after Send returns, so everything past this point
+		// (trace marshaling, session state, snapshot writes) must work
+		// on private memory rather than race the caller.
+		input = jsonClone(input)
 		spanMeta := &tracing.SpanMetadata{
 			Name:    fmt.Sprintf("agent/turn/%d", s.TurnIndex),
 			Type:    "flowStep",
@@ -165,7 +171,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
 				if input.Message != nil {
-					s.AddMessages(input.Message)
+					// The session owns its history: store a copy so fn's
+					// view of the input stays independent of session state.
+					s.AddMessages(jsonClone(input.Message))
 				}
 				tr, err := fn(ctx, input)
 				if err != nil {
@@ -227,7 +235,8 @@ func (s *SessionRunner[State]) recordLastGood() {
 // Result returns an [AgentResult] populated from the current session state:
 // the last message in the conversation history and all artifacts. The
 // returned value is independent of the session; callers may mutate it
-// without affecting session state.
+// without affecting session state. An artifact sent through the
+// [Responder] is visible here as soon as the Send call returns.
 //
 // It is a convenience for custom agents that don't need to construct the
 // result manually.
@@ -380,17 +389,26 @@ func (s *SessionRunner[State]) recoverySnapshotID(ctx context.Context) string {
 // --- Responder ---
 
 // Responder is the output channel for an agent. Artifacts sent through
-// it are automatically added to the session before being forwarded to the
-// client.
+// it are added to the session synchronously: by the time a Send method
+// returns, the chunk's session-level side effects have been applied, so
+// a state read ([SessionRunner.Result], [Session.Artifacts]) or a
+// turn-end snapshot that follows the call observes them. Only the wire
+// forward to the client is asynchronous.
 //
 // All Send methods are ctx-aware: if the agent's work context is
 // cancelled (typically client disconnect, abort during detach, or fn
-// completion), Send returns promptly with the chunk dropped. Send itself
-// remains fire-and-forget and returns no error; the user fn is expected
-// to observe cancellation through its own ctx check and stop producing.
+// completion), Send returns promptly with the chunk dropped from the
+// wire; the session-level side effects still apply. Send itself remains
+// fire-and-forget and returns no error; the user fn is expected to
+// observe cancellation through its own ctx check and stop producing.
 type Responder[Stream any] struct {
 	in  chan<- *AgentStreamChunk[Stream]
 	ctx context.Context
+	// effects applies the chunk's in-process side effects (session
+	// artifact add, turn-chunk accumulation) synchronously in send, in
+	// the sender's goroutine, so reads and snapshots that follow a Send
+	// cannot miss the chunk.
+	effects func(*AgentStreamChunk[Stream])
 }
 
 // SendModelChunk sends a generation chunk (token-level streaming).
@@ -405,19 +423,30 @@ func (r Responder[Stream]) SendStatus(status Stream) {
 
 // SendArtifact sends an artifact to the stream and adds it to the session.
 // If an artifact with the same name already exists in the session, it is
-// replaced. The session-level side effect happens whether or not detach
-// has landed; only the wire forward to the client is suppressed
-// post-detach, when there is no longer a client to receive it.
+// replaced. The artifact is in the session by the time SendArtifact
+// returns, and the session stores a deep copy captured at the call, so
+// later mutations of the caller's artifact do not affect session state.
+// The session-level side effect happens whether or not detach has landed;
+// only the wire forward to the client is suppressed post-detach, when
+// there is no longer a client to receive it.
 func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
 	r.send(&AgentStreamChunk[Stream]{Artifact: artifact})
 }
 
-// send delivers chunk to the router, returning promptly if r.ctx is
-// cancelled. Dropping on cancel decouples fn liveness from the runtime's
-// shutdown choreography: a Send issued after workCtx cancellation
-// completes immediately rather than blocking on a router that has not
-// yet been put into drain mode by a terminal path.
+// send applies chunk's in-process side effects, then delivers it to the
+// router for the wire forward, returning promptly if r.ctx is cancelled.
+// Applying side effects synchronously (in the sender's goroutine, before
+// the channel send) orders them before everything the caller does after
+// Send, so a state read or a turn-end snapshot cannot miss a chunk whose
+// Send already returned. Dropping the wire forward on cancel decouples
+// fn liveness from the runtime's shutdown choreography: a Send issued
+// after workCtx cancellation completes immediately rather than blocking
+// on a router that has not yet been put into drain mode by a terminal
+// path.
 func (r Responder[Stream]) send(chunk *AgentStreamChunk[Stream]) {
+	if r.effects != nil {
+		r.effects(chunk)
+	}
 	select {
 	case r.in <- chunk:
 	case <-r.ctx.Done():
@@ -647,6 +676,11 @@ func newAgentRuntime[Stream, State any](
 // snapshot (if applicable), and forwards the resulting [TurnEnd] chunk
 // through the router so clients see it on the output stream.
 //
+// The snapshot sees everything the turn produced: the side effects of
+// the turn's Send calls (e.g. artifacts) are applied synchronously in
+// [Responder] before each Send returns, and fn returned before this
+// runs, so there is no in-flight router work to wait out.
+//
 // The snapshot is skipped when the turn failed (the live state holds the
 // turn's partial mutations) and when detach has landed (maybeSnapshot
 // observes the suspension under snapMu; the pending row already captures
@@ -685,7 +719,17 @@ func (rt *agentRuntime[Stream, State]) run(
 	go func() {
 		select {
 		case <-clientCtx.Done():
-			cancelWork()
+			// Arbitrate atomically against markDetached: whichever claims
+			// the Once first wins. clientCtx ends not only on a true
+			// disconnect but also when the framework releases the action
+			// context right after run returns the detached output; by then
+			// both select arms are ready and this arm may be picked, so
+			// claiming the Once (rather than cancelling outright) is what
+			// keeps an already-landed detach's background work alive.
+			detachOnce.Do(func() {
+				close(detached)
+				cancelWork()
+			})
 		case <-detached:
 		}
 	}()
@@ -754,10 +798,10 @@ func (rt *agentRuntime[Stream, State]) checkDetachCapabilities() error {
 // to surface its error.
 func (rt *agentRuntime[Stream, State]) drainAndWait(cancelWork context.CancelFunc) fnDoneResult[State] {
 	cancelWork()
-	// Switch the router to side-effects-only mode before waiting on fn.
-	// Without this, a fn mid-SendStatus blocks on the router's r.in
-	// receive while the router blocks on r.out send (consumer is gone),
-	// so fn never observes ctx and we deadlock waiting on fnDone.
+	// Switch the router to discard mode before waiting on fn. Without
+	// this, a fn mid-SendStatus blocks on the router's r.in receive while
+	// the router blocks on r.out send (consumer is gone), so fn never
+	// observes ctx and we deadlock waiting on fnDone.
 	rt.router.stopAndWait()
 	rt.intake.stopAndWait()
 	res := <-rt.fnDone
@@ -871,9 +915,9 @@ func (rt *agentRuntime[Stream, State]) failedOutput(ctx context.Context, cause e
 // status-subscriber and finalizer goroutines that own the rest of the
 // invocation. Per-turn snapshots are suspended for the remainder so the
 // queued inputs roll into a single finalize rewrite; the chunk router
-// stops writing to outCh but keeps applying in-process side effects
-// (e.g. artifacts added via Responder.SendArtifact) so user code does
-// not have to branch on detach.
+// stops writing to outCh and discards further chunks, whose in-process
+// side effects (e.g. artifacts added via Responder.SendArtifact) still
+// apply at Send time, so user code does not have to branch on detach.
 func (rt *agentRuntime[Stream, State]) handleDetach(
 	clientCtx, workCtx context.Context,
 	cancelWork context.CancelFunc,
@@ -1048,7 +1092,12 @@ func loadSession[State any](
 			return nil, nil, core.NewError(core.FAILED_PRECONDITION,
 				"state provided but agent has a session store configured (server-managed state); use snapshot ID instead")
 		}
-		s.state = *init.State
+		// Deep-copy at the entry boundary: an in-process caller retains
+		// its state object ([WithState] documents resending it), so the
+		// session must own private memory. Without this, AddArtifacts'
+		// in-place replace writes into the caller's array and the
+		// caller's later mutations race snapshot marshaling.
+		s.state = *jsonClone(init.State)
 		return s, nil, nil
 
 	case init.SnapshotID != "":
@@ -1115,7 +1164,12 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 			"snapshot %q was aborted", snap.SnapshotID)
 	}
 	if snap.State != nil {
-		s.state = *snap.State
+		// Stores may return rows sharing memory with their internal
+		// copies (the [SnapshotReader] contract does not require fresh
+		// memory), so the session takes a private copy; otherwise two
+		// invocations resumed from the same snapshot would cross-corrupt
+		// through the shared backing arrays.
+		s.state = *jsonClone(snap.State)
 	}
 	return s, snap, nil
 }
@@ -1123,10 +1177,12 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 // --- chunkRouter ---
 //
 // chunkRouter owns the intermediate stream channel that all chunks flow
-// through on their way to outCh. Every chunk gets the same in-process
-// side effects (adding artifacts to the session, accumulating turn
-// chunks for span output) regardless of whether detach has landed; the
-// wire forward to outCh is the only thing detach suppresses, since the
+// through on their way to outCh. A chunk's in-process side effects
+// (adding artifacts to the session, accumulating turn chunks for span
+// output) are applied synchronously by Responder.send before the chunk
+// enters the router, so every chunk gets them in its sender's goroutine
+// regardless of whether detach has landed; the router owns only the wire
+// forward to outCh, which is the one thing detach suppresses, since the
 // bidi framework closes outCh shortly after bidiFn returns. The router
 // commits to not writing before we return so that close is safe, and
 // keeps draining its input so the user fn never blocks on a responder
@@ -1172,20 +1228,24 @@ func (r *chunkRouter[Stream, State]) run() {
 	}
 	close(r.writerStopped)
 	// Writes stopped (detach, shutdown, or client disconnect): keep
-	// applying side effects so the user fn's SendArtifact/SendModelChunk
-	// calls behave the same way they did before. Only the wire forward to
-	// outCh is suppressed.
-	for chunk := range r.in {
-		r.applySideEffects(chunk)
+	// draining so a producer mid-send never blocks. The chunks' side
+	// effects already happened at Send time; only the wire forward to
+	// outCh is suppressed, so the chunks are simply discarded.
+	for range r.in {
 	}
 }
 
 // applySideEffects records the chunk's effect on session state and turn
-// span output. Invoked from both forward (pre-detach) and the post-detach
-// drain so a Send call is observably the same in either mode.
+// span output. Invoked synchronously from Responder.send, in the
+// sender's goroutine, so the effects are ordered before everything the
+// sender does after Send: a state read, a turn-end snapshot, or
+// [SessionRunner.Result] immediately after SendArtifact observes the
+// artifact. The artifact is deep-copied on its way into the session so
+// the sender's retained pointer (which also rides the wire chunk) cannot
+// alias live session state.
 func (r *chunkRouter[Stream, State]) applySideEffects(chunk *AgentStreamChunk[Stream]) {
 	if chunk.Artifact != nil {
-		r.session.AddArtifacts(chunk.Artifact)
+		r.session.AddArtifacts(jsonClone(chunk.Artifact))
 	}
 	if chunk.TurnEnd == nil {
 		r.turnMu.Lock()
@@ -1194,10 +1254,9 @@ func (r *chunkRouter[Stream, State]) applySideEffects(chunk *AgentStreamChunk[St
 	}
 }
 
-// forward delivers chunks to outCh and applies side effects until told to
-// stop writing, the action context ends, or r.in closes. Returns true if
-// the router must keep draining side effects (writes stopped), false if
-// r.in closed.
+// forward delivers chunks to outCh until told to stop writing, the
+// action context ends, or r.in closes. Returns true if the router must
+// keep draining (writes stopped), false if r.in closed.
 func (r *chunkRouter[Stream, State]) forward() bool {
 	for {
 		select {
@@ -1205,7 +1264,6 @@ func (r *chunkRouter[Stream, State]) forward() bool {
 			if !ok {
 				return false
 			}
-			r.applySideEffects(chunk)
 			select {
 			case r.out <- chunk:
 			case <-r.stopWriting:
@@ -1223,16 +1281,20 @@ func (r *chunkRouter[Stream, State]) forward() bool {
 	}
 }
 
-// responder returns a [Responder] that sends chunks into the router. The
-// returned Responder's Send methods drop chunks (returning promptly)
-// when ctx is cancelled.
+// responder returns a [Responder] that applies chunk side effects
+// synchronously and sends chunks into the router for the wire forward.
+// The returned Responder's Send methods drop the forward (returning
+// promptly) when ctx is cancelled.
 func (r *chunkRouter[Stream, State]) responder(ctx context.Context) Responder[Stream] {
-	return Responder[Stream]{in: r.in, ctx: ctx}
+	return Responder[Stream]{in: r.in, ctx: ctx, effects: r.applySideEffects}
 }
 
 // sendChunk delivers chunk to the router for producers other than the
-// user agent function (e.g. the runtime's emitTurnEnd). Returns
-// promptly if ctx is cancelled, dropping the chunk.
+// user agent function (e.g. the runtime's emitTurnEnd). It skips the
+// in-process side effects (the only runtime-produced chunk is TurnEnd,
+// which has none: no artifact, and TurnEnd is excluded from turn-chunk
+// accumulation) and returns promptly if ctx is cancelled, dropping the
+// chunk.
 func (r *chunkRouter[Stream, State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk[Stream]) {
 	select {
 	case r.in <- chunk:

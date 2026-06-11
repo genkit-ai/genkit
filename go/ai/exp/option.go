@@ -166,7 +166,9 @@ func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State
 // ([SessionState.SessionID]): the framework mints one on the
 // conversation's first invocation and echoes it on the output state, so
 // resending the state keeps the identity without tracking a separate
-// field. Mutually exclusive with [WithSessionID] and [WithSnapshotID].
+// field. The framework deep-copies the state when the invocation starts,
+// so the caller keeps ownership of the object it passed and may reuse it
+// freely. Mutually exclusive with [WithSessionID] and [WithSnapshotID].
 func WithState[State any](state *SessionState[State]) InvocationOption[State] {
 	return &invocationOptions[State]{state: state}
 }

@@ -267,7 +267,12 @@ func registerSnapshotActions[State any](
 			if resp.UpdatedAt.IsZero() {
 				resp.UpdatedAt = resp.CreatedAt
 			}
-			resp.State = applyTransform(ctx, transform, snap.State)
+			// Clone before transforming: the [StateTransform] contract
+			// promises a fresh deep copy the transform may mutate in
+			// place, and the store's row may share memory with its
+			// internal copy, which neither the transform nor the
+			// SessionID re-stamp below may write into.
+			resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
 			if resp.State != nil {
 				// SessionID is framework identity, not user data: re-stamp
 				// it from the row after the transform so outbound state
@@ -337,7 +342,10 @@ func (s *Session[State]) State() *SessionState[State] {
 	return &copied
 }
 
-// Messages returns the current conversation history.
+// Messages returns the current conversation history. The returned slice
+// is a fresh copy, but its elements point at the live messages held by
+// the session: treat them as read-only, or deep-copy before mutating.
+// [Session.State] returns a fully independent copy.
 func (s *Session[State]) Messages() []*ai.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -363,7 +371,9 @@ func (s *Session[State]) SetMessages(messages []*ai.Message) {
 }
 
 // UpdateMessages atomically reads the current messages, applies the given
-// function, and writes the result back.
+// function, and writes the result back. fn runs while the session's
+// internal lock is held: it must not call other Session methods or send
+// on a [Responder], or it will deadlock.
 func (s *Session[State]) UpdateMessages(fn func([]*ai.Message) []*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -379,7 +389,9 @@ func (s *Session[State]) Custom() State {
 }
 
 // UpdateCustom atomically reads the current custom state, applies the given
-// function, and writes the result back.
+// function, and writes the result back. fn runs while the session's
+// internal lock is held: it must not call other Session methods or send
+// on a [Responder], or it will deadlock.
 func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -387,7 +399,10 @@ func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.version++
 }
 
-// Artifacts returns the current artifacts.
+// Artifacts returns the current artifacts. The returned slice is a fresh
+// copy, but its elements point at the live artifacts held by the
+// session: treat them as read-only, or deep-copy before mutating.
+// [Session.State] returns a fully independent copy.
 func (s *Session[State]) Artifacts() []*Artifact {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -420,7 +435,9 @@ func (s *Session[State]) AddArtifacts(artifacts ...*Artifact) {
 }
 
 // UpdateArtifacts atomically reads the current artifacts, applies the given
-// function, and writes the result back.
+// function, and writes the result back. fn runs while the session's
+// internal lock is held: it must not call other Session methods or send
+// on a [Responder], or it will deadlock.
 func (s *Session[State]) UpdateArtifacts(fn func([]*Artifact) []*Artifact) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
