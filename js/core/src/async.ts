@@ -93,13 +93,16 @@ export class Channel<T> implements AsyncIterable<T> {
           this.ready = createTask<void>();
         }
         if (value === DONE) {
+          // Mark the channel as done so that any further calls to next()
+          // (e.g. manual iteration after the stream has ended) return
+          // {done: true} immediately instead of awaiting a readiness promise
+          // that will never resolve.
+          this.done = true;
           return {
             value: undefined,
             done: true,
           };
         }
-
-        if (value === null) this.done = true;
 
         return {
           value,
