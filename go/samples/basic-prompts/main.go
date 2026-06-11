@@ -142,7 +142,7 @@ func main() {
 func DefineSimpleJokeWithInlinePrompt(g *genkit.Genkit) {
 	jokePrompt := genkit.DefinePrompt(
 		g, "joke.code",
-		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
 			},
@@ -201,7 +201,7 @@ func DefineSimpleJokeWithDotprompt(g *genkit.Genkit) {
 func DefineStructuredJokeWithInlinePrompt(g *genkit.Genkit) {
 	jokePrompt := genkit.DefineDataPrompt[JokeRequest, *Joke](
 		g, "structured-joke.code",
-		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
 			},
@@ -254,7 +254,7 @@ func DefineStructuredJokeWithDotprompt(g *genkit.Genkit) {
 func DefineRecipeWithInlinePrompt(g *genkit.Genkit) {
 	recipePrompt := genkit.DefineDataPrompt[RecipeRequest, *Recipe](
 		g, "recipe.code",
-		ai.WithModel(googlegenai.ModelRef("googleai/gemini-2.5-flash", &genai.GenerateContentConfig{
+		ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
 			ThinkingConfig: &genai.ThinkingConfig{
 				ThinkingBudget: genai.Ptr[int32](0),
 			},

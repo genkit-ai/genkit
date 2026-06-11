@@ -34,7 +34,7 @@ import (
 func main() {
 	ctx := context.Background()
 	g := genkit.Init(ctx,
-		genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+		genkit.WithDefaultModel("googleai/gemini-flash-latest"),
 		genkit.WithPlugins(&googlegenai.GoogleAI{}),
 		genkit.WithPromptDir("prompts"),
 	)
@@ -208,7 +208,7 @@ func PromptWithMultiMessage(ctx context.Context, g *genkit.Genkit) {
 		log.Fatal("empty prompt")
 	}
 	resp, err := prompt.Execute(ctx,
-		ai.WithModelName("googleai/gemini-2.5-pro"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInput(map[string]any{
 			"videoUrl":    "https://www.youtube.com/watch?v=K-hY0E6cGfo",
 			"contentType": "video/mp4",
@@ -265,7 +265,7 @@ func PromptWithMessageHistory(ctx context.Context, g *genkit.Genkit) {
 	helloPrompt := genkit.DefinePrompt(
 		g, "PromptWithMessageHistory",
 		ai.WithSystem("You are a helpful AI assistant named Walt"),
-		ai.WithModelName("googleai/gemini-2.5-flash-lite"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithMessages(
 			ai.NewUserTextMessage("Hi, my name is Bob"),
 			ai.NewModelTextMessage("Hi, my name is Walt, what can I help you with?"),
@@ -291,7 +291,7 @@ func PromptWithExecuteOverrides(ctx context.Context, g *genkit.Genkit) {
 
 	// Call the model and add additional messages from the user.
 	resp, err := helloPrompt.Execute(ctx,
-		ai.WithModel(googlegenai.GoogleAIModel(g, "gemini-2.5-flash-lite")),
+		ai.WithModel(googlegenai.GoogleAIModel(g, "gemini-flash-latest")),
 		ai.WithMessages(ai.NewUserTextMessage("And I like turtles.")),
 	)
 	if err != nil {
@@ -338,7 +338,7 @@ func PromptWithMediaType(ctx context.Context, g *genkit.Genkit) {
 		log.Fatal("empty prompt")
 	}
 	resp, err := prompt.Execute(ctx,
-		ai.WithModelName("googleai/gemini-2.5-flash"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInput(map[string]any{"imageUrl": "data:image/jpeg;base64," + img}),
 	)
 	if err != nil {
@@ -380,7 +380,7 @@ func PromptWithOutputSchemaName(ctx context.Context, g *genkit.Genkit) {
 	})
 
 	resp, err := prompt.Execute(ctx,
-		ai.WithModelName("googleai/gemini-2.5-pro"),
+		ai.WithModelName("googleai/gemini-flash-latest"),
 		ai.WithInput(map[string]any{"food": "tacos", "ingredients": []string{"octopus", "shrimp"}}),
 	)
 	if err != nil {
