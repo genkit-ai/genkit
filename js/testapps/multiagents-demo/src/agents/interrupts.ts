@@ -14,4 +14,19 @@
  * limitations under the License.
  */
 
-// Removed legacy session tests
+import { z } from 'genkit';
+import { ai } from '../config/genkit.js';
+
+export const transferToAgent = ai.defineInterrupt({
+  name: 'transferToAgent',
+  description:
+    'Call this to transfer conversation control to a different specialist agent.',
+  inputSchema: z.object({
+    agentName: z
+      .string()
+      .describe(
+        'The name of the specialist agent to transfer to (e.g., catalogAgent, paymentAgent, representativeAgent)'
+      ),
+  }),
+  outputSchema: z.string(),
+});

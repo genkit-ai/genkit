@@ -47,7 +47,6 @@ export {
   generate,
   generateOperation,
   generateStream,
-  tagAsPreamble,
   toGenerateRequest,
   type GenerateOptions,
   type GenerateStreamOptions,

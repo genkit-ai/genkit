@@ -21,16 +21,15 @@ import {
   GenerateOptions,
   GenerateResponseData,
   GenerationCommonConfigSchema,
-  isExecutablePrompt,
   ResourceAction,
   ResourceFn,
   ResourceOptions,
-  type ExecutablePrompt,
   type InterruptConfig,
   type ToolAction,
 } from '@genkit-ai/ai';
-import type { Chat, ChatOptions } from '@genkit-ai/ai/chat';
+
 import { defineFormat } from '@genkit-ai/ai/formats';
+
 import {
   getCurrentSession,
   Session,
@@ -68,73 +67,6 @@ export class GenkitBeta extends Genkit {
   constructor(options?: GenkitOptions) {
     super(options);
     this.registry.apiStability = 'beta';
-  }
-
-  /**
-   * Create a chat session with the provided options.
-   *
-   * ```ts
-   * const chat = ai.chat({
-   *   system: 'talk like a pirate',
-   * })
-   * let response = await chat.send('tell me a joke')
-   * response = await chat.send('another one')
-   * ```
-   *
-   * @beta
-   */
-  chat<I>(options?: ChatOptions<I>): Chat;
-
-  /**
-   * Create a chat session with the provided preamble.
-   *
-   * ```ts
-   * const triageAgent = ai.definePrompt({
-   *   system: 'help the user triage a problem',
-   * })
-   * const chat = ai.chat(triageAgent)
-   * const { text } = await chat.send('my phone feels hot');
-   * ```
-   *
-   * @beta
-   */
-  chat<I>(preamble: ExecutablePrompt<I>, options?: ChatOptions<I>): Chat;
-
-  /**
-   * Create a chat session with the provided options.
-   *
-   * ```ts
-   * const chat = ai.chat({
-   *   system: 'talk like a pirate',
-   * })
-   * let response = await chat.send('tell me a joke')
-   * response = await chat.send('another one')
-   * ```
-   *
-   * @beta
-   */
-  chat<I>(
-    preambleOrOptions?: ChatOptions<I> | ExecutablePrompt<I>,
-    maybeOptions?: ChatOptions<I>
-  ): Chat {
-    let options: ChatOptions<I> | undefined;
-    let preamble: ExecutablePrompt<I> | undefined;
-    if (maybeOptions) {
-      options = maybeOptions;
-    }
-    if (preambleOrOptions) {
-      if (isExecutablePrompt(preambleOrOptions)) {
-        preamble = preambleOrOptions as ExecutablePrompt<I>;
-      } else {
-        options = preambleOrOptions as ChatOptions<I>;
-      }
-    }
-
-    const session = this.createSession();
-    if (preamble) {
-      return session.chat(preamble, options);
-    }
-    return session.chat(options);
   }
 
   /**
