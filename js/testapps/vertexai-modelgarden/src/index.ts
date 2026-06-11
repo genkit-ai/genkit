@@ -159,6 +159,36 @@ export const thinkingFlow = ai.defineFlow(
   }
 );
 
+export const anthropicFable5Model = ai.defineFlow(
+  {
+    name: 'claude-fable-5',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-fable-5'),
+      config: {
+        location: 'global',
+        thinking: {
+          adaptive: true,
+          display: 'summarized',
+        },
+        output_config: {
+          effort: 'xhigh',
+        },
+      },
+      prompt: `You are a helpful assistant. Write a Fable about a sunny day`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
 export const anthropicOpus48Model = ai.defineFlow(
   {
     name: 'claude-opus-4-8 - basic',

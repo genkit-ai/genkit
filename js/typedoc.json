@@ -7,6 +7,7 @@
     "plugins/anthropic",
     "plugins/firebase",
     "plugins/express",
+    "plugins/fastify",
     "plugins/fetch",
     "plugins/google-cloud",
     "plugins/middleware",
