@@ -188,4 +188,24 @@ describe('Channel', () => {
 
     assert.deepStrictEqual(results, [1, 2]);
   });
+
+  it('should keep returning done after the stream has ended', async () => {
+    const channel = new Channel<number>();
+    channel.send(1);
+    channel.close();
+
+    const iterator = channel[Symbol.asyncIterator]();
+
+    assert.deepStrictEqual(await iterator.next(), { value: 1, done: false });
+    assert.deepStrictEqual(await iterator.next(), {
+      value: undefined,
+      done: true,
+    });
+    // Calling next() again after the stream has ended must resolve immediately
+    // with done: true rather than hanging forever.
+    assert.deepStrictEqual(await iterator.next(), {
+      value: undefined,
+      done: true,
+    });
+  });
 });

@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,23 +14,83 @@
  * limitations under the License.
  */
 
-import { getAsyncContext, type z } from '@genkit-ai/core';
+import { getAsyncContext, z, type ActionContext } from '@genkit-ai/core';
+
+import { EventEmitter } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
-import { v4 as uuidv4 } from 'uuid';
-import { type GenerateOptions, type MessageData } from './index.js';
+import { MessageData, MessageSchema } from './model-types.js';
 
-export type BaseGenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
-> = Omit<GenerateOptions<O, CustomOptions>, 'prompt'>;
+import { PartSchema } from './model-types.js';
 
-export interface SessionOptions<S = any> {
-  /** Session store implementation for persisting the session state. */
-  store?: SessionStore<S>;
-  /** Initial state of the session.  */
-  initialState?: S;
-  /** Custom session Id. */
+/**
+ * Schema for tracking persistent artifacts generated during a session turn.
+ */
+export const ArtifactSchema = z.object({
+  name: z.string().optional(),
+  parts: z.array(PartSchema),
+  metadata: z.record(z.any()).optional(),
+});
+
+/**
+ * Artifact generated during a session turn.
+ */
+export type Artifact = z.infer<typeof ArtifactSchema>;
+
+/**
+ * Events signifying a session snapshot persistence point.
+ */
+export const SnapshotEventSchema = z.enum(['turnEnd', 'invocationEnd']);
+
+/**
+ * Event signifying a session snapshot persistence point.
+ */
+export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
+
+/**
+ * Reason an agent turn (or whole invocation) finished.
+ *
+ * Mirrors the generate `FinishReason` enum and adds two agent-specific
+ * states: `detached` (the turn was moved to the background) and `failed`
+ * (the turn ended in an error).
+ */
+export const AgentFinishReasonSchema = z.enum([
+  // From generate's FinishReason:
+  'stop',
+  'length',
+  'blocked',
+  'aborted',
+  'interrupted',
+  'other',
+  'unknown',
+  // Agent additions:
+  'detached',
+  'failed',
+]);
+
+/**
+ * Reason an agent turn (or whole invocation) finished.
+ */
+export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
+
+/**
+ * Schema for session execution state.
+
+ */
+export const SessionStateSchema = z.object({
+  sessionId: z.string().optional(),
+  messages: z.array(MessageSchema).optional(),
+  custom: z.any().optional(),
+  artifacts: z.array(ArtifactSchema).optional(),
+});
+
+/**
+ * State persisted for a session across turns.
+ */
+export interface SessionState<S = unknown> {
   sessionId?: string;
+  messages?: MessageData[];
+  custom?: S;
+  artifacts?: Artifact[];
 }
 
 /**
@@ -43,141 +103,331 @@ export interface SessionOptions<S = any> {
  * conversation history can be persisted per thread with
  * {@link Session.updateMessages}.
  */
-export class Session<S = any> {
-  readonly id: string;
-  private sessionData?: SessionData<S>;
-  private store: SessionStore<S>;
-
-  constructor(
-    readonly registry: Registry,
-    options?: {
-      id?: string;
-      stateSchema?: S;
-      sessionData?: SessionData<S>;
-      store?: SessionStore<S>;
-    }
-  ) {
-    this.id = options?.id ?? uuidv4();
-    this.sessionData = options?.sessionData ?? {
-      id: this.id,
-    };
-    if (!this.sessionData) {
-      this.sessionData = { id: this.id };
-    }
-    if (!this.sessionData.threads) {
-      this.sessionData!.threads = {};
-    }
-    this.store = options?.store ?? new InMemorySessionStore<S>();
-  }
-
-  get state(): S | undefined {
-    return this.sessionData!.state;
-  }
-
-  /**
-   * Update session state data by patching the existing state.
-   * @param data Partial state update that will be merged with existing state
-   */
-  async updateState(data: Partial<S>): Promise<void> {
-    let sessionData = this.sessionData;
-    if (!sessionData) {
-      sessionData = {} as SessionData<S>;
-    }
-
-    // Merge the new data with existing state
-    sessionData.state = {
-      ...sessionData.state,
-      ...data,
-    } as S;
-
-    this.sessionData = sessionData;
-    await this.store.save(this.id, sessionData);
-  }
-
-  /**
-   * Update messages for a given thread.
-   */
-  async updateMessages(thread: string, messages: MessageData[]): Promise<void> {
-    let sessionData = this.sessionData;
-    if (!sessionData) {
-      sessionData = {} as SessionData<S>;
-    }
-    if (!sessionData.threads) {
-      sessionData.threads = {};
-    }
-    sessionData.threads[thread] = messages.map((m: any) =>
-      m.toJSON ? m.toJSON() : m
-    );
-    this.sessionData = sessionData;
-
-    await this.store.save(this.id, sessionData);
-  }
-
-  /**
-   * Executes provided function within this session context allowing calling
-   * `ai.currentSession().state`
-   */
-  run<O>(fn: () => O) {
-    return runWithSession(this.registry, this, fn);
-  }
-
-  toJSON() {
-    return this.sessionData;
-  }
+export interface SnapshotContext<S = unknown> {
+  state: SessionState<S>;
+  prevState?: SessionState<S>;
+  turnIndex: number;
+  event: 'turnEnd' | 'invocationEnd';
 }
-
-export interface SessionData<S = any> {
-  id: string;
-  state?: S;
-  threads?: Record<string, MessageData[]>;
-}
-
-const sessionAlsKey = 'ai.session';
 
 /**
- * Executes provided function within the provided session state.
+ * Callback triggered before a snapshot is saved. Return false to reject persistence.
  */
+export type SnapshotCallback<S = unknown> = (
+  ctx: SnapshotContext<S>
+) => boolean;
+
+/**
+ * Saved snapshot of a session's state at a given event point.
+ */
+export interface SessionSnapshot<S = unknown> {
+  snapshotId: string;
+  parentId?: string;
+  createdAt: string;
+  event: 'turnEnd' | 'invocationEnd';
+  state: SessionState<S>;
+  status?: 'pending' | 'done' | 'failed' | 'aborted';
+
+  /**
+   * Semantic reason the turn/invocation finished (e.g. `interrupted`,
+   * `stop`). Distinct from `status`, which tracks the persistence lifecycle.
+   */
+  finishReason?: AgentFinishReason;
+
+  error?: {
+    status: string;
+
+    message: string;
+    details?: any;
+  };
+}
+
+/**
+ * Input type for {@link SessionStore.saveSnapshot}.
+ *
+ * Identical to {@link SessionSnapshot} except that `snapshotId` is optional.
+ * When omitted the store is responsible for assigning a new identifier
+ * (enabling stores to encode grouping or routing information in the ID).
+ * When provided the store performs an upsert - updating the existing snapshot.
+ */
+export type SessionSnapshotInput<S = unknown> = Omit<
+  SessionSnapshot<S>,
+  'snapshotId'
+> & {
+  snapshotId?: string;
+};
+
+/**
+ * Options provided to the session store methods.
+ */
+export interface SessionStoreOptions {
+  context?: ActionContext;
+}
+
+/**
+ * Lookup options for {@link SessionStore.getSnapshot}.
+ *
+ * Exactly one of `snapshotId` or `sessionId` must be provided:
+ *
+ * - `snapshotId` loads that specific snapshot.
+ * - `sessionId` loads the *latest* (leaf) snapshot of the session - the most
+ *   recent snapshot that no other snapshot points to as its parent. This is
+ *   the common case for simple session storage (e.g. `useChat`) where the
+ *   client only tracks a stable session id and lets the server remember the
+ *   conversation. A session with *branching* snapshots (more than one leaf,
+ *   e.g. after a regenerate) has no single "latest"; by default the store
+ *   returns the most-recent leaf, but it can be configured to reject the
+ *   lookup with `FAILED_PRECONDITION` - in which case, resume by `snapshotId`.
+ */
+export interface GetSnapshotOptions {
+  snapshotId?: string;
+  sessionId?: string;
+  context?: ActionContext;
+}
+
+/**
+ * A function that receives the current snapshot and returns the updated
+ * snapshot to persist.
+ *
+ * - Return the mutated snapshot to save it.
+ * - Return `null` to silently skip the update (no-op).
+ * - Throw to abort with an error (e.g. precondition failure).
+ */
+export type SnapshotMutator<S = unknown> = (
+  current: SessionSnapshot<S> | undefined
+) => SessionSnapshotInput<S> | null;
+
+/**
+ * Interface for persistent session snapshot storage.
+ */
+export interface SessionStore<S = unknown> {
+  /**
+   * Loads a snapshot either by its `snapshotId` or by `sessionId`.
+   *
+   * See {@link GetSnapshotOptions} for the lookup semantics (exactly one of
+   * `snapshotId` / `sessionId`; `sessionId` resolves to the session's latest
+   * leaf snapshot, optionally rejecting branching histories).
+   */
+  getSnapshot(
+    opts: GetSnapshotOptions
+  ): Promise<SessionSnapshot<S> | undefined>;
+
+  /**
+   * Atomically reads the current snapshot (if `snapshotId` is provided),
+   * passes it to `mutator`, and persists the result.
+   *
+   * - When `snapshotId` is provided the store reads the existing snapshot
+   *   and passes it to the mutator.  The mutator can inspect the current
+   *   state (e.g. to check for concurrent status changes) and return the
+   *   updated snapshot to save, or `null` to skip the write.
+   * - When `snapshotId` is `undefined` the store passes `undefined` to
+   *   the mutator (signaling a new snapshot).  The store assigns a new
+   *   identifier.
+   *
+   * Implementations should ensure the read→mutate→write cycle is atomic
+   * to prevent race conditions (e.g. a "done" write overwriting a
+   * concurrent "aborted" status).
+   *
+   * The mutator can:
+   *
+   * - Return a snapshot to save it.
+   * - Return `null` to silently skip the write.
+   * - Throw to abort with an error.
+   *
+   * @returns The `snapshotId` that was used, or `null` when the mutator
+   *   returned `null`.
+   */
+  saveSnapshot(
+    snapshotId: string | undefined,
+    mutator: SnapshotMutator<S>,
+    options?: SessionStoreOptions
+  ): Promise<string | null>;
+
+  onSnapshotStateChange?(
+    snapshotId: string,
+    callback: (snapshot: SessionSnapshot<S>) => void,
+    options?: SessionStoreOptions
+  ): void | (() => void);
+}
+
+/**
+ * State manager for a session turn, tracking messages, custom state, and artifacts.
+ */
+export class Session<S = unknown> extends EventEmitter {
+  private state: SessionState<S>;
+  private version: number = 0;
+
+  /** Stable identifier that correlates traces across agent turns. */
+  readonly sessionId: string;
+
+  constructor(initialState: SessionState<S>) {
+    super();
+    this.sessionId = initialState.sessionId || globalThis.crypto.randomUUID();
+    initialState.sessionId = this.sessionId;
+    this.state = initialState;
+  }
+
+  /**
+   * Returns a deep copy of the current session state.
+   */
+  getState(): SessionState<S> {
+    return structuredClone(this.state);
+  }
+
+  /**
+   * Retrieves all messages associated with the session.
+   */
+  getMessages(): MessageData[] {
+    return this.state.messages || [];
+  }
+
+  /**
+   * Appends a list of messages to the session.
+   */
+  addMessages(messages: MessageData[]) {
+    this.state.messages = [...(this.state.messages || []), ...messages];
+    this.version++;
+  }
+
+  /**
+   * Overwrites the session messages.
+   */
+  setMessages(messages: MessageData[]) {
+    this.state.messages = messages;
+    this.version++;
+  }
+
+  /**
+   * Retrieves the custom state of the session.
+   */
+  getCustom(): S | undefined {
+    return this.state.custom;
+  }
+
+  /**
+   * Updates the custom state of the session using a mutator function.
+   */
+  updateCustom(fn: (custom?: S) => S) {
+    this.state.custom = fn(this.state.custom);
+    this.version++;
+    this.emit('customChanged');
+  }
+
+  /**
+   * Retrieves the list of artifacts generated during the session.
+   */
+  getArtifacts(): Artifact[] {
+    return this.state.artifacts || [];
+  }
+
+  /**
+   * Adds artifacts to the session, deduplicating items by name.
+   * Emits 'artifactAdded' for new artifacts and 'artifactUpdated' for replacements.
+   */
+  addArtifacts(artifacts: Artifact[]) {
+    const existing = this.state.artifacts || [];
+    const added: Artifact[] = [];
+    const updated: Artifact[] = [];
+
+    for (const a of artifacts) {
+      if (a.name) {
+        const idx = existing.findIndex((e) => e.name === a.name);
+        if (idx >= 0) {
+          existing[idx] = a;
+          updated.push(a);
+          continue;
+        }
+      }
+      existing.push(a);
+      added.push(a);
+    }
+
+    this.state.artifacts = existing;
+    if (added.length + updated.length > 0) {
+      this.version++;
+    }
+    for (const a of added) {
+      this.emit('artifactAdded', a);
+    }
+    for (const a of updated) {
+      this.emit('artifactUpdated', a);
+    }
+  }
+
+  /**
+   * Runs the provided function inside the session's context.
+   */
+  run<O>(fn: () => O) {
+    return getAsyncContext().run('ai.session', this, fn);
+  }
+
+  /**
+   * Gets the current mutation version of the session state.
+   */
+  getVersion(): number {
+    return this.version;
+  }
+}
+
+/**
+ * Utility to execute a function bound to a Session instance context.
+ */
+
 export function runWithSession<S = any, O = any>(
   registry: Registry,
   session: Session<S>,
   fn: () => O
 ): O {
-  return getAsyncContext().run(sessionAlsKey, session, fn);
+  return getAsyncContext().run('ai.session', session, fn);
 }
 
-/** Returns the current session. */
+/**
+ * Returns the Session instance active in the current context.
+ */
 export function getCurrentSession<S = any>(
   registry: Registry
 ): Session<S> | undefined {
-  return getAsyncContext().getStore(sessionAlsKey);
+  return getAsyncContext().getStore('ai.session');
 }
 
-/** Throw when session state errors occur, ex. missing state, etc. */
+/**
+ * Error thrown during session execution.
+ */
 export class SessionError extends Error {
   constructor(msg: string) {
     super(msg);
   }
 }
 
-/** Session store persists session data such as state and chat messages. */
-export interface SessionStore<S = any> {
-  get(sessionId: string): Promise<SessionData<S> | undefined>;
+// Only UUID-shaped strings are accepted as a sessionId.
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  save(sessionId: string, data: Omit<SessionData<S>, 'id'>): Promise<void>;
+/**
+ * Validates that `sessionId` is a UUID, throwing a descriptive error otherwise.
+ *
+ * Session ids can be minted by the client, so we enforce a UUID shape to keep
+ * them well-formed (and safe to use as a directory name in
+ * {@link FileSessionStore}).
+ */
+export function assertValidSessionId(sessionId: string): void {
+  if (!UUID_PATTERN.test(sessionId)) {
+    throw new Error(
+      `Invalid sessionId: expected a UUID, got "${sessionId}". ` +
+        `Session ids must be UUIDs (e.g. crypto.randomUUID()).`
+    );
+  }
 }
 
-export function inMemorySessionStore() {
-  return new InMemorySessionStore();
-}
-
-class InMemorySessionStore<S = any> implements SessionStore<S> {
-  private data: Record<string, SessionData<S>> = {};
-
-  async get(sessionId: string): Promise<SessionData<S> | undefined> {
-    return this.data[sessionId];
-  }
-
-  async save(sessionId: string, sessionData: SessionData<S>): Promise<void> {
-    this.data[sessionId] = sessionData;
-  }
+/**
+ * Mints a new `snapshotId` (a plain random UUID).
+ *
+ * The runtime normally supplies the snapshotId to the store at save time, but
+ * some flows need the id *ahead of time* - e.g. an agent turn that wants to
+ * know the snapshotId at turn *start* (to name a git branch / worktree after
+ * it) and have the snapshot persisted at turn end reuse that very id, or the
+ * detach path which pre-reserves the in-flight snapshot's id.
+ */
+export function reserveSnapshotId(): string {
+  return globalThis.crypto.randomUUID();
 }
