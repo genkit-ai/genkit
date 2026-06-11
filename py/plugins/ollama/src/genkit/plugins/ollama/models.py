@@ -711,8 +711,6 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
         schema_type = input_schema['type']
         if schema_type == 'object':
             schema.type = 'object'
-
-        if schema_type == 'object':
             schema.properties = {}
             properties_raw = input_schema.get('properties', {})
             if isinstance(properties_raw, dict):
