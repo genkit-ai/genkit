@@ -367,6 +367,62 @@ describe('fetchHandler (single action)', () => {
       assert.strictEqual(json.result, 'input: hello, init: undefined');
     });
 
+    it('should validate init against initSchema and pass it to the action', async () => {
+      const ai = genkit({});
+      const flow = ai.defineFlow(
+        {
+          name: 'flowWithInitSchema',
+          inputSchema: z.string(),
+          initSchema: z.object({ sessionId: z.string() }),
+        },
+        async (input, { init }) =>
+          `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+      );
+      const request = new Request('http://localhost/flowWithInitSchema', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: 'hello',
+          init: { sessionId: 'abc123' },
+        }),
+      });
+      const response = await fetchHandler(flow)(request);
+      assert.strictEqual(response.status, 200);
+      const json = (await response.json()) as { result: string };
+      assert.strictEqual(json.result, 'input: hello, sessionId: abc123');
+    });
+
+    it('should reject init that does not conform to initSchema', async () => {
+      const ai = genkit({});
+      const flow = ai.defineFlow(
+        {
+          name: 'flowWithInitSchema',
+          inputSchema: z.string(),
+          initSchema: z.object({ sessionId: z.string() }),
+        },
+        async (input, { init }) =>
+          `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+      );
+      const request = new Request('http://localhost/flowWithInitSchema', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: 'hello',
+          // sessionId should be a string, not a number.
+          init: { sessionId: 123 },
+        }),
+      });
+      const response = await fetchHandler(flow)(request);
+      assert.strictEqual(response.status, 400);
+      const json = (await response.json()) as {
+        status?: string;
+        message?: string;
+      };
+      assert.ok(
+        json.status === 'INVALID_ARGUMENT' || json.message?.includes('INVALID')
+      );
+    });
+
     it('should set x-genkit-trace-id and x-genkit-span-id headers', async () => {
       const ai = genkit({});
       const flow = ai.defineFlow('traceFlow', async () => 'ok');

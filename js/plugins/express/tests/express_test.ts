@@ -180,7 +180,19 @@ describe('expressHandler', async () => {
       return result;
     };
 
+    // A flow with an initSchema to exercise real init validation.
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
     app.post('/flowWithInit', expressHandler(flowWithInit));
+    app.post('/flowWithInitSchema', expressHandler(flowWithInitSchema));
     app.post('/abortableFlow', expressHandler(abortableFlow));
 
     server = app.listen(port, () => {
@@ -327,6 +339,27 @@ describe('expressHandler', async () => {
         input: 'hello',
       });
       assert.strictEqual(result, 'input: hello, init: undefined');
+    });
+
+    it('should validate init against initSchema and pass it to the action', async () => {
+      const result = await runFlow<string>({
+        url: `http://localhost:${port}/flowWithInitSchema`,
+        input: 'hello',
+        init: { sessionId: 'abc123' },
+      });
+      assert.strictEqual(result, 'input: hello, sessionId: abc123');
+    });
+
+    it('should reject init that does not conform to initSchema', async () => {
+      const result = runFlow<string>({
+        url: `http://localhost:${port}/flowWithInitSchema`,
+        input: 'hello',
+        // sessionId should be a string, not a number.
+        init: { sessionId: 123 },
+      });
+      await assert.rejects(result, (err: Error) => {
+        return err.message.includes('INVALID_ARGUMENT');
+      });
     });
 
     // TODO: This test is flaky, skipping until fixed.

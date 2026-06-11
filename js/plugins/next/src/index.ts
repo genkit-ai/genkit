@@ -156,7 +156,10 @@ function appRoute<
 ) {
   return async (req: NextRequest): Promise<NextResponse> => {
     let context: C = {} as C;
-    const { data: input, init } = await req.json();
+    const { data: input, init } = (await req.json()) as {
+      data: z.infer<I>;
+      init?: z.infer<Init>;
+    };
     const streamId = req.headers.get('x-genkit-stream-id');
     if (req.headers.get('accept') !== 'text/event-stream') {
       try {

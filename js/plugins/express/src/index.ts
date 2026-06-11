@@ -79,7 +79,7 @@ export function expressHandler<
     }
 
     const input = request.body.data as z.infer<I>;
-    const init = request.body.init;
+    const init = request.body.init as z.infer<Init> | undefined;
     let context: Record<string, any>;
 
     try {
@@ -167,12 +167,13 @@ async function runActionWithDurableStreaming<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
   streamId: string,
   input: z.infer<I>,
-  init: any,
+  init: z.infer<Init> | undefined,
   context: ActionContext,
   response: express.Response,
   abortSignal: AbortSignal
