@@ -158,17 +158,22 @@ func (f *Flow[In, Out, Stream]) Run(ctx context.Context, input In) (Out, error) 
 // Otherwise the Stream field of the passed [StreamingFlowValue] holds a streamed result.
 func (f *Flow[In, Out, Stream]) Stream(ctx context.Context, input In) func(func(*StreamingFlowValue[Out, Stream], error) bool) {
 	return func(yield func(*StreamingFlowValue[Out, Stream], error) bool) {
+		done := false
 		cb := func(ctx context.Context, s Stream) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&StreamingFlowValue[Out, Stream]{Stream: s}, nil) {
+				done = true
 				return errStop
 			}
 			return nil
 		}
 		output, err := (*ActionDef[In, Out, Stream])(f).Run(ctx, input, cb)
-		if errors.Is(err, errStop) {
+		if done || errors.Is(err, errStop) {
 			// Consumer broke out of the loop; don't yield again.
 			return
 		}

@@ -34,7 +34,7 @@ import type {
   AgentStreamChunk,
 } from './agent.js';
 import { applyPatch, type JsonPatch } from './json-patch.js';
-import type { GenerationUsage, MessageData } from './model-types.js';
+import type { MessageData } from './model-types.js';
 import type {
   Media,
   Part,
@@ -164,7 +164,6 @@ export interface AgentResponse<State = unknown, O = unknown> {
   readonly toolRequests: ToolRequestPart[];
   readonly interrupts: AgentInterrupt[];
   readonly messages: MessageData[];
-  readonly usage: GenerationUsage;
   readonly finishReason: AgentFinishReason;
   readonly finishMessage?: string;
   readonly raw: AgentOutput<State>;
@@ -435,10 +434,6 @@ class AgentResponseImpl<State = unknown, O = unknown>
 
   get messages(): MessageData[] {
     return this._messages;
-  }
-
-  get usage(): GenerationUsage {
-    return ((this._raw as any).usage ?? {}) as GenerationUsage;
   }
 
   get finishReason(): AgentFinishReason {

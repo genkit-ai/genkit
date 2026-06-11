@@ -207,10 +207,11 @@ export class Genkit extends GenkitAI implements HasRegistry {
     I extends z.ZodTypeAny = z.ZodTypeAny,
     O extends z.ZodTypeAny = z.ZodTypeAny,
     S extends z.ZodTypeAny = z.ZodTypeAny,
+    Init extends z.ZodTypeAny = z.ZodTypeAny,
   >(
-    config: FlowConfig<I, O, S> | string,
+    config: FlowConfig<I, O, S, Init> | string,
     fn: FlowFn<I, O, S>
-  ): Action<I, O, S> {
+  ): Action<I, O, S, any, Init> {
     const flow = defineFlow(this.registry, config, fn);
     this.flows.push(flow);
     return flow;
