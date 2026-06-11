@@ -224,6 +224,25 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_actions_connection_error_wrapped_with_hint() -> None:
+    """An unreachable server during list_actions surfaces a friendly error."""
+    import httpx
+
+    from genkit.plugins.ollama import OllamaConnectionError
+
+    plugin = Ollama(server_address='http://unreachable.test')
+
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(side_effect=httpx.ConnectError('boom'))
+    plugin.client = lambda: client_mock
+
+    with pytest.raises(OllamaConnectionError) as excinfo:
+        await plugin.list_actions()
+    assert 'http://unreachable.test' in str(excinfo.value)
+    assert 'ollama serve' in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_async_request_headers_callback_resolved_on_init(monkeypatch: pytest.MonkeyPatch) -> None:
     """Async callable headers should be awaited during init()."""
     client_kwargs: dict[str, Any] = {}
