@@ -684,6 +684,10 @@ func convertToPartPointers(parts []dotprompt.Part) ([]*Part, error) {
 // The fsys parameter should be an fs.FS implementation (e.g., embed.FS or os.DirFS).
 // The dir parameter specifies the directory within the filesystem where prompts are located.
 func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
+	loadPromptDirFromFS(r, fsys, dir, namespace, "")
+}
+
+func loadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace, subPath string) {
 	if fsys == nil {
 		panic(errors.New("no prompt filesystem provided"))
 	}
@@ -701,10 +705,18 @@ func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 		filename := entry.Name()
 		filePath := path.Join(dir, filename)
 		if entry.IsDir() {
-			LoadPromptDirFromFS(r, fsys, filePath, namespace)
+			childSubPath := filename
+			if subPath != "" {
+				childSubPath = path.Join(subPath, filename)
+			}
+			loadPromptDirFromFS(r, fsys, filePath, namespace, childSubPath)
 		} else if strings.HasSuffix(filename, ".prompt") {
 			if strings.HasPrefix(filename, "_") {
-				partialName := strings.TrimSuffix(filename[1:], ".prompt")
+				partialBaseName := strings.TrimSuffix(filename[1:], ".prompt")
+				partialName := partialBaseName
+				if subPath != "" {
+					partialName = path.Join(subPath, partialBaseName)
+				}
 				source, err := fs.ReadFile(fsys, filePath)
 				if err != nil {
 					slog.Error("Failed to read partial file", "error", err)
