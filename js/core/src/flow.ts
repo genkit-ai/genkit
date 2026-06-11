@@ -90,8 +90,12 @@ export function flow<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
->(config: FlowConfig<I, O, S> | string, fn: FlowFn<I, O, S>): Flow<I, O, S> {
-  const resolvedConfig: FlowConfig<I, O, S> =
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  config: FlowConfig<I, O, S, Init> | string,
+  fn: FlowFn<I, O, S>
+): Flow<I, O, S, Init> {
+  const resolvedConfig: FlowConfig<I, O, S, Init> =
     typeof config === 'string' ? { name: config } : config;
 
   return flowAction(resolvedConfig, fn);
@@ -104,11 +108,12 @@ export function defineFlow<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  config: FlowConfig<I, O, S> | string,
+  config: FlowConfig<I, O, S, Init> | string,
   fn: FlowFn<I, O, S>
-): Flow<I, O, S> {
+): Flow<I, O, S, Init> {
   const f = flow(config, fn);
 
   registry.registerAction('flow', f);
@@ -123,7 +128,8 @@ function flowAction<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
   S extends z.ZodTypeAny = z.ZodTypeAny,
->(config: FlowConfig<I, O, S>, fn: FlowFn<I, O, S>): Flow<I, O, S> {
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
+>(config: FlowConfig<I, O, S, Init>, fn: FlowFn<I, O, S>): Flow<I, O, S, Init> {
   return action(
     {
       actionType: 'flow',
@@ -131,6 +137,8 @@ function flowAction<
       inputSchema: config.inputSchema,
       outputSchema: config.outputSchema,
       streamSchema: config.streamSchema,
+      initSchema: config.initSchema,
+      initJsonSchema: config.initJsonSchema,
       metadata: config.metadata,
     },
     async (
