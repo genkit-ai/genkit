@@ -525,6 +525,10 @@ export function isTTSModelName(value: string): value is TTSModelName {
   return value.startsWith('gemini-') && value.includes('-tts');
 }
 
+function hasSpeechVoiceConfig(speechConfig?: Record<string, unknown>): boolean {
+  return !!(speechConfig?.voiceConfig || speechConfig?.multiSpeakerVoiceConfig);
+}
+
 const KNOWN_IMAGE_MODELS = {
   'gemini-3.1-flash-image': commonRef(
     'gemini-3.1-flash-image',
@@ -849,8 +853,9 @@ export function defineModel(
         // rejects audio requests without one. Supply a default voice so the
         // dedicated TTS models are runnable from a bare prompt (e.g. the dev
         // UI), while still letting callers override it via config.
-        if (!generationConfig.speechConfig) {
+        if (!hasSpeechVoiceConfig(generationConfig.speechConfig)) {
           generationConfig.speechConfig = {
+            ...generationConfig.speechConfig,
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Algenib' } },
           };
         }
