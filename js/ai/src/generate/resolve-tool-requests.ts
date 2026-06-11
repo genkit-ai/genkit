@@ -96,7 +96,6 @@ export async function resolveToolRequest(
 ): Promise<{
   response?: ToolResponsePart;
   interrupt?: ToolRequestPart;
-  preamble?: GenerateActionOptions;
 }> {
   const tool = toolMap[part.toolRequest.name];
   if (!tool) {
@@ -182,8 +181,7 @@ export async function resolveToolRequest(
 
 /**
  * resolveToolRequests is responsible for executing the tools requested by the model for a single turn. it
- * returns either a toolMessage to append or a revisedModelMessage when an interrupt occurs, and a transferPreamble
- * if a prompt tool is called
+ * returns either a toolMessage to append or a revisedModelMessage when an interrupt occurs.
  */
 export async function resolveToolRequests(
   rawRequest: GenerateActionOptions,
@@ -321,19 +319,12 @@ async function resolveResumedToolRequest(
     part
   );
   if (restartRequest) {
-    const { response, interrupt, preamble } = await resolveToolRequest(
+    const { response, interrupt } = await resolveToolRequest(
       rawRequest,
       restartRequest,
       toolMap,
       middleware
     );
-
-    if (preamble) {
-      throw new GenkitError({
-        status: 'INTERNAL',
-        message: `Prompt tool '${restartRequest.toolRequest.name}' executed inside 'restart' resolution. This should never happen.`,
-      });
-    }
 
     // if there's a new interrupt, return it
     if (interrupt) return { interrupt };

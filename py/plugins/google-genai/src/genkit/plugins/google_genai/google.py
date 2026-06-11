@@ -102,6 +102,7 @@ from google.genai.client import DebugConfig
 from google.genai.types import HttpOptions, HttpOptionsDict
 
 import genkit.plugins.google_genai.constants as const
+from genkit import ModelInfo
 from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
@@ -123,9 +124,11 @@ from genkit.plugins.google_genai.evaluators import (
 from genkit.plugins.google_genai.models.embedder import EMBEDDER_DIMENSIONS, Embedder
 from genkit.plugins.google_genai.models.gemini import (
     SUPPORTED_MODELS,
+    GeminiConfigSchema,
     GeminiModel,
     get_model_config_schema,
     google_model_info,
+    is_tuned_gemini_name,
 )
 from genkit.plugins.google_genai.models.imagen import (
     SUPPORTED_MODELS as IMAGE_SUPPORTED_MODELS,
@@ -893,8 +896,16 @@ class VertexAI(Plugin):
         # Extract local name (remove plugin prefix)
         clean_name = name.replace(VERTEXAI_PLUGIN_NAME + '/', '') if name.startswith(VERTEXAI_PLUGIN_NAME) else name
 
-        # Determine model type and create model metadata/config schema
-        if clean_name.lower().startswith('image'):
+        # Determine model type and create model metadata/config schema.
+        # Tuned Gemini endpoints (endpoints/ID or projects/.../endpoints/ID)
+        # route through GeminiModel with the standard Gemini config schema.
+        if is_tuned_gemini_name(clean_name):
+            model_ref = ModelInfo(
+                label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {clean_name}',
+                supports=google_model_info('gemini').supports,
+            )
+            config_schema = GeminiConfigSchema
+        elif clean_name.lower().startswith('image'):
             model_ref = vertexai_image_model_info(clean_name)
             IMAGE_SUPPORTED_MODELS[clean_name] = model_ref
             config_schema = ImagenConfigSchema
@@ -907,7 +918,9 @@ class VertexAI(Plugin):
             config_schema = get_model_config_schema(clean_name)
 
         async def _run(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-            if clean_name.lower().startswith('image'):
+            if is_tuned_gemini_name(clean_name):
+                model = GeminiModel(clean_name, self._runtime_client())
+            elif clean_name.lower().startswith('image'):
                 model = ImagenModel(clean_name, self._runtime_client())
             elif is_veo_model(clean_name):
                 model = VeoModel(clean_name, self._runtime_client())

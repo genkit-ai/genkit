@@ -285,18 +285,26 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 			return
 		}
 
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&ModelStreamValue{Chunk: chunk}, nil) {
-				return errPromptStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
 
 		allOpts := append(slices.Clone(opts), WithStreaming(cb))
 		resp, err := p.Execute(ctx, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return
@@ -305,9 +313,6 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 		yield(&ModelStreamValue{Done: true, Response: resp}, nil)
 	}
 }
-
-// errPromptStop is a sentinel error used to signal early termination of streaming.
-var errPromptStop = errors.New("stop")
 
 // Render renders the prompt template based on user input.
 func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions, error) {
@@ -330,21 +335,30 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *prompt) Desc() api.ActionDesc {
 	desc := p.ActionDef.Desc()
-	promptMeta := desc.Metadata["prompt"].(map[string]any)
-	if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
-		if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
-				inputMeta["schema"] = resolved
+	descMeta := maps.Clone(desc.Metadata)
+	if promptMeta, ok := descMeta["prompt"].(map[string]any); ok {
+		promptMeta = maps.Clone(promptMeta)
+		if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
+			inputMeta = maps.Clone(inputMeta)
+			if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
+					inputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["input"] = inputMeta
 		}
-	}
-	if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
-		if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
-				outputMeta["schema"] = resolved
+		if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
+			outputMeta = maps.Clone(outputMeta)
+			if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
+					outputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["output"] = outputMeta
 		}
+		descMeta["prompt"] = promptMeta
 	}
+	desc.Metadata = descMeta
 	return desc
 }
 
@@ -1025,13 +1039,18 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			return
 		}
 
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			streamValue, err := extractTypedOutput[Out](chunk)
 			if err != nil {
 				yield(nil, err)
+				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
@@ -1039,13 +1058,17 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
 
 		allOpts := append(slices.Clone(opts), WithInput(input), WithStreaming(cb))
 		resp, err := dp.prompt.Execute(ctx, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return

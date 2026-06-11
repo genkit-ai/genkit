@@ -165,7 +165,7 @@ class BaseMiddleware(Generic[TConfig]):
     and a set of hooks to inject logic into the generate pipeline.
 
     The base middleware has no custom configuration and noop hooks. The hooks
-    that are not overriden are still called by the engine when the middleware
+    that are not overridden are still called by the engine when the middleware
     is invoked.
 
     To author a middleware,

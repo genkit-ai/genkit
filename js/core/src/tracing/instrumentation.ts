@@ -229,7 +229,11 @@ function metadataToAttributes(metadata: SpanMetadata): Record<string, string> {
       Object.entries(metadata.metadata).forEach(([metaKey, value]) => {
         out[ATTR_PREFIX + ':metadata:' + metaKey] = value;
       });
-    } else if (key === 'input' || typeof metadata[key] === 'object') {
+    } else if (
+      key === 'input' ||
+      key === 'init' ||
+      typeof metadata[key] === 'object'
+    ) {
       out[ATTR_PREFIX + ':' + key] = JSON.stringify(metadata[key]);
     } else {
       out[ATTR_PREFIX + ':' + key] = metadata[key];

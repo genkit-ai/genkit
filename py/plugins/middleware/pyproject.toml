@@ -40,7 +40,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit>=0.6.0",
+  "genkit>=0.7.0",
   "pyyaml>=6.0",
 ]
 description = "A collection of middleware implementations for Genkit."
@@ -54,7 +54,7 @@ license = "Apache-2.0"
 name = "genkit-plugin-middleware"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.6.0"
+version = "0.7.0"
 
 [project.optional-dependencies]
 dev = [

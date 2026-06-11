@@ -281,7 +281,7 @@ def _define_tool(
 ) -> Tool:
     """Register a function as a tool.
 
-    Normally, the input_schema and output_schem are inferred from func. However,
+    Normally, the input_schema and output_schema are inferred from func. However,
     in some cases, like define_interrupt, the app developer doesn't have a way to
     express the input schema in the func signature.
 

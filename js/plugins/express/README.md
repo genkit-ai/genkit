@@ -154,7 +154,7 @@ for await (const chunk of streamed.stream) {
 console.log(await streamed.output);
 ```
 
-The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side.
+The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side. If the `init` data does not conform to the `initSchema`, the request fails with a `400 INVALID_ARGUMENT` error before the flow runs.
 
 You can also use `startFlowServer` to quickly expose multiple flows and actions:
 
