@@ -75,6 +75,8 @@ async function markerExists(filePath: string): Promise<boolean> {
       await fs.access(filePath);
       return true;
     } catch (err) {
+      console.log(' - - - - -  - - - - -  - -- - - - - - - - - markerExists error');
+      console.log(err);
       const code = (err as NodeJS.ErrnoException)?.code;
       // Definitive "not here" answers — no point retrying.
       if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') {
