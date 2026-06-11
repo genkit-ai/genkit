@@ -135,7 +135,15 @@ function flowAction<
     },
     async (
       input,
-      { sendChunk, context, trace, abortSignal, streamingRequested }
+      {
+        sendChunk,
+        context,
+        trace,
+        abortSignal,
+        streamingRequested,
+        inputStream,
+        init,
+      }
     ) => {
       const ctx = sendChunk;
       (ctx as FlowSideChannel<z.infer<S>>).sendChunk = sendChunk;
@@ -144,6 +152,10 @@ function flowAction<
       (ctx as FlowSideChannel<z.infer<S>>).abortSignal = abortSignal;
       (ctx as FlowSideChannel<z.infer<S>>).streamingRequested =
         streamingRequested;
+      // Forward inputStream/init so the side-channel object actually has the
+      // members ActionFnArg declares (avoids a type-vs-runtime mismatch).
+      (ctx as FlowSideChannel<z.infer<S>>).inputStream = inputStream;
+      (ctx as FlowSideChannel<z.infer<S>>).init = init;
       return fn(input, ctx as FlowSideChannel<z.infer<S>>);
     }
   );

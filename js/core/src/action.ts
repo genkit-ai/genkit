@@ -189,6 +189,9 @@ export interface ActionFnArg<S, I = any, Init = any> {
 
   /**
    * Streaming input.
+   *
+   * The action runtime always provides this. For single-input (unary) actions
+   * it is a stream containing just the one input item.
    */
   inputStream: AsyncIterable<I>;
 
@@ -239,7 +242,10 @@ export type Action<
   RunOptions extends ActionRunOptions<
     z.infer<S>,
     z.infer<Init>
-  > = ActionRunOptions<z.infer<S>, z.infer<I>>,
+    // unfortunately we can't use Init generic param to type ActionRunOptions here (using any)
+    // this is somewhat mitigated in BidiAction interface, so anyone interacting with
+    // bidi actions will still get properly typed init option.
+  > = ActionRunOptions<z.infer<S>, any>,
   Init extends z.ZodTypeAny = z.ZodTypeAny,
 > = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
   /** @hidden */
@@ -549,7 +555,10 @@ export function action<
         metadata.name = actionName;
         metadata.input = input;
         if (options?.init !== undefined) {
-          metadata.init = JSON.stringify(options.init);
+          // Store `init` raw (like `input`) so it is serialized consistently by
+          // the tracing layer. Pre-stringifying here would diverge from `input`
+          // and could throw on non-serializable values, failing the whole run.
+          metadata.init = options.init;
         }
 
         try {
