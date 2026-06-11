@@ -347,6 +347,10 @@ export class RuntimeManager extends BaseRuntimeManager {
         async () => await manager.performHealthChecks(),
         HEALTH_CHECK_INTERVAL
       );
+      // Don't let the periodic health check keep the process (or a Jest
+      // worker) alive on its own; it should only run while there's other
+      // work keeping the event loop busy (e.g. the dev server).
+      manager.healthCheckInterval.unref?.();
     }
     return manager;
   }
