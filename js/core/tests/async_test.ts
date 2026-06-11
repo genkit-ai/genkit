@@ -158,4 +158,34 @@ describe('Channel', () => {
 
     assert.deepStrictEqual(results, [0, 'hello']);
   });
+
+  it('should not treat a sent null as end-of-stream', async () => {
+    const channel = new Channel<number | null>();
+    channel.send(null);
+    channel.send(1);
+    channel.close();
+
+    const results: (number | null)[] = [];
+    for await (const value of channel) {
+      results.push(value);
+    }
+
+    // Both the null and the real value must be yielded; the null must not
+    // truncate the stream.
+    assert.deepStrictEqual(results, [null, 1]);
+  });
+
+  it('should terminate the stream on close()', async () => {
+    const channel = new Channel<number>();
+    channel.send(1);
+    channel.send(2);
+    channel.close();
+
+    const results: number[] = [];
+    for await (const value of channel) {
+      results.push(value);
+    }
+
+    assert.deepStrictEqual(results, [1, 2]);
+  });
 });
