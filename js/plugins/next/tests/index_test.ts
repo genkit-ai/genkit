@@ -361,6 +361,65 @@ describe('appRoute', () => {
     );
   });
 
+  it('validates init against initSchema and passes it to the action', async () => {
+    const ai = genkit({});
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
+    const route = appRoute(flowWithInitSchema);
+
+    const request = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: 'hello',
+        init: { sessionId: 'abc123' },
+      }),
+    });
+    const response = await route(request);
+    expect(response.status).toEqual(200);
+    expect(await response.json()).toEqual({
+      result: 'input: hello, sessionId: abc123',
+    });
+  });
+
+  it('rejects init that does not conform to initSchema', async () => {
+    const ai = genkit({});
+    const flowWithInitSchema = ai.defineFlow(
+      {
+        name: 'flowWithInitSchema',
+        inputSchema: z.string(),
+        outputSchema: z.string(),
+        initSchema: z.object({ sessionId: z.string() }),
+      },
+      async (input, { init }) =>
+        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+    );
+
+    const route = appRoute(flowWithInitSchema);
+
+    const request = new NextRequest('http://localhost/api/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: 'hello',
+        // sessionId should be a string, not a number.
+        init: { sessionId: 123 },
+      }),
+    });
+    const response = await route(request);
+    expect(response.status).toEqual(400);
+    expect((await response.json()).error.status).toEqual('INVALID_ARGUMENT');
+  });
+
   describe('durable streaming', () => {
     const streamingFlow = ai.defineFlow(
       {

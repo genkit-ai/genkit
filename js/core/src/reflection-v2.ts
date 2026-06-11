@@ -136,6 +136,9 @@ export class ReflectionServerV2 {
 
     this.ws.on('error', (error) => {
       logger.error(`Reflection V2 WebSocket error: ${error}`);
+      // Surface the error into any in-flight input streams so action bodies
+      // awaiting input fail instead of hanging forever.
+      this.failInputStreams(error);
     });
 
     this.ws.on('close', (code, reason) => {
@@ -151,10 +154,39 @@ export class ReflectionServerV2 {
       }
       this.pendingRequests.clear();
 
+      // If the client disconnects mid-stream without sending `endInputStream`,
+      // close any open input streams so action bodies awaiting input can
+      // terminate instead of hanging forever (and leaking the channel).
+      this.closeInputStreams();
+
       if (!this.isStopped) {
         this.scheduleReconnect();
       }
     });
+  }
+
+  /**
+   * Closes all open per-request input streams and clears the registry. Used
+   * when the socket closes so action bodies awaiting input can terminate
+   * instead of leaking the channel.
+   */
+  private closeInputStreams() {
+    for (const channel of this.inputStreams.values()) {
+      channel.close();
+    }
+    this.inputStreams.clear();
+  }
+
+  /**
+   * Surfaces an error into all open per-request input streams and clears the
+   * registry. Used when the socket errors so action bodies awaiting input
+   * reject instead of hanging.
+   */
+  private failInputStreams(err: unknown) {
+    for (const channel of this.inputStreams.values()) {
+      channel.error(err);
+    }
+    this.inputStreams.clear();
   }
 
   private scheduleReconnect() {

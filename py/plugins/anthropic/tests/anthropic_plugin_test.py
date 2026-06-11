@@ -152,7 +152,8 @@ async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicM
 
 def test_supported_models() -> None:
     """Test that all supported models have proper metadata."""
-    assert len(SUPPORTED_MODELS) == 10
+    assert len(SUPPORTED_MODELS) == 9
+    assert 'claude-3-haiku' not in SUPPORTED_MODELS
     for _name, info in SUPPORTED_MODELS.items():
         assert info.label is not None
         assert info.label.startswith('Anthropic - ')

@@ -283,7 +283,11 @@ function toErrorDetails(e: any): AgentErrorDetails {
   return {
     status: e?.status || 'INTERNAL',
     message: e?.message || 'Internal failure',
-    details: e?.detail || e?.details || e,
+    // Only surface explicitly-provided structured details. Never fall back to
+    // the raw thrown value: it is serialized over the wire (AgentOutput.error)
+    // and persisted into snapshots, so leaking it could expose stack traces /
+    // internal state, or break JSON.stringify on circular error objects.
+    details: e?.detail ?? e?.details,
   };
 }
 
@@ -1105,14 +1109,24 @@ export function defineCustomAgent<State = unknown>(
       // Centralized chunk emitter: every stream chunk passes through here so
       // the optional `clientTransform.chunk` can reshape/redact it (or drop it
       // by returning a nullish value) before it reaches the client.
+      //
+      // The actual dispatch is failure-isolated (like `notifyEndTurn`): the
+      // artifact/customPatch emitters fire synchronously from inside
+      // `Session.updateCustom`/`addArtifacts` (i.e. from the user's handler).
+      // If the client stream is already closed, `sendChunk` throws; absorbing
+      // it here prevents that from propagating out of the handler and turning
+      // a normal turn into a `failed` one.
       const emitChunk = (chunk: AgentStreamChunk) => {
-        if (config.clientTransform?.chunk) {
-          const transformed = config.clientTransform.chunk(chunk);
-          if (!transformed) return;
-          arg.sendChunk(transformed);
-          return;
+        try {
+          let toSend: AgentStreamChunk | null | undefined = chunk;
+          if (config.clientTransform?.chunk) {
+            toSend = config.clientTransform.chunk(chunk);
+          }
+          if (!toSend) return;
+          arg.sendChunk(toSend);
+        } catch {
+          // Stream was closed (or the transform threw); absorb the exception.
         }
-        arg.sendChunk(chunk);
       };
 
       // We construct an asynchronous proxy channel over the inputStream.

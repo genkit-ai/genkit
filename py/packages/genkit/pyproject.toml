@@ -76,7 +76,7 @@ license = "Apache-2.0"
 name = "genkit"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.6.0"
+version = "0.7.0"
 
 [project.optional-dependencies]
 flask                 = ["genkit-plugin-flask"]

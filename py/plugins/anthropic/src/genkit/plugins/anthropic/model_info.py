@@ -23,17 +23,6 @@ from genkit import (
 )
 
 # Model definitions
-CLAUDE_3_HAIKU = ModelInfo(
-    label='Anthropic - Claude 3 Haiku',
-    versions=['claude-3-haiku-20240307'],
-    supports=Supports(
-        multiturn=True,
-        media=True,
-        tools=True,
-        system_role=True,
-    ),
-)
-
 CLAUDE_3_5_HAIKU = ModelInfo(
     label='Anthropic - Claude 3.5 Haiku',
     versions=['claude-3-5-haiku-20241022'],
@@ -149,7 +138,6 @@ CLAUDE_OPUS_4_6 = ModelInfo(
 )
 
 SUPPORTED_ANTHROPIC_MODELS: dict[str, ModelInfo] = {
-    'claude-3-haiku': CLAUDE_3_HAIKU,
     'claude-3-5-haiku': CLAUDE_3_5_HAIKU,
     'claude-3-5-sonnet': CLAUDE_3_5_SONNET,
     'claude-sonnet-4': CLAUDE_SONNET_4,
