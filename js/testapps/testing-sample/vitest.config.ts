@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,11 @@
  * limitations under the License.
  */
 
-export { testModels } from './model-tester.js';
-export {
-  echoModel,
-  mockModel,
-  type EchoModelOptions,
-  type MockChunk,
-  type MockContext,
-  type MockModel,
-  type MockModelOptions,
-  type MockResponse,
-} from './mock-model.js';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    // Only the vitest example; the `*_test.ts` files run under node:test.
+    include: ['tests/**/*.vitest.test.ts'],
+  },
+});
