@@ -28,7 +28,9 @@ export interface DevToolsInfo {
 }
 
 /**
- * Finds the project root by looking for a `package.json` file.
+ * Finds the project root by walking up the directory tree looking for a file
+ * that marks the root of a supported runtime's project (for example
+ * `package.json` for JS or `pubspec.yaml` for Dart).
  */
 export async function findProjectRoot(): Promise<string> {
   const projectMarkers = [
@@ -38,6 +40,7 @@ export async function findProjectRoot(): Promise<string> {
     'requirements.txt',
     'pom.xml',
     'build.gradle',
+    'pubspec.yaml',
   ];
 
   let currentDir = process.cwd();
