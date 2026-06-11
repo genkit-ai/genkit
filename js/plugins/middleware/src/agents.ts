@@ -16,7 +16,6 @@
 
 import {
   generateMiddleware,
-  ToolInterruptError,
   z,
   type Action,
   type GenerateMiddleware,
@@ -146,10 +145,13 @@ function makeInvocationId(agentName: string): string {
  *   result mentions artifact names but not content. Pair with the `artifacts`
  *   middleware to give the model `read_artifact` / `write_artifact` tools.
  *
- * If a sub-agent triggers an interrupt, the interrupt is propagated to the
- * caller as a `ToolInterruptError`.
+ * If a sub-agent triggers an interrupt, it is reported back to the orchestrator
+ * as a normal tool response (not propagated as a `ToolInterruptError`). There is
+ * no stateful sub-agent runtime to resume into, so interactive, back-and-forth
+ * interaction with an interrupted sub-agent is a future feature.
  *
  * @example
+
  * ```typescript
  * const researcher = ai.defineAgent({
  *   name: 'researcher',
@@ -338,12 +340,45 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               );
               const agentOutput: AgentOutput = actionResult.result;
 
+              // The agent runtime resolves gracefully rather than throwing:
+              // a failed turn returns `finishReason: 'failed'` with structured
+              // error details, and an interrupted turn returns
+              // `finishReason: 'interrupted'`. Handle both explicitly here (the
+              // `catch` below only fires for exceptions thrown outside the
+              // agent's graceful handling).
+
+              // ── Interrupt: surface as a normal tool response ──────
+              // We deliberately do NOT propagate the interrupt to the parent.
+              // Throwing would interrupt the parent's generate, but there is no
+              // stateful sub-agent runtime to resume back into — the sub-agent's
+              // turn state is already gone — so the parent could never satisfy
+              // the interrupt. Interactive, stateful sub-agent interaction is a
+              // future feature. For now we report it as text the orchestrator
+              // can reason about.
+              if (agentOutput.finishReason === 'interrupted') {
+                return {
+                  response:
+                    `Sub-agent '${ref.name}' interrupted for additional input ` +
+                    `and could not complete the task. Interactive sub-agent ` +
+                    `interrupts are not currently supported; try delegating a ` +
+                    `more self-contained task.`,
+                };
+              }
+
+              // ── Failure: surface the error to the orchestrator ────
+              if (agentOutput.finishReason === 'failed') {
+                const message =
+                  agentOutput.error?.message ?? 'Unknown sub-agent failure.';
+                return {
+                  response: `Error calling agent '${ref.name}': ${message}`,
+                };
+              }
+
               // Extract text content from the agent's response.
               const textContent = (agentOutput.message?.content ?? [])
-                .map((p: any) => p.text)
+                .map((p) => p.text)
                 .filter(
-                  (t: unknown): t is string =>
-                    typeof t === 'string' && (t as string).length > 0
+                  (t): t is string => typeof t === 'string' && t.length > 0
                 )
                 .join('\n');
 
@@ -355,10 +390,12 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               // Generate a unique invocation ID to namespace artifacts
               const invocationId = makeInvocationId(ref.name);
 
-              // Merge artifacts into the parent session (both strategies)
+              // Merge artifacts into the parent session (both strategies).
+              // `ai.currentSession()` throws when there is no active session,
+              // so guard with try/catch rather than a falsy check.
               if (subArtifacts.length > 0) {
-                const session = ai.currentSession();
-                if (session) {
+                try {
+                  const session = ai.currentSession();
                   const namespacedArtifacts = subArtifacts.map((a: any) => ({
                     ...a,
                     name: `${invocationId}/${a.name}`,
@@ -369,6 +406,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                     },
                   }));
                   session.addArtifacts(namespacedArtifacts);
+                } catch {
+                  // No active session — artifacts can't be merged into a
+                  // parent session. With the "inline" strategy the content is
+                  // still returned in the tool result below.
                 }
               }
 
@@ -397,17 +438,10 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                 ...(artifacts?.length ? { artifacts } : {}),
               };
             } catch (e: unknown) {
-              // If the sub-agent triggered an interrupt, propagate it up.
-              if (e instanceof ToolInterruptError) {
-                throw new ToolInterruptError({
-                  source: 'subagent',
-                  agentName: ref.name,
-                  task: input.task,
-                  originalInterrupt: e.metadata,
-                });
-              }
-
-              // Other errors: return as tool output so the model can recover.
+              // The agent runtime resolves failures and interrupts gracefully
+              // (see above), so this only fires for exceptions thrown outside
+              // that handling (e.g. schema parse errors on `run`). Return them
+              // as tool output so the model can recover.
               const message = e instanceof Error ? e.message : String(e);
               return {
                 response: `Error calling agent '${ref.name}': ${message}`,

@@ -15,6 +15,7 @@
  */
 
 import * as assert from 'assert';
+import { z } from 'genkit';
 import { genkit, Session } from 'genkit/beta';
 import { describe, it } from 'node:test';
 import { agents } from '../src/agents.js';
@@ -817,6 +818,176 @@ describe('agents middleware', () => {
     assert.ok(
       namePattern.test(name),
       `Artifact name "${name}" should match pattern nsAgent_XXXX/output.txt`
+    );
+  });
+
+  it('returns a tool response (does not propagate) when a sub-agent interrupts', async () => {
+    const ai = genkit({});
+
+    // A tool that always interrupts (never resolves to a value).
+    const approvalTool = ai.defineInterrupt({
+      name: 'needs_approval',
+      description: 'Requires human approval before proceeding.',
+      inputSchema: z.object({}),
+    });
+
+    // Sub-agent model calls the interrupting tool.
+    const subModel = ai.defineModel(
+      { name: 'sub-interrupt-' + Math.random() },
+      async () => ({
+        message: {
+          role: 'model' as const,
+          content: [
+            {
+              toolRequest: {
+                name: 'needs_approval',
+                input: {},
+              },
+            },
+          ],
+        },
+      })
+    );
+
+    ai.defineAgent({
+      name: 'interrupter',
+      model: subModel,
+      system: 'You require approval.',
+      tools: [approvalTool],
+    });
+
+    // Main model delegates, then produces final text after the delegation
+    // tool resolves (the sub-agent interrupt must NOT halt the parent loop).
+    let mainTurn = 0;
+    let capturedToolOutput: any;
+    const mainModel = ai.defineModel(
+      { name: 'main-interrupt-' + Math.random() },
+      async (req) => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_interrupter',
+                    input: { task: 'do something requiring approval' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        if (toolMsg) {
+          const toolResp = toolMsg.content.find((p: any) => p.toolResponse);
+          capturedToolOutput = toolResp?.toolResponse?.output;
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'acknowledged the interrupt' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model: mainModel,
+      prompt: 'delegate to an agent that interrupts',
+      use: [agents({ agents: ['interrupter'] })],
+    });
+
+    // The sub-agent interrupt should be reported as a normal tool response,
+    // NOT propagated as an interrupt to the orchestrator.
+    assert.notStrictEqual(
+      result.finishReason,
+      'interrupted',
+      'Orchestrator should not be interrupted by a sub-agent interrupt'
+    );
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.match(
+      capturedToolOutput.response,
+      /interrupt/i,
+      'Tool response should indicate the sub-agent interrupted'
+    );
+    assert.ok(
+      result.text.includes('acknowledged'),
+      'Orchestrator should continue after the interrupt is reported'
+    );
+  });
+
+  it('returns sub-agent failure as an error tool response', async () => {
+    const ai = genkit({});
+
+    // Sub-agent model throws, causing the agent to resolve with
+    // finishReason: 'failed' and a structured error.
+    const subModel = ai.defineModel(
+      { name: 'sub-failing-' + Math.random() },
+      async () => {
+        throw new Error('sub-agent boom');
+      }
+    );
+
+    ai.defineAgent({
+      name: 'failer',
+      model: subModel,
+      system: 'You fail.',
+    });
+
+    let mainTurn = 0;
+    let capturedToolOutput: any;
+    const mainModel = ai.defineModel(
+      { name: 'main-failing-' + Math.random() },
+      async (req) => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_failer',
+                    input: { task: 'do the impossible' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        if (toolMsg) {
+          const toolResp = toolMsg.content.find((p: any) => p.toolResponse);
+          capturedToolOutput = toolResp?.toolResponse?.output;
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'recovered from failure' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model: mainModel,
+      prompt: 'delegate to a failing agent',
+      use: [agents({ agents: ['failer'] })],
+    });
+
+    // The failure should be returned as tool output (not thrown), so the
+    // orchestrator can recover.
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.match(
+      capturedToolOutput.response,
+      /Error calling agent 'failer'/,
+      'Tool response should surface the sub-agent error'
+    );
+    assert.ok(
+      result.text.includes('recovered'),
+      'Orchestrator should be able to recover after the failure'
     );
   });
 });

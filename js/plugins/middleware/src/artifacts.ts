@@ -168,11 +168,14 @@ export const artifacts: GenerateMiddleware<typeof ArtifactsOptionsSchema> =
           }),
         },
         async (input) => {
-          const session = ai.currentSession();
-          if (!session) {
+          // `ai.currentSession()` throws when there is no active session.
+          let session: ReturnType<typeof ai.currentSession>;
+          try {
+            session = ai.currentSession();
+          } catch {
             return {
               name: input.name,
-              content: '',
+              content: 'Error: no active session.',
               found: false,
             };
           }
@@ -225,8 +228,11 @@ export const artifacts: GenerateMiddleware<typeof ArtifactsOptionsSchema> =
           }),
         },
         async (input) => {
-          const session = ai.currentSession();
-          if (!session) {
+          // `ai.currentSession()` throws when there is no active session.
+          let session: ReturnType<typeof ai.currentSession>;
+          try {
+            session = ai.currentSession();
+          } catch {
             return { status: 'Error: no active session.' };
           }
 
@@ -255,10 +261,13 @@ export const artifacts: GenerateMiddleware<typeof ArtifactsOptionsSchema> =
           const { request } = envelope;
 
           // ── Build artifact listing for the system prompt ──────────
-          const session = ai.currentSession();
-          const currentArtifacts: Artifact[] = session
-            ? session.getArtifacts()
-            : [];
+          // `ai.currentSession()` throws when there is no active session.
+          let currentArtifacts: Artifact[] = [];
+          try {
+            currentArtifacts = ai.currentSession().getArtifacts();
+          } catch {
+            // No active session — nothing to list.
+          }
 
           const artifactListing = buildArtifactListing(currentArtifacts);
 
