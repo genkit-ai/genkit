@@ -60,7 +60,11 @@ Use a context provider (e.g. for auth) and attach it to an action with `withActi
 ```ts
 import { UserFacingError } from 'genkit';
 import type { ContextProvider, RequestData } from 'genkit/context';
-import { fetchHandler, fetchHandlers, withActionOptions } from '@genkit-ai/fetch';
+import {
+  fetchHandler,
+  fetchHandlers,
+  withActionOptions,
+} from '@genkit-ai/fetch';
 
 const authContext: ContextProvider<{ userId: string }> = (req: RequestData) => {
   if (req.headers['authorization'] !== 'Bearer open-sesame') {
@@ -90,7 +94,11 @@ Provide a `streamManager` in the options. For development, use `InMemoryStreamMa
 
 ```ts
 import { InMemoryStreamManager } from 'genkit/beta';
-import { fetchHandler, fetchHandlers, withActionOptions } from '@genkit-ai/fetch';
+import {
+  fetchHandler,
+  fetchHandlers,
+  withActionOptions,
+} from '@genkit-ai/fetch';
 
 app.all('/myDurableFlow', (c) =>
   fetchHandler(myFlow, {
@@ -182,17 +190,17 @@ for await (const chunk of streamed.stream) {
 console.log(await streamed.output);
 ```
 
-The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side.
+The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side. If the `init` data does not conform to the `initSchema`, the request fails with a `400 INVALID_ARGUMENT` error before the flow runs.
 
 ## API summary
 
-| Export              | Description                                                                 |
-|---------------------|-----------------------------------------------------------------------------|
-| `fetchHandler(action, options?)` | Returns a handler `(request) => Promise<Response>` for a single action (flow, model, etc.). |
-| `fetchHandlers(actions, pathPrefix?)` | Returns a handler that dispatches by path to one of the given actions.   |
-| `withActionOptions(action, options)`  | Wraps an action with `contextProvider`, `streamManager`, or custom `path`. |
-| `ActionWithOptions` | Type for an action plus options.                                            |
-| `FetchHandlerOptions` | Options for `fetchHandler`: `contextProvider`, `streamManager`.            |
+| Export                                | Description                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `fetchHandler(action, options?)`      | Returns a handler `(request) => Promise<Response>` for a single action (flow, model, etc.). |
+| `fetchHandlers(actions, pathPrefix?)` | Returns a handler that dispatches by path to one of the given actions.                      |
+| `withActionOptions(action, options)`  | Wraps an action with `contextProvider`, `streamManager`, or custom `path`.                  |
+| `ActionWithOptions`                   | Type for an action plus options.                                                            |
+| `FetchHandlerOptions`                 | Options for `fetchHandler`: `contextProvider`, `streamManager`.                             |
 
 Request body must be JSON with a `data` field: `{ "data": <input> }`. For streaming, use `Accept: text/event-stream` or query `?stream=true`.
 

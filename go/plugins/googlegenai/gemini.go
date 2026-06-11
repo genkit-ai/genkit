@@ -314,8 +314,7 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	// Set response MIME type and schema based on output format.
 	// Gemini supports constrained output with application/json and text/x.enum.
 	hasOutput := input.Output != nil
-	// JSON mode is not compatible with tools
-	if hasOutput && len(input.Tools) == 0 {
+	if hasOutput {
 		switch {
 		case input.Output.ContentType == "application/json" || input.Output.Format == "json":
 			gcc.ResponseMIMEType = "application/json"

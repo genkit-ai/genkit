@@ -79,7 +79,7 @@ export function expressHandler<
     }
 
     const input = request.body.data as z.infer<I>;
-    const init = request.body.init;
+    const init = request.body.init as z.infer<Init> | undefined;
     let context: Record<string, any>;
 
     try {
@@ -87,10 +87,15 @@ export function expressHandler<
         (await opts?.contextProvider?.({
           method: request.method as RequestData['method'],
           headers: Object.fromEntries(
-            Object.entries(request.headers).map(([key, value]) => [
-              key.toLowerCase(),
-              Array.isArray(value) ? value.join(' ') : String(value),
-            ])
+            Object.entries(request.headers)
+              // Skip headers explicitly set to undefined so they don't become
+              // the literal string "undefined" via String(value).
+              .filter(([, value]) => value !== undefined)
+              .map(([key, value]) => [
+                key.toLowerCase(),
+                // RFC 9110 5.3: combine repeated field lines with a comma.
+                Array.isArray(value) ? value.join(', ') : String(value),
+              ])
           ),
           input,
         })) || {};
@@ -111,7 +116,10 @@ export function expressHandler<
       abortController.abort();
     });
 
-    if (request.get('Accept') === 'text/event-stream' || stream === 'true') {
+    if (
+      request.get('Accept')?.toLowerCase().includes('text/event-stream') ||
+      stream === 'true'
+    ) {
       const streamManager = opts?.streamManager;
       if (streamManager && streamId) {
         await subscribeToStream(streamManager, streamId, response);
@@ -167,12 +175,13 @@ async function runActionWithDurableStreaming<
   I extends z.ZodTypeAny,
   O extends z.ZodTypeAny,
   S extends z.ZodTypeAny,
+  Init extends z.ZodTypeAny = z.ZodTypeAny,
 >(
-  action: Action<I, O, S>,
+  action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
   streamId: string,
   input: z.infer<I>,
-  init: any,
+  init: z.infer<Init> | undefined,
   context: ActionContext,
   response: express.Response,
   abortSignal: AbortSignal
@@ -185,6 +194,9 @@ async function runActionWithDurableStreaming<
   }
   try {
     let onChunk = (chunk: z.infer<S>) => {
+      // The client may have disconnected mid-stream; writing to a destroyed
+      // response would throw.
+      if (response.destroyed) return;
       response.write(
         'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
       );
@@ -206,10 +218,12 @@ async function runActionWithDurableStreaming<
       taskQueue!.enqueue(() => durableStream!.done(result.result));
       await taskQueue!.merge();
     }
-    response.write(
-      'data: ' + JSON.stringify({ result: result.result }) + streamDelimiter
-    );
-    response.end();
+    if (!response.destroyed) {
+      response.write(
+        'data: ' + JSON.stringify({ result: result.result }) + streamDelimiter
+      );
+      response.end();
+    }
   } catch (e) {
     if (durableStream) {
       taskQueue!.enqueue(() => durableStream!.error(e));
@@ -220,12 +234,14 @@ async function runActionWithDurableStreaming<
         (e as Error).stack
       }`
     );
-    response.write(
-      `error: ${JSON.stringify({
-        error: getCallableJSON(e),
-      })}${streamDelimiter}`
-    );
-    response.end();
+    if (!response.destroyed) {
+      response.write(
+        `error: ${JSON.stringify({
+          error: getCallableJSON(e),
+        })}${streamDelimiter}`
+      );
+      response.end();
+    }
   }
 }
 
@@ -237,11 +253,15 @@ async function subscribeToStream(
   try {
     await streamManager.subscribe(streamId, {
       onChunk: (chunk) => {
+        // The subscribing client may have disconnected; skip writes to a
+        // destroyed response to avoid throwing.
+        if (response.destroyed) return;
         response.write(
           'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
         );
       },
       onDone: (output) => {
+        if (response.destroyed) return;
         response.write(
           'data: ' + JSON.stringify({ result: output }) + streamDelimiter
         );
@@ -253,6 +273,7 @@ async function subscribeToStream(
             (err as Error).stack
           }`
         );
+        if (response.destroyed) return;
         response.write(
           `error: ${JSON.stringify({
             error: getCallableJSON(err),
@@ -262,6 +283,9 @@ async function subscribeToStream(
       },
     });
   } catch (e: any) {
+    // The subscribing client may have disconnected; skip writes to a
+    // destroyed response to avoid throwing.
+    if (response.destroyed) return;
     if (e instanceof StreamNotFoundError) {
       response.status(204).end();
       return;

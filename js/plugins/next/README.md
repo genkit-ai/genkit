@@ -121,7 +121,7 @@ for await (const chunk of stream) {
 console.log(await output);
 ```
 
-The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side.
+The `init` data is sent in the request body alongside `data` and is validated against the action's `initSchema` on the server side. If the `init` data does not conform to the `initSchema`, the request fails with a `400 INVALID_ARGUMENT` error before the flow runs.
 
 The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
