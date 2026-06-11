@@ -610,7 +610,16 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
     'input_schema, expected_output',
     [
         ({}, None),
-        ({'properties': {'name': {'type': 'string'}}}, None),
+        (
+            {'properties': {'name': {'type': 'string'}}},
+            _ollama_parameters(
+                type='object',
+                required=None,
+                properties={
+                    'name': ollama_api.Tool.Function.Parameters.Property(type='string', description=''),
+                },
+            ),
+        ),
         (
             {'type': 'object'},
             _ollama_parameters(type='object', properties={}),
@@ -700,6 +709,20 @@ def test_convert_parameters_rejects_non_object_schema() -> None:
     """Ollama only accepts object-typed tool schemas — primitives must raise."""
     with pytest.raises(ValueError, match='object-typed input schema'):
         _convert_parameters({'type': 'string'})
+
+
+def test_convert_parameters_infers_object_from_properties() -> None:
+    """A schema with properties but no explicit type is treated as an object."""
+    result = _convert_parameters({'properties': {'city': {'type': 'string'}}})
+    assert result is not None
+    assert result.type == 'object'
+    assert result.properties is not None
+    assert result.properties['city'].type == 'string'
+
+
+def test_convert_parameters_no_type_no_properties_returns_none() -> None:
+    """Nothing to infer an object from — drop the schema rather than guess."""
+    assert _convert_parameters({'description': 'just a note'}) is None
 
 
 class TestBuildRequestOptions:

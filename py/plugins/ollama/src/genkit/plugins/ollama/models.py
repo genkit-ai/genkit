@@ -718,7 +718,13 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
         return None
     schema_type = input_schema.get('type')
     if schema_type is None:
-        return None
+        # A schema with properties but no explicit type is implicitly an
+        # object; infer it rather than silently dropping the parameters (the
+        # exact failure this function exists to prevent).
+        if 'properties' in input_schema:
+            schema_type = 'object'
+        else:
+            return None
     if schema_type != 'object':
         raise ValueError(
             f'Ollama tools must declare an object-typed input schema; got type={schema_type!r}. '
@@ -734,17 +740,15 @@ def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Func
         if isinstance(required, list):
             schema.required = cast(list[str], required)
 
-    if 'type' in input_schema:
-        schema_type = input_schema['type']
-        if schema_type == 'object':
-            schema.type = 'object'
-            schema.properties = {}
-            properties_raw = input_schema.get('properties', {})
-            if isinstance(properties_raw, dict):
-                properties = cast(dict[str, dict[str, Any]], properties_raw)
-                for key in properties:
-                    schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
-                        type=properties[key]['type'], description=properties[key].get('description', '')
-                    )
+    # schema_type is 'object' here (explicit or inferred); build properties.
+    schema.type = 'object'
+    schema.properties = {}
+    properties_raw = input_schema.get('properties', {})
+    if isinstance(properties_raw, dict):
+        properties = cast(dict[str, dict[str, Any]], properties_raw)
+        for key in properties:
+            schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
+                type=properties[key]['type'], description=properties[key].get('description', '')
+            )
 
     return schema
