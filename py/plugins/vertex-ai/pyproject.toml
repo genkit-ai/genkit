@@ -69,7 +69,7 @@ license = "Apache-2.0"
 name = "genkit-plugin-vertex-ai"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.6.0"
+version = "0.7.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"

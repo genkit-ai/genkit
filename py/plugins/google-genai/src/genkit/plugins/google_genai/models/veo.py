@@ -104,6 +104,10 @@ class VeoVersion(StrEnum):
 
     VEO_2_0 = 'veo-2.0-generate-001'
     VEO_2_0_EXP = 'veo-2.0-generate-exp'
+    VEO_3_0 = 'veo-3.0-generate-001'
+    VEO_3_0_FAST = 'veo-3.0-fast-generate-001'
+    VEO_3_1_PREVIEW = 'veo-3.1-generate-preview'
+    VEO_3_1_FAST_PREVIEW = 'veo-3.1-fast-generate-preview'
     VEO_3_1 = 'veo-3.1-generate-001'
     VEO_3_1_FAST = 'veo-3.1-fast-generate-001'
 
@@ -134,6 +138,8 @@ class VeoConfigSchema(BaseModel):
     duration_seconds: int | None = Field(
         default=None, alias='durationSeconds', description='Length of video in seconds.'
     )
+    resolution: str | None = Field(default=None, description='Desired output resolution (e.g. "720p").')
+    seed: int | None = Field(default=None, description='Random seed for deterministic generation.')
     enhance_prompt: bool | None = Field(default=None, alias='enhancePrompt', description='Enable prompt enhancement.')
 
 
