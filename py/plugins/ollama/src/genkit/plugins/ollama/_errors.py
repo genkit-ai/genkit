@@ -36,13 +36,15 @@ class OllamaConnectionError(ConnectionError):
 async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
     """Translate raw httpx connection failures into actionable errors.
 
-    Yields control to the wrapped block. On :class:`httpx.ConnectError`
-    (or any subclass), re-raises an :class:`OllamaConnectionError` whose
-    message tells the user to start the Ollama server.
+    Yields control to the wrapped block. On :class:`httpx.TransportError`
+    (connect failures, timeouts, network and pool errors), re-raises an
+    :class:`OllamaConnectionError` whose message tells the user to start
+    the Ollama server. HTTP status errors are left untouched so genuine
+    server responses are not masked.
     """
     try:
         yield
-    except httpx.ConnectError as exc:
+    except httpx.TransportError as exc:
         raise OllamaConnectionError(
             f'Cannot reach the Ollama server at {server_address}. '
             f'Start it with `ollama serve` (or set server_address to a reachable host).'
