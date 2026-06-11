@@ -163,6 +163,12 @@ class OllamaConfig(ModelConfig):
     num_predict: int | None = None
 
 
+# Snake-cased config keys that the Ollama client accepts at the request level
+# (not inside the ``options`` sampler dict). Kept in one place so the extract
+# (build_request_kwargs) and exclude (build_request_options) paths agree.
+REQUEST_LEVEL_KEYS = frozenset({'think', 'keep_alive'})
+
+
 class ModelDefinition(BaseModel):
     """Meta definition for Ollama models."""
 
@@ -506,10 +512,17 @@ class OllamaModel:
                     if extra_value is not None:
                         options_kwargs[to_snake(extra_key)] = extra_value
             return {k: v for k, v in options_kwargs.items() if v is not None}
-        # Raw dict passed straight through by the caller. Snake-case keys so a
+        # Raw dict passed straight through by the caller (the framework hands
+        # the model fn a dict, not a parsed OllamaConfig). Snake-case keys so a
         # camelCase knob (e.g. topP) maps to the server field (top_p) instead
-        # of being silently ignored by the Ollama API.
-        return {to_snake(k): v for k, v in cast(dict[str, Any], config).items()}
+        # of being silently ignored. Drop request-level keys (think, keep_alive)
+        # so they aren't buried in options where the server ignores them; they
+        # are lifted to the top level by build_request_kwargs.
+        return {
+            sk: v
+            for sk, v in ((to_snake(k), v) for k, v in cast(dict[str, Any], config).items())
+            if sk not in REQUEST_LEVEL_KEYS
+        }
 
     @staticmethod
     def build_request_kwargs(
@@ -519,6 +532,11 @@ class OllamaModel:
 
         These fields are accepted by the ollama-python client at the request
         level, separate from the ``options`` dict.
+
+        Handles both a parsed ``OllamaConfig`` and a raw dict — the framework
+        delivers ``request.config`` as a dict, so extracting only from the
+        typed instance would silently drop think/keep_alive in the normal
+        generate() path.
         """
         kwargs: dict[str, Any] = {}
         if isinstance(config, OllamaConfig):
@@ -526,6 +544,11 @@ class OllamaModel:
                 kwargs['think'] = config.think
             if config.keep_alive is not None:
                 kwargs['keep_alive'] = config.keep_alive
+        elif isinstance(config, dict):
+            snaked = {to_snake(k): v for k, v in cast(dict[str, Any], config).items()}
+            for key in REQUEST_LEVEL_KEYS:
+                if snaked.get(key) is not None:
+                    kwargs[key] = snaked[key]
         return kwargs
 
     @staticmethod

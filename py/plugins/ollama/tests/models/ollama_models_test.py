@@ -762,6 +762,23 @@ class TestBuildRequestOptions:
         options = cast(dict[str, Any], OllamaModel.build_request_options({'topP': 0.9, 'top_k': 40}))
         assert options == {'top_p': 0.9, 'top_k': 40}
 
+    def test_request_kwargs_extracts_think_and_keep_alive_from_dict(self) -> None:
+        """The framework delivers config as a dict; think/keep_alive must still lift."""
+        from genkit.plugins.ollama.models import OllamaModel
+
+        kwargs = OllamaModel.build_request_kwargs({'think': 'high', 'keepAlive': '5m', 'topP': 0.9})
+        assert kwargs == {'think': 'high', 'keep_alive': '5m'}
+
+    def test_dict_options_exclude_request_level_keys(self) -> None:
+        """think/keep_alive from a dict config stay out of the options sampler dict."""
+        from genkit.plugins.ollama.models import OllamaModel
+
+        options = cast(
+            dict[str, Any],
+            OllamaModel.build_request_options({'think': 'high', 'keepAlive': '5m', 'topP': 0.9}),
+        )
+        assert options == {'top_p': 0.9}
+
     def test_none_config_returns_empty_options(self) -> None:
         """None config still produces a usable Options instance."""
         from genkit.plugins.ollama.models import OllamaModel
