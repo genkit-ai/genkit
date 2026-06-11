@@ -3026,6 +3026,108 @@ Now respond to the latest message.`,
       assert.strictEqual(output.snapshotId, undefined);
     });
 
+    it('does not leak the raw thrown error into error.details', async () => {
+      const store = new InMemorySessionStore<{}>();
+
+      // Throw a value with a circular reference and no `detail`/`details`
+      // field. The old behavior fell back to placing the whole error object in
+      // `details`, which both leaked internals and could break JSON.stringify
+      // (here: a circular structure) when persisting the failed snapshot.
+      const circular: any = new Error('boom');
+      circular.self = circular;
+
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'frNoLeak', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw circular;
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.error);
+      assert.strictEqual(output.error!.status, 'INTERNAL');
+      assert.ok(output.error!.message.includes('boom'));
+      // details must NOT fall back to the raw (circular) error object.
+      assert.strictEqual(output.error!.details, undefined);
+
+      // The failed snapshot persisted without throwing on the circular error.
+      const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      const snapshot = await store.getSnapshot({
+        snapshotId: turnEndChunk!.turnEnd!.snapshotId!,
+      });
+      assert.strictEqual(snapshot?.status, 'failed');
+      assert.strictEqual(snapshot?.error?.details, undefined);
+    });
+
+    it('does not fail the turn when a stream emit throws (closed stream)', async () => {
+      // Simulate a client that has gone away mid-turn: arg.sendChunk throws.
+      // The synchronous custom/artifact emits fire from inside the user's
+      // handler (updateCustom / addArtifacts); a throw there must NOT escape
+      // and turn an otherwise-successful turn into a 'failed' one.
+      const registry = new Registry();
+
+      let sendChunkCalls = 0;
+      const flow = defineCustomAgent<{ count: number }>(
+        registry,
+        {
+          name: 'frStreamThrows',
+          clientTransform: {
+            chunk: () => {
+              // Throwing here is equivalent to arg.sendChunk throwing on a
+              // closed stream - emitChunk must absorb it.
+              sendChunkCalls++;
+              throw new Error('stream closed');
+            },
+          },
+        },
+        async (sess) => {
+          await sess.run(async () => {
+            // These both emit synchronously via the guarded emitter.
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            sess.session.addArtifacts([{ name: 'a', parts: [{ text: 'v1' }] }]);
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+      });
+      session.close();
+
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      // The turn succeeded despite every emit throwing.
+      assert.strictEqual(output.finishReason, 'stop');
+      assert.strictEqual(output.error, undefined);
+      assert.ok(sendChunkCalls > 0, 'emit should have been attempted');
+      // The state mutations still applied.
+      assert.strictEqual((output.state!.custom as any).count, 1);
+    });
+
     it('client-managed: preserves prior-turn state when a later turn fails', async () => {
       let turn = 0;
       const flow = defineCustomAgent<{ count: number }>(
