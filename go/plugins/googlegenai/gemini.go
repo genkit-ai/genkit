@@ -293,11 +293,12 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, modelNa
 	// audio requests without one. Supply a default voice so the dedicated TTS
 	// models are runnable from a bare prompt (e.g. the dev UI), while still
 	// letting callers override it via ai.WithConfig.
-	if isTTS && gcc.SpeechConfig == nil {
-		gcc.SpeechConfig = &genai.SpeechConfig{
-			VoiceConfig: &genai.VoiceConfig{
-				PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: defaultTTSVoice},
-			},
+	if isTTS && !hasSpeechVoiceConfig(gcc.SpeechConfig) {
+		if gcc.SpeechConfig == nil {
+			gcc.SpeechConfig = &genai.SpeechConfig{}
+		}
+		gcc.SpeechConfig.VoiceConfig = &genai.VoiceConfig{
+			PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: defaultTTSVoice},
 		}
 	}
 
@@ -397,6 +398,19 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, modelNa
 // defaultTTSVoice is the prebuilt voice used for TTS requests that don't
 // specify one. It must be a valid Gemini TTS voice name.
 const defaultTTSVoice = "Algenib"
+
+func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
+	if sc == nil {
+		return false
+	}
+	if sc.MultiSpeakerVoiceConfig != nil {
+		return true
+	}
+	if sc.VoiceConfig == nil {
+		return false
+	}
+	return sc.VoiceConfig.PrebuiltVoiceConfig != nil || sc.VoiceConfig.ReplicatedVoiceConfig != nil
+}
 
 func isTTSModelName(name string) bool {
 	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")

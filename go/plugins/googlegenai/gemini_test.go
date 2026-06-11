@@ -340,6 +340,96 @@ func TestConvertRequest(t *testing.T) {
 			t.Errorf("VoiceName = %q, want default %q", got, defaultTTSVoice)
 		}
 	})
+	t.Run("convert request for TTS model defaults voice when speech config has no voice", func(t *testing.T) {
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					LanguageCode: "en-US",
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := gcc.SpeechConfig.LanguageCode; got != "en-US" {
+			t.Errorf("LanguageCode = %q, want caller-provided %q", got, "en-US")
+		}
+		if gcc.SpeechConfig.VoiceConfig == nil ||
+			gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil {
+			t.Fatal("SpeechConfig voice not populated, want a default voice")
+		}
+		if got := gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != defaultTTSVoice {
+			t.Errorf("VoiceName = %q, want default %q", got, defaultTTSVoice)
+		}
+	})
+	t.Run("convert request for TTS model defaults voice when voice config has no voice", func(t *testing.T) {
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					VoiceConfig: &genai.VoiceConfig{},
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.SpeechConfig.VoiceConfig == nil ||
+			gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil {
+			t.Fatal("SpeechConfig voice not populated, want a default voice")
+		}
+		if got := gcc.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != defaultTTSVoice {
+			t.Errorf("VoiceName = %q, want default %q", got, defaultTTSVoice)
+		}
+	})
+	t.Run("convert request for TTS model preserves multi-speaker speech config", func(t *testing.T) {
+		msvc := &genai.MultiSpeakerVoiceConfig{
+			SpeakerVoiceConfigs: []*genai.SpeakerVoiceConfig{
+				{
+					Speaker: "Alice",
+					VoiceConfig: &genai.VoiceConfig{
+						PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Kore"},
+					},
+				},
+				{
+					Speaker: "Bob",
+					VoiceConfig: &genai.VoiceConfig{
+						PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Puck"},
+					},
+				},
+			},
+		}
+		req := &ai.ModelRequest{
+			Config: &genai.GenerateContentConfig{
+				SpeechConfig: &genai.SpeechConfig{
+					MultiSpeakerVoiceConfig: msvc,
+				},
+			},
+			Messages: []*ai.Message{
+				ai.NewUserMessage(ai.NewTextPart("say hello")),
+			},
+		}
+
+		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gcc.SpeechConfig.MultiSpeakerVoiceConfig != msvc {
+			t.Errorf("MultiSpeakerVoiceConfig = %v, want caller-provided %v", gcc.SpeechConfig.MultiSpeakerVoiceConfig, msvc)
+		}
+		if gcc.SpeechConfig.VoiceConfig != nil {
+			t.Errorf("VoiceConfig = %v, want nil", gcc.SpeechConfig.VoiceConfig)
+		}
+	})
 	t.Run("convert request leaves non-TTS speech config untouched", func(t *testing.T) {
 		// Non-TTS models must not get a synthesized speechConfig.
 		req := &ai.ModelRequest{
