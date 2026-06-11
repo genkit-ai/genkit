@@ -294,7 +294,8 @@ class Ollama(Plugin):
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
         client = self.client()
-        response = await client.list()
+        async with wrap_connection_errors(self.server_address):
+            response = await client.list()
 
         actions = []
         for model in response.models:
