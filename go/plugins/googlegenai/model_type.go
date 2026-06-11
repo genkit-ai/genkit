@@ -15,11 +15,12 @@ import (
 type ModelType int
 
 const (
-	ModelTypeUnknown  ModelType = iota
-	ModelTypeGemini             // Text/multimodal generation (gemini-*, gemma-*)
-	ModelTypeImagen             // Image generation (imagen-*)
-	ModelTypeVeo                // Video generation (veo-*), long-running
-	ModelTypeEmbedder           // Embedding models (*embedding*)
+	ModelTypeUnknown      ModelType = iota
+	ModelTypeGemini                 // Text/multimodal generation (gemini-*, gemma-*)
+	ModelTypeImagen                 // Image generation (imagen-*)
+	ModelTypeVeo                    // Video generation (veo-*), long-running
+	ModelTypeDeepResearch           // Deep Research (deep-research-*), long-running
+	ModelTypeEmbedder               // Embedding models (*embedding*)
 )
 
 // ClassifyModel determines the model type from its name.
@@ -28,6 +29,8 @@ func ClassifyModel(name string) ModelType {
 	switch {
 	case strings.HasPrefix(name, "veo"):
 		return ModelTypeVeo
+	case strings.HasPrefix(name, "deep-research-"):
+		return ModelTypeDeepResearch
 	case strings.HasPrefix(name, "imagen"), strings.HasPrefix(name, "image"):
 		return ModelTypeImagen
 	case strings.HasPrefix(name, "gemini"), strings.HasPrefix(name, "gemma"):
@@ -43,7 +46,7 @@ func ClassifyModel(name string) ModelType {
 // ActionType returns the appropriate API action type for this model type.
 func (mt ModelType) ActionType() api.ActionType {
 	switch mt {
-	case ModelTypeVeo:
+	case ModelTypeVeo, ModelTypeDeepResearch:
 		return api.ActionTypeBackgroundModel
 	case ModelTypeEmbedder:
 		return api.ActionTypeEmbedder
@@ -61,6 +64,8 @@ func (mt ModelType) DefaultSupports() *ai.ModelSupports {
 		return &Media
 	case ModelTypeVeo:
 		return &VeoSupports
+	case ModelTypeDeepResearch:
+		return &DeepResearchSupports
 	default:
 		return nil
 	}
@@ -75,6 +80,8 @@ func (mt ModelType) DefaultConfig() any {
 		return &genai.GenerateImagesConfig{}
 	case ModelTypeVeo:
 		return &genai.GenerateVideosConfig{}
+	case ModelTypeDeepResearch:
+		return &DeepResearchConfig{}
 	case ModelTypeEmbedder:
 		return &genai.EmbedContentConfig{}
 	default:

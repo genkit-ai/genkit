@@ -59,6 +59,15 @@ func listActions(ctx context.Context, client *genai.Client, provider string) []a
 		}
 	}
 
+	// Deep Research models (background models)
+	for _, name := range models.deep {
+		opts := GetModelOptions(name, provider)
+		deepResearchModel := newDeepResearchModel(client, name, opts)
+		if actionDef, ok := deepResearchModel.(api.Action); ok {
+			actions = append(actions, actionDef.Desc())
+		}
+	}
+
 	// Embedders
 	for _, name := range models.embedders {
 		opts := GetEmbedderOptions(name, provider)
@@ -91,27 +100,92 @@ func resolveAction(client *genai.Client, provider string, atype api.ActionType, 
 		return newEmbedder(client, name, &opts).(api.Action)
 
 	case api.ActionTypeModel:
-		// Veo models should not be resolved as regular models
-		if mt == ModelTypeVeo {
+		// Background models should not be resolved as regular models.
+		if mt == ModelTypeVeo || mt == ModelTypeDeepResearch {
 			return nil
 		}
 		opts := GetModelOptions(name, provider)
 		return newModel(client, name, opts).(api.Action)
 
 	case api.ActionTypeBackgroundModel:
-		if mt != ModelTypeVeo {
-			return nil
+		if mt == ModelTypeVeo {
+			return createVeoBackgroundAction(client, name, provider)
 		}
-		return createVeoBackgroundAction(client, name, provider)
+		if mt == ModelTypeDeepResearch {
+			return createDeepResearchBackgroundAction(client, name, provider)
+		}
+		return nil
 
 	case api.ActionTypeCheckOperation:
-		if mt != ModelTypeVeo {
+		if mt == ModelTypeVeo {
+			return createVeoCheckAction(client, name, provider)
+		}
+		if mt == ModelTypeDeepResearch {
+			return createDeepResearchCheckAction(client, name, provider)
+		}
+		return nil
+
+	case api.ActionTypeCancelOperation:
+		if mt != ModelTypeDeepResearch {
 			return nil
 		}
-		return createVeoCheckAction(client, name, provider)
+		return createDeepResearchCancelAction(client, name, provider)
 	}
 
 	return nil
+}
+
+// createDeepResearchBackgroundAction creates a background model action for Deep Research.
+func createDeepResearchBackgroundAction(client *genai.Client, name, provider string) api.Action {
+	opts := GetModelOptions(name, provider)
+	deepResearchModel := newDeepResearchModel(client, name, opts)
+	actionName := api.NewName(provider, name)
+
+	return core.NewAction(actionName, api.ActionTypeBackgroundModel, nil, nil,
+		func(ctx context.Context, input *ai.ModelRequest) (*core.Operation[*ai.ModelResponse], error) {
+			op, err := deepResearchModel.Start(ctx, input)
+			if err != nil {
+				return nil, err
+			}
+			op.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
+			return op, nil
+		})
+}
+
+// createDeepResearchCheckAction creates a check operation action for Deep Research.
+func createDeepResearchCheckAction(client *genai.Client, name, provider string) api.Action {
+	opts := GetModelOptions(name, provider)
+	deepResearchModel := newDeepResearchModel(client, name, opts)
+	actionName := api.NewName(provider, name)
+
+	return core.NewAction(actionName, api.ActionTypeCheckOperation,
+		map[string]any{"description": fmt.Sprintf("Check status of %s operation", name)}, nil,
+		func(ctx context.Context, op *core.Operation[*ai.ModelResponse]) (*core.Operation[*ai.ModelResponse], error) {
+			updatedOp, err := deepResearchModel.Check(ctx, op)
+			if err != nil {
+				return nil, err
+			}
+			updatedOp.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
+			return updatedOp, nil
+		})
+}
+
+// createDeepResearchCancelAction creates a cancel operation action for Deep Research.
+func createDeepResearchCancelAction(client *genai.Client, name, provider string) api.Action {
+	opts := GetModelOptions(name, provider)
+	deepResearchModel := newDeepResearchModel(client, name, opts)
+	actionName := api.NewName(provider, name)
+
+	return core.NewAction(actionName, api.ActionTypeCancelOperation,
+		map[string]any{"description": fmt.Sprintf("Cancel %s operation", name)}, nil,
+		func(ctx context.Context, op *core.Operation[*ai.ModelResponse]) (*core.Operation[*ai.ModelResponse], error) {
+			updatedOp, err := deepResearchModel.Cancel(ctx, op)
+			if err != nil {
+				return nil, err
+			}
+			updatedOp.Action = api.KeyFromName(api.ActionTypeBackgroundModel, actionName)
+			return updatedOp, nil
+		})
 }
 
 // createVeoBackgroundAction creates a background model action for Veo.
