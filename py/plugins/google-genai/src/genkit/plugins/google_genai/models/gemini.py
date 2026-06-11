@@ -840,7 +840,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported    |
     | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported    |
     | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported    |
-    | `gemini-3-pro-preview`               | Gemini 3 Pro Preview                 | Supported    |
     | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported    |
     | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported    |
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported    |
@@ -865,7 +864,6 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
     GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_3_PRO_PREVIEW = 'gemini-3-pro-preview'
     GEMINI_2_5_PRO = 'gemini-2.5-pro'
     GEMINI_2_5_FLASH = 'gemini-2.5-flash'
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
@@ -900,7 +898,6 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-pro-preview-03-25`       | Gemini 2.5 Pro Preview 03-25         | Supported  |
     | `gemini-2.5-pro-preview-05-06`       | Gemini 2.5 Pro Preview 05-06         | Supported  |
     | `gemini-3-flash-preview`             | Gemini 3 Flash Preview               | Supported  |
-    | `gemini-3-pro-preview`               | Gemini 3 Pro Preview                 | Supported  |
     | `gemini-2.5-pro`                     | Gemini 2.5 Pro                       | Supported  |
     | `gemini-2.5-flash`                   | Gemini 2.5 Flash                     | Supported  |
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported  |
@@ -925,7 +922,6 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_PRO_PREVIEW_03_25 = 'gemini-2.5-pro-preview-03-25'
     GEMINI_2_5_PRO_PREVIEW_05_06 = 'gemini-2.5-pro-preview-05-06'
     GEMINI_3_FLASH_PREVIEW = 'gemini-3-flash-preview'
-    GEMINI_3_PRO_PREVIEW = 'gemini-3-pro-preview'
     GEMINI_2_5_PRO = 'gemini-2.5-pro'
     GEMINI_2_5_FLASH = 'gemini-2.5-flash'
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
@@ -1052,6 +1048,64 @@ def is_gemma_model(name: str) -> bool:
         True
     """
     return name.startswith('gemma-')
+
+
+def is_tuned_gemini_name(name: str) -> bool:
+    """Check whether a model name refers to a Vertex AI tuned Gemini endpoint.
+
+    Accepts both the short form (``endpoints/ID``) and the fully qualified
+    resource path (``projects/PROJECT/locations/LOCATION/endpoints/ID``).
+    Mirrors ``isTunedGeminiName`` in the Go plugin.
+
+    Args:
+        name: The model name to check.
+
+    Returns:
+        True if this is a tuned endpoint name.
+
+    Example:
+        >>> is_tuned_gemini_name('endpoints/1234567890')
+        True
+        >>> is_tuned_gemini_name('projects/p/locations/us-central1/endpoints/9')
+        True
+        >>> is_tuned_gemini_name('gemini-2.5-flash')
+        False
+    """
+    if name.startswith('endpoints/'):
+        return True
+    return name.startswith('projects/') and '/locations/' in name and '/endpoints/' in name
+
+
+def resolve_vertex_model_name(client: genai.Client, name: str) -> str:
+    """Prepare a model name for the google-genai SDK.
+
+    The SDK's internal model-name transformer prefixes unqualified names with
+    ``publishers/google/models/``, which is wrong for tuned endpoints. For a
+    short-form ``endpoints/ID`` this expands to the fully qualified
+    ``projects/PROJECT/locations/LOCATION/endpoints/ID`` using the client's
+    configured project and location so the SDK passes it through unchanged.
+    Non-tuned names are returned as-is. Mirrors
+    ``gemini.go:resolveVertexModelName`` in the Go plugin.
+
+    Args:
+        client: The genai.Client whose project/location to use.
+        name: The incoming model name.
+
+    Returns:
+        A name safe to hand to ``client.aio.models.generate_content``.
+    """
+    if not is_tuned_gemini_name(name):
+        return name
+    if name.startswith('projects/'):
+        return name
+    api_client = getattr(client, '_api_client', None)
+    if api_client is None or not getattr(api_client, 'vertexai', False):
+        return name
+    project = getattr(api_client, 'project', None) or ''
+    location = getattr(api_client, 'location', None) or ''
+    if not project or not location:
+        return name
+    return f'projects/{project}/locations/{location}/{name}'
 
 
 def get_model_config_schema(name: str) -> type[GeminiConfigSchema]:
@@ -1436,7 +1490,7 @@ class GeminiModel:
         client = client or self._client
         try:
             response = await client.aio.models.generate_content(
-                model=model_name,
+                model=resolve_vertex_model_name(client, model_name),
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )
@@ -1560,7 +1614,7 @@ class GeminiModel:
         client = client or self._client
         try:
             generator = await client.aio.models.generate_content_stream(
-                model=model_name,
+                model=resolve_vertex_model_name(client, model_name),
                 contents=cast(genai_types.ContentListUnion, request_contents),
                 config=request_cfg,
             )

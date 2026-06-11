@@ -14,10 +14,57 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
-import { projectNameFromGenkitFilePath } from '../../src/utils';
+import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  findProjectRoot,
+  projectNameFromGenkitFilePath,
+} from '../../src/utils';
 
 describe('utils', () => {
+  describe('findProjectRoot', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      // realpathSync resolves symlinks (for example /var -> /private/var on
+      // macOS) so the temp paths match the resolved paths we compare against.
+      tmpDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-find-root-'))
+      );
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns the directory containing a pubspec.yaml', async () => {
+      const projectDir = path.join(tmpDir, 'dart-app');
+      const nestedDir = path.join(projectDir, 'lib', 'src');
+      fs.mkdirSync(nestedDir, { recursive: true });
+      fs.writeFileSync(path.join(projectDir, 'pubspec.yaml'), 'name: dart_app');
+
+      // Pass the start directory explicitly instead of mutating the
+      // process-global cwd, which makes the test deterministic when run
+      // alongside other tests in the same worker.
+      expect(await findProjectRoot(nestedDir)).toEqual(projectDir);
+    });
+
+    it('returns the nearest project root when a Dart project is nested under a package.json', async () => {
+      // Mirrors a Dart project living inside a JS workspace or monorepo. The
+      // CLI should stop at the Dart project rather than climbing to the
+      // workspace package.json above it.
+      const workspaceDir = path.join(tmpDir, 'workspace');
+      const dartDir = path.join(workspaceDir, 'dart-app');
+      fs.mkdirSync(dartDir, { recursive: true });
+      fs.writeFileSync(path.join(workspaceDir, 'package.json'), '{}');
+      fs.writeFileSync(path.join(dartDir, 'pubspec.yaml'), 'name: dart_app');
+
+      expect(await findProjectRoot(dartDir)).toEqual(dartDir);
+    });
+  });
+
   describe('projectNameFromGenkitFilePath', () => {
     it('returns unknown for empty string', () => {
       expect(projectNameFromGenkitFilePath('')).toEqual('unknown');

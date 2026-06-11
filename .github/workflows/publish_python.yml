@@ -54,13 +54,15 @@ jobs:
             py/packages/genkit
             py/plugins/anthropic
             py/plugins/compat-oai
-            py/plugins/google-cloud
-            py/plugins/google-genai
-            py/plugins/ollama
+            py/plugins/django
+            py/plugins/evaluators
             py/plugins/fastapi
             py/plugins/flask
+            py/plugins/google-cloud
+            py/plugins/google-genai
+            py/plugins/middleware
+            py/plugins/ollama
             py/plugins/vertex-ai
-            py/plugins/evaluators
           )
 
           FAILED=()
