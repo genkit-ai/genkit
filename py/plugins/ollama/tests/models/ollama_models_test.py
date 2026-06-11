@@ -787,6 +787,31 @@ class TestBuildRequestOptions:
         assert isinstance(result, ollama_api.Options)
         assert result.top_p is None
 
+    def test_from_ollama_role_maps_known_roles(self) -> None:
+        """Known Ollama roles map to their Genkit equivalents."""
+        from genkit.plugins.ollama.models import OllamaModel
+
+        assert OllamaModel._from_ollama_role('assistant') == Role.MODEL  # noqa: SLF001
+        assert OllamaModel._from_ollama_role('tool') == Role.TOOL  # noqa: SLF001
+        assert OllamaModel._from_ollama_role('user') == Role.USER  # noqa: SLF001
+        assert OllamaModel._from_ollama_role('system') == Role.SYSTEM  # noqa: SLF001
+
+    def test_from_ollama_role_empty_defaults_to_model_without_warning(self) -> None:
+        """Streaming chunks often omit the role; a falsy role defaults quietly."""
+        from genkit.plugins.ollama import models as models_mod
+
+        with patch.object(models_mod.logger, 'warning') as warn:
+            assert models_mod.OllamaModel._from_ollama_role('') == Role.MODEL  # noqa: SLF001
+        warn.assert_not_called()
+
+    def test_from_ollama_role_unknown_warns_and_defaults(self) -> None:
+        """A non-empty unknown role still defaults to MODEL but logs a warning."""
+        from genkit.plugins.ollama import models as models_mod
+
+        with patch.object(models_mod.logger, 'warning') as warn:
+            assert models_mod.OllamaModel._from_ollama_role('overlord') == Role.MODEL  # noqa: SLF001
+        warn.assert_called_once()
+
 
 class TestBuildMultimodalChatResponse:
     """Reasoning (think) output is surfaced rather than dropped."""

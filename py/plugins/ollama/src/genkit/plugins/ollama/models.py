@@ -656,7 +656,11 @@ class OllamaModel:
 
         Defaults to ``Role.MODEL`` with a warning on unknown values so that a
         future Ollama server adding a new role doesn't crash mid-stream.
+        Streaming chunks often omit the role, so a falsy role defaults silently
+        (no warning) to avoid flooding the logs on every chunk.
         """
+        if not role:
+            return Role.MODEL
         match role:
             case 'assistant':
                 return Role.MODEL
