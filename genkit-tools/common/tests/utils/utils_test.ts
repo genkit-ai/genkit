@@ -33,11 +33,9 @@ describe('utils', () => {
       tmpDir = fs.realpathSync(
         fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-find-root-'))
       );
-      console.log(`[utils_test] beforeEach pid=${process.pid} tmpDir=${tmpDir}`);
     });
 
     afterEach(() => {
-      console.log(`[utils_test] afterEach pid=${process.pid} rm tmpDir=${tmpDir}`);
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
@@ -47,29 +45,11 @@ describe('utils', () => {
       fs.mkdirSync(nestedDir, { recursive: true });
       fs.writeFileSync(path.join(projectDir, 'pubspec.yaml'), 'name: dart_app');
 
-      // Verify the marker really is on disk right before we search, and dump
-      // the directory contents so a failing CI run shows whether the file
-      // vanished underneath us.
-      console.log(
-        `[utils_test] pubspec exists=${fs.existsSync(
-          path.join(projectDir, 'pubspec.yaml')
-        )} projectDir contents=[${fs.readdirSync(projectDir).join(',')}]`
-      );
-
       // Pass the start directory explicitly instead of mutating the
       // process-global cwd, which makes the test deterministic when run
       // alongside other tests in the same worker.
-      const result = await findProjectRoot(nestedDir);
-      if (result !== projectDir) {
-        console.log(
-          `[utils_test] MISMATCH result=${result} expected=${projectDir} pubspecStillExists=${fs.existsSync(
-            path.join(projectDir, 'pubspec.yaml')
-          )}`
-        );
-      }
-      expect(result).toEqual(projectDir);
+      expect(await findProjectRoot(nestedDir)).toEqual(projectDir);
     });
-
 
     it('returns the nearest project root when a Dart project is nested under a package.json', async () => {
       // Mirrors a Dart project living inside a JS workspace or monorepo. The
