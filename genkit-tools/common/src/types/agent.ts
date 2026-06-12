@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { RuntimeErrorSchema } from './error';
 import { MessageSchema, ModelResponseChunkSchema } from './model';
 import {
   PartSchema,
@@ -218,20 +219,6 @@ export const AgentResultSchema = z.object({
 export type AgentResult = z.infer<typeof AgentResultSchema>;
 
 /**
- * Zod schema for the canonical Genkit error wire shape
- * (`{status, message, details}`), carried on agent outputs and snapshots.
- */
-export const AgentErrorSchema = z.object({
-  /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
-  status: z.string().optional(),
-  /** Human-readable error message. */
-  message: z.string(),
-  /** Optional structured details describing the failure. */
-  details: z.any().optional(),
-});
-export type AgentError = z.infer<typeof AgentErrorSchema>;
-
-/**
  * Zod schema for agent output.
  */
 export const AgentOutputSchema = z.object({
@@ -280,7 +267,7 @@ export const AgentOutputSchema = z.object({
    * category (e.g. `INVALID_ARGUMENT`, `FAILED_PRECONDITION`,
    * `INTERNAL`) so callers can still branch on it.
    */
-  error: AgentErrorSchema.optional(),
+  error: RuntimeErrorSchema.optional(),
 });
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 
@@ -371,7 +358,7 @@ export const SessionSnapshotSchema = z.object({
    */
   finishReason: AgentFinishReasonSchema.optional(),
   /** Structured failure information for a snapshot in `failed` status. */
-  error: AgentErrorSchema.optional(),
+  error: RuntimeErrorSchema.optional(),
   /**
    * Conversation state captured at this point. Empty on a pending snapshot
    * (the live state is not yet committed); populated on terminal snapshots

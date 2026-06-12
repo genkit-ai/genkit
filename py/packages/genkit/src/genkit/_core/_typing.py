@@ -133,15 +133,6 @@ class AbortSnapshotResponse(GenkitModel):
     status: SnapshotStatus | None = None
 
 
-class AgentError(GenkitModel):
-    """Model for agenterror data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    status: str | None = None
-    message: str = Field(...)
-    details: Any | None = Field(default=None)
-
-
 class AgentInit(GenkitModel):
     """Model for agentinit data."""
 
@@ -178,7 +169,7 @@ class AgentOutput(GenkitModel):
     message: MessageData | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: AgentError | None = None
+    error: GenkitRuntimeError | None = None
 
 
 class AgentResult(GenkitModel):
@@ -228,7 +219,7 @@ class SessionSnapshot(GenkitModel):
     event: SnapshotEvent = Field(...)
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: AgentError | None = None
+    error: GenkitRuntimeError | None = None
     state: SessionState | None = None
 
 
@@ -344,6 +335,15 @@ class GenkitError(GenkitModel):
     stack: str | None = None
     details: Any | None = Field(default=None)
     data: Data | None = None
+
+
+class GenkitRuntimeError(GenkitModel):
+    """Model for genkitruntimeerror data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    status: str | None = None
+    message: str = Field(...)
+    details: Any | None = Field(default=None)
 
 
 class MiddlewareDesc(GenkitModel):

@@ -177,7 +177,8 @@ func TestGenkitErrorJSONRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
 		}
-		want := `{"status":"NOT_FOUND","message":"missing","details":{"id":"abc"}}`
+		// Key order follows the generated wire struct's field order.
+		want := `{"details":{"id":"abc"},"message":"missing","status":"NOT_FOUND"}`
 		if string(got) != want {
 			t.Errorf("Marshal = %s, want %s", got, want)
 		}
@@ -189,7 +190,7 @@ func TestGenkitErrorJSONRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
 		}
-		want := `{"status":"NOT_FOUND","message":"missing"}`
+		want := `{"message":"missing","status":"NOT_FOUND"}`
 		if string(got) != want {
 			t.Errorf("Marshal = %s, want %s", got, want)
 		}

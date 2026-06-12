@@ -41,6 +41,8 @@ PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
+    # RuntimeError would shadow Python's builtin exception.
+    'RuntimeError': {'output_name': 'GenkitRuntimeError'},
 }
 
 

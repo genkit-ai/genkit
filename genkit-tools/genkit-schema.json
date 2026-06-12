@@ -28,22 +28,6 @@
       ],
       "additionalProperties": false
     },
-    "AgentError": {
-      "type": "object",
-      "properties": {
-        "status": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "details": {}
-      },
-      "required": [
-        "message"
-      ],
-      "additionalProperties": false
-    },
     "AgentFinishReason": {
       "type": "string",
       "enum": [
@@ -144,7 +128,7 @@
           "$ref": "#/$defs/AgentFinishReason"
         },
         "error": {
-          "$ref": "#/$defs/AgentError"
+          "$ref": "#/$defs/RuntimeError"
         }
       },
       "additionalProperties": false
@@ -252,7 +236,7 @@
           "$ref": "#/$defs/AgentFinishReason"
         },
         "error": {
-          "$ref": "#/$defs/AgentError"
+          "$ref": "#/$defs/RuntimeError"
         },
         "state": {
           "$ref": "#/$defs/SessionState"
@@ -580,6 +564,22 @@
           },
           "additionalProperties": false
         }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeError": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {}
       },
       "required": [
         "message"

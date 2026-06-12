@@ -55,16 +55,9 @@ type GenkitError struct {
 	originalError error          // The wrapped error, if any.
 }
 
-// genkitErrorWire is the on-the-wire shape of a [GenkitError]; it
-// matches the `RuntimeError` definition in the JSON schema.
-type genkitErrorWire struct {
-	Status  StatusName     `json:"status"`
-	Message string         `json:"message"`
-	Details map[string]any `json:"details,omitempty"`
-}
-
 // MarshalJSON encodes a GenkitError in the canonical Genkit error wire
-// format: {status, message, details}.
+// format: {status, message, details}. The wire shape ([genkitErrorWire])
+// is generated from the shared JSON schema's RuntimeError definition.
 func (e *GenkitError) MarshalJSON() ([]byte, error) {
 	return json.Marshal(genkitErrorWire{
 		Status:  e.Status,
