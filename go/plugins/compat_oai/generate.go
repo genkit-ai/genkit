@@ -260,7 +260,7 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	}
 
 	switch output.Format {
-	case "json":
+	case outputFormatJSON:
 		if output.Schema != nil {
 			jsonSchemaParam := shared.ResponseFormatJSONSchemaParam{
 				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
@@ -274,7 +274,7 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 			jsonObjectParam := shared.NewResponseFormatJSONObjectParam()
 			format.OfJSONObject = &jsonObjectParam
 		}
-	case "text":
+	case outputFormatText:
 		textParam := shared.NewResponseFormatTextParam()
 		format.OfText = &textParam
 	}

@@ -76,11 +76,11 @@ func (e *EngagementTelemetry) writeUserFeedback(span sdktrace.ReadOnlySpan, proj
 	hasText := textFeedback != ""
 
 	dimensions := map[string]interface{}{
-		"name":          name,
-		"value":         feedbackValue,
-		"hasText":       hasText,
-		"source":        "go",
-		"sourceVersion": internal.Version,
+		"name":             name,
+		"value":            feedbackValue,
+		"hasText":          hasText,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
 	}
 	e.feedbackCounter.Add(1, dimensions)
 
@@ -109,10 +109,10 @@ func (e *EngagementTelemetry) writeUserAcceptance(span sdktrace.ReadOnlySpan, pr
 	acceptanceValue := extractStringAttribute(attributes, "genkit:metadata:acceptanceValue")
 
 	dimensions := map[string]interface{}{
-		"name":          name,
-		"value":         acceptanceValue,
-		"source":        "go",
-		"sourceVersion": internal.Version,
+		"name":             name,
+		"value":            acceptanceValue,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
 	}
 	e.acceptanceCounter.Add(1, dimensions)
 
@@ -132,9 +132,9 @@ func (e *EngagementTelemetry) writeUserAcceptance(span sdktrace.ReadOnlySpan, pr
 
 // extractTraceName extracts trace name from path using regex
 func (e *EngagementTelemetry) extractTraceName(attributes []attribute.KeyValue) string {
-	path := extractStringAttribute(attributes, "genkit:path")
-	if path == "" || path == "<unknown>" {
-		return "<unknown>"
+	path := extractStringAttribute(attributes, attrGenkitPath)
+	if path == "" || path == unknownValue {
+		return unknownValue
 	}
 
 	// Extract the final action name from path using regex pattern to find the last /{...}
@@ -144,5 +144,5 @@ func (e *EngagementTelemetry) extractTraceName(attributes []attribute.KeyValue) 
 		return matches[1]
 	}
 
-	return "<unknown>"
+	return unknownValue
 }

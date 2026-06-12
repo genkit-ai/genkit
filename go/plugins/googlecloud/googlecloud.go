@@ -173,9 +173,9 @@ func initializeTelemetry(opts *GoogleCloudTelemetryOptions) {
 			slog.Error("Failed to set up Google Cloud logging", "error", err)
 		}
 		slog.Debug("Log handler setup complete")
-		slog.Info("Google Cloud telemetry fully initialized", "project_id", projectID, "modules", len(modules))
+		slog.Info("Google Cloud telemetry fully initialized", attrProjectID, projectID, "modules", len(modules))
 	} else {
-		slog.Info("Google Cloud telemetry resource configured, export disabled in dev environment", "project_id", projectID)
+		slog.Info("Google Cloud telemetry resource configured, export disabled in dev environment", attrProjectID, projectID)
 	}
 
 	var tpOptions []sdktrace.TracerProviderOption
@@ -289,7 +289,7 @@ func (e *AdjustingTraceExporter) ExportSpans(ctx context.Context, spans []sdktra
 		slog.Error("Unable to send telemetry to Google Cloud",
 			"error", err,
 			"span_count", len(adjustedSpans),
-			"project_id", e.projectId,
+			attrProjectID, e.projectId,
 			"error_type", fmt.Sprintf("%T", err))
 	}
 	return err
@@ -404,10 +404,10 @@ func (e *AdjustingTraceExporter) redactInputOutput(span sdktrace.ReadOnlySpan) s
 	hasOutput := false
 
 	for _, attr := range span.Attributes() {
-		if attr.Key == "genkit:input" {
+		if attr.Key == attrGenkitInput {
 			hasInput = true
 		}
-		if attr.Key == "genkit:output" {
+		if attr.Key == attrGenkitOutput {
 			hasOutput = true
 		}
 	}
@@ -421,10 +421,10 @@ func (e *AdjustingTraceExporter) redactInputOutput(span sdktrace.ReadOnlySpan) s
 		modifyFunc: func(attrs []attribute.KeyValue) []attribute.KeyValue {
 			var newAttrs []attribute.KeyValue
 			for _, attr := range attrs {
-				if attr.Key == "genkit:input" {
-					newAttrs = append(newAttrs, attribute.String("genkit:input", "<redacted>"))
-				} else if attr.Key == "genkit:output" {
-					newAttrs = append(newAttrs, attribute.String("genkit:output", "<redacted>"))
+				if attr.Key == attrGenkitInput {
+					newAttrs = append(newAttrs, attribute.String(attrGenkitInput, "<redacted>"))
+				} else if attr.Key == attrGenkitOutput {
+					newAttrs = append(newAttrs, attribute.String(attrGenkitOutput, "<redacted>"))
 				} else {
 					newAttrs = append(newAttrs, attr)
 				}
@@ -457,13 +457,13 @@ func (e *AdjustingTraceExporter) markFailedSpan(span sdktrace.ReadOnlySpan) sdkt
 	var name, path string
 
 	for _, attr := range span.Attributes() {
-		if attr.Key == "genkit:isFailureSource" {
+		if attr.Key == attrGenkitIsFailureSource {
 			isFailureSource = attr.Value.AsBool()
 		}
-		if attr.Key == "genkit:name" {
+		if attr.Key == attrGenkitName {
 			name = attr.Value.AsString()
 		}
-		if attr.Key == "genkit:path" {
+		if attr.Key == attrGenkitPath {
 			path = attr.Value.AsString()
 		}
 	}
@@ -493,7 +493,7 @@ func (e *AdjustingTraceExporter) markGenkitFeature(span sdktrace.ReadOnlySpan) s
 		if attr.Key == "genkit:isRoot" {
 			isRoot = attr.Value.AsBool()
 		}
-		if attr.Key == "genkit:name" {
+		if attr.Key == attrGenkitName {
 			name = attr.Value.AsString()
 		}
 	}
@@ -521,7 +521,7 @@ func (e *AdjustingTraceExporter) markGenkitModel(span sdktrace.ReadOnlySpan) sdk
 		if attr.Key == "genkit:metadata:subtype" {
 			subtype = attr.Value.AsString()
 		}
-		if attr.Key == "genkit:name" {
+		if attr.Key == attrGenkitName {
 			name = attr.Value.AsString()
 		}
 	}
@@ -568,7 +568,7 @@ func (e *AdjustingTraceExporter) setRootState(span sdktrace.ReadOnlySpan) sdktra
 		if attr.Key == "genkit:isRoot" {
 			isRoot = attr.Value.AsBool()
 		}
-		if attr.Key == "genkit:state" {
+		if attr.Key == attrGenkitState {
 			state = attr.Value.AsString()
 		}
 	}

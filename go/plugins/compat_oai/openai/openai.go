@@ -29,6 +29,8 @@ import (
 
 const provider = "openai"
 
+const embedderInputText = "text"
+
 type TextEmbeddingConfig struct {
 	Dimensions     int                                       `json:"dimensions,omitempty"`
 	EncodingFormat openaiGo.EmbeddingNewParamsEncodingFormat `json:"encodingFormat,omitempty"`
@@ -135,7 +137,7 @@ var (
 			Dimensions:   1536,
 			Label:        "Open AI - Text Embedding ADA 002",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{embedderInputText},
 			},
 		},
 		openaiGo.EmbeddingModelTextEmbedding3Large: {
@@ -144,7 +146,7 @@ var (
 			Dimensions:   3072,
 			Label:        "Open AI - Text Embedding 3 Large",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{embedderInputText},
 			},
 		},
 		openaiGo.EmbeddingModelTextEmbedding3Small: {
@@ -153,7 +155,7 @@ var (
 			Dimensions:   1536,
 			Label:        "Open AI - Text Embedding 3 Small",
 			Supports: &ai.EmbedderSupports{
-				Input: []string{"text"},
+				Input: []string{embedderInputText},
 			},
 		},
 	}

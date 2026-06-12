@@ -62,33 +62,33 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.initted {
-		panic("plugin already initialized")
+		panic(errPluginInitialized)
 	}
 
 	projectID := a.ProjectID
 	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+		projectID = os.Getenv(envGoogleCloudProject)
 		if projectID == "" {
 			projectID = os.Getenv("GCLOUD_PROJECT")
 			if projectID == "" {
-				panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_PROJECT or GCLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard")
+				panic(fmt.Sprintf("Vertex AI Modelgarden requires setting %s or GCLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard", envGoogleCloudProject))
 			}
 		}
 	}
 
 	location := a.Location
 	if location == "" {
-		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
+		location = os.Getenv(envGoogleCloudLocation)
 		if location == "" {
-			location = os.Getenv("GOOGLE_CLOUD_REGION")
+			location = os.Getenv(envGoogleCloudRegion)
 		}
 		if location == "" {
-			panic("Vertex AI Modelgarden requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations")
+			panic(fmt.Sprintf("Vertex AI Modelgarden requires setting %s or %s in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations", envGoogleCloudLocation, envGoogleCloudRegion))
 		}
 	}
 
 	c := anthropic.NewClient(
-		vertex.WithGoogleAuth(ctx, location, projectID, "https://www.googleapis.com/auth/cloud-platform"),
+		vertex.WithGoogleAuth(ctx, location, projectID, googleCloudPlatformScope),
 	)
 	a.client = c
 	a.initted = true
