@@ -680,4 +680,32 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 			t.Errorf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusBadRequest, string(respBody))
 		}
 	})
+
+	t.Run("init on non-bidi flow returns 400 on streaming requests", func(t *testing.T) {
+		plainFlow := DefineFlow(g, "envelopePlainStream",
+			func(ctx context.Context, in string) (string, error) {
+				return "out:" + in, nil
+			})
+		handler := Handler(plainFlow)
+
+		// The rejection must happen before the handler commits to SSE: a
+		// streaming client should see an HTTP 400, not a 200 with an
+		// in-band error event.
+		body := `{"data":"hello","init":{"prefix":">> "}}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		w := httptest.NewRecorder()
+
+		handler(w, req)
+
+		resp := w.Result()
+		respBody, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusBadRequest, string(respBody))
+		}
+		if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/event-stream") {
+			t.Errorf("Content-Type = %q; response must not commit to SSE before rejecting init", ct)
+		}
+	})
 }

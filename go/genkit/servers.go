@@ -175,6 +175,13 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 			}
 		}
 
+		// Rejected before the streaming branch commits to SSE headers, so a
+		// non-bidi action receiving init fails with a proper HTTP 400 on
+		// every path rather than an in-band SSE error event on a 200.
+		if err := checkInitSupported(a, body.Init); err != nil {
+			return err
+		}
+
 		run := func(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
 			r, err := runActionWithOptionalInit(ctx, a, input, body.Init, cb)
 			if err != nil {

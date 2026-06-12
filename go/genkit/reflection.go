@@ -752,17 +752,30 @@ func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawM
 	}, nil
 }
 
+// checkInitSupported rejects an init payload aimed at an action that cannot
+// accept one: it returns INVALID_ARGUMENT when init carries a value and the
+// action is not bidi, and nil otherwise. Transports call it before committing
+// to a response shape (e.g. before writing SSE headers) so the rejection
+// surfaces as a proper request error on every path.
+func checkInitSupported(a api.Action, init json.RawMessage) error {
+	if base.HasJSONValue(init) {
+		if _, ok := a.(api.BidiAction); !ok {
+			return core.NewError(core.INVALID_ARGUMENT, "action %q does not accept init", a.Name())
+		}
+	}
+	return nil
+}
+
 // runActionWithOptionalInit runs an action through its JSON surface,
 // dispatching to the bidi one-shot path when init carries a value. Init on a
 // non-bidi action is rejected with INVALID_ARGUMENT. Shared by the reflection
 // servers and the HTTP action handler so the init-acceptance contract stays
 // in one place.
 func runActionWithOptionalInit(ctx context.Context, a api.Action, input, init json.RawMessage, cb streamingCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
-	if base.HasJSONValue(init) {
-		bidi, ok := a.(api.BidiAction)
-		if !ok {
-			return nil, core.NewError(core.INVALID_ARGUMENT, "action %q does not accept init", a.Name())
-		}
+	if err := checkInitSupported(a, init); err != nil {
+		return nil, err
+	}
+	if bidi, ok := a.(api.BidiAction); ok && base.HasJSONValue(init) {
 		return bidi.RunBidiJSON(ctx, input, cb, &api.BidiSessionOptions{Init: init})
 	}
 	return a.RunJSONWithTelemetry(ctx, input, cb)
