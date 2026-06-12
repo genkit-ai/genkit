@@ -91,6 +91,45 @@ func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 	}
 }
 
+// gemmaModels are the concrete Gemma models registered for Google AI. They are
+// classified as Gemini-family by prefix but carry Gemma-specific capabilities.
+var gemmaModels = []string{gemma426bA4bIT, gemma431bIT}
+
+func TestGemmaModelsClassifyAsGemini(t *testing.T) {
+	for _, name := range gemmaModels {
+		if got := ClassifyModel(name); got != ModelTypeGemini {
+			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
+		}
+	}
+}
+
+func TestGemmaModelOptions(t *testing.T) {
+	for _, name := range gemmaModels {
+		opts := GetModelOptions(name, googleAIProvider)
+
+		if opts.Supports == nil {
+			t.Fatalf("GetModelOptions(%q): Supports is nil", name)
+		}
+		// Gemma differs from Gemini: no system role and no tool calling.
+		if opts.Supports.SystemRole {
+			t.Errorf("GetModelOptions(%q): SystemRole = true, want false", name)
+		}
+		if opts.Supports.Tools {
+			t.Errorf("GetModelOptions(%q): Tools = true, want false", name)
+		}
+		if opts.Supports.ToolChoice {
+			t.Errorf("GetModelOptions(%q): ToolChoice = true, want false", name)
+		}
+		if !opts.Supports.Multiturn {
+			t.Errorf("GetModelOptions(%q): Multiturn = false, want true", name)
+		}
+		// Registered (not the unknown-model fallback), so a config schema is set.
+		if opts.ConfigSchema == nil {
+			t.Errorf("GetModelOptions(%q): ConfigSchema is nil", name)
+		}
+	}
+}
+
 // TestNewGeminiModelsProviderSplit pins the per-provider registration from the
 // ticket: GoogleAI gets all except gemini-3.1-flash-lite; VertexAI gets all four.
 func TestNewGeminiModelsProviderSplit(t *testing.T) {
@@ -133,6 +172,17 @@ func TestGeminiEmbedding2Registered(t *testing.T) {
 	for _, want := range []string{"text", "image", "video"} {
 		if !slices.Contains(opts.Supports.Input, want) {
 			t.Errorf("GetEmbedderOptions(%q): Input missing %q, got %v", geminiEmbedding2, want, opts.Supports.Input)
+		}
+	}
+}
+
+func TestGemmaModelsRegisteredForGoogleAIOnly(t *testing.T) {
+	for _, name := range gemmaModels {
+		if !slices.Contains(googleAIModels, name) {
+			t.Errorf("googleAIModels missing %q", name)
+		}
+		if slices.Contains(vertexAIModels, name) {
+			t.Errorf("vertexAIModels should not contain %q (Gemma is Google AI only)", name)
 		}
 	}
 }
