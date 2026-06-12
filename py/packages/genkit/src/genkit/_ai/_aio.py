@@ -581,7 +581,23 @@ class Genkit:
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
     ) -> ExecutablePrompt[Any, Any]:
-        """Register a prompt template."""
+        """Register a prompt template.
+
+        Args:
+            config: Optional default configuration for the prompt. This can be a raw dict
+                or a typed configuration object (e.g. `GeminiConfigSchema` from
+                `genkit.plugins.google_genai`) to provide type safety and IDE autocomplete.
+
+        Example:
+            ```python
+            from genkit.plugins.google_genai import GeminiConfigSchema
+
+            my_prompt = ai.define_prompt(
+                prompt='Tell me a joke about {{topic}}.',
+                config=GeminiConfigSchema(temperature=0.9),
+            )
+            ```
+        """
         executable_prompt = ExecutablePrompt(
             self.registry,
             variant=variant,
@@ -908,6 +924,32 @@ class Genkit:
         ``tools`` is typed as ``Sequence`` rather than ``list`` because ``Sequence``
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
+
+        Args:
+            config: Optional configuration for the model. This can be a raw dict
+                or a typed configuration object (e.g. `GeminiConfigSchema` from
+                `genkit.plugins.google_genai`) to provide type safety and IDE autocomplete.
+
+        Example:
+            Using a typed config object (recommended):
+            ```python
+            from genkit.plugins.google_genai import GeminiConfigSchema
+
+            config = GeminiConfigSchema(temperature=0.7, code_execution=True)
+            response = await ai.generate(
+                model='googleai/gemini-2.0-flash',
+                prompt='Hello!',
+                config=config,
+            )
+            ```
+            Using a dictionary:
+            ```python
+            response = await ai.generate(
+                model='googleai/gemini-2.0-flash',
+                prompt='Hello!',
+                config={'temperature': 0.7, 'codeExecution': True},
+            )
+            ```
         """
         # One call-scoped registry layer holds anything inline (tools +
         # middleware) so it dies with the call and stays out of self.registry.
@@ -1023,7 +1065,28 @@ class Genkit:
         docs: list[Document] | None = None,
         timeout: float | None = None,
     ) -> ModelStreamResponse[Any]:
-        """Stream generated text, returning a ModelStreamResponse with .stream and .response."""
+        """Stream generated text, returning a ModelStreamResponse with .stream and .response.
+
+        Args:
+            config: Optional configuration for the model. This can be a raw dict
+                or a typed configuration object (e.g. `GeminiConfigSchema` from
+                `genkit.plugins.google_genai`) to provide type safety and IDE autocomplete.
+
+        Example:
+            Using a typed config object (recommended):
+            ```python
+            from genkit.plugins.google_genai import GeminiConfigSchema
+
+            config = GeminiConfigSchema(temperature=0.7, code_execution=True)
+            stream = ai.generate_stream(
+                model='googleai/gemini-2.0-flash',
+                prompt='Hello!',
+                config=config,
+            )
+            async for chunk in stream:
+                print(chunk.text, end='')
+            ```
+        """
         channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
 
         async def _run_generate() -> ModelResponse[Any]:

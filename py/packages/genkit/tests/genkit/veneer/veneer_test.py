@@ -18,6 +18,7 @@ from genkit import (
     Interrupt,
     Message,
     MiddlewareRef,
+    ModelConfig,
     ModelResponse,
     ModelResponseChunk,
     respond_to_interrupt,
@@ -78,12 +79,16 @@ async def test_generate_uses_default_model(setup_test: SetupFixture) -> None:
     want_txt = '[ECHO] user: "hi" {"temperature":11.0}'
 
     response = await ai.generate(prompt='hi', config={'temperature': 11})
-
     assert response.text == want_txt
 
-    stream_result = ai.generate_stream(prompt='hi', config={'temperature': 11})
+    response_typed = await ai.generate(prompt='hi', config=ModelConfig(temperature=11))
+    assert response_typed.text == want_txt
 
+    stream_result = ai.generate_stream(prompt='hi', config={'temperature': 11})
     assert (await stream_result.response).text == want_txt
+
+    stream_result_typed = ai.generate_stream(prompt='hi', config=ModelConfig(temperature=11))
+    assert (await stream_result_typed.response).text == want_txt
 
 
 @pytest.mark.asyncio

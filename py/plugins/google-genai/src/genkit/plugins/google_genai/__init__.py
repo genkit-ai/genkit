@@ -159,7 +159,16 @@ Example:
     # Uses GEMINI_API_KEY env var or pass api_key explicitly
     ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.0-flash')
 
+    # Simple generation:
     response = await ai.generate(prompt='Hello, world!')
+    print(response.text)
+
+    # Generation with typed configuration (recommended for IDE autocompletion):
+    from genkit.plugins.google_genai import GeminiConfigSchema
+    response = await ai.generate(
+        prompt='Hello, world!',
+        config=GeminiConfigSchema(temperature=0.7, code_execution=True)
+    )
     print(response.text)
 
     # Embeddings

@@ -179,7 +179,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
                 ],
             ),
         ],
-        config={'response_modalities': modalities},
+        config=GeminiConfigSchema(response_modalities=modalities),
     )
 
     candidate = genai.types.Candidate(
@@ -898,3 +898,27 @@ def test_gemini_model__pick_plugin_schema_routes_by_model_family(
     picked = model._pick_plugin_schema({})
 
     assert type(picked) is expected_schema
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__handles_gemini_config_schema_directly(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """The model correctly processes a raw GeminiConfigSchema object directly."""
+    config_obj = GeminiConfigSchema(
+        temperature=0.7,
+        code_execution=True,
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))])],
+        config=config_obj,
+    )
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.temperature == 0.7
+    assert cfg.tools is not None
+    code_exec_tools = [t for t in cfg.tools if isinstance(t, genai_types.Tool) and t.code_execution is not None]
+    assert len(code_exec_tools) == 1
+
