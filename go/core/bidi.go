@@ -217,10 +217,18 @@ func (b *BidiAction[In, Out, Stream, Init]) RunWithInit(ctx context.Context, ini
 // RunBidiJSON runs the bidi action as a single one-shot call: input is
 // delivered as the only chunk on the input stream, outgoing chunks are
 // forwarded to cb, and opts carries the session init. Returns an error if
-// init fails to decode or validate.
+// input is absent or init fails to decode or validate.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
 func (b *BidiAction[In, Out, Stream, Init]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage], opts *api.BidiSessionOptions) (*api.ActionRunResult[json.RawMessage], error) {
+	// A one-shot run with no input would start the function and run zero
+	// turns, so reject it with a clearer message than the schema failure
+	// it would otherwise hit (JSON null never satisfies an object input
+	// schema). Deferring input past startup is a streaming session
+	// capability; see StreamBidiJSON.
+	if !base.HasJSONValue(input) {
+		return nil, NewError(INVALID_ARGUMENT, "action %q requires input for a one-shot run; open a streaming session to defer input", b.desc.Key)
+	}
 	init, hasInit, err := b.decodeInit(opts)
 	if err != nil {
 		return nil, err

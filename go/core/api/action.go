@@ -63,7 +63,8 @@ type BidiAction interface {
 	Action
 	// RunBidiJSON runs the bidi action as a single one-shot call: input is
 	// delivered as the only chunk on the input stream, outgoing chunks are
-	// forwarded to cb, and opts carries the session init.
+	// forwarded to cb, and opts carries the session init. Input is required;
+	// only a streaming session can defer it past startup.
 	RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *BidiSessionOptions) (*ActionRunResult[json.RawMessage], error)
 	// StreamBidiJSON starts a bidirectional streaming session using
 	// JSON-encoded messages.

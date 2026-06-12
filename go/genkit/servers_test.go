@@ -918,6 +918,16 @@ func TestHandlerAgent(t *testing.T) {
 		if code != http.StatusBadRequest {
 			t.Errorf("sessionId on client-managed: status = %d, want %d; body = %s", code, http.StatusBadRequest, body)
 		}
+
+		// data is required for one-shot runs: only a streaming session can
+		// start up and defer its first input.
+		code, body = post(t, "agentClient", `{"init": {}}`, false)
+		if code != http.StatusBadRequest {
+			t.Errorf("init without data: status = %d, want %d; body = %s", code, http.StatusBadRequest, body)
+		}
+		if !strings.Contains(body, "streaming session") {
+			t.Errorf("init without data: body should point the caller at streaming sessions; body = %s", body)
+		}
 	})
 
 	t.Run("streaming turn delivers chunks then result", func(t *testing.T) {

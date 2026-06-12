@@ -269,6 +269,48 @@ func TestRunBidiJSONInvalidInit(t *testing.T) {
 	}
 }
 
+// TestRunBidiJSONRequiresInput verifies that a one-shot run with absent input
+// is rejected up front with a message pointing at streaming sessions, rather
+// than falling through to a schema validation failure. Only a streaming
+// session can start up and defer its first input.
+func TestRunBidiJSONRequiresInput(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct {
+		Prefix string `json:"prefix"`
+	}
+	action := NewBidiAction(
+		"input-required", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			return "ran", nil
+		},
+	)
+
+	for name, input := range map[string]json.RawMessage{
+		"nil input":       nil,
+		"empty input":     json.RawMessage(``),
+		"JSON null input": json.RawMessage(`null`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := action.RunBidiJSON(ctx, input, nil,
+				&api.BidiSessionOptions{Init: json.RawMessage(`{"prefix":">> "}`)})
+			if err == nil {
+				t.Fatal("expected error for absent input, got nil")
+			}
+			gerr, ok := err.(*GenkitError)
+			if !ok {
+				t.Fatalf("expected *GenkitError, got %T: %v", err, err)
+			}
+			if gerr.Status != INVALID_ARGUMENT {
+				t.Errorf("status = %v, want %v", gerr.Status, INVALID_ARGUMENT)
+			}
+			if !strings.Contains(gerr.Message, "streaming session") {
+				t.Errorf("message %q should point the caller at streaming sessions", gerr.Message)
+			}
+		})
+	}
+}
+
 // TestStreamBidiJSONNullInit verifies that nil options and a JSON-null init
 // payload are both treated as no init (the zero Init value).
 func TestStreamBidiJSONNullInit(t *testing.T) {
