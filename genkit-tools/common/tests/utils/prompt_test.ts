@@ -17,7 +17,11 @@
 import { describe, expect, it } from '@jest/globals';
 import type { MessageData } from '../../src/types/model';
 import type { PromptFrontmatter } from '../../src/types/prompt';
-import { fromMessages } from '../../src/utils/prompt';
+import {
+  fromMessages,
+  jsonSchemaToPicoschema,
+  toFrontmatterOutput,
+} from '../../src/utils/prompt';
 
 describe('fromMessages', () => {
   it('builds a template from messages', () => {
@@ -180,5 +184,165 @@ describe('fromMessages', () => {
       '---\n';
 
     expect(fromMessages(frontmatter, messages)).toStrictEqual(expected);
+  });
+});
+
+describe('jsonSchemaToPicoschema', () => {
+  it('converts an object schema with required, optional, and described fields', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        subtitle: { type: 'string', description: 'optional subtitle' },
+        servings: { type: 'integer' },
+      },
+      required: ['title', 'servings'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      title: 'string',
+      'subtitle?': 'string, optional subtitle',
+      servings: 'integer',
+    });
+  });
+
+  it('encodes an enum', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['PENDING', 'APPROVED'],
+          description: 'approval status',
+        },
+      },
+      required: ['status'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'status(enum, approval status)': ['PENDING', 'APPROVED'],
+    });
+  });
+
+  it('encodes an array of scalars', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'relevant tags',
+        },
+      },
+      required: ['tags'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'tags(array, relevant tags)': 'string',
+    });
+  });
+
+  it('encodes an array of objects', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        authors: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+      },
+      required: ['authors'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'authors(array)': { name: 'string' },
+    });
+  });
+
+  it('encodes a nested object, marking optional fields', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        metadata: {
+          type: 'object',
+          properties: { updatedAt: { type: 'string' } },
+        },
+      },
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'metadata?(object)': { 'updatedAt?': 'string' },
+    });
+  });
+
+  it('encodes additionalProperties as a wildcard field', () => {
+    const schema = {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: { type: 'number' },
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      id: 'string',
+      '(*)': 'number',
+    });
+  });
+
+  it('passes non-object top-level schemas through unchanged', () => {
+    const arraySchema = { type: 'array', items: { type: 'string' } };
+    expect(jsonSchemaToPicoschema(arraySchema)).toBe(arraySchema);
+  });
+
+  it('returns any for null or malformed properties', () => {
+    const schema = {
+      type: 'object',
+      properties: { id: { type: 'string' }, broken: null, items: {} },
+      required: ['id'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      id: 'string',
+      'broken?': 'any',
+      'items?': 'any',
+    });
+  });
+});
+
+describe('toFrontmatterOutput', () => {
+  const SCHEMA = {
+    type: 'object',
+    properties: { title: { type: 'string' } },
+    required: ['title'],
+  };
+
+  it('returns undefined when there is no output', () => {
+    expect(toFrontmatterOutput(undefined)).toBeUndefined();
+  });
+
+  it('reads the schema from jsonSchema and maps json formats', () => {
+    expect(toFrontmatterOutput({ format: 'json', jsonSchema: SCHEMA })).toEqual(
+      { format: 'json', schema: { title: 'string' } }
+    );
+  });
+
+  it('reads the schema from the schema field (model request shape)', () => {
+    expect(toFrontmatterOutput({ format: 'json', schema: SCHEMA })).toEqual({
+      format: 'json',
+      schema: { title: 'string' },
+    });
+  });
+
+  it('maps json-producing formats onto json', () => {
+    expect(
+      toFrontmatterOutput({ format: 'jsonl', jsonSchema: SCHEMA })?.format
+    ).toBe('json');
+  });
+
+  it('keeps the text format', () => {
+    expect(toFrontmatterOutput({ format: 'text' })).toEqual({ format: 'text' });
+  });
+
+  it('keeps the media format', () => {
+    expect(toFrontmatterOutput({ format: 'media' })).toEqual({
+      format: 'media',
+    });
   });
 });

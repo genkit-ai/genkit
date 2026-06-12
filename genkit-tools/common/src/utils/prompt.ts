@@ -18,6 +18,119 @@ import { stringify } from 'yaml';
 import type { MessageData, Part } from '../types/model';
 import type { PromptFrontmatter } from '../types/prompt';
 
+/** A JSON Schema-ish object. */
+type JsonSchema = Record<string, any>;
+
+function scalarType(schema: JsonSchema | null | undefined): string {
+  switch (schema?.type) {
+    case 'string':
+    case 'integer':
+    case 'number':
+    case 'boolean':
+    case 'null':
+      return schema.type;
+    default:
+      return 'any';
+  }
+}
+
+/** Wraps a type kind with an optional description, e.g. `(array, the tags)`. */
+function wrap(kind: string, description?: string): string {
+  return description ? `(${kind}, ${description})` : `(${kind})`;
+}
+
+/**
+ * Encodes a single property as a Picoschema key suffix and value. Scalars carry
+ * their description after a comma in the value (`string, the title`); wrapped
+ * kinds (object, array, enum) carry it inside the parentheses on the key.
+ */
+function picoEntry(schema: JsonSchema): { suffix: string; value: any } {
+  const description =
+    typeof schema?.description === 'string' ? schema.description : undefined;
+
+  if (Array.isArray(schema?.enum)) {
+    return { suffix: wrap('enum', description), value: schema.enum };
+  }
+  if (schema?.type === 'array') {
+    const items: JsonSchema = schema.items ?? {};
+    const value =
+      items.type === 'object' || items.properties
+        ? picoObject(items)
+        : scalarType(items);
+    return { suffix: wrap('array', description), value };
+  }
+  if (schema?.type === 'object' || schema?.properties) {
+    return { suffix: wrap('object', description), value: picoObject(schema) };
+  }
+  const type = scalarType(schema);
+  return { suffix: '', value: description ? `${type}, ${description}` : type };
+}
+
+/** Converts an object JSON Schema into a Picoschema object structure. */
+function picoObject(schema: JsonSchema): Record<string, any> {
+  const required = new Set<string>(
+    Array.isArray(schema.required) ? schema.required : []
+  );
+  const out: Record<string, any> = {};
+  for (const [name, propSchema] of Object.entries<any>(
+    schema.properties ?? {}
+  )) {
+    const optional = required.has(name) ? '' : '?';
+    const { suffix, value } = picoEntry(propSchema);
+    out[`${name}${optional}${suffix}`] = value;
+  }
+  const additional = schema.additionalProperties;
+  if (additional && typeof additional === 'object') {
+    const { suffix, value } = picoEntry(additional);
+    out[`(*)${suffix}`] = value;
+  }
+  return out;
+}
+
+/**
+ * Converts a JSON Schema into the equivalent Picoschema for a `.prompt` file.
+ * Object schemas become the compact Picoschema form. Non-object top-level
+ * schemas (a bare array or scalar) have no Picoschema form, so the JSON Schema
+ * is returned unchanged; Dotprompt accepts raw JSON Schema there too.
+ */
+export function jsonSchemaToPicoschema(schema: unknown): any {
+  if (!schema || typeof schema !== 'object') {
+    return schema;
+  }
+  const s = schema as JsonSchema;
+  if (s.type === 'object' || s.properties) {
+    return picoObject(s);
+  }
+  return schema;
+}
+
+/**
+ * Maps a generate request's output config onto `.prompt` frontmatter, converting
+ * the JSON Schema to Picoschema. The frontmatter format is limited to
+ * json/text/media, so the JSON-producing formats (json, jsonl, array, enum) map
+ * onto `json`. Returns undefined when there is nothing to record.
+ */
+export function toFrontmatterOutput(output?: {
+  format?: string;
+  jsonSchema?: unknown;
+  schema?: unknown;
+}): PromptFrontmatter['output'] | undefined {
+  if (!output) return undefined;
+  const result: NonNullable<PromptFrontmatter['output']> = {};
+  if (output.format === 'text') {
+    result.format = 'text';
+  } else if (output.format === 'media') {
+    result.format = 'media';
+  } else if (output.format) {
+    result.format = 'json';
+  }
+  const schema = output.jsonSchema ?? output.schema;
+  if (schema && typeof schema === 'object') {
+    result.schema = jsonSchemaToPicoschema(schema);
+  }
+  return result.format || result.schema ? result : undefined;
+}
+
 export function fromMessages(
   frontmatter: PromptFrontmatter,
   messages: MessageData[]

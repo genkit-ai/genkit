@@ -172,6 +172,17 @@ export const CreatePromptRequestSchema = z.object({
   config: GenerationCommonConfigSchema.passthrough().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
   use: z.array(MiddlewareRefSchema).optional(),
+  output: z
+    .object({
+      format: z.string().optional(),
+      // Resolved JSON Schema lives under jsonSchema for a generate action; a
+      // model request carries it under schema. Either is accepted.
+      jsonSchema: z.unknown().optional(),
+      schema: z.unknown().optional(),
+      contentType: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
 });
 
 export type CreatePromptRequest = z.infer<typeof CreatePromptRequestSchema>;
