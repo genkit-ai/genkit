@@ -399,7 +399,7 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 // Experimental: This API is under active development and may change in any
 // minor version release.
 //
-// An Agent is a stateful, multi-turn conversational flow. It builds on
+// An Agent is a stateful, multi-turn conversational action. It builds on
 // bidirectional streaming to enable ongoing conversations where each turn's
 // input and output are streamed between client and server. The framework
 // handles session state, conversation history, and optional snapshot
@@ -456,7 +456,7 @@ func DefineAgent[State any](
 }
 
 // DefineCustomAgent defines an agent with full control over the conversation
-// loop, registers it as a [core.Action] of type Flow, and returns an
+// loop, registers it as an action of type agent, and returns an
 // [aix.Agent].
 //
 // Experimental: This API is under active development and may change in any
@@ -570,6 +570,24 @@ func ListFlows(g *Genkit) []api.Action {
 		}
 	}
 	return flows
+}
+
+// ListAgents returns a slice of all [api.Action] instances that represent
+// agents registered with the Genkit instance `g`. Like [ListFlows], this is
+// useful for introspection or for dynamically exposing agent endpoints in an
+// HTTP server; an agent served via [Handler] runs one turn per request.
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+func ListAgents(g *Genkit) []api.Action {
+	acts := listActions(g)
+	agents := []api.Action{}
+	for _, act := range acts {
+		if act.Type == api.ActionTypeAgent {
+			agents = append(agents, g.reg.LookupAction(act.Key))
+		}
+	}
+	return agents
 }
 
 // ListTools returns a slice of all [ai.Tool] instances that are registered

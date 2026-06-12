@@ -122,10 +122,11 @@ func main() {
 		),
 	)
 
-	// Agents register as flow actions, so ListFlows surfaces them and the
-	// standard action handler serves them like any flow.
+	// Agents register under their own "agent" action type; ListAgents
+	// surfaces them and the standard action handler serves them one turn
+	// per request.
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListFlows(g) {
+	for _, a := range genkit.ListAgents(g) {
 		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
 	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))

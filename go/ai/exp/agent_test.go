@@ -3568,7 +3568,7 @@ func (minimalStore[State]) SaveSnapshot(
 }
 
 func TestAgent_AgentMetadata(t *testing.T) {
-	// Verify the metadata["agent"] payload on the flow's action descriptor
+	// Verify the metadata["agent"] payload on the agent's action descriptor
 	// correctly reports stateManagement and abortable for each combination
 	// of store capabilities.
 	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
@@ -3616,9 +3616,9 @@ func TestAgent_AgentMetadata(t *testing.T) {
 			tc.define(reg, flowName)
 
 			act := core.ResolveBidiActionFor[*AgentInput, *AgentOutput[testState], *AgentStreamChunk[testStatus], *AgentInit[testState]](
-				reg, api.ActionTypeFlow, flowName)
+				reg, api.ActionTypeAgent, flowName)
 			if act == nil {
-				t.Fatal("flow action not registered")
+				t.Fatal("agent action not registered")
 			}
 			desc := act.Desc()
 			raw, ok := desc.Metadata["agent"]

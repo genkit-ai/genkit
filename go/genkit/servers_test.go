@@ -768,16 +768,22 @@ func TestHandlerAgent(t *testing.T) {
 		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
 
-	// Agents register as flow actions, so they surface through ListFlows
-	// like any other handler-servable action.
+	// Agents register under their own action type, so they surface through
+	// ListAgents (and not ListFlows) and Handler serves them like any other
+	// action.
+	for _, a := range ListFlows(g) {
+		if a.Name() == "agentClient" || a.Name() == "agentServer" {
+			t.Fatalf("agent %q unexpectedly listed as a flow", a.Name())
+		}
+	}
 	handlerFor := func(t *testing.T, name string) http.HandlerFunc {
 		t.Helper()
-		for _, a := range ListFlows(g) {
+		for _, a := range ListAgents(g) {
 			if a.Name() == name {
 				return Handler(a)
 			}
 		}
-		t.Fatalf("agent %q not in ListFlows", name)
+		t.Fatalf("agent %q not in ListAgents", name)
 		return nil
 	}
 

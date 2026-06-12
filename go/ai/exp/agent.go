@@ -534,11 +534,13 @@ func DefineCustomAgent[Stream, State any](
 		}
 	}
 
-	// Built on DefineBidiAction (rather than DefineBidiFlow) so the agent
-	// capability metadata can be set at construction time; actions must be
-	// immutable once registered. WithFlowContext below preserves the
-	// flow-context wrapping that makes core.Run work inside fn.
-	action := core.DefineBidiAction(r, name, api.ActionTypeFlow,
+	// Registered under ActionTypeAgent so agents surface as their own
+	// action kind rather than as flows (genkit.ListAgents vs ListFlows).
+	// Built on DefineBidiAction so the agent capability metadata can be
+	// set at construction time; actions must be immutable once registered.
+	// WithFlowContext below preserves the flow-context wrapping that makes
+	// core.Run work inside fn.
+	action := core.DefineBidiAction(r, name, api.ActionTypeAgent,
 		&core.BidiActionOptions{
 			Metadata: map[string]any{"agent": agentMetadataFor(cfg.store)},
 		},
