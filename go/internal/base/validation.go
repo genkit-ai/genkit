@@ -66,16 +66,63 @@ func ValidateRaw(dataBytes json.RawMessage, schemaBytes json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("failed to validate data against expected schema: %w", err)
 	}
+	return validationResultError(result)
+}
 
-	if !result.Valid() {
-		var errors []string
-		for _, err := range result.Errors() {
-			errors = append(errors, fmt.Sprintf("- %s", err))
-		}
-		return fmt.Errorf("data did not match expected schema:\n%s", strings.Join(errors, "\n"))
+// validationResultError converts a gojsonschema result into the package's
+// standard validation error, or nil when the result is valid.
+func validationResultError(result *gojsonschema.Result) error {
+	if result.Valid() {
+		return nil
 	}
+	var errs []string
+	for _, err := range result.Errors() {
+		errs = append(errs, fmt.Sprintf("- %s", err))
+	}
+	return fmt.Errorf("data did not match expected schema:\n%s", strings.Join(errs, "\n"))
+}
 
-	return nil
+// CompiledSchema is a JSON schema precompiled for repeated validation, e.g.
+// per-chunk validation on streaming transports, where recompiling the schema
+// for every payload would dominate the hot path. A nil *CompiledSchema (from
+// a nil schema) accepts every value, matching ValidateValue's nil handling.
+type CompiledSchema struct {
+	schema *gojsonschema.Schema
+}
+
+// CompileSchema compiles schema for repeated validation with
+// [CompiledSchema.ValidateValue]. A nil schema compiles to a nil
+// CompiledSchema, which accepts every value.
+func CompileSchema(schema map[string]any) (*CompiledSchema, error) {
+	if schema == nil {
+		return nil, nil
+	}
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return nil, fmt.Errorf("expected schema is not valid: %w", err)
+	}
+	compiled, err := gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaBytes))
+	if err != nil {
+		return nil, fmt.Errorf("expected schema is not valid: %w", err)
+	}
+	return &CompiledSchema{schema: compiled}, nil
+}
+
+// ValidateValue validates data against the compiled schema, with the same
+// behavior and error shape as [ValidateValue].
+func (c *CompiledSchema) ValidateValue(data any) error {
+	if c == nil {
+		return nil
+	}
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("data is not a valid JSON type: %w", err)
+	}
+	result, err := c.schema.Validate(gojsonschema.NewBytesLoader(dataBytes))
+	if err != nil {
+		return fmt.Errorf("failed to validate data against expected schema: %w", err)
+	}
+	return validationResultError(result)
 }
 
 // ValidateIsJSONArray will validate if the schema represents a JSON array.

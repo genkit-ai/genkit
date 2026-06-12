@@ -72,7 +72,7 @@ func (e EvaluatorRef) Config() any {
 
 // evaluator is an action with functions specific to evaluating a dataset.
 type evaluator struct {
-	core.Action[*EvaluatorRequest, *EvaluatorResponse, struct{}, struct{}]
+	core.Action[*EvaluatorRequest, *EvaluatorResponse, struct{}]
 }
 
 // Example is a single example that requires evaluation
@@ -291,7 +291,7 @@ func DefineBatchEvaluator(r api.Registry, name string, opts *EvaluatorOptions, f
 // LookupEvaluator looks up an [Evaluator] registered by [DefineEvaluator].
 // It returns nil if the evaluator was not defined.
 func LookupEvaluator(r api.Registry, name string) Evaluator {
-	action := core.ResolveActionFor[*EvaluatorRequest, *EvaluatorResponse, struct{}, struct{}](r, api.ActionTypeEvaluator, name)
+	action := core.ResolveActionFor[*EvaluatorRequest, *EvaluatorResponse, struct{}](r, api.ActionTypeEvaluator, name)
 	if action == nil {
 		return nil
 	}

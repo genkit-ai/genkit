@@ -78,11 +78,11 @@ type ModelMiddleware = core.Middleware[*ModelRequest, *ModelResponse, *ModelResp
 
 // model is an action with functions specific to model generation such as Generate().
 type model struct {
-	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk, struct{}]
+	core.Action[*ModelRequest, *ModelResponse, *ModelResponseChunk]
 }
 
 // generateAction is the type for a utility model generation action that takes in a GenerateActionOptions instead of a ModelRequest.
-type generateAction = core.Action[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk, struct{}]
+type generateAction = core.Action[*GenerateActionOptions, *ModelResponse, *ModelResponseChunk]
 
 // result is a generic struct for parallel operation results with index, value, and error.
 type result[T any] struct {
@@ -198,7 +198,7 @@ func DefineModel(r api.Registry, name string, opts *ModelOptions, fn ModelFunc) 
 // It will try to resolve the model dynamically if the model is not found.
 // It returns nil if the model was not resolved.
 func LookupModel(r api.Registry, name string) Model {
-	action := core.ResolveActionFor[*ModelRequest, *ModelResponse, *ModelResponseChunk, struct{}](r, api.ActionTypeModel, name)
+	action := core.ResolveActionFor[*ModelRequest, *ModelResponse, *ModelResponseChunk](r, api.ActionTypeModel, name)
 	if action == nil {
 		return nil
 	}

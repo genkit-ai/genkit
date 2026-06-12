@@ -52,7 +52,7 @@ type Prompt interface {
 
 // prompt is a prompt template that can be executed to generate a model response.
 type prompt struct {
-	core.Action[any, *GenerateActionOptions, struct{}, struct{}]
+	core.Action[any, *GenerateActionOptions, struct{}]
 	promptOptions
 	registry api.Registry
 }
@@ -141,7 +141,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 // LookupPrompt looks up a [Prompt] registered by [DefinePrompt].
 // It returns nil if the prompt was not defined.
 func LookupPrompt(r api.Registry, name string) Prompt {
-	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}, struct{}](r, api.ActionTypeExecutablePrompt, name)
+	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}](r, api.ActionTypeExecutablePrompt, name)
 	if action == nil {
 		return nil
 	}

@@ -367,7 +367,7 @@ func TestResolveActionFor(t *testing.T) {
 		}
 		DefineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
 
-		found := ResolveActionFor[int, int, struct{}, struct{}](r, api.ActionTypeCustom, "test/resolvable")
+		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/resolvable")
 
 		if found == nil {
 			t.Fatal("ResolveActionFor returned nil")
@@ -380,7 +380,7 @@ func TestResolveActionFor(t *testing.T) {
 	t.Run("returns nil for non-existent action", func(t *testing.T) {
 		r := registry.New()
 
-		found := ResolveActionFor[int, int, struct{}, struct{}](r, api.ActionTypeCustom, "test/nonexistent")
+		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/nonexistent")
 
 		if found != nil {
 			t.Errorf("ResolveActionFor returned %v, want nil", found)
@@ -396,7 +396,7 @@ func TestLookupActionFor(t *testing.T) {
 		}
 		DefineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
 
-		found := LookupActionFor[string, string, struct{}, struct{}](r, api.ActionTypeCustom, "test/lookupable")
+		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/lookupable")
 
 		if found == nil {
 			t.Fatal("LookupActionFor returned nil")
@@ -406,7 +406,7 @@ func TestLookupActionFor(t *testing.T) {
 	t.Run("returns nil for non-existent action", func(t *testing.T) {
 		r := registry.New()
 
-		found := LookupActionFor[string, string, struct{}, struct{}](r, api.ActionTypeCustom, "test/missing")
+		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/missing")
 
 		if found != nil {
 			t.Errorf("LookupActionFor returned %v, want nil", found)
