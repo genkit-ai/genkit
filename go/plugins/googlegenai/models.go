@@ -38,7 +38,7 @@ var (
 		ToolChoice:  true,
 		SystemRole:  true,
 		Media:       true,
-		Constrained: ai.ConstrainedSupportNoTools,
+		Constrained: ai.ConstrainedSupportAll,
 	}
 
 	// Media describes model capabilities for image generation models (Imagen).
@@ -62,14 +62,16 @@ var (
 
 	// TTSSupports describes model capabilities for text-to-speech models
 	// (gemini-*-tts). They emit audio and, unlike conversational Gemini models,
-	// do not support tools, multi-turn history, or system roles.
+	// do not support tools, multi-turn history, or system roles. Output is
+	// "media" to match the convention used by the other media producers
+	// (Imagen, Veo) rather than a TTS-only token.
 	TTSSupports = ai.ModelSupports{
 		Multiturn:  false,
 		Media:      false,
 		Tools:      false,
 		ToolChoice: false,
 		SystemRole: false,
-		Output:     []string{modalityMedia},
+		Output:     []string{"media"},
 	}
 )
 
@@ -112,12 +114,20 @@ const (
 	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
 	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
 
+	gemini35Flash      = "gemini-3.5-flash"
+	gemini31FlashLite  = "gemini-3.1-flash-lite"
+	gemini31FlashImage = "gemini-3.1-flash-image"
+	gemini3ProImage    = "gemini-3-pro-image"
+
 	gemini25FlashPreviewTTS = "gemini-2.5-flash-preview-tts"
 	gemini25ProPreviewTTS   = "gemini-2.5-pro-preview-tts"
 	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
-	imagen3Generate001     = "imagen-3.0-generate-001"
-	imagen3FastGenerate001 = "imagen-3.0-fast-generate-001"
+	imagen3Generate001       = "imagen-3.0-generate-001"
+	imagen3FastGenerate001   = "imagen-3.0-fast-generate-001"
+	imagen40FastGenerate001  = "imagen-4.0-fast-generate-001"
+	imagen40Generate001      = "imagen-4.0-generate-001"
+	imagen40UltraGenerate001 = "imagen-4.0-ultra-generate-001"
 
 	veo20Generate001         = "veo-2.0-generate-001"
 	veo30Generate001         = "veo-3.0-generate-001"
@@ -134,6 +144,7 @@ const (
 	textembeddinggeckomultilingual001 = "textembedding-gecko-multilingual@001"
 	textmultilingualembedding002      = "text-multilingual-embedding-002"
 	multimodalembedding               = "multimodalembedding"
+	geminiEmbedding2                  = "gemini-embedding-2"
 )
 
 var (
@@ -147,6 +158,10 @@ var (
 		gemini25Pro,
 		gemini31FlashLitePreview,
 		gemini31FlashImagePreview,
+		gemini35Flash,
+		gemini31FlashLite,
+		gemini31FlashImage,
+		gemini3ProImage,
 
 		imagen3Generate001,
 		imagen3FastGenerate001,
@@ -166,6 +181,17 @@ var (
 		gemini25Pro,
 		gemini31FlashLitePreview,
 		gemini31FlashImagePreview,
+		gemini35Flash,
+		gemini31FlashImage,
+		gemini3ProImage,
+
+		imagen40FastGenerate001,
+		imagen40Generate001,
+		imagen40UltraGenerate001,
+
+		gemini25FlashPreviewTTS,
+		gemini25ProPreviewTTS,
+		gemini31FlashTTSPreview,
 
 		gemini25FlashPreviewTTS,
 		gemini25ProPreviewTTS,
@@ -225,6 +251,30 @@ var (
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageUnstable,
 		},
+		gemini35Flash: {
+			Label:    "Gemini 3.5 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashLite: {
+			Label:    "Gemini 3.1 Flash Lite",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashImage: {
+			Label:    "Gemini 3.1 Flash Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini3ProImage: {
+			Label:    "Gemini 3 Pro Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
 		gemini25FlashPreviewTTS: {
 			Label:    "Gemini 2.5 Flash Preview TTS",
 			Versions: []string{},
@@ -254,6 +304,24 @@ var (
 		},
 		imagen3FastGenerate001: {
 			Label:    "Imagen 3 Fast Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40FastGenerate001: {
+			Label:    "Imagen 4 Fast Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40Generate001: {
+			Label:    "Imagen 4 Generate 001",
+			Versions: []string{},
+			Supports: &Media,
+			Stage:    ai.ModelStageStable,
+		},
+		imagen40UltraGenerate001: {
+			Label:    "Imagen 4 Ultra Generate 001",
 			Versions: []string{},
 			Supports: &Media,
 			Stage:    ai.ModelStageStable,
@@ -356,6 +424,17 @@ var (
 					modalityText,
 					modalityImage,
 					modalityVideo,
+				},
+			},
+		},
+		geminiEmbedding2: {
+			Dimensions: 3072,
+			Label:      "Gemini Embedding 2",
+			Supports: &ai.EmbedderSupports{
+				Input: []string{
+					"text",
+					"image",
+					"video",
 				},
 			},
 		},

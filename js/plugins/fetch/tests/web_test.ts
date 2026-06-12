@@ -327,6 +327,41 @@ describe('fetchHandler (single action)', () => {
       assert.ok(response.headers.get('x-genkit-trace-id'));
       assert.ok(response.headers.get('x-genkit-span-id'));
     });
+
+    it('streams for a multi-value, mixed-case Accept header', async () => {
+      const ai = genkit({});
+      defineEchoModel(ai);
+      const flow = ai.defineFlow(
+        {
+          name: 'streamingFlow',
+          inputSchema: z.object({ question: z.string() }),
+        },
+        async (input, sendChunk) => {
+          const { text } = await ai.generate({
+            model: 'echoModel',
+            prompt: input.question,
+            onChunk: sendChunk,
+          });
+          return text;
+        }
+      );
+      // Clients/proxies can send a media-type list and mixed casing, e.g.
+      // "Text/Event-Stream, */*"; the handler should still stream rather than
+      // fall back to a single JSON response.
+      const request = new Request('http://localhost/streamingFlow', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'Text/Event-Stream, */*',
+        },
+        body: JSON.stringify({ data: { question: 'hi' } }),
+      });
+      const response = await fetchHandler(flow)(request);
+      assert.strictEqual(
+        response.headers.get('Content-Type'),
+        'text/event-stream'
+      );
+    });
   });
 });
 

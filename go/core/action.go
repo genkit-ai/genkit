@@ -235,7 +235,7 @@ func (a *ActionDef[In, Out, Stream]) runWithTelemetry(ctx context.Context, input
 			}
 
 			if err = base.ValidateValue(input, inputSchema); err != nil {
-				return base.Zero[Out](), NewError(INVALID_ARGUMENT, "invalid input to action %q: %v", a.desc.Key, err)
+				return base.Zero[Out](), NewSchemaValidationError(a.desc.Key, err)
 			}
 
 			output, err = a.fn(ctx, input, cb)
@@ -270,7 +270,7 @@ func (a *ActionDef[In, Out, Stream]) RunJSON(ctx context.Context, input json.Raw
 func (a *ActionDef[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
 	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
 	if err != nil {
-		return nil, NewError(INVALID_ARGUMENT, err.Error())
+		return nil, NewSchemaValidationError(a.desc.Key, err)
 	}
 
 	var scb StreamCallback[Stream]

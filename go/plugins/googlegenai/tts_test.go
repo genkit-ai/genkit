@@ -40,8 +40,9 @@ func TestTTSModelOptions(t *testing.T) {
 			if opts.Supports != &TTSSupports {
 				t.Errorf("Supports = %p, want &TTSSupports (%p)", opts.Supports, &TTSSupports)
 			}
-			// TTS models emit media and do not converse or call tools.
-			if got := opts.Supports.Output; len(got) != 1 || got[0] != modalityMedia {
+			// TTS models emit audio, declared with the shared "media" output
+			// token (matching Imagen/Veo), and do not converse or call tools.
+			if got := opts.Supports.Output; len(got) != 1 || got[0] != "media" {
 				t.Errorf("Output = %v, want [media]", got)
 			}
 			if opts.Supports.Tools {
