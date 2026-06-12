@@ -26,11 +26,10 @@ transformations that can be tested without SDK dependencies.
 See: https://github.com/ollama/ollama/blob/main/docs/api.md
 """
 
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelUsage,
     Part,
     Role,
@@ -41,7 +40,6 @@ from genkit import (
 
 __all__ = [
     'build_prompt',
-    'build_request_options_dict',
     'build_response_parts',
     'get_usage_info',
     'strip_data_uri_prefix',
@@ -91,42 +89,6 @@ def build_prompt(messages: list[Message]) -> str:
             if isinstance(text_part.root, TextPart):
                 parts.append(text_part.root.text)
     return ''.join(parts)
-
-
-def build_request_options_dict(
-    config: ModelConfig | dict[str, object] | None,
-) -> dict[str, Any]:
-    """Build options dict from config for the Ollama API.
-
-    Maps Genkit ``ModelConfig`` fields to Ollama option names.
-
-    Args:
-        config: Request configuration.
-
-    Returns:
-        Dict of Ollama options.
-    """
-    if config is None:
-        return {}
-
-    if isinstance(config, ModelConfig):
-        result: dict[str, Any] = {}
-        if config.top_k is not None:
-            result['top_k'] = config.top_k
-        if config.top_p is not None:
-            result['topP'] = config.top_p
-        if config.stop_sequences is not None:
-            result['stop'] = config.stop_sequences
-        if config.temperature is not None:
-            result['temperature'] = config.temperature
-        if config.max_output_tokens is not None:
-            result['num_predict'] = config.max_output_tokens
-        return result
-
-    if isinstance(config, dict):
-        return cast(dict[str, Any], config)
-
-    return {}
 
 
 def build_response_parts(
@@ -200,5 +162,7 @@ def strip_data_uri_prefix(url: str) -> str:
     Raises:
         ValueError: If the URL doesn't contain a comma.
     """
-    comma_idx = url.index(',')
+    comma_idx = url.find(',')
+    if comma_idx == -1:
+        raise ValueError(f'Malformed data URI (no comma separator): {url[:64]!r}')
     return url[comma_idx + 1 :]

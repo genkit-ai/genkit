@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportMissingImports=false
 
 """Tests for Ollama format conversion utilities.
 
@@ -20,13 +21,10 @@ Covers role conversion, prompt building, request options, response
 part building, usage info, and data URI stripping.
 """
 
-from typing import Any, cast
-
 import pytest
 
 from genkit import (
     Message,
-    ModelConfig,
     ModelUsage,
     Part,
     Role,
@@ -35,7 +33,6 @@ from genkit import (
 )
 from genkit.plugins.ollama.converters import (
     build_prompt,
-    build_request_options_dict,
     build_response_parts,
     get_usage_info,
     strip_data_uri_prefix,
@@ -82,33 +79,6 @@ class TestBuildPrompt:
     def test_empty_messages(self) -> None:
         """Test Empty messages."""
         assert build_prompt([]) == ''
-
-
-class TestBuildRequestOptionsDict:
-    """Tests for building Ollama options from config."""
-
-    def test_none_returns_empty(self) -> None:
-        """Test None returns empty."""
-        assert build_request_options_dict(None) == {}
-
-    def test_generation_common_config(self) -> None:
-        """Test Generation common config."""
-        config = ModelConfig(temperature=0.7, max_output_tokens=100, top_p=0.9)
-        got = build_request_options_dict(config)
-        assert got.get('temperature') == 0.7
-        assert got.get('num_predict') == 100
-        assert got.get('topP') == 0.9
-
-    def test_dict_passthrough(self) -> None:
-        """Test Dict passthrough."""
-        d = {'temperature': 0.5, 'custom': True}
-        got = build_request_options_dict(d)
-        assert got == d
-
-    def test_unknown_type_returns_empty(self) -> None:
-        """Test Unknown type returns empty."""
-        # Intentionally pass an unsupported type to test defensive handling
-        assert build_request_options_dict(cast(Any, 42)) == {}
 
 
 class TestBuildResponseParts:

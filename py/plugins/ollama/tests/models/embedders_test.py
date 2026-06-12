@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportMissingImports=false
 
 """Unit tests for Ollama embedders package."""
 

@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportMissingImports=false
 
 """Unit tests for Ollama Plugin."""
 
@@ -25,8 +26,9 @@ from pydantic import BaseModel
 
 from genkit import ActionKind
 from genkit.plugins.ollama import Ollama, ollama_name
+from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.embedders import EmbeddingDefinition
-from genkit.plugins.ollama.models import ModelDefinition
+from genkit.plugins.ollama.models import ModelDefinition, OllamaSupports
 
 
 class TestOllamaInit(unittest.TestCase):
@@ -64,6 +66,25 @@ class TestOllamaInit(unittest.TestCase):
         assert plugin.models[0] == model_ref
         assert plugin.server_address == server_address
         assert plugin.request_headers == headers
+
+
+@pytest.mark.asyncio
+async def test_init_passes_request_headers_to_async_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test request headers are passed to the Ollama client."""
+    client_kwargs: dict[str, Any] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            client_kwargs.update(kwargs)
+
+    headers = {'Authorization': 'Bearer token'}
+    server_address = 'http://ollama.example.test'
+    monkeypatch.setattr('genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', FakeAsyncClient)
+
+    plugin = Ollama(server_address=server_address, request_headers=headers)
+    plugin.client()
+
+    assert client_kwargs == {'host': server_address, 'headers': headers}
 
 
 @pytest.mark.asyncio
@@ -106,13 +127,44 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
 
     if kind == ActionKind.MODEL:
         model_meta = cast(dict[str, Any], metadata['model'])
+        supports = cast(dict[str, Any], model_meta['supports'])
         assert model_meta['label'] == f'Ollama - {name}'
-        assert model_meta['multiturn']
-        assert model_meta['system_role']
+        assert supports['multiturn']
+        assert supports['systemRole']
+        assert supports['tools']
+        assert supports['media'] is False
+        assert supports['output'] == ['text', 'json']
+        assert supports['constrained'] == 'all'
     else:
         embedder_meta = cast(dict[str, Any], metadata['embedder'])
         assert embedder_meta['label'] == f'Ollama Embedding - {name}'
         assert embedder_meta['supports'] == {'input': ['text']}
+
+
+def test_generate_model_metadata_disables_chat_only_features() -> None:
+    """Generate API models should not advertise chat-only capabilities."""
+    plugin = Ollama(models=[ModelDefinition(name='test_model', api_type=OllamaAPITypes.GENERATE)])
+
+    action = plugin._create_model_action(ollama_name('test_model'))  # noqa: SLF001
+    metadata = cast(dict[str, Any], action.metadata)
+    model_meta = cast(dict[str, Any], metadata['model'])
+    supports = cast(dict[str, Any], model_meta['supports'])
+
+    assert supports['multiturn'] is False
+    assert supports['tools'] is False
+    assert supports['media'] is False
+
+
+def test_model_metadata_uses_declared_media_support() -> None:
+    """Models should advertise media only when explicitly configured."""
+    plugin = Ollama(models=[ModelDefinition(name='llava', supports=OllamaSupports(media=True))])
+
+    action = plugin._create_model_action(ollama_name('llava'))  # noqa: SLF001
+    metadata = cast(dict[str, Any], action.metadata)
+    model_meta = cast(dict[str, Any], metadata['model'])
+    supports = cast(dict[str, Any], model_meta['supports'])
+
+    assert supports['media'] is True
 
 
 # _define_ollama_model and _define_ollama_embedder methods no longer exist in new plugin architecture
@@ -153,6 +205,11 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     for action in actions:
         if hasattr(action, 'name') and 'test_model' in action.name:
             has_model = True
+            assert action.metadata is not None
+            model_meta = cast(dict[str, Any], action.metadata['model'])
+            supports = cast(dict[str, Any], model_meta['supports'])
+            assert supports['tools']
+            assert supports['media'] is False
             break
 
     assert has_model
@@ -164,3 +221,108 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
             break
 
     assert has_embedder
+
+
+@pytest.mark.asyncio
+async def test_list_actions_connection_error_wrapped_with_hint() -> None:
+    """An unreachable server during list_actions surfaces a friendly error."""
+    import httpx
+
+    from genkit.plugins.ollama import OllamaConnectionError
+
+    plugin = Ollama(server_address='http://unreachable.test')
+
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(side_effect=httpx.ConnectError('boom'))
+    plugin.client = lambda: client_mock
+
+    with pytest.raises(OllamaConnectionError) as excinfo:
+        await plugin.list_actions()
+    assert 'http://unreachable.test' in str(excinfo.value)
+    assert 'ollama serve' in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_async_request_headers_callback_resolved_on_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async callable headers should be awaited during init()."""
+    client_kwargs: dict[str, Any] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            client_kwargs.update(kwargs)
+
+    async def headers_provider() -> dict[str, str]:
+        return {'Authorization': 'Bearer async-token'}
+
+    monkeypatch.setattr('genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', FakeAsyncClient)
+    plugin = Ollama(request_headers=headers_provider)
+
+    # Before init: empty (callable hasn't been resolved yet).
+    assert plugin.request_headers == {}
+    await plugin.init()
+    assert plugin.request_headers == {'Authorization': 'Bearer async-token'}
+
+    plugin.client()
+    assert client_kwargs['headers'] == {'Authorization': 'Bearer async-token'}
+
+
+@pytest.mark.asyncio
+async def test_sync_request_headers_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sync callable headers should also be resolved during init()."""
+    monkeypatch.setattr('genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', MagicMock(spec=type))
+    plugin = Ollama(request_headers=lambda: {'X-Tenant': 'acme'})
+    await plugin.init()
+    assert plugin.request_headers == {'X-Tenant': 'acme'}
+
+
+@pytest.mark.asyncio
+async def test_timeout_propagated_to_async_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Custom timeout is forwarded to the underlying ollama AsyncClient."""
+    client_kwargs: dict[str, Any] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            client_kwargs.update(kwargs)
+
+    monkeypatch.setattr('genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', FakeAsyncClient)
+    plugin = Ollama(timeout=42.5)
+    plugin.client()
+    assert client_kwargs['timeout'] == 42.5
+
+
+@pytest.mark.asyncio
+async def test_connection_error_wrapped_with_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reaching the plugin when ollama isn't running surfaces a friendly error."""
+    import httpx
+
+    from genkit.plugins.ollama import OllamaConnectionError
+    from genkit.plugins.ollama.models import OllamaModel
+
+    monkeypatch.setattr('genkit.plugins.ollama.plugin_api.ollama_api.AsyncClient', MagicMock(spec=type))
+    plugin = Ollama(models=[ModelDefinition(name='test_model')], server_address='http://unreachable.test')
+    action = plugin._create_model_action(ollama_name('test_model'))  # noqa: SLF001
+
+    async def boom(self: OllamaModel, request: Any, ctx: Any = None) -> None:
+        raise httpx.ConnectError('boom')
+
+    monkeypatch.setattr(OllamaModel, 'generate', boom)
+
+    with pytest.raises(OllamaConnectionError) as excinfo:
+        await action._fn(None)  # noqa: SLF001
+    assert 'http://unreachable.test' in str(excinfo.value)
+    assert 'ollama serve' in str(excinfo.value)
+
+
+def test_model_metadata_uses_ollama_config_schema() -> None:
+    """Generated model action exposes OllamaConfig (with think/keep_alive) in customOptions."""
+    from genkit.plugins.ollama.models import OllamaConfig
+
+    plugin = Ollama(models=[ModelDefinition(name='test_model')])
+    action = plugin._create_model_action(ollama_name('test_model'))  # noqa: SLF001
+    custom_options = cast(dict[str, Any], action.metadata['model']['customOptions'])  # type: ignore[index]
+    properties = set(cast(dict[str, Any], custom_options.get('properties', {})).keys())
+    # OllamaConfig adds these on top of ModelConfig.
+    assert {'think', 'keepAlive', 'numCtx', 'minP', 'seed', 'numPredict'} <= properties
+    # ModelConfig fields still present.
+    assert 'temperature' in properties
+    assert OllamaConfig is not None  # silence flake

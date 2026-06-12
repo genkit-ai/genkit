@@ -84,10 +84,11 @@ behavioral divergence from the JS plugin.
 
 import mimetypes
 from collections.abc import Callable
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 import structlog
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel, to_snake
 
 import ollama as ollama_api
 from genkit import (
@@ -100,6 +101,7 @@ from genkit import (
     ModelResponseChunk,
     ModelUsage,
     Part,
+    ReasoningPart,
     Role,
     TextPart,
     ToolRequest,
@@ -108,9 +110,11 @@ from genkit import (
 )
 from genkit.model import get_basic_usage_stats
 from genkit.plugin_api import ActionRunContext, get_cached_client
-from genkit.plugins.ollama.constants import (
+
+from .constants import (
     OllamaAPITypes,
 )
+from .converters import strip_data_uri_prefix, to_ollama_role
 
 logger = structlog.get_logger(__name__)
 
@@ -119,6 +123,50 @@ class OllamaSupports(BaseModel):
     """Supports for Ollama models."""
 
     tools: bool = True
+    media: bool = False
+
+
+class OllamaConfig(ModelConfig):
+    """Ollama-specific request configuration.
+
+    Extends ``ModelConfig`` (which already covers ``temperature``, ``top_k``,
+    ``top_p``, ``max_output_tokens``, ``stop_sequences``) with Ollama-only
+    knobs surfaced by the Ollama HTTP API.
+
+    Attributes:
+        think: Enable thinking/reasoning mode on supported models
+            (e.g. ``deepseek-r1``). ``bool`` toggles thinking; the literal
+            strings ``'low' | 'medium' | 'high'`` control effort on GPT-OSS
+            models.
+        keep_alive: How long to keep the model loaded in memory after the
+            request completes. Accepts an Ollama duration string
+            (``'5m'``, ``'1h'``) or seconds as a float.
+        num_ctx: Override the context window size in tokens.
+        min_p: Minimum-probability sampling threshold.
+        seed: Random seed for deterministic sampling.
+        num_predict: Maximum number of tokens to generate. Alternative to
+            the ``max_output_tokens`` field inherited from ``ModelConfig``;
+            when both are set, ``num_predict`` wins.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
+        extra='allow',
+        populate_by_name=True,
+    )
+
+    think: bool | Literal['low', 'medium', 'high'] | None = None
+    keep_alive: float | str | None = None
+    num_ctx: int | None = None
+    min_p: float | None = None
+    seed: int | None = None
+    num_predict: int | None = None
+
+
+# Snake-cased config keys that the Ollama client accepts at the request level
+# (not inside the ``options`` sampler dict). Kept in one place so the extract
+# (build_request_kwargs) and exclude (build_request_options) paths agree.
+REQUEST_LEVEL_KEYS = frozenset({'think', 'keep_alive'})
 
 
 class ModelDefinition(BaseModel):
@@ -203,7 +251,7 @@ class OllamaModel:
                     model=self.model_definition.name,
                     response=str(api_response.response)[:500],
                 )
-                content = [Part(root=TextPart(text=api_response.response))]
+                content = [Part(root=TextPart(text=api_response.response or ''))]
         else:
             raise ValueError(f'Unresolved API type: {self.model_definition.api_type}')
 
@@ -248,6 +296,7 @@ class OllamaModel:
 
         if request.output_format or request.output_schema:
             # ollama api either accepts 'json' literal, or the JSON schema
+            fmt: Any
             if request.output_schema:
                 fmt = request.output_schema
             elif request.output_format:
@@ -269,6 +318,7 @@ class OllamaModel:
             for tool in request.tools or []
         ]
         options = self.build_request_options(config=request.config)
+        extra_kwargs = self.build_request_kwargs(config=request.config)
 
         if streaming_request:
             # Streaming call with literal stream=True for proper overload resolution
@@ -279,11 +329,12 @@ class OllamaModel:
                 options=options,
                 format=fmt,
                 stream=True,
+                **extra_kwargs,
             )
             idx = 0
             async for chunk in chat_response:
                 idx += 1
-                role = Role.MODEL if chunk.message.role == 'assistant' else Role.TOOL
+                role = self._from_ollama_role(chunk.message.role)
                 if ctx:
                     ctx.send_chunk(
                         chunk=ModelResponseChunk(
@@ -305,6 +356,7 @@ class OllamaModel:
                 options=options,
                 format=fmt,
                 stream=False,
+                **extra_kwargs,
             )
             return chat_response
 
@@ -323,6 +375,7 @@ class OllamaModel:
         prompt = self.build_prompt(request)
         streaming_request = self.is_streaming_request(ctx=ctx)
         options = self.build_request_options(config=request.config)
+        extra_kwargs = self.build_request_kwargs(config=request.config)
 
         if streaming_request:
             # Streaming call with literal stream=True for proper overload resolution
@@ -331,6 +384,7 @@ class OllamaModel:
                 prompt=prompt,
                 options=options,
                 stream=True,
+                **extra_kwargs,
             )
             idx = 0
             async for chunk in generate_response:
@@ -340,7 +394,7 @@ class OllamaModel:
                         chunk=ModelResponseChunk(
                             role=Role.MODEL,
                             index=idx,
-                            content=[Part(root=TextPart(text=chunk.response))],
+                            content=[Part(root=TextPart(text=chunk.response or ''))],
                         )
                     )
             # For streaming requests, we return None because the response chunks
@@ -354,6 +408,7 @@ class OllamaModel:
                 prompt=prompt,
                 options=options,
                 stream=False,
+                **extra_kwargs,
             )
             return generate_response
 
@@ -371,6 +426,13 @@ class OllamaModel:
         """
         content = []
         chat_response_message = chat_response.message
+        # Reasoning models (think=True) return chain-of-thought in a separate
+        # ``thinking`` field. Surface it as a ReasoningPart (leading the
+        # content) rather than dropping it. Streaming chunks carry incremental
+        # thinking, so this also emits reasoning chunks during the think phase.
+        thinking = getattr(chat_response_message, 'thinking', None)
+        if thinking:
+            content.append(Part(root=ReasoningPart(reasoning=thinking)))
         if chat_response_message.content:
             content.append(Part(root=TextPart(text=chat_response.message.content or '')))
         if chat_response_message.images:
@@ -403,30 +465,91 @@ class OllamaModel:
     @staticmethod
     def build_request_options(
         config: ModelConfig | ollama_api.Options | dict[str, object] | None,
-    ) -> ollama_api.Options:
-        """Build request options for the generate API.
+    ) -> ollama_api.Options | dict[str, Any]:
+        """Build per-sampling options (top_k, top_p, etc.) for the Ollama API.
+
+        ``think`` and ``keep_alive`` live at the request level (not in
+        ``options``) — see :meth:`build_request_kwargs`.
+
+        Returns either an ``ollama.Options`` instance or a raw dict — the
+        ollama-python client accepts both under the ``options=`` kwarg.
+        Returning a dict lets us forward Ollama HTTP-API knobs (e.g.
+        ``min_p``) that the ollama-python ``Options`` model doesn't yet
+        declare. When upstream ollama-python adds the missing sampler
+        fields (tracking: ``min_p`` — server-side since v0.1.36 via
+        ollama/ollama#1825), this can simplify back to ``Options(**kwargs)``.
 
         Args:
-            config: The configuration to build the request options for.
-
-        Returns:
-            The request options for the generate API.
+            config: The Genkit-side configuration (``ModelConfig`` /
+                ``OllamaConfig``), a pre-built ``ollama.Options``, or a raw
+                kwargs dict.
         """
         if config is None:
             return ollama_api.Options()
+        if isinstance(config, ollama_api.Options):
+            return config
         if isinstance(config, ModelConfig):
-            config = dict(
-                top_k=config.top_k,
-                topP=config.top_p,
-                stop=config.stop_sequences,
-                temperature=config.temperature,
-                num_predict=config.max_output_tokens,
-            )
-        if isinstance(config, dict):
-            # Use cast to avoid type error with **spread of dict[str, object]
-            config = ollama_api.Options(**cast(dict[str, Any], config))
+            options_kwargs: dict[str, Any] = {
+                'top_k': config.top_k,
+                'top_p': config.top_p,
+                'stop': config.stop_sequences,
+                'temperature': config.temperature,
+                'num_predict': config.max_output_tokens,
+            }
+            if isinstance(config, OllamaConfig):
+                if config.num_predict is not None:
+                    options_kwargs['num_predict'] = config.num_predict
+                if config.num_ctx is not None:
+                    options_kwargs['num_ctx'] = config.num_ctx
+                if config.min_p is not None:
+                    options_kwargs['min_p'] = config.min_p
+                if config.seed is not None:
+                    options_kwargs['seed'] = config.seed
+                # OllamaConfig is extra='allow'; forward any additional sampler
+                # knobs the user set (e.g. repeat_penalty) instead of dropping
+                # them. Snake-case so camelCase aliases reach the server.
+                for extra_key, extra_value in (config.__pydantic_extra__ or {}).items():
+                    if extra_value is not None:
+                        options_kwargs[to_snake(extra_key)] = extra_value
+            return {k: v for k, v in options_kwargs.items() if v is not None}
+        # Raw dict passed straight through by the caller (the framework hands
+        # the model fn a dict, not a parsed OllamaConfig). Snake-case keys so a
+        # camelCase knob (e.g. topP) maps to the server field (top_p) instead
+        # of being silently ignored. Drop request-level keys (think, keep_alive)
+        # so they aren't buried in options where the server ignores them; they
+        # are lifted to the top level by build_request_kwargs.
+        return {
+            sk: v
+            for sk, v in ((to_snake(k), v) for k, v in cast(dict[str, Any], config).items())
+            if sk not in REQUEST_LEVEL_KEYS
+        }
 
-        return config
+    @staticmethod
+    def build_request_kwargs(
+        config: ModelConfig | ollama_api.Options | dict[str, object] | None,
+    ) -> dict[str, Any]:
+        """Build top-level Ollama request kwargs (``think``, ``keep_alive``).
+
+        These fields are accepted by the ollama-python client at the request
+        level, separate from the ``options`` dict.
+
+        Handles both a parsed ``OllamaConfig`` and a raw dict — the framework
+        delivers ``request.config`` as a dict, so extracting only from the
+        typed instance would silently drop think/keep_alive in the normal
+        generate() path.
+        """
+        kwargs: dict[str, Any] = {}
+        if isinstance(config, OllamaConfig):
+            if config.think is not None:
+                kwargs['think'] = config.think
+            if config.keep_alive is not None:
+                kwargs['keep_alive'] = config.keep_alive
+        elif isinstance(config, dict):
+            snaked = {to_snake(k): v for k, v in cast(dict[str, Any], config).items()}
+            for key in REQUEST_LEVEL_KEYS:
+                if snaked.get(key) is not None:
+                    kwargs[key] = snaked[key]
+        return kwargs
 
     @staticmethod
     def build_prompt(request: ModelRequest) -> str:
@@ -470,7 +593,7 @@ class OllamaModel:
         messages: list[ollama_api.Message] = []
         for message in request.messages:
             item = ollama_api.Message(
-                role=cls._to_ollama_role(role=cast(Role, message.role)),
+                role=to_ollama_role(cast(Role, message.role)),
                 content='',
                 images=[],
             )
@@ -506,9 +629,7 @@ class OllamaModel:
             A value suitable for ``ollama.Image(value=...)``.
         """
         if url.startswith('data:'):
-            # Strip data URI prefix → raw base64: "data:image/jpeg;base64,ABC" → "ABC"
-            comma_idx = url.index(',')
-            return url[comma_idx + 1 :]
+            return strip_data_uri_prefix(url)
 
         if url.startswith(('http://', 'https://')):
             # TODO(#4360): Replace with downloadRequestMedia middleware (G15 parity).
@@ -530,20 +651,28 @@ class OllamaModel:
         return url
 
     @staticmethod
-    def _to_ollama_role(
-        role: Role,
-    ) -> Literal['user', 'assistant', 'system', 'tool']:
+    def _from_ollama_role(role: str) -> Role:
+        """Map an Ollama message role string to a Genkit ``Role``.
+
+        Defaults to ``Role.MODEL`` with a warning on unknown values so that a
+        future Ollama server adding a new role doesn't crash mid-stream.
+        Streaming chunks often omit the role, so a falsy role defaults silently
+        (no warning) to avoid flooding the logs on every chunk.
+        """
+        if not role:
+            return Role.MODEL
         match role:
-            case Role.USER:
-                return 'user'
-            case Role.MODEL:
-                return 'assistant'
-            case Role.TOOL:
-                return 'tool'
-            case Role.SYSTEM:
-                return 'system'
+            case 'assistant':
+                return Role.MODEL
+            case 'tool':
+                return Role.TOOL
+            case 'user':
+                return Role.USER
+            case 'system':
+                return Role.SYSTEM
             case _:
-                raise ValueError(f'Unknown role: {role}')
+                logger.warning('Unknown Ollama role, defaulting to MODEL', role=role)
+                return Role.MODEL
 
     @staticmethod
     def is_streaming_request(ctx: ActionRunContext | None) -> bool:
@@ -578,29 +707,48 @@ class OllamaModel:
 
 
 def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Function.Parameters | None:
-    """Sanitizes a schema to be compatible with Ollama API."""
-    if not input_schema or 'type' not in input_schema:
-        return None
+    """Sanitize a tool input schema for the Ollama API.
 
-    schema = ollama_api.Tool.Function.Parameters()
+    Ollama only accepts object-shaped tool parameter schemas. We raise here
+    rather than silently dropping the schema (matching the JS plugin), so
+    misconfigured tools surface immediately instead of producing models
+    calling a tool with no arguments.
+    """
+    if not input_schema:
+        return None
+    schema_type = input_schema.get('type')
+    if schema_type is None:
+        # A schema with properties but no explicit type is implicitly an
+        # object; infer it rather than silently dropping the parameters (the
+        # exact failure this function exists to prevent).
+        if 'properties' in input_schema:
+            schema_type = 'object'
+        else:
+            return None
+    if schema_type != 'object':
+        raise ValueError(
+            f'Ollama tools must declare an object-typed input schema; got type={schema_type!r}. '
+            'Wrap primitive inputs in an object schema (e.g. {"type": "object", "properties": {...}}).'
+        )
+
+    # ollama_api.Parameters declares ``$defs`` via Field(alias=...) which pyright treats as
+    # a required ctor arg even though it defaults to None. model_construct() side-steps that
+    # and is safe here because we set every field we care about explicitly below.
+    schema = ollama_api.Tool.Function.Parameters.model_construct()
     if 'required' in input_schema:
         required = input_schema['required']
         if isinstance(required, list):
             schema.required = cast(list[str], required)
 
-    if 'type' in input_schema:
-        schema_type = input_schema['type']
-        if schema_type == 'object':
-            schema.type = 'object'
-
-        if schema_type == 'object':
-            schema.properties = {}
-            properties_raw = input_schema.get('properties', {})
-            if isinstance(properties_raw, dict):
-                properties = cast(dict[str, dict[str, Any]], properties_raw)
-                for key in properties:
-                    schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
-                        type=properties[key]['type'], description=properties[key].get('description', '')
-                    )
+    # schema_type is 'object' here (explicit or inferred); build properties.
+    schema.type = 'object'
+    schema.properties = {}
+    properties_raw = input_schema.get('properties', {})
+    if isinstance(properties_raw, dict):
+        properties = cast(dict[str, dict[str, Any]], properties_raw)
+        for key in properties:
+            schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
+                type=properties[key]['type'], description=properties[key].get('description', '')
+            )
 
     return schema

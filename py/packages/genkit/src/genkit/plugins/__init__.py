@@ -24,4 +24,11 @@ multiple installed packages. Each plugin can be imported as:
 For example:
     from genkit.plugins.google_genai import GoogleGenai
     from genkit.plugins.anthropic import Anthropic
+
+Cross-distribution discovery is handled at runtime by
+``genkit._core._plugins.extend_plugin_namespace`` (invoked from
+``genkit.__init__``), which scans ``sys.path`` for ``genkit/plugins``
+directories. ``pkgutil.extend_path`` is intentionally not used here: it
+only picks up portions that ship their own ``genkit/plugins/__init__.py``,
+whereas the plugin packages are PEP 420 namespace packages without one.
 """
