@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { AsyncTaskQueue, LazyPromise } from '../src/async';
+import { AsyncTaskQueue, Channel, LazyPromise } from '../src/async';
 import { sleep } from './utils';
 
 describe('AsyncTaskQueue', () => {
@@ -141,5 +141,51 @@ describe('LazyPromise', () => {
 
     assert.ok(called);
     assert.equal(result, 'foo');
+  });
+});
+
+describe('Channel', () => {
+  it('should handle falsy values', async () => {
+    const channel = new Channel<number | string>();
+    channel.send(0);
+    channel.send('hello');
+    channel.close();
+
+    const results: (number | string)[] = [];
+    for await (const value of channel) {
+      results.push(value);
+    }
+
+    assert.deepStrictEqual(results, [0, 'hello']);
+  });
+
+  it('should not treat a sent null as end-of-stream', async () => {
+    const channel = new Channel<number | null>();
+    channel.send(null);
+    channel.send(1);
+    channel.close();
+
+    const results: (number | null)[] = [];
+    for await (const value of channel) {
+      results.push(value);
+    }
+
+    // Both the null and the real value must be yielded; the null must not
+    // truncate the stream.
+    assert.deepStrictEqual(results, [null, 1]);
+  });
+
+  it('should terminate the stream on close()', async () => {
+    const channel = new Channel<number>();
+    channel.send(1);
+    channel.send(2);
+    channel.close();
+
+    const results: number[] = [];
+    for await (const value of channel) {
+      results.push(value);
+    }
+
+    assert.deepStrictEqual(results, [1, 2]);
   });
 });

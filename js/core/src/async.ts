@@ -40,12 +40,20 @@ export function createTask<T>(): Task<T> {
 }
 
 /**
+ * Unique sentinel used internally to mark the end of a {@link Channel}'s
+ * stream. Using a private Symbol (instead of `null`) ensures that legitimate
+ * falsy values sent by callers (including `null`) are never confused with the
+ * close signal.
+ */
+const DONE = Symbol('channel-done');
+
+/**
  * A class designed to help turn repeated callbacks into async iterators.
  * Based loosely on a combination of Go channels and Promises.
  */
 export class Channel<T> implements AsyncIterable<T> {
   private ready: Task<void> = createTask<void>();
-  private buffer: (T | null)[] = [];
+  private buffer: (T | typeof DONE)[] = [];
   private err: unknown = null;
 
   send(value: T): void {
@@ -54,7 +62,7 @@ export class Channel<T> implements AsyncIterable<T> {
   }
 
   close(): void {
-    this.buffer.push(null);
+    this.buffer.push(DONE);
     this.ready.resolve();
   }
 
@@ -80,10 +88,16 @@ export class Channel<T> implements AsyncIterable<T> {
         if (!this.buffer.length) {
           this.ready = createTask<void>();
         }
+        if (value === DONE) {
+          return {
+            value: undefined,
+            done: true,
+          };
+        }
 
         return {
           value,
-          done: !value,
+          done: false,
         };
       },
     };

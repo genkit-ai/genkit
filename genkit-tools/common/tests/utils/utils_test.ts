@@ -26,19 +26,16 @@ import {
 describe('utils', () => {
   describe('findProjectRoot', () => {
     let tmpDir: string;
-    let originalCwd: string;
 
     beforeEach(() => {
-      originalCwd = process.cwd();
       // realpathSync resolves symlinks (for example /var -> /private/var on
-      // macOS) so the temp paths match what process.cwd() reports.
+      // macOS) so the temp paths match the resolved paths we compare against.
       tmpDir = fs.realpathSync(
         fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-find-root-'))
       );
     });
 
     afterEach(() => {
-      process.chdir(originalCwd);
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
@@ -48,9 +45,10 @@ describe('utils', () => {
       fs.mkdirSync(nestedDir, { recursive: true });
       fs.writeFileSync(path.join(projectDir, 'pubspec.yaml'), 'name: dart_app');
 
-      process.chdir(nestedDir);
-
-      expect(await findProjectRoot()).toEqual(projectDir);
+      // Pass the start directory explicitly instead of mutating the
+      // process-global cwd, which makes the test deterministic when run
+      // alongside other tests in the same worker.
+      expect(await findProjectRoot(nestedDir)).toEqual(projectDir);
     });
 
     it('returns the nearest project root when a Dart project is nested under a package.json', async () => {
@@ -63,9 +61,7 @@ describe('utils', () => {
       fs.writeFileSync(path.join(workspaceDir, 'package.json'), '{}');
       fs.writeFileSync(path.join(dartDir, 'pubspec.yaml'), 'name: dart_app');
 
-      process.chdir(dartDir);
-
-      expect(await findProjectRoot()).toEqual(dartDir);
+      expect(await findProjectRoot(dartDir)).toEqual(dartDir);
     });
   });
 
