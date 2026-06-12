@@ -937,7 +937,7 @@ class Genkit:
 
             config = GeminiConfigSchema(temperature=0.7, code_execution=True)
             response = await ai.generate(
-                model='googleai/gemini-2.0-flash',
+                model='googleai/gemini-flash-latest',
                 prompt='Hello!',
                 config=config,
             )
@@ -945,7 +945,7 @@ class Genkit:
             Using a dictionary:
             ```python
             response = await ai.generate(
-                model='googleai/gemini-2.0-flash',
+                model='googleai/gemini-flash-latest',
                 prompt='Hello!',
                 config={'temperature': 0.7, 'codeExecution': True},
             )
@@ -1079,7 +1079,7 @@ class Genkit:
 
             config = GeminiConfigSchema(temperature=0.7, code_execution=True)
             stream = ai.generate_stream(
-                model='googleai/gemini-2.0-flash',
+                model='googleai/gemini-flash-latest',
                 prompt='Hello!',
                 config=config,
             )

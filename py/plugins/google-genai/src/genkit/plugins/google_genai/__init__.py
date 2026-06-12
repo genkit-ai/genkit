@@ -157,7 +157,7 @@ Example:
     from genkit.plugins.google_genai import GoogleAI
 
     # Uses GEMINI_API_KEY env var or pass api_key explicitly
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.0-flash')
+    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
     # Simple generation:
     response = await ai.generate(prompt='Hello, world!')
