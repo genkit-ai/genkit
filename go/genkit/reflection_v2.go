@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -319,6 +320,19 @@ func (s *reflectionServerV2) readLoop(ctx context.Context) {
 // notifications). Unknown methods with a request ID return "method not found";
 // unknown notifications are logged and ignored.
 func (s *reflectionServerV2) handleRequest(ctx context.Context, req *jsonRPCMessage) {
+	// Handlers run action functions on this goroutine, where an unrecovered
+	// panic would take down the whole dev process along with the failing
+	// action. Report it as a server error instead, matching how the bidi
+	// engine recovers its function panics.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("reflection V2: handler panicked", "method", req.Method, "panic", r, "stack", string(debug.Stack()))
+			if req.ID != "" {
+				s.sendErrorResponse(req.ID, jsonRPCServerError, fmt.Sprintf("handler for %s panicked: %v", req.Method, r), nil)
+			}
+		}
+	}()
+
 	switch req.Method {
 	case "listActions":
 		s.handleListActions(ctx, req)
