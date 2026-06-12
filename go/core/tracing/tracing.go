@@ -393,6 +393,18 @@ func telemetryCallback(ctx context.Context) func(traceID, spanID string) {
 	return telemetryCbKey.FromContext(ctx)
 }
 
+// SetCustomMetadataAttribute adds a custom metadata attribute to the current span.
+func SetCustomMetadataAttribute(ctx context.Context, key, value string) {
+	sm := spanMetaKey.FromContext(ctx)
+	if sm == nil {
+		return
+	}
+	if sm.Metadata == nil {
+		sm.Metadata = make(map[string]string)
+	}
+	sm.Metadata[key] = value
+}
+
 // SpanPath returns the path as recorded in the current span metadata.
 func SpanPath(ctx context.Context) string {
 	return spanMetaKey.FromContext(ctx).Path

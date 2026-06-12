@@ -1012,6 +1012,13 @@ func handleToolRequests(ctx context.Context, r api.Registry, req *ModelRequest, 
 			newPart.Metadata["pendingOutput"] = multipartResp.Output
 			revisedMsg.Content[idx] = newPart
 
+			if resumedMetadata, ok := p.Metadata["resumed"]; ok {
+				data, err := json.Marshal(resumedMetadata)
+				if err == nil {
+					tracing.SetCustomMetadataAttribute(ctx, "resumed", string(data))
+				}
+			}
+
 			resultChan <- result[*MultipartToolResponse]{index: idx, value: multipartResp}
 		}(i, part)
 	}
@@ -1456,6 +1463,14 @@ func handleResumedToolRequest(ctx context.Context, r api.Registry, genOpts *Gene
 					Ref:   restartPart.ToolRequest.Ref,
 					Input: restartPart.ToolRequest.Input,
 				}
+
+				if resumedMetadata, ok := restartPart.Metadata["resumed"]; ok {
+					data, err := json.Marshal(resumedMetadata)
+					if err == nil {
+						tracing.SetCustomMetadataAttribute(resumedCtx, "resumed", string(data))
+					}
+				}
+
 				multipartResp, err := runTool(resumedCtx, tool, restartToolReq)
 				if err != nil {
 					var tie *toolInterruptError
