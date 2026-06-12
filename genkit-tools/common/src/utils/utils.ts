@@ -49,18 +49,47 @@ export async function findProjectRoot(
     'pubspec.yaml',
   ];
 
+  // Unique id so we can correlate interleaved logs from parallel test workers.
+  const traceId = `${process.pid}:${Math.random().toString(36).slice(2, 8)}`;
+  console.log(
+    `[findProjectRoot ${traceId}] start startDir=${startDir} cwd=${process.cwd()}`
+  );
+
   let currentDir = startDir;
   while (currentDir !== path.parse(currentDir).root) {
+    // Snapshot what the OS thinks is in this directory, independent of the
+    // per-marker fs.access calls, so we can tell "dir is empty/gone" apart
+    // from "the specific marker file is missing".
+    let dirListing: string | undefined;
+    try {
+      dirListing = (await fs.readdir(currentDir)).join(',');
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      dirListing = `<readdir failed code=${e?.code} path=${e?.path}>`;
+    }
+
     const results = await Promise.all(
       projectMarkers.map((file) => markerExists(path.join(currentDir, file)))
     );
+    console.log(
+      `[findProjectRoot ${traceId}] level=${currentDir} readdir=[${dirListing}] markerResults=${JSON.stringify(
+        results
+      )}`
+    );
     if (results.some((found) => found)) {
+      console.log(
+        `[findProjectRoot ${traceId}] MATCH return=${currentDir}`
+      );
       return currentDir;
     }
     currentDir = path.dirname(currentDir);
   }
+  console.log(
+    `[findProjectRoot ${traceId}] NO MATCH walked to root, falling back to startDir=${startDir}`
+  );
   return startDir;
 }
+
 
 /**
  * Checks whether a marker file exists. Returns `true` if it exists, `false`
@@ -75,13 +104,21 @@ async function markerExists(filePath: string): Promise<boolean> {
       await fs.access(filePath);
       return true;
     } catch (err) {
-      console.log(' - - - - -  - - - - -  - -- - - - - - - - - markerExists error');
-      console.log(err);
-      const code = (err as NodeJS.ErrnoException)?.code;
+      const e = err as NodeJS.ErrnoException;
+      const code = e?.code;
+      // Only log the codes that are NOT the boring/expected "this marker just
+      // isn't here" case so the signal isn't buried. ENOENT for the 6 markers
+      // that legitimately don't exist at each level is normal and skipped.
+      if (code !== 'ENOENT') {
+        console.log(
+          `[markerExists] non-ENOENT attempt=${attempt} code=${code} path=${e?.path}`
+        );
+      }
       // Definitive "not here" answers — no point retrying.
       if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES') {
         return false;
       }
+
       // Transient error (e.g. EMFILE/ENFILE/EAGAIN): retry a few times before
       // giving up and treating the marker as absent.
       if (attempt >= 5) {
