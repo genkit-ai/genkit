@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"runtime/debug"
 
 	"github.com/firebase/genkit/go/internal/base"
@@ -58,11 +59,25 @@ type GenkitError struct {
 // MarshalJSON encodes a GenkitError in the canonical Genkit error wire
 // format: {status, message, details}. The wire shape ([genkitErrorWire])
 // is generated from the shared JSON schema's RuntimeError definition.
+//
+// The stack trace [NewError] records under Details["stack"] is in-process
+// diagnostics like HTTPCode and Source, not wire data: marshaling omits it
+// so errors embedded in values (e.g. a failed agent invocation's output)
+// do not leak process internals to clients. Consumers that want the stack
+// (the reflection API's error envelope) read the error value directly.
 func (e *GenkitError) MarshalJSON() ([]byte, error) {
+	details := e.Details
+	if _, ok := details["stack"]; ok {
+		details = maps.Clone(details)
+		delete(details, "stack")
+		if len(details) == 0 {
+			details = nil
+		}
+	}
 	return json.Marshal(genkitErrorWire{
 		Status:  e.Status,
 		Message: e.Message,
-		Details: e.Details,
+		Details: details,
 	})
 }
 

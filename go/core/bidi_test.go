@@ -377,6 +377,145 @@ func TestInitSchemaValidationAcceptsGoodInit(t *testing.T) {
 	}
 }
 
+// TestBidiNilInitSkipsValidation verifies that a nil init (the zero value of
+// a pointer Init type) bypasses init schema validation on every no-init path.
+// The inferred init schema describes the object form, which JSON null can
+// never satisfy, so without the bypass an action with a pointer Init (e.g. an
+// agent's *AgentInit) could not run at all through the unary surface or a
+// JSON transport request that omits init.
+func TestBidiNilInitSkipsValidation(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct{ Prefix string }
+
+	r := registry.New()
+	action := DefineBidiAction(r, "nil-init", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg *Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			prefix := "default: "
+			if cfg != nil {
+				prefix = cfg.Prefix
+			}
+			var out string
+			for in := range inCh {
+				out = prefix + in
+			}
+			return out, nil
+		})
+
+	t.Run("unary surface runs with nil init", func(t *testing.T) {
+		out, err := action.RunJSON(ctx, json.RawMessage(`"hello"`), nil)
+		if err != nil {
+			t.Fatalf("RunJSON: %v", err)
+		}
+		if string(out) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", out, "default: hello")
+		}
+	})
+
+	t.Run("JSON one-shot without init", func(t *testing.T) {
+		res, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil, nil)
+		if err != nil {
+			t.Fatalf("RunBidiJSON: %v", err)
+		}
+		if string(res.Result) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", res.Result, "default: hello")
+		}
+	})
+
+	t.Run("JSON session without init", func(t *testing.T) {
+		conn, err := action.StreamBidiJSON(ctx, nil)
+		if err != nil {
+			t.Fatalf("StreamBidiJSON: %v", err)
+		}
+		if err := conn.Send(json.RawMessage(`"hello"`)); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		conn.Close()
+		for _, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+		}
+		out, err := conn.Output()
+		if err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+		if string(out) != `"default: hello"` {
+			t.Errorf("output = %s, want %q", out, "default: hello")
+		}
+	})
+
+	t.Run("typed session with explicit nil init", func(t *testing.T) {
+		conn, err := action.StreamBidi(ctx, nil)
+		if err != nil {
+			t.Fatalf("StreamBidi: %v", err)
+		}
+		conn.Close()
+		for _, err := range conn.Receive() {
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+		}
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
+
+	t.Run("provided init still validates", func(t *testing.T) {
+		_, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil,
+			&api.BidiSessionOptions{Init: json.RawMessage(`{"Prefix": 42}`)})
+		if err == nil {
+			t.Fatal("expected error for mistyped init, got nil")
+		}
+	})
+}
+
+// TestBidiZeroStructInitValidatedWithoutInit pins the struct-Init half of the
+// no-init contract: running without init still validates the zero init value,
+// so an init schema the zero value cannot satisfy surfaces as
+// INVALID_ARGUMENT rather than silently defaulting. Authors opt into
+// omissible init by choosing a pointer Init type.
+func TestBidiZeroStructInitValidatedWithoutInit(t *testing.T) {
+	ctx := context.Background()
+
+	type Config struct{ Prefix string }
+
+	initSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Prefix": map[string]any{"type": "string", "minLength": 1},
+		},
+		"required": []any{"Prefix"},
+	}
+
+	action := NewBidiAction(
+		"required-init", api.ActionTypeCustom,
+		&BidiActionOptions{InitSchema: initSchema},
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			for range inCh {
+			}
+			return cfg.Prefix, nil
+		},
+	)
+
+	_, err := action.RunJSON(ctx, json.RawMessage(`"hello"`), nil)
+	if err == nil {
+		t.Fatal("expected validation error for zero init, got nil")
+	}
+	var gerr *GenkitError
+	if !errors.As(err, &gerr) || gerr.Status != INVALID_ARGUMENT {
+		t.Errorf("err = %v, want INVALID_ARGUMENT GenkitError", err)
+	}
+
+	got, err := action.RunWithInit(ctx, Config{Prefix: ">> "}, "ignored", nil)
+	if err != nil {
+		t.Fatalf("RunWithInit: %v", err)
+	}
+	if got != ">> " {
+		t.Errorf("output = %q, want %q", got, ">> ")
+	}
+}
+
 func TestBidiConnectionSendAfterClose(t *testing.T) {
 	ctx := context.Background()
 

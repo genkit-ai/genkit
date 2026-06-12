@@ -196,6 +196,36 @@ func TestGenkitErrorJSONRoundtrip(t *testing.T) {
 		}
 	})
 
+	t.Run("omits the auto-captured stack detail", func(t *testing.T) {
+		ge := NewError(NOT_FOUND, "missing")
+		ge.Details["id"] = "abc"
+		got, err := json.Marshal(ge)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		// The stack is in-process diagnostics; only the other details
+		// cross the wire.
+		want := `{"details":{"id":"abc"},"message":"missing","status":"NOT_FOUND"}`
+		if string(got) != want {
+			t.Errorf("Marshal = %s, want %s", got, want)
+		}
+		if _, ok := ge.Details["stack"]; !ok {
+			t.Error("marshaling must not mutate the in-process Details")
+		}
+	})
+
+	t.Run("omits details entirely when stack is the only entry", func(t *testing.T) {
+		ge := NewError(NOT_FOUND, "missing")
+		got, err := json.Marshal(ge)
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		want := `{"message":"missing","status":"NOT_FOUND"}`
+		if string(got) != want {
+			t.Errorf("Marshal = %s, want %s", got, want)
+		}
+	})
+
 	t.Run("unmarshals and derives HTTPCode", func(t *testing.T) {
 		raw := `{"status":"NOT_FOUND","message":"missing","details":{"id":"abc"}}`
 		var ge GenkitError

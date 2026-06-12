@@ -301,10 +301,18 @@ func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiSessionOpti
 
 // validateInit checks an init value against the action's InitSchema (if any),
 // resolving schema $refs through the registry first. Validation runs whenever
-// InitSchema is present, even for the zero init value, so a required field
-// surfaces as INVALID_ARGUMENT rather than silently defaulting.
+// InitSchema is present, even for the zero init value, so a struct Init with
+// required fields surfaces as INVALID_ARGUMENT rather than silently
+// defaulting. A nil init carries no value to validate and is skipped: it is
+// the zero value of a pointer Init type, produced whenever the action runs
+// without init (the unary surface, a JSON transport request with no init
+// field), and would otherwise always fail the inferred object schema as JSON
+// null. The action function receives the nil and applies its defaults.
 func (b *BidiAction[In, Out, Stream, Init]) validateInit(init Init) error {
 	if b.desc.InitSchema == nil {
+		return nil
+	}
+	if isNilValue(init) {
 		return nil
 	}
 	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
