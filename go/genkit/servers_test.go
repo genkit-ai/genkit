@@ -18,6 +18,7 @@ package genkit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/firebase/genkit/go/ai"
+	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/x/streaming"
@@ -423,7 +427,7 @@ data: {"result":"hello-end"}
 		resp := w.Result()
 		body, _ := io.ReadAll(resp.Body)
 
-		expected := `data: {"error":{"status":"INTERNAL_SERVER_ERROR","message":"stream flow error","details":"streaming error"}}
+		expected := `data: {"error":{"status":"INTERNAL","message":"stream flow error","details":"streaming error"}}
 
 `
 		if string(body) != expected {
@@ -706,6 +710,239 @@ func TestHandlerBidiInitEnvelope(t *testing.T) {
 		}
 		if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/event-stream") {
 			t.Errorf("Content-Type = %q; response must not commit to SSE before rejecting init", ct)
+		}
+	})
+}
+
+// agentHTTPResult mirrors the AgentOutput fields the agent handler tests
+// assert on, decoded from the handler's {"result": ...} envelope.
+type agentHTTPResult struct {
+	FinishReason string          `json:"finishReason"`
+	SessionID    string          `json:"sessionId"`
+	SnapshotID   string          `json:"snapshotId"`
+	Message      *ai.Message     `json:"message"`
+	State        json.RawMessage `json:"state"`
+	Error        *struct {
+		Status  string         `json:"status"`
+		Message string         `json:"message"`
+		Details map[string]any `json:"details"`
+	} `json:"error"`
+}
+
+// TestHandlerAgent verifies that agents, being bidi actions of type flow,
+// serve one-turn-at-a-time over the standard action handler: data carries
+// the turn's AgentInput, init carries the session source (state for
+// client-managed agents, sessionId/snapshotId for server-managed ones), and
+// the conversation resumes across requests. It also pins the error contract:
+// turn-tier failures resolve as a 200 with a failed AgentOutput (so the
+// caller keeps the last-good state), while init-tier failures (a rejected
+// session source) are hard HTTP errors.
+func TestHandlerAgent(t *testing.T) {
+	g := Init(context.Background())
+
+	// Replies "echo <n>" where n is the number of messages the model saw,
+	// so resumed history is observable; fails when asked to.
+	DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			last := req.Messages[len(req.Messages)-1]
+			if last.Role == ai.RoleUser && strings.Contains(last.Text(), "fail") {
+				return nil, core.NewError(core.RESOURCE_EXHAUSTED, "model on fire")
+			}
+			if cb != nil {
+				cb(ctx, &ai.ModelResponseChunk{Content: []*ai.Part{ai.NewTextPart("chunk")}})
+			}
+			return &ai.ModelResponse{
+				Message:      ai.NewModelTextMessage(fmt.Sprintf("echo %d", len(req.Messages))),
+				FinishReason: ai.FinishReasonStop,
+			}, nil
+		})
+
+	DefineAgent[any](g, "agentClient", aix.FromInline(ai.WithModelName("test/echo")))
+
+	store, err := localstore.NewFileSessionStore[any](t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	DefineAgent(g, "agentServer", aix.FromInline(ai.WithModelName("test/echo")),
+		aix.WithSessionStore(store),
+		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+	)
+
+	// Agents register under their own action type, so they surface through
+	// ListAgents (and not ListFlows) and Handler serves them like any other
+	// action.
+	for _, a := range ListFlows(g) {
+		if a.Name() == "agentClient" || a.Name() == "agentServer" {
+			t.Fatalf("agent %q unexpectedly listed as a flow", a.Name())
+		}
+	}
+	handlerFor := func(t *testing.T, name string) http.HandlerFunc {
+		t.Helper()
+		for _, a := range ListAgents(g) {
+			if a.Name() == name {
+				return Handler(a)
+			}
+		}
+		t.Fatalf("agent %q not in ListAgents", name)
+		return nil
+	}
+
+	post := func(t *testing.T, name, body string, stream bool) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if stream {
+			req.Header.Set("Accept", "text/event-stream")
+		}
+		w := httptest.NewRecorder()
+		handlerFor(t, name)(w, req)
+		respBody, _ := io.ReadAll(w.Result().Body)
+		return w.Result().StatusCode, string(respBody)
+	}
+
+	parseResult := func(t *testing.T, body string) agentHTTPResult {
+		t.Helper()
+		var envelope struct {
+			Result agentHTTPResult `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+			t.Fatalf("unmarshal %q: %v", body, err)
+		}
+		return envelope.Result
+	}
+
+	turn := func(text string) string {
+		return `{"data":{"message":{"role":"user","content":[{"text":"` + text + `"}]}}}`
+	}
+	turnWithInit := func(text, init string) string {
+		return `{"data":{"message":{"role":"user","content":[{"text":"` + text + `"}]}},"init":` + init + `}`
+	}
+
+	t.Run("client-managed conversation across requests", func(t *testing.T) {
+		// Fresh turn: no init at all.
+		code, body := post(t, "agentClient", turn("hello"), false)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.FinishReason != "stop" {
+			t.Errorf("finishReason = %q, want %q", res.FinishReason, "stop")
+		}
+		if res.SessionID == "" {
+			t.Error("missing sessionId")
+		}
+		if len(res.State) == 0 {
+			t.Fatal("client-managed output must carry state")
+		}
+		if got := res.Message.Text(); got != "echo 1" {
+			t.Errorf("message = %q, want %q", got, "echo 1")
+		}
+
+		// Resume: round-trip the returned state through init.
+		code, body = post(t, "agentClient", turnWithInit("again", `{"state":`+string(res.State)+`}`), false)
+		if code != http.StatusOK {
+			t.Fatalf("resume status = %d, body = %s", code, body)
+		}
+		resumed := parseResult(t, body)
+		// The model saw the prior user/model exchange plus the new message.
+		if got := resumed.Message.Text(); got != "echo 3" {
+			t.Errorf("resumed message = %q, want %q", got, "echo 3")
+		}
+		if resumed.SessionID != res.SessionID {
+			t.Errorf("sessionId changed across resume: %q vs %q", resumed.SessionID, res.SessionID)
+		}
+	})
+
+	t.Run("server-managed conversation across requests", func(t *testing.T) {
+		code, body := post(t, "agentServer", turn("hello"), false)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if len(res.State) != 0 {
+			t.Errorf("server-managed output must not inline state, got %s", res.State)
+		}
+		if res.SessionID == "" || res.SnapshotID == "" {
+			t.Fatalf("missing session/snapshot ID: %+v", res)
+		}
+
+		code, body = post(t, "agentServer", turnWithInit("again", `{"sessionId":"`+res.SessionID+`"}`), false)
+		if code != http.StatusOK {
+			t.Fatalf("resume status = %d, body = %s", code, body)
+		}
+		resumed := parseResult(t, body)
+		if got := resumed.Message.Text(); got != "echo 3" {
+			t.Errorf("resumed message = %q, want %q", got, "echo 3")
+		}
+	})
+
+	t.Run("turn failure resolves as failed output with 200", func(t *testing.T) {
+		code, body := post(t, "agentClient", turn("fail"), false)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (failure rides the output); body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.FinishReason != "failed" {
+			t.Errorf("finishReason = %q, want %q", res.FinishReason, "failed")
+		}
+		if res.Error == nil {
+			t.Fatalf("missing error in failed output: %s", body)
+		}
+		if res.Error.Status != "RESOURCE_EXHAUSTED" {
+			t.Errorf("error.status = %q, want RESOURCE_EXHAUSTED", res.Error.Status)
+		}
+		if res.Error.Message == "" {
+			t.Error("missing error.message")
+		}
+		if _, ok := res.Error.Details["stack"]; ok {
+			t.Error("error.details must not leak the in-process stack trace")
+		}
+		// The failed output still hands back the last-good state.
+		if len(res.State) == 0 {
+			t.Error("failed output must carry the last-good state")
+		}
+	})
+
+	t.Run("init-tier failures are hard HTTP errors", func(t *testing.T) {
+		code, body := post(t, "agentServer", turnWithInit("hi", `{"snapshotId":"nope"}`), false)
+		if code != http.StatusNotFound {
+			t.Errorf("unknown snapshot: status = %d, want %d; body = %s", code, http.StatusNotFound, body)
+		}
+
+		code, body = post(t, "agentServer", turnWithInit("hi", `{"state":{"messages":[]}}`), false)
+		if code != http.StatusBadRequest {
+			t.Errorf("state on server-managed: status = %d, want %d; body = %s", code, http.StatusBadRequest, body)
+		}
+
+		code, body = post(t, "agentClient", turnWithInit("hi", `{"sessionId":"abc"}`), false)
+		if code != http.StatusBadRequest {
+			t.Errorf("sessionId on client-managed: status = %d, want %d; body = %s", code, http.StatusBadRequest, body)
+		}
+
+		// data is required for one-shot runs: only a streaming session can
+		// start up and defer its first input.
+		code, body = post(t, "agentClient", `{"init": {}}`, false)
+		if code != http.StatusBadRequest {
+			t.Errorf("init without data: status = %d, want %d; body = %s", code, http.StatusBadRequest, body)
+		}
+		if !strings.Contains(body, "streaming session") {
+			t.Errorf("init without data: body should point the caller at streaming sessions; body = %s", body)
+		}
+	})
+
+	t.Run("streaming turn delivers chunks then result", func(t *testing.T) {
+		code, body := post(t, "agentClient", turn("stream"), true)
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", code, body)
+		}
+		if !strings.Contains(body, "modelChunk") {
+			t.Errorf("missing modelChunk event; body = %s", body)
+		}
+		if !strings.Contains(body, "turnEnd") {
+			t.Errorf("missing turnEnd event; body = %s", body)
+		}
+		if !strings.Contains(body, `"result"`) {
+			t.Errorf("missing final result event; body = %s", body)
 		}
 	})
 }

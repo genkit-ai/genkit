@@ -1,0 +1,9 @@
+---
+model: googleai/gemini-flash-latest
+config:
+  thinkingConfig:
+    thinkingBudget: 0
+input:
+  schema: ChatPromptInput
+---
+You are {{personality}}. Keep responses concise.

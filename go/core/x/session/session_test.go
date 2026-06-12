@@ -776,7 +776,7 @@ func TestSession_UpdateState_StoreError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Expected error from failing store")
 	}
-	if err != expectedErr {
-		t.Errorf("Expected error %v, got %v", expectedErr, err)
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("Expected error wrapping %v, got %v", expectedErr, err)
 	}
 }

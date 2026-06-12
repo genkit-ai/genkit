@@ -41,6 +41,8 @@ PRIM = {'string': 'str', 'number': 'float', 'integer': 'int', 'boolean': 'bool'}
 TRANSFORMATIONS = {
     'Message': {'output_name': 'MessageData'},
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
+    # RuntimeError would shadow Python's builtin exception.
+    'RuntimeError': {'output_name': 'GenkitRuntimeError'},
 }
 
 
@@ -159,7 +161,13 @@ def _typed_map_aliases(defs: dict) -> dict[str, str]:
 
 
 def _extract_inline_classes(schema: dict) -> dict[str, dict]:
-    """Extract inline object schemas to named classes (e.g. Score.details -> Details)."""
+    """Extract inline object schemas to named classes (e.g. Score.details -> Details).
+
+    When two inline schemas across different parents share a derived class
+    name (e.g. ``resume`` on both ``AgentInput`` and ``GenerateActionOptions``),
+    keep the one with the larger property set so the generated dataclass
+    captures the superset of fields.
+    """
     result = {}
     defs = schema.get('$defs') or {}
 
@@ -167,8 +175,11 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
         for prop_name, prop_schema in (props or {}).items():
             if isinstance(prop_schema, dict) and prop_schema.get('type') == 'object' and '$ref' not in prop_schema:
                 class_name = _pascal(prop_name)
-                if class_name not in defs and class_name not in result:
-                    result[class_name] = prop_schema
+                if class_name not in defs:
+                    existing = result.get(class_name)
+                    new_props = prop_schema.get('properties') or {}
+                    if existing is None or len(existing.get('properties') or {}) < len(new_props):
+                        result[class_name] = prop_schema
                 walk(prop_schema.get('properties', {}))
 
     for defn in defs.values():

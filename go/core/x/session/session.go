@@ -165,7 +165,7 @@ func New[S any](ctx context.Context, opts ...Option[S]) (*Session[S], error) {
 func Load[S any](ctx context.Context, store Store[S], sessionID string) (*Session[S], error) {
 	data, err := store.Get(ctx, sessionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("session.Load: %w", err)
 	}
 	if data == nil {
 		return nil, &NotFoundError{SessionID: sessionID}
@@ -221,7 +221,7 @@ func (s *Session[S]) UpdateState(ctx context.Context, state S) error {
 			State: state,
 		}
 		if err := s.store.Save(ctx, s.id, data); err != nil {
-			return err
+			return fmt.Errorf("session.UpdateState: %w", err)
 		}
 	}
 
@@ -346,12 +346,12 @@ func copyData[S any](data *Data[S]) (*Data[S], error) {
 
 	bytes, err := json.Marshal(data)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("copy session data: marshal: %w", err)
 	}
 
 	var copied Data[S]
 	if err := json.Unmarshal(bytes, &copied); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("copy session data: unmarshal: %w", err)
 	}
 
 	return &copied, nil
