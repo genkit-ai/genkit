@@ -109,7 +109,7 @@ type ResourceFunc = func(context.Context, *ResourceInput) (*ResourceOutput, erro
 // It holds the underlying core action and allows looking up resources
 // by name without knowing their specific input/output api.
 type resource struct {
-	core.Action[*ResourceInput, *ResourceOutput, struct{}, struct{}]
+	core.Action[*ResourceInput, *ResourceOutput, struct{}]
 }
 
 // Resource represents an instance of a resource.
@@ -227,7 +227,7 @@ func (r *resource) Execute(ctx context.Context, input *ResourceInput) (*Resource
 // FindMatchingResource finds a resource that matches the given URI.
 func FindMatchingResource(r api.Registry, uri string) (Resource, *ResourceInput, error) {
 	for _, a := range r.ListActions() {
-		if action, ok := a.(*core.Action[*ResourceInput, *ResourceOutput, struct{}, struct{}]); ok {
+		if action, ok := a.(*core.Action[*ResourceInput, *ResourceOutput, struct{}]); ok {
 			res := &resource{Action: *action}
 			if res.Matches(uri) {
 				variables, err := res.ExtractVariables(uri)
@@ -244,7 +244,7 @@ func FindMatchingResource(r api.Registry, uri string) (Resource, *ResourceInput,
 
 // LookupResource looks up the resource in the registry by provided name and returns it.
 func LookupResource(r api.Registry, name string) Resource {
-	action := core.ResolveActionFor[*ResourceInput, *ResourceOutput, struct{}, struct{}](r, api.ActionTypeResource, name)
+	action := core.ResolveActionFor[*ResourceInput, *ResourceOutput, struct{}](r, api.ActionTypeResource, name)
 	if action == nil {
 		return nil
 	}

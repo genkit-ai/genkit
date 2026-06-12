@@ -22,6 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+
+	"github.com/firebase/genkit/go/internal/base"
+	"github.com/invopop/jsonschema"
 )
 
 type ReflectionErrorDetails struct {
@@ -68,6 +71,15 @@ func (e *GenkitError) MarshalJSON() ([]byte, error) {
 		Message: e.Message,
 		Details: e.Details,
 	})
+}
+
+// JSONSchema describes the error's wire format for schema inference.
+// Without it, inference would reflect over the struct fields, requiring
+// capitalized in-process fields (Message, HTTPCode, Source) that
+// MarshalJSON never emits, so values embedding a GenkitError would fail
+// validation against their own inferred schema.
+func (GenkitError) JSONSchema() *jsonschema.Schema {
+	return base.InferJSONSchema(genkitErrorWire{})
 }
 
 // UnmarshalJSON decodes a GenkitError from the canonical wire format

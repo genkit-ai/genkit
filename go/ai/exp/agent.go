@@ -463,7 +463,7 @@ type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Str
 
 // Agent is a bidirectional streaming agent with automatic snapshot management.
 type Agent[Stream, State any] struct {
-	action *core.Action[*AgentInit[State], *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInput]
+	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInit[State]]
 }
 
 // Name returns the agent's registered name. This is also the name under
@@ -539,7 +539,7 @@ func DefineCustomAgent[Stream, State any](
 	// immutable once registered. WithFlowContext below preserves the
 	// flow-context wrapping that makes core.Run work inside fn.
 	action := core.DefineBidiAction(r, name, api.ActionTypeFlow,
-		&core.ActionOptions{
+		&core.BidiActionOptions{
 			Metadata: map[string]any{"agent": agentMetadataFor(cfg.store)},
 		},
 		func(
@@ -1804,7 +1804,7 @@ func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*
 // always waits for finalization (so detached invocations see the
 // pending snapshot ID rather than a context-cancellation error).
 type AgentConnection[Stream, State any] struct {
-	conn *core.BidiConnection[*AgentInput, *AgentStreamChunk[Stream], *AgentOutput[State]]
+	conn *core.BidiConnection[*AgentInput, *AgentOutput[State], *AgentStreamChunk[Stream]]
 }
 
 // Send sends an AgentInput to the agent. The input must not be nil.
@@ -1898,10 +1898,13 @@ func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[S
 // them. Finish Receive first, then call Output.
 func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
 	_ = c.conn.Close()
-	// The core Output drains unconsumed chunks (so the agent is never
-	// wedged publishing to a stream nobody reads) and unblocks on ctx
-	// cancellation while preferring the finalized result when both are
-	// ready.
+	// The core connection applies backpressure and its Output does not
+	// consume the stream, so drain the chunks the caller did not Receive;
+	// the agent must never wedge publishing to a stream nobody reads.
+	// Receive ends on completion or cancellation either way, and the core
+	// Output prefers the finalized result when both are ready.
+	for range c.conn.Receive() {
+	}
 	return c.conn.Output()
 }
 

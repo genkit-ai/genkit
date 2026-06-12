@@ -3254,7 +3254,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 
 	// Transform is action-layer behavior: invoke the registered action
 	// directly the way a non-Go client would.
-	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 		reg, api.ActionTypeAgentSnapshot, "transformedFlow")
 	if action == nil {
 		t.Fatal("getSnapshot action not registered")
@@ -3329,7 +3329,7 @@ func TestAgent_GetSnapshotAction_ReturnsFinishReason(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 
-	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 		reg, api.ActionTypeAgentSnapshot, "finishReasonActionFlow")
 	if action == nil {
 		t.Fatal("getSnapshot action not registered")
@@ -3366,12 +3366,12 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 		},
 	)
 
-	getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+	getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 		reg, api.ActionTypeAgentSnapshot, "noStoreFlow")
 	if getAction != nil {
 		t.Error("getSnapshot action should NOT be registered without a store")
 	}
-	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "noStoreFlow")
 	if abortAction != nil {
 		t.Error("abortSnapshot action should NOT be registered without a store")
@@ -3615,7 +3615,7 @@ func TestAgent_AgentMetadata(t *testing.T) {
 			flowName := "metaFlow"
 			tc.define(reg, flowName)
 
-			act := core.ResolveActionFor[*AgentInit[testState], *AgentOutput[testState], *AgentStreamChunk[testStatus], *AgentInput](
+			act := core.ResolveBidiActionFor[*AgentInput, *AgentOutput[testState], *AgentStreamChunk[testStatus], *AgentInit[testState]](
 				reg, api.ActionTypeFlow, flowName)
 			if act == nil {
 				t.Fatal("flow action not registered")
@@ -3652,12 +3652,12 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 			},
 			WithSessionStore(store),
 		)
-		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 			reg, api.ActionTypeAgentSnapshot, "fullCaps")
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered")
 		}
-		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "fullCaps")
 		if abortAction == nil {
 			t.Error("abortSnapshot action should be registered when store implements SnapshotAborter")
@@ -3672,12 +3672,12 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 			},
 			WithSessionStore[testState](minimalStore[testState]{}),
 		)
-		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 			reg, api.ActionTypeAgentSnapshot, "minCaps")
 		if getAction == nil {
 			t.Error("getSnapshot action should be registered even when store lacks SnapshotAborter")
 		}
-		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
 			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter")
@@ -3697,7 +3697,7 @@ func TestAgent_AbortAction_NotFound(t *testing.T) {
 		WithSessionStore(newTestInMemStore[testState]()),
 	)
 
-	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}, struct{}](
+	abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 		reg, api.ActionTypeAgentAbort, "missingFlow")
 	if abortAction == nil {
 		t.Fatal("abortSnapshot action should be registered")
@@ -5726,7 +5726,7 @@ func TestAgent_GetSnapshotAction_ReturnsSessionID(t *testing.T) {
 		t.Fatal("expected session ID on output")
 	}
 
-	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}, struct{}](
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 		reg, api.ActionTypeAgentSnapshot, "sessionActionFlow")
 	if action == nil {
 		t.Fatal("getSnapshot action not registered")

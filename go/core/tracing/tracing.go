@@ -169,6 +169,11 @@ type SpanMetadata struct {
 	TelemetryLabels map[string]string
 	// Metadata are genkit-specific metadata with automatic "genkit:metadata:" prefix
 	Metadata map[string]string
+	// Init is the initialization data supplied to the action, recorded as the
+	// "genkit:init" span attribute when non-nil. It is kept separate from the
+	// span input so tooling can distinguish per-call input from session
+	// initialization data.
+	Init any
 }
 
 // RunInNewSpan runs f on input in a new span with the provided metadata.
@@ -200,6 +205,7 @@ func RunInNewSpan[I, O any](
 	sm := &spanMetadata{
 		Name:     metadata.Name,
 		Input:    input,
+		Init:     metadata.Init,
 		IsRoot:   isRoot,
 		Type:     metadata.Type,
 		Subtype:  metadata.Subtype,
@@ -329,6 +335,7 @@ type spanMetadata struct {
 	IsRoot          bool
 	IsFailureSource bool // whether this span is the source of a failure
 	Input           any
+	Init            any // initialization data for the action, if any
 	Output          any
 	Error           string            // error message if State is spanStateError
 	Path            string            // annotated path with type information
@@ -345,6 +352,10 @@ func (sm *spanMetadata) attributes() []attribute.KeyValue {
 		attribute.String("genkit:state", string(sm.State)),
 		attribute.String("genkit:input", base.JSONString(sm.Input)),
 		attribute.String("genkit:path", sm.Path),
+	}
+
+	if sm.Init != nil {
+		kvs = append(kvs, attribute.String("genkit:init", base.JSONString(sm.Init)))
 	}
 
 	if sm.Output != nil {

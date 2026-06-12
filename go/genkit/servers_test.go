@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/x/streaming"
 )
 
@@ -553,6 +554,158 @@ data: {"result":"ab-done"}
 
 		if resp.StatusCode != http.StatusNoContent {
 			t.Errorf("want status code %d, got %d", http.StatusNoContent, resp.StatusCode)
+		}
+	})
+}
+
+// TestHandlerBidiInitEnvelope verifies that an HTTP POST to a bidi action
+// handler can supply Init via the request envelope's "init" field, alongside
+// the existing "data" field. This is the production HTTP path for bidi
+// actions invoked as one-shots.
+func TestHandlerBidiInitEnvelope(t *testing.T) {
+	g := Init(context.Background())
+
+	type Config struct {
+		Prefix string `json:"prefix"`
+	}
+
+	bidiAction := core.DefineBidiAction(g.reg, "envelopeBidi", api.ActionTypeCustom, nil,
+		func(ctx context.Context, cfg Config, inCh <-chan string, outCh chan<- string) (string, error) {
+			for in := range inCh {
+				outCh <- cfg.Prefix + in
+			}
+			return "done", nil
+		})
+
+	t.Run("non-streaming envelope with init", func(t *testing.T) {
+		handler := Handler(bidiAction)
+
+		body := `{"data":"hello","init":{"prefix":">> "}}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler(w, req)
+
+		resp := w.Result()
+		respBody, _ := io.ReadAll(resp.Body)
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", resp.StatusCode, string(respBody))
+		}
+		// Result should be "done"; the prefixed chunk goes to the streaming
+		// callback (nil here), so the final output is the function's return.
+		if !strings.Contains(string(respBody), `"done"`) {
+			t.Errorf("response body = %q, want it to contain \"done\"", string(respBody))
+		}
+	})
+
+	t.Run("streaming envelope with init delivers prefixed chunk", func(t *testing.T) {
+		handler := HandlerFunc(bidiAction)
+
+		// Use an HTML-safe prefix so json.Marshal doesn't escape it; that
+		// way the assertion can match the prefix literally in the SSE body.
+		body := `{"data":"hello","init":{"prefix":"PFX:"}}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		w := httptest.NewRecorder()
+
+		if err := handler(w, req); err != nil {
+			t.Fatalf("handler: %v", err)
+		}
+
+		respBody, _ := io.ReadAll(w.Result().Body)
+		if !strings.Contains(string(respBody), "PFX:hello") {
+			t.Errorf("response missing prefixed chunk; body = %q", string(respBody))
+		}
+		if !strings.Contains(string(respBody), `"done"`) {
+			t.Errorf("response missing final result; body = %q", string(respBody))
+		}
+	})
+
+	t.Run("envelope without init uses zero value", func(t *testing.T) {
+		handler := Handler(bidiAction)
+
+		body := `{"data":"hello"}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, body = %s", resp.StatusCode, string(respBody))
+		}
+	})
+
+	t.Run("envelope with malformed init returns 400", func(t *testing.T) {
+		handler := Handler(bidiAction)
+
+		// Init is valid JSON but doesn't match the action's Config (prefix
+		// must be a string; here it's a number).
+		body := `{"data":"hello","init":{"prefix":42}}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusBadRequest {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Errorf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusBadRequest, string(respBody))
+		}
+	})
+
+	t.Run("init on non-bidi flow returns 400", func(t *testing.T) {
+		plainFlow := DefineFlow(g, "envelopePlain",
+			func(ctx context.Context, in string) (string, error) {
+				return "out:" + in, nil
+			})
+		handler := Handler(plainFlow)
+
+		body := `{"data":"hello","init":{"prefix":">> "}}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		handler(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusBadRequest {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Errorf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusBadRequest, string(respBody))
+		}
+	})
+
+	t.Run("init on non-bidi flow returns 400 on streaming requests", func(t *testing.T) {
+		plainFlow := DefineFlow(g, "envelopePlainStream",
+			func(ctx context.Context, in string) (string, error) {
+				return "out:" + in, nil
+			})
+		handler := Handler(plainFlow)
+
+		// The rejection must happen before the handler commits to SSE: a
+		// streaming client should see an HTTP 400, not a 200 with an
+		// in-band error event.
+		body := `{"data":"hello","init":{"prefix":">> "}}`
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		w := httptest.NewRecorder()
+
+		handler(w, req)
+
+		resp := w.Result()
+		respBody, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d; body = %s", resp.StatusCode, http.StatusBadRequest, string(respBody))
+		}
+		if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/event-stream") {
+			t.Errorf("Content-Type = %q; response must not commit to SSE before rejecting init", ct)
 		}
 	})
 }

@@ -1974,6 +1974,9 @@
         "input": {
           "description": "An input with the type that this action expects."
         },
+        "init": {
+          "description": "Initialization parameters to establish long running session states."
+        },
         "context": {
           "description": "Additional runtime context data (ex. auth context data)."
         },
@@ -2277,6 +2280,7 @@
         },
         "input": {},
         "output": {},
+        "init": {},
         "isRoot": {
           "type": "boolean"
         },
