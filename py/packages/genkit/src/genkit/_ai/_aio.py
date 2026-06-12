@@ -1083,7 +1083,7 @@ class Genkit:
                 prompt='Hello!',
                 config=config,
             )
-            async for chunk in stream:
+            async for chunk in stream.stream:
                 print(chunk.text, end='')
             ```
         """
