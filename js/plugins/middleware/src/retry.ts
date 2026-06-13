@@ -22,6 +22,7 @@ import {
   z,
   type StatusName,
 } from 'genkit';
+import { logger } from 'genkit/logging';
 
 export const RetryOptionsSchema = z
   .object({
@@ -166,11 +167,15 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
               const error = e as Error;
               if (i < maxRetries) {
                 let shouldRetry = false;
+                let reason = '';
                 if (NEVER_RETRY_ERROR_NAMES.includes(error?.name)) {
                   shouldRetry = false;
+                  reason = `error name "${error?.name}" is non-retryable`;
                 } else if (error instanceof GenkitError) {
                   if ((statuses as string[]).includes(error.status)) {
                     shouldRetry = true;
+                  } else {
+                    reason = `status "${error.status}" is not retryable`;
                   }
                 } else {
                   shouldRetry = true;
@@ -191,13 +196,42 @@ export const retry: GenerateMiddleware<typeof RetryOptionsSchema> =
                   if (!noJitter) {
                     delay = delay + 1000 * Math.pow(2, i) * Math.random();
                   }
+                  logger.logStructuredWarn(
+                    `Retry ${i + 1} of ${maxRetries} in ${Math.round(delay)}ms due to error: ${error?.message || String(error)}`,
+                    {
+                      'genkit.middleware.name': 'retry',
+                      'genkit.middleware.retry.attempt': i + 1,
+                      'genkit.middleware.retry.max_attempts': maxRetries,
+                      'genkit.middleware.retry.delay_ms': Math.round(delay),
+                    },
+                    error
+                  );
                   await new Promise((resolve) => __setTimeout(resolve, delay));
                   currentDelay = Math.min(
                     currentDelay * backoffFactor,
                     maxDelayMs
                   );
                   continue;
+                } else {
+                  logger.logStructuredWarn(
+                    `Retry skipped for ${error?.message || String(error)} because of ${reason}`,
+                    {
+                      'genkit.middleware.name': 'retry',
+                      'genkit.middleware.retry.skipped_reason': reason,
+                      'genkit.middleware.retry.max_attempts': maxRetries,
+                    },
+                    error
+                  );
                 }
+              } else {
+                logger.logStructuredWarn(
+                  `Retry attempts exhausted (${maxRetries}). Last error: ${error?.message || String(error)}`,
+                  {
+                    'genkit.middleware.name': 'retry',
+                    'genkit.middleware.retry.max_attempts': maxRetries,
+                  },
+                  error
+                );
               }
               throw error;
             }
