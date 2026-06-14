@@ -66,6 +66,7 @@ interface FullInferenceSample {
 const SUPPORTED_ACTION_TYPES = ['flow', 'model', 'executable-prompt'] as const;
 type SupportedActionType = (typeof SUPPORTED_ACTION_TYPES)[number];
 const GENERATE_ACTION_UTIL = '/util/generate';
+const MAX_CONCURRENCY = 100;
 
 /**
  * Starts a new evaluation run. Intended to be used via the reflection API.
@@ -118,6 +119,7 @@ export async function runNewEvaluation(
     inferenceDataset,
     context: request.options?.context,
     actionConfig: request.options?.actionConfig,
+    batchSize: request.options?.batchSize,
   });
   const evaluatorActions = await getMatchingEvaluatorActions(
     manager,
@@ -145,11 +147,20 @@ export async function runInference(params: {
   inferenceDataset: Dataset;
   context?: string;
   actionConfig?: any;
+  batchSize?: number;
 }): Promise<EvalInput[]> {
-  const { manager, actionRef, inferenceDataset, context, actionConfig } =
-    params;
+  const {
+    manager,
+    actionRef,
+    inferenceDataset,
+    context,
+    actionConfig,
+    batchSize,
+  } = params;
   if (!isSupportedActionRef(actionRef)) {
-    throw new Error('Inference is only supported on flows and models');
+    throw new Error(
+      'Inference is only supported on flows, models, and executable prompts'
+    );
   }
 
   const evalDataset: EvalInput[] = await bulkRunAction({
@@ -158,6 +169,7 @@ export async function runInference(params: {
     inferenceDataset,
     context,
     actionConfig,
+    batchSize,
   });
   return evalDataset;
 }
@@ -182,20 +194,24 @@ export async function runEvaluation(params: {
   const runtime = manager.getMostRecentRuntime();
   const isNodeRuntime = runtime?.genkitVersion?.startsWith('nodejs') ?? false;
 
-  for (const action of evaluatorActions) {
-    const name = evaluatorName(action);
-    const response = await manager.runAction({
-      key: name,
-      input: {
-        dataset: evalDataset.filter((row) => !row.error),
-        evalRunId,
-        batchSize: isNodeRuntime ? batchSize : undefined,
-      },
-    });
-    scores[name] = response.result;
-    logger.debug(`Finished evaluator '${action.name}'`);
-    logger.info(`${clc.cyan('Trace ID:')} ${response.telemetry?.traceId}`);
-  }
+  const successfulResults = evalDataset.filter((row) => !row.error);
+
+  await Promise.all(
+    evaluatorActions.map(async (action) => {
+      const name = evaluatorName(action);
+      const response = await manager.runAction({
+        key: name,
+        input: {
+          dataset: successfulResults,
+          evalRunId,
+          batchSize: isNodeRuntime ? batchSize : undefined,
+        },
+      });
+      scores[name] = response.result;
+      logger.debug(`Finished evaluator '${action.name}'`);
+      logger.info(`${clc.cyan('Trace ID:')} ${response.telemetry?.traceId}`);
+    })
+  );
 
   const scoredResults = enrichResultsWithScoring(scores, evalDataset);
   const metadata = extractMetricsMetadata(evaluatorActions);
@@ -250,61 +266,96 @@ export async function getMatchingEvaluatorActions(
   return filteredEvaluatorActions;
 }
 
-async function bulkRunAction(params: {
+export async function bulkRunAction(params: {
   manager: BaseRuntimeManager;
   actionRef: string;
   inferenceDataset: Dataset;
   context?: string;
   actionConfig?: any;
+  batchSize?: number;
 }): Promise<EvalInput[]> {
-  const { manager, actionRef, inferenceDataset, context, actionConfig } =
-    params;
+  const {
+    manager,
+    actionRef,
+    inferenceDataset,
+    context,
+    actionConfig,
+    batchSize,
+  } = params;
   const actionType = getSupportedActionType(actionRef);
   if (inferenceDataset.length === 0) {
     throw new Error('Cannot run inference, no data provided');
   }
+
+  const desiredConcurrency = Math.max(1, batchSize ?? 1);
+  const resolvedConcurrency = Math.min(desiredConcurrency, MAX_CONCURRENCY);
 
   // Convert to satisfy TS checks. `input` is required in `Dataset` type, but
   // ZodAny also includes `undefined` in TS checks. This explcit conversion
   // works around this.
   const fullInferenceDataset = inferenceDataset as FullInferenceSample[];
 
-  const states: InferenceRunState[] = [];
+  const total = fullInferenceDataset.length;
+  logger.info(
+    `Running inference '${actionRef}' on ${total} samples with concurrency=${resolvedConcurrency}...`
+  );
+  let completed = 0;
+
+  const states: InferenceRunState[] = new Array(total);
   const evalInputs: EvalInput[] = [];
-  for (const sample of fullInferenceDataset) {
-    logger.debug(`Running inference '${actionRef}' ...`);
-    if (actionType === 'model') {
-      states.push(
-        await runModelAction({
+  const runSample = async (sample: FullInferenceSample, index: number) => {
+    try {
+      logger.debug(`Running inference '${actionRef}' ...`);
+      if (actionType === 'model') {
+        states[index] = await runModelAction({
           manager,
           actionRef,
           sample,
           modelConfig: actionConfig,
-        })
-      );
-    } else if (actionType === 'flow') {
-      states.push(
-        await runFlowAction({
+        });
+      } else if (actionType === 'flow') {
+        states[index] = await runFlowAction({
           manager,
           actionRef,
           sample,
           context,
-        })
-      );
-    } else {
-      // executable-prompt action
-      states.push(
-        await runPromptAction({
+        });
+      } else {
+        // executable-prompt action
+        states[index] = await runPromptAction({
           manager,
           actionRef,
           sample,
           context,
           promptConfig: actionConfig,
-        })
-      );
+        });
+      }
+      completed++;
+      if (completed % 10 === 0 || completed === total) {
+        logger.info(`Inference progress: ${completed}/${total} completed`);
+      }
+    } catch (error: any) {
+      completed++;
+      logger.error(`Inference failed for sample ${index}:`, error);
+      states[index] = {
+        testCaseId: sample.testCaseId,
+        input: sample.input,
+        reference: sample.reference,
+        traceIds: [],
+        evalError: error instanceof Error ? error.message : String(error),
+      };
     }
-  }
+  };
 
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: resolvedConcurrency }, async () => {
+      while (nextIndex < total) {
+        const index = nextIndex++;
+        await runSample(fullInferenceDataset[index], index);
+      }
+    })
+  );
   logger.debug(`Gathering evalInputs...`);
   for (const state of states) {
     evalInputs.push(await gatherEvalInput({ manager, actionRef, state }));

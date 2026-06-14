@@ -178,6 +178,7 @@ export const evalFlow = new Command('eval:flow')
           actionRef,
           inferenceDataset,
           context: options.context,
+          batchSize: options.batchSize,
         });
 
         const evalRun = await runEvaluation({
