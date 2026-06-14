@@ -10,6 +10,7 @@ import pytest
 from genkit import ActionKind, Genkit
 from genkit._ai._tools import (
     Interrupt,
+    Tool,
     ToolRunContext,
     _tool_original_input,
     _tool_resumed_metadata,
@@ -17,6 +18,7 @@ from genkit._ai._tools import (
     restart_tool,
     run_tool_after_restart,
 )
+from genkit._core._action import Action
 from genkit._core._error import GenkitError
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
 
@@ -27,7 +29,9 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': {'reason': 'hold'}},
     )
-    out = restart_tool(interrupt_trp, resumed_metadata={'k': 'v'})
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=lambda x: x)
+    tool = Tool(action)
+    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
@@ -41,7 +45,9 @@ def test_restart_replace_input_sets_replaced_input() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': True},
     )
-    out = restart_tool(interrupt_trp, resumed_metadata={'by': 'u'}, replace_input={'amount': 99})
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=lambda x: x)
+    tool = Tool(action)
+    out = restart_tool(replace_input={'amount': 99}, tool=tool, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
@@ -56,7 +62,9 @@ def test_restart_resumed_defaults_to_true() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={}),
         metadata={'interrupt': True},
     )
-    out = restart_tool(interrupt_trp, resumed_metadata=None)
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=lambda x: x)
+    tool = Tool(action)
+    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata=None)
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
@@ -208,20 +216,15 @@ def test_respond_to_interrupt_wire_format_with_metadata() -> None:
     assert result.metadata.get('interruptResponse') == {'by': 'admin'}
 
 
-def test_restart_tool_does_not_require_tool_reference() -> None:
-    """``restart_tool`` works from an interrupt alone — no ``Tool`` needed.
-
-    Middleware-contributed tools (``read_file`` from a filesystem middleware,
-    anything gated by a ``ToolApproval`` middleware) never give the caller
-    a ``Tool`` reference; they just appear in ``response.interrupts``. The
-    helper has to be callable from the interrupt by itself.
-    """
+def test_restart_tool_with_tool_reference() -> None:
+    """``restart_tool`` works with a ``Tool`` reference."""
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='middleware_tool', ref='r1', input={'p': 1}),
         metadata={'interrupt': True},
     )
-
-    out = restart_tool(interrupt_trp, resumed_metadata={'toolApproved': True})
+    action = Action(kind=ActionKind.TOOL, name='middleware_tool', fn=lambda x: x)
+    tool = Tool(action)
+    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'toolApproved': True})
 
     assert out.tool_request.name == 'middleware_tool'
     assert out.tool_request.input == {'p': 1}
@@ -235,7 +238,9 @@ def test_restart_preserves_ref_on_wire() -> None:
         tool_request=ToolRequest(name='pay', ref='corr-id-1', input={'amount': 50}),
         metadata={'interrupt': True},
     )
-    out = restart_tool(interrupt_trp)
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=lambda x: x)
+    tool = Tool(action)
+    out = restart_tool(tool=tool, interrupt=interrupt_trp)
 
     assert out.tool_request.ref == 'corr-id-1'
 
