@@ -38,6 +38,7 @@ from genkit._core._typing import (
     Role,
     SessionState,
     SnapshotStatus,
+    TextPart,
     ToolRequest,
     ToolRequestPart,
 )
@@ -79,7 +80,7 @@ _NO_ABORT = asyncio.Event()
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
     assert _agent_input_has_payload(
-        AgentInput(messages=[MessageData(role=Role.USER, content=[Part(text='x')])], detach=True),
+        AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='x'))])], detach=True),
     )
     assert not _agent_input_has_payload(AgentInput(detach=True))
 

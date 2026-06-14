@@ -551,6 +551,10 @@ class ReflectionServerV2:
           3. Background task reads receive() → sends streamChunk notifications
           4. When output() resolves, send final runAction response
         """
+        if not isinstance(action, BidiAction):
+            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'action is not bidirectional: {action.name}')
+            return
+
         # Parse init payload
         try:
             init = AgentInit.model_validate(p.input) if p.input is not None else AgentInit()
