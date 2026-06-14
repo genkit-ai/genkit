@@ -20,7 +20,7 @@
 import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, TypedDict, TypeVar, cast
@@ -129,7 +129,7 @@ class PromptGenerateOptions(TypedDict, total=False):
     """Runtime options for prompt execution (config, tools, messages, etc.)."""
 
     model: str | None
-    config: dict[str, Any] | ModelConfig | None
+    config: Mapping[str, Any] | ModelConfig | None
     messages: list[Message] | None
     docs: list[Document] | None
     tools: Sequence[str | Tool] | None
@@ -204,7 +204,7 @@ class PromptConfig(BaseModel):
 
     variant: str | None = None
     model: str | None = None
-    config: dict[str, Any] | ModelConfig | None = None
+    config: Mapping[str, Any] | ModelConfig | None = None
     description: str | None = None
     input_schema: type | dict[str, Any] | str | None = None
     system: str | list[Part] | None = None
@@ -236,7 +236,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
         registry: Registry,
         variant: str | None = None,
         model: str | None = None,
-        config: dict[str, Any] | ModelConfig | None = None,
+        config: Mapping[str, Any] | ModelConfig | None = None,
         description: str | None = None,
         input_schema: type | dict[str, Any] | str | None = None,
         system: str | list[Part] | None = None,
@@ -364,7 +364,7 @@ class ExecutablePrompt(Generic[InputT, OutputT]):
     def _prompt_config_for_call(self, opts: PromptGenerateOptions) -> PromptConfig:
         """Merge this prompt's definition with per-call ``opts`` into a :class:`PromptConfig`."""
         output_opts = opts.get('output') or {}
-        merged_config: dict[str, Any] | ModelConfig | None
+        merged_config: Mapping[str, Any] | ModelConfig | None
         if opts.get('config') is not None:
             base = (
                 self._config.model_dump(exclude_none=True)

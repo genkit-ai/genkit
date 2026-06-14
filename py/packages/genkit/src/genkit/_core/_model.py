@@ -22,7 +22,7 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import cached_property
 from typing import Any, ClassVar, Generic, cast
@@ -74,7 +74,7 @@ class ModelRef(BaseModel):
     config_schema: object | None = None
     info: object | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: Mapping[str, Any] | None = None
 
 
 class Message(MessageData):

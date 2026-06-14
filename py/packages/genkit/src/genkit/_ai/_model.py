@@ -70,7 +70,7 @@ def model_ref(
     namespace: str | None = None,
     info: ModelInfo | None = None,
     version: str | None = None,
-    config: dict[str, object] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> ModelRef:
     """Create a ModelRef, optionally prefixing name with namespace."""
     # Logic: if (options.namespace && !name.startsWith(options.namespace + '/'))
