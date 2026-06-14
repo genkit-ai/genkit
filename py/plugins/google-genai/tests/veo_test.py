@@ -124,11 +124,12 @@ class TestFromVeoOperation:
         op = _from_veo_operation({
             'name': 'operations/456',
             'done': True,
-            'error': {'message': 'Quota exceeded'},
+            'error': {'status': 'RESOURCE_EXHAUSTED', 'message': 'Quota exceeded'},
         })
         assert op.id == 'operations/456'
         assert op.done is True
         assert op.error is not None
+        assert op.error.status == 'RESOURCE_EXHAUSTED'
         assert op.error.message == 'Quota exceeded'
         assert op.output is None
 

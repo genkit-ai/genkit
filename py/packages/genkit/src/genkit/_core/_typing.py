@@ -34,6 +34,27 @@ warnings.filterwarnings(
 )
 
 
+class AgentFinishReason(StrEnum):
+    """AgentFinishReason data type class."""
+
+    STOP = 'stop'
+    LENGTH = 'length'
+    BLOCKED = 'blocked'
+    ABORTED = 'aborted'
+    INTERRUPTED = 'interrupted'
+    OTHER = 'other'
+    UNKNOWN = 'unknown'
+    DETACHED = 'detached'
+    FAILED = 'failed'
+
+
+class SnapshotEvent(StrEnum):
+    """SnapshotEvent data type class."""
+
+    TURNEND = 'turnEnd'
+    INVOCATIONEND = 'invocationEnd'
+
+
 class EvalStatusEnum(StrEnum):
     """EvalStatusEnum data type class."""
 
@@ -62,6 +83,15 @@ class Role(StrEnum):
     TOOL = 'tool'
 
 
+class SnapshotStatus(StrEnum):
+    """SnapshotStatus data type class."""
+
+    PENDING = 'pending'
+    DONE = 'done'
+    FAILED = 'failed'
+    ABORTED = 'aborted'
+
+
 class Schema(GenkitModel):
     """Model for schema data."""
 
@@ -77,6 +107,114 @@ class ConfigSchema(GenkitModel):
 Metadata = dict[str, Any]  # type alias for flexible metadata
 
 Custom = dict[str, Any]  # type alias for flexible custom data
+
+
+class AgentInit(GenkitModel):
+    """Model for agentinit data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    session_id: str | None = None
+    state: SessionState | None = None
+
+
+class AgentInput(GenkitModel):
+    """Model for agentinput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    messages: list[MessageData] | None = None
+    resume: Resume | None = None
+    detach: bool | None = None
+
+
+class AgentOutput(GenkitModel):
+    """Model for agentoutput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+    message: MessageData | None = None
+    artifacts: list[Artifact] | None = None
+    finish_reason: AgentFinishReason | None = None
+    error: Error | None = None
+
+
+class AgentResult(GenkitModel):
+    """Model for agentresult data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    message: MessageData | None = None
+    artifacts: list[Artifact] | None = None
+    finish_reason: AgentFinishReason | None = None
+
+
+class AgentStreamChunk(GenkitModel):
+    """Model for agentstreamchunk data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    model_chunk: ModelResponseChunk | None = None
+    custom_patch: JsonPatch | None = None
+    artifact: Artifact | None = None
+    turn_end: TurnEnd | None = None
+
+
+class Artifact(GenkitModel):
+    """Model for artifact data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    name: str | None = None
+    parts: list[Part] = Field(...)
+    metadata: Metadata | None = None
+
+
+class GetSnapshotDataInput(GenkitModel):
+    """Model for getsnapshotdatainput data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    session_id: str | None = None
+
+
+class JsonPatchOperation(GenkitModel):
+    """Model for jsonpatchoperation data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    op: Literal['add', 'remove', 'replace', 'move', 'copy', 'test'] = Field(...)
+    path: str = Field(...)
+    from_: str | None = None
+    value: Any | None = Field(default=None)
+
+
+class SessionSnapshot(GenkitModel):
+    """Model for sessionsnapshot data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str = Field(...)
+    parent_id: str | None = None
+    created_at: str = Field(...)
+    event: SnapshotEvent = Field(...)
+    state: SessionState = Field(...)
+    status: SnapshotStatus | None = None
+    finish_reason: AgentFinishReason | None = None
+    error: Error | None = None
+
+
+class SessionState(GenkitModel):
+    """Model for sessionstate data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    session_id: str | None = None
+    messages: list[MessageData] | None = None
+    custom: Any | None = Field(default=None)
+    artifacts: list[Artifact] | None = None
+
+
+class TurnEnd(GenkitModel):
+    """Model for turnend data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    snapshot_id: str | None = None
+    finish_reason: AgentFinishReason | None = None
 
 
 class DocumentData(GenkitModel):
@@ -765,6 +903,24 @@ class TraceMetadata(GenkitModel):
     timestamp: float = Field(...)
 
 
+class Resume(GenkitModel):
+    """Model for resume data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    respond: list[ToolResponsePart] | None = None
+    restart: list[ToolRequestPart] | None = None
+    metadata: Metadata | None = None
+
+
+class Error(GenkitModel):
+    """Model for error data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    status: str = Field(...)
+    message: str = Field(...)
+    details: Any | None = Field(default=None)
+
+
 class Details(GenkitModel):
     """Model for details data."""
 
@@ -788,15 +944,6 @@ class GenkitErrorDetails(GenkitModel):
     trace_id: str = Field(...)
 
 
-class Resume(GenkitModel):
-    """Model for resume data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    respond: list[ToolResponsePart] | None = None
-    restart: list[ToolRequestPart] | None = None
-    metadata: Metadata | None = None
-
-
 class Supports(GenkitModel):
     """Model for supports data."""
 
@@ -811,13 +958,6 @@ class Supports(GenkitModel):
     constrained: Constrained | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None
-
-
-class Error(GenkitModel):
-    """Model for error data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-    message: str = Field(...)
 
 
 class Resource(GenkitModel):
@@ -896,6 +1036,12 @@ class Part(
 
 
 TraceEvent = SpanStartEvent | SpanEndEvent
+
+
+class JsonPatch(RootModel[list[JsonPatchOperation]]):
+    """Root model for jsonpatch."""
+
+    root: list[JsonPatchOperation]
 
 
 class EvalResponse(RootModel[list[EvalFnResponse]]):

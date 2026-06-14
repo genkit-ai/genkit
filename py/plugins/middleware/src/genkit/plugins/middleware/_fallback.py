@@ -87,6 +87,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                     input=params.request,
                     context=ctx.custom_context,
                     on_chunk=on_chunk,
+                    abort_signal=ctx.abort_signal,
                 )
                 return result.response  # type: ignore[return-value]
             except Exception as e2:

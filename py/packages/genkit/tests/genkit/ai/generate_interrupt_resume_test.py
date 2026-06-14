@@ -10,9 +10,9 @@ from typing import Any
 import pytest
 
 from genkit import Genkit, Message, ModelResponse
-from genkit._ai._generate import generate_action
+from genkit._ai._generate import generate_action, resolve_tool
 from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import Interrupt, ToolRunContext, respond_to_interrupt, restart_tool
+from genkit._ai._tools import Interrupt, Tool, ToolRunContext, respond_to_interrupt, restart_tool
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import FinishReason, Resume
@@ -439,7 +439,10 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
         },
     ]
 
-    restart_trp = restart_tool(first.interrupts[0], resumed_metadata={'by': 'test'}, replace_input={'ok': True})
+    tool_pay = Tool(await resolve_tool(ai.registry, 'pay'))
+    restart_trp = restart_tool(
+        replace_input={'ok': True}, tool=tool_pay, interrupt=first.interrupts[0], resumed_metadata={'by': 'test'}
+    )
 
     second = await generate_action(
         ai.registry,
@@ -547,6 +550,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
     ia = next(p for p in first.interrupts if p.tool_request.name == 'a')
     ib = next(p for p in first.interrupts if p.tool_request.name == 'b')
 
+    tool_b = Tool(await resolve_tool(ai.registry, 'b'))
     second = await generate_action(
         ai.registry,
         _gen_opts(
@@ -555,7 +559,7 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
             messages=list(first.messages),
             resume=Resume(
                 respond=[respond_to_interrupt({'done': True}, interrupt=ia)],
-                restart=[restart_tool(ib, replace_input={'ok': True})],
+                restart=[restart_tool(replace_input={'ok': True}, tool=tool_b, interrupt=ib)],
             ),
         ),
     )

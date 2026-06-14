@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import traceback
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
@@ -37,6 +38,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
+from genkit._core._action import Action, BidiAction, BidiConnection
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
 from genkit._core._logger import get_logger
@@ -45,13 +47,17 @@ from genkit._core._registry import Registry
 from genkit._core._trace._default_exporter import TraceServerExporter
 from genkit._core._tracing import add_custom_exporter
 from genkit._core._typing import (
+    AgentInit,
+    AgentInput,
     ReflectionCancelActionParams,
     ReflectionCancelActionResponse,
     ReflectionConfigureParams,
+    ReflectionEndInputStreamParams,
     ReflectionListValuesParams,
     ReflectionRegisterParams,
     ReflectionRunActionParams,
     ReflectionRunActionStateParams,
+    ReflectionSendInputStreamChunkParams,
     ReflectionStreamChunkParams,
     State,
 )
@@ -123,6 +129,8 @@ class ReflectionServerV2:
         self._pending: dict[str, asyncio.Future[JsonValue]] = {}
         self._request_seq = 0
         self._active_actions: dict[str, asyncio.Task[Any]] = {}
+        # request_id → AgentConnection for active bidi (agent) sessions
+        self._bidi_connections: dict[str, BidiConnection] = {}
         self._stop = False
         self._reflection_handshake_telemetry_applied = False
 
@@ -163,6 +171,12 @@ class ReflectionServerV2:
             finally:
                 self._ws = None
                 self._drain_pending(ConnectionError('connection closed'))
+                for _rid, conn in list(self._bidi_connections.items()):
+                    try:
+                        await conn.close()
+                    except Exception as e:
+                        logger.debug('reflection V2: error closing bidi connection', err=e)
+                self._bidi_connections.clear()
 
             if self._stop:
                 return
@@ -309,8 +323,10 @@ class ReflectionServerV2:
                 await self._handle_cancel_action(req_id, params)
             elif method == 'configure':
                 self._handle_configure(params)
-            elif method in ('sendInputStreamChunk', 'endInputStream'):
-                await self._handle_input_stream_unimplemented(req_id, method)
+            elif method == 'sendInputStreamChunk':
+                await self._handle_send_input_stream_chunk(req_id, params)
+            elif method == 'endInputStream':
+                await self._handle_end_input_stream(req_id, params)
             else:
                 if req_id is not None:
                     await self._send_error(
@@ -325,20 +341,261 @@ class ReflectionServerV2:
             if req_id is not None:
                 await self._send_error(str(req_id), JSON_RPC_SERVER_ERROR, 'internal error')
 
-    async def _handle_input_stream_unimplemented(self, req_id: str | int | None, method: str) -> None:
-        if req_id is None:
-            logger.debug('reflection V2: input stream method not implemented (notification)', method=method)
-            return
+    async def _handle_send_input_stream_chunk(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+        """Feed a per-turn input chunk into an active bidi (agent) session."""
         try:
-            raise NotImplementedError('Not implemented')
-        except NotImplementedError as e:
-            stack = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-            await self._send_error(
-                str(req_id),
-                JSON_RPC_SERVER_ERROR,
-                str(e) or 'Not implemented',
-                {'stack': stack},
+            p = ReflectionSendInputStreamChunkParams.model_validate(params)
+        except Exception as e:  # noqa: BLE001
+            if req_id is not None:
+                await self._send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+            return
+
+        conn = self._bidi_connections.get(p.request_id)
+        if conn is None:
+            if req_id is not None:
+                await self._send_error(
+                    str(req_id),
+                    JSON_RPC_INVALID_PARAMS,
+                    f'no active bidi session for requestId {p.request_id!r}',
+                )
+            return
+
+        try:
+            inp = AgentInput.model_validate(p.chunk) if p.chunk is not None else AgentInput()
+            await conn.send(inp)
+        except Exception as e:  # noqa: BLE001
+            logger.error('reflection V2: sendInputStreamChunk error', err=e)
+
+    async def _handle_end_input_stream(self, req_id: str | int | None, params: dict[str, Any]) -> None:
+        """Close the input stream for an active bidi (agent) session."""
+        try:
+            p = ReflectionEndInputStreamParams.model_validate(params)
+        except Exception as e:  # noqa: BLE001
+            if req_id is not None:
+                await self._send_error(str(req_id), JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
+            return
+
+        conn = self._bidi_connections.get(p.request_id)
+        if conn is None:
+            return  # already gone or never existed — no-op
+        try:
+            await conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.error('reflection V2: endInputStream error', err=e)
+
+    async def _flush_tracing(self) -> None:
+        provider = trace_api.get_tracer_provider()
+        if isinstance(provider, TracerProvider):
+            await asyncio.to_thread(provider.force_flush)
+
+    @staticmethod
+    def _run_action_call_options(
+        p: ReflectionRunActionParams,
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
+        """Context and telemetry labels shared by one-shot and bidi runAction paths."""
+        ctx: dict[str, object] = {} if p.context is None else {str(k): v for k, v in p.context.items()}
+        labels: dict[str, object] | None = None
+        if p.telemetry_labels is not None:
+            labels = {str(k): v for k, v in p.telemetry_labels.items()}
+        return ctx, labels
+
+    async def _notify_run_action_state(self, sid: str, trace_id: str) -> None:
+        st = ReflectionRunActionStateParams(
+            request_id=sid,
+            state=State(trace_id=trace_id),
+        ).model_dump(by_alias=True, exclude_none=True)
+        await self._send_notification('runActionState', st)
+
+    def _trace_start_callback(
+        self,
+        sid: str,
+        trace_holder: list[str | None],
+        *,
+        register_for_cancel: bool,
+    ) -> Callable[[str, str], Awaitable[None]]:
+        async def on_trace_start(tid: str, span_id: str) -> None:
+            trace_holder[0] = tid
+            if register_for_cancel and (t := asyncio.current_task()):
+                self._active_actions[tid] = t
+            await self._notify_run_action_state(sid, tid)
+
+        return on_trace_start
+
+    async def _notify_stream_chunk(self, sid: str, chunk: object) -> None:
+        payload = ReflectionStreamChunkParams(
+            request_id=sid,
+            chunk=_chunk_for_json(chunk),
+        ).model_dump(by_alias=True, exclude_none=True)
+        await self._send_notification('streamChunk', payload)
+
+    @staticmethod
+    def _run_action_success_body(result: object, trace_id: str | None) -> dict[str, Any]:
+        if isinstance(result, BaseModel):
+            result_body = result.model_dump(by_alias=True, exclude_none=True)
+        else:
+            result_body = result
+        body: dict[str, Any] = {'result': result_body}
+        if trace_id:
+            body['telemetry'] = {'traceId': trace_id}
+        return body
+
+    async def _send_run_action_error(
+        self,
+        sid: str,
+        exc: BaseException,
+        trace_holder: list[str | None],
+    ) -> None:
+        """Map a runAction failure to the JSON-RPC error shape the Dev UI expects."""
+        if isinstance(exc, asyncio.CancelledError):
+            err_details: dict[str, Any] = {}
+            if trace_holder[0]:
+                err_details['traceId'] = trace_holder[0]
+            err_data: dict[str, Any] = {
+                'code': StatusCodes.CANCELLED.value,
+                'message': 'Action was cancelled',
+            }
+            if err_details:
+                err_data['details'] = err_details
+            await self._send_error(sid, JSON_RPC_SERVER_ERROR, 'Action was cancelled', err_data)
+            return
+
+        logger.exception('reflection V2: runAction error')
+        # Wire contract requires ``details`` to carry only ``stack`` and ``traceId``
+        # (see ``GenkitErrorSchema.data.genkitErrorDetails`` in genkit-tools); anything
+        # else in ``GenkitError.details`` is runtime-internal and gets dropped.
+        ref = get_reflection_json(exc)
+        stack = ref.details.stack if ref.details else None
+        if not stack and exc.__traceback__:
+            stack = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        tid = trace_holder[0] or (ref.details.trace_id if ref.details else None)
+        status = ReflectionError(
+            code=ref.code,
+            message=_coerce_json_rpc_message(ref.message),
+            details=ReflectionErrorDetails(stack=stack, trace_id=tid) if (stack or tid) else None,
+        )
+        await self._send_error(
+            sid,
+            JSON_RPC_SERVER_ERROR,
+            status.message,
+            status.model_dump(by_alias=True, exclude_none=True),
+        )
+
+    async def _respond_run_action_success(
+        self,
+        sid: str,
+        result: object,
+        trace_id: str | None,
+    ) -> None:
+        await self._flush_tracing()
+        await self._send_response(sid, self._run_action_success_body(result, trace_id))
+
+    async def _run_action(
+        self,
+        sid: str,
+        p: ReflectionRunActionParams,
+        action: Action[Any, Any, Any],
+    ) -> None:
+        """Execute a one-shot action and stream the runAction JSON-RPC response."""
+        stream = bool(p.stream)
+        trace_holder: list[str | None] = [None]
+        stream_chunk_tasks: list[asyncio.Task[Any]] = []
+        on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=True)
+
+        on_chunk = None
+        if stream:
+
+            def on_chunk_fn(chunk: object) -> None:
+                stream_chunk_tasks.append(asyncio.create_task(self._notify_stream_chunk(sid, chunk)))
+
+            on_chunk = on_chunk_fn
+
+        ctx, labels = self._run_action_call_options(p)
+
+        async def _drain_chunks() -> None:
+            if stream_chunk_tasks:
+                await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
+
+        try:
+            output = await action.run(
+                input=p.input,
+                on_chunk=on_chunk,
+                context=ctx or None,
+                on_trace_start=on_trace_start,
+                telemetry_labels=labels,
             )
+            await _drain_chunks()
+            await self._respond_run_action_success(
+                sid,
+                output.response,
+                output.trace_id or trace_holder[0],
+            )
+        except (asyncio.CancelledError, Exception) as e:
+            await _drain_chunks()
+            await self._send_run_action_error(sid, e, trace_holder)
+        finally:
+            tid = trace_holder[0]
+            if tid:
+                self._active_actions.pop(tid, None)
+
+    async def _run_bidi_action(
+        self,
+        sid: str,
+        p: ReflectionRunActionParams,
+        action: Action[Any, Any, Any],
+    ) -> None:
+        """Start a bidi (agent) session and wire up input/output streams.
+
+        Protocol:
+          1. Call action.stream_bidi(init) → BidiConnection
+          2. Store connection under sid in _bidi_connections
+          3. Background task reads receive() → sends streamChunk notifications
+          4. When output() resolves, send final runAction response
+        """
+        if not isinstance(action, BidiAction):
+            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'action is not bidirectional: {action.name}')
+            return
+
+        # Parse init payload
+        try:
+            init = AgentInit.model_validate(p.input) if p.input is not None else AgentInit()
+        except Exception as e:  # noqa: BLE001
+            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInit input: {e}')
+            return
+
+        ctx, labels = self._run_action_call_options(p)
+        trace_holder: list[str | None] = [None]
+        on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=False)
+
+        try:
+            conn = await action.stream_bidi(
+                init,
+                context=ctx or None,
+                on_trace_start=on_trace_start,
+                telemetry_labels=labels,
+            )
+        except (asyncio.CancelledError, Exception) as e:
+            await self._send_run_action_error(sid, e, trace_holder)
+            return
+
+        self._bidi_connections[sid] = conn
+
+        async def _run() -> None:
+            try:
+                async for chunk in conn.receive():
+                    await self._notify_stream_chunk(sid, chunk)
+
+                out = await conn.output()
+                await self._respond_run_action_success(
+                    sid,
+                    out,
+                    conn.trace_id or trace_holder[0],
+                )
+            except (asyncio.CancelledError, Exception) as e:
+                await self._send_run_action_error(sid, e, trace_holder)
+            finally:
+                self._bidi_connections.pop(sid, None)
+
+        asyncio.create_task(_run())
 
     async def _handle_list_actions(self, req_id: str | int | None, _: dict[str, Any]) -> None:
         if req_id is None:
@@ -421,11 +678,6 @@ class ReflectionServerV2:
                 'Action not found or already completed',
             )
 
-    async def _flush_tracing(self) -> None:
-        provider = trace_api.get_tracer_provider()
-        if isinstance(provider, TracerProvider):
-            await asyncio.to_thread(provider.force_flush)
-
     async def _handle_run_action(self, req_id: str | int | None, params: dict[str, Any]) -> None:
         if req_id is None:
             return
@@ -449,103 +701,8 @@ class ReflectionServerV2:
             )
             return
 
-        stream = bool(p.stream)
-        trace_holder: list[str | None] = [None]
-        stream_chunk_tasks: list[asyncio.Task[Any]] = []
-
-        async def on_trace_start(tid: str, span_id: str) -> None:
-            trace_holder[0] = tid
-            if t := asyncio.current_task():
-                self._active_actions[tid] = t
-            st = ReflectionRunActionStateParams(
-                request_id=sid,
-                state=State(trace_id=tid),
-            ).model_dump(by_alias=True, exclude_none=True)
-            await self._send_notification('runActionState', st)
-
-        on_chunk = None
-        if stream:
-
-            def on_chunk_fn(chunk: object) -> None:
-                chunk_payload = ReflectionStreamChunkParams(
-                    request_id=sid,
-                    chunk=_chunk_for_json(chunk),
-                ).model_dump(by_alias=True, exclude_none=True)
-                stream_chunk_tasks.append(asyncio.create_task(self._send_notification('streamChunk', chunk_payload)))
-
-            on_chunk = on_chunk_fn
-
-        ctx: dict[str, object] = {} if p.context is None else {str(k): v for k, v in p.context.items()}
-
-        labels: dict[str, object] | None = None
-        if p.telemetry_labels is not None:
-            labels = {str(k): v for k, v in p.telemetry_labels.items()}
-
-        async def _drain_chunks() -> None:
-            if stream_chunk_tasks:
-                await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
-
-        try:
-            output = await action.run(
-                input=p.input,
-                on_chunk=on_chunk,
-                context=ctx or None,
-                on_trace_start=on_trace_start,
-                telemetry_labels=labels,
-            )
-            await _drain_chunks()
-            await self._flush_tracing()
-            result_body: object
-            if isinstance(output.response, BaseModel):
-                result_body = output.response.model_dump(by_alias=True, exclude_none=True)
-            else:
-                result_body = output.response
-            # Omit telemetry or traceId when absent — Dev UI parses with Zod; null traceId fails
-            # z.string().optional() and would surface as HTTP 500 with an empty error body.
-            success_body: dict[str, Any] = {'result': result_body}
-            if output.trace_id:
-                success_body['telemetry'] = {'traceId': output.trace_id}
-            await self._send_response(sid, success_body)
-        except asyncio.CancelledError:
-            await _drain_chunks()
-            err_details: dict[str, Any] = {}
-            if trace_holder[0]:
-                err_details['traceId'] = trace_holder[0]
-            err_data: dict[str, Any] = {
-                'code': StatusCodes.CANCELLED.value,
-                'message': 'Action was cancelled',
-            }
-            if err_details:
-                err_data['details'] = err_details
-            await self._send_error(sid, JSON_RPC_SERVER_ERROR, 'Action was cancelled', err_data)
-            return
-        except Exception as e:
-            logger.exception('reflection V2: runAction error')
-            await _drain_chunks()
-            # Wire contract requires ``details`` to carry only ``stack`` and ``traceId``
-            # (see ``GenkitErrorSchema.data.genkitErrorDetails`` in genkit-tools); anything
-            # else in ``GenkitError.details`` is runtime-internal and gets dropped.
-            #
-            # ``stack``: prefer the value the error already carries (set by ``GenkitError``
-            # and copied through by ``get_reflection_json``); fall back to formatting the
-            # live traceback so plain Python exceptions still surface a useful frame.
-            ref = get_reflection_json(e)
-            stack = ref.details.stack if ref.details else None
-            if not stack and e.__traceback__:
-                stack = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-            tid = trace_holder[0] or (ref.details.trace_id if ref.details else None)
-            status = ReflectionError(
-                code=ref.code,
-                message=_coerce_json_rpc_message(ref.message),
-                details=ReflectionErrorDetails(stack=stack, trace_id=tid) if (stack or tid) else None,
-            )
-            await self._send_error(
-                sid,
-                JSON_RPC_SERVER_ERROR,
-                status.message,
-                status.model_dump(by_alias=True, exclude_none=True),
-            )
-        finally:
-            tid = trace_holder[0]
-            if tid:
-                self._active_actions.pop(tid, None)
+        # --- Bidi (agent) path ---
+        if isinstance(action, BidiAction) or bool(p.stream_input):
+            await self._run_bidi_action(sid, p, action)
+        else:
+            await self._run_action(sid, p, action)

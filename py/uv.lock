@@ -11,6 +11,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "agents",
     "basic-flows",
     "context",
     "django-hello",
@@ -42,6 +43,33 @@ members = [
     "vertexai-imagen",
 ]
 overrides = [{ name = "werkzeug", specifier = ">=3.1.6" }]
+
+[[package]]
+name = "agents"
+version = "0.1.0"
+source = { editable = "samples/agents" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "genkit" },
+    { name = "genkit-plugin-fastapi" },
+    { name = "genkit-plugin-google-genai" },
+    { name = "genkit-plugin-middleware" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.100.0" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-plugin-fastapi", editable = "plugins/fastapi" },
+    { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
+    { name = "genkit-plugin-middleware", editable = "plugins/middleware" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
+]
 
 [[package]]
 name = "aiofiles"
@@ -1409,6 +1437,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
 ]
+
 
 [[package]]
 name = "fastjsonschema"
@@ -6708,6 +6737,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6
 wheels = [
     { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
 ]
+
 
 [[package]]
 name = "uv"

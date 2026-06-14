@@ -50,7 +50,6 @@ from genkit._core._middleware import BaseMiddleware
 from genkit._core._reflection_v2 import (
     JSON_RPC_INVALID_PARAMS,
     JSON_RPC_METHOD_NOT_FOUND,
-    JSON_RPC_SERVER_ERROR,
     ReflectionServerV2,
 )
 from genkit._core._registry import Registry
@@ -556,35 +555,6 @@ async def test_reflection_server_v2_cancel_action(fake_manager: FakeReflectionMa
                 assert isinstance(err, dict)
                 assert 'cancel' in str(err.get('message', '')).lower()
                 saw_run_err = True
-    finally:
-        await _stop_client(client, task)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('stream_method', ('sendInputStreamChunk', 'endInputStream'))
-async def test_reflection_server_v2_input_stream_not_implemented_js_style(
-    fake_manager: FakeReflectionManager,
-    stream_method: str,
-) -> None:
-    """Unimplemented input-stream methods return -32000 + data.stack when id is set."""
-    registry = Registry()
-    client, task = await _run_client_lifecycle(registry, fake_manager)
-    try:
-        await ack_register(fake_manager)
-        await fake_manager.write_rpc({
-            'jsonrpc': '2.0',
-            'method': stream_method,
-            'params': {},
-            'id': 'stream-1',
-        })
-        resp = await fake_manager.read_rpc()
-        err = resp.get('error')
-        assert isinstance(err, dict)
-        assert err.get('code') == JSON_RPC_SERVER_ERROR
-        assert 'not implemented' in str(err.get('message', '')).lower()
-        data = err.get('data')
-        assert isinstance(data, dict)
-        assert 'stack' in data and str(data.get('stack', '')).strip()
     finally:
         await _stop_client(client, task)
 
