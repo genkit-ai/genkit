@@ -909,6 +909,7 @@ class Resume(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     respond: list[ToolResponsePart] | None = None
     restart: list[ToolRequestPart] | None = None
+    metadata: Metadata | None = None
 
 
 class Error(GenkitModel):

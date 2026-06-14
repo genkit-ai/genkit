@@ -105,7 +105,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     in_queue: asyncio.Queue = asyncio.Queue()
     await in_queue.put(
         AgentInput(
-            messages=[MessageData(role=Role.USER, content=[Part(text='appended message')])],
+            messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='appended message'))])],
             detach=True,
         )
     )
@@ -143,7 +143,12 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     async def agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput) -> None:
             ctx.send_chunk(
-                AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part(text='working')]))
+                AgentStreamChunk(
+                    model_chunk=ModelResponseChunk(
+                        role=Role.MODEL,
+                        content=[Part(root=TextPart(text='working'))],
+                    )
+                )
             )
             await release.wait()
 
@@ -151,7 +156,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(text='slow')])]))
+    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='slow'))])]))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -196,7 +201,7 @@ async def test_detach_without_store_raises() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(text='x')])]))
+    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='x'))])]))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -225,7 +230,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(text='long')])]))
+    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='long'))])]))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -275,7 +280,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
                 ai.registry,
                 GenerateActionOptions(
                     model='programmableModel',
-                    messages=[Message(role=Role.USER, content=[Part(text='go')])],
+                    messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='go'))])],
                     tools=['slowWork'],
                 ),
                 abort_signal=abort_signal,

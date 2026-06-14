@@ -742,7 +742,7 @@ class _AgentRuntime:
                     if not detach_future.done():
                         detach_future.set_result(None)
 
-                    val = cast(AgentInput, item)
+                    val = item
 
                     async def _finish_detach_input(
                         payload: AgentInput | None = None,
@@ -1129,7 +1129,7 @@ async def _generate_prompt_agent_turn(
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
 
-    def _on_chunk(chunk: ModelResponseChunk) -> None:
+    def _on_chunk(chunk: object) -> None:
         wire_chunk = (
             chunk if isinstance(chunk, ModelResponseChunk) else ModelResponseChunk.model_validate(chunk.model_dump())
         )
@@ -1257,7 +1257,7 @@ def define_prompt_agent(
     async def _agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
             history = await sess.get_messages()
-            history_messages = [
+            history_messages: list[MessageData] = [
                 m if isinstance(m, Message) else Message.model_validate(m.model_dump()) for m in history
             ]
 

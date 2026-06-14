@@ -393,8 +393,8 @@ class ReflectionServerV2:
         p: ReflectionRunActionParams,
     ) -> tuple[dict[str, object], dict[str, object] | None]:
         """Context and telemetry labels shared by one-shot and bidi runAction paths."""
-        ctx = {} if p.context is None else {str(k): v for k, v in p.context.items()}
-        labels = None
+        ctx: dict[str, object] = {} if p.context is None else {str(k): v for k, v in p.context.items()}
+        labels: dict[str, object] | None = None
         if p.telemetry_labels is not None:
             labels = {str(k): v for k, v in p.telemetry_labels.items()}
         return ctx, labels

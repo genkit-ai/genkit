@@ -70,7 +70,7 @@ def _diff_recursive(from_value: Any, to_value: Any, pointer: str, patch: list[Js
     if _is_object(from_value) and _is_object(to_value):
         keys = set(from_value) | set(to_value)
         for key in sorted(keys):
-            child_pointer = f'{pointer}/{_escape_token(key)}'
+            child_pointer = f'{pointer}/{_escape_token(str(key))}'
             in_from = key in from_value
             in_to = key in to_value
             if in_from and not in_to:
