@@ -2017,7 +2017,7 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
         action_response = await action.run(
             TypeAdapter(GenerateActionOptions).validate_python(spec['input']),  # type: ignore[arg-type]
             on_chunk=on_chunk,  # type: ignore[misc]
-            )
+        )
         response = action_response.response
     else:
         action_response = await action.run(

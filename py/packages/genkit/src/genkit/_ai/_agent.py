@@ -21,7 +21,7 @@ import copy
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Generic, TypedDict, TypeVar
+from typing import Any, Generic, TypedDict, TypeVar, cast
 
 from opentelemetry import trace as trace_api
 
@@ -37,12 +37,12 @@ from genkit._ai._prompt import (
 from genkit._ai._session import (
     Session,
     SessionStore,
+    SnapshotAborter,
     SnapshotCallback,
     SnapshotContext,
     StateT,
     _assert_valid_session_id,
     run_with_session,
-    supports_abort,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (
@@ -81,6 +81,7 @@ from genkit._core._typing import (
     SessionState,
     SnapshotEvent,
     SnapshotStatus,
+    TextPart,
     ToolChoice,
     TurnEnd,
 )
@@ -125,7 +126,7 @@ def _to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None
     if fr is None:
         return None
     try:
-        return AgentFinishReason(fr.value)
+        return cast(AgentFinishReason, AgentFinishReason(fr.value))
     except ValueError:
         return AgentFinishReason.UNKNOWN
 
@@ -294,7 +295,7 @@ async def _persist_turn_messages(
     if response_message is None:
         return
 
-    clean_history = [_coerce_message(m) for m in history]
+    clean_history: list[MessageData] = [_coerce_message(m) for m in history]
     if strip_preamble:
         clean_history = [m for m in clean_history if not (m.metadata or {}).get(_PREAMBLE_KEY)]
     clean_history.append(_coerce_message(response_message))
@@ -622,7 +623,7 @@ class _AgentRuntime:
         return out
 
     async def _watch_snapshot_abort(self, snapshot_id: str, abort_signal: asyncio.Event) -> None:
-        if self._store is None or not supports_abort(self._store):
+        if self._store is None or not isinstance(self._store, SnapshotAborter):
             return
         q = await self._store.on_snapshot_status_change(snapshot_id)
         while True:
@@ -633,12 +634,14 @@ class _AgentRuntime:
                 abort_signal.set()
                 return
 
-    def _send_chunk(self, chunk: AgentStreamChunk) -> None:
+    def _send_chunk(self, chunk: object) -> None:
         """Forward chunk to client and apply artifact side effects inline.
 
         Post-detach: side effects still apply (artifacts land in session)
         but wire forwarding is suppressed (client is gone).
         """
+        if not isinstance(chunk, AgentStreamChunk):
+            return
         if chunk.artifact is not None:
             asyncio.get_event_loop().create_task(self._session.add_artifacts(chunk.artifact, _suppress_events=True))
         if self._detached:
@@ -732,16 +735,23 @@ class _AgentRuntime:
         async def _forward() -> None:
             while True:
                 item = await in_queue.get()
-                if item is QUEUE_SENTINEL:
+                if isinstance(item, QueueSentinel):
                     await self._intake.put(QUEUE_SENTINEL)
                     return
                 if getattr(item, 'detach', False):
                     if not detach_future.done():
                         detach_future.set_result(None)
 
-                    async def _finish_detach_input(payload: AgentInput = item) -> None:
-                        if _agent_input_has_payload(payload):
-                            await self._intake.put(payload)
+                    val = cast(AgentInput, item)
+
+                    async def _finish_detach_input(
+                        payload: AgentInput | None = None,
+                        *,
+                        bound_item: AgentInput = val,
+                    ) -> None:
+                        p = payload if payload is not None else bound_item
+                        if _agent_input_has_payload(p):
+                            await self._intake.put(p)
                         await self._intake.put(QUEUE_SENTINEL)
 
                     asyncio.create_task(_finish_detach_input())
@@ -868,7 +878,7 @@ class AgentConnection(Generic[StreamT, StateT]):
 
     async def send_text(self, text: str) -> None:
         """Send a user text message for one turn."""
-        await self._conn.send(AgentInput(messages=[MessageData(role='user', content=[Part(text=text)])]))
+        await self._conn.send(AgentInput(messages=[MessageData(role='user', content=[Part(root=TextPart(text=text))])]))
 
     async def send_resume(self, resume: Resume) -> None:
         """Send a resume payload to continue an interrupted tool call."""
@@ -955,7 +965,7 @@ class SessionRunner(Generic[StateT]):
         """
         while True:
             inp = await self._intake.get()
-            if inp is QUEUE_SENTINEL:
+            if isinstance(inp, QueueSentinel):
                 return
 
             # Auto-add inbound messages to session history

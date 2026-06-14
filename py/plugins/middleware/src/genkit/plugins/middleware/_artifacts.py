@@ -103,7 +103,7 @@ def _inject_artifact_listing_messages(messages: list[Message], listing: str) -> 
 
     for i, msg in enumerate(out):
         filtered: list[Part] = []
-        for part in (msg.content or []):
+        for part in msg.content or []:
             root = part.root
             meta = root.metadata if isinstance(root, TextPart) else None
             if isinstance(meta, dict) and meta.get(_ARTIFACTS_LISTING_MARKER):

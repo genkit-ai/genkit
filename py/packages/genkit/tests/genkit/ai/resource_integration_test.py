@@ -17,7 +17,6 @@
 
 """Integration tests for Genkit resources."""
 
-
 import pytest
 
 from genkit import Message, ModelResponse

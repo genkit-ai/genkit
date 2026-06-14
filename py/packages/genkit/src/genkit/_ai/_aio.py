@@ -1261,9 +1261,7 @@ class Genkit:
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
 
-        response = (
-            await embed_action.run(EmbedRequest(input=documents, options=options))
-        ).response  # type: ignore[arg-type]
+        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
         return response.embeddings
 
     async def evaluate(

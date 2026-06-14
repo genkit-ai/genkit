@@ -144,9 +144,7 @@ async def test_define_async_action_with_input_and_context() -> None:
     action = Action(name='syncFoo', kind=ActionKind.CUSTOM, fn=async_foo)
 
     assert (await action.run('foo', context={'foo': 'bar'})).response == 'syncFoo foo bar'
-    assert (
-        await async_foo('foo', ActionRunContext(context={'foo': 'bar'}))
-    ) == 'syncFoo foo bar'
+    assert (await async_foo('foo', ActionRunContext(context={'foo': 'bar'}))) == 'syncFoo foo bar'
 
 
 @pytest.mark.asyncio

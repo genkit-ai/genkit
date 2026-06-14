@@ -3,7 +3,6 @@
 
 """Pytest fixtures for middleware plugin unit tests."""
 
-
 import pytest
 
 from genkit._core._registry import Registry
