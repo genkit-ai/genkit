@@ -3,10 +3,11 @@
 
 """Tests for tool restart builder and run_tool_after_restart."""
 
+import asyncio
+
 import pytest
 
 from genkit import ActionKind, Genkit
-from genkit._ai._generate import run_tool_after_restart
 from genkit._ai._tools import (
     Interrupt,
     ToolRunContext,
@@ -14,6 +15,7 @@ from genkit._ai._tools import (
     _tool_resumed_metadata,
     respond_to_interrupt,
     restart_tool,
+    run_tool_after_restart,
 )
 from genkit._core._error import GenkitError
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
@@ -79,7 +81,7 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
         tool_request=ToolRequest(name='t2', ref='x', input={'q': 1}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(action, restart_trp, asyncio.Event())
     assert len(captured) == 1
     assert captured[0][0] == {}
     assert captured[0][1] is None
@@ -103,7 +105,7 @@ async def test_run_tool_after_restart_resumed_dict() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': {'by': 'x'}},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(action, restart_trp, asyncio.Event())
     assert captured == [{'by': 'x'}]
 
 
@@ -125,7 +127,7 @@ async def test_run_tool_after_restart_replaced_input() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={'new': True}),
         metadata={'resumed': True, 'replacedInput': {'old': True}},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(action, restart_trp, asyncio.Event())
     assert len(captured) == 1
     assert captured[0][0] == {'new': True}
     assert captured[0][1] == {'old': True}
@@ -147,7 +149,7 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp)
+    await run_tool_after_restart(action, restart_trp, asyncio.Event())
     assert _tool_resumed_metadata.get() is None
     assert _tool_original_input.get() is None
 
@@ -169,7 +171,7 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
         metadata={'resumed': True},
     )
     with pytest.raises(GenkitError) as ei:
-        await run_tool_after_restart(action, restart_trp)
+        await run_tool_after_restart(action, restart_trp, asyncio.Event())
     assert ei.value.status == 'FAILED_PRECONDITION'
     assert 'interrupted again' in ei.value.original_message.lower()
 
@@ -254,7 +256,7 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
         tool_request=ToolRequest(name='t_ref', ref='wire-ref-99', input={}),
         metadata={'resumed': True},
     )
-    part = await run_tool_after_restart(action, restart_trp)
+    part = await run_tool_after_restart(action, restart_trp, asyncio.Event())
     assert part.tool_response.ref == 'wire-ref-99'
 
 
@@ -285,7 +287,7 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
         tool_request=ToolRequest(name='transfer', ref='ref-42', input={'amount': 100, 'confirmed': True}),
         metadata={'resumed': True, 'replacedInput': prior},
     )
-    result = await run_tool_after_restart(action, restart_trp)
+    result = await run_tool_after_restart(action, restart_trp, asyncio.Event())
 
     # Ref is preserved from the restart TRP.
     assert result.tool_response.ref == 'ref-42'

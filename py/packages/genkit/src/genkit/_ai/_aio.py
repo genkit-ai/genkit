@@ -34,6 +34,15 @@ import anyio
 import uvicorn
 from pydantic import BaseModel
 
+from genkit._ai._agent import (
+    Agent,
+    AgentFn,
+    ClientTransform,
+    StateTransform,
+    define_agent as _define_agent,
+    define_custom_agent as _define_custom_agent,
+    define_prompt_agent as _define_prompt_agent,
+)
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -74,6 +83,7 @@ from genkit._ai._resource import (
     ResourceOptions,
     define_resource,
 )
+from genkit._ai._session import SessionStore, SnapshotCallback
 from genkit._ai._tools import Tool, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, get_current_context
 from genkit._core._background import (
@@ -671,6 +681,127 @@ class Genkit:
             output_schema=output_schema,
         )
 
+    def define_custom_agent(
+        self,
+        name: str,
+        fn: AgentFn,
+        *,
+        store: SessionStore | None = None,
+        snapshot_callback: SnapshotCallback | None = None,
+        client_transform: ClientTransform | None = None,
+        transform: StateTransform | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Agent:
+        """Define and register an agent with full control over the turn loop.
+
+        fn receives (SessionRunner, AgentFnArg) and must call sess.run(handle_turn)
+        to process inputs, then return an AgentResult.
+        """
+        return _define_custom_agent(
+            registry=self.registry,
+            name=name,
+            fn=fn,
+            store=store,
+            snapshot_callback=snapshot_callback,
+            client_transform=client_transform,
+            transform=transform,
+            description=description,
+            metadata=metadata,
+        )
+
+    def define_agent(
+        self,
+        name: str,
+        *,
+        variant: str | None = None,
+        model: str | None = None,
+        config: dict[str, object] | ModelConfig | None = None,
+        description: str | None = None,
+        input_schema: type | dict[str, object] | str | None = None,
+        system: str | list[Part] | None = None,
+        prompt: str | list[Part] | None = None,
+        messages: str | list[Message] | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: str | None = None,
+        output_schema: type | dict[str, object] | str | None = None,
+        output_constrained: bool | None = None,
+        max_turns: int | None = None,
+        return_tool_requests: bool | None = None,
+        metadata: dict[str, object] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        docs: list[Document] | None = None,
+        resources: list[str] | None = None,
+        store: SessionStore | None = None,
+        snapshot_callback: SnapshotCallback | None = None,
+        client_transform: ClientTransform | None = None,
+        transform: StateTransform | None = None,
+    ) -> Agent:
+        """Define a prompt-backed agent with inline prompt configuration.
+
+        Each turn: attaches session history, calls generate with streaming,
+        updates session. Pass resume in AgentInput to resume from an interrupt.
+        """
+        return _define_agent(
+            registry=self.registry,
+            name=name,
+            variant=variant,
+            model=model,
+            config=config,
+            description=description,
+            input_schema=input_schema,
+            system=system,
+            prompt=prompt,
+            messages=messages,
+            output_format=output_format,
+            output_content_type=output_content_type,
+            output_instructions=output_instructions,
+            output_schema=output_schema,
+            output_constrained=output_constrained,
+            max_turns=max_turns,
+            return_tool_requests=return_tool_requests,
+            metadata=metadata,
+            tools=tools,
+            tool_choice=tool_choice,
+            use=use,
+            docs=docs,
+            resources=resources,
+            store=store,
+            snapshot_callback=snapshot_callback,
+            client_transform=client_transform,
+            transform=transform,
+        )
+
+    def define_prompt_agent(
+        self,
+        name: str,
+        *,
+        store: SessionStore | None = None,
+        snapshot_callback: SnapshotCallback | None = None,
+        client_transform: ClientTransform | None = None,
+        transform: StateTransform | None = None,
+        description: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Agent:
+        """Wire an already-registered prompt as an agent.
+
+        Looks up the prompt named `name` from the registry. Use when the prompt
+        is defined via ai.define_prompt() or loaded from a .prompt file.
+        """
+        return _define_prompt_agent(
+            registry=self.registry,
+            name=name,
+            store=store,
+            snapshot_callback=snapshot_callback,
+            client_transform=client_transform,
+            transform=transform,
+            description=description,
+            metadata=metadata,
+        )
+
     def define_resource(
         self,
         *,
@@ -1130,7 +1261,9 @@ class Genkit:
         if embed_action is None:
             raise ValueError(f'Embedder "{embedder_name}" not found')
 
-        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
+        response = (
+            await embed_action.run(EmbedRequest(input=documents, options=options))
+        ).response  # type: ignore[arg-type]
         return response.embeddings
 
     async def evaluate(
@@ -1170,7 +1303,7 @@ class Genkit:
                     dataset=dataset,
                     options=final_options,
                     eval_run_id=eval_run_id,
-                )
+                ),
             )
         ).response
 

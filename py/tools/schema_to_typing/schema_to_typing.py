@@ -43,6 +43,13 @@ TRANSFORMATIONS = {
     'GenerateActionOptions': {'suffix': 'Data', 'omit': ['messages']},
 }
 
+# Inline field enums that should become named StrEnums (no standalone $def in schema).
+INLINE_FIELD_ENUMS: dict[tuple[str, str], str] = {
+    ('SessionSnapshot', 'status'): 'SnapshotStatus',
+}
+
+PYTHON_KEYWORDS = frozenset({'from'})
+
 
 def _output_name(name: str) -> str:
     """Resolve schema type name to output type name for refs and emission."""
@@ -233,6 +240,11 @@ def _py_type(prop: dict, schema: dict, defs: dict, class_name: str, field_name: 
         return 'dict[str, Any]'
     if 'enum' in prop:
         vals = prop['enum']
+        inline_enum = INLINE_FIELD_ENUMS.get((class_name, field_name)) or INLINE_FIELD_ENUMS.get(
+            (class_name, _camel_to_snake(field_name))
+        )
+        if inline_enum:
+            return inline_enum
         if field_name in ('tool_choice', 'toolChoice') and set(vals) == {'auto', 'required', 'none'}:
             return 'ToolChoice'
         if field_name in ('constrained',) and set(vals) == {'none', 'all', 'no-tools'}:
@@ -283,6 +295,9 @@ def _emit_model(
         else:
             field_name = snake
             alias_extra = ''
+        if snake in PYTHON_KEYWORDS:
+            field_name = f'{snake}_'
+            alias_extra = f", alias='{snake}'"
         py_type_str = _py_type(v, schema, defs, name, k)
         # OutputConfig.schema is free-form JSON schema object; use dict for direct use
         if name == 'OutputConfig' and snake == 'schema':
@@ -328,6 +343,16 @@ def generate(schema_path: Path, _out: Path) -> str:
             class_name = _output_name(name)
             out.extend(_emit_enum(class_name, defn))
             emitted.add(name)
+
+    # Pass 1b: inline field enums promoted to StrEnums
+    for (model_name, field_name), enum_name in INLINE_FIELD_ENUMS.items():
+        if enum_name in emitted:
+            continue
+        model = defs.get(model_name, {})
+        prop = model.get('properties', {}).get(field_name, {})
+        if 'enum' in prop:
+            out.extend(_emit_enum(enum_name, prop))
+            emitted.add(enum_name)
 
     # Pass 2: object models (must precede root models that reference them)
     # Emit Schema, ConfigSchema, Metadata early (OutputConfig uses Schema; MessageData etc. use Metadata)

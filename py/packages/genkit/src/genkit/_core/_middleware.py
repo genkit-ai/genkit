@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import re
 from collections.abc import Awaitable, Callable
@@ -34,7 +35,7 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
-from genkit._core._protocols import RegistryLike
+from genkit._core._protocols import RegistryLike, SessionLike
 from genkit._core._typing import MiddlewareDesc, MultipartToolResponse, ToolRequestPart
 
 logger = get_logger(__name__)
@@ -96,6 +97,24 @@ class GenerateHookParams(BaseModel):
 
     Covers one full iteration of the tool loop: a model call plus optional tool
     resolution. ``message_index`` tracks streaming position for this turn.
+
+    ``options`` is the accumulating generate envelope. ``options.messages`` holds
+    the caller input plus each model and tool message appended as the loop runs —
+    it's the durable conversation transcript for this ``generate()`` call and the
+    thing that gets persisted.
+
+    ``request`` is built from ``options`` for this iteration and handed to the
+    model. The engine discards it after the iteration and rebuilds it from
+    ``options`` on the next pass, so it's per-call scratch space for customizing
+    this one model call without touching the saved conversation.
+
+    Rule of thumb for middleware that changes messages (reassigning the field or
+    mutating it in place both take effect):
+
+    - To persist a change across later tool-loop iterations and into history,
+      update ``options.messages``. If the current model call should see it too,
+      update ``request.messages`` as well.
+    - To affect only the current model call, update ``request.messages`` only.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
@@ -128,15 +147,16 @@ class GenerateMiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
     Holds the call-scoped registry, caller-provided metadata (``custom_context``),
-    and streaming hooks for the whole generate invocation. Hook ``params`` carry
-    per-turn request data only.
+    streaming hooks, and (when inside an agent) the bound session for the whole
+    generate invocation. Hook ``params`` carry per-turn request data only.
     """
 
     registry: RegistryLike
+    abort_signal: asyncio.Event = field(default_factory=asyncio.Event)
     custom_context: dict[str, object] = field(default_factory=dict)
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
-    abort_signal: Any | None = None
     telemetry_labels: dict[str, str] | None = None
+    session: SessionLike | None = None
 
     @property
     def is_streaming(self) -> bool:
@@ -175,33 +195,19 @@ class BaseMiddleware(Generic[TConfig]):
             max_retries: int = 3
 
     2. Extend BaseMiddleware with your config model, e.g. Retry:
-        ai = Genkit()
 
-        @ai.middleware(
-            name="retry",
-            description="Configures smart retry logic with exponential backoff and a jitter."
-        )
         class Retry(BaseMiddleware[RetryConfig]):
             async def wrap_model(self, params, next_fn, ctx):
                 for attempt in range(self.config.max_retries + 1):
                     ...
 
-    Wrap your subclass with the ``@ai.middleware`` decorator to make it available
+        use=[Retry(max_retries=5)]
+        use=[Retry(config=RetryConfig(max_retries=5))]
+
+    3. Wrap your subclass with the ``@ai.middleware`` decorator to make it available
     in your local Dev UI.
 
-    3.Use the Retry middleware in your `generate` call:
-        ai.generate(
-            ...,
-            use=[Retry(max_retries=5)]
-        )
-
-        # Or alternatively, for full keyword auto-complete in your preferred IDE:
-        ai.generate(
-            ...,
-            use=[Retry(config=RetryConfig(max_retries=5))]
-        )
-
-    Keep in mind that config are not meant to be mutated from within hooks.
+    Keep in mind that ctx and config are not meant to be mutated from within hooks.
     """
 
     Config: ClassVar[type[BaseModel]] = _EmptyMiddlewareConfig

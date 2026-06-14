@@ -33,6 +33,7 @@ def test_action_enum_behaves_like_str() -> None:
     assert ActionKind.EMBEDDER == 'embedder'
     assert ActionKind.EVALUATOR == 'evaluator'
     assert ActionKind.EXECUTABLE_PROMPT == 'executable-prompt'
+    assert ActionKind.AGENT == 'agent'
     assert ActionKind.FLOW == 'flow'
     assert ActionKind.MODEL == 'model'
     assert ActionKind.PROMPT == 'prompt'
@@ -51,6 +52,7 @@ def test_parse_action_key_valid() -> None:
         ),
         ('/custom/test-action', (ActionKind.CUSTOM, 'test-action')),
         ('/flow/my-flow', (ActionKind.FLOW, 'my-flow')),
+        ('/agent/my-agent', (ActionKind.AGENT, 'my-agent')),
     ]
 
     for key, expected in test_cases:
@@ -90,6 +92,7 @@ def test_create_action_key() -> None:
     assert create_action_key(ActionKind.PROMPT, 'foo') == '/prompt/foo'
     assert create_action_key(ActionKind.TOOL, 'foo') == '/tool/foo'
     assert create_action_key(ActionKind.UTIL, 'foo') == '/util/foo'
+    assert create_action_key(ActionKind.AGENT, 'foo') == '/agent/foo'
 
 
 def test_sync_action_rejected() -> None:
@@ -141,7 +144,9 @@ async def test_define_async_action_with_input_and_context() -> None:
     action = Action(name='syncFoo', kind=ActionKind.CUSTOM, fn=async_foo)
 
     assert (await action.run('foo', context={'foo': 'bar'})).response == 'syncFoo foo bar'
-    assert (await async_foo('foo', ActionRunContext(context={'foo': 'bar'}))) == 'syncFoo foo bar'
+    assert (
+        await async_foo('foo', ActionRunContext(context={'foo': 'bar'}))
+    ) == 'syncFoo foo bar'
 
 
 @pytest.mark.asyncio

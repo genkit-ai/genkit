@@ -148,6 +148,7 @@ override-dependencies = ["werkzeug>=3.1.6"]
 
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
+agents               = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }
 django-hello         = { workspace = true }
@@ -181,7 +182,7 @@ genkit-plugin-ollama                = { workspace = true }
 genkit-plugin-evaluators            = { workspace = true }
 genkit-plugin-vertex-ai             = { workspace = true }
 [tool.uv.workspace]
-exclude = ["*/shared", "testapps/*"]
+exclude = ["*/shared", "testapps/*", "samples/fastapi-serve", "samples/usechat-serve"]
 members = ["packages/*", "plugins/*", "samples/*"]
 
 
@@ -259,6 +260,7 @@ select = [
 "packages/genkit/src/genkit/_core/_typing.py" = ["E501"]
 # Base model uses **kwargs: Any to match pydantic signatures
 "packages/genkit/src/genkit/_core/_base.py" = ["ANN401"]
+"packages/genkit/src/genkit/_ai/_json_patch.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
 "packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
 # Span wrapper uses __getattr__ -> Any for dynamic delegation

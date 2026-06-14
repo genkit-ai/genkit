@@ -26,12 +26,14 @@ Provides concrete middleware implementations:
   ``use_skill`` tool.
 * ``Filesystem`` — sandboxed filesystem operations (list / read / write /
   edit).
+* ``Artifacts`` — ``read_artifact`` / ``write_artifact`` plus artifact listing in the system prompt.
 
 Import the classes you need and pass instances into ``use=[...]``.
 See below for an example.
 """
 
 from genkit.plugin_api import MiddlewarePlugin, new_middleware
+from genkit.plugins.middleware._artifacts import Artifacts
 from genkit.plugins.middleware._fallback import Fallback
 from genkit.plugins.middleware._filesystem import Filesystem
 from genkit.plugins.middleware._retry import Retry
@@ -64,13 +66,18 @@ _MIDDLEWARE_DESCS = [
         name='filesystem',
         description='Sandboxed filesystem operations',
     ),
+    new_middleware(
+        Artifacts,
+        name='artifacts',
+        description='read_artifact and write_artifact tools with session artifact listing in system prompt',
+    ),
 ]
 
 
 class Middleware(MiddlewarePlugin):
-    """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
+    """Plugin that registers Retry, Fallback, ToolApproval, Skills, Filesystem, and Artifacts.
 
-    Registers all five middleware descriptors so they show up in the Dev
+    Registers all six middleware descriptors so they show up in the Dev
     UI.
 
     ``Filesystem`` has no default root — supply ``root_dir`` when
@@ -92,6 +99,7 @@ class Middleware(MiddlewarePlugin):
 
 
 __all__ = [
+    'Artifacts',
     'Fallback',
     'Filesystem',
     'Middleware',

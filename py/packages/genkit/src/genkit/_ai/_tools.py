@@ -16,6 +16,7 @@
 
 """Tool-specific types and utilities for the Genkit framework."""
 
+import asyncio
 import inspect
 import json
 from collections.abc import Callable
@@ -78,6 +79,51 @@ class Tool:
         """Run the tool and return the unwrapped response value."""
         return (await self._action.run(*args, **kwargs)).response
 
+    def restart(
+        self,
+        replace_input: Any | None = None,  # noqa: ANN401
+        *,
+        interrupt: ToolRequestPart,
+        resumed_metadata: dict[str, Any] | None = None,
+    ) -> ToolRequestPart:
+        """Create a restart request for an interrupted tool call.
+
+        Args:
+            replace_input: Optional new ``tool_request.input`` for this run (previous input is
+                stored in ``metadata.replacedInput`` when this is set).
+            interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
+            resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
+
+        Returns:
+            A ``ToolRequestPart`` for ``resume_restart`` / message history.
+
+        Example:
+            ``pay_invoice.restart({**trp.tool_request.input, "confirmed": True}, interrupt=trp,``
+            ``resumed_metadata={"by": "bob"})``
+        """
+        tool_req = interrupt.tool_request
+        if tool_req.name != self.name:
+            raise ValueError(f"Interrupt is for tool '{tool_req.name}', not '{self.name}'")
+
+        existing_meta = interrupt.metadata or {}
+        new_meta: dict[str, Any] = dict(existing_meta) if existing_meta else {}
+
+        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+
+        new_input = tool_req.input
+        if replace_input is not None:
+            new_meta['replacedInput'] = tool_req.input
+            new_input = replace_input
+
+        return ToolRequestPart(
+            tool_request=ToolRequest(
+                name=tool_req.name,
+                ref=tool_req.ref,
+                input=new_input,
+            ),
+            metadata=new_meta,
+        )
+
 
 # Context variables for propagating resumed metadata to tools
 _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
@@ -101,7 +147,11 @@ class ToolRunContext(ActionRunContext):
             resumed_metadata: Metadata from previous interrupt (if resumed)
             original_input: Original tool input before replacement (if resumed)
         """
-        super().__init__(context=ctx.context)
+        super().__init__(
+            context=ctx.context,
+            streaming_callback=ctx.streaming_callback,
+            abort_signal=ctx.abort_signal,
+        )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
 
@@ -176,51 +226,40 @@ def respond_to_interrupt(
 
 
 def restart_tool(
-    interrupt: ToolRequestPart,
-    *,
-    resumed_metadata: dict[str, Any] | None = None,
     replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
+    *,
+    tool: Tool,
+    interrupt: ToolRequestPart,
+    resumed_metadata: dict[str, Any] | None = None,
 ) -> ToolRequestPart:
     """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
 
-    Pass the return value to ``generate(..., resume_restart=...)``.
+    Thin wrapper around :meth:`Tool.restart` for symmetry with
+    :func:`respond_to_interrupt`. Pass the return value to
+    ``generate(..., resume_restart=...)``.
 
     Args:
+        replace_input: Optional new ``tool_request.input`` for this run (previous input is
+            stored in ``metadata.replacedInput`` when this is set).
+        tool: The registered :class:`Tool` that was interrupted.
         interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
-        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``. The
-            common case is a small dict the tool / middleware checks
-            (e.g. ``{'toolApproved': True}`` for ``ToolApproval``).
-        replace_input: Optional new ``tool_request.input`` for this run; the previous input
-            is stashed in ``metadata.replacedInput`` so the tool can see what changed.
+        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
 
     Returns:
         A ``ToolRequestPart`` for ``resume_restart`` / message history.
 
     Example:
-        ``restart_tool(trp, resumed_metadata={'toolApproved': True})``
+        ``restart_tool({**trp.tool_request.input, "confirmed": True}, tool=pay_invoice,``
+        ``interrupt=trp, resumed_metadata={"by": "bob"})``
     """
-    tool_req = interrupt.tool_request
-
-    new_meta: dict[str, Any] = dict(interrupt.metadata or {})
-
-    new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
-
-    new_input = tool_req.input
-    if replace_input is not None:
-        new_meta['replacedInput'] = tool_req.input
-        new_input = replace_input
-
-    return ToolRequestPart(
-        tool_request=ToolRequest(
-            name=tool_req.name,
-            ref=tool_req.ref,
-            input=new_input,
-        ),
-        metadata=new_meta,
-    )
+    return tool.restart(replace_input, interrupt=interrupt, resumed_metadata=resumed_metadata)
 
 
-async def run_tool_after_restart(tool: Action[Any, Any, Any], restart_trp: ToolRequestPart) -> ToolResponsePart:
+async def run_tool_after_restart(
+    tool: Action[Any, Any, Any],
+    restart_trp: ToolRequestPart,
+    abort_signal: asyncio.Event,
+) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
     Sets the same context variables as the tool wrapper so ToolRunContext reflects
@@ -240,7 +279,7 @@ async def run_tool_after_restart(tool: Action[Any, Any, Any], restart_trp: ToolR
     token_input = _tool_original_input.set(original_input)
     try:
         try:
-            tool_response = (await tool.run(restart_trp.tool_request.input)).response
+            tool_response = (await tool.run(restart_trp.tool_request.input, abort_signal=abort_signal)).response
         except GenkitError as e:
             if e.cause and isinstance(e.cause, Interrupt):
                 raise GenkitError(
@@ -281,7 +320,7 @@ def _define_tool(
 ) -> Tool:
     """Register a function as a tool.
 
-    Normally, the input_schema and output_schema are inferred from func. However,
+    Normally, the input_schema and output_schem are inferred from func. However,
     in some cases, like define_interrupt, the app developer doesn't have a way to
     express the input schema in the func signature.
 

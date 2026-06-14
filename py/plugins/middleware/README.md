@@ -4,13 +4,14 @@ A collection of middleware implementations for Firebase Genkit Python.
 
 ## Overview
 
-This plugin provides five concrete middleware implementations for common use cases:
+This plugin provides six concrete middleware implementations for common use cases:
 
 - **Retry**: Retries model API calls on transient errors with exponential backoff
 - **Fallback**: Falls back to alternative models when the primary model fails
 - **ToolApproval**: Requires explicit approval before executing tool calls
 - **Skills**: Exposes a library of skills as system prompts and tools
 - **Filesystem**: Provides sandboxed filesystem operations
+- **Artifacts**: Session artifact listing plus read/write artifact tools
 
 ## Quick start
 
@@ -89,6 +90,7 @@ response = await ai.generate(
 Requires approval before executing tools (useful for sensitive operations):
 
 ```python
+from genkit import restart_tool
 from genkit.plugins.middleware import ToolApproval
 
 approval = ToolApproval(
@@ -105,7 +107,7 @@ response = await ai.generate(
 
 When a non-allowed tool is called, execution is interrupted. Approve and re-run the
 tool by restarting it with ``resumed_metadata`` that includes ``toolApproved``
-(the middleware only treats explicit dict metadata as approval):
+(the middleware also accepts snake_case ``tool_approved``):
 
 ```python
 first = await ai.generate(
@@ -115,8 +117,6 @@ first = await ai.generate(
     use=[approval],
 )
 
-from genkit import restart_tool
-
 response = await ai.generate(
     model='googleai/gemini-flash-latest',
     prompt='Delete the database',
@@ -124,6 +124,8 @@ response = await ai.generate(
     tools=[delete_database_tool],
     use=[approval],
     resume_restart=restart_tool(
+        None,
+        tool=delete_database_tool,
         interrupt=first.interrupts[0],
         resumed_metadata={'toolApproved': True},
     ),
@@ -185,3 +187,14 @@ Provides four tools:
 - `write_file`: Write to a file (requires `allow_write_access=True`)
 - `edit_file`: Edit file with string replacements (requires `allow_write_access=True`)
 
+## Development
+
+```bash
+cd py/plugins/middleware
+pip install -e ".[dev]"
+pytest tests/
+```
+
+## License
+
+Apache 2.0

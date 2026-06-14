@@ -141,9 +141,7 @@ async def test_simulates_doc_grounding(
         ),
     )
 
-    assert response.request is not None
-    assert response.request.messages is not None
-    assert response.request.messages[0] == Message(
+    grounded_msg = Message(
         role=Role.USER,
         content=[
             Part(TextPart(text='hi')),
@@ -155,6 +153,17 @@ async def test_simulates_doc_grounding(
             ),
         ],
     )
+
+    # the model receives the grounded prompt with docs injected as a context part.
+    assert pm.last_request is not None
+    assert pm.last_request.messages[0] == grounded_msg
+
+    # the returned request is the conversation we persist: the clean turn. The
+    # docs ride along as structured data, not inlined into the message.
+    assert response.request is not None
+    assert response.request.messages is not None
+    assert response.request.messages[0] == Message(role=Role.USER, content=[Part(TextPart(text='hi'))])
+    assert response.request.docs is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -2006,10 +2015,9 @@ async def test_generate_action_spec(spec: dict[str, Any]) -> None:
             captured_chunks.append(chunk)
 
         action_response = await action.run(
-            ai.registry,
             TypeAdapter(GenerateActionOptions).validate_python(spec['input']),  # type: ignore[arg-type]
             on_chunk=on_chunk,  # type: ignore[misc]
-        )
+            )
         response = action_response.response
     else:
         action_response = await action.run(
