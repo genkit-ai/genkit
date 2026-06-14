@@ -258,7 +258,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
 
     @ai.tool(name='slowWork')
     async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-        for _ in range(200):
+        for _i in range(200):
             if ctx.abort_signal.is_set():
                 tool_saw_abort.set()
                 raise GenkitError(status='ABORTED', message='Task aborted')

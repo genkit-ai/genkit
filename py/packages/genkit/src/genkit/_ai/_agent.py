@@ -1131,7 +1131,9 @@ async def _generate_prompt_agent_turn(
 
     def _on_chunk(chunk: object) -> None:
         wire_chunk = (
-            chunk if isinstance(chunk, ModelResponseChunk) else ModelResponseChunk.model_validate(chunk.model_dump())
+            chunk
+            if isinstance(chunk, ModelResponseChunk)
+            else ModelResponseChunk.model_validate(cast(Any, chunk).model_dump())
         )
         ctx.send_chunk(AgentStreamChunk(model_chunk=wire_chunk))
 
