@@ -112,7 +112,7 @@ action resolution, and action discovery.
   │                                                                     │
   │  Phase 2: LAZY INIT (on first action resolution)                   │
   │  ──────────                                                        │
-  │  await ai.generate(model='googleai/gemini-2.0-flash', ...)        │
+  │  await ai.generate(model='googleai/gemini-flash-latest', ...)      │
   │       │                                                            │
   │       ▼                                                            │
   │  registry._ensure_plugin_initialized('googleai')                   │
@@ -126,7 +126,7 @@ action resolution, and action discovery.
   │                                                                     │
   │  Phase 3: ACTION RESOLUTION (on each usage)                        │
   │  ─────────────────────                                             │
-  │  await plugin.resolve(ActionKind.MODEL, 'googleai/gemini-2.0-flash')│
+  │  await plugin.resolve(ActionKind.MODEL, 'googleai/gemini-flash-latest')│
   │       │                                                            │
   │       ▼                                                            │
   │  Action instance returned and cached in registry                   │
@@ -144,29 +144,29 @@ action resolution, and action discovery.
 
 ### How the Registry Resolves Actions
 
-When you call `ai.generate(model='googleai/gemini-2.0-flash')`, the
+When you call `ai.generate(model='googleai/gemini-flash-latest')`, the
 registry uses a multi-step resolution algorithm:
 
 ```
-  ai.generate(model="googleai/gemini-2.0-flash")
+  ai.generate(model="googleai/gemini-flash-latest")
        │
        ▼
   ┌──────────────────────────────────────────────────────────────────┐
   │  Step 1: CACHE HIT?                                              │
-  │  Is "googleai/gemini-2.0-flash" already in registry._entries?    │
+  │  Is "googleai/gemini-flash-latest" already in registry._entries? │
   │     ├── YES → return cached Action (fast path)                   │
   │     └── NO  → continue to Step 2                                 │
   ├──────────────────────────────────────────────────────────────────┤
   │  Step 2: NAMESPACED or UNPREFIXED?                               │
   │  Does the name contain "/"?                                      │
   │     │                                                            │
-  │     ├── YES ("googleai/gemini-2.0-flash")                        │
+  │     ├── YES ("googleai/gemini-flash-latest")                     │
   │     │    ├── Find plugin "googleai"                               │
   │     │    ├── await _ensure_plugin_initialized("googleai")         │
   │     │    ├── Check cache again (init may have registered it)     │
-  │     │    └── await plugin.resolve(MODEL, "googleai/gemini-2.0")  │
+  │     │    └── await plugin.resolve(MODEL, "googleai/gemini-flash")│
   │     │                                                            │
-  │     └── NO ("gemini-2.0-flash")                                  │
+  │     └── NO ("gemini-flash-latest")                               │
   │          ├── Try ALL plugins                                      │
   │          ├── If 1 match  → use it                                 │
   │          ├── If 2+ match → ValueError (ambiguous)                │
