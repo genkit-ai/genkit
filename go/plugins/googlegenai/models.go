@@ -68,11 +68,20 @@ var (
 	}
 
 	// AntigravitySupports describes model capabilities for Antigravity preview models.
+	//
+	// SystemRole is true even though the interactions endpoint has no native
+	// system role: the Antigravity handler maps system messages to user input
+	// itself (mirroring the JS plugin). Advertising true is what keeps the
+	// framework's default simulateSystemPrompt middleware from rewriting system
+	// messages into a "SYSTEM INSTRUCTIONS:/Understood." user+model pair first,
+	// which the model ignores in practice. (This is the one capability value
+	// that intentionally differs from the JS plugin, because Go auto-applies
+	// that middleware and JS does not.)
 	AntigravitySupports = ai.ModelSupports{
 		Multiturn:  true,
 		Tools:      false,
 		ToolChoice: false,
-		SystemRole: false,
+		SystemRole: true,
 		Media:      true,
 		Output:     []string{"text"},
 	}

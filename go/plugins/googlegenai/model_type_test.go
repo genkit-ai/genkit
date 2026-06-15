@@ -38,8 +38,11 @@ func TestAntigravityModelTypeDefaults(t *testing.T) {
 	if supports.ToolChoice {
 		t.Error("Antigravity should not advertise tool choice support")
 	}
-	if supports.SystemRole {
-		t.Error("Antigravity should not advertise system role support")
+	// SystemRole is intentionally true: the Antigravity handler maps system
+	// messages to user input itself, and advertising true bypasses the
+	// framework's simulateSystemPrompt rewrite (which the model ignores).
+	if !supports.SystemRole {
+		t.Error("Antigravity should advertise system role so simulateSystemPrompt is bypassed")
 	}
 	if supports.LongRunning {
 		t.Error("Antigravity should not be long-running")
