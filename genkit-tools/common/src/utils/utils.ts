@@ -31,14 +31,8 @@ export interface DevToolsInfo {
  * Finds the project root by walking up the directory tree looking for a file
  * that marks the root of a supported runtime's project (for example
  * `package.json` for JS or `pubspec.yaml` for Dart).
- *
- * @param startDir Directory to start the search from. Defaults to
- *   `process.cwd()`. Passing this explicitly avoids relying on the
- *   process-global current working directory, which is useful in tests.
  */
-export async function findProjectRoot(
-  startDir: string = process.cwd()
-): Promise<string> {
+export async function findProjectRoot(): Promise<string> {
   const projectMarkers = [
     'package.json',
     'go.mod',
