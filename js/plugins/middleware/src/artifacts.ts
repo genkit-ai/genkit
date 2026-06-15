@@ -48,8 +48,8 @@ export type ArtifactsOptions = z.infer<typeof ArtifactsOptionsSchema>;
  */
 function extractArtifactText(artifact: Artifact): string {
   return (artifact.parts ?? [])
-    .map((p: any) => p.text ?? '')
-    .filter((t: string) => t.length > 0)
+    .map((p) => p.text ?? '')
+    .filter((t) => t.length > 0)
     .join('\n');
 }
 
