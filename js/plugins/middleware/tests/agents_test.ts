@@ -918,6 +918,116 @@ describe('agents middleware', () => {
     );
   });
 
+  it('forwards recent history (text only) to sub-agents via historyLength', async () => {
+    const ai = genkit({});
+
+    // Capture what the sub-agent model actually receives.
+    let capturedSubMessages: any[] | undefined;
+    const subModel = ai.defineModel(
+      { name: 'sub-history-' + Math.random() },
+      async (req) => {
+        capturedSubMessages = req.messages;
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'sub done' }],
+          },
+        };
+      }
+    );
+
+    ai.defineAgent({
+      name: 'historyWorker',
+      model: subModel,
+      system: 'You are a worker.',
+    });
+
+    let mainTurn = 0;
+    const mainModel = ai.defineModel(
+      { name: 'main-history-' + Math.random() },
+      async () => {
+        mainTurn++;
+        if (mainTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'delegate_to_historyWorker',
+                    input: { task: 'do the main task' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'final' }],
+          },
+        };
+      }
+    );
+
+    // Provide conversation history that includes a complete tool exchange.
+    // The model message with a `toolRequest` part (and the `tool` message)
+    // must NOT be forwarded to the sub-agent — only text user/model parts.
+    await ai.generate({
+      model: mainModel,
+      messages: [
+        { role: 'user', content: [{ text: 'please search for X' }] },
+        {
+          role: 'model',
+          content: [{ toolRequest: { name: 'search', ref: '1', input: {} } }],
+        },
+        {
+          role: 'tool',
+          content: [{ toolResponse: { name: 'search', ref: '1', output: {} } }],
+        },
+        { role: 'model', content: [{ text: 'I found the answer.' }] },
+        { role: 'user', content: [{ text: 'now do the work' }] },
+      ],
+      use: [agents({ agents: ['historyWorker'], historyLength: 10 })],
+    });
+
+    assert.ok(capturedSubMessages, 'Sub-agent should have received messages');
+
+    // No forwarded part should be a tool/tool-request part.
+    const hasToolParts = capturedSubMessages!.some((m: any) =>
+      m.content?.some((p: any) => p.toolRequest || p.toolResponse)
+    );
+    assert.ok(
+      !hasToolParts,
+      'Forwarded history must not contain tool/tool-request parts'
+    );
+
+    // No forwarded message should be a `tool` role message.
+    const hasToolRole = capturedSubMessages!.some(
+      (m: any) => m.role === 'tool'
+    );
+    assert.ok(!hasToolRole, 'Forwarded history must not contain tool messages');
+
+    // The text from the history should be forwarded.
+    const allText = capturedSubMessages!
+      .flatMap((m: any) => m.content ?? [])
+      .map((p: any) => p.text ?? '')
+      .join('\n');
+    assert.ok(
+      allText.includes('please search for X'),
+      'User text history should be forwarded'
+    );
+    assert.ok(
+      allText.includes('I found the answer.'),
+      'Model text history should be forwarded'
+    );
+    assert.ok(
+      allText.includes('do the main task'),
+      'The delegated task should be present'
+    );
+  });
+
   it('returns sub-agent failure as an error tool response', async () => {
     const ai = genkit({});
 
