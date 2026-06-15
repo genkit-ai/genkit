@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { BaseRuntimeManager, RuntimeManager } from '../src/manager/manager';
+import { describe, expect, it, jest } from '@jest/globals';
+import { RuntimeManager } from '../src/manager/manager';
 import { RuntimeEvent } from '../src/manager/types';
 
 jest.mock('chokidar', () => ({
@@ -26,18 +26,8 @@ jest.mock('chokidar', () => ({
 }));
 
 describe('RuntimeManager', () => {
-  let manager: BaseRuntimeManager | undefined;
-
-  afterEach(async () => {
-    // Always stop the manager so its periodic health-check timer is cleared
-    // and the Jest worker can exit cleanly (otherwise the leaked interval can
-    // interfere with other test files sharing the worker).
-    await manager?.stop();
-    manager = undefined;
-  });
-
   it('should allow unsubscribing from runtime events', async () => {
-    manager = await RuntimeManager.create({ projectRoot: '.' });
+    const manager = await RuntimeManager.create({ projectRoot: '.' });
     const listener = jest.fn();
 
     // Subscribe

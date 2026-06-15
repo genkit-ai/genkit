@@ -49,7 +49,7 @@ export async function findProjectRoot(
     'pubspec.yaml',
   ];
 
-  let currentDir = startDir;
+  let currentDir = process.cwd();
   while (currentDir !== path.parse(currentDir).root) {
     try {
       const checks = projectMarkers.map((file) =>
@@ -67,7 +67,7 @@ export async function findProjectRoot(
     }
     currentDir = path.dirname(currentDir);
   }
-  return startDir;
+  return process.cwd();
 }
 
 /**
