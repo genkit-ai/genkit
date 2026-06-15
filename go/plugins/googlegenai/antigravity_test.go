@@ -287,6 +287,66 @@ func TestFromInteractionSyncUsage(t *testing.T) {
 	}
 }
 
+func TestFromInteractionStepExoticTypes(t *testing.T) {
+	t.Run("google_search_call", func(t *testing.T) {
+		parts := fromInteractionStep(interactionStep{
+			Type:      "google_search_call",
+			ID:        "gsc-1",
+			Arguments: map[string]any{"queries": []any{"weather"}},
+			Signature: "sig-1",
+		})
+		if len(parts) != 1 || parts[0].Custom["googleSearchCall"] == nil {
+			t.Fatalf("expected googleSearchCall custom part, got %+v", parts)
+		}
+		if parts[0].Metadata["signature"] != "sig-1" {
+			t.Errorf("signature metadata = %v, want sig-1", parts[0].Metadata["signature"])
+		}
+	})
+
+	t.Run("code_execution_call", func(t *testing.T) {
+		parts := fromInteractionStep(interactionStep{
+			Type:      "code_execution_call",
+			ID:        "cec-1",
+			Arguments: map[string]any{"code": "print(1)", "language": "PYTHON"},
+		})
+		if len(parts) != 1 {
+			t.Fatalf("expected 1 part, got %d", len(parts))
+		}
+		ec, ok := parts[0].Custom["executableCode"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected executableCode custom part, got %+v", parts[0].Custom)
+		}
+		if ec["code"] != "print(1)" {
+			t.Errorf("code = %v, want print(1)", ec["code"])
+		}
+		if parts[0].Metadata["callId"] != "cec-1" {
+			t.Errorf("callId = %v, want cec-1", parts[0].Metadata["callId"])
+		}
+	})
+
+	t.Run("code_execution_result", func(t *testing.T) {
+		parts := fromInteractionStep(interactionStep{
+			Type:   "code_execution_result",
+			CallID: "cec-1",
+			Result: "1\n",
+		})
+		cr, ok := parts[0].Custom["codeExecutionResult"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected codeExecutionResult custom part, got %+v", parts[0].Custom)
+		}
+		if cr["output"] != "1\n" {
+			t.Errorf("output = %v, want %q", cr["output"], "1\n")
+		}
+	})
+
+	t.Run("unknown still preserved", func(t *testing.T) {
+		parts := fromInteractionStep(interactionStep{Type: "some_future_type"})
+		if len(parts) != 1 || parts[0].Custom["unknownStep"] == nil {
+			t.Fatalf("expected unknownStep fallback, got %+v", parts)
+		}
+	})
+}
+
 func TestAntigravityErrorMapping(t *testing.T) {
 	client, _ := newInteractionServer(t, map[string]any{
 		"error": map[string]any{"message": "bad request"},

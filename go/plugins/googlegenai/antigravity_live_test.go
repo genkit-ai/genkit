@@ -4,7 +4,12 @@
 package googlegenai_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"strings"
 	"testing"
@@ -92,5 +97,57 @@ func TestAntigravityLive(t *testing.T) {
 			t.Fatalf("second turn: %v", err)
 		}
 		t.Logf("second turn response: %q", second.Text())
+	})
+
+	// Verifies the system instruction survives end to end. Antigravity advertises
+	// SystemRole=false, so the framework's simulateSystemPrompt middleware rewrites
+	// the system message before our handler runs; this confirms the instruction is
+	// still honoured by the model despite that rewrite.
+	t.Run("system prompt", func(t *testing.T) {
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithMessages(
+				ai.NewSystemTextMessage("Respond with only the single word BANANA, regardless of the question."),
+				ai.NewUserTextMessage("What is 2 + 2?"),
+			),
+		)
+		if err != nil {
+			t.Fatalf("system prompt generate: %v", err)
+		}
+		out := resp.Text()
+		t.Logf("system-prompt response: %q", out)
+		if !strings.Contains(strings.ToUpper(out), "BANANA") {
+			t.Errorf("system instruction not honoured: response %q does not contain BANANA", out)
+		}
+	})
+
+	t.Run("media input", func(t *testing.T) {
+		img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+		for y := 0; y < 16; y++ {
+			for x := 0; x < 16; x++ {
+				img.Set(x, y, color.RGBA{R: 255, G: 0, B: 0, A: 255})
+			}
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			t.Fatalf("encode png: %v", err)
+		}
+		dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithModel(m),
+			ai.WithMessages(ai.NewUserMessage(
+				ai.NewTextPart("What single colour dominates this image? Reply with just the colour name."),
+				ai.NewMediaPart("image/png", dataURI),
+			)),
+		)
+		if err != nil {
+			t.Fatalf("media generate: %v", err)
+		}
+		out := resp.Text()
+		t.Logf("media response: %q", out)
+		if !strings.Contains(strings.ToLower(out), "red") {
+			t.Errorf("expected the model to identify red, got %q", out)
+		}
 	})
 }

@@ -511,9 +511,64 @@ func fromInteractionStep(step interactionStep) []*ai.Part {
 			Output: step.Result,
 			Ref:    step.CallID,
 		})}
+	case "google_search_call":
+		p := ai.NewCustomPart(map[string]any{
+			"googleSearchCall": map[string]any{"id": step.ID, "arguments": step.Arguments},
+		})
+		setPartMeta(p, "signature", step.Signature)
+		return []*ai.Part{p}
+	case "google_search_result":
+		p := ai.NewCustomPart(map[string]any{
+			"googleSearchResult": map[string]any{"callId": step.CallID, "result": step.Result},
+		})
+		setPartMeta(p, "signature", step.Signature)
+		return []*ai.Part{p}
+	case "code_execution_call":
+		code, _ := step.Arguments["code"].(string)
+		language, _ := step.Arguments["language"].(string)
+		if language == "" {
+			language = "PYTHON"
+		}
+		p := newExecutableCodePart(language, code)
+		setPartMeta(p, "callId", step.ID)
+		setPartMeta(p, "signature", step.Signature)
+		return []*ai.Part{p}
+	case "code_execution_result":
+		p := newCodeExecutionResultPart("OUTCOME_OK", resultToString(step.Result))
+		setPartMeta(p, "callId", step.CallID)
+		setPartMeta(p, "signature", step.Signature)
+		return []*ai.Part{p}
 	default:
 		return []*ai.Part{ai.NewCustomPart(map[string]any{"unknownStep": step})}
 	}
+}
+
+// setPartMeta sets a metadata key on a part, allocating the map on first use and
+// skipping empty values.
+func setPartMeta(p *ai.Part, key string, val any) {
+	if val == nil || val == "" {
+		return
+	}
+	if p.Metadata == nil {
+		p.Metadata = map[string]any{}
+	}
+	p.Metadata[key] = val
+}
+
+// resultToString renders an interaction step result (string or object) as a
+// string for the code-execution-result custom part.
+func resultToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(b)
 }
 
 // fromInteractionContent converts an interaction content block into a Genkit
