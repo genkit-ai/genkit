@@ -9,7 +9,6 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
-	"google.golang.org/genai"
 )
 
 func TestClassifyModelAntigravity(t *testing.T) {
@@ -49,8 +48,10 @@ func TestAntigravityModelTypeDefaults(t *testing.T) {
 		t.Fatalf("Antigravity output = %v, want [text]", supports.Output)
 	}
 
-	if _, ok := ModelTypeAntigravity.DefaultConfig().(*genai.GenerateContentConfig); !ok {
-		t.Fatalf("ModelTypeAntigravity.DefaultConfig() = %T, want *genai.GenerateContentConfig", ModelTypeAntigravity.DefaultConfig())
+	// Antigravity is served by the interactions endpoint, so its config is the
+	// interactions-shaped AntigravityConfig, not generateContent's config.
+	if _, ok := ModelTypeAntigravity.DefaultConfig().(*AntigravityConfig); !ok {
+		t.Fatalf("ModelTypeAntigravity.DefaultConfig() = %T, want *AntigravityConfig", ModelTypeAntigravity.DefaultConfig())
 	}
 }
 

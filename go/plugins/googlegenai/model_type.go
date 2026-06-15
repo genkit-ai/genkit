@@ -103,6 +103,8 @@ func (mt ModelType) configSchema() map[string]any {
 		return imagenConfigSchema
 	case ModelTypeVeo:
 		return veoConfigSchema
+	case ModelTypeAntigravity:
+		return antigravityConfigSchema
 	default:
 		// Gemini models and unrecognized names speak generateContent, and so
 		// does an embedding-classified name defined as a model. Embedder
@@ -124,7 +126,7 @@ func (mt ModelType) DefaultConfig() any {
 	case ModelTypeEmbedder:
 		return &genai.EmbedContentConfig{}
 	case ModelTypeAntigravity:
-		return &genai.GenerateContentConfig{}
+		return &AntigravityConfig{}
 	default:
 		return nil
 	}

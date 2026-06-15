@@ -89,6 +89,15 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 			})
 	}
 
+	// Antigravity models are served by the interactions endpoint. The request
+	// config is left untyped so generateAntigravity can forward unknown keys.
+	if mt == ModelTypeAntigravity {
+		return ai.NewModelAction(api.NewName(provider, id), &opts,
+			func(ctx context.Context, input *ai.ModelRequest, _ any, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return generateAntigravity(ctx, client, id, input, cb)
+			})
+	}
+
 	// The gemini api doesn't support downloading media from http(s).
 	var download ai.ModelMiddleware
 	if opts.Supports != nil && opts.Supports.Media {

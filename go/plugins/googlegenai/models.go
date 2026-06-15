@@ -84,9 +84,10 @@ var (
 // config structs is expensive and every model of a modality advertises the
 // same read-only schema, so they are built once and shared.
 var (
-	geminiConfigSchema = configToMap(genai.GenerateContentConfig{})
-	imagenConfigSchema = configToMap(genai.GenerateImagesConfig{})
-	veoConfigSchema    = configToMap(genai.GenerateVideosConfig{})
+	geminiConfigSchema      = configToMap(genai.GenerateContentConfig{})
+	imagenConfigSchema      = configToMap(genai.GenerateImagesConfig{})
+	veoConfigSchema         = configToMap(genai.GenerateVideosConfig{})
+	antigravityConfigSchema = configToMap(AntigravityConfig{})
 )
 
 // Default options for unknown models of each type. Every catalog entry is
@@ -115,7 +116,7 @@ var (
 	defaultAntigravityOpts = ai.ModelOptions{
 		Supports:     &AntigravitySupports,
 		Stage:        ai.ModelStageUnstable,
-		ConfigSchema: configToMap(genai.GenerateContentConfig{}),
+		ConfigSchema: antigravityConfigSchema,
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
