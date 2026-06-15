@@ -556,8 +556,10 @@ describe('artifacts middleware', () => {
   it('gracefully handles no active session', async () => {
     const ai = genkit({});
 
-    // No session.run() wrapper — ai.currentSession() should throw or return
-    // undefined. The tools should handle this gracefully.
+    // No session.run() wrapper, so ai.currentSession() throws inside the
+    // tool. The middleware catches that and the read_artifact tool must
+    // resolve deterministically with found=false and an explanatory message
+    // (rather than throwing out of the generate call).
     let capturedToolOutput: any;
     let modelTurn = 0;
     const model = ai.defineModel(
@@ -593,21 +595,78 @@ describe('artifacts middleware', () => {
       }
     );
 
-    // ai.currentSession() throws when no session is active.
-    // The middleware tool should catch this or the error propagates.
-    // Depending on implementation, this may throw or return found=false.
-    try {
-      await ai.generate({
-        model,
-        prompt: 'no session',
-        use: [artifacts()],
-      });
-      // If it didn't throw, verify the output indicates no session.
-      assert.ok(capturedToolOutput);
-      assert.strictEqual(capturedToolOutput.found, false);
-    } catch (e: any) {
-      // If it threw, that's also acceptable — session is required.
-      assert.ok(e.message.includes('session'), 'Error should mention session');
-    }
+    const result = await ai.generate({
+      model,
+      prompt: 'no session',
+      use: [artifacts()],
+    });
+
+    // The generate call must complete (no thrown error) and the tool must
+    // report the missing session deterministically.
+    assert.ok(result.text.includes('done'));
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.strictEqual(
+      capturedToolOutput.found,
+      false,
+      'read_artifact should report found=false with no active session'
+    );
+    assert.match(
+      capturedToolOutput.content,
+      /no active session/i,
+      'read_artifact should explain there is no active session'
+    );
+  });
+
+  it('write_artifact reports no active session deterministically', async () => {
+    const ai = genkit({});
+
+    let capturedToolOutput: any;
+    let modelTurn = 0;
+    const model = ai.defineModel(
+      { name: 'nosession-write-' + Math.random() },
+      async (req: any) => {
+        modelTurn++;
+        if (modelTurn === 1) {
+          return {
+            message: {
+              role: 'model' as const,
+              content: [
+                {
+                  toolRequest: {
+                    name: 'write_artifact',
+                    input: { name: 'x.txt', content: 'hello' },
+                  },
+                },
+              ],
+            },
+          };
+        }
+        const toolMsg = req.messages?.find((m: any) => m.role === 'tool');
+        if (toolMsg) {
+          const toolResp = toolMsg.content.find((p: any) => p.toolResponse);
+          capturedToolOutput = toolResp?.toolResponse?.output;
+        }
+        return {
+          message: {
+            role: 'model' as const,
+            content: [{ text: 'done' }],
+          },
+        };
+      }
+    );
+
+    const result = await ai.generate({
+      model,
+      prompt: 'no session write',
+      use: [artifacts()],
+    });
+
+    assert.ok(result.text.includes('done'));
+    assert.ok(capturedToolOutput, 'Tool output should be captured');
+    assert.match(
+      capturedToolOutput.status,
+      /no active session/i,
+      'write_artifact should explain there is no active session'
+    );
   });
 });

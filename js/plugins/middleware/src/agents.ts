@@ -19,8 +19,10 @@ import {
   z,
   type Action,
   type GenerateMiddleware,
+  type MessageData,
+  type Part,
 } from 'genkit';
-import { tool, type AgentOutput } from 'genkit/beta';
+import { tool, type AgentOutput, type Artifact } from 'genkit/beta';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -203,7 +205,7 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
       // `generate()` invocation, giving each call its own closure.
       const shared = {
         delegationCount: 0,
-        conversationMessages: [] as any[],
+        conversationMessages: [] as MessageData[],
       };
 
       // Caches (persist across turns within the same generate cycle).
@@ -318,13 +320,26 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
 
             try {
               // Build messages for the sub-agent.
-              const messages: any[] = [];
+              const messages: MessageData[] = [];
 
               // Optionally include recent conversation history as context.
+              // Only user/model messages are forwarded, and each is reduced to
+              // its text parts. This avoids leaking tool/tool-request parts —
+              // a model message mid-tool-loop can carry dangling `toolRequest`
+              // parts with no matching tool response, which would confuse the
+              // sub-agent model.
               if (historyLength > 0 && shared.conversationMessages.length > 0) {
                 const contextMsgs = shared.conversationMessages
-                  .filter((m: any) => m.role === 'user' || m.role === 'model')
-                  .slice(-historyLength);
+                  .filter((m) => m.role === 'user' || m.role === 'model')
+                  .slice(-historyLength)
+                  .map((m) => ({
+                    role: m.role,
+                    content: m.content.filter(
+                      (p): p is Part & { text: string } =>
+                        typeof p.text === 'string' && p.text.length > 0
+                    ),
+                  }))
+                  .filter((m) => m.content.length > 0);
                 messages.push(...contextMsgs);
               }
 
@@ -383,9 +398,9 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                 .join('\n');
 
               // ── Artifact handling ─────────────────────────────────
-              const subArtifacts = (agentOutput.artifacts ?? []).filter(
-                (a: any) => a.name
-              );
+              const subArtifacts: Artifact[] = (
+                agentOutput.artifacts ?? []
+              ).filter((a) => a.name);
 
               // Generate a unique invocation ID to namespace artifacts
               const invocationId = makeInvocationId(ref.name);
@@ -396,15 +411,17 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               if (subArtifacts.length > 0) {
                 try {
                   const session = ai.currentSession();
-                  const namespacedArtifacts = subArtifacts.map((a: any) => ({
-                    ...a,
-                    name: `${invocationId}/${a.name}`,
-                    metadata: {
-                      ...a.metadata,
-                      source: ref.name,
-                      invocationId,
-                    },
-                  }));
+                  const namespacedArtifacts: Artifact[] = subArtifacts.map(
+                    (a) => ({
+                      ...a,
+                      name: `${invocationId}/${a.name}`,
+                      metadata: {
+                        ...a.metadata,
+                        source: ref.name,
+                        invocationId,
+                      },
+                    })
+                  );
                   session.addArtifacts(namespacedArtifacts);
                 } catch {
                   // No active session — artifacts can't be merged into a
@@ -414,20 +431,20 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
               }
 
               // Build tool result based on strategy
-              let artifacts: any[] | undefined;
+              let artifacts: { name: string; content?: string }[] | undefined;
               if (subArtifacts.length > 0) {
                 if (artifactStrategy === 'inline') {
                   // Include full content in tool result
-                  artifacts = subArtifacts.map((a: any) => ({
+                  artifacts = subArtifacts.map((a) => ({
                     name: `${invocationId}/${a.name}`,
                     content: (a.parts ?? [])
-                      .map((p: any) => p.text ?? '')
-                      .filter((t: string) => t.length > 0)
+                      .map((p) => p.text ?? '')
+                      .filter((t) => t.length > 0)
                       .join('\n'),
                   }));
                 } else {
                   // Session strategy: names only
-                  artifacts = subArtifacts.map((a: any) => ({
+                  artifacts = subArtifacts.map((a) => ({
                     name: `${invocationId}/${a.name}`,
                   }));
                 }
