@@ -32,8 +32,6 @@ from genkit._ai._session import (
     SnapshotAborter,
     SnapshotCallback,
     SnapshotContext,
-    run_with_session,
-    supports_abort,
 )
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
@@ -62,8 +60,6 @@ __all__ = [
     'Session',
     'SessionStore',
     'SnapshotAborter',
-    'supports_abort',
-    'run_with_session',
     'InMemorySessionStore',
     # Callbacks and transforms
     'SnapshotCallback',
