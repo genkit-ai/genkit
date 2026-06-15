@@ -40,20 +40,44 @@ import fs from 'fs';
  * actual bug, and `afterAll` cleans up before the next file runs without
  * disturbing intra-file behavior.
  */
-const realFs = { ...fs };
-const realFsPromises = { ...fs.promises };
+function snapshot(source: object): Record<string | symbol, any> {
+  const snap: Record<string | symbol, any> = {};
+  for (const key of Reflect.ownKeys(source)) {
+    try {
+      snap[key as any] = (source as any)[key];
+    } catch {
+      // Ignore getters that throw.
+    }
+  }
+  return snap;
+}
+
+const realFs = snapshot(fs);
+const realFsPromises = snapshot(fs.promises);
 
 /**
- * Restores own enumerable properties of `target` from `snapshot`, skipping any
- * that are non-writable (for example `fs.constants`) or unchanged. Restoring
- * only changed, writable properties avoids throwing on read-only members.
+ * Restores own properties of `target` from `snapshot`: deletes any properties a
+ * test added that weren't in the original, and re-assigns any that changed.
+ * Skips non-writable members (for example `fs.constants`) and unchanged ones.
+ * Uses `Reflect.ownKeys` so symbol and non-enumerable properties are handled.
  */
 function restoreFrom(
-  target: Record<string, any>,
-  snapshot: Record<string, any>
+  target: Record<string | symbol, any>,
+  snap: Record<string | symbol, any>
 ) {
-  for (const key of Object.keys(snapshot)) {
-    if (target[key] === snapshot[key]) {
+  // Remove properties added by a test that weren't part of the snapshot.
+  for (const key of Reflect.ownKeys(target)) {
+    if (!(key in snap)) {
+      try {
+        delete target[key];
+      } catch {
+        // Best-effort; ignore properties that can't be deleted.
+      }
+    }
+  }
+  // Restore changed properties back to their original implementations.
+  for (const key of Reflect.ownKeys(snap)) {
+    if (target[key] === snap[key]) {
       continue;
     }
     const descriptor = Object.getOwnPropertyDescriptor(target, key);
@@ -61,7 +85,7 @@ function restoreFrom(
       continue;
     }
     try {
-      target[key] = snapshot[key];
+      target[key] = snap[key];
     } catch {
       // Best-effort restore; ignore properties that can't be reassigned.
     }
