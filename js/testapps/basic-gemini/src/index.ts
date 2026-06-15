@@ -602,10 +602,10 @@ ai.defineFlow('imagen-image-generation', async (_) => {
   return media;
 });
 
-// TTS sample
+// TTS sample with speech Config
 ai.defineFlow(
   {
-    name: 'tts',
+    name: 'tts-Algenib',
     inputSchema: z
       .string()
       .default(
@@ -624,6 +624,35 @@ ai.defineFlow(
           },
         },
       },
+      prompt,
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    const audioBuffer = Buffer.from(
+      media.url.substring(media.url.indexOf(',') + 1),
+      'base64'
+    );
+    return {
+      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
+    };
+  }
+);
+
+// TTS sample with default voice
+ai.defineFlow(
+  {
+    name: 'tts-default-voice',
+    inputSchema: z
+      .string()
+      .default(
+        'Gemini is amazing. Can say things like: glorg, blub-blub, and ayeeeeee!!!'
+      ),
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async (prompt) => {
+    const { media } = await ai.generate({
+      model: googleAI.model('gemini-2.5-flash-preview-tts'),
       prompt,
     });
     if (!media) {
@@ -672,13 +701,6 @@ two... let's go!`
   async (prompt: string) => {
     const { media } = await ai.generate({
       model: googleAI.model('gemini-3.1-flash-tts-preview'),
-      config: {
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Algenib' },
-          },
-        },
-      },
       prompt,
     });
     if (!media) {
