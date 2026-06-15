@@ -52,6 +52,20 @@ var (
 		Output:      []string{"media"},
 		LongRunning: true,
 	}
+
+	// TTSSupports describes model capabilities for text-to-speech models
+	// (gemini-*-tts). They emit audio and, unlike conversational Gemini models,
+	// do not support tools, multi-turn history, or system roles. Output is
+	// "media" to match the convention used by the other media producers
+	// (Imagen, Veo) rather than a TTS-only token.
+	TTSSupports = ai.ModelSupports{
+		Multiturn:  false,
+		Media:      false,
+		Tools:      false,
+		ToolChoice: false,
+		SystemRole: false,
+		Output:     []string{"media"},
+	}
 )
 
 // Default options for unknown models of each type.
@@ -93,6 +107,15 @@ const (
 	gemini31FlashLitePreview  = "gemini-3.1-flash-lite-preview"
 	gemini31FlashImagePreview = "gemini-3.1-flash-image-preview"
 
+	gemini35Flash      = "gemini-3.5-flash"
+	gemini31FlashLite  = "gemini-3.1-flash-lite"
+	gemini31FlashImage = "gemini-3.1-flash-image"
+	gemini3ProImage    = "gemini-3-pro-image"
+
+	gemini25FlashPreviewTTS = "gemini-2.5-flash-preview-tts"
+	gemini25ProPreviewTTS   = "gemini-2.5-pro-preview-tts"
+	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
+
 	imagen3Generate001       = "imagen-3.0-generate-001"
 	imagen3FastGenerate001   = "imagen-3.0-fast-generate-001"
 	imagen40FastGenerate001  = "imagen-4.0-fast-generate-001"
@@ -114,6 +137,7 @@ const (
 	textembeddinggeckomultilingual001 = "textembedding-gecko-multilingual@001"
 	textmultilingualembedding002      = "text-multilingual-embedding-002"
 	multimodalembedding               = "multimodalembedding"
+	geminiEmbedding2                  = "gemini-embedding-2"
 )
 
 var (
@@ -127,6 +151,10 @@ var (
 		gemini25Pro,
 		gemini31FlashLitePreview,
 		gemini31FlashImagePreview,
+		gemini35Flash,
+		gemini31FlashLite,
+		gemini31FlashImage,
+		gemini3ProImage,
 
 		imagen3Generate001,
 		imagen3FastGenerate001,
@@ -146,10 +174,17 @@ var (
 		gemini25Pro,
 		gemini31FlashLitePreview,
 		gemini31FlashImagePreview,
+		gemini35Flash,
+		gemini31FlashImage,
+		gemini3ProImage,
 
 		imagen40FastGenerate001,
 		imagen40Generate001,
 		imagen40UltraGenerate001,
+
+		gemini25FlashPreviewTTS,
+		gemini25ProPreviewTTS,
+		gemini31FlashTTSPreview,
 
 		veo20Generate001,
 		veo30Generate001,
@@ -203,6 +238,48 @@ var (
 			Label:    "Gemini 3.1 Flash Image Preview",
 			Versions: []string{},
 			Supports: &Multimodal,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini35Flash: {
+			Label:    "Gemini 3.5 Flash",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashLite: {
+			Label:    "Gemini 3.1 Flash Lite",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini31FlashImage: {
+			Label:    "Gemini 3.1 Flash Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini3ProImage: {
+			Label:    "Gemini 3 Pro Image",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemini25FlashPreviewTTS: {
+			Label:    "Gemini 2.5 Flash Preview TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini25ProPreviewTTS: {
+			Label:    "Gemini 2.5 Pro Preview TTS",
+			Versions: []string{},
+			Supports: &TTSSupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+		gemini31FlashTTSPreview: {
+			Label:    "Gemini 3.1 Flash TTS Preview",
+			Versions: []string{},
+			Supports: &TTSSupports,
 			Stage:    ai.ModelStageUnstable,
 		},
 	}
@@ -331,6 +408,17 @@ var (
 		multimodalembedding: {
 			Dimensions: 768,
 			Label:      "Google Gen AI - Text Embedding Gecko (Legacy)",
+			Supports: &ai.EmbedderSupports{
+				Input: []string{
+					"text",
+					"image",
+					"video",
+				},
+			},
+		},
+		geminiEmbedding2: {
+			Dimensions: 3072,
+			Label:      "Gemini Embedding 2",
 			Supports: &ai.EmbedderSupports{
 				Input: []string{
 					"text",
