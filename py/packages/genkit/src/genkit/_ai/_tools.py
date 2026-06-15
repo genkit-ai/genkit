@@ -258,28 +258,30 @@ def restart_tool(
 async def run_tool_after_restart(
     tool: Action[Any, Any, Any],
     restart_trp: ToolRequestPart,
-    abort_signal: asyncio.Event,
+    abort_signal: asyncio.Event | None = None,
 ) -> ToolResponsePart:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
     Sets the same context variables as the tool wrapper so ToolRunContext reflects
     a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
     """
+    signal = abort_signal or asyncio.Event()
     meta = restart_trp.metadata or {}
     raw_resumed = meta.get('resumed')
     if raw_resumed is True:
-        resumed_meta: dict[str, Any] | None = {}
+        resumed_metadata: dict[str, Any] | None = {}
     elif isinstance(raw_resumed, dict):
-        resumed_meta = raw_resumed
+        resumed_metadata = raw_resumed
     else:
-        resumed_meta = None
+        resumed_metadata = None
+
     original_input = meta.get('replacedInput')
 
-    token_meta = _tool_resumed_metadata.set(resumed_meta)
+    token_meta = _tool_resumed_metadata.set(resumed_metadata)
     token_input = _tool_original_input.set(original_input)
     try:
         try:
-            tool_response = (await tool.run(restart_trp.tool_request.input, abort_signal=abort_signal)).response
+            tool_response = (await tool.run(restart_trp.tool_request.input, abort_signal=signal)).response
         except GenkitError as e:
             if e.cause and isinstance(e.cause, Interrupt):
                 raise GenkitError(

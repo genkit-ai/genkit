@@ -3,8 +3,6 @@
 
 """Tests for tool restart builder and run_tool_after_restart."""
 
-import asyncio
-
 import pytest
 
 from genkit import ActionKind, Genkit
@@ -93,7 +91,7 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
         tool_request=ToolRequest(name='t2', ref='x', input={'q': 1}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp, asyncio.Event())
+    await run_tool_after_restart(action, restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {}
     assert captured[0][1] is None
@@ -117,7 +115,7 @@ async def test_run_tool_after_restart_resumed_dict() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': {'by': 'x'}},
     )
-    await run_tool_after_restart(action, restart_trp, asyncio.Event())
+    await run_tool_after_restart(action, restart_trp)
     assert captured == [{'by': 'x'}]
 
 
@@ -139,7 +137,7 @@ async def test_run_tool_after_restart_replaced_input() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={'new': True}),
         metadata={'resumed': True, 'replacedInput': {'old': True}},
     )
-    await run_tool_after_restart(action, restart_trp, asyncio.Event())
+    await run_tool_after_restart(action, restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {'new': True}
     assert captured[0][1] == {'old': True}
@@ -161,7 +159,7 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
         tool_request=ToolRequest(name='t2', ref='x', input={}),
         metadata={'resumed': True},
     )
-    await run_tool_after_restart(action, restart_trp, asyncio.Event())
+    await run_tool_after_restart(action, restart_trp)
     assert _tool_resumed_metadata.get() is None
     assert _tool_original_input.get() is None
 
@@ -183,7 +181,7 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
         metadata={'resumed': True},
     )
     with pytest.raises(GenkitError) as ei:
-        await run_tool_after_restart(action, restart_trp, asyncio.Event())
+        await run_tool_after_restart(action, restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
     assert 'interrupted again' in ei.value.original_message.lower()
 
@@ -265,7 +263,7 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
         tool_request=ToolRequest(name='t_ref', ref='wire-ref-99', input={}),
         metadata={'resumed': True},
     )
-    part = await run_tool_after_restart(action, restart_trp, asyncio.Event())
+    part = await run_tool_after_restart(action, restart_trp)
     assert part.tool_response.ref == 'wire-ref-99'
 
 
@@ -296,7 +294,7 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
         tool_request=ToolRequest(name='transfer', ref='ref-42', input={'amount': 100, 'confirmed': True}),
         metadata={'resumed': True, 'replacedInput': prior},
     )
-    result = await run_tool_after_restart(action, restart_trp, asyncio.Event())
+    result = await run_tool_after_restart(action, restart_trp)
 
     # Ref is preserved from the restart TRP.
     assert result.tool_response.ref == 'ref-42'

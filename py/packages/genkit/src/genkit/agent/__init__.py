@@ -24,7 +24,6 @@ from genkit._ai._agent import (
     ClientTransform,
     SessionRunner,
     StateTransform,
-    validate_resume_against_history,
 )
 from genkit._ai._session import (
     InMemorySessionStore,
@@ -65,7 +64,6 @@ __all__ = [
     'SnapshotAborter',
     'supports_abort',
     'run_with_session',
-    'validate_resume_against_history',
     'InMemorySessionStore',
     # Callbacks and transforms
     'SnapshotCallback',
