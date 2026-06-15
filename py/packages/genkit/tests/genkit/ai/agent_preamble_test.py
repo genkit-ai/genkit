@@ -29,7 +29,7 @@ from genkit._core._typing import FinishReason, Part, Role, TextPart
 
 
 def test_tag_history_for_render_copies_messages() -> None:
-    original = Message(role=Role.USER, content=[Part(root=TextPart(text='hi'))], metadata={'keep': True})
+    original = Message(role=Role.USER, content=[Part(TextPart(text='hi'))], metadata={'keep': True})
     tagged = tag_history_for_render([original])[0]
 
     assert tagged.metadata is not None
@@ -39,8 +39,8 @@ def test_tag_history_for_render_copies_messages() -> None:
 
 
 def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() -> None:
-    history = Message(role=Role.USER, content=[Part(root=TextPart(text='turn 1'))], metadata={_HISTORY_TAG: True})
-    system = Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='be helpful'))])
+    history = Message(role=Role.USER, content=[Part(TextPart(text='turn 1'))], metadata={_HISTORY_TAG: True})
+    system = Message(role=Role.SYSTEM, content=[Part(TextPart(text='be helpful'))])
 
     tagged = apply_preamble_tags([system, history])
 
@@ -49,7 +49,7 @@ def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() 
 
 
 def test_apply_preamble_tags_does_not_mutate_shared_prompt_messages() -> None:
-    shared = Message(role=Role.SYSTEM, content=[Part(root=TextPart(text='static system'))])
+    shared = Message(role=Role.SYSTEM, content=[Part(TextPart(text='static system'))])
     tagged = apply_preamble_tags([shared])[0]
 
     assert tagged.metadata == {_PREAMBLE_KEY: True}
@@ -67,7 +67,7 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
         )
     )
 
@@ -97,11 +97,11 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
     pm.responses.extend([
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='first'))]),
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='first'))]),
         ),
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='second'))]),
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='second'))]),
         ),
     ])
 

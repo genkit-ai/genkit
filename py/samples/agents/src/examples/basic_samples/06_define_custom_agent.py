@@ -51,7 +51,7 @@ async def main() -> None:
             def on_chunk(chunk) -> None:
                 ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
-            res = await generate_action(child, opts, asyncio.Event(), on_chunk=on_chunk)
+            res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
             if res.message:
                 await sess.add_messages(res.message)
             return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))

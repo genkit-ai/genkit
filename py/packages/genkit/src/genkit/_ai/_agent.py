@@ -21,12 +21,13 @@ import copy
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Generic, TypedDict, TypeVar, cast
+from typing import Any, Generic, TypedDict, TypeVar
 
 from opentelemetry import trace as trace_api
 
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import _deep_equal, diff_json
+from genkit._ai._model import ModelResponseChunk as StreamModelResponseChunk
 from genkit._ai._prompt import (
     ExecutablePrompt,
     PromptGenerateOptions,
@@ -125,10 +126,10 @@ class TurnResult:
 def _to_agent_finish_reason(fr: FinishReason | None) -> AgentFinishReason | None:
     if fr is None:
         return None
-    try:
-        return cast(AgentFinishReason, AgentFinishReason(fr.value))
-    except ValueError:
-        return AgentFinishReason.UNKNOWN
+    for reason in AgentFinishReason:
+        if reason.value == fr.value:
+            return reason
+    return AgentFinishReason.UNKNOWN
 
 
 def _tool_request_parts(message: MessageData | None) -> list[Part]:
@@ -170,11 +171,12 @@ def _collect_tool_requests_from_history(history: list[MessageData]) -> list[_Too
             elif isinstance(tr, dict):
                 tr_dict = tr  # type: ignore[assignment]
             else:
-                tr_dict = {
+                tr_record: _ToolRequestRecord = {
                     'name': getattr(tr, 'name', None),
                     'ref': getattr(tr, 'ref', None),
                     'input': getattr(tr, 'input', None),
                 }
+                tr_dict = tr_record
             found.append(tr_dict)
     return found
 
@@ -1129,11 +1131,9 @@ async def _generate_prompt_agent_turn(
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
 
-    def _on_chunk(chunk: object) -> None:
+    def _on_chunk(chunk: StreamModelResponseChunk) -> None:
         wire_chunk = (
-            chunk
-            if isinstance(chunk, ModelResponseChunk)
-            else ModelResponseChunk.model_validate(cast(Any, chunk).model_dump())
+            chunk if isinstance(chunk, ModelResponseChunk) else ModelResponseChunk.model_validate(chunk.model_dump())
         )
         ctx.send_chunk(AgentStreamChunk(model_chunk=wire_chunk))
 
@@ -1259,20 +1259,16 @@ def define_prompt_agent(
     async def _agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
             history = await sess.get_messages()
-            history_messages: list[MessageData] = [
-                m if isinstance(m, Message) else Message.model_validate(m.model_dump()) for m in history
-            ]
-
             resume_respond = None
             resume_restart = None
             if inp.resume is not None:
-                validate_resume_against_history(inp.resume, history_messages)
+                validate_resume_against_history(inp.resume, history)
                 resume_respond = inp.resume.respond or None
                 resume_restart = inp.resume.restart or None
 
             executable = await lookup_prompt(registry, name)
             call_opts: PromptGenerateOptions = {
-                'messages': tag_history_for_render(history_messages),
+                'messages': tag_history_for_render(history),
                 'resume_respond': resume_respond,
                 'resume_restart': resume_restart,
             }

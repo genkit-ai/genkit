@@ -194,7 +194,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                 if session is None:
                     return _WriteArtifactOutput(status='Error: no active session.')
 
-                await session.add_artifacts(Artifact(name=input.name, parts=[Part(text=input.content)]))
+                await session.add_artifacts(Artifact(name=input.name, parts=[Part(TextPart(text=input.content))]))
                 return _WriteArtifactOutput(status=f'Artifact "{input.name}" saved successfully.')
 
             tools.append(

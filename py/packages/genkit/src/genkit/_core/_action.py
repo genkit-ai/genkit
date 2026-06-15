@@ -816,7 +816,13 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
 
         Reference: go/core/action.go Action.StreamBidi
         """
-        validated_input = cast(InputT, self._validate_input(input))
+        validated = self._validate_input(input)
+        if validated is None:
+            raise GenkitError(
+                message=f"Action '{self.name}' requires input but none was provided.",
+                status='INVALID_ARGUMENT',
+            )
+        input = validated
 
         # in_queue is size 1 (backpressure: caller blocks between sends).
         # out_queue is unbounded: agent fn emits multiple chunks per turn
@@ -838,10 +844,10 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
             try:
 
                 async def _execute_bidi() -> OutputT:
-                    return await self._bidi_fn(validated_input, in_queue, out_queue)
+                    return await self._bidi_fn(input, in_queue, out_queue)
 
                 response = await self._run_with_telemetry(
-                    validated_input,
+                    input,
                     ActionRunContext(context=_action_context.get(None)),
                     _on_trace_start,
                     telemetry_labels,

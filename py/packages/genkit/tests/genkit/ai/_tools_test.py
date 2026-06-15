@@ -4,7 +4,6 @@
 """Tests for tool restart builder and run_tool_after_restart."""
 
 import asyncio
-from typing import Any
 
 import pytest
 
@@ -24,7 +23,7 @@ from genkit._core._error import GenkitError
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
 
 
-async def _dummy_fn(x: Any) -> Any:
+async def _echo_tool(x: object) -> object:
     return x
 
 
@@ -34,7 +33,7 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': {'reason': 'hold'}},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_dummy_fn)
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
     tool = Tool(action)
     out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
     assert isinstance(out, ToolRequestPart)
@@ -50,7 +49,7 @@ def test_restart_replace_input_sets_replaced_input() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_dummy_fn)
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
     tool = Tool(action)
     out = restart_tool(replace_input={'amount': 99}, tool=tool, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
     assert isinstance(out, ToolRequestPart)
@@ -67,7 +66,7 @@ def test_restart_resumed_defaults_to_true() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_dummy_fn)
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
     tool = Tool(action)
     out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata=None)
     assert isinstance(out, ToolRequestPart)
@@ -227,7 +226,7 @@ def test_restart_tool_with_tool_reference() -> None:
         tool_request=ToolRequest(name='middleware_tool', ref='r1', input={'p': 1}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='middleware_tool', fn=_dummy_fn)
+    action = Action(kind=ActionKind.TOOL, name='middleware_tool', fn=_echo_tool)
     tool = Tool(action)
     out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'toolApproved': True})
 
@@ -243,7 +242,7 @@ def test_restart_preserves_ref_on_wire() -> None:
         tool_request=ToolRequest(name='pay', ref='corr-id-1', input={'amount': 50}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_dummy_fn)
+    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
     tool = Tool(action)
     out = restart_tool(tool=tool, interrupt=interrupt_trp)
 

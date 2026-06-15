@@ -75,9 +75,10 @@ async def main() -> None:
         mc = chunk.model_chunk
         if mc and mc.content:
             for part in mc.content:
-                tr = part.tool_request
-                if tr and tr.name == 'transferMoney':
-                    interrupt_trp = part
+                root = getattr(part, 'root', part)
+                tr = getattr(root, 'tool_request', None)
+                if tr and tr.name == 'transferMoney' and isinstance(root, ToolRequestPart):
+                    interrupt_trp = root
 
     out1 = await conn.output()
     if out1.finish_reason != 'interrupted':

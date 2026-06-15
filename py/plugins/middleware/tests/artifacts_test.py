@@ -62,7 +62,7 @@ def test_build_artifact_listing_empty() -> None:
 
 
 def test_extract_artifact_text() -> None:
-    art = Artifact(name='a.txt', parts=[Part(text='line1'), Part(text='line2')])
+    art = Artifact(name='a.txt', parts=[Part(TextPart(text='line1')), Part(TextPart(text='line2'))])
     assert _extract_artifact_text(art) == 'line1\nline2'
 
 
@@ -87,7 +87,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
 async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(SessionState())
-    await session.add_artifacts(Artifact(name='notes.txt', parts=[Part(text='hello')]))
+    await session.add_artifacts(Artifact(name='notes.txt', parts=[Part(TextPart(text='hello'))]))
     ctx.session = session
     read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
 
@@ -118,7 +118,7 @@ async def test_readonly_excludes_write_tool(ctx: GenerateMiddlewareContext) -> N
 async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(
-        SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part(text='abc')])]),
+        SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part(TextPart(text='abc'))])]),
     )
     ctx.session = session
 
@@ -141,8 +141,8 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         and p.root.metadata.get(_ARTIFACTS_LISTING_MARKER)
     ]
     assert len(listing_parts) == 1
-    assert 'poem.txt' in listing_parts[0].root.text
-    assert '(3 chars)' in listing_parts[0].root.text
+    assert 'poem.txt' in (listing_parts[0].root.text or '')
+    assert '(3 chars)' in (listing_parts[0].root.text or '')
 
 
 @pytest.mark.asyncio
@@ -156,11 +156,11 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
 
     async def next_fn(params, _ctx):
         for part in _listing_parts(params.request.messages):
-            seen.append(part.text)
+            seen.append(part.text or '')
         return ModelResponse(message=None)
 
     await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
-    await session.add_artifacts(Artifact(name='b.txt', parts=[Part(text='x')]))
+    await session.add_artifacts(Artifact(name='b.txt', parts=[Part(TextPart(text='x'))]))
     await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
     assert len(seen) == 2
@@ -174,7 +174,7 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
     ctx.session = Session(
-        SessionState(artifacts=[Artifact(name='a.txt', parts=[Part(text='hi')])]),
+        SessionState(artifacts=[Artifact(name='a.txt', parts=[Part(TextPart(text='hi'))])]),
     )
 
     captured_request: list[ModelRequest] = []

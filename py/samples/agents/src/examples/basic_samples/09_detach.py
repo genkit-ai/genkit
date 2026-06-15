@@ -37,7 +37,7 @@ async def main() -> None:
 
     @ai.tool(name='slowWork', description='Simulate long background work.')
     async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-        for _ in range(30):
+        for _i in range(30):
             if ctx.abort_signal.is_set():
                 raise GenkitError(status='ABORTED', message='Task aborted')
             await asyncio.sleep(0.5)

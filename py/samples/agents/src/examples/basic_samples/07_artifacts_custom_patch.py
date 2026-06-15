@@ -27,7 +27,7 @@ from genkit._ai._agent import SessionRunner, TurnResult, _to_agent_finish_reason
 from genkit._ai._generate import generate_action
 from genkit._ai._prompt import PromptConfig, to_generate_action_options
 from genkit._core._action import ActionRunContext
-from genkit._core._typing import AgentInput, AgentResult, AgentStreamChunk, Artifact, Part
+from genkit._core._typing import AgentInput, AgentResult, AgentStreamChunk, Artifact, Part, TextPart
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
@@ -40,7 +40,9 @@ async def main() -> None:
     async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
             await sess.update_custom(lambda c: {'turns': (c or {}).get('turns', 0) + 1})
-            await sess.add_artifacts(Artifact(name='status', parts=[Part(text=f'turn {sess.turn_index + 1}')]))
+            await sess.add_artifacts(
+                Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))])
+            )
             history = await sess.get_messages()
             child = ai.registry.new_child()
             pc = PromptConfig(
@@ -53,7 +55,7 @@ async def main() -> None:
             def on_chunk(chunk) -> None:
                 ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
-            res = await generate_action(child, opts, asyncio.Event(), on_chunk=on_chunk)
+            res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
             if res.message:
                 await sess.add_messages(res.message)
             return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))

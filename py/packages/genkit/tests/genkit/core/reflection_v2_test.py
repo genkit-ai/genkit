@@ -560,6 +560,32 @@ async def test_reflection_server_v2_cancel_action(fake_manager: FakeReflectionMa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('stream_method', ('sendInputStreamChunk', 'endInputStream'))
+async def test_reflection_server_v2_input_stream_rejects_invalid_params(
+    fake_manager: FakeReflectionManager,
+    stream_method: str,
+) -> None:
+    """Input-stream methods validate params and return -32602 when required fields are missing."""
+    registry = Registry()
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': stream_method,
+            'params': {},
+            'id': 'stream-1',
+        })
+        resp = await fake_manager.read_rpc()
+        err = resp.get('error')
+        assert isinstance(err, dict)
+        assert err.get('code') == JSON_RPC_INVALID_PARAMS
+        assert 'invalid params' in str(err.get('message', '')).lower()
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
 async def test_reflection_server_v2_method_not_found(fake_manager: FakeReflectionManager) -> None:
     registry = Registry()
     client, task = await _run_client_lifecycle(registry, fake_manager)

@@ -70,6 +70,8 @@ def _as_tool_request_part(part) -> ToolRequestPart | None:
         return None
     if isinstance(root, ToolRequestPart):
         return root
+    if not hasattr(root, 'model_dump'):
+        return None
     return ToolRequestPart.model_validate(root.model_dump())
 
 

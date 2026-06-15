@@ -62,7 +62,9 @@ async def test_run_with_session_nested_bind() -> None:
 
     async def nested() -> str:
         assert get_current_session() is inner
-        custom = await get_current_session().get_custom()
+        cur = get_current_session()
+        assert cur is not None
+        custom = await cur.get_custom()
         assert isinstance(custom, dict)
         return custom['label']
 
@@ -100,7 +102,9 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
 
         async def handle_turn(_inp: AgentInput) -> None:
             seen.append(get_current_session())
-            await get_current_session().update_custom(lambda c: {**(c or {}), 'seen': True})
+            cur = get_current_session()
+            assert cur is not None
+            await cur.update_custom(lambda c: {**(c or {}), 'seen': True})
 
         await sess.run(handle_turn)
         return await sess.result()

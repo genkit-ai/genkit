@@ -175,13 +175,7 @@ def _extract_inline_classes(schema: dict) -> dict[str, dict]:
             if isinstance(prop_schema, dict) and prop_schema.get('type') == 'object' and '$ref' not in prop_schema:
                 class_name = _pascal(prop_name)
                 if class_name not in defs and class_name not in result:
-                    result[class_name] = dict(prop_schema)
-                elif class_name in result:
-                    # Merge properties of duplicate inline schemas to prevent field dropping
-                    existing = result[class_name]
-                    existing_props = existing.get('properties') or {}
-                    new_props = prop_schema.get('properties') or {}
-                    existing['properties'] = {**existing_props, **new_props}
+                    result[class_name] = prop_schema
                 walk(prop_schema.get('properties', {}))
 
     for defn in defs.values():

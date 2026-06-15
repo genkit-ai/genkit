@@ -39,6 +39,7 @@ from genkit._core._typing import (
     Artifact,
     MessageData,
     Part,
+    TextPart,
 )
 from genkit.agent import InMemorySessionStore
 from genkit.plugins.fastapi import genkit_fastapi_handler
@@ -158,7 +159,7 @@ def _register_agents() -> dict[str, object]:
             def on_chunk(chunk) -> None:
                 ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
-            res = await generate_action(child, opts, asyncio.Event(), on_chunk=on_chunk)
+            res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
             if res.message:
                 await sess.add_messages(res.message)
             return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))
@@ -171,7 +172,9 @@ def _register_agents() -> dict[str, object]:
     async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
             await sess.update_custom(lambda c: {'turns': (c or {}).get('turns', 0) + 1})
-            await sess.add_artifacts(Artifact(name='status', parts=[Part(text=f'turn {sess.turn_index + 1}')]))
+            await sess.add_artifacts(
+                Artifact(name='status', parts=[Part(TextPart(text=f'turn {sess.turn_index + 1}'))])
+            )
             history = await sess.get_messages()
             child = ai.registry.new_child()
             pc = PromptConfig(
@@ -184,7 +187,7 @@ def _register_agents() -> dict[str, object]:
             def on_chunk(chunk) -> None:
                 ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
-            res = await generate_action(child, opts, asyncio.Event(), on_chunk=on_chunk)
+            res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
             if res.message:
                 await sess.add_messages(res.message)
             return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))
@@ -199,12 +202,13 @@ def _register_agents() -> dict[str, object]:
             text = ''
             if inp.messages:
                 for part in inp.messages[-1].content or []:
-                    if part.text:
-                        text += part.text
+                    root = getattr(part, 'root', part)
+                    if isinstance(root, TextPart) and root.text:
+                        text += root.text
             if 'fail' in text.lower():
                 raise GenkitError(status='INTERNAL', message='Simulated turn failure')
             msgs = await sess.get_messages()
-            await sess.set_messages(msgs + [MessageData(role='model', content=[Part(text='OK')])])
+            await sess.set_messages(msgs + [MessageData(role='model', content=[Part(TextPart(text='OK'))])])
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await sess.run(handle_turn)
@@ -214,7 +218,7 @@ def _register_agents() -> dict[str, object]:
 
     @ai.tool(name='slowWork', description='Simulate long background work.')
     async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-        for _ in range(30):
+        for _i in range(30):
             if ctx.abort_signal.is_set():
                 raise GenkitError(status='ABORTED', message='Task aborted')
             await asyncio.sleep(0.5)

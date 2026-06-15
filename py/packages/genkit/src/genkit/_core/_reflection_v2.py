@@ -393,7 +393,7 @@ class ReflectionServerV2:
         p: ReflectionRunActionParams,
     ) -> tuple[dict[str, object], dict[str, object] | None]:
         """Context and telemetry labels shared by one-shot and bidi runAction paths."""
-        ctx: dict[str, object] = {} if p.context is None else {str(k): v for k, v in p.context.items()}
+        ctx = {} if p.context is None else {str(k): v for k, v in p.context.items()}
         labels: dict[str, object] | None = None
         if p.telemetry_labels is not None:
             labels = {str(k): v for k, v in p.telemetry_labels.items()}
@@ -541,7 +541,7 @@ class ReflectionServerV2:
         self,
         sid: str,
         p: ReflectionRunActionParams,
-        action: Action[Any, Any, Any],
+        action: BidiAction[Any, Any, Any],
     ) -> None:
         """Start a bidi (agent) session and wire up input/output streams.
 
@@ -551,10 +551,6 @@ class ReflectionServerV2:
           3. Background task reads receive() → sends streamChunk notifications
           4. When output() resolves, send final runAction response
         """
-        if not isinstance(action, BidiAction):
-            await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'action is not bidirectional: {action.name}')
-            return
-
         # Parse init payload
         try:
             init = AgentInit.model_validate(p.input) if p.input is not None else AgentInit()
@@ -703,6 +699,13 @@ class ReflectionServerV2:
 
         # --- Bidi (agent) path ---
         if isinstance(action, BidiAction) or bool(p.stream_input):
+            if not isinstance(action, BidiAction):
+                await self._send_error(
+                    sid,
+                    JSON_RPC_INVALID_PARAMS,
+                    f'action {p.key} does not support bidi streaming',
+                )
+                return
             await self._run_bidi_action(sid, p, action)
         else:
             await self._run_action(sid, p, action)

@@ -53,6 +53,10 @@
               "items": {
                 "$ref": "#/$defs/ToolRequestPart"
               }
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": {}
             }
           },
           "additionalProperties": false

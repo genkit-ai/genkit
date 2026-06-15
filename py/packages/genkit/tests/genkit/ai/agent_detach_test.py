@@ -80,7 +80,7 @@ _NO_ABORT = asyncio.Event()
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
     assert _agent_input_has_payload(
-        AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='x'))])], detach=True),
+        AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])], detach=True),
     )
     assert not _agent_input_has_payload(AgentInput(detach=True))
 
@@ -105,7 +105,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     in_queue: asyncio.Queue = asyncio.Queue()
     await in_queue.put(
         AgentInput(
-            messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='appended message'))])],
+            messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))])],
             detach=True,
         )
     )
@@ -144,10 +144,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         async def handle_turn(_inp: AgentInput) -> None:
             ctx.send_chunk(
                 AgentStreamChunk(
-                    model_chunk=ModelResponseChunk(
-                        role=Role.MODEL,
-                        content=[Part(root=TextPart(text='working'))],
-                    )
+                    model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='working'))])
                 )
             )
             await release.wait()
@@ -156,7 +153,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='slow'))])]))
+    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])]))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -201,7 +198,7 @@ async def test_detach_without_store_raises() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='x'))])]))
+    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])]))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -230,7 +227,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
         return await sess.result()
 
     in_queue: asyncio.Queue = asyncio.Queue()
-    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(root=TextPart(text='long'))])]))
+    await in_queue.put(AgentInput(messages=[MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])]))
     await in_queue.put(AgentInput(detach=True))
     await in_queue.put(_BIDI_SENTINEL)
 
@@ -280,7 +277,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
                 ai.registry,
                 GenerateActionOptions(
                     model='programmableModel',
-                    messages=[Message(role=Role.USER, content=[Part(root=TextPart(text='go'))])],
+                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],
                     tools=['slowWork'],
                 ),
                 abort_signal=abort_signal,
