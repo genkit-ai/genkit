@@ -547,7 +547,16 @@ op, err := genkit.GenerateOperation(ctx, g,
 
 ## Speech Models
 
-Use `gemini-2.5-flash` or `gemini-2.5-pro` with audio output modality.
+Use Gemini TTS models to generate speech. Dedicated TTS models include
+`gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts`.
+
+Gemini TTS responses are returned as media parts. The media data may be raw PCM
+audio, commonly `audio/L16;codec=pcm;rate=24000`, rather than a WAV or MP3 file.
+Genkit preserves the provider MIME type and bytes as returned. If you need a
+browser- or player-friendly file, decode the media data URI and wrap `audio/L16`
+PCM bytes in a WAV container before playback. This is the same pattern used by
+the JavaScript Gemini TTS samples, which convert the returned PCM bytes with a
+`toWav` helper.
 
 ### Usage
 
@@ -555,10 +564,9 @@ Use `gemini-2.5-flash` or `gemini-2.5-pro` with audio output modality.
 import "google.golang.org/genai"
 
 resp, err := genkit.Generate(ctx, g,
- ai.WithModelName("googleai/gemini-2.5-flash"),
+ ai.WithModelName("googleai/gemini-2.5-flash-preview-tts"),
  ai.WithPrompt("Say that Genkit is an amazing AI framework"),
  ai.WithConfig(&genai.GenerateContentConfig{
-  ResponseModalities: []string{"AUDIO"},
   SpeechConfig: &genai.SpeechConfig{
    VoiceConfig: &genai.VoiceConfig{
     PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
@@ -569,5 +577,19 @@ resp, err := genkit.Generate(ctx, g,
  }),
 )
 
-// The audio data will be in resp.Message.Content as a media part
+// Audio-only TTS responses usually have no text output.
+audio := resp.Media()
 ```
+
+For conversational Gemini models that can produce multiple modalities, set
+`ResponseModalities: []string{"AUDIO"}`. For dedicated `*-tts` models, configure
+the voice with `SpeechConfig`; the model already produces audio.
+
+The returned `audio` value may look like:
+
+```text
+data:audio/L16;codec=pcm;rate=24000;base64,...
+```
+
+For a complete Go sample that writes a playable WAV file, see
+`go/samples/text-to-speech/gemini`.
