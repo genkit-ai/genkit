@@ -27,9 +27,9 @@ from genkit._core._typing import Artifact, Part, Role, SessionState, TextPart
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
 from genkit.plugins.middleware import Artifacts
 from genkit.plugins.middleware._artifacts import (
-    _ARTIFACTS_LISTING_MARKER,
-    _build_artifact_listing,
-    _extract_artifact_text,
+    ARTIFACTS_LISTING_MARKER,
+    build_artifact_listing,
+    extract_artifact_text,
 )
 
 
@@ -50,20 +50,20 @@ def _listing_parts(messages) -> list[TextPart]:
         for part in msg.content:
             root = part.root
             if isinstance(root, TextPart) and isinstance(root.metadata, dict):
-                if root.metadata.get(_ARTIFACTS_LISTING_MARKER):
+                if root.metadata.get(ARTIFACTS_LISTING_MARKER):
                     parts.append(root)
     return parts
 
 
 def test_build_artifact_listing_empty() -> None:
-    listing = _build_artifact_listing([])
+    listing = build_artifact_listing([])
     assert 'No artifacts are currently available' in listing
     assert listing.startswith('<artifacts>')
 
 
 def test_extract_artifact_text() -> None:
     art = Artifact(name='a.txt', parts=[Part(TextPart(text='line1')), Part(TextPart(text='line2'))])
-    assert _extract_artifact_text(art) == 'line1\nline2'
+    assert extract_artifact_text(art) == 'line1\nline2'
 
 
 @pytest.mark.asyncio
@@ -138,7 +138,7 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         for p in system_msgs[0].content
         if isinstance(p.root, TextPart)
         and isinstance(p.root.metadata, dict)
-        and p.root.metadata.get(_ARTIFACTS_LISTING_MARKER)
+        and p.root.metadata.get(ARTIFACTS_LISTING_MARKER)
     ]
     assert len(listing_parts) == 1
     assert 'poem.txt' in (listing_parts[0].root.text or '')

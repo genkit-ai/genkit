@@ -30,7 +30,7 @@ from genkit._core._registry import Registry
 from genkit._core._typing import Artifact, Part, Role, TextPart
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 
-_ARTIFACTS_LISTING_MARKER = 'artifacts-middleware-listing'
+ARTIFACTS_LISTING_MARKER = 'artifacts-middleware-listing'
 
 
 class ArtifactsConfig(BaseModel):
@@ -42,26 +42,26 @@ class ArtifactsConfig(BaseModel):
     )
 
 
-class _ReadArtifactInput(BaseModel):
+class ReadArtifactInput(BaseModel):
     name: str = Field(description='The name of the artifact to read.')
 
 
-class _ReadArtifactOutput(BaseModel):
+class ReadArtifactOutput(BaseModel):
     name: str = Field(description='The artifact name.')
     content: str = Field(description='The text content of the artifact.')
     found: bool = Field(description='Whether the artifact was found in the session.')
 
 
-class _WriteArtifactInput(BaseModel):
+class WriteArtifactInput(BaseModel):
     name: str = Field(description='A unique name for the artifact (e.g. a filename like "report.md").')
     content: str = Field(description='The full text content of the artifact.')
 
 
-class _WriteArtifactOutput(BaseModel):
+class WriteArtifactOutput(BaseModel):
     status: str = Field(description='Confirmation that the artifact was created or updated.')
 
 
-def _extract_artifact_text(artifact: Artifact) -> str:
+def extract_artifact_text(artifact: Artifact) -> str:
     parts: list[str] = []
     for part in artifact.parts:
         root = part.root
@@ -70,7 +70,7 @@ def _extract_artifact_text(artifact: Artifact) -> str:
     return '\n'.join(parts)
 
 
-def _artifact_source(artifact: Artifact) -> str | None:
+def artifact_source(artifact: Artifact) -> str | None:
     meta = artifact.metadata
     if isinstance(meta, dict):
         source = meta.get('source')
@@ -78,7 +78,7 @@ def _artifact_source(artifact: Artifact) -> str | None:
     return None
 
 
-def _build_artifact_listing(artifacts: list[Artifact]) -> str:
+def build_artifact_listing(artifacts: list[Artifact]) -> str:
     if not artifacts:
         return '<artifacts>\nNo artifacts are currently available in the session.\n</artifacts>'
 
@@ -87,9 +87,9 @@ def _build_artifact_listing(artifacts: list[Artifact]) -> str:
         'The following artifacts are available in the session. Use the read_artifact tool to view their content.',
     ]
     for art in artifacts:
-        text = _extract_artifact_text(art)
+        text = extract_artifact_text(art)
         size_hint = f' ({len(text)} chars)' if text else ''
-        source = _artifact_source(art)
+        source = artifact_source(art)
         source_hint = f' [from: {source}]' if source else ''
         label = art.name or '(unnamed)'
         lines.append(f'  - {label}{size_hint}{source_hint}')
@@ -97,7 +97,7 @@ def _build_artifact_listing(artifacts: list[Artifact]) -> str:
     return '\n'.join(lines)
 
 
-def _inject_artifact_listing_messages(messages: list[Message], listing: str) -> list[Message]:
+def inject_artifact_listing_messages(messages: list[Message], listing: str) -> list[Message]:
     """Strip prior listing parts and append a fresh listing to the system message."""
     out = list(messages)
 
@@ -106,14 +106,14 @@ def _inject_artifact_listing_messages(messages: list[Message], listing: str) -> 
         for part in msg.content or []:
             root = part.root
             meta = root.metadata if isinstance(root, TextPart) else None
-            if isinstance(meta, dict) and meta.get(_ARTIFACTS_LISTING_MARKER):
+            if isinstance(meta, dict) and meta.get(ARTIFACTS_LISTING_MARKER):
                 continue
             filtered.append(part)
         if len(filtered) != len(msg.content or []):
             out[i] = Message(role=msg.role, content=filtered)
 
     listing_part = Part(
-        root=TextPart(text=listing, metadata={_ARTIFACTS_LISTING_MARKER: True}),
+        root=TextPart(text=listing, metadata={ARTIFACTS_LISTING_MARKER: True}),
     )
 
     system_idx: int | None = None
@@ -134,9 +134,9 @@ def _inject_artifact_listing_messages(messages: list[Message], listing: str) -> 
     return out
 
 
-def _inject_artifact_listing(request: ModelRequest, listing: str) -> ModelRequest:
+def inject_artifact_listing(request: ModelRequest, listing: str) -> ModelRequest:
     new_request = request.model_copy()
-    new_request.messages = _inject_artifact_listing_messages(list(request.messages), listing)
+    new_request.messages = inject_artifact_listing_messages(list(request.messages), listing)
     return new_request
 
 
@@ -147,10 +147,10 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
         scratch = Registry()
         tools: list[Any] = []
 
-        async def read_artifact(input: _ReadArtifactInput) -> _ReadArtifactOutput:
+        async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
             session = ctx.session
             if session is None:
-                return _ReadArtifactOutput(
+                return ReadArtifactOutput(
                     name=input.name,
                     content=(
                         'Artifacts-based tools are not available, as there is no active agent '
@@ -162,15 +162,15 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
             artifacts = await session.get_artifacts()
             match = next((a for a in artifacts if a.name == input.name), None)
             if match is None:
-                return _ReadArtifactOutput(
+                return ReadArtifactOutput(
                     name=input.name,
                     content=f'Artifact "{input.name}" not found.',
                     found=False,
                 )
 
-            return _ReadArtifactOutput(
+            return ReadArtifactOutput(
                 name=input.name,
-                content=_extract_artifact_text(match),
+                content=extract_artifact_text(match),
                 found=True,
             )
 
@@ -189,13 +189,13 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
 
         if not self.config.readonly:
 
-            async def write_artifact(input: _WriteArtifactInput) -> _WriteArtifactOutput:
+            async def write_artifact(input: WriteArtifactInput) -> WriteArtifactOutput:
                 session = ctx.session
                 if session is None:
-                    return _WriteArtifactOutput(status='Error: no active session.')
+                    return WriteArtifactOutput(status='Error: no active session.')
 
                 await session.add_artifacts(Artifact(name=input.name, parts=[Part(TextPart(text=input.content))]))
-                return _WriteArtifactOutput(status=f'Artifact "{input.name}" saved successfully.')
+                return WriteArtifactOutput(status=f'Artifact "{input.name}" saved successfully.')
 
             tools.append(
                 define_tool(
@@ -221,6 +221,6 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
     ) -> ModelResponse:
         session = ctx.session
         artifacts = await session.get_artifacts() if session is not None else []
-        listing = _build_artifact_listing(artifacts)
-        params.request = _inject_artifact_listing(params.request, listing)
+        listing = build_artifact_listing(artifacts)
+        params.request = inject_artifact_listing(params.request, listing)
         return await next_fn(params, ctx)
