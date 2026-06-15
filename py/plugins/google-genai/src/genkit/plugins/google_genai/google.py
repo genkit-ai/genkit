@@ -64,7 +64,7 @@ Key Concepts:
     |                    | used, avoiding upfront initialization overhead.       |
     +--------------------+-------------------------------------------------------+
     | Namespacing        | Models are prefixed with plugin name (e.g.,           |
-    |                    | 'googleai/gemini-2.0-flash-001').                     |
+    |                    | 'googleai/gemini-flash-latest').                      |
     +--------------------+-------------------------------------------------------+
 
 Supported Model Types:
@@ -82,7 +82,7 @@ Example:
     >>>
     >>> # Use any available model - no pre-registration needed
     >>> response = await ai.generate(
-    ...     model='googleai/gemini-2.0-flash-001',
+    ...     model='googleai/gemini-flash-latest',
     ...     prompt='Hello, world!',
     ... )
 
@@ -325,7 +325,7 @@ class GoogleAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Type             | Action Kind       | Example                        |
         +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | googleai/gemini-2.0-flash-001  |
+        | Gemini/Gemma     | MODEL             | googleai/gemini-flash-latest   |
         | Imagen           | MODEL             | googleai/imagen-3.0-generate   |
         | Embedders        | EMBEDDER          | googleai/gemini-embedding-001  |
         | Veo (video)      | BACKGROUND_MODEL  | googleai/veo-2.0-generate-001  |
@@ -339,7 +339,7 @@ class GoogleAI(Plugin):
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='googleai/gemini-2.0-flash-001',
+        ...     model='googleai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>
@@ -688,7 +688,7 @@ class VertexAI(Plugin):
         +------------------+-------------------+--------------------------------+
         | Type             | Action Kind       | Example                        |
         +------------------+-------------------+--------------------------------+
-        | Gemini/Gemma     | MODEL             | vertexai/gemini-2.0-flash-001  |
+        | Gemini/Gemma     | MODEL             | vertexai/gemini-flash-latest   |
         | Imagen           | MODEL             | vertexai/imagen-3.0-generate   |
         | Veo (video)      | MODEL             | vertexai/veo-2.0-generate-001  |
         | Embedders        | EMBEDDER          | vertexai/text-embedding-005    |
@@ -702,7 +702,7 @@ class VertexAI(Plugin):
         >>>
         >>> # Text generation
         >>> response = await ai.generate(
-        ...     model='vertexai/gemini-2.0-flash-001',
+        ...     model='vertexai/gemini-flash-latest',
         ...     prompt='Explain quantum computing',
         ... )
         >>>
