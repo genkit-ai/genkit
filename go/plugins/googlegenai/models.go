@@ -101,7 +101,7 @@ var (
 	defaultAntigravityOpts = ai.ModelOptions{
 		Supports:     &AntigravitySupports,
 		Stage:        ai.ModelStageUnstable,
-		ConfigSchema: configToMap(genai.GenerateContentConfig{}),
+		ConfigSchema: configToMap(AntigravityConfig{}),
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{

@@ -85,7 +85,7 @@ func (mt ModelType) DefaultConfig() any {
 	case ModelTypeEmbedder:
 		return &genai.EmbedContentConfig{}
 	case ModelTypeAntigravity:
-		return &genai.GenerateContentConfig{}
+		return &AntigravityConfig{}
 	default:
 		return nil
 	}
