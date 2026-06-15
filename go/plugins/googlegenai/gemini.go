@@ -164,7 +164,7 @@ func generate(
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, cache)
+	gcc, err := toGeminiRequest(input, cache, model)
 	if err != nil {
 		return nil, err
 	}
@@ -273,21 +273,41 @@ func generate(
 
 // toGeminiRequest translates an [*ai.ModelRequest] to
 // *genai.GenerateContentConfig
-func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai.GenerateContentConfig, error) {
+func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
 	gcc, err := configFromRequest(input)
 	if err != nil {
 		return nil, err
 	}
 
+	isTTS := len(modelName) > 0 && isTTSModelName(modelName[0])
+
 	// candidate count might not be set to 1 and will keep its zero value if not set
-	// e.g. default value from reflection server is 0
-	if gcc.CandidateCount == 0 {
+	// e.g. default value from reflection server is 0. TTS models leave it unset.
+	if gcc.CandidateCount == 0 && !isTTS {
 		gcc.CandidateCount = 1
+	}
+	if isTTS && len(gcc.ResponseModalities) == 0 {
+		gcc.ResponseModalities = []string{"AUDIO"}
+	}
+	// TTS generateContent requires a speechConfig with a voice; the API rejects
+	// audio requests without one. Supply a default voice so the dedicated TTS
+	// models are runnable from a bare prompt (e.g. the dev UI), while still
+	// letting callers override it via ai.WithConfig.
+	if isTTS && !hasSpeechVoiceConfig(gcc.SpeechConfig) {
+		if gcc.SpeechConfig == nil {
+			gcc.SpeechConfig = &genai.SpeechConfig{}
+		}
+		gcc.SpeechConfig.VoiceConfig = &genai.VoiceConfig{
+			PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: defaultTTSVoice},
+		}
 	}
 
 	// Genkit primitive fields must be used instead of go-genai fields
 	// i.e.: system prompt, tools, cached content, response schema, etc
-	if gcc.CandidateCount != 1 {
+	if !isTTS && gcc.CandidateCount != 1 {
+		return nil, errors.New("multiple candidates is not supported")
+	}
+	if isTTS && gcc.CandidateCount > 1 {
 		return nil, errors.New("multiple candidates is not supported")
 	}
 	if gcc.SystemInstruction != nil {
@@ -372,6 +392,27 @@ func toGeminiRequest(input *ai.ModelRequest, cache *genai.CachedContent) (*genai
 	}
 
 	return gcc, nil
+}
+
+// defaultTTSVoice is the prebuilt voice used for TTS requests that don't
+// specify one. It must be a valid Gemini TTS voice name.
+const defaultTTSVoice = "Algenib"
+
+func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
+	if sc == nil {
+		return false
+	}
+	if sc.MultiSpeakerVoiceConfig != nil {
+		return true
+	}
+	if sc.VoiceConfig == nil {
+		return false
+	}
+	return sc.VoiceConfig.PrebuiltVoiceConfig != nil || sc.VoiceConfig.ReplicatedVoiceConfig != nil
+}
+
+func isTTSModelName(name string) bool {
+	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.
