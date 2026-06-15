@@ -1,36 +1,48 @@
-# Agents sample
+# Genkit Agents Samples
 
-Backend examples for Genkit agents: `stream_bidi`, `send_text`, `send_resume`,
-`detach`, `close`, `receive`, `output`, plus FastAPI serving for HTTP/useChat.
+Backend examples demonstrating the Genkit agents runtime: `stream_bidi`, `send_text`, `send_resume`, `detach`, `close`, `receive`, `output`, and session stores.
 
-Requires `GEMINI_API_KEY`.
+Requires `GEMINI_API_KEY` for the basic examples.
 
-## Backend examples (primary)
+## Getting Started
 
 From the sample directory:
 
 ```bash
 cd py/samples/agents
 uv sync
-uv run python src/examples/basic_samples/01_define_agent_with_store.py
 ```
 
-See [`src/examples/README.md`](src/examples/README.md) for the full matrix (`basic_samples/`, `branching_samples/`). Each example defines its agent inline.
-
-## FastAPI / HTTP
+To run any example:
 
 ```bash
-cd py/samples/agents
-uv run uvicorn src.main:app --port 8080
+uv run python basic_examples/01_define_agent_with_store.py
 ```
 
-See [`src/examples/fastapi/README.md`](src/examples/fastapi/README.md).
+## Available Examples
 
-Optional HTTP smoke test: `uv run python src/verify.py`
+### 1. Basic Examples — `basic_examples/`
 
-Wire format: [`WIRE_PROTOCOL.md`](WIRE_PROTOCOL.md)
+These demonstrate the core agent APIs and require a `GEMINI_API_KEY`.
 
-## useChat UI
+| File | Shows |
+|------|-------|
+| `01_define_agent_with_store.py` | Two `stream_bidi` calls on the same `session_id` to demonstrate history. |
+| `02_define_agent_no_store.py` | Client-managed state using `AgentInit(state=out.state)`. |
+| `03_interrupt_resume_with_store.py` | `ToolApproval` interrupt → client approval → resume with store. |
+| `04_interrupt_resume_no_store.py` | `ToolApproval` middleware with client-managed state. |
+| `05_define_prompt_agent.py` | Defining an agent using a Prompt template (`define_prompt_agent`). |
+| `06_define_custom_agent.py` | Defining a custom agent (`define_custom_agent`). |
+| `07_artifacts_custom_patch.py` | `customPatch` and `artifact` chunks. |
+| `08_graceful_failure.py` | Handling execution errors (`finish_reason=failed`). |
+| `09_detach.py` | Moving execution to the background (`conn.detach()`). |
+| `10_abort.py` | Aborting a backgrounded task (`store.abort_snapshot()`). |
+| `11_write_artifact_tool.py` | Using `Artifacts()` middleware to automatically write artifacts. |
 
-The Next.js frontend lives in [`../usechat-serve`](../usechat-serve). Start this
-sample's backend on port 8080, then run the web app.
+Each example defines its agent inline.
+
+### 2. Branching Examples — `branching_examples/`
+
+These demonstrate how to manipulate `SessionSnapshots` to fork conversations, try alternative options, or explore different paths in parallel. **No API key is required** (they use a mock echo agent).
+
+See [`branching_examples/README.md`](branching_examples/README.md) for more details.

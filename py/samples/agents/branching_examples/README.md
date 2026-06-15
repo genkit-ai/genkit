@@ -26,7 +26,7 @@ track which branch is active.
 ```bash
 cd py/samples/agents
 uv sync
-uv run python src/examples/branching_samples/01_fork_sibling_snapshots.py
+uv run python branching_examples/01_fork_sibling_snapshots.py
 ```
 
 Helpers: [`_helpers.py`](_helpers.py). Wire format: [`../../WIRE_PROTOCOL.md`](../../WIRE_PROTOCOL.md).
