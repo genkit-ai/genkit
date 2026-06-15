@@ -57,16 +57,16 @@ func (p *PathTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, pr
 	ctx := trace.ContextWithSpanContext(context.Background(), span.SpanContext())
 	attributes := span.Attributes()
 
-	path := extractStringAttribute(attributes, "genkit:path")
-	isFailureSource := extractBoolAttribute(attributes, "genkit:isFailureSource")
-	state := extractStringAttribute(attributes, "genkit:state")
+	path := extractStringAttribute(attributes, attrGenkitPath)
+	isFailureSource := extractBoolAttribute(attributes, attrGenkitIsFailureSource)
+	state := extractStringAttribute(attributes, attrGenkitState)
 
 	if path == "" || !isFailureSource || state != "error" {
 		return
 	}
 
-	sessionID := extractStringAttribute(attributes, "genkit:sessionId")
-	threadName := extractStringAttribute(attributes, "genkit:threadName")
+	sessionID := extractStringAttribute(attributes, attrGenkitSessionID)
+	threadName := extractStringAttribute(attributes, attrGenkitThreadName)
 
 	errorType := "Error"
 	errorMessage := p.extractErrorMessage(span)
@@ -82,12 +82,12 @@ func (p *PathTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, pr
 	errorStack := p.extractErrorStack(span)
 	latencyMs := p.calculateLatencyMs(span)
 	pathDimensions := map[string]interface{}{
-		"featureName":   extractOuterFeatureNameFromPath(path),
-		"status":        "failure",
-		"error":         errorType,
-		"path":          path,
-		"source":        "go",
-		"sourceVersion": internal.Version,
+		attrFeatureName:    extractOuterFeatureNameFromPath(path),
+		"status":           statusFailure,
+		"error":            errorType,
+		"path":             path,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
 	}
 
 	p.pathCounter.Add(1, pathDimensions)
@@ -97,19 +97,19 @@ func (p *PathTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, pr
 	sharedMetadata := createCommonLogAttributes(span, projectID)
 
 	logData := map[string]interface{}{
-		"path":          displayPath,
-		"qualifiedPath": path,
-		"name":          errorType,
-		"stack":         errorStack,
-		"source":        "go",
-		"sourceVersion": internal.Version,
+		"path":             displayPath,
+		fieldQualifiedPath: path,
+		"name":             errorType,
+		"stack":            errorStack,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
 	}
 
 	if sessionID != "" {
-		logData["sessionId"] = sessionID
+		logData[fieldSessionID] = sessionID
 	}
 	if threadName != "" {
-		logData["threadName"] = threadName
+		logData[fieldThreadName] = threadName
 	}
 
 	for k, v := range sharedMetadata {

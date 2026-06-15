@@ -35,7 +35,7 @@ type client struct {
 // newClient builds a client.
 func newClient(ctx context.Context) (*client, error) {
 	// Load credentials from the environment or default locations.
-	creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	creds, err := google.FindDefaultCredentials(ctx, googleCloudPlatformScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find default credentials: %v", err)
 	}
@@ -114,7 +114,7 @@ func (v *VertexAIVectorSearch) FindNeighbors(params FindNeighborsParams) (*FindN
 			{
 				"datapoint": map[string]interface{}{
 					"featureVector":    params.FeatureVector,
-					"restricts":        params.Restricts,
+					metadataRestricts:  params.Restricts,
 					"numericRestricts": params.NumericRestricts,
 				},
 				"neighborCount": params.NeighborCount,

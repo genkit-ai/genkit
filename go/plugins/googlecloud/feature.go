@@ -59,18 +59,18 @@ func (f *FeatureTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool,
 		return
 	}
 
-	name := extractStringAttribute(attributes, "genkit:name")
-	path := extractStringAttribute(attributes, "genkit:path")
-	state := extractStringAttribute(attributes, "genkit:state")
+	name := extractStringAttribute(attributes, attrGenkitName)
+	path := extractStringAttribute(attributes, attrGenkitPath)
+	state := extractStringAttribute(attributes, attrGenkitState)
 
 	latencyMs := f.calculateLatencyMs(span)
 	switch state {
-	case "success":
+	case statusSuccess:
 		f.writeFeatureSuccess(name, latencyMs)
 	case "error":
 		errorName := f.extractErrorName(span)
 		if errorName == "" {
-			errorName = "<unknown>"
+			errorName = unknownValue
 		}
 		f.writeFeatureFailure(name, latencyMs, errorName)
 	default:
@@ -82,10 +82,10 @@ func (f *FeatureTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool,
 		return
 	}
 	if logInputOutput {
-		input := truncate(extractStringAttribute(attributes, "genkit:input"))
-		output := truncate(extractStringAttribute(attributes, "genkit:output"))
-		sessionID := extractStringAttribute(attributes, "genkit:sessionId")
-		threadName := extractStringAttribute(attributes, "genkit:threadName")
+		input := truncate(extractStringAttribute(attributes, attrGenkitInput))
+		output := truncate(extractStringAttribute(attributes, attrGenkitOutput))
+		sessionID := extractStringAttribute(attributes, attrGenkitSessionID)
+		threadName := extractStringAttribute(attributes, attrGenkitThreadName)
 
 		if input != "" {
 			f.writeLog(span, "Input", name, path, input, projectID, sessionID, threadName)
@@ -99,10 +99,10 @@ func (f *FeatureTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool,
 // writeFeatureSuccess records metrics for successful feature calls
 func (f *FeatureTelemetry) writeFeatureSuccess(featureName string, latencyMs float64) {
 	dimensions := map[string]interface{}{
-		"name":          featureName,
-		"status":        "success",
-		"source":        "go",
-		"sourceVersion": internal.Version,
+		"name":             featureName,
+		"status":           statusSuccess,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
 	}
 
 	f.featureCounter.Add(1, dimensions)
@@ -112,11 +112,11 @@ func (f *FeatureTelemetry) writeFeatureSuccess(featureName string, latencyMs flo
 // writeFeatureFailure records metrics for failed feature calls
 func (f *FeatureTelemetry) writeFeatureFailure(featureName string, latencyMs float64, errorName string) {
 	dimensions := map[string]interface{}{
-		"name":          featureName,
-		"status":        "failure",
-		"source":        "go",
-		"sourceVersion": internal.Version,
-		"error":         errorName,
+		"name":             featureName,
+		"status":           statusFailure,
+		fieldSource:        sourceGo,
+		fieldSourceVersion: internal.Version,
+		"error":            errorName,
 	}
 
 	f.featureCounter.Add(1, dimensions)
@@ -130,17 +130,17 @@ func (f *FeatureTelemetry) writeLog(span sdktrace.ReadOnlySpan, tag, featureName
 	sharedMetadata := createCommonLogAttributes(span, projectID)
 
 	logData := map[string]interface{}{
-		"path":          path,
-		"qualifiedPath": qualifiedPath,
-		"featureName":   featureName,
-		"content":       content,
+		"path":             path,
+		fieldQualifiedPath: qualifiedPath,
+		attrFeatureName:    featureName,
+		fieldContent:       content,
 	}
 
 	if sessionID != "" {
-		logData["sessionId"] = sessionID
+		logData[fieldSessionID] = sessionID
 	}
 	if threadName != "" {
-		logData["threadName"] = threadName
+		logData[fieldThreadName] = threadName
 	}
 
 	for k, v := range sharedMetadata {

@@ -127,7 +127,7 @@ func (h *handler) recordToEntry(ctx context.Context, r slog.Record) logging.Entr
 	globalResource := &mrpb.MonitoredResource{
 		Type: "global",
 		Labels: map[string]string{
-			"project_id": h.projectID,
+			attrProjectID: h.projectID,
 		},
 	}
 

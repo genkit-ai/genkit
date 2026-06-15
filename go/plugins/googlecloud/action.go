@@ -42,9 +42,9 @@ func (a *ActionTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, 
 	}
 
 	attributes := span.Attributes()
-	actionName := extractStringAttribute(attributes, "genkit:name")
+	actionName := extractStringAttribute(attributes, attrGenkitName)
 	if actionName == "" {
-		actionName = "<unknown>"
+		actionName = unknownValue
 	}
 
 	subtype := extractStringAttribute(attributes, "genkit:metadata:subtype")
@@ -53,18 +53,18 @@ func (a *ActionTelemetry) Tick(span sdktrace.ReadOnlySpan, logInputOutput bool, 
 		return
 	}
 
-	path := extractStringAttribute(attributes, "genkit:path")
+	path := extractStringAttribute(attributes, attrGenkitPath)
 	if path == "" {
-		path = "<unknown>"
+		path = unknownValue
 	}
 
-	input := truncate(extractStringAttribute(attributes, "genkit:input"))
-	output := truncate(extractStringAttribute(attributes, "genkit:output"))
-	sessionID := extractStringAttribute(attributes, "genkit:sessionId")
-	threadName := extractStringAttribute(attributes, "genkit:threadName")
+	input := truncate(extractStringAttribute(attributes, attrGenkitInput))
+	output := truncate(extractStringAttribute(attributes, attrGenkitOutput))
+	sessionID := extractStringAttribute(attributes, attrGenkitSessionID)
+	threadName := extractStringAttribute(attributes, attrGenkitThreadName)
 
 	featureName := extractOuterFeatureNameFromPath(path)
-	if featureName == "" || featureName == "<unknown>" {
+	if featureName == "" || featureName == unknownValue {
 		featureName = actionName
 	}
 
@@ -84,17 +84,17 @@ func (a *ActionTelemetry) writeLog(span sdktrace.ReadOnlySpan, tag, featureName,
 	sharedMetadata := createCommonLogAttributes(span, projectID)
 
 	logData := map[string]interface{}{
-		"path":          path,
-		"qualifiedPath": qualifiedPath,
-		"featureName":   featureName,
-		"content":       content,
+		"path":             path,
+		fieldQualifiedPath: qualifiedPath,
+		attrFeatureName:    featureName,
+		fieldContent:       content,
 	}
 
 	if sessionID != "" {
-		logData["sessionId"] = sessionID
+		logData[fieldSessionID] = sessionID
 	}
 	if threadName != "" {
-		logData["threadName"] = threadName
+		logData[fieldThreadName] = threadName
 	}
 
 	for k, v := range sharedMetadata {

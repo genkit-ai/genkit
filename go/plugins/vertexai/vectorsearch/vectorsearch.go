@@ -53,25 +53,25 @@ func (v *VertexAIVectorSearch) Init(ctx context.Context) []api.Action {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.initted {
-		panic("plugin already initialized")
+		panic(errPluginInitialized)
 	}
 
 	projectID := v.ProjectID
 	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+		projectID = os.Getenv(envGoogleCloudProject)
 		if projectID == "" {
-			panic(fmt.Errorf("Vertex AI requires setting GOOGLE_CLOUD_PROJECT in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard?project=%s", projectID))
+			panic(fmt.Errorf("Vertex AI requires setting %s in the environment. You can get a project ID at https://console.cloud.google.com/home/dashboard?project=%s", envGoogleCloudProject, projectID))
 		}
 	}
 
 	location := v.Location
 	if location == "" {
-		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
+		location = os.Getenv(envGoogleCloudLocation)
 		if location == "" {
-			location = os.Getenv("GOOGLE_CLOUD_REGION")
+			location = os.Getenv(envGoogleCloudRegion)
 		}
 		if location == "" {
-			panic(fmt.Errorf("Vertex AI requires setting GOOGLE_CLOUD_LOCATION or GOOGLE_CLOUD_REGION in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations"))
+			panic(fmt.Errorf("Vertex AI requires setting %s or %s in the environment. You can get a location at https://cloud.google.com/vertex-ai/docs/general/locations", envGoogleCloudLocation, envGoogleCloudRegion))
 		}
 	}
 
@@ -128,13 +128,13 @@ func Index(ctx context.Context, g *genkit.Genkit, params IndexParams, documentIn
 			DatapointID:   id,
 			FeatureVector: de.Embedding,
 		}
-		if restricts, ok := params.Docs[i].Metadata["restricts"].([]Restrict); ok {
+		if restricts, ok := params.Docs[i].Metadata[metadataRestricts].([]Restrict); ok {
 			dp.Restricts = restricts
 		}
-		if numericRestricts, ok := params.Docs[i].Metadata["numeric_restricts"].([]NumericRestrict); ok {
+		if numericRestricts, ok := params.Docs[i].Metadata[metadataNumericRestricts].([]NumericRestrict); ok {
 			dp.NumericRestricts = numericRestricts
 		}
-		if crowdingTag, ok := params.Docs[i].Metadata["crowding_tag"].(string); ok {
+		if crowdingTag, ok := params.Docs[i].Metadata[metadataCrowdingTag].(string); ok {
 			dp.CrowdingTag = crowdingTag
 		}
 		datapoints = append(datapoints, dp)

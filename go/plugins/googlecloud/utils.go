@@ -137,8 +137,8 @@ func loggingDeniedHelpText(projectID string) string {
 // e.g. for /{myFlow,t:flow}/{myStep,t:flowStep}/{googleai/gemini-pro,t:action,s:model}
 // returns "myFlow"
 func extractOuterFeatureNameFromPath(path string) string {
-	if path == "" || path == "<unknown>" {
-		return "<unknown>"
+	if path == "" || path == unknownValue {
+		return unknownValue
 	}
 
 	// Simple path parsing - extract feature name from genkit path format
@@ -156,5 +156,5 @@ func extractOuterFeatureNameFromPath(path string) string {
 		}
 	}
 
-	return "<unknown>"
+	return unknownValue
 }
