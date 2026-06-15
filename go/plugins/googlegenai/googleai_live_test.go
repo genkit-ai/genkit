@@ -51,6 +51,34 @@ func requireEnv(key string) (string, bool) {
 // we get duplicate definitions of models.
 var testAll = flag.Bool("all", false, "test DefineAllXXX functions")
 
+// orgChartEmployee is a self-referential type: each employee's DirectReports
+// are themselves employees. Its inferred JSON schema therefore uses $ref/$defs,
+// which the Gemini plugin sends via ResponseJsonSchema (the default) and the API
+// unrolls server-side. The legacy ResponseSchema field cannot express this, so
+// the recursive constrained-output tests guard the new default path on both the
+// GoogleAI and Vertex AI backends.
+type orgChartEmployee struct {
+	Name          string              `json:"name"`
+	Title         string              `json:"title"`
+	DirectReports []*orgChartEmployee `json:"directReports,omitempty"`
+}
+
+// assertOrgChart checks that a recursive constrained-output response
+// round-tripped: the root is populated and at least one level of nesting
+// survived (i.e. the recursion was not collapsed to an "any" schema).
+func assertOrgChart(t *testing.T, ceo *orgChartEmployee) {
+	t.Helper()
+	if ceo == nil {
+		t.Fatal("nil org chart")
+	}
+	if ceo.Name == "" || ceo.Title == "" {
+		t.Errorf("expected populated root employee, got %#v", ceo)
+	}
+	if len(ceo.DirectReports) == 0 {
+		t.Fatal("expected nested direct reports, got none — recursion did not round-trip")
+	}
+}
+
 func TestGoogleAILive(t *testing.T) {
 	apiKey, ok := requireEnv("GEMINI_API_KEY")
 	if !ok {
@@ -495,6 +523,43 @@ func TestGoogleAILive(t *testing.T) {
 		}
 		if resp.Usage.InputTokens == 0 || resp.Usage.OutputTokens == 0 || resp.Usage.TotalTokens == 0 {
 			t.Errorf("Empty usage stats %#v", *resp.Usage)
+		}
+	})
+	t.Run("constrained recursive output", func(t *testing.T) {
+		// Recursive output type: schema inference emits $ref/$defs, sent via
+		// ResponseJsonSchema (the default). Verifies self-referential types
+		// round-trip instead of collapsing to an "any" schema.
+		ceo, _, err := genkit.GenerateData[orgChartEmployee](ctx, g,
+			ai.WithSystem("You design company org charts. Start at the CEO and nest direct reports two or three levels deep."),
+			ai.WithPrompt("Build an org chart for a 20-person coffee roasting startup."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOrgChart(t, ceo)
+	})
+	t.Run("constrained recursive output (legacy schema)", func(t *testing.T) {
+		// With LegacyResponseSchema the plugin uses the OpenAPI-subset
+		// ResponseSchema field, which cannot express recursion: the cycle
+		// collapses to a generic object. We only assert the request still
+		// succeeds and the root is populated; nested reports are not guaranteed
+		// in legacy mode.
+		lg := genkit.Init(ctx,
+			genkit.WithDefaultModel("googleai/gemini-2.5-flash"),
+			genkit.WithPlugins(&googlegenai.GoogleAI{APIKey: apiKey, LegacyResponseSchema: true}),
+		)
+		ceo, _, err := genkit.GenerateData[orgChartEmployee](ctx, lg,
+			ai.WithSystem("You design company org charts. Start at the CEO and list a few direct reports."),
+			ai.WithPrompt("Build an org chart for a 20-person coffee roasting startup."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ceo == nil {
+			t.Fatal("nil org chart")
+		}
+		if ceo.Name == "" || ceo.Title == "" {
+			t.Errorf("expected populated root employee, got %#v", ceo)
 		}
 	})
 	t.Run("thinking", func(t *testing.T) {

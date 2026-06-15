@@ -327,6 +327,20 @@ func TestVertexAILive(t *testing.T) {
 			t.Errorf("Empty usage stats %#v", *resp.Usage)
 		}
 	})
+	t.Run("constrained recursive output", func(t *testing.T) {
+		// Recursive output type exercises the ResponseJsonSchema path on Vertex
+		// AI, which historically lagged GoogleAI on schema fields. If Vertex
+		// rejects responseJsonSchema this surfaces it here, rather than the
+		// default flip failing silently in production.
+		ceo, _, err := genkit.GenerateData[orgChartEmployee](ctx, g,
+			ai.WithSystem("You design company org charts. Start at the CEO and nest direct reports two or three levels deep."),
+			ai.WithPrompt("Build an org chart for a 20-person coffee roasting startup."),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOrgChart(t, ceo)
+	})
 	t.Run("thinking enabled", func(t *testing.T) {
 		if location != "global" && location != "us-central1" {
 			t.Skipf("thinking in Vertex AI is only supported in these regions: [global, us-central1], got: %q", location)
