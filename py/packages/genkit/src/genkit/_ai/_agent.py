@@ -84,6 +84,7 @@ from genkit._core._typing import (
     SnapshotStatus,
     TextPart,
     ToolChoice,
+    ToolRequestPart,
     TurnEnd,
 )
 
@@ -138,8 +139,7 @@ def _tool_request_parts(message: MessageData | None) -> list[Part]:
         return parts
     for part in message.content or []:
         p = part if isinstance(part, Part) else Part.model_validate(part)
-        root = getattr(p, 'root', p)
-        if hasattr(root, 'tool_request') and root.tool_request:
+        if isinstance(p.root, ToolRequestPart):
             parts.append(p)
     return parts
 
