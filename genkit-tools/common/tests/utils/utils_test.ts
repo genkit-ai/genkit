@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -29,7 +36,7 @@ describe('utils', () => {
 
     beforeEach(() => {
       // realpathSync resolves symlinks (for example /var -> /private/var on
-      // macOS) so the temp paths match the resolved paths we compare against.
+      // macOS) so the temp paths match what process.cwd() reports.
       tmpDir = fs.realpathSync(
         fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-find-root-'))
       );
@@ -45,10 +52,13 @@ describe('utils', () => {
       fs.mkdirSync(nestedDir, { recursive: true });
       fs.writeFileSync(path.join(projectDir, 'pubspec.yaml'), 'name: dart_app');
 
-      // Pass the start directory explicitly instead of mutating the
-      // process-global cwd, which makes the test deterministic when run
-      // alongside other tests in the same worker.
-      expect(await findProjectRoot(nestedDir)).toEqual(projectDir);
+      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(nestedDir);
+
+      try {
+        expect(await findProjectRoot()).toEqual(projectDir);
+      } finally {
+        cwdSpy.mockRestore();
+      }
     });
 
     it('returns the nearest project root when a Dart project is nested under a package.json', async () => {
@@ -61,7 +71,13 @@ describe('utils', () => {
       fs.writeFileSync(path.join(workspaceDir, 'package.json'), '{}');
       fs.writeFileSync(path.join(dartDir, 'pubspec.yaml'), 'name: dart_app');
 
-      expect(await findProjectRoot(dartDir)).toEqual(dartDir);
+      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(dartDir);
+
+      try {
+        expect(await findProjectRoot()).toEqual(dartDir);
+      } finally {
+        cwdSpy.mockRestore();
+      }
     });
   });
 
