@@ -44,6 +44,10 @@ TRANSFORMATIONS = {
 }
 
 # Inline field enums that should become named StrEnums (no standalone $def in schema).
+# We explicitly map these rather than auto-promoting all inline enums to:
+# 1) Control naming (e.g. `SnapshotStatus` instead of `SessionSnapshotStatus`)
+# 2) Avoid polluting the namespace with Enums for fields where Literals are
+#    ergonomic enough (like `op: Literal['add', 'remove']`).
 INLINE_FIELD_ENUMS: dict[tuple[str, str], str] = {
     ('SessionSnapshot', 'status'): 'SnapshotStatus',
 }
