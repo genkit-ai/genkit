@@ -28,6 +28,11 @@ const config: Config = {
   // A preset that is used as a base for Jest's configuration
   preset: 'ts-jest',
 
+  // Restore the real `fs` implementation after each test file so that test
+  // files which mock `fs` by direct assignment can't leak those mocks into
+  // other test files running later in the same worker. See tests/jest.setup.ts.
+  setupFilesAfterEnv: ['<rootDir>/tests/jest.setup.ts'],
+
   // The glob patterns Jest uses to detect test files
   testMatch: ['**/tests/**/*_test.ts'],
 
