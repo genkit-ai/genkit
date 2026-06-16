@@ -53,6 +53,7 @@ from genkit._core._action import (
     BidiAction,
     BidiConnection,
     QueueSentinel,
+    Action,
     define_bidi_action,
     get_current_context,
 )
@@ -1117,8 +1118,33 @@ def define_custom_agent(
         name=name,
         bidi_fn=_bidi_fn,
         description=description,
-        metadata={**(metadata or {}), 'agent': True},
+        metadata={
+            **(metadata or {}),
+            'agent': {
+                'stateManagement': 'server' if store is not None else 'client'
+            }
+        },
     )
+
+    if store is not None:
+        async def _snapshot_fn(input_dict: Any) -> SessionSnapshot:
+            if not isinstance(input_dict, dict):
+                input_dict = getattr(input_dict, '__dict__', {})
+            snapshot_id = input_dict.get('snapshotId') or input_dict.get('snapshot_id')
+            if not snapshot_id:
+                raise ValueError("snapshotId required")
+            snap = await store.get_snapshot(snapshot_id=snapshot_id)
+            if snap is None:
+                raise ValueError(f"Snapshot {snapshot_id} not found")
+            return snap
+
+        snapshot_action = Action(
+            kind=ActionKind.AGENT_SNAPSHOT,
+            name=name,
+            fn=_snapshot_fn,
+        )
+        registry.register_action_from_instance(snapshot_action)
+
     return Agent(action)
 
 

@@ -112,6 +112,7 @@ class ActionKind(StrEnum):
 
     BACKGROUND_MODEL = 'background-model'
     AGENT = 'agent'
+    AGENT_SNAPSHOT = 'agent-snapshot'
     CANCEL_OPERATION = 'cancel-operation'
     CHECK_OPERATION = 'check-operation'
     CUSTOM = 'custom'
