@@ -226,12 +226,12 @@ def test_restart_tool_with_tool_reference() -> None:
     )
     action = Action(kind=ActionKind.TOOL, name='middleware_tool', fn=_echo_tool)
     tool = Tool(action)
-    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'toolApproved': True})
+    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
 
     assert out.tool_request.name == 'middleware_tool'
     assert out.tool_request.input == {'p': 1}
     assert out.metadata is not None
-    assert out.metadata.get('resumed') == {'toolApproved': True}
+    assert out.metadata.get('resumed') == {'tool_approved': True}
 
 
 def test_restart_preserves_ref_on_wire() -> None:
