@@ -169,6 +169,8 @@ func generate(
 		return nil, err
 	}
 
+	isGemma := isGemmaModelName(model)
+
 	var contents []*genai.Content
 	for _, m := range input.Messages {
 		// system parts are handled separately
@@ -176,7 +178,20 @@ func generate(
 			continue
 		}
 
-		parts, err := toGeminiParts(m.Content)
+		content := m.Content
+		if isGemma {
+			// Gemma does not accept previous thoughts; strip reasoning parts and
+			// any part carrying a thought signature before sending (mirrors the JS
+			// google-genai plugin).
+			content = stripGemmaThoughts(content)
+			// Skip a turn that was entirely thoughts: emitting an empty content
+			// block can be rejected by the API. (Go-side guard; JS leaves it.)
+			if len(content) == 0 {
+				continue
+			}
+		}
+
+		parts, err := toGeminiParts(content)
 		if err != nil {
 			return nil, err
 		}
@@ -413,6 +428,44 @@ func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
 
 func isTTSModelName(name string) bool {
 	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")
+}
+
+// isGemmaModelName reports whether the model is a Gemma model.
+func isGemmaModelName(name string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(name, "googleai/"), "gemma")
+}
+
+// gemmaConfigSchema returns the standard Gemini config schema with the
+// temperature property clamped to [0, 1], matching the JS GemmaConfigSchema
+// (Gemma's valid temperature range is narrower than Gemini's 0-2).
+func gemmaConfigSchema() map[string]any {
+	schema := configToMap(genai.GenerateContentConfig{})
+	if props, ok := schema["properties"].(map[string]any); ok {
+		if temp, ok := props["temperature"].(map[string]any); ok {
+			temp["minimum"] = 0.0
+			temp["maximum"] = 1.0
+		}
+	}
+	return schema
+}
+
+// stripGemmaThoughts removes reasoning parts, and any part carrying a thought
+// signature, from a message's content. Gemma rejects previous thoughts, so they
+// must not be sent back on follow-up turns (mirrors the JS google-genai plugin).
+func stripGemmaThoughts(parts []*ai.Part) []*ai.Part {
+	out := make([]*ai.Part, 0, len(parts))
+	for _, p := range parts {
+		if p.IsReasoning() {
+			continue
+		}
+		if p.Metadata != nil {
+			if _, ok := p.Metadata["signature"]; ok {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.

@@ -92,7 +92,10 @@ func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 }
 
 // gemmaModels are the concrete Gemma models registered for Google AI. They are
-// classified as Gemini-family by prefix but carry Gemma-specific capabilities.
+// classified as Gemini-family by prefix and, matching the JS google-genai
+// plugin, advertise the standard Gemini capabilities (Gemma 4 supports tools and
+// system instructions). Gemma-specific behavior is the temperature clamp and the
+// stripping of prior thoughts in the generate path.
 var gemmaModels = []string{gemma426bA4bIT, gemma431bIT}
 
 func TestGemmaModelsClassifyAsGemini(t *testing.T) {
@@ -110,22 +113,32 @@ func TestGemmaModelOptions(t *testing.T) {
 		if opts.Supports == nil {
 			t.Fatalf("GetModelOptions(%q): Supports is nil", name)
 		}
-		// Gemma differs from Gemini: no system role and no tool calling.
-		if opts.Supports.SystemRole {
-			t.Errorf("GetModelOptions(%q): SystemRole = true, want false", name)
+		// Gemma advertises the standard Gemini capabilities (matches JS).
+		if !opts.Supports.SystemRole {
+			t.Errorf("GetModelOptions(%q): SystemRole = false, want true", name)
 		}
-		if opts.Supports.Tools {
-			t.Errorf("GetModelOptions(%q): Tools = true, want false", name)
+		if !opts.Supports.Tools {
+			t.Errorf("GetModelOptions(%q): Tools = false, want true", name)
 		}
-		if opts.Supports.ToolChoice {
-			t.Errorf("GetModelOptions(%q): ToolChoice = true, want false", name)
+		if !opts.Supports.ToolChoice {
+			t.Errorf("GetModelOptions(%q): ToolChoice = false, want true", name)
 		}
 		if !opts.Supports.Multiturn {
 			t.Errorf("GetModelOptions(%q): Multiturn = false, want true", name)
 		}
-		// Registered (not the unknown-model fallback), so a config schema is set.
+		if !opts.Supports.Media {
+			t.Errorf("GetModelOptions(%q): Media = false, want true", name)
+		}
+		// Registered (not the unknown-model fallback), so a config schema is set,
+		// and it carries the Gemma temperature clamp (applied by name).
 		if opts.ConfigSchema == nil {
 			t.Errorf("GetModelOptions(%q): ConfigSchema is nil", name)
+		} else if props, ok := opts.ConfigSchema["properties"].(map[string]any); ok {
+			if temp, ok := props["temperature"].(map[string]any); ok {
+				if temp["maximum"] != 1.0 {
+					t.Errorf("GetModelOptions(%q): temperature maximum = %v, want 1.0 (Gemma clamp)", name, temp["maximum"])
+				}
+			}
 		}
 	}
 }

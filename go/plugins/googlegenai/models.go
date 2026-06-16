@@ -34,17 +34,6 @@ var (
 		Constrained: ai.ConstrainedSupportAll,
 	}
 
-	// GemmaSupports describes model capabilities for Gemma models. Unlike
-	// Gemini, Gemma models do not support a system role or tool calling.
-	GemmaSupports = ai.ModelSupports{
-		Multiturn:   true,
-		Tools:       false,
-		ToolChoice:  false,
-		SystemRole:  false,
-		Media:       true,
-		Constrained: ai.ConstrainedSupportNoTools,
-	}
-
 	// Media describes model capabilities for image generation models (Imagen).
 	Media = ai.ModelSupports{
 		Multiturn:  false,
@@ -299,16 +288,20 @@ var (
 			Supports: &TTSSupports,
 			Stage:    ai.ModelStageUnstable,
 		},
+		// Gemma reuses the standard Gemini capabilities, matching the JS
+		// google-genai plugin. The Gemma-specific behavior (temperature clamped to
+		// [0, 1] via gemmaConfigSchema, applied by name in GetModelOptions; and
+		// stripping prior thoughts in the generate path) is not expressed here.
 		gemma426bA4bIT: {
 			Label:    "Gemma 4 26B",
 			Versions: []string{},
-			Supports: &GemmaSupports,
+			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
 		gemma431bIT: {
 			Label:    "Gemma 4 31B",
 			Versions: []string{},
-			Supports: &GemmaSupports,
+			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
 	}
@@ -489,6 +482,12 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		if cfg := mt.DefaultConfig(); cfg != nil {
 			opts.ConfigSchema = configToMap(cfg)
 		}
+	}
+
+	// All gemma-* models clamp temperature to [0, 1] (matches the JS
+	// GemmaConfigSchema), whether or not they are individually registered.
+	if isGemmaModelName(name) {
+		opts.ConfigSchema = gemmaConfigSchema()
 	}
 
 	// Set label with provider prefix
