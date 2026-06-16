@@ -16,6 +16,8 @@
 
 import { expressHandler } from '@genkit-ai/express';
 import express from 'express';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { branchingAgent, demonstrateBranching } from './branching-agent.js';
 import { researchAgent, testResearchAgent } from './research-agent.js';
@@ -173,10 +175,32 @@ app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
 app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
 app.post('/api/testTripPlannerAgent', expressHandler(testTripPlannerAgent));
 
+// ---------------------------------------------------------------------------
+// Static web UI — serve the compiled Vite app (web/dist) so the whole demo
+// can run from a single server. Run "pnpm run build:web" to generate it.
+// (For development with hot-reload, use the Vite dev server instead.)
+// ---------------------------------------------------------------------------
+const webDist = join(__dirname, '..', 'web', 'dist');
+if (existsSync(webDist)) {
+  app.use(express.static(webDist));
+  // SPA fallback — send index.html for any non-API GET request so client-side
+  // routing (react-router) works on page reload / deep links.
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(join(webDist, 'index.html'));
+  });
+}
+
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 app.listen(PORT, () => {
   console.log(`\n🚀 Express server running on http://localhost:${PORT}`);
-  console.log(
-    `   Web UI: run "cd web && npm run dev" then open http://localhost:5173\n`
-  );
+  if (existsSync(webDist)) {
+    console.log(`   Web UI: open http://localhost:${PORT}\n`);
+  } else {
+    console.log(
+      `   Web UI not built. Run "pnpm run build:web" to serve it here,`
+    );
+    console.log(
+      `   or "pnpm run web:dev" for the Vite dev server (http://localhost:5173).\n`
+    );
+  }
 });
