@@ -898,7 +898,7 @@ async function resolveSession<State>(
     }
     return {
       session: new Session<State>({
-        custom: {} as State,
+        custom: undefined,
         artifacts: [],
         messages: [],
         sessionId: init.sessionId,
@@ -915,7 +915,7 @@ async function resolveSession<State>(
 
   return {
     session: new Session<State>({
-      custom: {} as State,
+      custom: undefined,
       artifacts: [],
       messages: [],
     }),
