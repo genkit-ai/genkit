@@ -3026,6 +3026,66 @@ Now respond to the latest message.`,
       assert.strictEqual(output.snapshotId, undefined);
     });
 
+    it('does not validate a never-set custom state against a required-field stateSchema across turns', async () => {
+      // Regression: a fresh session must NOT seed custom state with `{}`.
+      // If it did, `{}` would be persisted into the first snapshot and then
+      // fail validation on the next resume when the stateSchema has required
+      // fields - even though the user never set any custom state.
+      const store = new InMemorySessionStore<{ required: string }>();
+
+      const flow = defineCustomAgent<{ required: string }>(
+        new Registry(),
+        {
+          name: 'requiredStateAgent',
+          store,
+          // `required` is a required field, so `{}` would be invalid.
+          stateSchema: z.object({ required: z.string() }),
+        },
+        async (sess) => {
+          // The handler never sets custom state.
+          await sess.run(async () => {
+            return { finishReason: 'stop' as const };
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // Turn 1: fresh session (no custom state set). The persisted snapshot
+      // holds `custom: undefined` rather than `{}`.
+      const session1 = flow.streamBidi({});
+      session1.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+      });
+      session1.close();
+      for await (const _ of session1.stream) {
+      }
+      const output1 = await session1.output;
+      assert.strictEqual(
+        output1.finishReason,
+        'stop',
+        `turn1 error: ${JSON.stringify(output1.error)}`
+      );
+      assert.ok(output1.snapshotId);
+
+      // Turn 2: resume from the turn-1 snapshot. This loads + validates the
+      // persisted custom state. It must NOT fail validation, since the
+      // never-set custom state stays `undefined` rather than `{}`.
+      const session2 = flow.streamBidi({ snapshotId: output1.snapshotId });
+      session2.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+      });
+      session2.close();
+      for await (const _ of session2.stream) {
+      }
+      const output2 = await session2.output;
+      assert.strictEqual(
+        output2.finishReason,
+        'stop',
+        `turn2 error: ${JSON.stringify(output2.error)}`
+      );
+      assert.strictEqual(output2.error, undefined);
+    });
+
     it('does not leak the raw thrown error into error.details', async () => {
       const store = new InMemorySessionStore<{}>();
 
