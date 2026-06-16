@@ -73,10 +73,9 @@ async def test_agent_propagates_context_to_tools() -> None:
 
     conn = await agent.stream_bidi(context={'auth': 'secret'})
     await conn.send_text('run')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
     await conn.close()
+    async for chunk in conn.receive():
+        pass
     out = await conn.output()
 
     assert out.message is not None
@@ -104,10 +103,9 @@ async def test_prompt_agent_propagates_context_to_template() -> None:
 
     conn = await agent.stream_bidi(context={'auth': {'email': 'secret@agent.com'}})
     await conn.send_text('hello')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
     await conn.close()
+    async for chunk in conn.receive():
+        pass
     await conn.output()
 
     assert pm.request_count == 1
@@ -142,10 +140,9 @@ async def test_agent_lookup_and_execution() -> None:
     # Execution runs it
     conn = await agent.stream_bidi()
     await conn.send_text('hello')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
     await conn.close()
+    async for chunk in conn.receive():
+        pass
     out = await conn.output()
 
     assert out.message is not None
