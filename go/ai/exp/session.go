@@ -63,28 +63,27 @@ type SnapshotReader[State any] interface {
 	// GetSnapshot retrieves a snapshot by ID. Returns nil if not found.
 	GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
 
-	// GetLatestSnapshot resolves the snapshot a session would resume from:
-	// the session's most recently updated row that is not a dead end, as a
-	// full row (the runtime loads its state to resume). Returns nil if the
-	// session has no such row (unknown session ID, or every row is a dead
-	// end), and an error if sessionID is empty.
+	// GetLatestSnapshot returns the session's most recently updated
+	// snapshot as a full row (the runtime loads its state to resume),
+	// whatever its status: a pending, failed, or aborted row is returned
+	// like any other. Returns nil if the session has no rows (unknown
+	// session ID), and an error if sessionID is empty.
 	//
 	// "Most recently updated" means the greatest
 	// [SessionSnapshot.UpdatedAt], falling back to CreatedAt on rows that
 	// lack one; ties may be broken arbitrarily but deterministically (e.g.
-	// by SnapshotID). Failed and aborted rows are dead ends (resuming from
-	// them is rejected), so they are skipped and a branch that died never
-	// hides the session's last good snapshot. A pending row is NOT
-	// skipped: it marks a detached invocation that is still running, and
-	// surfacing it lets the agent runtime reject the resume instead of
-	// silently racing the background work.
+	// by SnapshotID). The latest row is returned unconditionally, so the
+	// two callers can each apply their own policy: the getSnapshot
+	// companion action surfaces it verbatim (a client reconnecting wants to
+	// see a pending/failed tip), and the session-ID resume path rejects a
+	// failed/aborted/pending tip rather than continuing from a dead end.
 	//
-	// The contract is a status-filtered max-timestamp lookup, so stores
-	// can implement it as a single indexed query (e.g. WHERE sessionId = ?
-	// AND status NOT IN ('failed', 'aborted') ORDER BY updatedAt DESC
-	// LIMIT 1). ParentID is informational lineage and plays no part in
-	// resolution: when a session's history was forked by re-resuming an
-	// earlier snapshot, the most recently updated branch simply wins.
+	// The contract is a plain max-timestamp lookup, so stores can implement
+	// it as a single indexed query (e.g. WHERE sessionId = ? ORDER BY
+	// updatedAt DESC LIMIT 1). ParentID is informational lineage and plays
+	// no part in resolution: when a session's history was forked by
+	// re-resuming an earlier snapshot, the most recently updated branch
+	// simply wins.
 	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
 }
 
@@ -108,7 +107,7 @@ type SnapshotWriter[State any] interface {
 	//     from the existing row on update.
 	//   - UpdatedAt: stamped to the wall clock on every commit.
 	//   - Status: if the snapshot returned by fn has Status="", it is
-	//     defaulted to [SnapshotStatusSucceeded] (the common case for
+	//     defaulted to [SnapshotStatusCompleted] (the common case for
 	//     synchronous turn-end and invocation-end writes). Callers
 	//     writing a pending row must set Status explicitly.
 	//
@@ -220,8 +219,9 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // registering them, when the agent has a [SessionStore] configured:
 //
 //   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
-//     the remote counterpart to [SessionStore.GetSnapshot] for Dev UI and
-//     non-Go clients. Local Go callers use the store reference directly.
+//     the remote counterpart to [SnapshotReader.GetSnapshot] (by snapshot
+//     ID) and [SnapshotReader.GetLatestSnapshot] (by session ID) for Dev UI
+//     and non-Go clients. Local Go callers use the store reference directly.
 //
 //   - The agent's name under [api.ActionTypeAgentAbort] — abortSnapshot,
 //     created only when the store also implements [SnapshotAborter] (which
@@ -246,26 +246,50 @@ func newSnapshotActions[State any](
 	}
 	getSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentSnapshot, nil, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
-			if req == nil || req.SnapshotID == "" {
-				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId is required")
+			if req == nil || (req.SnapshotID == "" && req.SessionID == "") {
+				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId or sessionId is required")
 			}
-			snap, err := store.GetSnapshot(ctx, req.SnapshotID)
-			if err != nil {
-				return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
-			}
-			if snap == nil {
-				return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", req.SnapshotID)
+
+			// Resolve the snapshot. A snapshot ID fetches that exact row; a
+			// session ID alone fetches the session's latest row (whatever
+			// its status). When both are present the snapshot ID picks the
+			// row and the session ID asserts it belongs to that session,
+			// mirroring AgentInit's combined-ID check.
+			var (
+				snap *SessionSnapshot[State]
+				err  error
+			)
+			if req.SnapshotID != "" {
+				snap, err = store.GetSnapshot(ctx, req.SnapshotID)
+				if err != nil {
+					return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+				}
+				if snap == nil {
+					return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", req.SnapshotID)
+				}
+				if req.SessionID != "" && snap.SessionID != req.SessionID {
+					return nil, core.NewError(core.INVALID_ARGUMENT,
+						"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", req.SnapshotID, req.SessionID, snap.SessionID)
+				}
+			} else {
+				snap, err = store.GetLatestSnapshot(ctx, req.SessionID)
+				if err != nil {
+					return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+				}
+				if snap == nil {
+					return nil, core.NewError(core.NOT_FOUND, "getSnapshot: no snapshot found for session %q", req.SessionID)
+				}
 			}
 
 			// Return a normalized copy: the documented defaults (empty
-			// status means succeeded, zero UpdatedAt means CreatedAt) are
+			// status means completed, zero UpdatedAt means CreatedAt) are
 			// resolved server-side so remote clients don't reimplement
 			// them, and the state transform shapes what leaves the server.
 			// A failed snapshot's state is its last-good state, so it is
 			// returned like any other.
 			resp := *snap
 			if resp.Status == "" {
-				resp.Status = SnapshotStatusSucceeded
+				resp.Status = SnapshotStatusCompleted
 			}
 			if resp.UpdatedAt.IsZero() {
 				resp.UpdatedAt = resp.CreatedAt

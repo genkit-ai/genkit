@@ -995,8 +995,8 @@ func TestAgent_FailedTurn_RecoverySnapshotBypassesCallback(t *testing.T) {
 	if err != nil || snap == nil {
 		t.Fatalf("GetSnapshot(%q): %v, %v", out.SnapshotID, snap, err)
 	}
-	if snap.Status != SnapshotStatusSucceeded {
-		t.Errorf("expected recovery snapshot status %q, got %q", SnapshotStatusSucceeded, snap.Status)
+	if snap.Status != SnapshotStatusCompleted {
+		t.Errorf("expected recovery snapshot status %q, got %q", SnapshotStatusCompleted, snap.Status)
 	}
 	if snap.Event != SnapshotEventRecovery {
 		t.Errorf("expected recovery snapshot event %q, got %q", SnapshotEventRecovery, snap.Event)
@@ -1077,7 +1077,7 @@ func TestAgent_FailedFirstTurn_AfterResume_ReturnsParentSnapshotID(t *testing.T)
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				Event:  SnapshotEventInvocationEnd,
-				Status: SnapshotStatusSucceeded,
+				Status: SnapshotStatusCompleted,
 				State: &SessionState[testState]{
 					Messages: []*ai.Message{
 						ai.NewUserTextMessage("one"),
@@ -2626,7 +2626,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	close(release)
 
 	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 	if final.State.Custom.Counter != 2 {
 		t.Errorf("final counter = %d, want 2 (A + D both processed)", final.State.Custom.Counter)
@@ -2717,7 +2717,7 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	// Release remaining turns and let finalize run.
 	close(release)
 	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 }
 
@@ -2758,7 +2758,7 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 
 func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	// Client detaches mid-flow; flow finishes naturally; pending snapshot
-	// flips to status=succeeded with the full session state.
+	// flips to status=completed with the full session state.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
@@ -2839,7 +2839,7 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	close(release)
 
 	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 	if finalSnap.State.Custom.Counter != 42 {
 		t.Errorf("expected counter=42 in final snapshot, got %d", finalSnap.State.Custom.Counter)
@@ -2914,7 +2914,7 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	close(release)
 
 	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 
 	names := make(map[string]bool, len(final.State.Artifacts))
@@ -3119,8 +3119,8 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if snap.Status != SnapshotStatusSucceeded {
-		t.Errorf("turn-end snapshot status = %q, want succeeded", snap.Status)
+	if snap.Status != SnapshotStatusCompleted {
+		t.Errorf("turn-end snapshot status = %q, want completed", snap.Status)
 	}
 	if snap.Event != SnapshotEventTurnEnd {
 		t.Errorf("turn-end snapshot event = %q, want %q", snap.Event, SnapshotEventTurnEnd)
@@ -3272,8 +3272,8 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	if resp.SnapshotID != out.SnapshotID {
 		t.Errorf("SnapshotID mismatch: got %q want %q", resp.SnapshotID, out.SnapshotID)
 	}
-	if resp.Status != SnapshotStatusSucceeded {
-		t.Errorf("expected status=succeeded, got %q", resp.Status)
+	if resp.Status != SnapshotStatusCompleted {
+		t.Errorf("expected status=completed, got %q", resp.Status)
 	}
 	if resp.State == nil {
 		t.Fatal("expected state in response")
@@ -3346,6 +3346,95 @@ func TestAgent_GetSnapshotAction_ReturnsFinishReason(t *testing.T) {
 	}
 	if resp.FinishReason != AgentFinishReasonStop {
 		t.Errorf("getSnapshot FinishReason = %q, want %q", resp.FinishReason, AgentFinishReasonStop)
+	}
+}
+
+// TestAgent_GetSnapshotAction_BySessionID verifies the getSnapshot companion
+// action's session-ID modes: fetching the session's latest snapshot (whatever
+// its status, the way a reconnecting client observes a session), composing
+// with a snapshot ID as an integrity assertion, and the argument-validation
+// edges.
+func TestAgent_GetSnapshotAction_BySessionID(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "getBySessionFlow", WithSessionStore(store))
+
+	ctx := context.Background()
+	out1, err := af.RunText(ctx, "first")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	out2, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
+	if err != nil {
+		t.Fatalf("RunText resume: %v", err)
+	}
+
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
+		reg, api.ActionTypeAgentSnapshot, "getBySessionFlow")
+	if action == nil {
+		t.Fatal("getSnapshot action not registered")
+	}
+
+	// sessionId alone resolves the session's latest snapshot (the second turn).
+	resp, err := action.Run(ctx, &GetSnapshotRequest{SessionID: out1.SessionID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot by sessionId: %v", err)
+	}
+	if resp.SnapshotID != out2.SnapshotID {
+		t.Errorf("latest snapshot = %q, want most recent %q", resp.SnapshotID, out2.SnapshotID)
+	}
+
+	// sessionId + matching snapshotId returns that exact snapshot.
+	resp, err = action.Run(ctx, &GetSnapshotRequest{SessionID: out1.SessionID, SnapshotID: out1.SnapshotID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot by snapshotId+sessionId: %v", err)
+	}
+	if resp.SnapshotID != out1.SnapshotID {
+		t.Errorf("snapshot = %q, want %q", resp.SnapshotID, out1.SnapshotID)
+	}
+
+	// A snapshotId whose session does not match the asserted sessionId is rejected.
+	if _, err := action.Run(ctx, &GetSnapshotRequest{SessionID: "other-session", SnapshotID: out1.SnapshotID}, nil); err == nil {
+		t.Fatal("expected snapshot/session mismatch to be rejected")
+	} else if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+		t.Errorf("mismatch status = %q, want INVALID_ARGUMENT (err: %v)", ge.Status, err)
+	}
+
+	// Neither field set is rejected.
+	if _, err := action.Run(ctx, &GetSnapshotRequest{}, nil); err == nil {
+		t.Fatal("expected empty request to be rejected")
+	} else if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+		t.Errorf("empty-request status = %q, want INVALID_ARGUMENT (err: %v)", ge.Status, err)
+	}
+
+	// An unknown session resolves to no snapshot (NOT_FOUND).
+	if _, err := action.Run(ctx, &GetSnapshotRequest{SessionID: "no-such-session"}, nil); err == nil {
+		t.Fatal("expected NOT_FOUND for unknown session")
+	} else if ge := core.AsGenkitError(err); ge.Status != core.NOT_FOUND {
+		t.Errorf("unknown-session status = %q, want NOT_FOUND (err: %v)", ge.Status, err)
+	}
+
+	// The session-ID lookup returns the latest row whatever its status, so a
+	// reconnecting client can observe a failed/pending tip (unlike resume,
+	// which rejects it).
+	failed, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{
+			SessionID:    out1.SessionID,
+			ParentID:     out2.SnapshotID,
+			Event:        SnapshotEventDetach,
+			Status:       SnapshotStatusFailed,
+			FinishReason: AgentFinishReasonFailed,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("SaveSnapshot failed tip: %v", err)
+	}
+	resp, err = action.Run(ctx, &GetSnapshotRequest{SessionID: out1.SessionID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot by sessionId (failed tip): %v", err)
+	}
+	if resp.SnapshotID != failed.SnapshotID || resp.Status != SnapshotStatusFailed {
+		t.Errorf("latest = %q/%q, want failed tip %q/failed", resp.SnapshotID, resp.Status, failed.SnapshotID)
 	}
 }
 
@@ -3458,12 +3547,6 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 			wantErr: "client-managed state",
 		},
 		{
-			name:    "sessionId with no matching snapshots",
-			init:    &AgentInit[testState]{SessionID: "sess-unknown"},
-			store:   store,
-			wantErr: "no resumable snapshot",
-		},
-		{
 			name:    "sessionId mismatching the loaded snapshot",
 			init:    &AgentInit[testState]{SessionID: "sess-other", SnapshotID: saved.SnapshotID},
 			store:   store,
@@ -3507,6 +3590,16 @@ func TestLoadSession_AgentInitValidation(t *testing.T) {
 			init:     &AgentInit[testState]{SessionID: "sess-1", SnapshotID: saved.SnapshotID},
 			store:    store,
 			wantSnap: true,
+		},
+		{
+			// A session ID with no persisted snapshots is not an error: the
+			// caller is starting a brand-new conversation under an ID of its
+			// own choosing. loadSession returns a fresh session and no parent
+			// snapshot; the runtime stamps the chosen ID.
+			name:     "sessionId with no matching snapshots starts fresh",
+			init:     &AgentInit[testState]{SessionID: "sess-unknown"},
+			store:    store,
+			wantSnap: false,
 		},
 	}
 
@@ -3645,6 +3738,59 @@ func TestAgent_AgentMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgent_AgentMetadata_StateSchema(t *testing.T) {
+	// metadata["agent"].stateSchema advertises a JSON schema for the agent's
+	// custom state type, inferred the same way action input/output schemas
+	// are: a struct state yields an object schema with its fields; an
+	// unstructured `any` state yields none (omitted).
+	readMeta := func(t *testing.T, reg api.Registry, flowName string) AgentMetadata {
+		t.Helper()
+		act := reg.LookupAction(api.NewKey(api.ActionTypeAgent, "", flowName))
+		if act == nil {
+			t.Fatal("agent action not registered")
+		}
+		meta, ok := act.Desc().Metadata["agent"].(AgentMetadata)
+		if !ok {
+			t.Fatalf("metadata[\"agent\"] missing or wrong type: %+v", act.Desc().Metadata["agent"])
+		}
+		return meta
+	}
+
+	t.Run("struct state yields an object schema with its fields", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		DefineCustomAgent(reg, "structStateFlow",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+				return nil, nil
+			})
+		meta := readMeta(t, reg, "structStateFlow")
+		if meta.StateSchema == nil {
+			t.Fatal("expected a state schema for a struct state type")
+		}
+		if got := meta.StateSchema["type"]; got != "object" {
+			t.Errorf("state schema type = %v, want object", got)
+		}
+		props, ok := meta.StateSchema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("state schema properties = %T, want map", meta.StateSchema["properties"])
+		}
+		if _, ok := props["counter"]; !ok {
+			t.Errorf("state schema missing the 'counter' field: %+v", props)
+		}
+	})
+
+	t.Run("any state yields no schema", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		DefineCustomAgent[any](reg, "anyStateFlow",
+			func(ctx context.Context, resp Responder, sess *SessionRunner[any]) (*AgentResult, error) {
+				return nil, nil
+			})
+		meta := readMeta(t, reg, "anyStateFlow")
+		if meta.StateSchema != nil {
+			t.Errorf("expected no state schema for an any state type, got %+v", meta.StateSchema)
+		}
+	})
 }
 
 func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
@@ -4004,7 +4150,7 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 		t.Fatalf("Output: %v", err)
 	}
 	finalSnap := waitForSnapshot(t, store, first.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 	if finalSnap.State.Custom.Counter != 1 {
 		t.Fatalf("expected counter=1 in finalized snapshot, got %d", finalSnap.State.Custom.Counter)
@@ -4083,7 +4229,7 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
 				Event:  SnapshotEventTurnEnd,
-				Status: SnapshotStatusSucceeded,
+				Status: SnapshotStatusCompleted,
 			}, nil
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
@@ -4092,8 +4238,8 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbortSnapshot on complete: %v", err)
 	}
-	if status3 != SnapshotStatusSucceeded {
-		t.Errorf("abort on complete returned status=%q, want succeeded", status3)
+	if status3 != SnapshotStatusCompleted {
+		t.Errorf("abort on complete returned status=%q, want completed", status3)
 	}
 }
 
@@ -4118,7 +4264,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 				}
 				<-fnRelease
 				// Return cleanly without observing ctx. Without the
-				// subscriber/recheck, this would land status=succeeded and
+				// subscriber/recheck, this would land status=completed and
 				// clobber the abort.
 				return nil, nil
 			})
@@ -4159,7 +4305,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	close(fnRelease)
 
 	finalSnap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusAborted || s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusAborted || s.Status == SnapshotStatusCompleted
 	})
 	if finalSnap.Status != SnapshotStatusAborted {
 		t.Errorf("finalize clobbered aborted with %q", finalSnap.Status)
@@ -4261,8 +4407,8 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
-	if status != SnapshotStatusSucceeded {
-		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusSucceeded, status)
+	if status != SnapshotStatusCompleted {
+		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusCompleted, status)
 	}
 
 	// Confirm the store snapshot was not flipped.
@@ -4270,8 +4416,8 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if snap.Status != SnapshotStatusSucceeded {
-		t.Errorf("snapshot status = %q after abort-on-terminal, want succeeded", snap.Status)
+	if snap.Status != SnapshotStatusCompleted {
+		t.Errorf("snapshot status = %q after abort-on-terminal, want completed", snap.Status)
 	}
 }
 
@@ -4657,7 +4803,7 @@ func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
 		}
 		// Wait out the finalizer so the iteration's goroutines wind down.
 		waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-			return s.Status == SnapshotStatusSucceeded
+			return s.Status == SnapshotStatusCompleted
 		})
 	}
 }
@@ -4665,7 +4811,7 @@ func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
 // TestAgent_Detach_FinishReasons covers the three detach outcomes: the output
 // returned to the detaching client always reports "detached", while the
 // persisted snapshot records how the background work actually ended
-// (succeeded -> last turn's reason, failed, or aborted).
+// (completed -> last turn's reason, failed, or aborted).
 func TestAgent_Detach_FinishReasons(t *testing.T) {
 	t.Run("complete", func(t *testing.T) {
 		reg := newTestRegistry(t)
@@ -4717,7 +4863,7 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 
 		close(release)
 		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-			return s.Status == SnapshotStatusSucceeded
+			return s.Status == SnapshotStatusCompleted
 		})
 		if snap.FinishReason != AgentFinishReasonStop {
 			t.Errorf("finalized snapshot.FinishReason = %q, want %q", snap.FinishReason, AgentFinishReasonStop)
@@ -5048,11 +5194,11 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	}
 }
 
-// TestAgent_Detach_SucceededHonorsResultOverride verifies the detach finalizer
+// TestAgent_Detach_CompletedHonorsResultOverride verifies the detach finalizer
 // applies an AgentResult.FinishReason override on clean success, matching the
 // synchronous path (the override does not leak into the failed/aborted cases,
 // which are covered by TestAgent_Detach_FinishReasons).
-func TestAgent_Detach_SucceededHonorsResultOverride(t *testing.T) {
+func TestAgent_Detach_CompletedHonorsResultOverride(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 	release := make(chan struct{})
@@ -5107,7 +5253,7 @@ func TestAgent_Detach_SucceededHonorsResultOverride(t *testing.T) {
 
 	close(release)
 	snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 	if snap.FinishReason != AgentFinishReasonOther {
 		t.Errorf("finalized snapshot.FinishReason = %q, want %q (AgentResult override)", snap.FinishReason, AgentFinishReasonOther)
@@ -5214,14 +5360,19 @@ func TestAgent_SessionID_AssignedBeforeFirstSnapshot(t *testing.T) {
 		t.Errorf("expected no snapshot (callback declined every write), got %q", out.SnapshotID)
 	}
 
-	// A session with no persisted snapshots cannot be resumed by its ID;
-	// the init-level rejection fails the action.
+	// A session with no persisted snapshots is not resumable, but supplying
+	// its ID is not an error: it starts a brand-new conversation under that
+	// caller-chosen ID rather than failing. The supplied ID carries through
+	// to the output (see also TestAgent_ResumeFromSessionID_NewConversation).
 	out2, err := af.RunText(ctx, "again", WithSessionID[testState](out.SessionID))
-	if err == nil {
-		t.Fatalf("expected NOT_FOUND error for snapshot-less session, got output: %+v", out2)
+	if err != nil {
+		t.Fatalf("RunText with session ID for a snapshot-less session: %v", err)
 	}
-	if ge := core.AsGenkitError(err); ge.Status != core.NOT_FOUND {
-		t.Fatalf("expected NOT_FOUND, got %q (err: %v)", ge.Status, err)
+	if out2.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("second invocation failed: %+v", out2.Error)
+	}
+	if out2.SessionID != out.SessionID {
+		t.Errorf("second invocation session ID = %q, want the caller-supplied %q", out2.SessionID, out.SessionID)
 	}
 }
 
@@ -5341,10 +5492,11 @@ func TestAgent_ResumeFromSessionID_ForkContinuesLatestBranch(t *testing.T) {
 	}
 }
 
-func TestAgent_ResumeFromSessionID_SkipsDeadEnds(t *testing.T) {
-	// A failed (or aborted) row is a permanent dead end: even as the
-	// session's newest row it never blocks session-ID init. The session
-	// resumes from the last good snapshot.
+func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
+	// GetLatestSnapshot returns the session's literal latest row, so a failed
+	// (or aborted) tip is no longer skipped: resuming the session by ID hits
+	// the dead end and is rejected. To continue past it the caller names an
+	// earlier good snapshot via WithSnapshotID.
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -5368,37 +5520,84 @@ func TestAgent_ResumeFromSessionID_SkipsDeadEnds(t *testing.T) {
 		t.Fatalf("SaveSnapshot failed row: %v", err)
 	}
 
-	out2, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID))
-	if err != nil {
-		t.Fatalf("RunText session resume: %v", err)
+	// Resuming by session ID hits the failed tip and is rejected.
+	if _, err := af.RunText(ctx, "second", WithSessionID[testState](out1.SessionID)); err == nil {
+		t.Fatal("expected resume to be rejected for a failed tip, got nil")
+	} else if ge := core.AsGenkitError(err); ge.Status != core.FAILED_PRECONDITION {
+		t.Fatalf("expected FAILED_PRECONDITION, got %q (err: %v)", ge.Status, err)
 	}
-	if out2.FinishReason == AgentFinishReasonFailed {
-		t.Fatalf("session resume failed: %+v", out2.Error)
+
+	// Naming the last good snapshot explicitly still resumes past the dead end.
+	out3, err := af.RunText(ctx, "third", WithSnapshotID[testState](out1.SnapshotID))
+	if err != nil {
+		t.Fatalf("RunText resume from good snapshot: %v", err)
+	}
+	if out3.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("snapshot resume failed: %+v", out3.Error)
+	}
+	snap3, err := store.GetSnapshot(ctx, out3.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got := snap3.State.Custom.Counter; got != 2 {
+		t.Errorf("expected counter=2 (resumed from last good state), got %d", got)
+	}
+}
+
+func TestAgent_ResumeFromSessionID_NewConversation(t *testing.T) {
+	// A caller may name a brand-new session: with no snapshot yet under that
+	// ID, the invocation starts a fresh conversation and adopts the ID for
+	// the whole session lifecycle (every snapshot carries it) rather than
+	// failing with NOT_FOUND or minting a server ID.
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineLastGoodTestAgent(reg, "sessionNewConvoFlow", WithSessionStore(store))
+
+	const sessID = "client-chosen-session"
+	out, err := af.RunText(ctx, "hello", WithSessionID[testState](sessID))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("invocation failed: %+v", out.Error)
+	}
+	if out.SessionID != sessID {
+		t.Errorf("output session ID = %q, want caller-supplied %q", out.SessionID, sessID)
+	}
+	// The persisted snapshot carries the caller-chosen session ID.
+	snap, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if snap.SessionID != sessID {
+		t.Errorf("snapshot session ID = %q, want %q", snap.SessionID, sessID)
+	}
+
+	// A second invocation under the same ID now resumes the conversation it
+	// just created (that snapshot is the session's resumable tip).
+	out2, err := af.RunText(ctx, "again", WithSessionID[testState](sessID))
+	if err != nil {
+		t.Fatalf("RunText resume: %v", err)
+	}
+	if out2.SessionID != sessID {
+		t.Errorf("resumed session ID = %q, want %q", out2.SessionID, sessID)
 	}
 	snap2, err := store.GetSnapshot(ctx, out2.SnapshotID)
 	if err != nil {
 		t.Fatalf("GetSnapshot: %v", err)
 	}
-	if snap2.ParentID != out1.SnapshotID {
-		t.Errorf("resumed snapshot ParentID = %q, want last good %q", snap2.ParentID, out1.SnapshotID)
+	if snap2.ParentID != out.SnapshotID {
+		t.Errorf("resumed snapshot ParentID = %q, want first snapshot %q", snap2.ParentID, out.SnapshotID)
 	}
 	if got := snap2.State.Custom.Counter; got != 2 {
-		t.Errorf("expected counter=2 (resumed from last good state), got %d", got)
-	}
-
-	// The dead end keeps being skipped on subsequent resumes.
-	out3, err := af.RunText(ctx, "third", WithSessionID[testState](out1.SessionID))
-	if err != nil {
-		t.Fatalf("RunText second session resume: %v", err)
-	}
-	if out3.FinishReason == AgentFinishReasonFailed {
-		t.Fatalf("second session resume failed: %+v", out3.Error)
+		t.Errorf("expected counter=2 after resuming the new conversation, got %d", got)
 	}
 }
 
 func TestAgent_ResumeFromSessionID_AfterFailureResumesRecovery(t *testing.T) {
 	// After an invocation fails, the session's newest non-dead-end row is
-	// the recovery snapshot (a normal succeeded row, event=recovery)
+	// the recovery snapshot (a normal completed row, event=recovery)
 	// holding the last-good state. Resuming by session ID continues from
 	// it like any other snapshot.
 	ctx := context.Background()
@@ -5691,7 +5890,7 @@ func TestAgent_Detach_AssignsSessionID(t *testing.T) {
 
 	close(release)
 	final := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 	if final.SessionID != out.SessionID {
 		t.Errorf("finalized row SessionID = %q, want %q", final.SessionID, out.SessionID)
@@ -5767,7 +5966,7 @@ func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
 	}
 
 	final := waitForSnapshot[testState](t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
-		return s.Status == SnapshotStatusSucceeded
+		return s.Status == SnapshotStatusCompleted
 	})
 
 	// Find the turn-end row (the only row besides the detach row).
@@ -5851,7 +6050,7 @@ func TestAgent_ResumeFromLegacySnapshot_MintsFreshSessionID(t *testing.T) {
 	legacy := &SessionSnapshot[testState]{
 		SnapshotID: "legacy-1",
 		Event:      SnapshotEventInvocationEnd,
-		Status:     SnapshotStatusSucceeded,
+		Status:     SnapshotStatusCompleted,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 		State:      &SessionState[testState]{Custom: testState{Counter: 5}},

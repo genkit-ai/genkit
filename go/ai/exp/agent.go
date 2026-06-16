@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"reflect"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -327,7 +328,7 @@ func (s *SessionRunner[State]) maybeSnapshot(ctx context.Context, event Snapshot
 	return s.persistSnapshotLocked(ctx, event, finishReason, &currentState, currentVersion)
 }
 
-// persistSnapshotLocked writes a succeeded snapshot row capturing state (at
+// persistSnapshotLocked writes a completed snapshot row capturing state (at
 // the given session version), chained to the newest persisted snapshot, and
 // advances the lastSnapshot bookkeeping. Both the routine cadence
 // (maybeSnapshot) and the failure path (recoverySnapshotID) funnel through
@@ -344,7 +345,7 @@ func (s *SessionRunner[State]) persistSnapshotLocked(ctx context.Context, event 
 				SessionID:    sessionID,
 				ParentID:     parentID,
 				Event:        event,
-				Status:       SnapshotStatusSucceeded,
+				Status:       SnapshotStatusCompleted,
 				FinishReason: finishReason,
 				State:        state,
 			}, nil
@@ -743,7 +744,8 @@ func DefineCustomAgent[State any](
 // agentMetadataFor derives the [AgentMetadata] value attached to the
 // agent's action descriptor under the "agent" key. [AgentMetadata]
 // itself is generated from agent.ts; this constructor is hand-written
-// because it inspects the configured store's optional capabilities.
+// because it inspects the configured store's optional capabilities and
+// infers the custom-state schema from the State type parameter.
 func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	mgmt := AgentStateManagementClient
 	abortable := false
@@ -754,7 +756,21 @@ func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	return AgentMetadata{
 		StateManagement: mgmt,
 		Abortable:       abortable,
+		StateSchema:     stateSchemaFor[State](),
 	}
+}
+
+// stateSchemaFor infers the JSON schema for an agent's custom state type,
+// the same way core derives an action's input/output schemas. It returns
+// nil for an interface State (e.g. Agent[any]), whose zero value carries
+// no type information to infer from, so [AgentMetadata.StateSchema] is
+// simply omitted rather than advertising an empty object.
+func stateSchemaFor[State any]() map[string]any {
+	var zero State
+	if reflect.ValueOf(&zero).Elem().Kind() == reflect.Interface {
+		return nil
+	}
+	return core.InferSchemaMap(zero)
 }
 
 // --- agentRuntime ---
@@ -803,14 +819,23 @@ func newAgentRuntime[State any](
 	// state goes: every persisted snapshot's state, and the state
 	// returned to (and resent by) client-managed callers.
 	if cfg.store != nil {
-		// Server-managed: the store row is canonical. Inherit the resumed
-		// chain's ID, overriding whatever the loaded state blob claims (a
-		// third-party writer could have let them drift), or mint one for a
-		// fresh conversation (including one resumed from a snapshot that
-		// predates session IDs).
-		if parent != nil && parent.SessionID != "" {
+		// Server-managed: the store row is canonical, overriding whatever the
+		// loaded state blob claims (a third-party writer could have let them
+		// drift).
+		switch {
+		case parent != nil && parent.SessionID != "":
+			// Resumed an existing chain: inherit its ID.
 			session.state.SessionID = parent.SessionID
-		} else {
+		case parent == nil && in != nil && in.SessionID != "":
+			// No snapshot resolved for the caller-supplied session ID: the
+			// client is starting a brand-new conversation under an ID of its
+			// own choosing. Honor it for the whole session lifecycle so every
+			// snapshot it persists carries it (rather than minting a server ID
+			// and stranding the client's ID).
+			session.state.SessionID = in.SessionID
+		default:
+			// Fresh conversation, or one resumed from a snapshot that predates
+			// session IDs: mint one.
 			session.state.SessionID = uuid.New().String()
 		}
 	} else if session.state.SessionID == "" {
@@ -1200,7 +1225,7 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 	// Captured outside the SaveSnapshot callback (which must stay pure): the
 	// finalizer runs after fn returned, so this is stable. The abort/error
 	// branches below own their reasons and ignore this clean-success default.
-	succeededReason := rt.sess.invocationReason(result)
+	completedReason := rt.sess.invocationReason(result)
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
@@ -1218,11 +1243,11 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				return &annotated, nil
 			}
 
-			status := SnapshotStatusSucceeded
+			status := SnapshotStatusCompleted
 			// The persisted finish reason records how the background work
 			// actually ended, distinct from the detached reason the client
 			// already saw on AgentOutput.
-			finishReason := succeededReason
+			finishReason := completedReason
 			var snapErr *core.GenkitError
 			switch {
 			case abortedByUser:
@@ -1323,7 +1348,12 @@ func loadSession[State any](
 			return nil, nil, core.NewError(core.INTERNAL, "failed to resolve latest snapshot for session %q: %v", init.SessionID, err)
 		}
 		if snap == nil {
-			return nil, nil, core.NewError(core.NOT_FOUND, "no resumable snapshot found for session %q", init.SessionID)
+			// No snapshot exists for this session ID yet: the caller is
+			// starting a brand-new conversation under an ID of its own
+			// choosing, not resuming one. Return a fresh session with no
+			// parent; newAgentRuntime stamps the chosen ID so every snapshot
+			// the new session persists carries it.
+			return s, nil, nil
 		}
 		if snap.SessionID != init.SessionID {
 			return nil, nil, core.NewError(core.INTERNAL,
@@ -1335,10 +1365,12 @@ func loadSession[State any](
 }
 
 // resumeSessionFrom validates that snap is in a resumable status and loads
-// its state into s. Shared by the snapshot-ID and session-ID init paths;
-// the session-ID path can only hit the pending case (a conforming store's
-// GetLatestSnapshot never resolves to failed/aborted dead ends), but the
-// full switch stays as a defense against non-conforming stores.
+// its state into s. Shared by the snapshot-ID and session-ID init paths:
+// both reject a failed, aborted, or pending snapshot, since none can be
+// continued from. The session-ID path reaches them too, because
+// GetLatestSnapshot returns the literal latest row whatever its status; a
+// caller wanting to continue past a dead-end tip must name an earlier good
+// snapshot explicitly via SnapshotID.
 func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State]) (*Session[State], *SessionSnapshot[State], error) {
 	switch snap.Status {
 	case SnapshotStatusFailed:

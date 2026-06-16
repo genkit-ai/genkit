@@ -95,6 +95,10 @@
         },
         "abortable": {
           "type": "boolean"
+        },
+        "stateSchema": {
+          "type": "object",
+          "additionalProperties": {}
         }
       },
       "required": [
@@ -203,11 +207,11 @@
       "properties": {
         "snapshotId": {
           "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
         }
       },
-      "required": [
-        "snapshotId"
-      ],
       "additionalProperties": false
     },
     "JsonPatchOp": {
@@ -323,7 +327,7 @@
       "type": "string",
       "enum": [
         "pending",
-        "succeeded",
+        "completed",
         "aborted",
         "failed"
       ]

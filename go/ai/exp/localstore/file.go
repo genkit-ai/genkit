@@ -127,7 +127,7 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	}
 	next.UpdatedAt = now
 	if next.Status == "" {
-		next.Status = exp.SnapshotStatusSucceeded
+		next.Status = exp.SnapshotStatusCompleted
 	}
 
 	if err := s.writeLocked(next); err != nil {
@@ -139,23 +139,22 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	return next, nil
 }
 
-// snapshotHeader is the subset of snapshot fields needed to decide
-// whether a row resolves a session resume. Decoding only these avoids
+// snapshotHeader is the subset of snapshot fields needed to match a row to
+// a session during the latest-snapshot scan. Decoding only these avoids
 // materializing every row's full conversation state during the scan.
 type snapshotHeader struct {
-	SessionID string             `json:"sessionId"`
-	Status    exp.SnapshotStatus `json:"status"`
+	SessionID string `json:"sessionId"`
 }
 
 // GetLatestSnapshot returns the session's most recently updated snapshot
-// that is not a failed/aborted dead end, per the
-// [exp.SnapshotReader.GetLatestSnapshot] contract.
+// regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
+// contract.
 //
 // Recency is judged by file mtime, which for snapshots written by this
 // package advances with [exp.SessionSnapshot.UpdatedAt] (each save
 // creates a fresh temp file and renames it into place); if a file is
 // touched externally, mtime wins. The scan walks files newest first and
-// stops at the first row that matches, so resolving the most recently
+// stops at the first row for the session, so resolving the most recently
 // active session costs one read in the common case. Only header fields
 // are decoded per candidate (the winner is the only full parse), the
 // store lock is held per file rather than across the whole scan, and a
@@ -180,8 +179,7 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID
 		if err := json.Unmarshal(data, &h); err != nil {
 			continue
 		}
-		if h.SessionID != sessionID ||
-			h.Status == exp.SnapshotStatusFailed || h.Status == exp.SnapshotStatusAborted {
+		if h.SessionID != sessionID {
 			continue
 		}
 		var snap exp.SessionSnapshot[State]

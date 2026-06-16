@@ -49,7 +49,7 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  * - `recovery`: snapshot was written retroactively by the failure path to
  *   preserve the last-good state (everything through the last successful
  *   turn) when a selective snapshot callback had skipped persisting it.
- *   It is a normal `succeeded` row carrying the last good turn's
+ *   It is a normal `completed` row carrying the last good turn's
  *   `finishReason`, resumable like any other; the callback is bypassed.
  */
 export const SnapshotEventSchema = z.enum([
@@ -67,7 +67,7 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  *   The snapshot's state is empty until the background work finishes, at
  *   which point it is rewritten with the cumulative final state and a
  *   terminal status.
- * - `succeeded`: the snapshot captures a settled state.
+ * - `completed`: the snapshot captures a settled state.
  * - `aborted`: the snapshot's invocation was aborted via the
  *   `abortSnapshot` companion action while detached.
  * - `failed`: the invocation terminated with an error. The snapshot's `error`
@@ -75,7 +75,7 @@ export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
  */
 export const SnapshotStatusSchema = z.enum([
   'pending',
-  'succeeded',
+  'completed',
   'aborted',
   'failed',
 ]);
@@ -170,18 +170,19 @@ export type AgentInput = z.infer<typeof AgentInputSchema>;
  */
 export const AgentInitSchema = z.object({
   /**
-   * Identifies the session (conversation) to resume. Only valid when the
-   * agent is server-managed (a session store is configured); mutually
-   * exclusive with state (a client-managed conversation carries its
-   * identity inside `state.sessionId`). Alone it resumes the session
-   * from its latest snapshot: the most recently updated one that is not
-   * a failed/aborted dead end. A pending latest snapshot (a detached
-   * invocation still running) rejects the resume rather than racing the
-   * background work; if the session's history was forked by re-resuming
-   * an earlier snapshot, the most recently updated branch wins, and
-   * snapshotId can pick a branch explicitly. Combined with snapshotId,
-   * it asserts which session the snapshot belongs to, and a mismatch is
-   * rejected.
+   * Identifies the session (conversation) to resume or start. Only valid
+   * when the agent is server-managed (a session store is configured);
+   * mutually exclusive with state (a client-managed conversation carries
+   * its identity inside `state.sessionId`). Alone it resumes the session
+   * from its latest snapshot: the most recently updated row, whatever its
+   * status. If that row is a failed, aborted, or still-pending dead end
+   * the resume is rejected (pass snapshotId to continue from a specific
+   * earlier point); if the session's history was forked by re-resuming an
+   * earlier snapshot, the most recently updated branch wins. If the
+   * session has no snapshots yet, a brand-new conversation is started
+   * under this caller-chosen ID, and every snapshot it persists carries
+   * it. Combined with snapshotId, it asserts which session the snapshot
+   * belongs to, and a mismatch is rejected.
    */
   sessionId: z.string().optional(),
   /**
@@ -225,8 +226,9 @@ export const AgentOutputSchema = z.object({
   /**
    * ID of the session this invocation belongs to, assigned by the
    * framework when the invocation starts. With server-managed state, a
-   * fresh invocation mints a new ID, resumed invocations inherit the
-   * chain's, and resuming a snapshot from before session IDs existed
+   * fresh invocation adopts the caller-supplied session ID (see
+   * AgentInit.sessionId) or mints a new one, resumed invocations inherit
+   * the chain's, and resuming a snapshot from before session IDs existed
    * mints a fresh one. With client-managed state it echoes the ID
    * carried inside the state object (`state.sessionId`), minting one on
    * the conversation's first invocation; only a session with persisted
@@ -391,7 +393,7 @@ export const SessionSnapshotSchema = z.object({
   updatedAt: z.string().optional(),
   /** What triggered this snapshot. */
   event: SnapshotEventSchema,
-  /** Lifecycle state of this snapshot. Empty is treated as `succeeded`. */
+  /** Lifecycle state of this snapshot. Empty is treated as `completed`. */
   status: SnapshotStatusSchema.optional(),
   /**
    * Semantic reason the turn or invocation captured here ended (e.g.
@@ -417,10 +419,27 @@ export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
  * `agent-snapshot`) when the agent has a session store configured. The
  * action returns the stored `SessionSnapshot`, with any configured state
  * transform applied to its state.
+ *
+ * At least one of `snapshotId` or `sessionId` must be set; they are not
+ * mutually exclusive. `snapshotId` fetches a specific snapshot;
+ * `sessionId` alone fetches the session's latest snapshot (via the
+ * store's `GetLatestSnapshot`, whatever its status). When both are set
+ * the fetched snapshot must belong to that session, or the request is
+ * rejected.
  */
 export const GetSnapshotRequestSchema = z.object({
-  /** Identifies the snapshot to fetch. */
-  snapshotId: z.string(),
+  /**
+   * Identifies the snapshot to fetch. Optional when `sessionId` is given;
+   * when both are present the fetched snapshot must belong to that session.
+   */
+  snapshotId: z.string().optional(),
+  /**
+   * Identifies the session whose latest snapshot to fetch. Optional when
+   * `snapshotId` is given. The latest snapshot is the session's most
+   * recently updated row regardless of status (pending, failed, or
+   * aborted included).
+   */
+  sessionId: z.string().optional(),
 });
 export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
 
@@ -474,5 +493,13 @@ export const AgentMetadataSchema = z.object({
    * configured store implements the abort lifecycle.
    */
   abortable: z.boolean(),
+  /**
+   * JSON schema for the agent's custom session state (the `custom` field
+   * of `SessionState`), inferred from the agent's state type. Lets the
+   * Dev UI and other reflective callers render or validate state without
+   * the agent describing it separately. Omitted when the state type
+   * carries no schema to infer (e.g. an unstructured `any` state).
+   */
+  stateSchema: z.record(z.any()).optional(),
 });
 export type AgentMetadata = z.infer<typeof AgentMetadataSchema>;

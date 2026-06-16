@@ -44,7 +44,7 @@ func TestInMemorySessionStore(t *testing.T) {
 					t.Errorf("expected nil existing on first save, got %+v", existing)
 				}
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusSucceeded,
+					Status: exp.SnapshotStatusCompleted,
 					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			})
@@ -65,7 +65,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusSucceeded,
+					Status: exp.SnapshotStatusCompleted,
 					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			}); err != nil {
@@ -91,7 +91,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		if saved.SnapshotID == "" {
 			t.Error("expected store to generate SnapshotID")
 		}
-		if saved.Status != exp.SnapshotStatusSucceeded {
+		if saved.Status != exp.SnapshotStatusCompleted {
 			t.Errorf("expected Status=complete by default, got %q", saved.Status)
 		}
 	})
@@ -100,7 +100,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
 		if _, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusSucceeded}, nil
+				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -125,7 +125,7 @@ func TestInMemorySessionStore(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusSucceeded}, nil
+				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
 			})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
@@ -137,7 +137,7 @@ func TestInMemorySessionStore(t *testing.T) {
 					t.Fatal("expected non-nil existing on update")
 				}
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusSucceeded,
+					Status: exp.SnapshotStatusCompleted,
 					State:  &exp.SessionState[testState]{Custom: testState{Counter: 2}},
 				}, nil
 			})
@@ -169,7 +169,7 @@ func TestInMemorySessionStore_SessionIDs(t *testing.T) {
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				return &exp.SessionSnapshot[testState]{
 					SessionID: "sess-1",
-					Status:    exp.SnapshotStatusSucceeded,
+					Status:    exp.SnapshotStatusCompleted,
 					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
 			}); err != nil {

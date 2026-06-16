@@ -62,7 +62,7 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 
 	t.Run("SessionIDKeptWhenProvided", func(t *testing.T) {
 		store := newStore(t)
-		saved := saveRow(t, store, "a", "sess-keep", "", exp.SnapshotStatusSucceeded)
+		saved := saveRow(t, store, "a", "sess-keep", "", exp.SnapshotStatusCompleted)
 		if saved.SessionID != "sess-keep" {
 			t.Errorf("SessionID = %q, want provided %q", saved.SessionID, "sess-keep")
 		}
@@ -91,7 +91,7 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 						SessionID: rewrite,
 						ParentID:  existing.ParentID,
 						Event:     existing.Event,
-						Status:    exp.SnapshotStatusSucceeded,
+						Status:    exp.SnapshotStatusCompleted,
 						State:     &exp.SessionState[testState]{Custom: testState{Counter: 2}},
 					}, nil
 				})
@@ -109,8 +109,8 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		// them at invocation start and stamps every row it writes); a row
 		// written without one is session-less even when its parent has one.
 		store := newStore(t)
-		saveRow(t, store, "parent", "sess-1", "", exp.SnapshotStatusSucceeded)
-		child := saveRow(t, store, "child", "", "parent", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "parent", "sess-1", "", exp.SnapshotStatusCompleted)
+		child := saveRow(t, store, "child", "", "parent", exp.SnapshotStatusCompleted)
 		if child.SessionID != "" {
 			t.Errorf("expected session-less row, got SessionID %q", child.SessionID)
 		}
@@ -120,13 +120,13 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		// IDs deliberately sort against write order so a recency bug (or an
 		// accidental reliance on the tie-break) cannot pass by luck.
 		store := newStore(t)
-		saveRow(t, store, "z", "sess-1", "", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "z", "sess-1", "", exp.SnapshotStatusCompleted)
 		tick()
-		saveRow(t, store, "m", "sess-1", "z", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "m", "sess-1", "z", exp.SnapshotStatusCompleted)
 		tick()
-		saveRow(t, store, "a", "sess-1", "m", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "a", "sess-1", "m", exp.SnapshotStatusCompleted)
 		tick()
-		saveRow(t, store, "x", "sess-other", "", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "x", "sess-other", "", exp.SnapshotStatusCompleted)
 
 		latest, err := store.GetLatestSnapshot(ctx, "sess-1")
 		if err != nil {
@@ -147,16 +147,16 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		// row (e.g. a detach finalize landing after other branches were
 		// written) moves it to the front.
 		store := newStore(t)
-		saveRow(t, store, "root", "sess-1", "", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "root", "sess-1", "", exp.SnapshotStatusCompleted)
 		tick()
 		saveRow(t, store, "b1", "sess-1", "root", exp.SnapshotStatusPending)
 		tick()
-		saveRow(t, store, "b2", "sess-1", "root", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "b2", "sess-1", "root", exp.SnapshotStatusCompleted)
 		tick()
 		if _, err := store.SaveSnapshot(ctx, "b1",
 			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				rewritten := *existing
-				rewritten.Status = exp.SnapshotStatusSucceeded
+				rewritten.Status = exp.SnapshotStatusCompleted
 				rewritten.State = &exp.SessionState[testState]{Custom: testState{Counter: 2}}
 				return &rewritten, nil
 			}); err != nil {
@@ -172,11 +172,12 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		}
 	})
 
-	t.Run("GetLatestSnapshotSkipsDeadEnds", func(t *testing.T) {
-		// Failed and aborted rows are dead ends: even when newest, they
-		// never hide the session's last good snapshot.
+	t.Run("GetLatestSnapshotReturnsLatestAnyStatus", func(t *testing.T) {
+		// The latest row is returned whatever its status: failed and aborted
+		// tips are no longer skipped. Deciding a tip is a dead end is the
+		// resume path's job, not the store's. Here the newest row is aborted.
 		store := newStore(t)
-		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusCompleted)
 		tick()
 		saveRow(t, store, "b", "sess-1", "a", exp.SnapshotStatusFailed)
 		tick()
@@ -186,18 +187,18 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		if err != nil {
 			t.Fatalf("GetLatestSnapshot: %v", err)
 		}
-		if latest == nil || latest.SnapshotID != "a" {
-			t.Errorf("latest = %+v, want last good snapshot a", latest)
+		if latest == nil || latest.SnapshotID != "c" || latest.Status != exp.SnapshotStatusAborted {
+			t.Errorf("latest = %+v, want newest row c (aborted)", latest)
 		}
 	})
 
 	t.Run("GetLatestSnapshotPendingReturned", func(t *testing.T) {
-		// A pending row is not skipped: it marks a detached invocation
-		// that is still running, and the runtime needs to see it to
-		// reject the resume instead of silently racing the background
+		// A pending row is returned like any other: it marks a detached
+		// invocation that is still running, and the runtime needs to see it
+		// to reject the resume instead of silently racing the background
 		// work.
 		store := newStore(t)
-		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusCompleted)
 		tick()
 		saveRow(t, store, "b", "sess-1", "a", exp.SnapshotStatusPending)
 
@@ -212,7 +213,7 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 
 	t.Run("GetLatestSnapshotUnknownSession", func(t *testing.T) {
 		store := newStore(t)
-		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusSucceeded)
+		saveRow(t, store, "a", "sess-1", "", exp.SnapshotStatusCompleted)
 		latest, err := store.GetLatestSnapshot(ctx, "sess-unknown")
 		if err != nil {
 			t.Fatalf("GetLatestSnapshot: %v", err)

@@ -67,11 +67,11 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 }
 
 // GetLatestSnapshot returns the session's most recently updated snapshot
-// that is not a failed/aborted dead end, per the
-// [exp.SnapshotReader.GetLatestSnapshot] contract. Ties on UpdatedAt are
-// broken by SnapshotID so resolution is deterministic. The scan runs
-// under the read lock, so the stored rows (which other calls mutate in
-// place) never escape it; the winner is returned as a deep copy.
+// regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
+// contract. Ties on UpdatedAt are broken by SnapshotID so resolution is
+// deterministic. The scan runs under the read lock, so the stored rows
+// (which other calls mutate in place) never escape it; the winner is
+// returned as a deep copy.
 func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("InMemorySessionStore: session ID is empty")
@@ -80,8 +80,7 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessi
 	defer s.mu.RUnlock()
 	var latest *exp.SessionSnapshot[State]
 	for _, snap := range s.snapshots {
-		if snap.SessionID != sessionID ||
-			snap.Status == exp.SnapshotStatusFailed || snap.Status == exp.SnapshotStatusAborted {
+		if snap.SessionID != sessionID {
 			continue
 		}
 		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) ||
@@ -158,7 +157,7 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	}
 	next.UpdatedAt = now
 	if next.Status == "" {
-		next.Status = exp.SnapshotStatusSucceeded
+		next.Status = exp.SnapshotStatusCompleted
 	}
 
 	copied, err := copySnapshot(next)

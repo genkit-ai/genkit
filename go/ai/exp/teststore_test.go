@@ -76,8 +76,7 @@ func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID s
 	defer s.mu.RUnlock()
 	var latest *SessionSnapshot[State]
 	for _, snap := range s.snapshots {
-		if snap.SessionID != sessionID ||
-			snap.Status == SnapshotStatusFailed || snap.Status == SnapshotStatusAborted {
+		if snap.SessionID != sessionID {
 			continue
 		}
 		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) ||
@@ -147,7 +146,7 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	}
 	next.UpdatedAt = now
 	if next.Status == "" {
-		next.Status = SnapshotStatusSucceeded
+		next.Status = SnapshotStatusCompleted
 	}
 
 	copied, err := testCopySnapshot(next)

@@ -97,18 +97,20 @@ const (
 //
 // Sending no fields starts a fresh invocation with empty state.
 type AgentInit[State any] struct {
-	// SessionID identifies the session (conversation) to resume. Only valid
-	// when the agent is server-managed (a session store is configured);
-	// mutually exclusive with State (a client-managed conversation carries
-	// its identity inside [SessionState.SessionID]). Alone, it resumes the
-	// session from its latest snapshot: the most recently updated one that
-	// is not a failed/aborted dead end. A pending latest snapshot (a
-	// detached invocation still running) rejects the resume rather than
-	// racing the background work; if the session's history was forked by
-	// resuming an earlier snapshot again, the most recently updated branch
-	// wins, and SnapshotID can pick a branch explicitly. Combined with
-	// SnapshotID, it asserts which session the snapshot belongs to, and a
-	// mismatch is rejected.
+	// SessionID identifies the session (conversation) to resume or start.
+	// Only valid when the agent is server-managed (a session store is
+	// configured); mutually exclusive with State (a client-managed
+	// conversation carries its identity inside [SessionState.SessionID]).
+	// Alone, it resumes the session from its latest snapshot: the most
+	// recently updated row, whatever its status. If that row is a failed,
+	// aborted, or still-pending dead end the resume is rejected (pass
+	// SnapshotID to continue from a specific earlier point); if the session's
+	// history was forked by resuming an earlier snapshot again, the most
+	// recently updated branch wins. If the session has no snapshots yet, a
+	// brand-new conversation is started under this caller-chosen ID, and
+	// every snapshot it persists carries it. Combined with SnapshotID, it
+	// asserts which session the snapshot belongs to, and a mismatch is
+	// rejected.
 	SessionID string `json:"sessionId,omitempty"`
 	// SnapshotID loads state from a persisted snapshot. Only valid when the
 	// agent is server-managed (a session store is configured). May be
@@ -165,6 +167,12 @@ type AgentMetadata struct {
 	Abortable bool `json:"abortable,omitempty"`
 	// StateManagement reports who owns session state.
 	StateManagement AgentStateManagement `json:"stateManagement,omitempty"`
+	// StateSchema is the JSON schema for the agent's custom session state
+	// (the Custom field of [SessionState]), inferred from the agent's state
+	// type. It lets the Dev UI and other reflective callers render or
+	// validate state without the agent describing it separately. Nil when the
+	// state type carries no schema to infer (e.g. an unstructured any state).
+	StateSchema map[string]any `json:"stateSchema,omitempty"`
 }
 
 // AgentOutput is the output when an agent invocation completes.
@@ -187,7 +195,8 @@ type AgentOutput[State any] struct {
 	Message *ai.Message `json:"message,omitempty"`
 	// SessionID is the ID of the session this invocation belongs to,
 	// assigned by the framework when the invocation starts. With
-	// server-managed state, a fresh invocation mints a new ID, resumed
+	// server-managed state, a fresh invocation adopts the caller-supplied
+	// session ID (see [AgentInit.SessionID]) or mints a new one, resumed
 	// invocations inherit the chain's, and resuming a snapshot from before
 	// session IDs existed mints a fresh one. With client-managed state it
 	// echoes the ID carried inside the state object
@@ -284,9 +293,23 @@ type Artifact struct {
 // for Dev UI and client-side reconnect flows. It returns the stored
 // [SessionSnapshot], with [WithStateTransform] applied to its state if
 // configured.
+//
+// At least one of SnapshotID or SessionID must be set; they are not
+// mutually exclusive. SnapshotID fetches a specific snapshot; SessionID
+// alone fetches the session's latest snapshot (via the store's
+// [SnapshotReader.GetLatestSnapshot], whatever its status). When both are
+// set, the fetched snapshot must belong to that session, or the request
+// is rejected.
 type GetSnapshotRequest struct {
-	// SnapshotID identifies the snapshot to fetch.
-	SnapshotID string `json:"snapshotId"`
+	// SessionID identifies the session whose latest snapshot to fetch.
+	// Optional when SnapshotID is given. The latest snapshot is the session's
+	// most recently updated row regardless of status (pending, failed, or
+	// aborted included).
+	SessionID string `json:"sessionId,omitempty"`
+	// SnapshotID identifies the snapshot to fetch. Optional when SessionID is
+	// given; when both are present the fetched snapshot must belong to that
+	// session.
+	SnapshotID string `json:"snapshotId,omitempty"`
 }
 
 // JSONPatch is an RFC 6902 JSON Patch: an ordered list of operations applied in
@@ -364,7 +387,7 @@ type SessionSnapshot[State any] struct {
 	// snapshots with the cumulative final state.
 	State *SessionState[State] `json:"state,omitempty"`
 	// Status is the lifecycle state of this snapshot. Empty is treated as
-	// [SnapshotStatusSucceeded] for backwards compatibility.
+	// [SnapshotStatusCompleted] for backwards compatibility.
 	Status SnapshotStatus `json:"status,omitempty"`
 	// UpdatedAt is when the snapshot was last written. For pending snapshots
 	// it equals CreatedAt; once the snapshot is finalized it reflects the
@@ -408,7 +431,7 @@ const (
 	// SnapshotEventRecovery indicates the snapshot was written retroactively
 	// by the failure path to preserve the last-good state (everything through
 	// the last successful turn) when a selective snapshot callback had skipped
-	// persisting it. It is a normal [SnapshotStatusSucceeded] row carrying the
+	// persisting it. It is a normal [SnapshotStatusCompleted] row carrying the
 	// last good turn's finish reason, resumable like any other; the snapshot
 	// callback is bypassed and never sees this event.
 	SnapshotEventRecovery SnapshotEvent = "recovery"
@@ -416,13 +439,13 @@ const (
 
 // SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
 // written for synchronous turns or invocations are always
-// [SnapshotStatusSucceeded] (an empty value is also treated as succeeded
+// [SnapshotStatusCompleted] (an empty value is also treated as completed
 // for backwards compatibility).
 //
 // When a client sets [AgentInput.Detach], the server writes a single
 // snapshot with [SnapshotStatusPending] (and empty state) and returns its
 // ID immediately. Background processing then either rewrites that snapshot
-// with the cumulative final state and [SnapshotStatusSucceeded] /
+// with the cumulative final state and [SnapshotStatusCompleted] /
 // [SnapshotStatusFailed] when the agent finishes, or with
 // [SnapshotStatusAborted] if the client called abortSnapshot in the
 // meantime.
@@ -433,8 +456,8 @@ const (
 	// processing the queued inputs. The snapshot will be rewritten with a
 	// terminal status once the background work finishes.
 	SnapshotStatusPending SnapshotStatus = "pending"
-	// SnapshotStatusSucceeded indicates the snapshot captures a settled state.
-	SnapshotStatusSucceeded SnapshotStatus = "succeeded"
+	// SnapshotStatusCompleted indicates the snapshot captures a settled state.
+	SnapshotStatusCompleted SnapshotStatus = "completed"
 	// SnapshotStatusAborted indicates the snapshot's invocation was aborted
 	// while detached (e.g. via the abortSnapshot companion action).
 	SnapshotStatusAborted SnapshotStatus = "aborted"

@@ -1061,10 +1061,10 @@ func TestHandlerAgentRef(t *testing.T) {
 		if snap.SnapshotID != res.SnapshotID || snap.SessionID != res.SessionID {
 			t.Errorf("snapshot identity = %q/%q, want %q/%q", snap.SnapshotID, snap.SessionID, res.SnapshotID, res.SessionID)
 		}
-		// The action normalizes the implicit empty status to "succeeded"
+		// The action normalizes the implicit empty status to "completed"
 		// so remote clients don't reimplement the default.
-		if snap.Status != "succeeded" {
-			t.Errorf("status = %q, want %q", snap.Status, "succeeded")
+		if snap.Status != "completed" {
+			t.Errorf("status = %q, want %q", snap.Status, "completed")
 		}
 		if len(snap.State) == 0 {
 			t.Error("snapshot must carry state")
@@ -1094,8 +1094,8 @@ func TestHandlerAgentRef(t *testing.T) {
 			t.Fatalf("abortSnapshot status = %d, body = %s", code, body)
 		}
 		snap := parseSnapshot(t, body)
-		if snap.Status != "succeeded" {
-			t.Errorf("status = %q, want %q (abort of a terminal snapshot is a no-op)", snap.Status, "succeeded")
+		if snap.Status != "completed" {
+			t.Errorf("status = %q, want %q (abort of a terminal snapshot is a no-op)", snap.Status, "completed")
 		}
 	})
 
@@ -1123,8 +1123,8 @@ func TestHandlerAgentRef(t *testing.T) {
 			}
 			snap := parseSnapshot(t, body)
 			if snap.Status != "pending" {
-				if snap.Status != "succeeded" {
-					t.Fatalf("final status = %q, want %q; body = %s", snap.Status, "succeeded", body)
+				if snap.Status != "completed" {
+					t.Fatalf("final status = %q, want %q; body = %s", snap.Status, "completed", body)
 				}
 				if len(snap.State) == 0 {
 					t.Error("finalized snapshot must carry the cumulative state")

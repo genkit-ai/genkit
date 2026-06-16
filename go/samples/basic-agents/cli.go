@@ -181,8 +181,8 @@ func openAgent(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], la
 //  2. ignore it and start a fresh conversation,
 //  3. go back to the agent list.
 //
-// Returns the snapshot to resume from (option 1, succeeded) or nil
-// (option 2, or option 1 when the snapshot terminated non-succeeded).
+// Returns the snapshot to resume from (option 1, completed) or nil
+// (option 2, or option 1 when the snapshot terminated non-completed).
 // ok=false means the user chose 3 or the context was canceled.
 //
 // Crucially, options that imply "use this conversation" return the
@@ -214,7 +214,7 @@ func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any]
 				return nil, true
 			}
 			fmt.Printf("Done (%s).\n", final.Status)
-			if final.Status != aix.SnapshotStatusSucceeded {
+			if final.Status != aix.SnapshotStatusCompleted {
 				// failed / aborted snapshots aren't resumable; the
 				// agent runtime would reject WithSnapshotID on them.
 				// Fall through to a fresh chat instead.
@@ -240,7 +240,7 @@ func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any]
 // recent terminal snapshot (returns the snapshot pointer), or start
 // fresh (returns nil).
 func pickSession(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], latest *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
-	if latest == nil || latest.Status != aix.SnapshotStatusSucceeded {
+	if latest == nil || latest.Status != aix.SnapshotStatusCompleted {
 		fmt.Printf("\nStarting a new conversation with %s.\n", a.Name())
 		return nil, true
 	}
