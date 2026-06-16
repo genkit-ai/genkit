@@ -182,9 +182,9 @@ def respond_to_interrupt(
 
 
 def restart_tool(
-    replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
     *,
     interrupt: ToolRequestPart,
+    replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
     resumed_metadata: dict[str, Any] | None = None,
 ) -> ToolRequestPart:
     """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
@@ -192,21 +192,20 @@ def restart_tool(
     Pass the return value to ``generate(..., resume_restart=...)``.
 
     Args:
+        interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
         replace_input: Optional new ``tool_request.input`` for this run (previous input is
             stored in ``metadata.replacedInput`` when this is set).
-        interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
         resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
 
     Returns:
         A ``ToolRequestPart`` for ``resume_restart`` / message history.
 
     Example:
-        ``restart_tool({**trp.tool_request.input, "confirmed": True},``
-        ``interrupt=trp, resumed_metadata={"by": "bob"})``
+        ``restart_tool(interrupt=trp, replace_input={**trp.tool_request.input, "confirmed": True},``
+        ``resumed_metadata={"by": "bob"})``
     """
     tool_req = interrupt.tool_request
-    existing_meta = interrupt.metadata or {}
-    new_meta: dict[str, Any] = dict(existing_meta) if existing_meta else {}
+    new_meta: dict[str, Any] = dict(interrupt.metadata or {})
 
     new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
 
