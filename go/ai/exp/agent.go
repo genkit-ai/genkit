@@ -58,6 +58,7 @@ type SessionRunner[State any] struct {
 	TurnIndex int
 
 	snapshotCallback  SnapshotCallback[State]
+	onStartTurn       func()
 	onEndTurn         func(ctx context.Context)
 	collectTurnOutput func() any
 
@@ -164,6 +165,11 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 		// (trace marshaling, session state, snapshot writes) must work
 		// on private memory rather than race the caller.
 		input = jsonClone(input)
+		// Mark the start of the turn so the first customPatch emitted during
+		// it is a whole-document replace that re-bases the client.
+		if s.onStartTurn != nil {
+			s.onStartTurn()
+		}
 		spanMeta := &tracing.SpanMetadata{
 			Name:    fmt.Sprintf("agent/turn/%d", s.TurnIndex),
 			Type:    "flowStep",
@@ -402,24 +408,19 @@ func (s *SessionRunner[State]) recoverySnapshotID(ctx context.Context) string {
 // wire; the session-level side effects still apply. Send itself remains
 // fire-and-forget and returns no error; the user fn is expected to
 // observe cancellation through its own ctx check and stop producing.
-type Responder[Stream any] struct {
-	in  chan<- *AgentStreamChunk[Stream]
+type Responder struct {
+	in  chan<- *AgentStreamChunk
 	ctx context.Context
 	// effects applies the chunk's in-process side effects (session
 	// artifact add, turn-chunk accumulation) synchronously in send, in
 	// the sender's goroutine, so reads and snapshots that follow a Send
 	// cannot miss the chunk.
-	effects func(*AgentStreamChunk[Stream])
+	effects func(*AgentStreamChunk)
 }
 
 // SendModelChunk sends a generation chunk (token-level streaming).
-func (r Responder[Stream]) SendModelChunk(chunk *ai.ModelResponseChunk) {
-	r.send(&AgentStreamChunk[Stream]{ModelChunk: chunk})
-}
-
-// SendStatus sends a user-defined status update.
-func (r Responder[Stream]) SendStatus(status Stream) {
-	r.send(&AgentStreamChunk[Stream]{Status: status})
+func (r Responder) SendModelChunk(chunk *ai.ModelResponseChunk) {
+	r.send(&AgentStreamChunk{ModelChunk: chunk})
 }
 
 // SendArtifact sends an artifact to the stream and adds it to the session.
@@ -430,8 +431,8 @@ func (r Responder[Stream]) SendStatus(status Stream) {
 // The session-level side effect happens whether or not detach has landed;
 // only the wire forward to the client is suppressed post-detach, when
 // there is no longer a client to receive it.
-func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
-	r.send(&AgentStreamChunk[Stream]{Artifact: artifact})
+func (r Responder) SendArtifact(artifact *Artifact) {
+	r.send(&AgentStreamChunk{Artifact: artifact})
 }
 
 // send applies chunk's in-process side effects, then delivers it to the
@@ -444,7 +445,7 @@ func (r Responder[Stream]) SendArtifact(artifact *Artifact) {
 // after workCtx cancellation completes immediately rather than blocking
 // on a router that has not yet been put into drain mode by a terminal
 // path.
-func (r Responder[Stream]) send(chunk *AgentStreamChunk[Stream]) {
+func (r Responder) send(chunk *AgentStreamChunk) {
 	if r.effects != nil {
 		r.effects(chunk)
 	}
@@ -456,11 +457,12 @@ func (r Responder[Stream]) send(chunk *AgentStreamChunk[Stream]) {
 
 // --- Agent ---
 
-// AgentFunc is the function signature for custom agents.
-// Type parameters:
-//   - Stream: Type for status updates sent via the responder
-//   - State: Type for user-defined state in snapshots
-type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Stream], sess *SessionRunner[State]) (*AgentResult, error)
+// AgentFunc is the function signature for custom agents. The State type
+// parameter is the shape of the conversation's custom state (see
+// [SessionState.Custom]). The agent streams output through resp and reads or
+// mutates state through sess; mutating custom state via [Session.UpdateCustom]
+// automatically streams a [AgentStreamChunk.CustomPatch] delta to the client.
+type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error)
 
 // Agent is a bidirectional streaming agent with automatic snapshot management.
 //
@@ -474,8 +476,8 @@ type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Str
 // register companion actions for the snapshot lifecycle, available via
 // [Agent.GetSnapshotAction] and [Agent.AbortSnapshotAction] for serving
 // alongside the agent, and expose the store itself via [Agent.Store].
-type Agent[Stream, State any] struct {
-	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInit[State]]
+type Agent[State any] struct {
+	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk, *AgentInit[State]]
 	// Companion actions, retained so transports can serve them without a
 	// registry lookup. Nil when the corresponding capability is absent;
 	// see newSnapshotActions.
@@ -490,7 +492,7 @@ type Agent[Stream, State any] struct {
 // Name returns the agent's registered name. This is also the name under
 // which any inline-defined prompt and companion actions (getSnapshot,
 // abortSnapshot) are registered.
-func (a *Agent[Stream, State]) Name() string {
+func (a *Agent[State]) Name() string {
 	return a.action.Name()
 }
 
@@ -503,7 +505,7 @@ func (a *Agent[Stream, State]) Name() string {
 // Use it to expose snapshot polling over a transport (e.g. mount it with
 // genkit.Handler next to the agent itself); local Go code should read
 // from the store directly.
-func (a *Agent[Stream, State]) GetSnapshotAction() api.Action {
+func (a *Agent[State]) GetSnapshotAction() api.Action {
 	return a.getSnapshot
 }
 
@@ -516,7 +518,7 @@ func (a *Agent[Stream, State]) GetSnapshotAction() api.Action {
 // Use it to expose aborting over a transport (e.g. mount it with
 // genkit.Handler next to the agent itself); local Go code should call the
 // store's [SnapshotAborter.AbortSnapshot] directly.
-func (a *Agent[Stream, State]) AbortSnapshotAction() api.Action {
+func (a *Agent[State]) AbortSnapshotAction() api.Action {
 	return a.abortSnapshot
 }
 
@@ -528,7 +530,7 @@ func (a *Agent[Stream, State]) AbortSnapshotAction() api.Action {
 // The store is returned as the [SessionStore] interface, not its concrete
 // type; a caller needing a store-specific capability (e.g.
 // [SnapshotAborter]) type-asserts for it.
-func (a *Agent[Stream, State]) Store() SessionStore[State] {
+func (a *Agent[State]) Store() SessionStore[State] {
 	return a.store
 }
 
@@ -540,7 +542,7 @@ func (a *Agent[Stream, State]) Store() SessionStore[State] {
 // type-assert to [api.BidiAction] to route session init (the wire
 // counterpart of [WithSessionID], [WithSnapshotID], and [WithState]), so
 // satisfying only [api.Action] would silently break session resume.
-var _ api.BidiAction = (*Agent[any, any])(nil)
+var _ api.BidiAction = (*Agent[any])(nil)
 
 // Register registers the agent's run action and any companion actions
 // (getSnapshot, abortSnapshot) with the registry. Agents defined via
@@ -549,7 +551,7 @@ var _ api.BidiAction = (*Agent[any, any])(nil)
 // inline-defined prompt does not travel: the agent holds it directly, so
 // execution is unaffected, but the prompt action stays in the registry it
 // was defined in.
-func (a *Agent[Stream, State]) Register(r api.Registry) {
+func (a *Agent[State]) Register(r api.Registry) {
 	// Register the wrapped bidi action under the agent key, the same way
 	// every other action registers itself; the registry holds a uniform
 	// api.BidiAction that the reflection servers, ListAgents, and the route
@@ -568,20 +570,20 @@ func (a *Agent[Stream, State]) Register(r api.Registry) {
 }
 
 // Desc returns the descriptor of the agent's run action.
-func (a *Agent[Stream, State]) Desc() api.ActionDesc {
+func (a *Agent[State]) Desc() api.ActionDesc {
 	return a.action.Desc()
 }
 
 // RunJSON runs a one-shot invocation with no init (a fresh session):
 // input is the turn's [AgentInput] and the result is the final
 // [AgentOutput]. To supply a session source, use [Agent.RunBidiJSON].
-func (a *Agent[Stream, State]) RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
+func (a *Agent[State]) RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
 	return a.action.RunJSON(ctx, input, cb)
 }
 
 // RunJSONWithTelemetry is [Agent.RunJSON] with trace information on the
 // result.
-func (a *Agent[Stream, State]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*api.ActionRunResult[json.RawMessage], error) {
+func (a *Agent[State]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*api.ActionRunResult[json.RawMessage], error) {
 	return a.action.RunJSONWithTelemetry(ctx, input, cb)
 }
 
@@ -589,14 +591,14 @@ func (a *Agent[Stream, State]) RunJSONWithTelemetry(ctx context.Context, input j
 // counterpart of the [InvocationOption] values) rides in opts: input is
 // delivered as the only chunk on the input stream and outgoing chunks are
 // forwarded to cb.
-func (a *Agent[Stream, State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiSessionOptions) (*api.ActionRunResult[json.RawMessage], error) {
+func (a *Agent[State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiSessionOptions) (*api.ActionRunResult[json.RawMessage], error) {
 	return a.action.RunBidiJSON(ctx, input, cb, opts)
 }
 
 // StreamBidiJSON starts a bidirectional streaming session using
 // JSON-encoded messages. Local Go callers should prefer the typed
 // [Agent.StreamBidi].
-func (a *Agent[Stream, State]) StreamBidiJSON(ctx context.Context, opts *api.BidiSessionOptions) (api.BidiJSONConnection, error) {
+func (a *Agent[State]) StreamBidiJSON(ctx context.Context, opts *api.BidiSessionOptions) (api.BidiJSONConnection, error) {
 	return a.action.StreamBidiJSON(ctx, opts)
 }
 
@@ -623,7 +625,7 @@ func DefineAgent[State any](
 	name string,
 	source AgentSource,
 	opts ...AgentOption[State],
-) *Agent[any, State] {
+) *Agent[State] {
 	switch s := source.(type) {
 	case inlineSource:
 		prompt := ai.DefinePrompt(r, name, s.opts...)
@@ -659,11 +661,11 @@ func DefineAgent[State any](
 // prompt-backed agent cannot be built before it has one. To get
 // prompt-like behavior without registration, write a custom agent that
 // renders and generates with your own [genkit.Genkit] inside fn.
-func NewCustomAgent[Stream, State any](
+func NewCustomAgent[State any](
 	name string,
-	fn AgentFunc[Stream, State],
+	fn AgentFunc[State],
 	opts ...AgentOption[State],
-) *Agent[Stream, State] {
+) *Agent[State] {
 	cfg := &agentOptions[State]{}
 	for _, opt := range opts {
 		if err := opt.applyAgent(cfg); err != nil {
@@ -692,7 +694,7 @@ func NewCustomAgent[Stream, State any](
 			ctx context.Context,
 			in *AgentInit[State],
 			inCh <-chan *AgentInput,
-			outCh chan<- *AgentStreamChunk[Stream],
+			outCh chan<- *AgentStreamChunk,
 		) (*AgentOutput[State], error) {
 			ctx = core.WithFlowContext(ctx, name)
 			rt, err := newAgentRuntime(ctx, name, cfg, in, inCh, outCh)
@@ -710,7 +712,7 @@ func NewCustomAgent[Stream, State any](
 
 	getSnapshot, abortSnapshot := newSnapshotActions(name, cfg.store, cfg.transform)
 
-	return &Agent[Stream, State]{
+	return &Agent[State]{
 		action:        action,
 		getSnapshot:   getSnapshot,
 		abortSnapshot: abortSnapshot,
@@ -727,12 +729,12 @@ func NewCustomAgent[Stream, State any](
 // It is [NewCustomAgent] followed by [Agent.Register]. To build an agent
 // without registering it, use [NewCustomAgent] directly. For agents backed
 // by a prompt, use [DefineAgent] instead.
-func DefineCustomAgent[Stream, State any](
+func DefineCustomAgent[State any](
 	r api.Registry,
 	name string,
-	fn AgentFunc[Stream, State],
+	fn AgentFunc[State],
 	opts ...AgentOption[State],
-) *Agent[Stream, State] {
+) *Agent[State] {
 	a := NewCustomAgent(name, fn, opts...)
 	a.Register(r)
 	return a
@@ -761,13 +763,14 @@ func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 // session, runner, output router, input intake, and the goroutine that runs
 // the user fn. Its methods implement the three terminal paths the agent can
 // take: detach, fn-completion, and client-cancel.
-type agentRuntime[Stream, State any] struct {
+type agentRuntime[State any] struct {
 	name string
 	cfg  *agentOptions[State]
 
 	session *Session[State]
 	sess    *SessionRunner[State]
-	router  *chunkRouter[Stream, State]
+	router  *chunkRouter[State]
+	patcher *customPatcher[State]
 	intake  *detachIntake
 
 	fnDone chan fnDoneResult[State]
@@ -780,14 +783,14 @@ type fnDoneResult[State any] struct {
 	err    error
 }
 
-func newAgentRuntime[Stream, State any](
+func newAgentRuntime[State any](
 	ctx context.Context,
 	name string,
 	cfg *agentOptions[State],
 	in *AgentInit[State],
 	inCh <-chan *AgentInput,
-	outCh chan<- *AgentStreamChunk[Stream],
-) (*agentRuntime[Stream, State], error) {
+	outCh chan<- *AgentStreamChunk,
+) (*agentRuntime[State], error) {
 	session, parent, err := loadSession(ctx, in, cfg.store)
 	if err != nil {
 		return nil, err
@@ -818,7 +821,7 @@ func newAgentRuntime[Stream, State any](
 		session.state.SessionID = uuid.New().String()
 	}
 
-	rt := &agentRuntime[Stream, State]{
+	rt := &agentRuntime[State]{
 		name:    name,
 		cfg:     cfg,
 		session: session,
@@ -835,6 +838,15 @@ func newAgentRuntime[Stream, State any](
 	}
 	rt.sess.collectTurnOutput = func() any { return rt.router.collectTurnChunks() }
 	rt.sess.onEndTurn = rt.emitTurnEnd
+	// Stream custom-state mutations as customPatch chunks. beginTurn is armed
+	// per turn by the runner; the session's onCustomChange hook is wired in
+	// run, once the work context and responder exist.
+	rt.patcher = &customPatcher[State]{
+		transform:   cfg.transform,
+		session:     session,
+		firstInTurn: true,
+	}
+	rt.sess.onStartTurn = rt.patcher.beginTurn
 	// The initial state (fresh, client-provided, or loaded from a
 	// snapshot) is the last-good recovery point until a turn completes.
 	rt.sess.recordLastGood()
@@ -857,14 +869,14 @@ func newAgentRuntime[Stream, State any](
 // observes the suspension under snapMu; the pending row already captures
 // the invocation and a single finalize rewrite records the cumulative
 // state once the queued inputs drain).
-func (rt *agentRuntime[Stream, State]) emitTurnEnd(ctx context.Context) {
+func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 	rt.intake.releaseForward()
 	reason := rt.sess.lastTurnFinishReason
 	var snapshotID string
 	if !rt.sess.lastTurnFailed {
 		snapshotID = rt.sess.maybeSnapshot(ctx, SnapshotEventTurnEnd, reason)
 	}
-	rt.router.sendChunk(ctx, &AgentStreamChunk[Stream]{TurnEnd: &TurnEnd{
+	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnEnd: &TurnEnd{
 		SnapshotID:   snapshotID,
 		FinishReason: reason,
 	}})
@@ -875,12 +887,21 @@ func (rt *agentRuntime[Stream, State]) emitTurnEnd(ctx context.Context) {
 // workCtx carries the session and is decoupled from clientCtx: pre-detach a
 // watcher mirrors clientCtx so a disconnect cancels the work; on detach the
 // watcher exits and the finalizer goroutine owns workCtx until fn returns.
-func (rt *agentRuntime[Stream, State]) run(
+func (rt *agentRuntime[State]) run(
 	clientCtx context.Context,
-	fn AgentFunc[Stream, State],
+	fn AgentFunc[State],
 ) (*AgentOutput[State], error) {
 	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(clientCtx))
 	workCtx = NewSessionContext(workCtx, rt.session)
+
+	// Wire custom-state streaming now that the work context exists: every
+	// UpdateCustom mutation during the invocation emits a customPatch chunk
+	// through the same responder fn uses (so the chunk is accumulated for the
+	// turn span and forwarded on the wire, dropping post-detach like any
+	// other chunk). The session mutation itself still applies regardless.
+	resp := rt.router.responder(workCtx)
+	rt.patcher.bind(workCtx, resp.send)
+	rt.session.onCustomChange = rt.patcher.onChange
 
 	var detachOnce sync.Once
 	detached := make(chan struct{})
@@ -920,7 +941,7 @@ func (rt *agentRuntime[Stream, State]) run(
 					fnErr = core.NewError(core.INTERNAL, "agent fn panicked: %v", r)
 				}
 			}()
-			result, fnErr = fn(workCtx, rt.router.responder(workCtx), rt.sess)
+			result, fnErr = fn(workCtx, resp, rt.sess)
 		}()
 		rt.fnDone <- fnDoneResult[State]{result: result, err: fnErr}
 	}()
@@ -950,7 +971,7 @@ func (rt *agentRuntime[Stream, State]) run(
 // pending snapshot) and a [SnapshotAborter] (which bundles both abort
 // triggering and status-change subscription so the runtime can react to
 // the abort without polling).
-func (rt *agentRuntime[Stream, State]) checkDetachCapabilities() error {
+func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
 		return core.NewError(core.FAILED_PRECONDITION,
 			"agent %q: detach requires a session store", rt.name)
@@ -967,12 +988,12 @@ func (rt *agentRuntime[Stream, State]) checkDetachCapabilities() error {
 // gone), wait for the intake reader/forwarder to finish, drain fnDone,
 // and close the router. Returns the fn's result for callers that need
 // to surface its error.
-func (rt *agentRuntime[Stream, State]) drainAndWait(cancelWork context.CancelFunc) fnDoneResult[State] {
+func (rt *agentRuntime[State]) drainAndWait(cancelWork context.CancelFunc) fnDoneResult[State] {
 	cancelWork()
 	// Switch the router to discard mode before waiting on fn. Without
-	// this, a fn mid-SendStatus blocks on the router's r.in receive while
-	// the router blocks on r.out send (consumer is gone), so fn never
-	// observes ctx and we deadlock waiting on fnDone.
+	// this, a fn mid-send (or a customPatch emit) blocks on the router's
+	// r.in receive while the router blocks on r.out send (consumer is
+	// gone), so fn never observes ctx and we deadlock waiting on fnDone.
 	rt.router.stopAndWait()
 	rt.intake.stopAndWait()
 	res := <-rt.fnDone
@@ -996,7 +1017,7 @@ func (rt *agentRuntime[Stream, State]) drainAndWait(cancelWork context.CancelFun
 // client drains it, a disconnected client's ctx cancellation trips
 // forward's ctx arm, and a client that stopped receiving unparks it when
 // its Output call drains the stream.
-func (rt *agentRuntime[Stream, State]) handleFnDone(
+func (rt *agentRuntime[State]) handleFnDone(
 	ctx context.Context,
 	cancelWork context.CancelFunc,
 	res fnDoneResult[State],
@@ -1055,7 +1076,7 @@ func (rt *agentRuntime[Stream, State]) handleFnDone(
 // framework-owned SessionID, so the state handed to a client-managed
 // caller always carries the conversation's identity even if a transform
 // rewrote or dropped it. Returns nil if state is nil.
-func (rt *agentRuntime[Stream, State]) outboundState(ctx context.Context, state *SessionState[State]) *SessionState[State] {
+func (rt *agentRuntime[State]) outboundState(ctx context.Context, state *SessionState[State]) *SessionState[State] {
 	out := applyTransform(ctx, rt.cfg.transform, state)
 	if out != nil {
 		out.SessionID = rt.session.SessionID()
@@ -1068,7 +1089,7 @@ func (rt *agentRuntime[Stream, State]) outboundState(ctx context.Context, state 
 // and the last-good state (inline when client-managed, behind a recovery
 // snapshot ID when server-managed). Message and Artifacts are left empty;
 // they describe the result of a completed run.
-func (rt *agentRuntime[Stream, State]) failedOutput(ctx context.Context, cause error) *AgentOutput[State] {
+func (rt *agentRuntime[State]) failedOutput(ctx context.Context, cause error) *AgentOutput[State] {
 	out := &AgentOutput[State]{
 		FinishReason: AgentFinishReasonFailed,
 		Error:        core.AsGenkitError(cause),
@@ -1089,7 +1110,7 @@ func (rt *agentRuntime[Stream, State]) failedOutput(ctx context.Context, cause e
 // stops writing to outCh and discards further chunks, whose in-process
 // side effects (e.g. artifacts added via Responder.SendArtifact) still
 // apply at Send time, so user code does not have to branch on detach.
-func (rt *agentRuntime[Stream, State]) handleDetach(
+func (rt *agentRuntime[State]) handleDetach(
 	clientCtx, workCtx context.Context,
 	cancelWork context.CancelFunc,
 	markDetached func(),
@@ -1168,7 +1189,7 @@ func (rt *agentRuntime[Stream, State]) handleDetach(
 // so the read-and-rewrite is one atomic step: if the row has already
 // transitioned to aborted (a late abort racing this finalize),
 // SaveSnapshot sees it inside fn and we leave the row untouched.
-func (rt *agentRuntime[Stream, State]) finalizePendingSnapshot(
+func (rt *agentRuntime[State]) finalizePendingSnapshot(
 	ctx context.Context,
 	pending *SessionSnapshot[State],
 	result *AgentResult,
@@ -1359,28 +1380,28 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 // keeps draining its input so the user fn never blocks on a responder
 // send.
 
-type chunkRouter[Stream, State any] struct {
+type chunkRouter[State any] struct {
 	ctx     context.Context // action context; ends on client disconnect (or completion)
-	in      chan *AgentStreamChunk[Stream]
-	out     chan<- *AgentStreamChunk[Stream]
+	in      chan *AgentStreamChunk
+	out     chan<- *AgentStreamChunk
 	session *Session[State]
 
 	turnMu     sync.Mutex
-	turnChunks []*AgentStreamChunk[Stream]
+	turnChunks []*AgentStreamChunk
 
 	done          chan struct{}
 	stopWriting   chan struct{}
 	writerStopped chan struct{}
 }
 
-func startChunkRouter[Stream, State any](
+func startChunkRouter[State any](
 	ctx context.Context,
 	session *Session[State],
-	out chan<- *AgentStreamChunk[Stream],
-) *chunkRouter[Stream, State] {
-	r := &chunkRouter[Stream, State]{
+	out chan<- *AgentStreamChunk,
+) *chunkRouter[State] {
+	r := &chunkRouter[State]{
 		ctx:           ctx,
-		in:            make(chan *AgentStreamChunk[Stream]),
+		in:            make(chan *AgentStreamChunk),
 		out:           out,
 		session:       session,
 		done:          make(chan struct{}),
@@ -1391,7 +1412,7 @@ func startChunkRouter[Stream, State any](
 	return r
 }
 
-func (r *chunkRouter[Stream, State]) run() {
+func (r *chunkRouter[State]) run() {
 	defer close(r.done)
 	if !r.forward() {
 		// r.in closed while writes were still allowed; nothing left to do.
@@ -1414,7 +1435,7 @@ func (r *chunkRouter[Stream, State]) run() {
 // artifact. The artifact is deep-copied on its way into the session so
 // the sender's retained pointer (which also rides the wire chunk) cannot
 // alias live session state.
-func (r *chunkRouter[Stream, State]) applySideEffects(chunk *AgentStreamChunk[Stream]) {
+func (r *chunkRouter[State]) applySideEffects(chunk *AgentStreamChunk) {
 	if chunk.Artifact != nil {
 		r.session.AddArtifacts(jsonClone(chunk.Artifact))
 	}
@@ -1428,7 +1449,7 @@ func (r *chunkRouter[Stream, State]) applySideEffects(chunk *AgentStreamChunk[St
 // forward delivers chunks to outCh until told to stop writing, the
 // action context ends, or r.in closes. Returns true if the router must
 // keep draining (writes stopped), false if r.in closed.
-func (r *chunkRouter[Stream, State]) forward() bool {
+func (r *chunkRouter[State]) forward() bool {
 	for {
 		select {
 		case chunk, ok := <-r.in:
@@ -1456,8 +1477,8 @@ func (r *chunkRouter[Stream, State]) forward() bool {
 // synchronously and sends chunks into the router for the wire forward.
 // The returned Responder's Send methods drop the forward (returning
 // promptly) when ctx is cancelled.
-func (r *chunkRouter[Stream, State]) responder(ctx context.Context) Responder[Stream] {
-	return Responder[Stream]{in: r.in, ctx: ctx, effects: r.applySideEffects}
+func (r *chunkRouter[State]) responder(ctx context.Context) Responder {
+	return Responder{in: r.in, ctx: ctx, effects: r.applySideEffects}
 }
 
 // sendChunk delivers chunk to the router for producers other than the
@@ -1466,7 +1487,7 @@ func (r *chunkRouter[Stream, State]) responder(ctx context.Context) Responder[St
 // which has none: no artifact, and TurnEnd is excluded from turn-chunk
 // accumulation) and returns promptly if ctx is cancelled, dropping the
 // chunk.
-func (r *chunkRouter[Stream, State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk[Stream]) {
+func (r *chunkRouter[State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk) {
 	select {
 	case r.in <- chunk:
 	case <-ctx.Done():
@@ -1474,7 +1495,7 @@ func (r *chunkRouter[Stream, State]) sendChunk(ctx context.Context, chunk *Agent
 }
 
 // collectTurnChunks returns and resets accumulated turn chunks.
-func (r *chunkRouter[Stream, State]) collectTurnChunks() []*AgentStreamChunk[Stream] {
+func (r *chunkRouter[State]) collectTurnChunks() []*AgentStreamChunk {
 	r.turnMu.Lock()
 	defer r.turnMu.Unlock()
 	result := r.turnChunks
@@ -1485,15 +1506,98 @@ func (r *chunkRouter[Stream, State]) collectTurnChunks() []*AgentStreamChunk[Str
 // stopAndWait tells the router to stop writing to out and blocks until it
 // has committed. After it returns, it is safe for the framework to close
 // out without risking a write-to-closed-channel panic.
-func (r *chunkRouter[Stream, State]) stopAndWait() {
+func (r *chunkRouter[State]) stopAndWait() {
 	close(r.stopWriting)
 	<-r.writerStopped
 }
 
 // close signals end-of-input and waits for the router to drain.
-func (r *chunkRouter[Stream, State]) close() {
+func (r *chunkRouter[State]) close() {
 	close(r.in)
 	<-r.done
+}
+
+// --- customPatcher ---
+
+// customPatcher streams the agent's custom state to the client as RFC 6902
+// JSON Patches. The runtime wires it to the session's onCustomChange hook so
+// every [Session.UpdateCustom] mutation emits a [AgentStreamChunk.CustomPatch]
+// describing the delta, exactly as adding an artifact emits an artifact chunk.
+//
+// The diff is computed on the client-facing custom value (after the configured
+// [StateTransform]), so streamed deltas honor redaction and stay consistent
+// with the full state in turn-end snapshots and final output. Because a client
+// may begin a turn without having loaded the full state, the first patch of
+// each turn is a whole-document replace at the root pointer that re-bases it;
+// subsequent patches are incremental diffs against the last sent value.
+type customPatcher[State any] struct {
+	transform StateTransform[State]
+	session   *Session[State]
+
+	ctx  context.Context         // invocation work context, for the transform
+	send func(*AgentStreamChunk) // forwards the chunk (accumulate + wire)
+
+	mu          sync.Mutex
+	firstInTurn bool
+	baseline    any // last sent custom, normalized; the diff baseline
+}
+
+// bind attaches the invocation's work context and chunk sink. Called once in
+// run, before the agent fn (the only producer of custom mutations) starts.
+func (p *customPatcher[State]) bind(ctx context.Context, send func(*AgentStreamChunk)) {
+	p.ctx = ctx
+	p.send = send
+}
+
+// beginTurn arms the next emitted patch to be a whole-document replace,
+// re-basing a client that may not share the server's baseline. Called by the
+// runner at the start of every turn.
+func (p *customPatcher[State]) beginTurn() {
+	p.mu.Lock()
+	p.firstInTurn = true
+	p.mu.Unlock()
+}
+
+// onChange computes and emits the patch for the current custom state. It is
+// invoked (outside the session lock) after every UpdateCustom mutation. The
+// state read, diff, baseline update, and send all happen under p.mu so
+// concurrent mutations produce a single, consistently ordered patch stream.
+func (p *customPatcher[State]) onChange() {
+	if p.send == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Diff the client-facing custom value (after the transform), matching what
+	// turn-end snapshots and final output expose. With no transform we only need
+	// the custom value, so take a custom-only normalized copy instead of
+	// deep-copying the whole session state (messages and artifacts included) on
+	// every mutation. With a transform we honor it on the full state, exactly as
+	// the snapshot and output paths do, so the streamed delta stays consistent
+	// with them.
+	var next any
+	if p.transform == nil {
+		next = p.session.customJSON()
+	} else {
+		var custom any
+		if t := applyTransform(p.ctx, p.transform, p.session.State()); t != nil {
+			custom = t.Custom
+		}
+		next = normalizeJSON(custom)
+	}
+
+	var patch JSONPatch
+	if p.firstInTurn {
+		patch = JSONPatch{{Op: JSONPatchOpReplace, Path: "", Value: cloneJSON(next)}}
+		p.firstInTurn = false
+	} else {
+		patch = diffValues(p.baseline, next)
+	}
+	p.baseline = next
+	if len(patch) > 0 {
+		p.send(&AgentStreamChunk{CustomPatch: patch})
+	}
 }
 
 // --- detachIntake ---
@@ -1786,8 +1890,8 @@ func validateUserMessage(m *ai.Message) error {
 // defaultInput is the prompt input passed to Render on every turn. It is
 // nil for inline-defined prompts ([FromInline]), which take no per-turn
 // input.
-func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[any, State] {
-	return func(ctx context.Context, resp Responder[any], sess *SessionRunner[State]) (*AgentResult, error) {
+func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) AgentFunc[State] {
+	return func(ctx context.Context, resp Responder, sess *SessionRunner[State]) (*AgentResult, error) {
 		if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 			if err := validateUserMessage(input.Message); err != nil {
 				return nil, err
@@ -1887,10 +1991,10 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 // StreamBidi starts a new agent invocation with bidirectional streaming.
 // Use this for multi-turn interactions where you need to send multiple inputs
 // and receive streaming chunks. For single-turn usage, see Run and RunText.
-func (a *Agent[Stream, State]) StreamBidi(
+func (a *Agent[State]) StreamBidi(
 	ctx context.Context,
 	opts ...InvocationOption[State],
-) (*AgentConnection[Stream, State], error) {
+) (*AgentConnection[State], error) {
 	init, err := a.resolveOptions(opts)
 	if err != nil {
 		return nil, err
@@ -1899,7 +2003,7 @@ func (a *Agent[Stream, State]) StreamBidi(
 	if err != nil {
 		return nil, err
 	}
-	return &AgentConnection[Stream, State]{conn: conn}, nil
+	return &AgentConnection[State]{conn: conn}, nil
 }
 
 // Run starts a single-turn agent invocation with the given input.
@@ -1909,7 +2013,7 @@ func (a *Agent[Stream, State]) StreamBidi(
 // In-band failures (e.g. a failed turn) resolve as a failed [AgentOutput]
 // rather than an error; a rejected init payload fails with an error, since
 // the invocation never starts. See [AgentConnection.Output].
-func (a *Agent[Stream, State]) Run(
+func (a *Agent[State]) Run(
 	ctx context.Context,
 	input *AgentInput,
 	opts ...InvocationOption[State],
@@ -1930,7 +2034,7 @@ func (a *Agent[Stream, State]) Run(
 // RunText is a convenience method that starts a single-turn agent invocation
 // with a user text message. It is equivalent to calling Run with an
 // AgentInput whose Message is a user text message.
-func (a *Agent[Stream, State]) RunText(
+func (a *Agent[State]) RunText(
 	ctx context.Context,
 	text string,
 	opts ...InvocationOption[State],
@@ -1946,7 +2050,7 @@ func (a *Agent[Stream, State]) RunText(
 // client-managed conversation's identity rides inside the state itself),
 // while WithSessionID and WithSnapshotID compose as an assertion.
 // Per-option duplicate checks live in applyInvocation.
-func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*AgentInit[State], error) {
+func (a *Agent[State]) resolveOptions(opts []InvocationOption[State]) (*AgentInit[State], error) {
 	invOpts := &invocationOptions[State]{}
 	for _, opt := range opts {
 		if err := opt.applyInvocation(invOpts); err != nil {
@@ -1974,8 +2078,16 @@ func (a *Agent[Stream, State]) resolveOptions(opts []InvocationOption[State]) (*
 // (SendMessage / SendText / SendResume / Detach) and an Output that
 // always waits for finalization (so detached invocations see the
 // pending snapshot ID rather than a context-cancellation error).
-type AgentConnection[Stream, State any] struct {
-	conn *core.BidiConnection[*AgentInput, *AgentOutput[State], *AgentStreamChunk[Stream]]
+//
+// It also tracks the conversation's custom state live: as [AgentConnection.Receive]
+// yields chunks, it applies each chunk's [AgentStreamChunk.CustomPatch] to an
+// internal copy, exposed by [AgentConnection.Custom], so callers observe custom
+// state as it streams without applying patches themselves.
+type AgentConnection[State any] struct {
+	conn *core.BidiConnection[*AgentInput, *AgentOutput[State], *AgentStreamChunk]
+
+	mu     sync.Mutex
+	custom any // live custom state (normalized JSON), updated as patches stream
 }
 
 // Send sends an AgentInput to the agent. The input must not be nil.
@@ -1984,7 +2096,7 @@ type AgentConnection[Stream, State any] struct {
 // fails with an error matching [core.ErrActionCompleted]; the outcome is
 // on [AgentConnection.Output]. The same applies to the SendMessage,
 // SendText, SendResume, and Detach helpers.
-func (c *AgentConnection[Stream, State]) Send(input *AgentInput) error {
+func (c *AgentConnection[State]) Send(input *AgentInput) error {
 	if input == nil {
 		return core.NewError(core.INVALID_ARGUMENT, "agent input must not be nil")
 	}
@@ -1992,12 +2104,12 @@ func (c *AgentConnection[Stream, State]) Send(input *AgentInput) error {
 }
 
 // SendMessage sends a message to the agent for one turn.
-func (c *AgentConnection[Stream, State]) SendMessage(message *ai.Message) error {
+func (c *AgentConnection[State]) SendMessage(message *ai.Message) error {
 	return c.conn.Send(&AgentInput{Message: message})
 }
 
 // SendText sends a user text message to the agent.
-func (c *AgentConnection[Stream, State]) SendText(text string) error {
+func (c *AgentConnection[State]) SendText(text string) error {
 	return c.conn.Send(&AgentInput{
 		Message: ai.NewUserTextMessage(text),
 	})
@@ -2006,7 +2118,7 @@ func (c *AgentConnection[Stream, State]) SendText(text string) error {
 // SendResume sends a resume payload to continue an interrupted generation.
 // Construct the payload with [ai.ToolDef.RestartWith] or
 // [ai.ToolDef.RespondWith] parts.
-func (c *AgentConnection[Stream, State]) SendResume(resume *ToolResume) error {
+func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 	return c.conn.Send(&AgentInput{Resume: resume})
 }
 
@@ -2025,12 +2137,12 @@ func (c *AgentConnection[Stream, State]) SendResume(resume *ToolResume) error {
 //
 // To send a final input as part of the same wire message, use
 // Send(&AgentInput{Detach: true, Message: ...}) directly.
-func (c *AgentConnection[Stream, State]) Detach() error {
+func (c *AgentConnection[State]) Detach() error {
 	return c.conn.Send(&AgentInput{Detach: true})
 }
 
 // Close signals that no more inputs will be sent.
-func (c *AgentConnection[Stream, State]) Close() error {
+func (c *AgentConnection[State]) Close() error {
 	return c.conn.Close()
 }
 
@@ -2040,8 +2152,54 @@ func (c *AgentConnection[Stream, State]) Close() error {
 // again to consume the next batch. Call [AgentConnection.Output] to
 // finish the invocation, or cancel the ctx passed to StreamBidi to
 // abort it.
-func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[Stream], error] {
-	return c.conn.Receive()
+//
+// Each yielded chunk's [AgentStreamChunk.CustomPatch] is applied to the
+// connection's tracked custom state before the chunk is yielded, so
+// [AgentConnection.Custom] reflects every delta observed so far.
+func (c *AgentConnection[State]) Receive() iter.Seq2[*AgentStreamChunk, error] {
+	return func(yield func(*AgentStreamChunk, error) bool) {
+		for chunk, err := range c.conn.Receive() {
+			if err == nil && chunk != nil && len(chunk.CustomPatch) > 0 {
+				c.applyCustomPatch(chunk.CustomPatch)
+			}
+			if !yield(chunk, err) {
+				return
+			}
+		}
+	}
+}
+
+// applyCustomPatch applies a streamed patch to the tracked custom state. A
+// malformed patch (only possible from a non-conforming server) leaves the last
+// good value in place; the next turn's whole-document replace re-bases it.
+func (c *AgentConnection[State]) applyCustomPatch(patch JSONPatch) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if next, err := applyOps(cloneJSON(c.custom), patch); err == nil {
+		c.custom = next
+	}
+}
+
+// Custom returns the conversation's custom state as tracked from the streamed
+// patches observed via [AgentConnection.Receive]. It reflects the deltas
+// consumed so far, so reading it as a turn streams shows the live state; before
+// any patch arrives it returns the zero value. The authoritative final state is
+// on [AgentOutput.State] (client-managed) or the turn-end snapshot
+// (server-managed).
+func (c *AgentConnection[State]) Custom() (State, error) {
+	c.mu.Lock()
+	tree := cloneJSON(c.custom)
+	c.mu.Unlock()
+
+	var out State
+	b, err := json.Marshal(tree)
+	if err != nil {
+		return out, err
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
 // Output finalizes the connection and returns the agent's result.
@@ -2067,7 +2225,7 @@ func (c *AgentConnection[Stream, State]) Receive() iter.Seq2[*AgentStreamChunk[S
 // Do not call Output concurrently with a goroutine iterating Receive;
 // both consume from the same stream and chunks would be split between
 // them. Finish Receive first, then call Output.
-func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
+func (c *AgentConnection[State]) Output() (*AgentOutput[State], error) {
 	_ = c.conn.Close()
 	// The core connection applies backpressure and its Output does not
 	// consume the stream, so drain the chunks the caller did not Receive;
@@ -2080,6 +2238,6 @@ func (c *AgentConnection[Stream, State]) Output() (*AgentOutput[State], error) {
 }
 
 // Done returns a channel closed when the connection completes.
-func (c *AgentConnection[Stream, State]) Done() <-chan struct{} {
+func (c *AgentConnection[State]) Done() <-chan struct{} {
 	return c.conn.Done()
 }

@@ -301,13 +301,56 @@ export const TurnEndSchema = z.object({
 export type TurnEnd = z.infer<typeof TurnEndSchema>;
 
 /**
+ * Zod schema for the operation kind of a JSON Patch operation (RFC 6902).
+ */
+export const JsonPatchOpSchema = z.enum([
+  'add',
+  'remove',
+  'replace',
+  'move',
+  'copy',
+  'test',
+]);
+export type JsonPatchOp = z.infer<typeof JsonPatchOpSchema>;
+
+/**
+ * Zod schema for a single RFC 6902 (JSON Patch) operation.
+ */
+export const JsonPatchOperationSchema = z.object({
+  op: JsonPatchOpSchema,
+  /** A JSON Pointer (RFC 6901) to the target location, e.g. `"/agentStatus"`. */
+  path: z.string(),
+  /** Source pointer; required for `move` and `copy`. */
+  from: z.string().optional(),
+  /** New value; required for `add`, `replace`, and `test`. */
+  value: z.any().optional(),
+});
+export type JsonPatchOperation = z.infer<typeof JsonPatchOperationSchema>;
+
+/**
+ * Zod schema for an RFC 6902 JSON Patch: an ordered list of operations
+ * applied in sequence.
+ */
+export const JsonPatchSchema = z.array(JsonPatchOperationSchema);
+export type JsonPatch = z.infer<typeof JsonPatchSchema>;
+
+/**
  * Zod schema for agent stream chunk.
  */
 export const AgentStreamChunkSchema = z.object({
   /** Generation tokens from the model. */
   modelChunk: ModelResponseChunkSchema.optional(),
-  /** User-defined structured status information. */
-  status: z.any().optional(),
+  /**
+   * An RFC 6902 JSON Patch describing a delta applied to the session's custom
+   * state. Emitted automatically whenever the agent mutates custom state, so
+   * the client can apply it to its tracked copy and keep custom live as the
+   * turn streams. Pointers are rooted at the custom document (e.g.
+   * `/agentStatus`), with no `/custom` prefix. The first patch of every turn is
+   * a whole-document replace at the root pointer (`""`) that re-bases clients
+   * which may not share the server's baseline; subsequent patches are
+   * incremental diffs against the last sent value.
+   */
+  customPatch: JsonPatchSchema.optional(),
   /** A newly produced artifact. */
   artifact: ArtifactSchema.optional(),
   /**

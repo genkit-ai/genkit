@@ -242,14 +242,24 @@ const (
 
 // AgentStreamChunk represents a single item in the agent's output stream.
 // Multiple fields can be populated in a single chunk.
-type AgentStreamChunk[Stream any] struct {
+type AgentStreamChunk struct {
 	// Artifact contains a newly produced artifact.
 	Artifact *Artifact `json:"artifact,omitempty"`
+	// CustomPatch is an RFC 6902 JSON Patch describing a delta applied to the
+	// session's custom state. The runtime emits it automatically whenever the
+	// agent mutates custom state (e.g. via [Session.UpdateCustom]); agents do not
+	// hand-craft patches. Pointers are rooted at the custom document (e.g.
+	// "/agentStatus"), with no "/custom" prefix. The first patch of every turn is a
+	// whole-document replace at the root pointer ("") that re-bases clients which
+	// may not share the server's baseline; subsequent patches are incremental diffs
+	// against the last sent value. The diff is computed on the client-facing custom
+	// state (after any [WithStateTransform]), so streamed deltas honor redaction and
+	// stay consistent with the full state in turn-end snapshots and final output.
+	// Apply it with [ApplyPatch] to keep a local copy of custom live as the turn
+	// streams.
+	CustomPatch JSONPatch `json:"customPatch,omitempty"`
 	// ModelChunk contains generation tokens from the model.
 	ModelChunk *ai.ModelResponseChunk `json:"modelChunk,omitempty"`
-	// Status contains user-defined structured status information.
-	// The Stream type parameter defines the shape of this data.
-	Status Stream `json:"status,omitempty"`
 	// TurnEnd is non-nil when the agent has finished processing the current
 	// input. It groups all turn-end signals (snapshot ID, etc.) so callers can
 	// check a single field. When set, the client should stop iterating and may
@@ -277,6 +287,45 @@ type Artifact struct {
 type GetSnapshotRequest struct {
 	// SnapshotID identifies the snapshot to fetch.
 	SnapshotID string `json:"snapshotId"`
+}
+
+// JSONPatch is an RFC 6902 JSON Patch: an ordered list of operations applied in
+// sequence. Use [Diff] to compute the patch between two values and [ApplyPatch]
+// to apply one to a document.
+type JSONPatch []*JSONPatchOperation
+
+// JSONPatchOp is the kind of a JSON Patch operation (RFC 6902): one of
+// [JSONPatchOpAdd], [JSONPatchOpRemove], [JSONPatchOpReplace], [JSONPatchOpMove],
+// [JSONPatchOpCopy], or [JSONPatchOpTest].
+type JSONPatchOp string
+
+const (
+	JSONPatchOpAdd     JSONPatchOp = "add"
+	JSONPatchOpRemove  JSONPatchOp = "remove"
+	JSONPatchOpReplace JSONPatchOp = "replace"
+	JSONPatchOpMove    JSONPatchOp = "move"
+	JSONPatchOpCopy    JSONPatchOp = "copy"
+	JSONPatchOpTest    JSONPatchOp = "test"
+)
+
+// JSONPatchOperation is a single RFC 6902 (JSON Patch) operation. A [JSONPatch]
+// applies an ordered list of these to transform one JSON document into another.
+type JSONPatchOperation struct {
+	// From is a JSON Pointer to the source location; required for "move" and "copy".
+	From string `json:"from,omitempty"`
+	// Op is the operation to perform.
+	Op JSONPatchOp `json:"op"`
+	// Path is a JSON Pointer (RFC 6901) to the target location, e.g. "/agentStatus".
+	// The empty pointer "" refers to the whole document. It must always be present on
+	// the wire (a whole-document replace carries path ""), so it is not omitted when
+	// empty.
+	Path string `json:"path"`
+	// Value is the operand for "add", "replace", and "test". It is not omitted when
+	// null so an explicit null operand survives the wire (omitempty cannot tell a
+	// null operand from an absent one, and dropping it makes a peer applier set the
+	// member to undefined or remove it instead of null); for "remove", "move", and
+	// "copy" it is null and ignored.
+	Value any `json:"value"`
 }
 
 // SessionSnapshot is a persisted point-in-time capture of session state. It

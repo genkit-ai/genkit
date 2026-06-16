@@ -99,7 +99,7 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 // the same as the reflection API. Companion routes are omitted for
 // capabilities the agent lacks; a client-managed agent contributes only
 // its turn route.
-func AgentRoutes[Stream, State any](a *aix.Agent[Stream, State]) []Route {
+func AgentRoutes[State any](a *aix.Agent[State]) []Route {
 	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.AbortSnapshotAction())
 }
 

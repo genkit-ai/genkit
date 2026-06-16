@@ -317,6 +317,12 @@ type Session[State any] struct {
 	state   SessionState[State]
 	store   SessionStore[State]
 	version uint64 // incremented on every mutation; used to skip redundant snapshots
+
+	// onCustomChange, when set by the agent runtime, is invoked after every
+	// UpdateCustom mutation (outside the lock) so the runtime can emit a
+	// customPatch chunk describing the delta. Nil for a standalone Session,
+	// in which case UpdateCustom is silent.
+	onCustomChange func()
 }
 
 // SessionID returns the ID of the session this conversation belongs to.
@@ -392,15 +398,37 @@ func (s *Session[State]) Custom() State {
 	return s.state.Custom
 }
 
+// customJSON returns a deep, JSON-normalized copy (a map[string]any / []any /
+// ... tree) of just the custom state, taken under the lock so it is safe to
+// use after the lock is released. Unlike [Session.State] it does not copy the
+// messages or artifacts, so the streaming patcher can diff custom on the hot
+// path without re-serializing the whole conversation on every mutation.
+func (s *Session[State]) customJSON() any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return normalizeJSON(s.state.Custom)
+}
+
 // UpdateCustom atomically reads the current custom state, applies the given
 // function, and writes the result back. fn runs while the session's
 // internal lock is held: it must not call other Session methods or send
 // on a [Responder], or it will deadlock.
+//
+// When the session is driven by an agent invocation, the mutation is streamed
+// to the client as an [AgentStreamChunk.CustomPatch] describing the delta (the
+// runtime computes and emits it after fn returns). Agents therefore just mutate
+// state; they never hand-craft patches.
 func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.state.Custom = fn(s.state.Custom)
 	s.version++
+	s.mu.Unlock()
+	// Emit the customPatch delta after releasing the lock: the hook reads
+	// session state (and may send on the wire), neither of which is safe to
+	// do while holding s.mu.
+	if s.onCustomChange != nil {
+		s.onCustomChange()
+	}
 }
 
 // Artifacts returns the current artifacts. The returned slice is a fresh

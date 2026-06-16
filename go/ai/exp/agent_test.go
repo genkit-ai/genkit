@@ -37,10 +37,6 @@ type testState struct {
 	Topics  []string `json:"topics,omitempty"`
 }
 
-type testStatus struct {
-	Phase string `json:"phase"`
-}
-
 func newTestRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	return registry.New()
@@ -51,19 +47,18 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "basicFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				resp.SendStatus(testStatus{Phase: "generating"})
 				// Echo back the user's message.
 				if input.Message != nil {
 					reply := ai.NewModelTextMessage("echo: " + input.Message.Content[0].Text)
 					sess.AddMessages(reply)
 				}
+				// Mutating custom state streams a customPatch chunk.
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
 					return s
 				})
-				resp.SendStatus(testStatus{Phase: "complete"})
 				return nil, nil
 			})
 		},
@@ -88,7 +83,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 			break
 		}
 	}
-	if turn1Chunks < 2 { // at least status + TurnEnd
+	if turn1Chunks < 2 { // at least customPatch + TurnEnd
 		t.Errorf("expected at least 2 chunks in turn 1, got %d", turn1Chunks)
 	}
 
@@ -127,7 +122,7 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "snapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -197,7 +192,7 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "resumeFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -286,7 +281,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "clientStateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -349,7 +344,7 @@ func TestAgent_Artifacts(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "artifactFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 
 				resp.SendArtifact(&Artifact{
@@ -424,7 +419,7 @@ func TestAgent_ClientManagedState_CallerStateIsolated(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "stateIsolationFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				// Replace the artifact the caller's state carried (the
 				// in-place replace path) and extend history.
@@ -481,7 +476,7 @@ func TestAgent_InputMessageCloned(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "inputCloneFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, nil
 			})
@@ -536,7 +531,7 @@ func TestAgent_SendArtifact_SynchronousAndCloned(t *testing.T) {
 		sessionContent  string
 	)
 	af := DefineCustomAgent(reg, "syncArtifactFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				a := &Artifact{Name: "out.txt", Parts: []*ai.Part{ai.NewTextPart("original")}}
 				resp.SendArtifact(a)
@@ -575,7 +570,7 @@ func TestAgent_TurnEndSnapshot_IncludesSameTurnArtifact(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "turnEndArtifactFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendArtifact(&Artifact{
 					Name:  "report.md",
@@ -621,7 +616,7 @@ func TestAgent_SnapshotCallback(t *testing.T) {
 	// Only snapshot on even turns.
 	callbackCalls := 0
 	af := DefineCustomAgent(reg, "callbackFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -677,7 +672,7 @@ func TestAgent_SendMessage(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "sendMsgFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, nil
 			})
@@ -721,7 +716,7 @@ func TestAgent_SessionContext(t *testing.T) {
 
 	var retrievedCounter int
 	af := DefineCustomAgent(reg, "contextFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				// Session should be retrievable from context.
 				ctxSess := SessionFromContext[testState](ctx)
@@ -766,7 +761,7 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "errorFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, fmt.Errorf("turn failed")
 			})
@@ -807,9 +802,9 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 // defineLastGoodTestAgent defines a client- or server-managed echo agent
 // whose turn fails (with partial session mutations) when the user sends
 // "boom". Successful turns report [AgentFinishReasonStop].
-func defineLastGoodTestAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testStatus, testState] {
+func defineLastGoodTestAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testState] {
 	return DefineCustomAgent(reg, name,
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				text := input.Message.Content[0].Text
 				if text == "boom" {
@@ -1123,7 +1118,7 @@ func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
 	// forwarding chunks once fn returns with an error).
 	turnEndSeen := make(chan struct{})
 	af := DefineCustomAgent(reg, "failedTurnEnd",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, fmt.Errorf("boom")
 			})
@@ -1170,7 +1165,7 @@ func TestAgent_CustomAgentContinuesAfterFailedTurn(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "continueAfterFail",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			for {
 				err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 					text := input.Message.Content[0].Text
@@ -1227,7 +1222,7 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	echo := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+	echo := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 			return nil, nil
 		})
@@ -1291,7 +1286,7 @@ func TestAgent_SetMessages(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "setMsgsFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				// Replace all messages with just one.
 				sess.SetMessages([]*ai.Message{ai.NewModelTextMessage("replaced")})
@@ -1334,7 +1329,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	var capturedOutputs []any
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			// Wrap collectTurnOutput to capture what each turn produces.
 			originalCollect := sess.collectTurnOutput
 			sess.collectTurnOutput = func() any {
@@ -1344,7 +1339,10 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 			}
 
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				resp.SendStatus(testStatus{Phase: "thinking"})
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
 				resp.SendModelChunk(&ai.ModelResponseChunk{
 					Content: []*ai.Part{ai.NewTextPart("reply")},
 				})
@@ -1389,11 +1387,11 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	}
 
 	for i, output := range capturedOutputs {
-		chunks, ok := output.([]*AgentStreamChunk[testStatus])
+		chunks, ok := output.([]*AgentStreamChunk)
 		if !ok {
-			t.Fatalf("turn %d: expected []*AgentStreamChunk[testStatus], got %T", i, output)
+			t.Fatalf("turn %d: expected []*AgentStreamChunk, got %T", i, output)
 		}
-		// 3 content chunks per turn: status + model chunk + artifact.
+		// 3 content chunks per turn: customPatch + model chunk + artifact.
 		if len(chunks) != 3 {
 			t.Errorf("turn %d: expected 3 chunks, got %d", i, len(chunks))
 		}
@@ -1413,7 +1411,7 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	var capturedOutputs []any
 
 	af := DefineCustomAgent(reg, "turnOutputSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			originalCollect := sess.collectTurnOutput
 			sess.collectTurnOutput = func() any {
 				output := originalCollect()
@@ -1422,7 +1420,10 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 			}
 
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				resp.SendStatus(testStatus{Phase: "working"})
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil, nil
 			})
@@ -1455,16 +1456,17 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		t.Fatal("expected a snapshot ID on the turn-end chunk")
 	}
 
-	// Turn output should contain only the status chunk, not the TurnEnd signal.
+	// Turn output should contain only the customPatch chunk, not the TurnEnd signal.
 	if len(capturedOutputs) != 1 {
 		t.Fatalf("expected 1 captured output, got %d", len(capturedOutputs))
 	}
-	chunks := capturedOutputs[0].([]*AgentStreamChunk[testStatus])
+	chunks := capturedOutputs[0].([]*AgentStreamChunk)
 	if len(chunks) != 1 {
 		t.Errorf("expected 1 content chunk, got %d", len(chunks))
 	}
-	if chunks[0].Status.Phase != "working" {
-		t.Errorf("expected status phase 'working', got %q", chunks[0].Status.Phase)
+	// The first (and only) patch of the turn is a whole-document replace.
+	if got := chunks[0].CustomPatch; len(got) != 1 || got[0].Op != JSONPatchOpReplace || got[0].Path != "" {
+		t.Errorf("expected a whole-document replace customPatch, got %+v", got)
 	}
 }
 
@@ -1902,7 +1904,7 @@ func TestAgent_RunText(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "runTextFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Message.Content[0].Text))
@@ -1935,7 +1937,7 @@ func TestAgent_Run(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "runFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("reply"))
@@ -1965,7 +1967,7 @@ func TestAgent_RunText_WithState(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "runStateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -2006,7 +2008,7 @@ func TestAgent_RunText_WithSnapshot(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "runSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -2161,7 +2163,7 @@ func TestAgent_SingleTurnSnapshotDedup(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "dedupFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -2205,7 +2207,7 @@ func TestAgent_MultiTurnSnapshotDedup(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "multiDedupFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -2267,7 +2269,7 @@ func TestAgent_InvocationEndSnapshotWhenStateChangesAfterRun(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "postRunMutateFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil, nil
@@ -2320,9 +2322,11 @@ func TestAgent_FnPanicResolvesAsFailedOutput(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "panicFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				resp.SendStatus(testStatus{Phase: "before-panic"})
+				resp.SendModelChunk(&ai.ModelResponseChunk{
+					Content: []*ai.Part{ai.NewTextPart("before-panic")},
+				})
 				panic("boom")
 			})
 		},
@@ -2362,7 +2366,7 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 	emitting := make(chan struct{})
 	fnDone := make(chan struct{})
 	af := DefineCustomAgent(reg, "cancelFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			defer close(fnDone)
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				close(emitting)
@@ -2375,7 +2379,9 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 						return nil, ctx.Err()
 					default:
 					}
-					resp.SendStatus(testStatus{Phase: "tick"})
+					resp.SendModelChunk(&ai.ModelResponseChunk{
+						Content: []*ai.Part{ai.NewTextPart("tick")},
+					})
 				}
 			})
 		},
@@ -2431,7 +2437,7 @@ func waitForSnapshot[State any](
 // a copy of it, failing the test if the stream errors or ends first. Use it
 // in tests that only need to advance to a turn boundary; tests that must
 // inspect intermediate chunks should range over Receive directly.
-func nextTurnEnd[Stream, State any](t *testing.T, conn *AgentConnection[Stream, State]) *TurnEnd {
+func nextTurnEnd[State any](t *testing.T, conn *AgentConnection[State]) *TurnEnd {
 	t.Helper()
 	for chunk, err := range conn.Receive() {
 		if err != nil {
@@ -2449,7 +2455,7 @@ func nextTurnEnd[Stream, State any](t *testing.T, conn *AgentConnection[Stream, 
 // outputWithin finalizes conn and returns its output, failing the test if
 // finalization does not complete within d. Use it in tests where a
 // regression would make Output hang rather than fail.
-func outputWithin[Stream, State any](t *testing.T, conn *AgentConnection[Stream, State], d time.Duration) (*AgentOutput[State], error) {
+func outputWithin[State any](t *testing.T, conn *AgentConnection[State], d time.Duration) (*AgentOutput[State], error) {
 	t.Helper()
 	type outcome struct {
 		out *AgentOutput[State]
@@ -2476,7 +2482,7 @@ func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "turnEndSnapshotFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return nil, nil
@@ -2542,7 +2548,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	release := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachInFlight",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				entered <- struct{}{}
 				<-release
@@ -2641,7 +2647,7 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	release := make(chan struct{}, 4)
 
 	af := DefineCustomAgent(reg, "detachChainParent",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				enter <- struct{}{}
 				<-release
@@ -2719,7 +2725,7 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "detachNoStore",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				return nil, nil
 			})
@@ -2760,7 +2766,7 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachComplete",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -2855,7 +2861,7 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	release := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachArtifact",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				resp.SendArtifact(&Artifact{
 					Name:  "before.txt",
@@ -2932,7 +2938,7 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	boom := errors.New("kaboom")
 
 	af := DefineCustomAgent(reg, "detachErr",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -3003,7 +3009,7 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachAbort",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -3074,7 +3080,7 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "syncStillWorks",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return nil, nil
@@ -3132,7 +3138,7 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	exited := make(chan error, 1)
 
 	af := DefineCustomAgent(reg, "syncCancel",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -3197,7 +3203,7 @@ func TestAgent_ResumeFromErrorSnapshot_Rejected(t *testing.T) {
 	}
 
 	af := DefineCustomAgent(reg, "resumeErrored",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, nil
 		},
 		WithSessionStore(store),
@@ -3236,7 +3242,7 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	}
 
 	af := DefineCustomAgent(reg, "transformedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("the secret is out"))
 				return nil, nil
@@ -3314,7 +3320,7 @@ func TestAgent_GetSnapshotAction_ReturnsFinishReason(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "finishReasonActionFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("done"))
 				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
@@ -3361,7 +3367,7 @@ func TestAgent_GetSnapshotAction_NoStore(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	DefineCustomAgent(reg, "noStoreFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, nil
 		},
 	)
@@ -3571,7 +3577,7 @@ func TestAgent_AgentMetadata(t *testing.T) {
 	// Verify the metadata["agent"] payload on the agent's action descriptor
 	// correctly reports stateManagement and abortable for each combination
 	// of store capabilities.
-	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, nil
 	}
 
@@ -3649,7 +3655,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		reg := newTestRegistry(t)
 		store := newTestInMemStore[testState]() // implements SnapshotAborter
 		DefineCustomAgent(reg, "fullCaps",
-			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, nil
 			},
 			WithSessionStore(store),
@@ -3669,7 +3675,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 	t.Run("no aborter capability → abort not registered", func(t *testing.T) {
 		reg := newTestRegistry(t)
 		DefineCustomAgent(reg, "minCaps",
-			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, nil
 			},
 			WithSessionStore[testState](minimalStore[testState]{}),
@@ -3693,7 +3699,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 // the store's capabilities by returning nil for actions that were not
 // registered.
 func TestAgent_CompanionActionAccessors(t *testing.T) {
-	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, nil
 	}
 
@@ -3737,7 +3743,7 @@ func TestAgent_CompanionActionAccessors(t *testing.T) {
 // configured with (so local Go code need not thread a separate reference),
 // and nil when the agent is client-managed.
 func TestAgent_Store(t *testing.T) {
-	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, nil
 	}
 
@@ -3769,7 +3775,7 @@ func TestAgent_Store(t *testing.T) {
 // metadata["description"] by core), so reflective tooling and local
 // callers read it the same way they read any other action's description.
 func TestAgent_Description(t *testing.T) {
-	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 		return nil, nil
 	}
 
@@ -3816,7 +3822,7 @@ func TestAgent_Description(t *testing.T) {
 func TestAgent_RegisterCarriesCompanions(t *testing.T) {
 	reg := newTestRegistry(t)
 	af := DefineCustomAgent(reg, "mover",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, nil
 		},
 		WithSessionStore(newTestInMemStore[testState]()),
@@ -3852,7 +3858,7 @@ func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := NewCustomAgent("standalone",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("hi"))
 				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
@@ -3892,7 +3898,7 @@ func TestAgent_AbortAction_NotFound(t *testing.T) {
 	// action so callers (Dev UI, remote clients) see a proper status.
 	reg := newTestRegistry(t)
 	DefineCustomAgent(reg, "missingFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, nil
 		},
 		WithSessionStore(newTestInMemStore[testState]()),
@@ -3928,7 +3934,7 @@ func TestAgent_StateTransform_ClientManagedState(t *testing.T) {
 	}
 
 	af := DefineCustomAgent(reg, "clientXformFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter = 7
@@ -3959,7 +3965,7 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "resumeDetachedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				sess.UpdateCustom(func(s testState) testState {
@@ -4104,7 +4110,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "raceFinalize",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -4236,7 +4242,7 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "abortNoop",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("reply"))
 				return nil, nil
@@ -4287,7 +4293,7 @@ func TestAgent_ResultAndOutput_IsolatedFromSession(t *testing.T) {
 	)
 
 	af := DefineCustomAgent(reg, "isolation",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("session-msg"))
 				sess.AddArtifacts(&Artifact{
@@ -4361,7 +4367,7 @@ func TestAgent_ResultAndOutput_IsolatedFromSession(t *testing.T) {
 func TestAgent_Name(t *testing.T) {
 	reg := newTestRegistry(t)
 	a := DefineCustomAgent(reg, "name-accessor",
-		func(ctx context.Context, _ Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, _ Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return sess.Result(), nil
 		})
 	if got := a.Name(); got != "name-accessor" {
@@ -4380,7 +4386,7 @@ func TestAgent_FinishReason_TurnAndInvocation(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "finishReasonFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
@@ -4430,7 +4436,7 @@ func TestAgent_FinishReason_OmittedWhenNil(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "noReasonFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return nil, nil
@@ -4466,7 +4472,7 @@ func TestAgent_FinishReason_InvocationOverride(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "overrideReasonFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
@@ -4510,7 +4516,7 @@ func TestAgent_FinishReason_MultiTurnDistinct(t *testing.T) {
 	reasons := []AgentFinishReason{AgentFinishReasonStop, AgentFinishReasonInterrupted}
 
 	af := DefineCustomAgent(reg, "multiReasonFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return &TurnResult{FinishReason: reasons[sess.TurnIndex]}, nil
@@ -4605,7 +4611,7 @@ func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
 		fnSaw := make(chan string, 1)
 
 		af := DefineCustomAgent(reg, "detachSurviveFlow",
-			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 					select {
 					case <-release:
@@ -4668,7 +4674,7 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		entered := make(chan struct{})
 
 		af := DefineCustomAgent(reg, "detachReasonComplete",
-			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 					select {
 					case entered <- struct{}{}:
@@ -4725,7 +4731,7 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		entered := make(chan struct{})
 
 		af := DefineCustomAgent(reg, "detachReasonFailed",
-			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 					select {
 					case entered <- struct{}{}:
@@ -4780,7 +4786,7 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		entered := make(chan struct{})
 
 		af := DefineCustomAgent(reg, "detachReasonAborted",
-			func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 					select {
 					case entered <- struct{}{}:
@@ -4841,7 +4847,7 @@ func TestAgent_FinishReason_InvocationOverride_Persisted(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "overridePersistedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
@@ -4888,7 +4894,7 @@ func TestAgent_FinishReason_MultiTurnDistinct_Persisted(t *testing.T) {
 	reasons := []AgentFinishReason{AgentFinishReasonStop, AgentFinishReasonInterrupted}
 
 	af := DefineCustomAgent(reg, "multiReasonPersistedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return &TurnResult{FinishReason: reasons[sess.TurnIndex]}, nil
@@ -4939,7 +4945,7 @@ func TestAgent_FinishReason_OmittedPersisted(t *testing.T) {
 	store := newTestInMemStore[testState]()
 
 	af := DefineCustomAgent(reg, "noReasonPersistedFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
 				return nil, nil
@@ -5053,7 +5059,7 @@ func TestAgent_Detach_SucceededHonorsResultOverride(t *testing.T) {
 	entered := make(chan struct{})
 
 	af := DefineCustomAgent(reg, "detachOverride",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -5172,7 +5178,7 @@ func TestAgent_SessionID_AssignedBeforeFirstSnapshot(t *testing.T) {
 
 	var fnSawSessionID, ctxSawSessionID string
 	af := DefineCustomAgent(reg, "sessionAlwaysAssigned",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			fnSawSessionID = sess.SessionID()
 			// The ID lives on the session itself, so code holding only the
 			// context-carried session (e.g. a tool) can read it too.
@@ -5526,7 +5532,7 @@ func TestAgent_ClientManagedState_SessionIDRoundTrip(t *testing.T) {
 
 	var fnSawSessionID string
 	af := DefineCustomAgent(reg, "clientPassthroughFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			fnSawSessionID = sess.SessionID()
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.UpdateCustom(func(s testState) testState {
@@ -5635,7 +5641,7 @@ func TestAgent_Detach_AssignsSessionID(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	af := DefineCustomAgent(reg, "detachSessionFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				select {
 				case entered <- struct{}{}:
@@ -6012,7 +6018,7 @@ func TestAgent_SendNilInput_Rejected(t *testing.T) {
 	reg := newTestRegistry(t)
 
 	af := DefineCustomAgent(reg, "nilInputFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				if input.Message != nil {
 					sess.AddMessages(ai.NewModelTextMessage("echo: " + input.Message.Text()))
@@ -6114,10 +6120,14 @@ func TestAgent_ClientCancelMidStream(t *testing.T) {
 			reg := newTestRegistry(t)
 
 			af := DefineCustomAgent(reg, "cancelFlow",
-				func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+				func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 					return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-						resp.SendStatus(testStatus{Phase: "step0"})
-						resp.SendStatus(testStatus{Phase: "step1"})
+						resp.SendModelChunk(&ai.ModelResponseChunk{
+							Content: []*ai.Part{ai.NewTextPart("step0")},
+						})
+						resp.SendModelChunk(&ai.ModelResponseChunk{
+							Content: []*ai.Part{ai.NewTextPart("step1")},
+						})
 						return nil, nil
 					})
 				},
@@ -6182,7 +6192,7 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 	t.Cleanup(func() { close(block) }) // let the stubborn fn unwind
 
 	af := DefineCustomAgent(reg, "stubbornFlow",
-		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			<-block // ignores ctx
 			return nil, nil
 		},

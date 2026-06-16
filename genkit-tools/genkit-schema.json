@@ -164,7 +164,9 @@
         "modelChunk": {
           "$ref": "#/$defs/ModelResponseChunk"
         },
-        "status": {},
+        "customPatch": {
+          "$ref": "#/$defs/JsonPatch"
+        },
         "artifact": {
           "$ref": "#/$defs/Artifact"
         },
@@ -207,6 +209,43 @@
         "snapshotId"
       ],
       "additionalProperties": false
+    },
+    "JsonPatchOp": {
+      "type": "string",
+      "enum": [
+        "add",
+        "remove",
+        "replace",
+        "move",
+        "copy",
+        "test"
+      ]
+    },
+    "JsonPatchOperation": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/JsonPatchOp"
+        },
+        "path": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "op",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "JsonPatch": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/JsonPatchOperation"
+      }
     },
     "SessionSnapshot": {
       "type": "object",

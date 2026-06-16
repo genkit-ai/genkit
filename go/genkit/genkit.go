@@ -470,7 +470,7 @@ func DefineAgent[State any](
 	name string,
 	source aix.AgentSource,
 	opts ...aix.AgentOption[State],
-) *aix.Agent[any, State] {
+) *aix.Agent[State] {
 	return aix.DefineAgent(g.reg, name, source, opts...)
 }
 
@@ -500,14 +500,14 @@ func DefineAgent[State any](
 //   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
-// Type parameters:
-//   - Stream: Type for custom status updates sent via [aix.Responder.SendStatus]
-//   - State: Type for user-defined state persisted in snapshots
+// The State type parameter is the shape of the conversation's custom state
+// ([aix.SessionState.Custom]); mutating it via [aix.Session.UpdateCustom]
+// streams an [aix.AgentStreamChunk.CustomPatch] delta to the client.
 //
 // Example:
 //
 //	chatAgent := genkit.DefineCustomAgent(g, "chat",
-//		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+//		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 //			var lastMessage *ai.Message
 //			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 //				var reason aix.AgentFinishReason
@@ -536,12 +536,12 @@ func DefineAgent[State any](
 //			return &aix.AgentResult{Message: lastMessage}, nil
 //		},
 //	)
-func DefineCustomAgent[Stream, State any](
+func DefineCustomAgent[State any](
 	g *Genkit,
 	name string,
-	fn aix.AgentFunc[Stream, State],
+	fn aix.AgentFunc[State],
 	opts ...aix.AgentOption[State],
-) *aix.Agent[Stream, State] {
+) *aix.Agent[State] {
 	return aix.DefineCustomAgent(g.reg, name, fn, opts...)
 }
 

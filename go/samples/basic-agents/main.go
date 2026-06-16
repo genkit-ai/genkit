@@ -85,7 +85,7 @@ func main() {
 	// and a.Store() for snapshot reads. Nothing the CLI does is tied to a
 	// concrete store type, so swapping in a different SessionStore would
 	// not touch a line of it.
-	agents := []*aix.Agent[any, any]{
+	agents := []*aix.Agent[any]{
 		defineInlineAgent(g),
 		definePromptAgent(g),
 		defineCustomAgent(g),
@@ -103,7 +103,7 @@ func main() {
 // prompt, appends the conversation history, calls the model, and updates
 // session state. This is the shortest path from "I want a chat agent" to
 // a working one.
-func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any, any] {
+func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "pirate"
 	return genkit.DefineAgent(g, name,
 		aix.FromInline(
@@ -129,7 +129,7 @@ func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any, any] {
 // FromPrompt's argument is the default input passed to the prompt's
 // Render on every turn; the inline-prompt variant has no per-turn input
 // of its own.
-func definePromptAgent(g *genkit.Genkit) *aix.Agent[any, any] {
+func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "chef"
 	return genkit.DefineAgent(g, name,
 		aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
@@ -148,10 +148,10 @@ func definePromptAgent(g *genkit.Genkit) *aix.Agent[any, any] {
 //
 // Even with full control over the loop, the framework still owns session
 // state, snapshot writes, and the detach lifecycle.
-func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any, any] {
+func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "coder"
 	return genkit.DefineCustomAgent(g, name,
-		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
 					ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
