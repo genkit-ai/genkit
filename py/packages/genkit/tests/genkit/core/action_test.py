@@ -321,4 +321,3 @@ async def test_action_context_isolation_sequential_and_nested() -> None:
     assert parent_ctx == {'auth': 'parent_secret'}  # Permanent override check
 
     assert get_current_context() is None
-

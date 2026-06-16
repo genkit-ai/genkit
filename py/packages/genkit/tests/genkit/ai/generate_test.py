@@ -1526,7 +1526,7 @@ async def test_restart_path_routes_through_wrap_tool_middleware() -> None:
                 restart=[
                     ToolRequestPart(
                         tool_request=ToolRequest(name='approveMe', input={}, ref='r1'),
-                        metadata={'resumed': {'toolApproved': True}},
+                        metadata={'resumed': {'tool_approved': True}},
                     )
                 ],
             ),

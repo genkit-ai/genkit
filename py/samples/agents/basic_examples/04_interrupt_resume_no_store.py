@@ -18,7 +18,7 @@
 """Backend: interrupt + resume without store — carry out.state between stream_bidi calls.
 
 Uses ToolApproval middleware: transferMoney is gated until the client resumes with
-``restart_tool(..., resumed_metadata={'toolApproved': True})``.
+``restart_tool(..., resumed_metadata={'tool_approved': True})``.
 """
 
 from __future__ import annotations

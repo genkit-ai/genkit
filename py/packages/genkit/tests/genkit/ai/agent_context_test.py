@@ -20,7 +20,7 @@ from genkit._ai._aio import Genkit
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
 from genkit._core._model import Message, ModelResponse
-from genkit._core._typing import FinishReason, Part, Role, ToolRequest, ToolRequestPart, TextPart
+from genkit._core._typing import FinishReason, Part, Role, TextPart, ToolRequest, ToolRequestPart
 
 
 @pytest.mark.asyncio
@@ -33,7 +33,7 @@ async def test_agent_propagates_context_to_tools() -> None:
     @ai.tool(name='getContextTool')
     async def get_context_tool(_: dict, ctx: ToolRunContext) -> str:
         context_seen.append(ctx.context)
-        return f"auth: {ctx.context.get('auth', 'missing')}"
+        return f'auth: {ctx.context.get("auth", "missing")}'
 
     agent = ai.define_agent(
         name='contextAgent',
@@ -74,7 +74,7 @@ async def test_agent_propagates_context_to_tools() -> None:
     conn = await agent.stream_bidi(context={'auth': 'secret'})
     await conn.send_text('run')
     await conn.close()
-    async for chunk in conn.receive():
+    async for _chunk in conn.receive():
         pass
     out = await conn.output()
 
@@ -104,7 +104,7 @@ async def test_prompt_agent_propagates_context_to_template() -> None:
     conn = await agent.stream_bidi(context={'auth': {'email': 'secret@agent.com'}})
     await conn.send_text('hello')
     await conn.close()
-    async for chunk in conn.receive():
+    async for _chunk in conn.receive():
         pass
     await conn.output()
 
@@ -141,7 +141,7 @@ async def test_agent_lookup_and_execution() -> None:
     conn = await agent.stream_bidi()
     await conn.send_text('hello')
     await conn.close()
-    async for chunk in conn.receive():
+    async for _chunk in conn.receive():
         pass
     out = await conn.output()
 

@@ -54,6 +54,7 @@ from genkit._core._action import (
     BidiConnection,
     QueueSentinel,
     define_bidi_action,
+    get_current_context,
 )
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware

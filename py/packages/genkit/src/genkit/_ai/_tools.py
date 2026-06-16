@@ -80,7 +80,6 @@ class Tool:
         return (await self._action.run(*args, **kwargs)).response
 
 
-
 # Context variables for propagating resumed metadata to tools
 _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
 # Stashed copy of tool_request.input when restart replaces input (JSON; shape is per tool).

@@ -8,7 +8,6 @@ import pytest
 from genkit import ActionKind, Genkit
 from genkit._ai._tools import (
     Interrupt,
-    Tool,
     ToolRunContext,
     _tool_original_input,
     _tool_resumed_metadata,
@@ -16,7 +15,6 @@ from genkit._ai._tools import (
     restart_tool,
     run_tool_after_restart,
 )
-from genkit._core._action import Action
 from genkit._core._error import GenkitError
 from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
 

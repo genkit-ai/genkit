@@ -10,9 +10,9 @@ from typing import Any
 import pytest
 
 from genkit import Genkit, Message, ModelResponse
-from genkit._ai._generate import generate_action, resolve_tool
+from genkit._ai._generate import generate_action
 from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import Interrupt, Tool, ToolRunContext, respond_to_interrupt, restart_tool
+from genkit._ai._tools import Interrupt, ToolRunContext, respond_to_interrupt, restart_tool
 from genkit._core._error import GenkitError
 from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import FinishReason, Resume

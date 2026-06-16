@@ -106,8 +106,7 @@ response = await ai.generate(
 ```
 
 When a non-allowed tool is called, execution is interrupted. Approve and re-run the
-tool by restarting it with ``resumed_metadata`` that includes ``toolApproved``
-(the middleware also accepts snake_case ``tool_approved``):
+tool by restarting it with ``resumed_metadata`` that includes ``tool_approved``:
 
 ```python
 first = await ai.generate(
