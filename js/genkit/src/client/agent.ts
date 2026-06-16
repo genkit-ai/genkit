@@ -133,21 +133,6 @@ export function remoteAgent<State = unknown>(
       return { stream, output };
     },
 
-    async run(
-      input: AgentInput,
-      init: AgentInit,
-      opts: { abortSignal: AbortSignal }
-    ) {
-      const headers = await resolveHeaders();
-      return runFlow<AgentOutput, AgentInit>({
-        url,
-        input,
-        init,
-        headers,
-        abortSignal: opts.abortSignal,
-      });
-    },
-
     async getSnapshot(lookup: SnapshotLookup) {
       const headers = await resolveHeaders();
       return runFlow<SessionSnapshot<State> | undefined>({

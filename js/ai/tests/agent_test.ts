@@ -3464,6 +3464,39 @@ Now respond to the latest message.`,
       assert.notStrictEqual(chat.snapshotId, firstSnapshotId);
     });
 
+    it('keeps chat.state/res.state live across a non-streaming send() (server-managed)', async () => {
+      // Server-managed agents return only a snapshotId on the wire (no custom
+      // `state`); custom state reaches the client via streamed customPatch
+      // chunks. send() must drain the stream so chat.state stays live after a
+      // non-streaming turn, and res.state must mirror it.
+      const store = new InMemorySessionStore<{ count: number }>();
+      const agent = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'apiCounter', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            message: { role: 'model', content: [{ text: 'ok' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+
+      const chat = agent.chat();
+      const res1 = await chat.send('inc');
+      assert.deepEqual(chat.state, { count: 1 });
+      // res.state mirrors chat.state even though the wire output omits `state`.
+      assert.deepEqual(res1.state, { count: 1 });
+
+      // A second non-streaming send() must refresh chat.state (not go stale).
+      const res2 = await chat.send('inc');
+      assert.deepEqual(chat.state, { count: 2 });
+      assert.deepEqual(res2.state, { count: 2 });
+    });
+
     it('exposes interrupts and builds resume parts', async () => {
       const agent = defineCustomAgent(
         new Registry(),
