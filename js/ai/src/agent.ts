@@ -1387,10 +1387,6 @@ export function defineCustomAgent<State = unknown>(
       return { stream: bidi.stream, output: bidi.output };
     },
 
-    async run(input, init, opts) {
-      return startBidi(input, init, opts).output;
-    },
-
     async getSnapshot(lookup: SnapshotLookup) {
       return composite.getSnapshotData(lookup);
     },
