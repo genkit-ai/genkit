@@ -55,6 +55,17 @@ class AgentStateManagement(StrEnum):
     CLIENT = 'client'
 
 
+class JsonPatchOp(StrEnum):
+    """JsonPatchOp data type class."""
+
+    ADD = 'add'
+    REMOVE = 'remove'
+    REPLACE = 'replace'
+    MOVE = 'move'
+    COPY = 'copy'
+    TEST = 'test'
+
+
 class SnapshotEvent(StrEnum):
     """SnapshotEvent data type class."""
 
@@ -68,7 +79,7 @@ class SnapshotStatus(StrEnum):
     """SnapshotStatus data type class."""
 
     PENDING = 'pending'
-    SUCCEEDED = 'succeeded'
+    COMPLETED = 'completed'
     ABORTED = 'aborted'
     FAILED = 'failed'
 
@@ -157,6 +168,7 @@ class AgentMetadata(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     state_management: AgentStateManagement = Field(...)
     abortable: bool = Field(...)
+    state_schema: StateSchema | None = None
 
 
 class AgentOutput(GenkitModel):
@@ -186,7 +198,7 @@ class AgentStreamChunk(GenkitModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     model_chunk: ModelResponseChunk | None = None
-    status: Any | None = Field(default=None)
+    custom_patch: JsonPatch | None = None
     artifact: Artifact | None = None
     turn_end: TurnEnd | None = None
 
@@ -204,7 +216,18 @@ class GetSnapshotRequest(GenkitModel):
     """Model for getsnapshotrequest data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    snapshot_id: str = Field(...)
+    snapshot_id: str | None = None
+    session_id: str | None = None
+
+
+class JsonPatchOperation(GenkitModel):
+    """Model for jsonpatchoperation data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    op: JsonPatchOp = Field(...)
+    path: str = Field(...)
+    from_: str | None = Field(default=None, alias='from')
+    value: Any | None = Field(default=None)
 
 
 class SessionSnapshot(GenkitModel):
@@ -948,6 +971,12 @@ class Resume(GenkitModel):
     metadata: Metadata | None = None
 
 
+class StateSchema(GenkitModel):
+    """Model for stateschema data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+
+
 class Details(GenkitModel):
     """Model for details data."""
 
@@ -1070,6 +1099,12 @@ class Part(
 
 
 TraceEvent = SpanStartEvent | SpanEndEvent
+
+
+class JsonPatch(RootModel[list[JsonPatchOperation]]):
+    """Root model for jsonpatch."""
+
+    root: list[JsonPatchOperation]
 
 
 class EvalResponse(RootModel[list[EvalFnResponse]]):
