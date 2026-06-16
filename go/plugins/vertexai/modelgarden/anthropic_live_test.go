@@ -49,8 +49,8 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 
-	t.Run("model version ok", func(t *testing.T) {
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+	t.Run("model ok", func(t *testing.T) {
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -69,8 +69,8 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 
-	t.Run("model version nok", func(t *testing.T) {
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+	t.Run("model without messages fails", func(t *testing.T) {
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		_, err := genkit.Generate(ctx, g,
 			ai.WithConfig(&anthropic.MessageNewParams{
 				Temperature: anthropic.Float(1),
@@ -79,7 +79,30 @@ func TestAnthropicLive(t *testing.T) {
 			ai.WithModel(m),
 		)
 		if err == nil {
-			t.Fatal("should have failed due wrong model version")
+			t.Fatal("should have failed due missing messages")
+		}
+	})
+
+	t.Run("opus 4.5", func(t *testing.T) {
+		m := modelgarden.AnthropicModel(g, "claude-opus-4-5")
+		if m == nil {
+			t.Fatal("claude-opus-4-5 model was not registered")
+		}
+		resp, err := genkit.Generate(ctx, g,
+			ai.WithConfig(&anthropic.MessageNewParams{
+				Temperature: anthropic.Float(1),
+				MaxTokens:   1024,
+			}),
+			ai.WithModel(m),
+			ai.WithSystem("talk to me like an evil pirate and say ARR several times but be very short"),
+			ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("I'm a fish"))),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(resp.Text(), "ARR") {
+			t.Fatalf("not a pirate :( :%s", resp.Text())
 		}
 	})
 
@@ -88,7 +111,7 @@ func TestAnthropicLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		resp, err := genkit.Generate(ctx, g,
 			ai.WithSystem("You are a professional image detective that talks like an evil pirate that loves animals, your task is to tell the name of the animal in the image but be very short"),
 			ai.WithModel(m),
@@ -109,7 +132,7 @@ func TestAnthropicLive(t *testing.T) {
 	})
 
 	t.Run("tools", func(t *testing.T) {
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		myJokeTool := genkit.DefineTool(
 			g,
 			"myJoke",
@@ -136,7 +159,7 @@ func TestAnthropicLive(t *testing.T) {
 	})
 
 	t.Run("streaming", func(t *testing.T) {
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
 
 		final, err := genkit.Generate(ctx, g,
@@ -168,7 +191,7 @@ func TestAnthropicLive(t *testing.T) {
 		}
 	})
 	t.Run("streaming with thinking", func(t *testing.T) {
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
 
 		final, err := genkit.Generate(ctx, g,
@@ -214,7 +237,7 @@ func TestAnthropicLive(t *testing.T) {
 	})
 
 	t.Run("tools streaming", func(t *testing.T) {
-		m := modelgarden.AnthropicModel(g, "claude-opus-4@20250514")
+		m := modelgarden.AnthropicModel(g, "claude-opus-4")
 		out := ""
 
 		myStoryTool := genkit.DefineTool(
