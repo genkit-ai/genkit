@@ -27,9 +27,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, restart_tool
-from genkit._core._typing import Resume, ToolRequestPart
-from genkit.agent import AgentInit
+from genkit import Genkit, ToolRequestPart, restart_tool
+from genkit.agent import AgentInit, Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 

@@ -21,13 +21,17 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from genkit import Genkit
-from genkit._ai._agent import SessionRunner, TurnResult, _to_agent_finish_reason
-from genkit._ai._generate import generate_action
-from genkit._ai._prompt import PromptConfig, to_generate_action_options
-from genkit._core._action import ActionRunContext
-from genkit._core._typing import AgentInput, AgentResult, AgentStreamChunk
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit import ActionRunContext, FinishReason, Genkit, Message
+from genkit.agent import (
+    AgentFinishReason,
+    AgentInit,
+    AgentInput,
+    AgentResult,
+    AgentStreamChunk,
+    InMemorySessionStore,
+    SessionRunner,
+    TurnResult,
+)
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -37,21 +41,22 @@ store = InMemorySessionStore()
 async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
     async def handle_turn(inp: AgentInput) -> TurnResult | None:
         history = await sess.get_messages()
-        child = ai.registry.new_child()
-        pc = PromptConfig(
+        messages = [Message(m) for m in history] if history else None
+
+        stream_resp = ai.generate_stream(
             model='googleai/gemini-flash-latest',
             system='Concise coding assistant.',
-            messages=history or None,
+            messages=messages,
         )
-        opts = await to_generate_action_options(child, pc)
-
-        def on_chunk(chunk) -> None:
+        async for chunk in stream_resp.stream:
             ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
-        res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
+        res = await stream_resp.response
         if res.message:
             await sess.add_messages(res.message)
-        return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))
+
+        fr = AgentFinishReason.STOP if res.finish_reason == FinishReason.STOP else AgentFinishReason.UNKNOWN
+        return TurnResult(finish_reason=fr)
 
     await sess.run(handle_turn)
     return await sess.result()

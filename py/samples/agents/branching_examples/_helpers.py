@@ -22,20 +22,18 @@ an API key.
 
 from __future__ import annotations
 
-from genkit import Genkit
+from genkit import Genkit, Message, Part, TextPart
 from genkit._ai._agent import SessionRunner, TurnResult
 from genkit._core._action import ActionRunContext
-from genkit._core._typing import (
+from genkit.agent import (
+    Agent,
     AgentFinishReason,
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentResult,
-    MessageData,
-    Part,
-    TextPart,
+    InMemorySessionStore,
 )
-from genkit.agent import Agent, InMemorySessionStore
 
 
 def text_from_parts(parts) -> str:
@@ -69,7 +67,7 @@ def define_echo_agent(
     async def echo_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
         async def handle_turn(inp: AgentInput) -> TurnResult | None:
             user_text = text_from_parts(inp.messages[-1].content if inp.messages else None)
-            await sess.add_messages(MessageData(role='model', content=[Part(root=TextPart(text=f'Echo: {user_text}'))]))
+            await sess.add_messages(Message(role='model', content=[Part(root=TextPart(text=f'Echo: {user_text}'))]))
             return TurnResult(finish_reason=AgentFinishReason.STOP)
 
         await sess.run(handle_turn)

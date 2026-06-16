@@ -32,8 +32,7 @@ from uuid import uuid4
 from _helpers import define_echo_agent, model_text, run_turn
 
 from genkit import Genkit
-from genkit._core._typing import AgentInit
-from genkit.agent import InMemorySessionStore
+from genkit.agent import AgentInit, InMemorySessionStore
 
 ai = Genkit()
 store = InMemorySessionStore()

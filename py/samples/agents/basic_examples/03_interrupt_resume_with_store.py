@@ -33,8 +33,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, Message, restart_tool
-from genkit._core._typing import Resume
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import AgentInit, InMemorySessionStore, Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 

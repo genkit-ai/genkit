@@ -24,6 +24,7 @@ from genkit._ai._agent import (
     ClientTransform,
     SessionRunner,
     StateTransform,
+    TurnResult,
 )
 from genkit._ai._session import (
     InMemorySessionStore,
@@ -42,6 +43,7 @@ from genkit._core._typing import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
+    Resume,
     SessionSnapshot,
     SessionState,
     SnapshotEvent,
@@ -56,6 +58,7 @@ __all__ = [
     'ActionRunContext',
     'AgentFn',
     'SessionRunner',
+    'TurnResult',
     # Session persistence
     'Session',
     'SessionStore',
@@ -75,6 +78,7 @@ __all__ = [
     'AgentResult',
     'AgentStreamChunk',
     'Artifact',
+    'Resume',
     'SessionSnapshot',
     'SessionState',
     'SnapshotEvent',
