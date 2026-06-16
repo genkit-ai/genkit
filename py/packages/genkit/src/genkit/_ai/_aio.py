@@ -85,7 +85,7 @@ from genkit._ai._resource import (
 )
 from genkit._ai._session import SessionStore, SnapshotCallback
 from genkit._ai._tools import Tool, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
+from genkit._core._action import Action, ActionKind, BidiAction, get_current_context
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
@@ -680,6 +680,16 @@ class Genkit:
             input_schema=input_schema,
             output_schema=output_schema,
         )
+
+    async def agent(self, name: str) -> Agent:
+        """Look up a registered agent by name."""
+        resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
+        if resolved is None:
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Agent '{name}' not found in registry.",
+            )
+        return Agent(cast(BidiAction, resolved))
 
     def define_custom_agent(
         self,

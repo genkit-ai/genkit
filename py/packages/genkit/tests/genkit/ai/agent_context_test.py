@@ -115,3 +115,46 @@ async def test_prompt_agent_propagates_context_to_template() -> None:
     system_msg = next((m for m in pm.last_request.messages if m.role == Role.SYSTEM), None)
     assert system_msg is not None
     assert 'secret@agent.com' in system_msg.content[0].root.text
+
+
+@pytest.mark.asyncio
+async def test_agent_lookup_and_execution() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    ai.define_agent(
+        name='lookupAgent',
+        model='programmableModel',
+        system='Hello from lookup agent.',
+    )
+
+    # Lookup asynchronously
+    agent = await ai.agent('lookupAgent')
+    assert agent.name == 'lookupAgent'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='lookup response'))]),
+        )
+    )
+
+    # Execution runs it
+    conn = await agent.stream_bidi()
+    await conn.send_text('hello')
+    async for chunk in conn.receive():
+        if chunk.turn_end is not None:
+            break
+    await conn.close()
+    out = await conn.output()
+
+    assert out.message is not None
+    assert out.message.content[0].root.text == 'lookup response'
+
+
+@pytest.mark.asyncio
+async def test_agent_lookup_not_found() -> None:
+    ai = Genkit()
+
+    with pytest.raises(Exception, match="Agent 'missingAgent' not found in registry."):
+        await ai.agent('missingAgent')
