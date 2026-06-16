@@ -94,30 +94,6 @@ export interface SessionState<S = unknown> {
 }
 
 /**
- * Session encapsulates a stateful execution environment.
- *
- * A session holds shared state and per-thread message history, and provides a
- * context in which functions can be executed via {@link Session.run} so that
- * `ai.currentSession()` resolves to this session. State can be read via
- * {@link Session.state} and updated with {@link Session.updateState}, and
- * conversation history can be persisted per thread with
- * {@link Session.updateMessages}.
- */
-export interface SnapshotContext<S = unknown> {
-  state: SessionState<S>;
-  prevState?: SessionState<S>;
-  turnIndex: number;
-  event: 'turnEnd' | 'invocationEnd';
-}
-
-/**
- * Callback triggered before a snapshot is saved. Return false to reject persistence.
- */
-export type SnapshotCallback<S = unknown> = (
-  ctx: SnapshotContext<S>
-) => boolean;
-
-/**
  * Saved snapshot of a session's state at a given event point.
  */
 export interface SessionSnapshot<S = unknown> {
