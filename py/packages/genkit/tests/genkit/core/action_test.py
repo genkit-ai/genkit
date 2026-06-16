@@ -278,3 +278,44 @@ async def test_run_no_input_type_allows_none() -> None:
 
     result = await action.run(input=None)
     assert result.response == 'no input needed'
+
+
+@pytest.mark.asyncio
+async def test_action_context_isolation_sequential_and_nested() -> None:
+    """Action context is isolated and does not bleed sequentially or permanently override in nested runs."""
+
+    # 1. Sequential isolation test
+    async def get_context(_: None, ctx: ActionRunContext) -> dict[str, object] | None:
+        return ctx.context
+
+    tool_action = Action(name='getContext', kind=ActionKind.TOOL, fn=get_context)
+
+    # First run sets context
+    res1 = await tool_action.run(context={'auth': 'user1'})
+    assert res1.response == {'auth': 'user1'}
+
+    # Second run does NOT set context (should be empty/None)
+    res2 = await tool_action.run()
+    assert res2.response == {}  # Bleeding check
+
+    # 2. Nested isolation test (parent calls child with overrides)
+    async def child_fn(_: None, ctx: ActionRunContext) -> dict[str, object] | None:
+        return ctx.context
+
+    child_action = Action(name='childAction', kind=ActionKind.CUSTOM, fn=child_fn)
+
+    async def parent_fn(_: None, ctx: ActionRunContext) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+        # Run child action with different context
+        child_res = await child_action.run(context={'auth': 'child_secret'})
+        # Return parent context (which should still be parent's original context!)
+        return ctx.context, child_res.response
+
+    parent_action = Action(name='parentAction', kind=ActionKind.CUSTOM, fn=parent_fn)
+
+    # Run parent action with its own context
+    res = await parent_action.run(context={'auth': 'parent_secret'})
+    parent_ctx, child_ctx = res.response
+
+    assert child_ctx == {'auth': 'child_secret'}
+    assert parent_ctx == {'auth': 'parent_secret'}  # Permanent override check
+

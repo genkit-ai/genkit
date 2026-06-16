@@ -471,21 +471,26 @@ class Action(Generic[InputT, OutputT, ChunkT]):
         """
         input = self._validate_input(input)
 
+        token = None
         if context:
-            _ = _action_context.set(context)
+            token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
 
-        return await self._run_with_telemetry(
-            input,
-            ActionRunContext(
-                context=_action_context.get(None),
-                streaming_callback=streaming_cb,
-                abort_signal=abort_signal,
-            ),
-            on_trace_start,
-            telemetry_labels,
-        )
+        try:
+            return await self._run_with_telemetry(
+                input,
+                ActionRunContext(
+                    context=_action_context.get(None),
+                    streaming_callback=streaming_cb,
+                    abort_signal=abort_signal,
+                ),
+                on_trace_start,
+                telemetry_labels,
+            )
+        finally:
+            if token is not None:
+                _action_context.reset(token)
 
     def stream(
         self,
@@ -832,8 +837,9 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
         result_future: asyncio.Future[OutputT] = asyncio.get_event_loop().create_future()
         conn = BidiConnection(in_queue, out_queue, result_future)
 
+        token = None
         if context:
-            _ = _action_context.set(context)
+            token = _action_context.set(context)
 
         async def _on_trace_start(trace_id: str, span_id: str) -> None:
             conn.trace_id = trace_id
@@ -860,8 +866,12 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                 # Sentinel tells BidiConnection.receive() to stop.
                 await out_queue.put(_SENTINEL)
 
-        asyncio.create_task(_run())
-        return conn
+        try:
+            asyncio.create_task(_run())
+            return conn
+        finally:
+            if token is not None:
+                _action_context.reset(token)
 
 
 def define_bidi_action(
