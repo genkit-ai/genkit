@@ -81,3 +81,37 @@ async def test_agent_propagates_context_to_tools() -> None:
 
     assert out.message is not None
     assert context_seen == [{'auth': 'secret'}]
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_propagates_context_to_template() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    ai.define_prompt(
+        name='templatedAgent',
+        model='programmableModel',
+        system='System context: {{@auth.email}}',
+    )
+    agent = ai.define_prompt_agent(name='templatedAgent')
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ack'))]),
+        )
+    )
+
+    conn = await agent.stream_bidi(context={'auth': {'email': 'secret@agent.com'}})
+    await conn.send_text('hello')
+    async for chunk in conn.receive():
+        if chunk.turn_end is not None:
+            break
+    await conn.close()
+    await conn.output()
+
+    assert pm.request_count == 1
+    assert pm.last_request is not None
+    system_msg = next((m for m in pm.last_request.messages if m.role == Role.SYSTEM), None)
+    assert system_msg is not None
+    assert 'secret@agent.com' in system_msg.content[0].root.text

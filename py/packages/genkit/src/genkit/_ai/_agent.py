@@ -728,6 +728,7 @@ class _AgentRuntime:
         detach_future: asyncio.Future[None] = asyncio.get_event_loop().create_future()
         abort_signal = asyncio.Event()
         action_ctx = ActionRunContext(
+            context=get_current_context(),
             streaming_callback=self._send_chunk,
             abort_signal=abort_signal,
         )
@@ -1272,6 +1273,7 @@ def define_prompt_agent(
                 'messages': tag_history_for_render(history),
                 'resume_respond': resume_respond,
                 'resume_restart': resume_restart,
+                'context': ctx.context,
             }
             child_registry, gen_options = await _prepare(executable, {}, call_opts)
             rendered_messages = list(gen_options.messages or [])
