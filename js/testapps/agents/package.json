@@ -4,8 +4,11 @@
   "description": "Testapp for Genkit Agents",
   "main": "lib/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:web",
+    "build:web": "cd web && pnpm run build",
     "server": "npx tsx src/index.ts",
+    "start": "pnpm run build:web && npx tsx src/index.ts",
+    "web:dev": "cd web && pnpm run dev",
     "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
   },
   "dependencies": {
