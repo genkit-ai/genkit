@@ -124,10 +124,8 @@ response = await ai.generate(
     tools=[delete_database_tool],
     use=[approval],
     resume_restart=restart_tool(
-        None,
-        tool=delete_database_tool,
         interrupt=first.interrupts[0],
-        resumed_metadata={'toolApproved': True},
+        resumed_metadata={'tool_approved': True},
     ),
 )
 ```
