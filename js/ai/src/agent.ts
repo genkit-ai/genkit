@@ -66,7 +66,6 @@ import {
   SessionState,
   SessionStateSchema,
   SessionStore,
-  SnapshotCallback,
   reserveSnapshotId,
   runWithSession,
   type AgentFinishReason,
@@ -371,20 +370,21 @@ export class SessionRunner<State = unknown> {
    */
   public lastTurnError?: AgentErrorDetails;
   /**
-   * The state the most recently *successful* turn left behind, captured
-   * regardless of whether the `snapshotCallback` chose to persist it. On a
-   * failed turn this is the state the failed turn started with - the
-   * last-good state returned to the caller.
+   * The state the most recently *successful* turn left behind. On a failed
+   * turn this is the state the failed turn started with - the last-good state
+   * returned to the caller (for client-managed agents).
    */
   public lastGoodState?: SessionState<State>;
-  /** The finish reason of the most recently successful turn. */
-  private lastGoodFinishReason?: AgentFinishReason;
-  /** Session version corresponding to {@link lastGoodState}. */
-  private lastGoodStateVersion?: number;
-  private snapshotCallback?: SnapshotCallback<State>;
+  /**
+   * The snapshotId of the most recently *successful* (persisted, `done`) turn.
+   * On a failed turn this is the last-good snapshot the caller resumes from;
+   * `undefined` when no turn has succeeded yet (e.g. a first-turn failure).
+   */
+  public lastGoodSnapshotId?: string;
   private lastSnapshot?: SessionSnapshot<State>;
 
   private lastSnapshotVersion: number = 0;
+
   private store?: SessionStore<State>;
   public isDetached: boolean = false;
   /**
@@ -399,7 +399,6 @@ export class SessionRunner<State = unknown> {
     session: Session<State>,
     inputCh: AsyncIterable<AgentInput>,
     options?: {
-      snapshotCallback?: SnapshotCallback<State>;
       lastSnapshot?: SessionSnapshot<State>;
       store?: SessionStore<State>;
       onEndTurn?: (
@@ -412,7 +411,6 @@ export class SessionRunner<State = unknown> {
     this.session = session;
     this.inputCh = inputCh;
 
-    this.snapshotCallback = options?.snapshotCallback;
     this.lastSnapshot = options?.lastSnapshot;
     this.store = options?.store;
     this.onEndTurn = options?.onEndTurn;
@@ -420,9 +418,10 @@ export class SessionRunner<State = unknown> {
 
     // Seed the last-good state with the initial session state so that a
     // failure on the very first turn still has a valid state to fall back to
-    // (the seed/loaded state, excluding the failed turn's mutations).
+    // (the seed/loaded state, excluding the failed turn's mutations). The
+    // last-good snapshotId is undefined until a turn successfully persists.
     this.lastGoodState = this.session.getState();
-    this.lastGoodStateVersion = this.session.getVersion();
+    this.lastGoodSnapshotId = options?.lastSnapshot?.snapshotId;
   }
 
   // ── Session delegate methods ────────────────────────────────────────
@@ -542,13 +541,13 @@ export class SessionRunner<State = unknown> {
           );
 
           // Capture the state this successful turn produced. This becomes the
-          // last-good state to fall back to if a later turn fails - captured
-          // regardless of whether the snapshotCallback chose to persist it.
+          // last-good state to fall back to if a later turn fails, and its
+          // snapshotId is the last-good snapshot a failed turn resumes from.
           this.lastGoodState = this.session.getState();
-          this.lastGoodStateVersion = this.session.getVersion();
-          this.lastGoodFinishReason = finishReason;
+          this.lastGoodSnapshotId = snapshotId;
 
           this.notifyEndTurn(snapshotId, finishReason);
+
           return {
             lastSnapshot: this.lastSnapshot,
           };
@@ -577,73 +576,13 @@ export class SessionRunner<State = unknown> {
   }
 
   /**
-   * Ensures the last-good state is persisted and returns its snapshotId.
+   * Saves a snapshot of the current session state to the persistent store.
    *
-   * Used on the failure path for server-managed agents: a selective
-   * `snapshotCallback` may have skipped persisting the last successful turn,
-   * so the newest stored snapshot could predate it. If the last-good state is
-   * already persisted this returns the existing id; otherwise it writes a
-   * one-off recovery snapshot (bypassing the `snapshotCallback`) of the
-   * last-good state and returns its id.
-   *
-   * No-op (returns the last snapshot id, if any) when there is no store.
-   */
-  async ensureRecoverySnapshot(): Promise<string | undefined> {
-    if (!this.store || !this.lastGoodState) {
-      return this.lastSnapshot?.snapshotId;
-    }
-
-    // Already persisted: the last write captured the last-good version.
-    if (
-      this.lastGoodStateVersion !== undefined &&
-      this.lastGoodStateVersion === this.lastSnapshotVersion
-    ) {
-      return this.lastSnapshot?.snapshotId;
-    }
-
-    // First-turn failure: no successful turn ran (turnIndex only advances after
-    // a turn succeeds), so the last-good state is the initial/seed state the
-    // client already has. Writing a recovery snapshot here would be a redundant
-    // no-diff write - skip it and leave snapshotId unset. The client resumes
-    // from the seed it already holds.
-    if (this.turnIndex === 0) {
-      return undefined;
-    }
-
-    const snapshotInput: SessionSnapshotInput<State> = {
-      createdAt: new Date().toISOString(),
-      event: 'turnEnd',
-      state: this.lastGoodState,
-      parentId: this.lastSnapshot?.snapshotId,
-      status: 'done',
-      ...(this.lastGoodFinishReason && {
-        finishReason: this.lastGoodFinishReason,
-      }),
-    };
-
-    const assignedId = await this.store.saveSnapshot(
-      undefined,
-      abortAwareMutator(snapshotInput),
-      { context: getContext() }
-    );
-    if (assignedId === null) {
-      return this.lastSnapshot?.snapshotId;
-    }
-
-    this.lastSnapshot = { ...snapshotInput, snapshotId: assignedId };
-    if (this.lastGoodStateVersion !== undefined) {
-      this.lastSnapshotVersion = this.lastGoodStateVersion;
-    }
-    return assignedId;
-  }
-
-  /**
-   * Evaluates whether to save a snapshot to the persistent store.
-   *
-   * Uses the mutator-based `saveSnapshot` to atomically check that the
-   * snapshot has not been concurrently aborted before writing - preventing
-   * a race where a "done" write could overwrite a concurrent "aborted"
-   * status.
+   * When a store is configured every turn is persisted (snapshotting is no
+   * longer opt-out). Uses the mutator-based `saveSnapshot` to atomically check
+   * that the snapshot has not been concurrently aborted before writing -
+   * preventing a race where a "done" write could overwrite a concurrent
+   * "aborted" status.
    */
   async maybeSnapshot(
     event: 'turnEnd' | 'invocationEnd',
@@ -664,20 +603,6 @@ export class SessionRunner<State = unknown> {
     }
 
     const currentState = this.session.getState();
-    const prevState = this.lastSnapshot ? this.lastSnapshot.state : undefined;
-
-    if (this.snapshotCallback && !this.isDetached) {
-      if (
-        !this.snapshotCallback({
-          state: currentState as SessionState<State>,
-          prevState: prevState as SessionState<State> | undefined,
-          turnIndex: this.turnIndex,
-          event: event,
-        })
-      ) {
-        return undefined;
-      }
-    }
 
     const snapshotInput: SessionSnapshotInput<State> = {
       ...(snapshotId || this.newSnapshotId
@@ -687,7 +612,11 @@ export class SessionRunner<State = unknown> {
       event: event,
       state: currentState as SessionState<State>,
       parentId: this.lastSnapshot?.snapshotId,
-      status,
+      // Default to a resumable `done` status. The only caller that omits a
+      // status is the `invocationEnd` write (which fires when the handler
+      // mutates state after the last turn); persisting it as `done` keeps it a
+      // valid resume target under the "only `done` is resumable" rule.
+      status: status ?? 'done',
       ...(finishReason && { finishReason }),
       error,
     };
@@ -874,6 +803,17 @@ async function resolveSession<State>(
         message: `Snapshot ${init.snapshotId} not found`,
       });
     }
+    // Only `done` snapshots are resumable. A failed/aborted/pending snapshot is
+    // persisted for inspection but is not a valid resume target.
+    if (snapshot.status !== 'done') {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          `Snapshot ${init.snapshotId} is not resumable (status: ` +
+          `${snapshot.status ?? 'unknown'}). Only 'done' snapshots can be ` +
+          `resumed.`,
+      });
+    }
     validateCustomState(snapshot.state?.custom);
     return {
       snapshot,
@@ -882,13 +822,25 @@ async function resolveSession<State>(
   }
 
   if (init?.sessionId) {
-    // Resume the session's latest (leaf) snapshot. When the session has no
-    // snapshots yet (first turn) seed a fresh session bound to the requested
-    // sessionId so subsequent turns can find it.
-    const snapshot = await store.getSnapshot({
+    // Resume the session's latest snapshot. The store returns the latest leaf
+    // regardless of status, but only `done` snapshots are resumable - so if the
+    // leaf is a non-resumable turn (e.g. a `failed`/`aborted`/`pending` turn)
+    // walk back over its parent chain to the last-good (`done`) snapshot. When
+    // the session has no resumable snapshot (e.g. a first-turn failure) seed a
+    // fresh session bound to the requested sessionId so subsequent turns can
+    // find it.
+    let snapshot = await store.getSnapshot({
       sessionId: init.sessionId,
       context: getContext(),
     });
+    while (snapshot && snapshot.status !== 'done') {
+      snapshot = snapshot.parentId
+        ? await store.getSnapshot({
+            snapshotId: snapshot.parentId,
+            context: getContext(),
+          })
+        : undefined;
+    }
     if (snapshot) {
       validateCustomState(snapshot.state?.custom);
       return {
@@ -1004,7 +956,6 @@ export function defineCustomAgent<State = unknown>(
     description?: string;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
-    snapshotCallback?: SnapshotCallback<State>;
     clientTransform?: ClientTransform<State>;
   },
   fn: AgentFn<State>
@@ -1144,8 +1095,8 @@ export function defineCustomAgent<State = unknown>(
 
       runner = new SessionRunner<State>(session, runnerInputChannel, {
         store,
-        snapshotCallback: config.snapshotCallback,
         lastSnapshot: snapshot,
+
         onDetach: (snapshotId) => {
           detachedSnapshotId = snapshotId;
           if (resolveDetach) {
@@ -1270,11 +1221,12 @@ export function defineCustomAgent<State = unknown>(
           ...(lastGoodMessages?.length && {
             message: lastGoodMessages[lastGoodMessages.length - 1],
           }),
-          // Server-managed: ensure the last-good state is persisted (a selective
-          // snapshotCallback may have skipped it) and return its id.
-          ...(config.store && {
-            snapshotId: await runner.ensureRecoverySnapshot(),
-          }),
+          // Server-managed: the last successful turn is already persisted (every
+          // turn is snapshotted), so point at its snapshot. The failed turn's
+          // own snapshot is persisted too but is not resumable - `sessionId`
+          // resume skips it back to this last-good `done` snapshot. Undefined on
+          // a first-turn failure (no successful turn yet; client holds the seed).
+          ...(config.store && { snapshotId: runner.lastGoodSnapshotId }),
           // Client-managed: return the last-good state directly.
           ...(!config.store && { state: toClientState(lastGood) }),
         };
@@ -1419,7 +1371,6 @@ export function definePromptAgent<State = unknown>(
     promptName: string;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
-    snapshotCallback?: SnapshotCallback<State>;
     clientTransform?: ClientTransform<State>;
   }
 ) {
@@ -1550,7 +1501,6 @@ export function definePromptAgent<State = unknown>(
       name: config.promptName,
       stateSchema: config.stateSchema,
       store: config.store,
-      snapshotCallback: config.snapshotCallback,
       clientTransform: config.clientTransform,
     },
     fn
@@ -1669,12 +1619,12 @@ export interface AgentConfig<State = unknown> extends PromptConfig {
    */
   stateSchema?: z.ZodType<State>;
   store?: SessionStore<State>;
-  snapshotCallback?: SnapshotCallback<State>;
   clientTransform?: ClientTransform<State>;
 }
 
 /**
  * Defines and registers an agent by creating a prompt and wiring it into a
+
  * multi-turn agent in one step.
  *
  * This is a convenience shortcut for:
@@ -1689,13 +1639,7 @@ export function defineAgent<State = unknown>(
 ): Agent<State> {
   // Extract agent-specific fields from the combined config; the rest is
   // forwarded to definePrompt.
-  const {
-    stateSchema,
-    store,
-    snapshotCallback,
-    clientTransform,
-    ...promptConfig
-  } = config;
+  const { stateSchema, store, clientTransform, ...promptConfig } = config;
 
   // Register the prompt.
   definePrompt(registry, promptConfig);
@@ -1705,7 +1649,6 @@ export function defineAgent<State = unknown>(
     promptName: promptConfig.name,
     stateSchema,
     store,
-    snapshotCallback,
     clientTransform,
   });
 }
