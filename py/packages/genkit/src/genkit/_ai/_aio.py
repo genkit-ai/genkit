@@ -39,9 +39,9 @@ from genkit._ai._agent import (
     AgentFn,
     ClientTransform,
     StateTransform,
-    define_agent as _define_agent,
-    define_custom_agent as _define_custom_agent,
-    define_prompt_agent as _define_prompt_agent,
+    define_agent,
+    define_custom_agent,
+    define_prompt_agent,
 )
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
@@ -698,7 +698,7 @@ class Genkit:
         fn receives (SessionRunner, AgentFnArg) and must call sess.run(handle_turn)
         to process inputs, then return an AgentResult.
         """
-        return _define_custom_agent(
+        return define_custom_agent(
             registry=self.registry,
             name=name,
             fn=fn,
@@ -745,7 +745,7 @@ class Genkit:
         Each turn: attaches session history, calls generate with streaming,
         updates session. Pass resume in AgentInput to resume from an interrupt.
         """
-        return _define_agent(
+        return define_agent(
             registry=self.registry,
             name=name,
             variant=variant,
@@ -791,7 +791,7 @@ class Genkit:
         Looks up the prompt named `name` from the registry. Use when the prompt
         is defined via ai.define_prompt() or loaded from a .prompt file.
         """
-        return _define_prompt_agent(
+        return define_prompt_agent(
             registry=self.registry,
             name=name,
             store=store,
