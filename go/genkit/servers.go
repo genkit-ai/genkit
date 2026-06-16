@@ -196,30 +196,9 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		}
 		stream = stream || r.Header.Get("Accept") == "text/event-stream"
 
-		ctx := r.Context()
-		if opts.ContextProviders != nil {
-			for _, ctxProvider := range opts.ContextProviders {
-				headers := make(map[string]string, len(r.Header))
-				for k, v := range r.Header {
-					headers[strings.ToLower(k)] = strings.Join(v, " ")
-				}
-
-				actionCtx, err := ctxProvider(ctx, core.RequestData{
-					Method:  r.Method,
-					Headers: headers,
-					Input:   body.Data,
-				})
-				if err != nil {
-					logger.FromContext(ctx).Error("error providing action context from request", "err", err)
-					return err
-				}
-
-				if existing := core.FromContext(ctx); existing != nil {
-					maps.Copy(existing, actionCtx)
-					actionCtx = existing
-				}
-				ctx = core.WithActionContext(ctx, actionCtx)
-			}
+		ctx, err := applyContextProviders(r.Context(), r, opts.ContextProviders, body.Data)
+		if err != nil {
+			return err
 		}
 
 		if stream {
@@ -248,6 +227,38 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 		}
 		return writeResultResponse(w, out)
 	}
+}
+
+// applyContextProviders runs the configured context providers against the
+// request and folds their results into ctx, so request-derived action
+// context (e.g. auth from headers) is available to the action. input is
+// handed to each provider as the request's decoded input
+// ([core.RequestData.Input]). A nil or empty providers slice returns ctx
+// unchanged.
+func applyContextProviders(ctx context.Context, r *http.Request, providers []core.ContextProvider, input json.RawMessage) (context.Context, error) {
+	for _, ctxProvider := range providers {
+		headers := make(map[string]string, len(r.Header))
+		for k, v := range r.Header {
+			headers[strings.ToLower(k)] = strings.Join(v, " ")
+		}
+
+		actionCtx, err := ctxProvider(ctx, core.RequestData{
+			Method:  r.Method,
+			Headers: headers,
+			Input:   input,
+		})
+		if err != nil {
+			logger.FromContext(ctx).Error("error providing action context from request", "err", err)
+			return ctx, err
+		}
+
+		if existing := core.FromContext(ctx); existing != nil {
+			maps.Copy(existing, actionCtx)
+			actionCtx = existing
+		}
+		ctx = core.WithActionContext(ctx, actionCtx)
+	}
+	return ctx, nil
 }
 
 // runJSONFunc abstracts over RunJSON and RunBidiJSON for the handler's

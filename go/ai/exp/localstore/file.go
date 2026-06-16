@@ -237,32 +237,6 @@ func (s *FileSessionStore[State]) snapshotFilesNewestFirst() ([]string, error) {
 	return names, nil
 }
 
-// LatestSnapshot returns the snapshot whose backing file has the most
-// recent on-disk modification time, or nil if the directory has no
-// snapshots yet. It is not part of the [exp.SessionStore] interface; it
-// is a convenience for UIs and CLIs that need to surface "where did I
-// leave off" without indexing the directory themselves.
-//
-// Selecting by mtime avoids parsing every file: for snapshots written by
-// this package, mtime and [exp.SessionSnapshot.UpdatedAt] advance
-// together, so the result matches a sort by UpdatedAt; if a file is
-// touched externally, mtime wins. Files that fail to stat or parse are
-// skipped and the scan falls back to the next-newest candidate.
-func (s *FileSessionStore[State]) LatestSnapshot(ctx context.Context) (*exp.SessionSnapshot[State], error) {
-	names, err := s.snapshotFilesNewestFirst()
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range names {
-		snap, err := s.GetSnapshot(ctx, strings.TrimSuffix(name, ".json"))
-		if err != nil || snap == nil {
-			continue
-		}
-		return snap, nil
-	}
-	return nil, nil
-}
-
 // AbortSnapshot atomically flips a pending snapshot to aborted. If the
 // snapshot is already terminal the existing status is returned unchanged.
 // Returns an empty status if the snapshot is not found.

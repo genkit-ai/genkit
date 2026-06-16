@@ -3615,8 +3615,10 @@ func TestAgent_AgentMetadata(t *testing.T) {
 			flowName := "metaFlow"
 			tc.define(reg, flowName)
 
-			act := core.ResolveBidiActionFor[*AgentInput, *AgentOutput[testState], *AgentStreamChunk[testStatus], *AgentInit[testState]](
-				reg, api.ActionTypeAgent, flowName)
+			// The registry holds the agent's bidi action under the agent key
+			// (see Agent.Register); resolve it as a plain api.Action and read
+			// its descriptor.
+			act := reg.LookupAction(api.NewKey(api.ActionTypeAgent, "", flowName))
 			if act == nil {
 				t.Fatal("agent action not registered")
 			}
@@ -3683,6 +3685,205 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter")
 		}
 	})
+}
+
+// TestAgent_CompanionActionAccessors verifies the agent ref hands out the
+// same companion actions the registry holds, so transports can mount them
+// on custom routes without registry lookups, and that the accessors mirror
+// the store's capabilities by returning nil for actions that were not
+// registered.
+func TestAgent_CompanionActionAccessors(t *testing.T) {
+	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, nil
+	}
+
+	t.Run("no store → no companions", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		af := DefineCustomAgent(reg, "noCompanions", noopFn)
+		if got := af.GetSnapshotAction(); got != nil {
+			t.Errorf("GetSnapshotAction() = %v, want nil", got)
+		}
+		if got := af.AbortSnapshotAction(); got != nil {
+			t.Errorf("AbortSnapshotAction() = %v, want nil", got)
+		}
+	})
+
+	t.Run("store without aborter → getSnapshot only", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		af := DefineCustomAgent(reg, "getOnly", noopFn,
+			WithSessionStore[testState](minimalStore[testState]{}))
+		if af.GetSnapshotAction() == nil {
+			t.Error("GetSnapshotAction() = nil, want action")
+		}
+		if got := af.AbortSnapshotAction(); got != nil {
+			t.Errorf("AbortSnapshotAction() = %v, want nil", got)
+		}
+	})
+
+	t.Run("aborter store → both, identical to the registered actions", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		af := DefineCustomAgent(reg, "bothCompanions", noopFn,
+			WithSessionStore(newTestInMemStore[testState]()))
+		if got, want := af.GetSnapshotAction(), reg.LookupAction("/agent-snapshot/bothCompanions"); got == nil || got != want {
+			t.Errorf("GetSnapshotAction() = %v, want registered action %v", got, want)
+		}
+		if got, want := af.AbortSnapshotAction(), reg.LookupAction("/agent-abort/bothCompanions"); got == nil || got != want {
+			t.Errorf("AbortSnapshotAction() = %v, want registered action %v", got, want)
+		}
+	})
+}
+
+// TestAgent_Store verifies the agent hands back the store it was
+// configured with (so local Go code need not thread a separate reference),
+// and nil when the agent is client-managed.
+func TestAgent_Store(t *testing.T) {
+	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, nil
+	}
+
+	t.Run("returns the configured store", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		store := newTestInMemStore[testState]()
+		af := DefineCustomAgent(reg, "withStore", noopFn, WithSessionStore[testState](store))
+		if got := af.Store(); got != SessionStore[testState](store) {
+			t.Errorf("Store() = %v, want the configured store %v", got, store)
+		}
+		// The returned store is usable directly, and store-specific
+		// capabilities are reachable by type assertion.
+		if _, ok := af.Store().(SnapshotAborter); !ok {
+			t.Error("expected the configured store to satisfy SnapshotAborter")
+		}
+	})
+
+	t.Run("nil for a client-managed agent", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		af := DefineCustomAgent(reg, "noStore", noopFn)
+		if got := af.Store(); got != nil {
+			t.Errorf("Store() = %v, want nil for a client-managed agent", got)
+		}
+	})
+}
+
+// TestAgent_Description verifies that WithDescription lands on the agent
+// action's descriptor as the standard top-level Description (lifted from
+// metadata["description"] by core), so reflective tooling and local
+// callers read it the same way they read any other action's description.
+func TestAgent_Description(t *testing.T) {
+	noopFn := func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, nil
+	}
+
+	t.Run("set via WithDescription", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		const want = "A concise test agent."
+		af := DefineCustomAgent(reg, "described", noopFn, WithDescription[testState](want))
+		if got := af.Desc().Description; got != want {
+			t.Errorf("Desc().Description = %q, want %q", got, want)
+		}
+		// It must also be in the metadata map, the place core lifts it
+		// from and where the wire descriptor carries it.
+		if got, _ := af.Desc().Metadata["description"].(string); got != want {
+			t.Errorf("Desc().Metadata[\"description\"] = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty when unset", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		af := DefineCustomAgent(reg, "undescribed", noopFn)
+		if got := af.Desc().Description; got != "" {
+			t.Errorf("Desc().Description = %q, want empty", got)
+		}
+		if _, ok := af.Desc().Metadata["description"]; ok {
+			t.Error("expected no description key in metadata when unset")
+		}
+	})
+
+	t.Run("rejects a second WithDescription", func(t *testing.T) {
+		reg := newTestRegistry(t)
+		defer func() {
+			if recover() == nil {
+				t.Error("expected a panic when WithDescription is set twice")
+			}
+		}()
+		DefineCustomAgent(reg, "twice", noopFn,
+			WithDescription[testState]("first"), WithDescription[testState]("second"))
+	})
+}
+
+// TestAgent_RegisterCarriesCompanions verifies that registering an agent
+// ref into another registry brings the companion actions along, so the
+// agent travels as a unit (see Agent.Register).
+func TestAgent_RegisterCarriesCompanions(t *testing.T) {
+	reg := newTestRegistry(t)
+	af := DefineCustomAgent(reg, "mover",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, nil
+		},
+		WithSessionStore(newTestInMemStore[testState]()),
+	)
+
+	reg2 := newTestRegistry(t)
+	af.Register(reg2)
+	for _, key := range []string{"/agent/mover", "/agent-snapshot/mover", "/agent-abort/mover"} {
+		if reg2.LookupAction(key) == nil {
+			t.Errorf("action %q missing from the registry after Register", key)
+		}
+	}
+
+	// The agent key resolves to the bidi run action, not a companion-bearing
+	// facade: consumers recover the companions by their own keys (as the loop
+	// above and the route builders do), not by asserting an interface on the
+	// agent action.
+	runAction := reg2.LookupAction("/agent/mover")
+	if _, ok := runAction.(api.BidiAction); !ok {
+		t.Errorf("registered agent action = %T, want an api.BidiAction", runAction)
+	}
+	if _, ok := runAction.(interface{ GetSnapshotAction() api.Action }); ok {
+		t.Error("registered agent action should be the bidi run action, not the Agent facade")
+	}
+}
+
+// TestNewCustomAgent_UnregisteredUntilRegister verifies the non-registering
+// constructor: the agent is fully usable before it touches a registry, and
+// registering it later (the genkit.RegisterAction path) surfaces the run
+// action and its companions together.
+func TestNewCustomAgent_UnregisteredUntilRegister(t *testing.T) {
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+
+	af := NewCustomAgent("standalone",
+		func(ctx context.Context, resp Responder[testStatus], sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("hi"))
+				return &TurnResult{FinishReason: AgentFinishReasonStop}, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	// Companion refs are wired at construction, before any registry.
+	if af.GetSnapshotAction() == nil || af.AbortSnapshotAction() == nil {
+		t.Fatal("companion actions should be built by NewCustomAgent before registration")
+	}
+
+	// The agent runs without ever being registered: the runtime never
+	// consults a registry for a custom agent.
+	out, err := af.RunText(ctx, "hello")
+	if err != nil {
+		t.Fatalf("RunText on unregistered agent: %v", err)
+	}
+	if out.FinishReason != AgentFinishReasonStop {
+		t.Errorf("finishReason = %q, want %q", out.FinishReason, AgentFinishReasonStop)
+	}
+
+	// Registering later brings the whole unit into the registry.
+	reg := newTestRegistry(t)
+	af.Register(reg)
+	for _, key := range []string{"/agent/standalone", "/agent-snapshot/standalone", "/agent-abort/standalone"} {
+		if reg.LookupAction(key) == nil {
+			t.Errorf("action %q missing after Register", key)
+		}
+	}
 }
 
 func TestAgent_AbortAction_NotFound(t *testing.T) {

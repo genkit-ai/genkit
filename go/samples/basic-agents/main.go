@@ -79,12 +79,13 @@ func main() {
 	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 	genkit.DefineSchemaFor[ChatPromptInput](g)
 
-	// Each define function returns a fully-populated sampleAgent that
-	// pairs the registered agent with its FileSessionStore and a
-	// one-line description for the CLI list view. The CLI then calls
-	// a.Name(), a.StreamBidi(...) on the embedded agent and a.Store
-	// for snapshot operations.
-	agents := []sampleAgent{
+	// Each define function registers an agent and returns it. The CLI
+	// drives all three through the same surface: a.Name() and
+	// a.Desc().Description for the list view, a.StreamBidi(...) to chat,
+	// and a.Store() for snapshot reads. Nothing the CLI does is tied to a
+	// concrete store type, so swapping in a different SessionStore would
+	// not touch a line of it.
+	agents := []*aix.Agent[any, any]{
 		defineInlineAgent(g),
 		definePromptAgent(g),
 		defineCustomAgent(g),
@@ -102,25 +103,21 @@ func main() {
 // prompt, appends the conversation history, calls the model, and updates
 // session state. This is the shortest path from "I want a chat agent" to
 // a working one.
-func defineInlineAgent(g *genkit.Genkit) sampleAgent {
+func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any, any] {
 	const name = "pirate"
-	store := mustStore(name)
-	return sampleAgent{
-		Agent: genkit.DefineAgent(g, name,
-			aix.FromInline(
-				ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-					ThinkingConfig: &genai.ThinkingConfig{
-						ThinkingBudget: genai.Ptr[int32](0),
-					},
-				})),
-				ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
-			),
-			aix.WithSessionStore(store),
-			aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+	return genkit.DefineAgent(g, name,
+		aix.FromInline(
+			ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingBudget: genai.Ptr[int32](0),
+				},
+			})),
+			ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
 		),
-		Store:       store,
-		Description: "Sarcastic pirate (inline-defined prompt)",
-	}
+		aix.WithSessionStore(mustStore(name)),
+		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+		aix.WithDescription[any]("Sarcastic pirate (inline-defined prompt)"),
+	)
 }
 
 // definePromptAgent demonstrates DefineAgent with aix.FromPrompt. The
@@ -132,18 +129,14 @@ func defineInlineAgent(g *genkit.Genkit) sampleAgent {
 // FromPrompt's argument is the default input passed to the prompt's
 // Render on every turn; the inline-prompt variant has no per-turn input
 // of its own.
-func definePromptAgent(g *genkit.Genkit) sampleAgent {
+func definePromptAgent(g *genkit.Genkit) *aix.Agent[any, any] {
 	const name = "chef"
-	store := mustStore(name)
-	return sampleAgent{
-		Agent: genkit.DefineAgent(g, name,
-			aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
-			aix.WithSessionStore(store),
-			aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
-		),
-		Store:       store,
-		Description: "Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)",
-	}
+	return genkit.DefineAgent(g, name,
+		aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
+		aix.WithSessionStore(mustStore(name)),
+		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
+	)
 }
 
 // defineCustomAgent demonstrates DefineCustomAgent. The per-turn function
@@ -155,56 +148,54 @@ func definePromptAgent(g *genkit.Genkit) sampleAgent {
 //
 // Even with full control over the loop, the framework still owns session
 // state, snapshot writes, and the detach lifecycle.
-func defineCustomAgent(g *genkit.Genkit) sampleAgent {
+func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any, any] {
 	const name = "coder"
-	store := mustStore(name)
-	return sampleAgent{
-		Agent: genkit.DefineCustomAgent(g, name,
-			func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
-				if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
-					for chunk, err := range genkit.GenerateStream(ctx, g,
-						ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
-							ThinkingConfig: &genai.ThinkingConfig{
-								ThinkingBudget: genai.Ptr[int32](0),
-							},
-						})),
-						ai.WithSystem("You are a senior software engineer. Answer briefly. Use fenced code blocks when showing code."),
-						ai.WithMessages(sess.Messages()...),
-					) {
-						if err != nil {
-							return nil, err
-						}
-						if chunk.Done {
-							sess.AddMessages(chunk.Response.Message)
-							// Report how the turn ended so the framework can
-							// forward it on the TurnEnd chunk and persist it
-							// on the snapshot.
-							return &aix.TurnResult{
-								FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
-							}, nil
-						}
-						resp.SendModelChunk(chunk.Chunk)
+	return genkit.DefineCustomAgent(g, name,
+		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
+			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+				for chunk, err := range genkit.GenerateStream(ctx, g,
+					ai.WithModel(googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.GenerateContentConfig{
+						ThinkingConfig: &genai.ThinkingConfig{
+							ThinkingBudget: genai.Ptr[int32](0),
+						},
+					})),
+					ai.WithSystem("You are a senior software engineer. Answer briefly. Use fenced code blocks when showing code."),
+					ai.WithMessages(sess.Messages()...),
+				) {
+					if err != nil {
+						return nil, err
 					}
-					return nil, nil
-				}); err != nil {
-					return nil, err
+					if chunk.Done {
+						sess.AddMessages(chunk.Response.Message)
+						// Report how the turn ended so the framework can
+						// forward it on the TurnEnd chunk and persist it
+						// on the snapshot.
+						return &aix.TurnResult{
+							FinishReason: aix.AgentFinishReason(chunk.Response.FinishReason),
+						}, nil
+					}
+					resp.SendModelChunk(chunk.Chunk)
 				}
-				return sess.Result(), nil
-			},
-			aix.WithSessionStore(store),
-			aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
-		),
-		Store:       store,
-		Description: "Concise code helper (custom per-turn loop)",
-	}
+				return nil, nil
+			}); err != nil {
+				return nil, err
+			}
+			return sess.Result(), nil
+		},
+		aix.WithSessionStore(mustStore(name)),
+		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+		aix.WithDescription[any]("Concise code helper (custom per-turn loop)"),
+	)
 }
 
 // mustStore creates a FileSessionStore rooted at the per-agent dir under
 // ./.genkit/snapshots/, or exits the process on failure. Used during
 // agent setup where there's nowhere sensible to return an error.
 //
-// Per-agent dirs keep one agent's history out of another's listing
-// (FileSessionStore.LatestSnapshot scans the directory it was given).
+// A dir per agent keeps each agent's snapshots on disk separately, which
+// is tidy for browsing but not required: resumes are resolved by session
+// ID (see SnapshotReader.GetLatestSnapshot), so one shared store would
+// work the same.
 func mustStore(agentName string) *localstore.FileSessionStore[any] {
 	store, err := localstore.NewFileSessionStore[any]("./.genkit/snapshots/" + agentName)
 	if err != nil {

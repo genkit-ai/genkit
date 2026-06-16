@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -729,8 +730,8 @@ type agentHTTPResult struct {
 	} `json:"error"`
 }
 
-// TestHandlerAgent verifies that agents, being bidi actions of type flow,
-// serve one-turn-at-a-time over the standard action handler: data carries
+// TestHandlerAgent verifies that agents, being bidi actions, serve
+// one-turn-at-a-time over the standard action handler: data carries
 // the turn's AgentInput, init carries the session source (state for
 // client-managed agents, sessionId/snapshotId for server-managed ones), and
 // the conversation resumes across requests. It also pins the error contract:
@@ -943,6 +944,198 @@ func TestHandlerAgent(t *testing.T) {
 		}
 		if !strings.Contains(body, `"result"`) {
 			t.Errorf("missing final result event; body = %s", body)
+		}
+	})
+}
+
+// TestHandlerAgentRef verifies that the typed agent ref is servable
+// directly: the ref satisfies api.BidiAction, so Handler routes init
+// through the bidi interface (session resume keeps working), and the
+// companion actions plucked off the ref (GetSnapshotAction,
+// AbortSnapshotAction) serve the snapshot lifecycle on caller-chosen
+// routes. Together they pin the detach → poll → abort story over plain
+// HTTP.
+func TestHandlerAgentRef(t *testing.T) {
+	g := Init(context.Background())
+
+	DefineModel(g, "test/echo", &ai.ModelOptions{Supports: &ai.ModelSupports{Multiturn: true}},
+		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{
+				Message:      ai.NewModelTextMessage(fmt.Sprintf("echo %d", len(req.Messages))),
+				FinishReason: ai.FinishReasonStop,
+			}, nil
+		})
+
+	store, err := localstore.NewFileSessionStore[any](t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := DefineAgent(g, "agentRef", aix.FromInline(ai.WithModelName("test/echo")),
+		aix.WithSessionStore(store),
+		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
+	)
+
+	// Handlers come straight off the ref; no registry iteration involved.
+	runHandler := Handler(agent)
+	getSnapshotHandler := Handler(agent.GetSnapshotAction())
+	abortHandler := Handler(agent.AbortSnapshotAction())
+
+	post := func(t *testing.T, h http.HandlerFunc, body string) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h(w, req)
+		respBody, _ := io.ReadAll(w.Result().Body)
+		return w.Result().StatusCode, string(respBody)
+	}
+
+	parseResult := func(t *testing.T, body string) agentHTTPResult {
+		t.Helper()
+		var envelope struct {
+			Result agentHTTPResult `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+			t.Fatalf("unmarshal %q: %v", body, err)
+		}
+		return envelope.Result
+	}
+
+	// snapshotHTTPResult covers both companion responses: getSnapshot
+	// returns the snapshot row, abortSnapshot echoes {snapshotId, status}.
+	type snapshotHTTPResult struct {
+		SnapshotID string          `json:"snapshotId"`
+		SessionID  string          `json:"sessionId"`
+		Status     string          `json:"status"`
+		State      json.RawMessage `json:"state"`
+	}
+	parseSnapshot := func(t *testing.T, body string) snapshotHTTPResult {
+		t.Helper()
+		var envelope struct {
+			Result snapshotHTTPResult `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+			t.Fatalf("unmarshal %q: %v", body, err)
+		}
+		return envelope.Result
+	}
+
+	turn := func(text string) string {
+		return `{"data":{"message":{"role":"user","content":[{"text":"` + text + `"}]}}}`
+	}
+
+	t.Run("turns resume through the ref's bidi interface", func(t *testing.T) {
+		code, body := post(t, runHandler, turn("hello"))
+		if code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.SessionID == "" || res.SnapshotID == "" {
+			t.Fatalf("missing session/snapshot ID: %+v", res)
+		}
+
+		// Resume rides the init field, which the handler only accepts
+		// because the ref satisfies api.BidiAction.
+		code, body = post(t, runHandler,
+			`{"data":{"message":{"role":"user","content":[{"text":"again"}]}},"init":{"sessionId":"`+res.SessionID+`"}}`)
+		if code != http.StatusOK {
+			t.Fatalf("resume status = %d, body = %s", code, body)
+		}
+		if got := parseResult(t, body).Message.Text(); got != "echo 3" {
+			t.Errorf("resumed message = %q, want %q", got, "echo 3")
+		}
+	})
+
+	t.Run("getSnapshot serves the persisted snapshot", func(t *testing.T) {
+		code, body := post(t, runHandler, turn("snapshot me"))
+		if code != http.StatusOK {
+			t.Fatalf("turn status = %d, body = %s", code, body)
+		}
+		res := parseResult(t, body)
+
+		code, body = post(t, getSnapshotHandler, `{"data":{"snapshotId":"`+res.SnapshotID+`"}}`)
+		if code != http.StatusOK {
+			t.Fatalf("getSnapshot status = %d, body = %s", code, body)
+		}
+		snap := parseSnapshot(t, body)
+		if snap.SnapshotID != res.SnapshotID || snap.SessionID != res.SessionID {
+			t.Errorf("snapshot identity = %q/%q, want %q/%q", snap.SnapshotID, snap.SessionID, res.SnapshotID, res.SessionID)
+		}
+		// The action normalizes the implicit empty status to "succeeded"
+		// so remote clients don't reimplement the default.
+		if snap.Status != "succeeded" {
+			t.Errorf("status = %q, want %q", snap.Status, "succeeded")
+		}
+		if len(snap.State) == 0 {
+			t.Error("snapshot must carry state")
+		}
+	})
+
+	t.Run("unknown snapshot IDs map to 404", func(t *testing.T) {
+		code, body := post(t, getSnapshotHandler, `{"data":{"snapshotId":"nope"}}`)
+		if code != http.StatusNotFound {
+			t.Errorf("getSnapshot: status = %d, want %d; body = %s", code, http.StatusNotFound, body)
+		}
+		code, body = post(t, abortHandler, `{"data":{"snapshotId":"nope"}}`)
+		if code != http.StatusNotFound {
+			t.Errorf("abortSnapshot: status = %d, want %d; body = %s", code, http.StatusNotFound, body)
+		}
+	})
+
+	t.Run("abort on a terminal snapshot echoes its status", func(t *testing.T) {
+		code, body := post(t, runHandler, turn("terminal"))
+		if code != http.StatusOK {
+			t.Fatalf("turn status = %d, body = %s", code, body)
+		}
+		res := parseResult(t, body)
+
+		code, body = post(t, abortHandler, `{"data":{"snapshotId":"`+res.SnapshotID+`"}}`)
+		if code != http.StatusOK {
+			t.Fatalf("abortSnapshot status = %d, body = %s", code, body)
+		}
+		snap := parseSnapshot(t, body)
+		if snap.Status != "succeeded" {
+			t.Errorf("status = %q, want %q (abort of a terminal snapshot is a no-op)", snap.Status, "succeeded")
+		}
+	})
+
+	t.Run("detached turn finalizes in the background", func(t *testing.T) {
+		code, body := post(t, runHandler,
+			`{"data":{"detach":true,"message":{"role":"user","content":[{"text":"work in background"}]}}}`)
+		if code != http.StatusOK {
+			t.Fatalf("detach status = %d, body = %s", code, body)
+		}
+		res := parseResult(t, body)
+		if res.FinishReason != "detached" {
+			t.Fatalf("finishReason = %q, want %q; body = %s", res.FinishReason, "detached", body)
+		}
+		if res.SnapshotID == "" {
+			t.Fatal("detached output missing the pending snapshotId")
+		}
+
+		// Poll the companion route until the background turn finalizes the
+		// pending row, the way a remote client would.
+		deadline := time.After(10 * time.Second)
+		for {
+			code, body := post(t, getSnapshotHandler, `{"data":{"snapshotId":"`+res.SnapshotID+`"}}`)
+			if code != http.StatusOK {
+				t.Fatalf("getSnapshot status = %d, body = %s", code, body)
+			}
+			snap := parseSnapshot(t, body)
+			if snap.Status != "pending" {
+				if snap.Status != "succeeded" {
+					t.Fatalf("final status = %q, want %q; body = %s", snap.Status, "succeeded", body)
+				}
+				if len(snap.State) == 0 {
+					t.Error("finalized snapshot must carry the cumulative state")
+				}
+				break
+			}
+			select {
+			case <-deadline:
+				t.Fatal("snapshot still pending after 10s")
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	})
 }

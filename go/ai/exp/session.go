@@ -216,32 +216,35 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 
 // --- Snapshot companion actions ---
 
-// registerSnapshotActions registers the agent's companion actions when
-// the agent has a [SessionStore] configured:
+// newSnapshotActions creates the agent's companion actions, without
+// registering them, when the agent has a [SessionStore] configured:
 //
 //   - The agent's name under [api.ActionTypeAgentSnapshot] — getSnapshot,
 //     the remote counterpart to [SessionStore.GetSnapshot] for Dev UI and
 //     non-Go clients. Local Go callers use the store reference directly.
 //
 //   - The agent's name under [api.ActionTypeAgentAbort] — abortSnapshot,
-//     registered only when the store also implements [SnapshotAborter]
-//     (which bundles both the abort trigger and the status-change
-//     subscription needed for the runtime to react).
+//     created only when the store also implements [SnapshotAborter] (which
+//     bundles both the abort trigger and the status-change subscription
+//     needed for the runtime to react).
 //
 // When the agent is client-managed (no store configured), neither action
-// is registered: there is no server-side snapshot to fetch or abort.
+// is created: there is no server-side snapshot to fetch or abort.
 // Surfacing actions only when the underlying capabilities exist keeps the
 // reflected API aligned with what the agent can actually do.
-func registerSnapshotActions[State any](
-	r api.Registry,
+//
+// The [Agent] retains the returned actions (an absent one is nil) and
+// registers them alongside its run action; see [Agent.Register],
+// [Agent.GetSnapshotAction], and [Agent.AbortSnapshotAction].
+func newSnapshotActions[State any](
 	agentName string,
 	store SessionStore[State],
 	transform StateTransform[State],
-) {
+) (getSnapshot, abortSnapshot api.Action) {
 	if store == nil {
-		return
+		return nil, nil
 	}
-	core.DefineAction(r, agentName, api.ActionTypeAgentSnapshot, nil, nil,
+	getSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentSnapshot, nil, nil,
 		func(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[State], error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId is required")
@@ -286,9 +289,9 @@ func registerSnapshotActions[State any](
 	if !ok {
 		// Store doesn't support the abort lifecycle. Don't surface the
 		// action.
-		return
+		return getSnapshotAction, nil
 	}
-	core.DefineAction(r, agentName, api.ActionTypeAgentAbort, nil, nil,
+	abortSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil, nil,
 		func(ctx context.Context, req *AbortSnapshotRequest) (*AbortSnapshotResponse, error) {
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
@@ -302,6 +305,7 @@ func registerSnapshotActions[State any](
 			}
 			return &AbortSnapshotResponse{SnapshotID: req.SnapshotID, Status: status}, nil
 		})
+	return getSnapshotAction, abortSnapshotAction
 }
 
 // --- Session ---

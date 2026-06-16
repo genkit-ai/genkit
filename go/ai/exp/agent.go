@@ -22,6 +22,7 @@ package exp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -462,8 +463,28 @@ func (r Responder[Stream]) send(chunk *AgentStreamChunk[Stream]) {
 type AgentFunc[Stream, State any] = func(ctx context.Context, resp Responder[Stream], sess *SessionRunner[State]) (*AgentResult, error)
 
 // Agent is a bidirectional streaming agent with automatic snapshot management.
+//
+// Agent implements [api.BidiAction], so generic transports accept it
+// directly (e.g. pass it to genkit.Handler to serve it over HTTP, one turn
+// per request). The [Agent.Run], [Agent.RunText], and [Agent.StreamBidi]
+// methods are typed conveniences over the same underlying action; both
+// surfaces run the identical per-invocation runtime.
+//
+// Server-managed agents (those with a [SessionStore] configured) also
+// register companion actions for the snapshot lifecycle, available via
+// [Agent.GetSnapshotAction] and [Agent.AbortSnapshotAction] for serving
+// alongside the agent, and expose the store itself via [Agent.Store].
 type Agent[Stream, State any] struct {
 	action *core.BidiAction[*AgentInput, *AgentOutput[State], *AgentStreamChunk[Stream], *AgentInit[State]]
+	// Companion actions, retained so transports can serve them without a
+	// registry lookup. Nil when the corresponding capability is absent;
+	// see newSnapshotActions.
+	getSnapshot   api.Action
+	abortSnapshot api.Action
+	// store is the configured session store, or nil for a client-managed
+	// agent. Retained so callers can reach it via Store without threading
+	// a separate reference.
+	store SessionStore[State]
 }
 
 // Name returns the agent's registered name. This is also the name under
@@ -471,6 +492,112 @@ type Agent[Stream, State any] struct {
 // abortSnapshot) are registered.
 func (a *Agent[Stream, State]) Name() string {
 	return a.action.Name()
+}
+
+// GetSnapshotAction returns the agent's getSnapshot companion action,
+// which fetches a session snapshot by ID (input [GetSnapshotRequest],
+// output [SessionSnapshot]). It returns nil when the agent is
+// client-managed (no [SessionStore] configured): there is no server-side
+// snapshot to fetch.
+//
+// Use it to expose snapshot polling over a transport (e.g. mount it with
+// genkit.Handler next to the agent itself); local Go code should read
+// from the store directly.
+func (a *Agent[Stream, State]) GetSnapshotAction() api.Action {
+	return a.getSnapshot
+}
+
+// AbortSnapshotAction returns the agent's abortSnapshot companion action,
+// which asks the background work behind a pending snapshot (e.g. a
+// detached invocation) to stop (input [AbortSnapshotRequest], output
+// [AbortSnapshotResponse]). It returns nil when the agent has no
+// [SessionStore] or the store does not implement [SnapshotAborter].
+//
+// Use it to expose aborting over a transport (e.g. mount it with
+// genkit.Handler next to the agent itself); local Go code should call the
+// store's [SnapshotAborter.AbortSnapshot] directly.
+func (a *Agent[Stream, State]) AbortSnapshotAction() api.Action {
+	return a.abortSnapshot
+}
+
+// Store returns the [SessionStore] the agent was configured with via
+// [WithSessionStore], or nil when the agent is client-managed (no store).
+// It lets local Go code read and write snapshots directly given an agent
+// reference, without threading a separate store variable.
+//
+// The store is returned as the [SessionStore] interface, not its concrete
+// type; a caller needing a store-specific capability (e.g.
+// [SnapshotAborter]) type-asserts for it.
+func (a *Agent[Stream, State]) Store() SessionStore[State] {
+	return a.store
+}
+
+// --- api.BidiAction implementation ---
+
+// Agent is itself an [api.BidiAction]: transports that accept an
+// [api.Action] (or [api.BidiAction]) take an Agent directly. The bidi
+// methods matter beyond mere interface completeness: generic transports
+// type-assert to [api.BidiAction] to route session init (the wire
+// counterpart of [WithSessionID], [WithSnapshotID], and [WithState]), so
+// satisfying only [api.Action] would silently break session resume.
+var _ api.BidiAction = (*Agent[any, any])(nil)
+
+// Register registers the agent's run action and any companion actions
+// (getSnapshot, abortSnapshot) with the registry. Agents defined via
+// [DefineAgent] or [DefineCustomAgent] are already registered; this
+// exists so an agent can travel to another registry as a unit. An
+// inline-defined prompt does not travel: the agent holds it directly, so
+// execution is unaffected, but the prompt action stays in the registry it
+// was defined in.
+func (a *Agent[Stream, State]) Register(r api.Registry) {
+	// Register the wrapped bidi action under the agent key, the same way
+	// every other action registers itself; the registry holds a uniform
+	// api.BidiAction that the reflection servers, ListAgents, and the route
+	// builders consume without knowing about the Agent type.
+	//
+	// The companion actions register independently under their own keys, so
+	// registry consumers recover them by key (genkit.LookupAction) rather
+	// than by reaching through the agent action; see newSnapshotActions.
+	a.action.Register(r)
+	if a.getSnapshot != nil {
+		a.getSnapshot.Register(r)
+	}
+	if a.abortSnapshot != nil {
+		a.abortSnapshot.Register(r)
+	}
+}
+
+// Desc returns the descriptor of the agent's run action.
+func (a *Agent[Stream, State]) Desc() api.ActionDesc {
+	return a.action.Desc()
+}
+
+// RunJSON runs a one-shot invocation with no init (a fresh session):
+// input is the turn's [AgentInput] and the result is the final
+// [AgentOutput]. To supply a session source, use [Agent.RunBidiJSON].
+func (a *Agent[Stream, State]) RunJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
+	return a.action.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [Agent.RunJSON] with trace information on the
+// result.
+func (a *Agent[Stream, State]) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (*api.ActionRunResult[json.RawMessage], error) {
+	return a.action.RunJSONWithTelemetry(ctx, input, cb)
+}
+
+// RunBidiJSON runs a one-shot invocation whose session init (the wire
+// counterpart of the [InvocationOption] values) rides in opts: input is
+// delivered as the only chunk on the input stream and outgoing chunks are
+// forwarded to cb.
+func (a *Agent[Stream, State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiSessionOptions) (*api.ActionRunResult[json.RawMessage], error) {
+	return a.action.RunBidiJSON(ctx, input, cb, opts)
+}
+
+// StreamBidiJSON starts a bidirectional streaming session using
+// JSON-encoded messages. Local Go callers should prefer the typed
+// [Agent.StreamBidi].
+func (a *Agent[Stream, State]) StreamBidiJSON(ctx context.Context, opts *api.BidiSessionOptions) (api.BidiJSONConnection, error) {
+	return a.action.StreamBidiJSON(ctx, opts)
 }
 
 // DefineAgent defines a prompt-backed agent and registers it. Each turn
@@ -515,14 +642,24 @@ func DefineAgent[State any](
 	}
 }
 
-// DefineCustomAgent defines an agent with full control over the
-// conversation loop and registers it with the registry. fn receives a
-// [Responder] for streaming output and a [SessionRunner] for turn and
-// state management; call [SessionRunner.Run] to enter the per-turn loop.
+// NewCustomAgent creates an agent with full control over the conversation
+// loop without registering it. Register it later with the registry (e.g.
+// genkit.RegisterAction), which also registers its companion actions; see
+// [Agent.Register]. fn receives a [Responder] for streaming output and a
+// [SessionRunner] for turn and state management; call [SessionRunner.Run]
+// to enter the per-turn loop.
 //
-// For agents backed by a prompt, use [DefineAgent] instead.
-func DefineCustomAgent[Stream, State any](
-	r api.Registry,
+// This is the agent counterpart of [core.NewStreamingAction]: use it when
+// the agent must outlive or precede a registry (e.g. built in a library,
+// registered conditionally, or moved between registries). For the common
+// case, [DefineCustomAgent] creates and registers in one step.
+//
+// There is no NewAgent counterpart for prompt-backed agents: a prompt is
+// bound to the registry it renders and generates against, so a
+// prompt-backed agent cannot be built before it has one. To get
+// prompt-like behavior without registration, write a custom agent that
+// renders and generates with your own [genkit.Genkit] inside fn.
+func NewCustomAgent[Stream, State any](
 	name string,
 	fn AgentFunc[Stream, State],
 	opts ...AgentOption[State],
@@ -530,20 +667,27 @@ func DefineCustomAgent[Stream, State any](
 	cfg := &agentOptions[State]{}
 	for _, opt := range opts {
 		if err := opt.applyAgent(cfg); err != nil {
-			panic(fmt.Errorf("DefineCustomAgent %q: %w", name, err))
+			panic(fmt.Errorf("NewCustomAgent %q: %w", name, err))
 		}
 	}
 
-	// Registered under ActionTypeAgent so agents surface as their own
-	// action kind rather than as flows (genkit.ListAgents vs ListFlows).
-	// Built on DefineBidiAction so the agent capability metadata can be
-	// set at construction time; actions must be immutable once registered.
-	// WithFlowContext below preserves the flow-context wrapping that makes
-	// core.Run work inside fn.
-	action := core.DefineBidiAction(r, name, api.ActionTypeAgent,
-		&core.BidiActionOptions{
-			Metadata: map[string]any{"agent": agentMetadataFor(cfg.store)},
-		},
+	// Typed under ActionTypeAgent so agents surface as their own action
+	// kind rather than as flows (genkit.ListAgents vs ListFlows). Built on
+	// NewBidiAction so the agent capability metadata is set at construction
+	// time; actions must be immutable once registered. WithFlowContext
+	// below preserves the flow-context wrapping that makes core.Run work
+	// inside fn.
+	//
+	// metadata["agent"] carries the capability info for the Dev UI;
+	// metadata["description"], if set, is lifted to the descriptor's
+	// top-level Description by core (see core.newAction), the standard
+	// place reflective tooling reads an action's description.
+	metadata := map[string]any{"agent": agentMetadataFor(cfg.store)}
+	if cfg.description != "" {
+		metadata["description"] = cfg.description
+	}
+	action := core.NewBidiAction(name, api.ActionTypeAgent,
+		&core.BidiActionOptions{Metadata: metadata},
 		func(
 			ctx context.Context,
 			in *AgentInit[State],
@@ -564,9 +708,34 @@ func DefineCustomAgent[Stream, State any](
 			return rt.run(ctx, fn)
 		})
 
-	registerSnapshotActions(r, name, cfg.store, cfg.transform)
+	getSnapshot, abortSnapshot := newSnapshotActions(name, cfg.store, cfg.transform)
 
-	return &Agent[Stream, State]{action: action}
+	return &Agent[Stream, State]{
+		action:        action,
+		getSnapshot:   getSnapshot,
+		abortSnapshot: abortSnapshot,
+		store:         cfg.store,
+	}
+}
+
+// DefineCustomAgent defines an agent with full control over the
+// conversation loop and registers it (and any companion actions) with the
+// registry. fn receives a [Responder] for streaming output and a
+// [SessionRunner] for turn and state management; call [SessionRunner.Run]
+// to enter the per-turn loop.
+//
+// It is [NewCustomAgent] followed by [Agent.Register]. To build an agent
+// without registering it, use [NewCustomAgent] directly. For agents backed
+// by a prompt, use [DefineAgent] instead.
+func DefineCustomAgent[Stream, State any](
+	r api.Registry,
+	name string,
+	fn AgentFunc[Stream, State],
+	opts ...AgentOption[State],
+) *Agent[Stream, State] {
+	a := NewCustomAgent(name, fn, opts...)
+	a.Register(r)
+	return a
 }
 
 // agentMetadataFor derives the [AgentMetadata] value attached to the

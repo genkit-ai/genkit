@@ -47,9 +47,10 @@ type AgentOption[State any] interface {
 type StateTransform[State any] = func(ctx context.Context, state *SessionState[State]) *SessionState[State]
 
 type agentOptions[State any] struct {
-	store     SessionStore[State]
-	callback  SnapshotCallback[State]
-	transform StateTransform[State]
+	store       SessionStore[State]
+	callback    SnapshotCallback[State]
+	transform   StateTransform[State]
+	description string
 }
 
 func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
@@ -70,6 +71,12 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 			return errors.New("cannot set state transform more than once (WithStateTransform)")
 		}
 		opts.transform = o.transform
+	}
+	if o.description != "" {
+		if opts.description != "" {
+			return errors.New("cannot set description more than once (WithDescription)")
+		}
+		opts.description = o.description
 	}
 	return nil
 }
@@ -109,6 +116,15 @@ func WithSnapshotOn[State any](events ...SnapshotEvent) AgentOption[State] {
 // persisted in the store or to state passed to the user agent function.
 func WithStateTransform[State any](transform StateTransform[State]) AgentOption[State] {
 	return &agentOptions[State]{transform: transform}
+}
+
+// WithDescription sets a human-readable description of the agent. It is
+// stored on the agent action's descriptor (read back via [Agent.Desc] and
+// surfaced in the Dev UI's action listing), the same place every other
+// primitive carries its description, so reflective tooling can render it
+// without a separate field.
+func WithDescription[State any](description string) AgentOption[State] {
+	return &agentOptions[State]{description: description}
 }
 
 // --- InvocationOption ---

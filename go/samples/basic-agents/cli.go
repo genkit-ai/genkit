@@ -46,24 +46,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
-	"github.com/firebase/genkit/go/ai/exp/localstore"
 )
-
-// sampleAgent pairs an agent with the store it persists to and a
-// one-line description for the CLI list view. The embedded
-// *aix.Agent[any, any] makes Name(), StreamBidi() etc. callable
-// directly on a sampleAgent value, so the CLI does not need a
-// separate field-threading layer.
-//
-// Store is tracked alongside the agent (rather than fished out of it)
-// because we use FileSessionStore-specific helpers like
-// LatestSnapshot and OnSnapshotStatusChange; carrying the concrete
-// type avoids a type assertion at every call site.
-type sampleAgent struct {
-	*aix.Agent[any, any]
-	Store       *localstore.FileSessionStore[any]
-	Description string
-}
 
 // errQuit signals that the user typed /quit somewhere in the CLI; it
 // bubbles up through openAgent and breaks runCLI's outer loop.
@@ -73,7 +56,7 @@ var errQuit = errors.New("quit")
 // between two screens forever: the agent list and a per-agent chat.
 // Returning from a chat brings the user back to the agent list. /quit
 // (anywhere) and Ctrl-C both unwind back here and exit cleanly.
-func runCLI(ctx context.Context, agents []sampleAgent) error {
+func runCLI(ctx context.Context, agents []*aix.Agent[any, any]) error {
 	fmt.Println("Genkit Basic Agents")
 	fmt.Println("===================")
 	fmt.Println()
@@ -89,31 +72,42 @@ func runCLI(ctx context.Context, agents []sampleAgent) error {
 	fmt.Println("  /back              return to the agent list")
 	fmt.Println("  /quit              exit the program")
 
+	// lastSession remembers, per agent, the session ID of the most recent
+	// conversation this process ran with it. That is all a client needs to
+	// resume: re-entering an agent resolves the session's latest snapshot
+	// from the store (see SnapshotReader.GetLatestSnapshot). It lives in
+	// memory, so a fresh run starts clean rather than rediscovering prior
+	// conversations from the store.
+	lastSession := map[string]string{}
+
 	inputCh := readLines(ctx)
 	for {
-		choice, ok := pickAgent(ctx, inputCh, agents)
+		choice, ok := pickAgent(ctx, inputCh, agents, lastSession)
 		if !ok {
 			return nil
 		}
-		if err := openAgent(ctx, inputCh, agents[choice]); err != nil {
+		a := agents[choice]
+		sessionID, err := openAgent(ctx, inputCh, a, lastSession[a.Name()])
+		if err != nil {
 			if errors.Is(err, errQuit) {
 				return nil
 			}
 			return err
 		}
+		lastSession[a.Name()] = sessionID
 	}
 }
 
 // pickAgent renders the agent list and reads the user's choice. The
 // list is re-rendered between selections so the user can see updated
 // pending/terminal status after returning from a chat.
-func pickAgent(ctx context.Context, inputCh <-chan string, agents []sampleAgent) (int, bool) {
+func pickAgent(ctx context.Context, inputCh <-chan string, agents []*aix.Agent[any, any], lastSession map[string]string) (int, bool) {
 	for {
 		fmt.Println()
 		fmt.Println("Agents:")
 		for i, a := range agents {
-			fmt.Printf("  %d. %s — %s\n", i+1, a.Name(), a.Description)
-			if summary := summarizeLatest(ctx, a); summary != "" {
+			fmt.Printf("  %d. %s — %s\n", i+1, a.Name(), a.Desc().Description)
+			if summary := summarizeLatest(ctx, a, lastSession[a.Name()]); summary != "" {
 				fmt.Printf("       last: %s\n", summary)
 			}
 		}
@@ -147,29 +141,37 @@ func pickAgent(ctx context.Context, inputCh <-chan string, agents []sampleAgent)
 // so the rest of the flow is uniform: ok=false means the user backed
 // out, otherwise hand the chosen snapshot (or nil for fresh) to
 // runChat.
-func openAgent(ctx context.Context, inputCh <-chan string, a sampleAgent) error {
-	latest, err := a.Store.LatestSnapshot(ctx)
-	if err != nil {
-		return fmt.Errorf("read snapshots for %q: %w", a.Name(), err)
+func openAgent(ctx context.Context, inputCh <-chan string, a *aix.Agent[any, any], lastSessionID string) (string, error) {
+	// Resolve where the last conversation left off. With no tracked
+	// session (a first visit this run) there is nothing to resume;
+	// otherwise the store resolves the session's latest snapshot, which
+	// also surfaces a still-pending detached invocation.
+	var tip *aix.SessionSnapshot[any]
+	if lastSessionID != "" {
+		var err error
+		tip, err = a.Store().GetLatestSnapshot(ctx, lastSessionID)
+		if err != nil {
+			return lastSessionID, fmt.Errorf("read snapshot for %q: %w", a.Name(), err)
+		}
 	}
 
 	var (
 		resume *aix.SessionSnapshot[any]
 		ok     bool
 	)
-	if latest != nil && latest.Status == aix.SnapshotStatusPending {
-		// Background invocation still in flight. handlePending makes
-		// the final decision itself (wait & resume, new, or back), so
-		// we don't fall through to pickSession — the user already
-		// chose; asking again would just be noise.
-		resume, ok = handlePending(ctx, inputCh, a, latest)
+	if tip != nil && tip.Status == aix.SnapshotStatusPending {
+		// Background invocation still in flight. handlePending makes the
+		// final decision itself (wait & resume, new, or back), so we don't
+		// fall through to pickSession: the user already chose, and asking
+		// again would just be noise.
+		resume, ok = handlePending(ctx, inputCh, a, tip)
 	} else {
-		resume, ok = pickSession(ctx, inputCh, a, latest)
+		resume, ok = pickSession(ctx, inputCh, a, tip)
 	}
 	if !ok {
-		return nil
+		return lastSessionID, nil
 	}
-	return runChat(ctx, inputCh, a, resume)
+	return runChat(ctx, inputCh, a, resume, lastSessionID)
 }
 
 // handlePending offers the three reasonable responses when a previous
@@ -187,7 +189,7 @@ func openAgent(ctx context.Context, inputCh <-chan string, a sampleAgent) error 
 // snapshot directly so the caller can skip the resume / new prompt:
 // the user already committed to the choice by waiting, and re-asking
 // would be redundant.
-func handlePending(ctx context.Context, inputCh <-chan string, a sampleAgent, pending *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
+func handlePending(ctx context.Context, inputCh <-chan string, a *aix.Agent[any, any], pending *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
 	for {
 		fmt.Printf("\nThe last %s session is still running in the background (%s).\n", a.Name(), shortID(pending.SnapshotID))
 		fmt.Println("  1. Wait for it to finalize")
@@ -202,7 +204,7 @@ func handlePending(ctx context.Context, inputCh <-chan string, a sampleAgent, pe
 		switch strings.TrimSpace(line) {
 		case "1":
 			fmt.Println("Waiting for it to finalize...")
-			final, err := waitForFinalize(ctx, a.Store, pending.SnapshotID)
+			final, err := waitForFinalize(ctx, a, pending.SnapshotID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Wait error: %v\n", err)
 				return nil, false
@@ -237,7 +239,7 @@ func handlePending(ctx context.Context, inputCh <-chan string, a sampleAgent, pe
 // offers two paths so the demo stays focused: resume from the most
 // recent terminal snapshot (returns the snapshot pointer), or start
 // fresh (returns nil).
-func pickSession(ctx context.Context, inputCh <-chan string, a sampleAgent, latest *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
+func pickSession(ctx context.Context, inputCh <-chan string, a *aix.Agent[any, any], latest *aix.SessionSnapshot[any]) (*aix.SessionSnapshot[any], bool) {
 	if latest == nil || latest.Status != aix.SnapshotStatusSucceeded {
 		fmt.Printf("\nStarting a new conversation with %s.\n", a.Name())
 		return nil, true
@@ -272,9 +274,9 @@ func pickSession(ctx context.Context, inputCh <-chan string, a sampleAgent, late
 // snapshot the user was just shown. Validating up front keeps the chat
 // from opening on a connection whose invocation already failed, which
 // would surface the error only after the user types a message.
-func resumeOption(ctx context.Context, a sampleAgent, resume *aix.SessionSnapshot[any]) aix.InvocationOption[any] {
+func resumeOption(ctx context.Context, a *aix.Agent[any, any], resume *aix.SessionSnapshot[any]) aix.InvocationOption[any] {
 	if resume.SessionID != "" {
-		tip, err := a.Store.GetLatestSnapshot(ctx, resume.SessionID)
+		tip, err := a.Store().GetLatestSnapshot(ctx, resume.SessionID)
 		if err == nil && tip != nil && tip.Status != aix.SnapshotStatusPending {
 			return aix.WithSessionID[any](resume.SessionID)
 		}
@@ -287,10 +289,11 @@ func resumeOption(ctx context.Context, a sampleAgent, resume *aix.SessionSnapsho
 // snapshot) and runs the per-turn REPL. When resuming, the prior
 // conversation is replayed first so the user sees the context they're
 // picking up, then the REPL takes over. /detach is the one interesting
-// branch — it sends the optional trailing text as the final input and
-// detaches the connection, returning the pending snapshot ID for the
-// user to observe.
-func runChat(ctx context.Context, inputCh <-chan string, a sampleAgent, resume *aix.SessionSnapshot[any]) error {
+// branch: it sends the optional trailing text as the final input and
+// detaches the connection, leaving a pending snapshot for the user to
+// observe. It returns the session ID the chat ran under (falling back to
+// prevSessionID) so the caller can offer to resume it later.
+func runChat(ctx context.Context, inputCh <-chan string, a *aix.Agent[any, any], resume *aix.SessionSnapshot[any], prevSessionID string) (string, error) {
 	fmt.Printf("\n=== Chatting with %s ===\n", a.Name())
 	if resume != nil {
 		fmt.Printf("Resumed from %s\n", shortID(resume.SnapshotID))
@@ -310,7 +313,7 @@ func runChat(ctx context.Context, inputCh <-chan string, a sampleAgent, resume *
 	}
 	conn, err := a.StreamBidi(ctx, opts...)
 	if err != nil {
-		return fmt.Errorf("open agent %q: %w", a.Name(), err)
+		return prevSessionID, fmt.Errorf("open agent %q: %w", a.Name(), err)
 	}
 
 	var (
@@ -417,17 +420,28 @@ repl:
 		fmt.Printf("Done (%s). Final snapshot: %s.\n", out.FinishReason, shortID(out.SnapshotID))
 	}
 
-	if quit {
-		return errQuit
+	// Hand back the session this chat ran under so the caller can offer to
+	// resume it. An invocation that never produced output (e.g. the stream
+	// errored before any turn) keeps the prior session.
+	sessionID := prevSessionID
+	if out != nil && out.SessionID != "" {
+		sessionID = out.SessionID
 	}
-	return nil
+	if quit {
+		return sessionID, errQuit
+	}
+	return sessionID, nil
 }
 
-// summarizeLatest is the one-line summary printed under each agent in
-// the list. Empty if there is no snapshot yet, so a freshly-installed
-// sample doesn't show clutter.
-func summarizeLatest(ctx context.Context, a sampleAgent) string {
-	latest, err := a.Store.LatestSnapshot(ctx)
+// summarizeLatest is the one-line summary printed under each agent in the
+// list: the tip of the conversation last run with it this session. Empty
+// when none has run yet, or the session has no resumable snapshot, so a
+// fresh list shows no clutter.
+func summarizeLatest(ctx context.Context, a *aix.Agent[any, any], sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	latest, err := a.Store().GetLatestSnapshot(ctx, sessionID)
 	if err != nil || latest == nil {
 		return ""
 	}
@@ -442,12 +456,21 @@ func summarizeLatest(ctx context.Context, a sampleAgent) string {
 // waitForFinalize subscribes to a snapshot's status and blocks until it
 // transitions out of pending. The returned snapshot is the final one (or
 // nil if it disappeared). OnSnapshotStatusChange yields the current
-// status first, so a snapshot that finalized between the directory scan
-// and the subscription is observed immediately.
-func waitForFinalize(ctx context.Context, store *localstore.FileSessionStore[any], snapshotID string) (*aix.SessionSnapshot[any], error) {
+// status first, so a snapshot that finalized just before the
+// subscription is observed immediately.
+//
+// The status subscription is the optional SnapshotAborter half of the
+// store contract. A store without it cannot stream background progress,
+// so we fall back to reading the snapshot once and returning it as-is.
+func waitForFinalize(ctx context.Context, a *aix.Agent[any, any], snapshotID string) (*aix.SessionSnapshot[any], error) {
+	store := a.Store()
+	aborter, ok := store.(aix.SnapshotAborter)
+	if !ok {
+		return store.GetSnapshot(ctx, snapshotID)
+	}
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	statusCh := store.OnSnapshotStatusChange(subCtx, snapshotID)
+	statusCh := aborter.OnSnapshotStatusChange(subCtx, snapshotID)
 	for {
 		select {
 		case <-ctx.Done():

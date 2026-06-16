@@ -156,59 +156,6 @@ func TestInMemorySessionStore(t *testing.T) {
 		var _ exp.SessionStore[testState] = (*InMemorySessionStore[testState])(nil)
 		var _ exp.SnapshotAborter = (*InMemorySessionStore[testState])(nil)
 	})
-
-	t.Run("LatestSnapshotEmpty", func(t *testing.T) {
-		store := NewInMemorySessionStore[testState]()
-		latest, err := store.LatestSnapshot(context.Background())
-		if err != nil {
-			t.Fatalf("LatestSnapshot: %v", err)
-		}
-		if latest != nil {
-			t.Errorf("expected nil on empty store, got %+v", latest)
-		}
-	})
-
-	t.Run("LatestSnapshotReturnsMostRecent", func(t *testing.T) {
-		store := NewInMemorySessionStore[testState]()
-		ctx := context.Background()
-		for _, id := range []string{"snap-1", "snap-2", "snap-3"} {
-			if _, err := store.SaveSnapshot(ctx, id,
-				func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-					return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusSucceeded}, nil
-				}); err != nil {
-				t.Fatalf("SaveSnapshot %q: %v", id, err)
-			}
-			// Wall-clock UpdatedAt can tie within a tick; force order.
-			time.Sleep(2 * time.Millisecond)
-		}
-		latest, err := store.LatestSnapshot(ctx)
-		if err != nil {
-			t.Fatalf("LatestSnapshot: %v", err)
-		}
-		if latest == nil || latest.SnapshotID != "snap-3" {
-			t.Errorf("expected latest=snap-3, got %+v", latest)
-		}
-	})
-
-	t.Run("LatestSnapshotReturnsCopy", func(t *testing.T) {
-		store := NewInMemorySessionStore[testState]()
-		ctx := context.Background()
-		if _, err := store.SaveSnapshot(ctx, "snap-1",
-			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusSucceeded,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
-				}, nil
-			}); err != nil {
-			t.Fatalf("SaveSnapshot: %v", err)
-		}
-		first, _ := store.LatestSnapshot(ctx)
-		first.State.Custom.Counter = 999
-		second, _ := store.LatestSnapshot(ctx)
-		if second.State.Custom.Counter != 1 {
-			t.Errorf("expected counter=1 (isolation), got %d", second.State.Custom.Counter)
-		}
-	})
 }
 
 func TestInMemorySessionStore_SessionIDs(t *testing.T) {

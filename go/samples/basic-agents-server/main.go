@@ -25,7 +25,9 @@
 //     persists a snapshot; the response carries sessionId and snapshotId,
 //     and a later request resumes the conversation by sending
 //     {"init": {"sessionId": ...}} (or {"snapshotId": ...} to resume from
-//     a specific point in history).
+//     a specific point in history). The store also gives the agent
+//     snapshot companion actions, served here at
+//     /agents/chat/getSnapshot and /agents/chat/abortSnapshot.
 //   - "statelessChat" has no store (client-managed state). The response
 //     carries the full conversation state; the client sends it back
 //     verbatim as {"init": {"state": ...}} on the next turn. The server
@@ -37,27 +39,54 @@
 //
 // Start a conversation (no init starts a fresh session):
 //
-//	curl -X POST http://localhost:8080/chat \
+//	curl -X POST http://localhost:8080/agents/chat \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"message": {"role": "user", "content": [{"text": "My name is Alex and I am planning a trip to Japan."}]}}}'
 //
 // Continue it, using the sessionId from the response:
 //
-//	curl -X POST http://localhost:8080/chat \
+//	curl -X POST http://localhost:8080/agents/chat \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"message": {"role": "user", "content": [{"text": "What is my name?"}]}}, "init": {"sessionId": "SESSION_ID"}}'
 //
 // Stream a turn's model chunks and lifecycle events as server-sent events:
 //
-//	curl -N -X POST 'http://localhost:8080/chat?stream=true' \
+//	curl -N -X POST 'http://localhost:8080/agents/chat?stream=true' \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"message": {"role": "user", "content": [{"text": "Suggest three day trips from Tokyo."}]}}}'
 //
 // For statelessChat, resume by round-tripping the returned state instead:
 //
-//	curl -X POST http://localhost:8080/statelessChat \
+//	curl -X POST http://localhost:8080/agents/statelessChat \
 //	  -H "Content-Type: application/json" \
 //	  -d '{"data": {"message": {"role": "user", "content": [{"text": "What is my name?"}]}}, "init": {"state": STATE_FROM_PREVIOUS_RESPONSE}}'
+//
+// Server-managed state also unlocks background continuation. Send a turn
+// with "detach": true and the response comes back immediately with
+// finishReason "detached" and a pending snapshotId, while the turn keeps
+// running on the server:
+//
+//	curl -X POST http://localhost:8080/agents/chat \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"message": {"role": "user", "content": [{"text": "Plan a two-week Japan itinerary."}]}, "detach": true}}'
+//
+// The companion endpoints follow the conversation from there. Each is a
+// POST that carries the snapshotId in the {"data": ...} body and returns
+// the {"result": ...} envelope, the same convention as the turn route.
+// Poll the pending snapshot until its status leaves "pending" (the final
+// state carries the result), using the snapshotId from the detach
+// response:
+//
+//	curl -X POST http://localhost:8080/agents/chat/getSnapshot \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"snapshotId": "SNAPSHOT_ID"}}'
+//
+// Or abort the background work instead; an aborted snapshot finalizes
+// with status "aborted":
+//
+//	curl -X POST http://localhost:8080/agents/chat/abortSnapshot \
+//	  -H "Content-Type: application/json" \
+//	  -d '{"data": {"snapshotId": "SNAPSHOT_ID"}}'
 //
 // Failures come in two tiers. A failed turn (e.g. the model call errors)
 // still returns HTTP 200: the result reports finishReason "failed", a
@@ -77,6 +106,7 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	"github.com/firebase/genkit/go/plugins/server"
 	"google.golang.org/genai"
@@ -122,12 +152,28 @@ func main() {
 		),
 	)
 
-	// Agents register under their own "agent" action type; ListAgents
-	// surfaces them and the standard action handler serves them one turn
-	// per request.
+	// genkitx.AllAgentRoutes lays out a default HTTP surface for every
+	// registered agent, and genkitx.Mount wires it onto the mux. The layout
+	// follows each agent's capabilities, so server-managed and
+	// client-managed agents can be deployed side by side from one call:
+	//
+	//   "chat" (store-backed):
+	//     POST /agents/chat                one turn per request
+	//     POST /agents/chat/getSnapshot    read a snapshot by ID
+	//     POST /agents/chat/abortSnapshot  abort background work
+	//   "statelessChat" (client-managed):
+	//     POST /agents/statelessChat       one turn per request
+	//
+	// Every route is a POST taking the standard {"data": ...} envelope and
+	// returning {"result": ...}; the companions read the snapshotId from
+	// that body. HandlerOptions passed here (e.g. context providers for
+	// auth) apply to every route.
+	//
+	// To serve specific agents instead of all of them, use
+	// genkitx.AgentRoutes(agent); to expose flows, genkitx.AllFlowRoutes(g).
+	// Mix them by concatenating the route slices. The genkitx (genkit/exp)
+	// package holds these helpers while the routing layer is experimental.
 	mux := http.NewServeMux()
-	for _, a := range genkit.ListAgents(g) {
-		mux.HandleFunc("POST /"+a.Name(), genkit.Handler(a))
-	}
+	genkitx.Mount(mux, genkitx.AllAgentRoutes(g))
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 }

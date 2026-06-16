@@ -304,6 +304,19 @@ func RegisterAction(g *Genkit, action api.Registerable) {
 	action.Register(g.reg)
 }
 
+// LookupAction returns the action registered with g under key, or nil if
+// none is registered. key is an action's fully qualified
+// "/type/provider/name" identifier; build it with [api.NewKey] or
+// [api.KeyFromName]. For example, an agent's getSnapshot companion is keyed
+// by api.KeyFromName(api.ActionTypeAgentSnapshot, agentName).
+//
+// This is the generic, type-agnostic lookup. Prefer a typed accessor
+// ([LookupModel], [LookupPrompt], etc.) when one exists for the kind of
+// action you need.
+func LookupAction(g *Genkit, key string) api.Action {
+	return g.reg.LookupAction(key)
+}
+
 // DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
 // and returns a [core.Flow] runner.
 // The provided function `fn` takes an input of type `In` and returns an output of type `Out`.
@@ -417,6 +430,12 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 // (e.g. [aix.WithSessionStore], [aix.WithSnapshotOn]); pass an explicit
 // [State] only when no typed option is provided.
 //
+// The returned agent is an [api.BidiAction]; pass it to [Handler] to
+// serve it over HTTP, one turn per request. Server-managed agents also
+// register companion actions for the snapshot lifecycle; serve them
+// alongside the agent via [aix.Agent.GetSnapshotAction] and
+// [aix.Agent.AbortSnapshotAction].
+//
 // For full control over the per-turn loop, use [DefineCustomAgent].
 //
 // # Options
@@ -466,6 +485,10 @@ func DefineAgent[State any](
 // to the client and an [aix.SessionRunner] for accessing conversation state.
 // Call [aix.SessionRunner.Run] to enter the turn loop, which blocks until the
 // client sends the next message.
+//
+// Like [DefineAgent], the returned agent is an [api.BidiAction] servable
+// via [Handler], with companion actions on [aix.Agent.GetSnapshotAction]
+// and [aix.Agent.AbortSnapshotAction].
 //
 // For agents backed by a prompt, use [DefineAgent] with [aix.FromInline]
 // (inline prompt) or [aix.FromPrompt] (existing prompt) instead.
