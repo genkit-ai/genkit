@@ -101,27 +101,12 @@ class Tool:
             ``pay_invoice.restart({**trp.tool_request.input, "confirmed": True}, interrupt=trp,``
             ``resumed_metadata={"by": "bob"})``
         """
-        tool_req = interrupt.tool_request
-        if tool_req.name != self.name:
-            raise ValueError(f"Interrupt is for tool '{tool_req.name}', not '{self.name}'")
-
-        existing_meta = interrupt.metadata or {}
-        new_meta: dict[str, Any] = dict(existing_meta) if existing_meta else {}
-
-        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
-
-        new_input = tool_req.input
-        if replace_input is not None:
-            new_meta['replacedInput'] = tool_req.input
-            new_input = replace_input
-
-        return ToolRequestPart(
-            tool_request=ToolRequest(
-                name=tool_req.name,
-                ref=tool_req.ref,
-                input=new_input,
-            ),
-            metadata=new_meta,
+        if interrupt.tool_request.name != self.name:
+            raise ValueError(f"Interrupt is for tool '{interrupt.tool_request.name}', not '{self.name}'")
+        return restart_tool(
+            replace_input,
+            interrupt=interrupt,
+            resumed_metadata=resumed_metadata,
         )
 
 
@@ -228,20 +213,16 @@ def respond_to_interrupt(
 def restart_tool(
     replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
     *,
-    tool: Tool,
     interrupt: ToolRequestPart,
     resumed_metadata: dict[str, Any] | None = None,
 ) -> ToolRequestPart:
     """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
 
-    Thin wrapper around :meth:`Tool.restart` for symmetry with
-    :func:`respond_to_interrupt`. Pass the return value to
-    ``generate(..., resume_restart=...)``.
+    Pass the return value to ``generate(..., resume_restart=...)``.
 
     Args:
         replace_input: Optional new ``tool_request.input`` for this run (previous input is
             stored in ``metadata.replacedInput`` when this is set).
-        tool: The registered :class:`Tool` that was interrupted.
         interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
         resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
 
@@ -249,10 +230,28 @@ def restart_tool(
         A ``ToolRequestPart`` for ``resume_restart`` / message history.
 
     Example:
-        ``restart_tool({**trp.tool_request.input, "confirmed": True}, tool=pay_invoice,``
+        ``restart_tool({**trp.tool_request.input, "confirmed": True},``
         ``interrupt=trp, resumed_metadata={"by": "bob"})``
     """
-    return tool.restart(replace_input, interrupt=interrupt, resumed_metadata=resumed_metadata)
+    tool_req = interrupt.tool_request
+    existing_meta = interrupt.metadata or {}
+    new_meta: dict[str, Any] = dict(existing_meta) if existing_meta else {}
+
+    new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+
+    new_input = tool_req.input
+    if replace_input is not None:
+        new_meta['replacedInput'] = tool_req.input
+        new_input = replace_input
+
+    return ToolRequestPart(
+        tool_request=ToolRequest(
+            name=tool_req.name,
+            ref=tool_req.ref,
+            input=new_input,
+        ),
+        metadata=new_meta,
+    )
 
 
 async def run_tool_after_restart(

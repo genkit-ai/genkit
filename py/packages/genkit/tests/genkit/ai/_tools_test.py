@@ -31,9 +31,7 @@ def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': {'reason': 'hold'}},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
-    tool = Tool(action)
-    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
+    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
@@ -47,9 +45,7 @@ def test_restart_replace_input_sets_replaced_input() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
-    tool = Tool(action)
-    out = restart_tool(replace_input={'amount': 99}, tool=tool, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
+    out = restart_tool(replace_input={'amount': 99}, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
@@ -64,9 +60,7 @@ def test_restart_resumed_defaults_to_true() -> None:
         tool_request=ToolRequest(name='pay', ref='r1', input={}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
-    tool = Tool(action)
-    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata=None)
+    out = restart_tool(interrupt=interrupt_trp, resumed_metadata=None)
     assert isinstance(out, ToolRequestPart)
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
@@ -218,20 +212,40 @@ def test_respond_to_interrupt_wire_format_with_metadata() -> None:
     assert result.metadata.get('interruptResponse') == {'by': 'admin'}
 
 
-def test_restart_tool_with_tool_reference() -> None:
-    """``restart_tool`` works with a ``Tool`` reference."""
+def test_restart_tool_directly() -> None:
+    """``restart_tool`` works directly without a ``Tool`` reference."""
     interrupt_trp = ToolRequestPart(
         tool_request=ToolRequest(name='middleware_tool', ref='r1', input={'p': 1}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='middleware_tool', fn=_echo_tool)
-    tool = Tool(action)
-    out = restart_tool(tool=tool, interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
+    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
 
     assert out.tool_request.name == 'middleware_tool'
     assert out.tool_request.input == {'p': 1}
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'tool_approved': True}
+
+
+def test_restart_tool_via_class_helper() -> None:
+    """A tool's ``restart`` method validates the tool name and delegates to ``restart_tool``."""
+    interrupt_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='my_tool', ref='r1', input={'p': 1}),
+        metadata={'interrupt': True},
+    )
+    action = Action(kind=ActionKind.TOOL, name='my_tool', fn=_echo_tool)
+    tool = Tool(action)
+    out = tool.restart(interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
+
+    assert out.tool_request.name == 'my_tool'
+    assert out.tool_request.input == {'p': 1}
+    assert out.metadata.get('resumed') == {'tool_approved': True}
+
+    # Verify name validation fails if calling with mismatched tool name
+    mismatched_trp = ToolRequestPart(
+        tool_request=ToolRequest(name='other_tool', ref='r1', input={'p': 1}),
+    )
+    with pytest.raises(ValueError, match="Interrupt is for tool 'other_tool', not 'my_tool'"):
+        tool.restart(interrupt=mismatched_trp)
 
 
 def test_restart_preserves_ref_on_wire() -> None:
@@ -240,9 +254,7 @@ def test_restart_preserves_ref_on_wire() -> None:
         tool_request=ToolRequest(name='pay', ref='corr-id-1', input={'amount': 50}),
         metadata={'interrupt': True},
     )
-    action = Action(kind=ActionKind.TOOL, name='pay', fn=_echo_tool)
-    tool = Tool(action)
-    out = restart_tool(tool=tool, interrupt=interrupt_trp)
+    out = restart_tool(interrupt=interrupt_trp)
 
     assert out.tool_request.ref == 'corr-id-1'
 
