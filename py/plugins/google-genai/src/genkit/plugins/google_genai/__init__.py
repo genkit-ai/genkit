@@ -212,6 +212,7 @@ from genkit.plugins.google_genai.models.embedder import (
     VertexEmbeddingModels,
 )
 from genkit.plugins.google_genai.models.gemini import (
+    GeminiConfigDict,
     GeminiConfigSchema,
     GeminiImageConfigSchema,
     GeminiTtsConfigSchema,
@@ -241,6 +242,7 @@ __all__ = [
     GoogleAIGeminiVersion.__name__,
     VertexAIGeminiVersion.__name__,
     EmbeddingTaskType.__name__,
+    GeminiConfigDict.__name__,
     GeminiConfigSchema.__name__,
     GeminiImageConfigSchema.__name__,
     GeminiTtsConfigSchema.__name__,

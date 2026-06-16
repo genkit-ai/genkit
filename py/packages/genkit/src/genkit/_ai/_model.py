@@ -32,6 +32,7 @@ from genkit._core._action import (
 from genkit._core._model import (
     Message,
     ModelConfig,
+    ModelConfigDict,
     ModelRef,
     ModelRequest,
     ModelResponse,

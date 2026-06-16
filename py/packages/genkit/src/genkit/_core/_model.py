@@ -43,6 +43,7 @@ from genkit._core._typing import (
     GenerateResponseChunk,
     GenerationCommonConfig,
     GenerationUsage,
+    ModelConfigDict,
     Media,
     MediaModel,
     MediaPart,

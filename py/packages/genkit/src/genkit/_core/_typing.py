@@ -286,6 +286,23 @@ class GenerateResponseChunk(GenkitModel):
     aggregated: bool | None = None
 
 
+from typing import TypedDict
+
+class ModelConfigDict(TypedDict, total=False):
+    """TypedDict for model configuration options.
+    
+    This provides IDE autocompletion and static type checking for users
+    who prefer to pass configuration as plain dictionaries.
+    """
+
+    version: str
+    temperature: float
+    max_output_tokens: float
+    top_k: float
+    top_p: float
+    stop_sequences: list[str]
+    api_key: str
+
 class GenerationCommonConfig(GenkitModel):
     """Model for generationcommonconfig data."""
 

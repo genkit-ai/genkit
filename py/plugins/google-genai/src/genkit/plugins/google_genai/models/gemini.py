@@ -143,7 +143,7 @@ else:
     from enum import StrEnum
 
 from functools import cached_property
-from typing import Annotated, Any, Any as JsonAny, cast
+from typing import Annotated, Any, Any as JsonAny, TypedDict, cast
 
 from google import genai
 from google.genai import types as genai_types
@@ -167,7 +167,7 @@ from genkit import (
     TextPart,
     ToolDefinition,
 )
-from genkit.model import Candidate, FinishReason, get_basic_usage_stats
+from genkit.model import Candidate, FinishReason, ModelConfigDict, get_basic_usage_stats
 from genkit.plugin_api import (
     ActionRunContext,
     StatusName,
@@ -299,6 +299,22 @@ class VoiceConfigSchema(BaseModel):
 
     model_config = ConfigDict(extra='allow', populate_by_name=True)
     prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(None, alias='prebuiltVoiceConfig')
+
+
+class GeminiConfigDict(ModelConfigDict, total=False):
+    """Gemini Config TypedDict."""
+    
+    api_key: str
+    base_url: str
+    api_version: str
+    safety_settings: list[dict[str, Any]]
+    code_execution: bool | dict[str, Any]
+    context_cache: bool
+    function_calling_config: dict[str, Any]
+    response_modalities: list[str]
+    google_search_retrieval: bool | dict[str, Any]
+    file_search: dict[str, Any]
+    url_context: bool | dict[str, Any]
 
 
 class GeminiConfigSchema(ModelConfig):
