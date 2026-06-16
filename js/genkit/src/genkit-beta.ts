@@ -47,8 +47,6 @@ import {
   type SessionState,
   type SessionStore,
   type SessionStoreOptions,
-  type SnapshotCallback,
-  type SnapshotContext,
   type SnapshotMutator,
 } from '@genkit-ai/ai/session';
 import {
@@ -72,8 +70,6 @@ export type {
   SessionState,
   SessionStore,
   SessionStoreOptions,
-  SnapshotCallback,
-  SnapshotContext,
   SnapshotMutator,
 };
 
@@ -113,7 +109,6 @@ export class GenkitBeta extends Genkit {
       description?: string;
       stateSchema?: z.ZodType<State>;
       store?: SessionStore<State>;
-      snapshotCallback?: SnapshotCallback<State>;
     },
     fn: AgentFn<State>
   ) {
@@ -129,7 +124,6 @@ export class GenkitBeta extends Genkit {
     promptName: string;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
-    snapshotCallback?: SnapshotCallback<State>;
   }) {
     return definePromptAgent<State>(this.registry, config);
   }

@@ -60,6 +60,10 @@ function normalizeGetSnapshotOptions(opts: GetSnapshotOptions): {
  * A "leaf" is a snapshot that no other snapshot points to as its `parentId`.
  * A healthy linear session has exactly one leaf - the latest turn.
  *
+ * The leaf is returned regardless of `status`; resumability (only `done`
+ * snapshots are resumable) is enforced by the agent, which walks back over a
+ * non-resumable leaf (e.g. a failed turn) to the last-good snapshot.
+ *
  * - Returns `undefined` when `snapshots` is empty.
  * - Returns the single leaf when the history is linear.
  * - When the history has branched (more than one leaf, e.g. after a
