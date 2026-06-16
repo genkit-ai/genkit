@@ -238,15 +238,15 @@ async def run_tool_after_restart(
     meta = restart_trp.metadata or {}
     raw_resumed = meta.get('resumed')
     if raw_resumed is True:
-        resumed_metadata: dict[str, Any] | None = {}
+        resumed_meta: dict[str, Any] | None = {}
     elif isinstance(raw_resumed, dict):
-        resumed_metadata = raw_resumed
+        resumed_meta = raw_resumed
     else:
-        resumed_metadata = None
+        resumed_meta = None
 
     original_input = meta.get('replacedInput')
 
-    token_meta = _tool_resumed_metadata.set(resumed_metadata)
+    token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
     try:
         try:
@@ -291,7 +291,7 @@ def _define_tool(
 ) -> Tool:
     """Register a function as a tool.
 
-    Normally, the input_schema and output_schem are inferred from func. However,
+    Normally, the input_schema and output_schema are inferred from func. However,
     in some cases, like define_interrupt, the app developer doesn't have a way to
     express the input schema in the func signature.
 
