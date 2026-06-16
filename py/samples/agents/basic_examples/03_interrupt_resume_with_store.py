@@ -28,13 +28,12 @@ the user clicks approve in the UI.
 
 from __future__ import annotations
 
-import json
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, restart_tool
-from genkit._core._typing import Resume, ToolRequestPart
+from genkit import Genkit, Message, restart_tool
+from genkit._core._typing import Resume
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
@@ -60,57 +59,6 @@ class BalanceInput(BaseModel):
 
 class BalanceOutput(BaseModel):
     balance: float
-
-
-def _as_tool_request_part(part) -> ToolRequestPart | None:
-    root = getattr(part, 'root', part)
-    if not getattr(root, 'tool_request', None):
-        return None
-    if isinstance(root, ToolRequestPart):
-        return root
-    if not hasattr(root, 'model_dump'):
-        return None
-    return ToolRequestPart.model_validate(root.model_dump())
-
-
-def _tool_request_key(trp: ToolRequestPart) -> str:
-    ref = trp.tool_request.ref
-    if ref:
-        return ref
-    inp = trp.tool_request.input
-    if isinstance(inp, BaseModel):
-        inp = inp.model_dump()
-    return f'{trp.tool_request.name}:{json.dumps(inp, sort_keys=True, default=str)}'
-
-
-def _collect_tool_request(pending: dict[str, ToolRequestPart], part) -> None:
-    trp = _as_tool_request_part(part)
-    if trp is None:
-        return
-    key = _tool_request_key(trp)
-    existing = pending.get(key)
-    if existing is None:
-        pending[key] = trp
-        return
-    if (trp.metadata or {}).get('interrupt') and not (existing.metadata or {}).get('interrupt'):
-        pending[key] = trp
-
-
-def _interrupted_tool_requests(pending: dict[str, ToolRequestPart]) -> list[ToolRequestPart]:
-    marked = [trp for trp in pending.values() if (trp.metadata or {}).get('interrupt')]
-    return marked if marked else list(pending.values())
-
-
-async def _build_restarts(ai: Genkit, interrupted: list[ToolRequestPart]) -> list[ToolRequestPart]:
-    restarts = []
-    for trp in interrupted:
-        restarts.append(
-            restart_tool(
-                interrupt=trp,
-                resumed_metadata={'tool_approved': True},
-            )
-        )
-    return restarts
 
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
@@ -144,7 +92,6 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-
     session_id = str(uuid4())
 
     # --- Turn 1 (HTTP POST #1): user message → stream until interrupted ---
@@ -152,13 +99,8 @@ async def main() -> None:
     await conn1.send_text('Transfer $500 to account 12345 for rent and check the balance in account 12345.')
     await conn1.close()
 
-    pending: dict[str, ToolRequestPart] = {}
     async for chunk in conn1.receive():
         print('turn 1 chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-        mc = chunk.model_chunk
-        if mc and mc.content:
-            for part in mc.content:
-                _collect_tool_request(pending, part)
 
     out1 = await conn1.output()
     if out1.finish_reason != 'interrupted':
@@ -166,18 +108,16 @@ async def main() -> None:
     if not out1.snapshot_id:
         raise RuntimeError('expected snapshotId on interrupted turn with store')
 
-    interrupted = _interrupted_tool_requests(pending)
+    # Get interrupted tool requests directly from the output message!
+    msg = Message(out1.message)
+    interrupted = msg.interrupts
     if not interrupted:
         raise RuntimeError('expected at least one tool-request chunk to approve')
-    print(
-        'client would show approval UI for:',
-        [trp.tool_request.name for trp in interrupted],  # pyright: ignore[reportUnknownMemberType]
-    )
+    print('client would show approval UI for:', [trp.tool_request.name for trp in interrupted])
 
-    restarts = await _build_restarts(ai, interrupted)
+    restarts = [restart_tool(interrupt=trp, resumed_metadata={'tool_approved': True}) for trp in interrupted]
 
     # --- Turn 2 (HTTP POST #2): resume only — user approved in the UI ---
-    # sessionId is enough on a linear chat; snapshotId from out1 works too.
     conn2 = await agent.stream_bidi(AgentInit(session_id=session_id))
     await conn2.send_resume(Resume(restart=restarts))
     await conn2.close()
