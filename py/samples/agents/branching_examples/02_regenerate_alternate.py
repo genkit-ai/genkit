@@ -25,7 +25,6 @@ you don't want to overwrite what they already saw.
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 from _helpers import define_echo_agent, model_text, run_turn
@@ -34,12 +33,12 @@ from genkit import Genkit
 from genkit._core._typing import AgentInit
 from genkit.agent import InMemorySessionStore
 
+ai = Genkit()
+store = InMemorySessionStore()
+agent = define_echo_agent(ai, store)
+
 
 async def main() -> None:
-    ai = Genkit()
-    store = InMemorySessionStore()
-    agent = define_echo_agent(ai, store)
-
     session_id = str(uuid4())
 
     turn1 = await run_turn(agent, AgentInit(session_id=session_id), 'Plan a landing page')
@@ -64,4 +63,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

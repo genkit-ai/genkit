@@ -36,24 +36,3 @@ requires = ["hatchling"]
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
-[tool.basedpyright]
-include = ["src"]
-extraPaths = [
-  "../../packages/genkit/src",
-  "../../plugins/fastapi/src",
-  "../../plugins/google-genai/src",
-  "../../plugins/middleware/src",
-]
-venvPath = "../.."
-venv = ".venv"
-pythonVersion = "3.10"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "src"
-extraPaths = [
-  "../../packages/genkit/src",
-  "../../plugins/fastapi/src",
-  "../../plugins/google-genai/src",
-  "../../plugins/middleware/src",
-]
-pythonVersion = "3.10"

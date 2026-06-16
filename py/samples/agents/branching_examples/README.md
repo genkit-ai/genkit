@@ -26,5 +26,5 @@ track which branch is active.
 ```bash
 cd py/samples/agents
 uv sync
-uv run python branching_examples/01_fork_sibling_snapshots.py
+genkit start -- uv run branching_examples/01_fork_sibling_snapshots.py
 ```

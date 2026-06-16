@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 from genkit import Genkit
@@ -31,36 +30,37 @@ from genkit._core._typing import AgentInput, AgentResult, AgentStreamChunk
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
+ai = Genkit(plugins=[GoogleAI()])
+store = InMemorySessionStore()
+
+
+async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+        history = await sess.get_messages()
+        child = ai.registry.new_child()
+        pc = PromptConfig(
+            model='googleai/gemini-flash-latest',
+            system='Concise coding assistant.',
+            messages=history or None,
+        )
+        opts = await to_generate_action_options(child, pc)
+
+        def on_chunk(chunk) -> None:
+            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
+
+        res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
+        if res.message:
+            await sess.add_messages(res.message)
+        return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))
+
+    await sess.run(handle_turn)
+    return await sess.result()
+
+
+agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=store)
+
 
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI()])
-
-    store = InMemorySessionStore()
-
-    async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
-            history = await sess.get_messages()
-            child = ai.registry.new_child()
-            pc = PromptConfig(
-                model='googleai/gemini-flash-latest',
-                system='Concise coding assistant.',
-                messages=history or None,
-            )
-            opts = await to_generate_action_options(child, pc)
-
-            def on_chunk(chunk) -> None:
-                ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
-
-            res = await generate_action(child, opts, on_chunk=on_chunk, abort_signal=ctx.abort_signal)
-            if res.message:
-                await sess.add_messages(res.message)
-            return TurnResult(finish_reason=_to_agent_finish_reason(res.finish_reason))
-
-        await sess.run(handle_turn)
-        return await sess.result()
-
-    agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=store)
-
     conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
     await conn.send_text('What is a Python list comprehension?')
     await conn.close()
@@ -73,4 +73,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

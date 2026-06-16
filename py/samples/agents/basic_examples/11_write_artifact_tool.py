@@ -24,7 +24,6 @@ custom system prompt or session closure is required.
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 from genkit import Genkit
@@ -32,18 +31,18 @@ from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Artifacts, Middleware
 
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
+store = InMemorySessionStore()
+
+agent = ai.define_agent(
+    name='workspaceAgent',
+    model='googleai/gemini-flash-latest',
+    use=[Artifacts()],
+    store=store,
+)
+
 
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI(), Middleware()])
-    store = InMemorySessionStore()
-
-    agent = ai.define_agent(
-        name='workspaceAgent',
-        model='googleai/gemini-flash-latest',
-        use=[Artifacts()],
-        store=store,
-    )
-
     conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
     await conn.send_text('Write poem.txt with a short poem about Python agents.')
     await conn.close()
@@ -56,4 +55,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

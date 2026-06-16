@@ -19,26 +19,24 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 from genkit import Genkit
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
+ai = Genkit(plugins=[GoogleAI()])
+store = InMemorySessionStore()
+
+ai.define_prompt(
+    name='greeterPrompt',
+    model='googleai/gemini-flash-latest',
+    system='You are a greeter. Be warm and brief.',
+)
+agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
+
 
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI()])
-
-    store = InMemorySessionStore()
-
-    ai.define_prompt(
-        name='greeterPrompt',
-        model='googleai/gemini-flash-latest',
-        system='You are a greeter. Be warm and brief.',
-    )
-    agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
-
     conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
     await conn.send_text('Hello!')
     await conn.close()
@@ -51,4 +49,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

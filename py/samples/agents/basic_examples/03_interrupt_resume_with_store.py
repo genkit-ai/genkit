@@ -28,14 +28,12 @@ the user clicks approve in the UI.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Tool, restart_tool
-from genkit._ai._generate import resolve_tool
+from genkit import Genkit, restart_tool
 from genkit._core._typing import Resume, ToolRequestPart
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
@@ -106,43 +104,46 @@ def _interrupted_tool_requests(pending: dict[str, ToolRequestPart]) -> list[Tool
 async def _build_restarts(ai: Genkit, interrupted: list[ToolRequestPart]) -> list[ToolRequestPart]:
     restarts = []
     for trp in interrupted:
-        tool = Tool(await resolve_tool(ai.registry, trp.tool_request.name))
         restarts.append(
             restart_tool(
-                tool=tool,
                 interrupt=trp,
-                resumed_metadata={'toolApproved': True},
+                resumed_metadata={'tool_approved': True},
             )
         )
     return restarts
 
 
+ai = Genkit(plugins=[GoogleAI(), Middleware()])
+tool_approval = ToolApproval(allowed_tools=[])
+
+
+@ai.tool(name='transferMoney', description='Transfer money between accounts.')
+async def transfer_money(_input: TransferInput) -> TransferOutput:
+    return TransferOutput(success=True, transactionId=f'txn-{uuid4().hex[:12]}')
+
+
+@ai.tool(name='checkBalance', description='Check the balance of an account.')
+async def check_balance(_input: BalanceInput) -> BalanceOutput:
+    return BalanceOutput(balance=1_234.56)
+
+
+store = InMemorySessionStore()
+
+agent = ai.define_agent(
+    name='bankingAgent',
+    model='googleai/gemini-flash-latest',
+    system=(
+        'Banking assistant. When the user asks to transfer money, call '
+        'transferMoney and checkBalance for the destination account in the '
+        'same turn (both tools).'
+    ),
+    tools=[transfer_money, check_balance],
+    use=[tool_approval],
+    store=store,
+)
+
+
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI(), Middleware()])
-    tool_approval = ToolApproval(allowed_tools=[])
-
-    @ai.tool(name='transferMoney', description='Transfer money between accounts.')
-    async def transfer_money(_input: TransferInput) -> TransferOutput:
-        return TransferOutput(success=True, transactionId=f'txn-{uuid4().hex[:12]}')
-
-    @ai.tool(name='checkBalance', description='Check the balance of an account.')
-    async def check_balance(_input: BalanceInput) -> BalanceOutput:
-        return BalanceOutput(balance=1_234.56)
-
-    store = InMemorySessionStore()
-
-    agent = ai.define_agent(
-        name='bankingAgent',
-        model='googleai/gemini-flash-latest',
-        system=(
-            'Banking assistant. When the user asks to transfer money, call '
-            'transferMoney and checkBalance for the destination account in the '
-            'same turn (both tools).'
-        ),
-        tools=[transfer_money, check_balance],
-        use=[tool_approval],
-        store=store,
-    )
 
     session_id = str(uuid4())
 
@@ -189,4 +190,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

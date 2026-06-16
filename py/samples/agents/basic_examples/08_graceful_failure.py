@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from uuid import uuid4
 
 from genkit import Genkit, GenkitError
@@ -29,31 +28,32 @@ from genkit._core._typing import AgentFinishReason, AgentInput, AgentResult, Mes
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
+ai = Genkit(plugins=[GoogleAI()])
+store = InMemorySessionStore()
+
+
+async def flaky_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+    async def handle_turn(inp: AgentInput) -> TurnResult | None:
+        text = ''
+        if inp.messages:
+            for part in inp.messages[-1].content or []:
+                root = getattr(part, 'root', part)
+                if isinstance(root, TextPart) and root.text:
+                    text += root.text
+        if 'fail' in text.lower():
+            raise GenkitError(status='INTERNAL', message='Simulated turn failure')
+        msgs = await sess.get_messages()
+        await sess.set_messages(msgs + [MessageData(role='model', content=[Part(TextPart(text='OK'))])])
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    await sess.run(handle_turn)
+    return await sess.result()
+
+
+agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
+
 
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI()])
-
-    store = InMemorySessionStore()
-
-    async def flaky_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput) -> TurnResult | None:
-            text = ''
-            if inp.messages:
-                for part in inp.messages[-1].content or []:
-                    root = getattr(part, 'root', part)
-                    if isinstance(root, TextPart) and root.text:
-                        text += root.text
-            if 'fail' in text.lower():
-                raise GenkitError(status='INTERNAL', message='Simulated turn failure')
-            msgs = await sess.get_messages()
-            await sess.set_messages(msgs + [MessageData(role='model', content=[Part(TextPart(text='OK'))])])
-            return TurnResult(finish_reason=AgentFinishReason.STOP)
-
-        await sess.run(handle_turn)
-        return await sess.result()
-
-    agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
-
     session_id = str(uuid4())
 
     conn = await agent.stream_bidi(AgentInit(session_id=session_id))
@@ -74,4 +74,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

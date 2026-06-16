@@ -31,28 +31,29 @@ from genkit import Genkit, GenkitError, ToolRunContext
 from genkit.agent import AgentInit, InMemorySessionStore
 from genkit.plugins.google_genai import GoogleAI
 
+ai = Genkit(plugins=[GoogleAI()])
+store = InMemorySessionStore()
+
+
+@ai.tool(name='slowWork', description='Simulate long background work.')
+async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+    for _i in range(30):
+        if ctx.abort_signal.is_set():
+            raise GenkitError(status='ABORTED', message='Task aborted')
+        await asyncio.sleep(0.5)
+    return {'done': True}
+
+
+agent = ai.define_agent(
+    name='longTaskAgent',
+    model='googleai/gemini-flash-latest',
+    system='When asked for a long task, call slowWork.',
+    tools=[slow_work],
+    store=store,
+)
+
 
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI()])
-
-    store = InMemorySessionStore()
-
-    @ai.tool(name='slowWork', description='Simulate long background work.')
-    async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-        for _i in range(30):
-            if ctx.abort_signal.is_set():
-                raise GenkitError(status='ABORTED', message='Task aborted')
-            await asyncio.sleep(0.5)
-        return {'done': True}
-
-    agent = ai.define_agent(
-        name='longTaskAgent',
-        model='googleai/gemini-flash-latest',
-        system='When asked for a long task, call slowWork.',
-        tools=[slow_work],
-        store=store,
-    )
-
     conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
     await conn.send_text('Please run a long task using slowWork.')
     await conn.detach()
@@ -71,4 +72,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

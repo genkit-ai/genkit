@@ -27,7 +27,6 @@ Pattern:
 
 from __future__ import annotations
 
-import asyncio
 import random
 from uuid import uuid4
 
@@ -47,26 +46,28 @@ class WeatherOutput(BaseModel):
     temperature: str
 
 
-async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI()])
+ai = Genkit(plugins=[GoogleAI()])
+store = InMemorySessionStore()
 
-    store = InMemorySessionStore()
 
-    @ai.tool(name='getWeather', description='Get weather for a city.')
-    async def get_weather(input: WeatherInput) -> WeatherOutput:
-        return WeatherOutput(
-            weather=f'{random.choice(["Sunny", "Cloudy", "Rainy"])} in {input.location}',
-            temperature=f'{random.randint(5, 34)}°C',
-        )
-
-    agent = ai.define_agent(
-        name='weatherAgent',
-        model='googleai/gemini-flash-latest',
-        system='Weather assistant. Use getWeather for weather questions.',
-        tools=[get_weather],
-        store=store,
+@ai.tool(name='getWeather', description='Get weather for a city.')
+async def get_weather(input: WeatherInput) -> WeatherOutput:
+    return WeatherOutput(
+        weather=f'{random.choice(["Sunny", "Cloudy", "Rainy"])} in {input.location}',
+        temperature=f'{random.randint(5, 34)}°C',
     )
 
+
+agent = ai.define_agent(
+    name='weatherAgent',
+    model='googleai/gemini-flash-latest',
+    system='Weather assistant. Use getWeather for weather questions.',
+    tools=[get_weather],
+    store=store,
+)
+
+
+async def main() -> None:
     session_id = str(uuid4())
 
     conn = await agent.stream_bidi(AgentInit(session_id=session_id))
@@ -91,4 +92,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())

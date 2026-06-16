@@ -13,10 +13,10 @@ cd py/samples/agents
 uv sync
 ```
 
-To run any example:
+To run any example in Dev UI:
 
 ```bash
-uv run python basic_examples/01_define_agent_with_store.py
+genkit start -- uv run basic_examples/01_define_agent_with_store.py
 ```
 
 ## Available Examples

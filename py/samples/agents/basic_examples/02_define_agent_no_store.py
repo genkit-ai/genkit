@@ -19,22 +19,20 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from genkit import Genkit
 from genkit.agent import AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
+ai = Genkit(plugins=[GoogleAI()])
+
+agent = ai.define_agent(
+    name='echoNoStore',
+    model='googleai/gemini-flash-latest',
+    system='Echo assistant. Answer briefly and remember context.',
+)
+
 
 async def main() -> None:
-    ai = Genkit(plugins=[GoogleAI()])
-
-    agent = ai.define_agent(
-        name='echoNoStore',
-        model='googleai/gemini-flash-latest',
-        system='Echo assistant. Answer briefly and remember context.',
-    )
-
     conn = await agent.stream_bidi(AgentInit())
     await conn.send_text('My name is Ada. Remember it.')
     await conn.close()
@@ -53,4 +51,4 @@ async def main() -> None:
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    ai.run_main(main())
