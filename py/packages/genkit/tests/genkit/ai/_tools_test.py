@@ -226,28 +226,6 @@ def test_restart_tool_directly() -> None:
     assert out.metadata.get('resumed') == {'tool_approved': True}
 
 
-def test_restart_tool_via_class_helper() -> None:
-    """A tool's ``restart`` method validates the tool name and delegates to ``restart_tool``."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='my_tool', ref='r1', input={'p': 1}),
-        metadata={'interrupt': True},
-    )
-    action = Action(kind=ActionKind.TOOL, name='my_tool', fn=_echo_tool)
-    tool = Tool(action)
-    out = tool.restart(interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
-
-    assert out.tool_request.name == 'my_tool'
-    assert out.tool_request.input == {'p': 1}
-    assert out.metadata.get('resumed') == {'tool_approved': True}
-
-    # Verify name validation fails if calling with mismatched tool name
-    mismatched_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='other_tool', ref='r1', input={'p': 1}),
-    )
-    with pytest.raises(ValueError, match="Interrupt is for tool 'other_tool', not 'my_tool'"):
-        tool.restart(interrupt=mismatched_trp)
-
-
 def test_restart_preserves_ref_on_wire() -> None:
     """``restart_tool`` preserves the original tool_request.ref so the resumed TRP can be correlated."""
     interrupt_trp = ToolRequestPart(

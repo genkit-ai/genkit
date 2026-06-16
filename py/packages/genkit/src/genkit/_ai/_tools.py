@@ -79,35 +79,6 @@ class Tool:
         """Run the tool and return the unwrapped response value."""
         return (await self._action.run(*args, **kwargs)).response
 
-    def restart(
-        self,
-        replace_input: Any | None = None,  # noqa: ANN401
-        *,
-        interrupt: ToolRequestPart,
-        resumed_metadata: dict[str, Any] | None = None,
-    ) -> ToolRequestPart:
-        """Create a restart request for an interrupted tool call.
-
-        Args:
-            replace_input: Optional new ``tool_request.input`` for this run (previous input is
-                stored in ``metadata.replacedInput`` when this is set).
-            interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
-            resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
-
-        Returns:
-            A ``ToolRequestPart`` for ``resume_restart`` / message history.
-
-        Example:
-            ``pay_invoice.restart({**trp.tool_request.input, "confirmed": True}, interrupt=trp,``
-            ``resumed_metadata={"by": "bob"})``
-        """
-        if interrupt.tool_request.name != self.name:
-            raise ValueError(f"Interrupt is for tool '{interrupt.tool_request.name}', not '{self.name}'")
-        return restart_tool(
-            replace_input,
-            interrupt=interrupt,
-            resumed_metadata=resumed_metadata,
-        )
 
 
 # Context variables for propagating resumed metadata to tools
