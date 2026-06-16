@@ -289,18 +289,6 @@ export interface AgentTransport {
     output: Promise<AgentOutput>;
   };
 
-  /**
-   * Runs a single turn without streaming and resolves with the final,
-   * non-throwing {@link AgentOutput} (failures resolve with
-   * `finishReason: 'failed'`). Optional: when omitted, the core falls back to
-   * consuming {@link runTurn}'s `output`.
-   */
-  run?(
-    input: AgentInput,
-    init: AgentInit,
-    opts: { abortSignal: AbortSignal }
-  ): Promise<AgentOutput>;
-
   /** Reads a snapshot. Requires a server store. */
   getSnapshot(
     lookup: SnapshotLookup
@@ -399,7 +387,15 @@ class AgentResponseImpl<State = unknown, O = unknown>
 {
   constructor(
     private readonly _raw: AgentOutput<State>,
-    private readonly _messages: MessageData[]
+    private readonly _messages: MessageData[],
+    /**
+     * Fallback custom-state getter. Server-managed agents (with a store) do not
+     * return `state` on the wire - they return a `snapshotId` and the chat
+     * tracks custom state locally (via streamed `customPatch` chunks). In that
+     * case `_raw.state` is undefined, so we fall back to the chat's tracked
+     * custom state here, ensuring `res.state` matches `chat.state` as documented.
+     */
+    private readonly _fallbackState?: () => State | undefined
   ) {}
 
   get message(): MessageData | undefined {
@@ -453,7 +449,10 @@ class AgentResponseImpl<State = unknown, O = unknown>
   }
 
   get state(): State | undefined {
-    return this._raw.state?.custom as State | undefined;
+    const fromWire = this._raw.state?.custom as State | undefined;
+    // Server-managed agents omit `state` on the wire; fall back to the chat's
+    // locally tracked custom state so `res.state === chat.state` as documented.
+    return fromWire !== undefined ? fromWire : this._fallbackState?.();
   }
 
   get artifacts(): Artifact[] {
@@ -725,7 +724,11 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
         }
       }
       this.applyOutput(raw);
-      const response = new AgentResponseImpl<State>(raw, [...this.messages]);
+      const response = new AgentResponseImpl<State>(
+        raw,
+        [...this.messages],
+        () => this.state
+      );
       if (raw.finishReason === 'failed') {
         throw new AgentError<State>({
           message: raw.error?.message ?? 'Agent turn failed.',
@@ -744,21 +747,24 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     input: string | AgentInput,
     opts?: { abortSignal?: AbortSignal }
   ): Promise<AgentResponse<State>> {
-    // Prefer a non-streaming transport call when available; otherwise fall
-    // back to running the streaming path and awaiting its response.
-    if (this.transport.run) {
-      const agentInput = toAgentInput(input);
-      if (agentInput.messages?.length) {
-        this.messages.push(...agentInput.messages);
-      }
-      const init = this.buildInit();
-      const { controller, isAborted } = this.setupAbort(opts);
-      const output = this.transport.run(agentInput, init, {
-        abortSignal: controller.signal,
-      });
-      return this.buildResponse(output, isAborted);
+    // `send()` is a non-streaming veneer over the streaming path: we run the
+    // turn via `sendStream` and drain its stream internally before resolving.
+    //
+    // Draining matters for server-managed agents (with a store): they do not
+    // return custom `state` on the wire (only a `snapshotId`); the chat's
+    // tracked custom state is kept live by applying the streamed `customPatch`
+    // chunks. A non-streaming path would skip those chunks and leave
+    // `chat.state` (and the `res.state` fallback) stale after a `send()`.
+    // Consuming the stream here keeps `send()` and `sendStream()` consistent.
+    // Client-managed agents are unaffected (they round-trip full state on the
+    // wire either way).
+    const turn = this.sendStream(input, opts);
+    // Drain the stream so custom-state patches are applied to the chat.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of turn.stream) {
+      // no-op: side effects (custom-state patches) happen as we iterate.
     }
-    return this.sendStream(input, opts).response;
+    return turn.response;
   }
 
   sendStream(
