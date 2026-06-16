@@ -57,11 +57,19 @@ import {
   testTripPlannerAgent,
   tripPlannerAgent,
 } from './trip-planner-agent.js';
+import {
+  mockAgent,
+  mockAgentStateless,
+  testMockAgent,
+} from './mock-agent.js';
 
 // Force-reference all agents/flows so they register with Genkit.
 // (Side-effect imports would also work, but explicit references
 // make it clear which actions are available.)
 void [
+  mockAgent,
+  mockAgentStateless,
+  testMockAgent,
   researchAgent,
   testResearchAgent,
   weatherAgent,
@@ -158,6 +166,13 @@ app.post(
 );
 app.post('/api/testCodingAgent', expressHandler(testCodingAgent));
 
+app.post('/api/mockAgent', expressHandler(mockAgent));
+app.post(
+  '/api/mockAgent/state',
+  expressHandler(mockAgent.getSnapshotDataAction)
+);
+app.post('/api/mockAgentStateless', expressHandler(mockAgentStateless));
+
 // Workspace browser — exposed as Genkit flows via expressHandler
 app.post('/api/workspace/files', expressHandler(listWorkspaceFiles));
 app.post('/api/workspace/file', expressHandler(readWorkspaceFile));
@@ -174,6 +189,7 @@ app.post('/api/testWorkspaceAgent', expressHandler(testWorkspaceAgent));
 app.post('/api/testBackgroundAgent', expressHandler(testBackgroundAgent));
 app.post('/api/testTaskAgent', expressHandler(testTaskAgent));
 app.post('/api/testTripPlannerAgent', expressHandler(testTripPlannerAgent));
+app.post('/api/testMockAgent', expressHandler(testMockAgent));
 
 // ---------------------------------------------------------------------------
 // Static web UI — serve the compiled Vite app (web/dist) so the whole demo
