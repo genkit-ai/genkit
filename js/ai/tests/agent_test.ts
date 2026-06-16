@@ -250,42 +250,6 @@ describe('Agent', () => {
       assert.strictEqual(saved?.snapshotId, turnSnapshotId);
     });
 
-    it('should respect snapshot callback', async () => {
-      const store = new InMemorySessionStore();
-      const session = new Session({});
-      const inputs = [
-        { messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }] },
-      ];
-
-      async function* inputGen() {
-        for (const input of inputs) {
-          yield input;
-        }
-      }
-
-      const runner = new SessionRunner(session, inputGen(), {
-        store,
-        snapshotCallback: () => false, // Never snapshot
-      });
-
-      await runner.run(async () => {});
-
-      // Verify the store is empty (callback suppressed all snapshots).
-      const onEndTurnSnapshotId = await new Promise<string | undefined>(
-        (resolve) => {
-          const r = new SessionRunner(session, inputGen(), {
-            store,
-            onEndTurn: resolve,
-          });
-          r.run(async () => {}).catch(() => {});
-        }
-      );
-      // The callback-suppressed runner should have produced no entries.
-      const keys = Array.from((store as any).snapshots.keys()) as string[];
-      // Only the snapshot from the second (non-callback) runner should exist.
-      assert.ok(keys.every((k) => k === onEndTurnSnapshotId));
-    });
-
     it('reserves the turn snapshotId at turn start and persists under it', async () => {
       const store = new InMemorySessionStore();
       const session = new Session({});
@@ -3230,66 +3194,14 @@ Now respond to the latest message.`,
       assert.strictEqual(output.state!.messages![0].content[0].text, 'one');
     });
 
-    it('server-managed: writes a recovery snapshot when a selective callback skipped the prior turn', async () => {
+    it('server-managed: failure returns the last-good (done) snapshot, not the failed one', async () => {
       const store = new InMemorySessionStore<{ count: number }>();
       let turn = 0;
 
-      const flow = defineCustomAgent<{ count: number }>(
-        new Registry(),
-        {
-          name: 'frServerRecovery',
-          store,
-          // Never persist a turn snapshot - forces the retroactive recovery
-          // snapshot path on failure.
-          snapshotCallback: () => false,
-        },
-        async (sess) => {
-          await sess.run(async () => {
-            turn++;
-            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
-            if (turn === 2) {
-              throw new Error('server turn boom');
-            }
-          });
-          return { message: { role: 'model', content: [{ text: 'done' }] } };
-        }
-      );
-
-      const session = flow.streamBidi({});
-      session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
-      });
-      session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
-      });
-      session.close();
-
-      for await (const _ of session.stream) {
-      }
-      const output = await session.output;
-
-      assert.strictEqual(output.finishReason, 'failed');
-      assert.ok(output.error);
-      // A recovery snapshot id is returned so the client can resume.
-      assert.ok(output.snapshotId);
-
-      const snapshot = await store.getSnapshot({
-        snapshotId: output.snapshotId!,
-      });
-      assert.ok(snapshot, 'recovery snapshot should exist in the store');
-      assert.strictEqual(snapshot!.status, 'done');
-      // The recovery snapshot holds the last-good state (turn 1 only).
-      assert.strictEqual((snapshot!.state.custom as any).count, 1);
-    });
-
-    it('server-managed: recovery snapshot holds last-good state and chains from the failed snapshot (default callback)', async () => {
-      const store = new InMemorySessionStore<{ count: number }>();
-      let turn = 0;
-
-      // Default snapshotCallback - every turn (including the failed one) is
-      // persisted. The retroactive recovery snapshot must still be written as a
-      // distinct 'done' snapshot holding the last-good state, separate from the
-      // failed turn's snapshot.
+      // Every turn is persisted. On failure the output points at the prior
+      // successful turn's `done` snapshot (the last-good state), not the failed
+      // turn's snapshot. No extra recovery snapshot is written - the last good
+      // turn is already persisted.
       const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
         { name: 'frServerRecoveryDefault', store },
@@ -3323,26 +3235,110 @@ Now respond to the latest message.`,
       assert.strictEqual(output.finishReason, 'failed');
       assert.ok(output.snapshotId);
 
-      // The failed turn's snapshot records the partial (failed-turn) state.
+      // Collect the per-turn snapshot ids: turn 1 (done) then turn 2 (failed).
       const turnEndChunks = chunks.filter((c) => !!c.turnEnd);
+      const successfulTurnSnapshotId = turnEndChunks[0]?.turnEnd?.snapshotId;
       const failedTurnSnapshotId =
         turnEndChunks[turnEndChunks.length - 1]?.turnEnd?.snapshotId;
+      assert.ok(successfulTurnSnapshotId);
       assert.ok(failedTurnSnapshotId);
+      assert.notStrictEqual(successfulTurnSnapshotId, failedTurnSnapshotId);
+
+      // The failed turn's snapshot records the partial (failed-turn) state and
+      // is persisted (inspectable) but is NOT resumable.
       const failedSnap = await store.getSnapshot({
         snapshotId: failedTurnSnapshotId!,
       });
       assert.strictEqual(failedSnap?.status, 'failed');
       assert.strictEqual((failedSnap!.state.custom as any).count, 2);
 
-      // The recovery snapshot is a distinct, 'done' snapshot holding the
-      // last-good state (turn 1 only) and chains from the failed snapshot.
-      assert.notStrictEqual(output.snapshotId, failedTurnSnapshotId);
-      const recovery = await store.getSnapshot({
+      // The returned snapshotId is the last-good (turn 1) `done` snapshot - no
+      // separate recovery snapshot is written.
+      assert.strictEqual(output.snapshotId, successfulTurnSnapshotId);
+      const lastGood = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
-      assert.strictEqual(recovery?.status, 'done');
-      assert.strictEqual((recovery!.state.custom as any).count, 1);
-      assert.strictEqual(recovery?.parentId, failedTurnSnapshotId);
+      assert.strictEqual(lastGood?.status, 'done');
+      assert.strictEqual((lastGood!.state.custom as any).count, 1);
+
+      // The raw store still returns the failed leaf for a sessionId lookup -
+      // resumability is enforced by the agent, not the store.
+      const bySession = await store.getSnapshot({
+        sessionId: lastGood!.state.sessionId!,
+      });
+      assert.strictEqual(bySession?.snapshotId, failedTurnSnapshotId);
+
+      // But resuming by sessionId walks back over the failed leaf to the
+      // last-good `done` snapshot: the next turn continues from count 1 (not the
+      // failed turn's partial count 2) and chains from the last-good snapshot.
+      const sessionId = lastGood!.state.sessionId!;
+      const resumeSession = flow.streamBidi({ sessionId });
+      resumeSession.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'three' }] }],
+      });
+      resumeSession.close();
+      for await (const _ of resumeSession.stream) {
+      }
+      const resumeOutput = await resumeSession.output;
+      assert.strictEqual(resumeOutput.finishReason, undefined);
+      assert.ok(resumeOutput.snapshotId);
+      const resumed = await store.getSnapshot({
+        snapshotId: resumeOutput.snapshotId!,
+      });
+      // count 1 (last-good) + 1 (this turn) = 2, and it chains from the
+      // last-good snapshot, not the failed leaf.
+      assert.strictEqual((resumed!.state.custom as any).count, 2);
+      assert.strictEqual(resumed?.parentId, successfulTurnSnapshotId);
+    });
+
+    it('server-managed: resuming a non-done (failed) snapshot is rejected', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'frResumeNonDone', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            throw new Error('boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // First turn fails, persisting a `failed` snapshot.
+      const session1 = flow.streamBidi({});
+      session1.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+      });
+      session1.close();
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session1.stream) {
+        chunks.push(chunk);
+      }
+      await session1.output;
+
+      const failedTurnSnapshotId = chunks.filter((c) => !!c.turnEnd).pop()
+        ?.turnEnd?.snapshotId;
+      assert.ok(failedTurnSnapshotId);
+
+      // Resuming that failed snapshot by snapshotId is rejected.
+      const session2 = flow.streamBidi({ snapshotId: failedTurnSnapshotId });
+      session2.send({
+        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+      });
+      session2.close();
+      for await (const _ of session2.stream) {
+      }
+      const output2 = await session2.output;
+
+      assert.strictEqual(output2.finishReason, 'failed');
+      assert.ok(output2.error);
+      assert.strictEqual(output2.error!.status, 'INVALID_ARGUMENT');
+      assert.ok(
+        output2.error!.message.includes('not resumable'),
+        `Expected not-resumable error, got: ${output2.error!.message}`
+      );
     });
 
     it('server-managed: no redundant recovery snapshot when the first turn fails', async () => {

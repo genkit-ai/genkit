@@ -76,7 +76,5 @@ export {
   type SessionState,
   type SessionStore,
   type SessionStoreOptions,
-  type SnapshotCallback,
-  type SnapshotContext,
   type SnapshotMutator,
 } from './genkit-beta.js';
