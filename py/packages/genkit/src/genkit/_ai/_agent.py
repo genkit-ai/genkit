@@ -1142,6 +1142,7 @@ async def _generate_prompt_agent_turn(
         gen_options,
         on_chunk=_on_chunk,
         abort_signal=ctx.abort_signal,
+        context=ctx.context,
     )
 
     if response.finish_reason == FinishReason.INTERRUPTED:
