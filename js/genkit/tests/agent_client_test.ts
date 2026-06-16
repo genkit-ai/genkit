@@ -201,16 +201,16 @@ describe('remoteAgent', () => {
 
   it('carries snapshotId across multi-turn (server-managed)', async () => {
     mock.onNext(() =>
-      jsonResponse(
-        turnEndResult({ snapshotId: 'snap-1', finishReason: 'stop' })
-      )
+      sseResponse([
+        turnEndResult({ snapshotId: 'snap-1', finishReason: 'stop' }),
+      ])
     );
     mock.onNext((req) => {
       // Second turn must send init.snapshotId.
       assert.deepEqual(req.body.init, { snapshotId: 'snap-1' });
-      return jsonResponse(
-        turnEndResult({ snapshotId: 'snap-2', finishReason: 'stop' })
-      );
+      return sseResponse([
+        turnEndResult({ snapshotId: 'snap-2', finishReason: 'stop' }),
+      ]);
     });
 
     const agent = remoteAgent({ url: '/api/a' });
@@ -221,25 +221,57 @@ describe('remoteAgent', () => {
     assert.equal(chat.snapshotId, 'snap-2');
   });
 
+  it('keeps chat.state live across a non-streaming send() for server-managed agents and res.state mirrors it', async () => {
+    // Server-managed agents return only a snapshotId on the wire (no `state`);
+    // custom state arrives as streamed customPatch chunks. send() must drain the
+    // stream so chat.state stays live and res.state falls back to it.
+    mock.onNext(() =>
+      sseResponse([
+        customChunk([{ op: 'replace', path: '', value: { count: 1 } }]),
+        turnEndResult({ snapshotId: 'snap-1', finishReason: 'stop' }),
+      ])
+    );
+    mock.onNext(() =>
+      sseResponse([
+        customChunk([{ op: 'replace', path: '/count', value: 2 }]),
+        turnEndResult({ snapshotId: 'snap-2', finishReason: 'stop' }),
+      ])
+    );
+
+    const agent = remoteAgent<{ count: number }>({ url: '/api/counter' });
+    const chat = agent.chat();
+
+    const res1 = await chat.send('inc');
+    assert.deepEqual(chat.state, { count: 1 });
+    // res.state mirrors chat.state even though the wire output had no `state`.
+    assert.deepEqual(res1.state, { count: 1 });
+    assert.equal(res1.snapshotId, 'snap-1');
+
+    // A second non-streaming send() must refresh chat.state (not go stale).
+    const res2 = await chat.send('inc');
+    assert.deepEqual(chat.state, { count: 2 });
+    assert.deepEqual(res2.state, { count: 2 });
+  });
+
   it('carries state across multi-turn (client-managed)', async () => {
     mock.onNext(() =>
-      jsonResponse(
+      sseResponse([
         turnEndResult({
           state: { custom: { unit: 'celsius' }, messages: [] },
           finishReason: 'stop',
-        })
-      )
+        }),
+      ])
     );
     mock.onNext((req) => {
       assert.deepEqual(req.body.init, {
         state: { custom: { unit: 'celsius' }, messages: [] },
       });
-      return jsonResponse(
+      return sseResponse([
         turnEndResult({
           state: { custom: { unit: 'fahrenheit' }, messages: [] },
           finishReason: 'stop',
-        })
-      );
+        }),
+      ]);
     });
 
     const agent = remoteAgent<{ unit: string }>({ url: '/api/a' });
@@ -254,7 +286,7 @@ describe('remoteAgent', () => {
 
   it('exposes interrupts and builds resume parts', async () => {
     mock.onNext(() =>
-      jsonResponse(
+      sseResponse([
         turnEndResult({
           snapshotId: 'snap-1',
           message: {
@@ -271,8 +303,8 @@ describe('remoteAgent', () => {
             ],
           },
           finishReason: 'interrupted',
-        })
-      )
+        }),
+      ])
     );
 
     const agent = remoteAgent({ url: '/api/bank' });
@@ -306,9 +338,9 @@ describe('remoteAgent', () => {
     // chat.resume is sugar for send({ resume }).
     mock.onNext((req) => {
       assert.deepEqual(req.body.data.resume, { respond: [respondPart] });
-      return jsonResponse(
-        turnEndResult({ snapshotId: 'snap-2', finishReason: 'stop' })
-      );
+      return sseResponse([
+        turnEndResult({ snapshotId: 'snap-2', finishReason: 'stop' }),
+      ]);
     });
     await chat.resume({ respond: [respondPart] });
     assert.equal(chat.snapshotId, 'snap-2');
@@ -317,19 +349,19 @@ describe('remoteAgent', () => {
   it('throws AgentError on a failed turn and keeps last-good state', async () => {
     // First successful turn establishes last-good snapshot.
     mock.onNext(() =>
-      jsonResponse(
-        turnEndResult({ snapshotId: 'snap-1', finishReason: 'stop' })
-      )
+      sseResponse([
+        turnEndResult({ snapshotId: 'snap-1', finishReason: 'stop' }),
+      ])
     );
     // Second turn fails.
     mock.onNext(() =>
-      jsonResponse(
+      sseResponse([
         turnEndResult({
           snapshotId: 'snap-1',
           finishReason: 'failed',
           error: { status: 'INTERNAL', message: 'boom' },
-        })
-      )
+        }),
+      ])
     );
 
     const agent = remoteAgent({ url: '/api/a' });
@@ -455,7 +487,7 @@ describe('remoteAgent', () => {
   it('applies static and async headers', async () => {
     mock.onNext((req) => {
       assert.equal(req.headers['Authorization'], 'Bearer xyz');
-      return jsonResponse(turnEndResult({ finishReason: 'stop' }));
+      return sseResponse([turnEndResult({ finishReason: 'stop' })]);
     });
     const agent = remoteAgent({
       url: '/api/a',
