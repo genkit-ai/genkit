@@ -201,8 +201,7 @@ def restart_tool(
         A ``ToolRequestPart`` for ``resume_restart`` / message history.
 
     Example:
-        ``restart_tool(interrupt=trp, replace_input={**trp.tool_request.input, "confirmed": True},``
-        ``resumed_metadata={"by": "bob"})``
+        ``restart_tool(interrupt=trp, resumed_metadata={"tool_approved": True})``
     """
     tool_req = interrupt.tool_request
     new_meta: dict[str, Any] = dict(interrupt.metadata or {})
