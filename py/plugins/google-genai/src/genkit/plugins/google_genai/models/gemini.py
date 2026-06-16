@@ -766,6 +766,46 @@ GEMINI_3_5_FLASH = ModelInfo(
     ),
 )
 
+GEMINI_3_1_PRO_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Pro Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+# customtools is registered identically to pro-preview (no distinct config in JS).
+GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = ModelInfo(
+    label='Google AI - Gemini 3.1 Pro Preview (Custom Tools)',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
+GEMINI_3_1_FLASH_LITE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Lite Preview',
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        tool_choice=True,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['text', 'json'],
+    ),
+)
+
 GENERIC_GEMINI_MODEL = ModelInfo(
     label='Google AI - Gemini',
     supports=Supports(
@@ -906,6 +946,9 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported  |
     | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported  |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported  |
+    | `gemini-3.1-pro-preview`             | Gemini 3.1 Pro Preview               | Supported  |
+    | `gemini-3.1-pro-preview-customtools` | Gemini 3.1 Pro Preview Custom Tools  | Supported  |
+    | `gemini-3.1-flash-lite-preview`      | Gemini 3.1 Flash Lite Preview        | Supported  |
     | `gemma-3-12b-it`                     | Gemma 3 12B IT                       | Supported  |
     | `gemma-3-1b-it`                      | Gemma 3 1B IT                        | Supported  |
     | `gemma-3-27b-it`                     | Gemma 3 27B IT                       | Supported  |
@@ -930,6 +973,9 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
+    GEMINI_3_1_PRO_PREVIEW = 'gemini-3.1-pro-preview'
+    GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = 'gemini-3.1-pro-preview-customtools'
+    GEMINI_3_1_FLASH_LITE_PREVIEW = 'gemini-3.1-flash-lite-preview'
     GEMMA_3_12B_IT = 'gemma-3-12b-it'
     GEMMA_3_1B_IT = 'gemma-3-1b-it'
     GEMMA_3_27B_IT = 'gemma-3-27b-it'
@@ -964,6 +1010,9 @@ _add_model(GEMINI_2_5_FLASH_LITE, ['gemini-2.5-flash-lite'])
 _add_model(GEMINI_3_FLASH_PREVIEW, ['gemini-3-flash-preview'])
 _add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
 _add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
+_add_model(GEMINI_3_1_PRO_PREVIEW, ['gemini-3.1-pro-preview'])
+_add_model(GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, ['gemini-3.1-pro-preview-customtools'])
+_add_model(GEMINI_3_1_FLASH_LITE_PREVIEW, ['gemini-3.1-flash-lite-preview'])
 
 
 DEFAULT_SUPPORTS_MODEL = Supports(
