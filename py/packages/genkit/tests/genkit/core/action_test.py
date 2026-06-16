@@ -16,6 +16,7 @@ from genkit._core._action import (
     ActionRunContext,
     DapQualifiedName,
     create_action_key,
+    get_current_context,
     parse_action_key,
     parse_dap_qualified_name,
     parse_plugin_name_from_action_name,
@@ -318,4 +319,6 @@ async def test_action_context_isolation_sequential_and_nested() -> None:
 
     assert child_ctx == {'auth': 'child_secret'}
     assert parent_ctx == {'auth': 'parent_secret'}  # Permanent override check
+
+    assert get_current_context() is None
 
