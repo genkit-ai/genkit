@@ -66,15 +66,6 @@ class JsonPatchOp(StrEnum):
     TEST = 'test'
 
 
-class SnapshotEvent(StrEnum):
-    """SnapshotEvent data type class."""
-
-    TURNEND = 'turnEnd'
-    INVOCATIONEND = 'invocationEnd'
-    DETACH = 'detach'
-    RECOVERY = 'recovery'
-
-
 class SnapshotStatus(StrEnum):
     """SnapshotStatus data type class."""
 
@@ -140,7 +131,6 @@ class AbortSnapshotResponse(GenkitModel):
     """Model for abortsnapshotresponse data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
-    snapshot_id: str = Field(...)
     status: SnapshotStatus | None = None
 
 
@@ -239,7 +229,6 @@ class SessionSnapshot(GenkitModel):
     parent_id: str | None = None
     created_at: str = Field(...)
     updated_at: str | None = None
-    event: SnapshotEvent = Field(...)
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None
