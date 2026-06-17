@@ -100,9 +100,11 @@ export interface SessionSnapshot<S = unknown> {
   snapshotId: string;
   parentId?: string;
   createdAt: string;
+  /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
+  updatedAt?: string;
   event: 'turnEnd' | 'invocationEnd';
   state: SessionState<S>;
-  status?: 'pending' | 'done' | 'failed' | 'aborted';
+  status?: 'pending' | 'completed' | 'failed' | 'aborted';
 
   /**
    * Semantic reason the turn/invocation finished (e.g. `interrupted`,
@@ -110,9 +112,12 @@ export interface SessionSnapshot<S = unknown> {
    */
   finishReason?: AgentFinishReason;
 
+  /**
+   * Structured failure information (RuntimeError shape). `status` is the
+   * canonical error category (e.g. `INTERNAL`, `FAILED_PRECONDITION`).
+   */
   error?: {
-    status: string;
-
+    status?: string;
     message: string;
     details?: any;
   };

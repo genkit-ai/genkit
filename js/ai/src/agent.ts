@@ -101,7 +101,7 @@ export interface AgentInit<S = unknown> {
  * Schema for agent input messages and commands.
  */
 export const AgentInputSchema = z.object({
-  messages: z.array(MessageSchema).optional(),
+  message: MessageSchema.optional(),
   /** Options for resuming an interrupted generation. */
   resume: z
     .object({
@@ -224,6 +224,11 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
  * Schema for output returned at turn completion.
  */
 export const AgentOutputSchema = z.object({
+  /**
+   * ID of the session this invocation belongs to, assigned by the framework
+   * when the invocation starts.
+   */
+  sessionId: z.string().optional(),
   snapshotId: z.string().optional(),
   state: SessionStateSchema.optional(),
   message: MessageSchema.optional(),
@@ -232,13 +237,13 @@ export const AgentOutputSchema = z.object({
   finishReason: AgentFinishReasonSchema.optional(),
   /**
    * Present when `finishReason` is `failed`. Carries the original error
-   * details (the runtime resolves gracefully instead of throwing). The
-   * accompanying `state`/`snapshotId` hold the last-good state - the state
-   * the failed turn started with.
+   * details (RuntimeError shape; the runtime resolves gracefully instead of
+   * throwing). The accompanying `state`/`snapshotId` hold the last-good state -
+   * the state the failed turn started with.
    */
   error: z
     .object({
-      status: z.string(),
+      status: z.string().optional(),
       message: z.string(),
       details: z.any().optional(),
     })
@@ -249,6 +254,7 @@ export const AgentOutputSchema = z.object({
  * Output returned at turn completion.
  */
 export interface AgentOutput<S = unknown> {
+  sessionId?: string;
   artifacts?: Artifact[];
   message?: MessageData;
   snapshotId?: string;
@@ -256,10 +262,10 @@ export interface AgentOutput<S = unknown> {
   finishReason?: AgentFinishReason;
   /**
    * Present when `finishReason` is `failed`. Carries the original error
-   * details; `state`/`snapshotId` hold the last-good state.
+   * details (RuntimeError shape); `state`/`snapshotId` hold the last-good state.
    */
   error?: {
-    status: string;
+    status?: string;
     message: string;
     details?: any;
   };
@@ -335,7 +341,7 @@ async function abortSnapshotInStore<S>(
       if (!current) return null;
       previousStatus = current.status;
       if (
-        current.status === 'done' ||
+        current.status === 'completed' ||
         current.status === 'failed' ||
         current.status === 'aborted'
       ) {
@@ -497,8 +503,8 @@ export class SessionRunner<State = unknown> {
     fn: (input: AgentInput, ctx: TurnContext) => Promise<TurnResult | void>
   ): Promise<void> {
     for await (const input of this.inputCh) {
-      if (input.messages) {
-        this.session.addMessages(input.messages);
+      if (input.message) {
+        this.session.addMessages([input.message]);
       }
 
       // The first customPatch of every turn is a whole-document replace that
@@ -534,7 +540,7 @@ export class SessionRunner<State = unknown> {
 
           const snapshotId = await this.maybeSnapshot(
             'turnEnd',
-            'done',
+            'completed',
             undefined,
             turnSnapshotId,
             finishReason
@@ -586,8 +592,8 @@ export class SessionRunner<State = unknown> {
    */
   async maybeSnapshot(
     event: 'turnEnd' | 'invocationEnd',
-    status?: 'pending' | 'done' | 'failed',
-    error?: { status: string; message: string; details?: any },
+    status?: 'pending' | 'completed' | 'failed',
+    error?: { status?: string; message: string; details?: any },
     snapshotId?: string,
     finishReason?: AgentFinishReason
   ): Promise<string | undefined> {
@@ -609,14 +615,15 @@ export class SessionRunner<State = unknown> {
         ? { snapshotId: (snapshotId || this.newSnapshotId)! }
         : {}),
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       event: event,
       state: currentState as SessionState<State>,
       parentId: this.lastSnapshot?.snapshotId,
-      // Default to a resumable `done` status. The only caller that omits a
+      // Default to a resumable `completed` status. The only caller that omits a
       // status is the `invocationEnd` write (which fires when the handler
-      // mutates state after the last turn); persisting it as `done` keeps it a
-      // valid resume target under the "only `done` is resumable" rule.
-      status: status ?? 'done',
+      // mutates state after the last turn); persisting it as `completed` keeps
+      // it a valid resume target under the "only `completed` is resumable" rule.
+      status: status ?? 'completed',
       ...(finishReason && { finishReason }),
       error,
     };
@@ -703,6 +710,30 @@ export const GetSnapshotDataInputSchema = z.object({
 });
 
 /**
+ * Schema for the input of the `getSnapshot` companion action. Provide exactly
+ * one of `snapshotId` or `sessionId`.
+ */
+export const GetSnapshotRequestSchema = z.object({
+  sessionId: z.string().optional(),
+  snapshotId: z.string().optional(),
+});
+
+/**
+ * Schema for the input of the `abortSnapshot` companion action.
+ */
+export const AbortSnapshotRequestSchema = z.object({
+  snapshotId: z.string(),
+});
+
+/**
+ * Schema for the output of the `abortSnapshot` companion action.
+ */
+export const AbortSnapshotResponseSchema = z.object({
+  snapshotId: z.string(),
+  status: z.enum(['pending', 'completed', 'aborted', 'failed']).optional(),
+});
+
+/**
  * Lookup input for `getSnapshotData`.
  */
 export interface GetSnapshotDataInput {
@@ -745,7 +776,10 @@ export interface Agent<State = unknown>
   ): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly getSnapshotDataAction: GetSnapshotDataAction<State>;
-  readonly abortAgentAction: Action<z.ZodString, z.ZodType<string | undefined>>;
+  readonly abortAgentAction: Action<
+    typeof AbortSnapshotRequestSchema,
+    typeof AbortSnapshotResponseSchema
+  >;
 }
 
 /**
@@ -803,17 +837,18 @@ async function resolveSession<State>(
         message: `Snapshot ${init.snapshotId} not found`,
       });
     }
-    // Only `done` snapshots are resumable. A failed/aborted/pending snapshot is
-    // persisted for inspection but is not a valid resume target.
-    if (snapshot.status !== 'done') {
+    // Only `completed` snapshots are resumable. A failed/aborted/pending
+    // snapshot is persisted for inspection but is not a valid resume target.
+    if (snapshot.status !== 'completed') {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
         message:
           `Snapshot ${init.snapshotId} is not resumable (status: ` +
-          `${snapshot.status ?? 'unknown'}). Only 'done' snapshots can be ` +
-          `resumed.`,
+          `${snapshot.status ?? 'unknown'}). Only 'completed' snapshots can ` +
+          `be resumed.`,
       });
     }
+
     validateCustomState(snapshot.state?.custom);
     return {
       snapshot,
@@ -823,17 +858,17 @@ async function resolveSession<State>(
 
   if (init?.sessionId) {
     // Resume the session's latest snapshot. The store returns the latest leaf
-    // regardless of status, but only `done` snapshots are resumable - so if the
-    // leaf is a non-resumable turn (e.g. a `failed`/`aborted`/`pending` turn)
-    // walk back over its parent chain to the last-good (`done`) snapshot. When
-    // the session has no resumable snapshot (e.g. a first-turn failure) seed a
-    // fresh session bound to the requested sessionId so subsequent turns can
-    // find it.
+    // regardless of status, but only `completed` snapshots are resumable - so
+    // if the leaf is a non-resumable turn (e.g. a `failed`/`aborted`/`pending`
+    // turn) walk back over its parent chain to the last-good (`completed`)
+    // snapshot. When the session has no resumable snapshot (e.g. a first-turn
+    // failure) seed a fresh session bound to the requested sessionId so
+    // subsequent turns can find it.
     let snapshot = await store.getSnapshot({
       sessionId: init.sessionId,
       context: getContext(),
     });
-    while (snapshot && snapshot.status !== 'done') {
+    while (snapshot && snapshot.status !== 'completed') {
       snapshot = snapshot.parentId
         ? await store.getSnapshot({
             snapshotId: snapshot.parentId,
@@ -923,7 +958,7 @@ function pipeInputWithDetach<State>(
           // Only forward to the runner if the input carries a payload beyond
           // the detach directive; a detach-only message has no turn to process.
           const hasPayload = !!(
-            input.messages?.length ||
+            input.message ||
             input.resume?.restart?.length ||
             input.resume?.respond?.length
           );
@@ -1199,6 +1234,7 @@ export function defineCustomAgent<State = unknown>(
 
       if (outcome === 'detached') {
         return {
+          sessionId: session.sessionId,
           snapshotId: detachedSnapshotId!,
           finishReason: 'detached' as AgentFinishReason,
           ...(!config.store && { state: toClientState(session.getState()) }),
@@ -1215,8 +1251,10 @@ export function defineCustomAgent<State = unknown>(
           session.getState()) as SessionState<State>;
         const lastGoodMessages = lastGood.messages;
         return {
+          sessionId: session.sessionId,
           finishReason: 'failed' as AgentFinishReason,
           error: runner.lastTurnError,
+
           ...(result.artifacts?.length && { artifacts: result.artifacts }),
           ...(lastGoodMessages?.length && {
             message: lastGoodMessages[lastGoodMessages.length - 1],
@@ -1235,6 +1273,7 @@ export function defineCustomAgent<State = unknown>(
       const finishReason = result.finishReason ?? runner.lastTurnFinishReason;
 
       return {
+        sessionId: session.sessionId,
         ...(result.artifacts?.length && { artifacts: result.artifacts }),
         ...(result.message && { message: result.message }),
         ...(finishReason && { finishReason }),
@@ -1283,7 +1322,7 @@ export function defineCustomAgent<State = unknown>(
       name: config.name,
       description: `Gets snapshot data for ${config.name} by snapshotId or sessionId`,
       actionType: 'agent-snapshot',
-      inputSchema: GetSnapshotDataInputSchema,
+      inputSchema: GetSnapshotRequestSchema,
       outputSchema: z.any(), // SessionSnapshot Schema
     },
     async (lookup) => resolveSnapshot({ ...lookup, context: getContext() })
@@ -1293,12 +1332,15 @@ export function defineCustomAgent<State = unknown>(
     registry,
     {
       name: config.name,
-      description: `Aborts ${config.name} agent by snapshotId. Returns the previous status of the snapshot before it was set to 'aborted', or undefined if the snapshot was not found.`,
+      description: `Aborts ${config.name} agent by snapshotId. Returns the snapshot id and its status after the abort attempt.`,
       actionType: 'agent-abort',
-      inputSchema: z.string(),
-      outputSchema: z.string().optional(),
+      inputSchema: AbortSnapshotRequestSchema,
+      outputSchema: AbortSnapshotResponseSchema,
     },
-    async (snapshotId) => runAbort(snapshotId, { context: getContext() })
+    async ({ snapshotId }) => {
+      const status = await runAbort(snapshotId, { context: getContext() });
+      return { snapshotId, status };
+    }
   );
 
   const composite = Object.assign(primaryAction, {
@@ -1308,8 +1350,8 @@ export function defineCustomAgent<State = unknown>(
     getSnapshotDataAction:
       getSnapshotDataAction as unknown as GetSnapshotDataAction<State>,
     abortAgentAction: abortAgentAction as unknown as Action<
-      z.ZodString,
-      z.ZodType<string | undefined>
+      typeof AbortSnapshotRequestSchema,
+      typeof AbortSnapshotResponseSchema
     >,
   });
 
