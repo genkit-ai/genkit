@@ -25,7 +25,7 @@ import { ai } from './genkit.js';
 //   • `detach: true` in the input causes the server to start processing in
 //     the background and return a snapshotId immediately.
 //   • The client can poll `getSnapshotDataAction` to check the status
-//     (pending → done/failed/aborted).
+//     (pending → completed/failed/aborted).
 //   • The client can call `abortAgentAction` to cancel background work.
 //   • A persistent store is REQUIRED for detach to work — the server needs
 //     somewhere to write the result when the background work completes.
@@ -38,10 +38,10 @@ const store = new InMemorySessionStore();
  * defined together — but the key feature here is the `store`, which
  * enables `detach: true`.
  *
- * When the client sends `{ messages: [...], detach: true }`, the server:
+ * When the client sends `{ message: ..., detach: true }`, the server:
  * 1. Saves a snapshot with status 'pending' and returns the snapshotId.
  * 2. Continues processing the LLM request in the background.
- * 3. Updates the snapshot to status 'done' (or 'failed') when complete.
+ * 3. Updates the snapshot to status 'completed' (or 'failed') when complete.
  */
 export const backgroundAgent = ai.defineAgent({
   name: 'backgroundAgent',
