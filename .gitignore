@@ -32,6 +32,9 @@ js/testapps/firebase-functions-sample1/public/config.js
 js/**/.genkit
 samples/**/.genkit
 go/**/.genkit
+# Compiled Go sample binaries (e.g. `go build ./samples/<name>` writes go/<name>)
+/go/custom-agent
+/go/x-agent-interrupts
 ui-debug.log
 firebase-debug.log
 **/*.env
