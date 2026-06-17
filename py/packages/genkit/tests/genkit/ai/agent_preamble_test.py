@@ -25,7 +25,19 @@ from genkit._ai._agent import (
 from genkit._ai._aio import Genkit
 from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Message, ModelResponse
-from genkit._core._typing import FinishReason, Part, Role, TextPart
+from genkit._core._typing import (
+    AgentInit,
+    FinishReason,
+    MessageData,
+    Part,
+    Role,
+    SessionState,
+    TextPart,
+    ToolRequest,
+    ToolRequestPart,
+    ToolResponse,
+    ToolResponsePart,
+)
 
 
 def test_tag_history_for_render_copies_messages() -> None:
@@ -128,3 +140,190 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
     # Each generate call still gets a fresh system preamble for the model.
     turn_two_roles = [m.role for m in pm.last_request.messages]
     assert Role.SYSTEM in turn_two_roles
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_explicit_history_tag_preamble() -> None:
+    """Verifies that explicit {{history}} tags work correctly with preamble marking.
+
+    When the prompt template explicitly references history, any instructions compiled
+    before (e.g. prefix system prompts) and after (e.g. suffix user queries) the history
+    should be marked as preamble and excluded from persistence. Only the runtime history
+    and model responses are persisted.
+    """
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    ai.define_prompt(
+        name='explicitHistory',
+        model='programmableModel',
+        messages="""
+        {{role "system"}}
+        Prefix system instruction.
+        {{history}}
+        {{role "user"}}
+        Suffix user instruction.
+        """,
+    )
+    agent = ai.define_prompt_agent(name='explicitHistory')
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='response'))]),
+        )
+    )
+
+    # Start a conversation; 'turn 1' represents history
+    conn = await agent.stream_bidi()
+    await conn.send_text('turn 1')
+    async for chunk in conn.receive():
+        if chunk.turn_end is not None:
+            break
+    await conn.close()
+    out = await conn.output()
+
+    # Verify that the LLM received the prefix instructions, history, and suffix instructions
+    assert pm.request_count == 1
+    assert pm.last_request is not None
+    req_msgs = pm.last_request.messages
+    assert len(req_msgs) == 3
+    assert req_msgs[0].role == Role.SYSTEM
+    assert 'Prefix' in req_msgs[0].content[0].root.text
+    assert req_msgs[1].role == Role.USER
+    assert req_msgs[1].content[0].root.text == 'turn 1'
+    assert req_msgs[2].role == Role.USER
+    assert 'Suffix' in req_msgs[2].content[0].root.text
+
+    # Verify that ONLY history and model response are stored (Prefix & Suffix are filtered out)
+    assert out.state is not None
+    assert out.state.messages is not None
+    roles = [m.role for m in out.state.messages]
+    assert Role.SYSTEM not in roles
+    assert roles == [Role.USER, Role.MODEL]
+    assert out.state.messages[0].content[0].root.text == 'turn 1'
+    assert out.state.messages[1].content[0].root.text == 'response'
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_few_shot_preamble() -> None:
+    """Verifies that static few-shot messages in the template are treated as preamble.
+
+    Static examples in the template do not belong to the runtime conversation history.
+    They must be sent to the LLM model to provide context, but must be discarded
+    from the session store at the end of the turn.
+    """
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    ai.define_prompt(
+        name='fewShotAgent',
+        model='programmableModel',
+        messages="""
+        {{role "system"}}
+        System help.
+        {{role "user"}}
+        Q: 1+1
+        {{role "model"}}
+        A: 2
+        {{history}}
+        """,
+    )
+    agent = ai.define_prompt_agent(name='fewShotAgent')
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='response'))]),
+        )
+    )
+
+    conn = await agent.stream_bidi()
+    await conn.send_text('turn 1')
+    async for chunk in conn.receive():
+        if chunk.turn_end is not None:
+            break
+    await conn.close()
+    out = await conn.output()
+
+    # Verify the LLM received the system prompt, few-shots, and user query
+    assert pm.request_count == 1
+    assert pm.last_request is not None
+    req_msgs = pm.last_request.messages
+    assert len(req_msgs) == 4
+    assert 'Q: 1+1' in req_msgs[1].content[0].root.text
+    assert 'A: 2' in req_msgs[2].content[0].root.text
+
+    # Verify few-shots are stripped, and only runtime history & response are saved
+    assert out.state is not None
+    assert out.state.messages is not None
+    assert len(out.state.messages) == 2
+    assert [m.role for m in out.state.messages] == [Role.USER, Role.MODEL]
+    assert out.state.messages[0].content[0].root.text == 'turn 1'
+    assert out.state.messages[1].content[0].root.text == 'response'
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
+    """Verifies that tool execution messages in the history are preserved verbatim.
+
+    Tool call and response messages represent part of the conversation history.
+    These must maintain their history tags through compilation and not be flagged
+    as preambles, ensuring tool traces are successfully saved to the database.
+    """
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    ai.define_prompt(name='toolHistoryAgent', model='programmableModel', system='You are helpful.')
+    agent = ai.define_prompt_agent(name='toolHistoryAgent')
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='done'))]),
+        )
+    )
+
+    # Pre-seed tool call and tool response history
+    tool_request_msg = Message(
+        role=Role.MODEL,
+        content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='myTool', ref='r1', input={'x': 1})))],
+    )
+    tool_response_msg = Message(
+        role=Role.TOOL,
+        content=[Part(root=ToolResponsePart(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'})))],
+    )
+
+    history = [
+        Message(role=Role.USER, content=[Part(root=TextPart(text='run tool'))]),
+        tool_request_msg,
+        tool_response_msg,
+    ]
+
+    conn = await agent.stream_bidi(AgentInit(state=SessionState(messages=[MessageData.model_validate(m.model_dump()) for m in history])))
+    await conn.send_text('continue')
+    async for chunk in conn.receive():
+        if chunk.turn_end is not None:
+            break
+    await conn.close()
+    out = await conn.output()
+
+    # Verify that LLM receives all history messages, including tool components
+    assert pm.request_count == 1
+    assert pm.last_request is not None
+    req_msgs = pm.last_request.messages
+    assert len(req_msgs) == 5
+    assert req_msgs[1].role == Role.USER
+    assert req_msgs[2].role == Role.MODEL
+    assert req_msgs[3].role == Role.TOOL
+    assert req_msgs[4].role == Role.USER
+
+    # Verify that tool request/responses are saved back to session store verbatim
+    assert out.state is not None
+    assert out.state.messages is not None
+    assert len(out.state.messages) == 5
+    assert out.state.messages[1].role == Role.MODEL
+    assert isinstance(out.state.messages[1].content[0].root, ToolRequestPart)
+    assert out.state.messages[2].role == Role.TOOL
+    assert isinstance(out.state.messages[2].content[0].root, ToolResponsePart)
+
