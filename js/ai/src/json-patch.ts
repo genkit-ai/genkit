@@ -84,7 +84,23 @@ function isObject(value: unknown): value is Record<string, any> {
 }
 
 /**
+ * Lists the keys of a plain object whose values are not `undefined`.
+ *
+ * JSON has no `undefined`: `JSON.stringify` drops such members entirely, so
+ * `{ a: undefined }` and `{}` serialize identically. We mirror that here so
+ * that diffing/equality match how state is actually persisted (and so we never
+ * emit `undefined`-valued `add`/`replace` ops, which serialize to a valueless,
+ * meaningless operation).
+ */
+function definedKeys(obj: Record<string, any>): string[] {
+  return Object.keys(obj).filter((key) => obj[key] !== undefined);
+}
+
+/**
  * Deep structural equality for JSON-serializable values.
+ *
+ * Object members whose value is `undefined` are treated as absent, matching
+ * JSON semantics (see {@link definedKeys}).
  */
 function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -97,11 +113,11 @@ function deepEqual(a: unknown, b: unknown): boolean {
     return true;
   }
   if (isObject(a) && isObject(b)) {
-    const aKeys = Object.keys(a);
-    const bKeys = Object.keys(b);
+    const aKeys = definedKeys(a);
+    const bKeys = definedKeys(b);
     if (aKeys.length !== bKeys.length) return false;
     for (const key of aKeys) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      if (b[key] === undefined) return false;
       if (!deepEqual(a[key], b[key])) return false;
     }
     return true;
@@ -145,18 +161,21 @@ function diffRecursive(
 ): void {
   if (deepEqual(from, to)) return;
 
-  // Both plain objects - recurse member by member.
+  // Both plain objects - recurse member by member. Members whose value is
+  // `undefined` are treated as absent (JSON has no `undefined`); this avoids
+  // emitting valueless `add`/`replace` ops and correctly turns "set to
+  // undefined" into a `remove`.
   if (isObject(from) && isObject(to)) {
     const keys = new Set([...Object.keys(from), ...Object.keys(to)]);
     for (const key of keys) {
       const childPointer = `${pointer}/${escapeToken(key)}`;
-      const inFrom = Object.prototype.hasOwnProperty.call(from, key);
-      const inTo = Object.prototype.hasOwnProperty.call(to, key);
+      const inFrom = from[key] !== undefined;
+      const inTo = to[key] !== undefined;
       if (inFrom && !inTo) {
         patch.push({ op: 'remove', path: childPointer });
       } else if (!inFrom && inTo) {
         patch.push({ op: 'add', path: childPointer, value: clone(to[key]) });
-      } else {
+      } else if (inFrom && inTo) {
         diffRecursive(from[key], to[key], childPointer, patch);
       }
     }
