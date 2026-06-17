@@ -755,6 +755,101 @@ describe('Agent', () => {
         'sessionId should be preserved across turns via snapshot'
       );
     });
+
+    it('resumes a snapshot when both snapshotId and a matching sessionId are provided', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'snapshotAndMatchingSession', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // Turn 1
+      const session1 = flow.streamBidi({});
+      session1.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session1.close();
+      for await (const _ of session1.stream) {
+      }
+      const output1 = await session1.output;
+      const firstSnapshotId = output1.snapshotId!;
+      const sessionId = output1.sessionId!;
+      assert.ok(sessionId, 'First turn should have sessionId');
+
+      // Turn 2: resume passing BOTH the snapshotId and its owning sessionId.
+      const session2 = flow.streamBidi({
+        snapshotId: firstSnapshotId,
+        sessionId,
+      });
+      session2.send({
+        message: { role: 'user' as const, content: [{ text: 'bye' }] },
+      });
+      session2.close();
+      for await (const _ of session2.stream) {
+      }
+      const output2 = await session2.output;
+
+      assert.notStrictEqual(
+        output2.finishReason,
+        'failed',
+        `Expected a successful resume, got error: ${output2.error?.message}`
+      );
+      assert.strictEqual(
+        output2.sessionId,
+        sessionId,
+        'sessionId should be preserved when resuming by snapshotId + sessionId'
+      );
+    });
+
+    it('rejects when snapshotId belongs to a different session than the provided sessionId', async () => {
+      const registry = new Registry();
+      const store = new InMemorySessionStore();
+
+      const flow = defineCustomAgent(
+        registry,
+        { name: 'snapshotSessionMismatch', store },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      // Create a snapshot that belongs to session A.
+      const session1 = flow.streamBidi({});
+      session1.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session1.close();
+      for await (const _ of session1.stream) {
+      }
+      const output1 = await session1.output;
+      const snapshotId = output1.snapshotId!;
+
+      // Resume that snapshot but claim it belongs to a different session.
+      const session2 = flow.streamBidi({
+        snapshotId,
+        sessionId: 'a-different-session-id',
+      });
+      session2.send({
+        message: { role: 'user' as const, content: [{ text: 'bye' }] },
+      });
+      session2.close();
+      for await (const _ of session2.stream) {
+      }
+      const output2 = await session2.output;
+
+      assert.strictEqual(output2.finishReason, 'failed');
+      assert.ok(
+        output2.error!.message.includes('does not belong to session'),
+        `Expected an ownership-mismatch error, got: ${output2.error!.message}`
+      );
+    });
   });
 
   describe('definePromptAgent', () => {
