@@ -43,6 +43,40 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 	return registry.New()
 }
 
+// sendText sends a user text message, failing the test if the send is
+// rejected. The few sites that expect the send to race invocation completion
+// (e.g. a send after a failing turn) check the error themselves instead.
+func sendText[State any](t *testing.T, conn *AgentConnection[State], text string) {
+	t.Helper()
+	if err := conn.SendText(text); err != nil {
+		t.Fatalf("SendText(%q): %v", text, err)
+	}
+}
+
+// sendTurn sends a user text message and advances the stream to that turn's
+// TurnEnd, returning it. It is the send-one-turn-and-wait pattern most
+// multi-turn tests share; tests that must inspect intermediate chunks should
+// drive Receive directly (see nextTurnEnd).
+func sendTurn[State any](t *testing.T, conn *AgentConnection[State], text string) *TurnEnd {
+	t.Helper()
+	sendText(t, conn, text)
+	return nextTurnEnd(t, conn)
+}
+
+// drainInBackground consumes conn's stream in a goroutine so the agent's
+// responder never blocks on a full stream buffer while the test orchestrates
+// a detach or cancellation. The goroutine exits when the stream ends or
+// errors. Used by tests that don't inspect the streamed chunks.
+func drainInBackground[State any](conn *AgentConnection[State]) {
+	go func() {
+		for _, err := range conn.Receive() {
+			if err != nil {
+				return
+			}
+		}
+	}()
+}
+
 func TestAgent_BasicMultiTurn(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -71,9 +105,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 	}
 
 	// Turn 1.
-	if err := conn.SendText("hello"); err != nil {
-		t.Fatalf("SendText failed: %v", err)
-	}
+	sendText(t, conn, "hello")
 	var turn1Chunks int
 	for chunk, err := range conn.Receive() {
 		if err != nil {
@@ -89,17 +121,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 	}
 
 	// Turn 2.
-	if err := conn.SendText("world"); err != nil {
-		t.Fatalf("SendText failed: %v", err)
-	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "world")
 
 	conn.Close()
 
@@ -117,45 +139,94 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 	}
 }
 
-func TestAgent_WithSessionStore(t *testing.T) {
+// TestAgentConnection_Custom_TracksStreamedPatches verifies the client-side
+// live custom-state tracking: as Receive yields chunks, AgentConnection applies
+// each CustomPatch to an internal copy that Custom() returns. It exercises the
+// per-turn whole-document replace (the first patch of a turn re-bases the
+// client) followed by an incremental diff within the same turn, and that the
+// tracking carries across turns. The server-side patch emission is covered by
+// TestAgent_TurnSpanOutput_WithSnapshots; this is its client-side complement.
+func TestAgentConnection_Custom_TracksStreamedPatches(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-	store := newTestInMemStore[testState]()
 
-	af := DefineCustomAgent(reg, "snapshotFlow",
+	af := DefineCustomAgent(reg, "liveCustomFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				if input.Message != nil {
-					sess.AddMessages(ai.NewModelTextMessage("reply"))
-				}
+				// Two mutations per turn: the first emits a whole-document
+				// replace, the second an incremental diff.
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
+					return s
+				})
+				sess.UpdateCustom(func(s testState) testState {
+					s.Topics = append(s.Topics, input.Message.Text())
 					return s
 				})
 				return nil, nil
 			})
 		},
-		WithSessionStore(store),
 	)
+
+	conn, err := af.StreamBidi(ctx)
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+
+	// Before any patch arrives, Custom() is the zero value.
+	if got, err := conn.Custom(); err != nil || got.Counter != 0 || len(got.Topics) != 0 {
+		t.Errorf("Custom() before any turn = %+v (err %v), want zero value", got, err)
+	}
+
+	// Turn 1: draining the turn applies the streamed patches (replace + diff).
+	sendTurn(t, conn, "alpha")
+	got, err := conn.Custom()
+	if err != nil {
+		t.Fatalf("Custom() after turn 1: %v", err)
+	}
+	if got.Counter != 1 || !slices.Equal(got.Topics, []string{"alpha"}) {
+		t.Errorf("tracked custom after turn 1 = %+v, want {Counter:1 Topics:[alpha]}", got)
+	}
+
+	// Turn 2: its first patch is a whole-document replace that re-bases the
+	// client; the cumulative tracked state must still be correct.
+	sendTurn(t, conn, "beta")
+	got, err = conn.Custom()
+	if err != nil {
+		t.Fatalf("Custom() after turn 2: %v", err)
+	}
+	if got.Counter != 2 || !slices.Equal(got.Topics, []string{"alpha", "beta"}) {
+		t.Errorf("tracked custom after turn 2 = %+v, want {Counter:2 Topics:[alpha beta]}", got)
+	}
+
+	conn.Close()
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	// The authoritative final state agrees with what the streamed patches tracked.
+	if out.State.Custom.Counter != 2 || !slices.Equal(out.State.Custom.Topics, []string{"alpha", "beta"}) {
+		t.Errorf("final state custom = %+v, want {Counter:2 Topics:[alpha beta]}", out.State.Custom)
+	}
+}
+
+func TestAgent_WithSessionStore(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	af := defineCounterAgent(reg, "snapshotFlow", WithSessionStore(store))
 
 	conn, err := af.StreamBidi(ctx)
 	if err != nil {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("turn1")
+	sendText(t, conn, "turn1")
 
 	var snapshotIDs []string
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			if chunk.TurnEnd.SnapshotID != "" {
-				snapshotIDs = append(snapshotIDs, chunk.TurnEnd.SnapshotID)
-			}
-			break
-		}
+	if te := nextTurnEnd(t, conn); te.SnapshotID != "" {
+		snapshotIDs = append(snapshotIDs, te.SnapshotID)
 	}
 
 	if len(snapshotIDs) != 1 {
@@ -192,28 +263,14 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	af := DefineCustomAgent(reg, "resumeFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				if input.Message != nil {
-					sess.AddMessages(ai.NewModelTextMessage("reply"))
-				}
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "resumeFlow", WithSessionStore(store))
 
 	// First invocation: create a snapshot.
 	conn1, err := af.StreamBidi(ctx)
 	if err != nil {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
-	conn1.SendText("first message")
+	sendText(t, conn1, "first message")
 	for chunk, err := range conn1.Receive() {
 		if err != nil {
 			t.Fatalf("Receive error: %v", err)
@@ -236,15 +293,7 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi with snapshot failed: %v", err)
 	}
-	conn2.SendText("continued message")
-	for chunk, err := range conn2.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn2, "continued message")
 	conn2.Close()
 	resp2, err := conn2.Output()
 	if err != nil {
@@ -281,20 +330,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "clientStateFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				if input.Message != nil {
-					sess.AddMessages(ai.NewModelTextMessage("reply"))
-				}
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-	)
+	af := defineCounterAgent(reg, "clientStateFlow")
 
 	// Start with client-provided state.
 	clientState := &SessionState[testState]{
@@ -310,15 +346,7 @@ func TestAgent_ClientManagedState(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("new message")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "new message")
 	conn.Close()
 
 	response, err := conn.Output()
@@ -380,7 +408,7 @@ func TestAgent_Artifacts(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("generate code")
+	sendText(t, conn, "generate code")
 	var receivedArtifacts []*Artifact
 	for chunk, err := range conn.Receive() {
 		if err != nil {
@@ -493,14 +521,7 @@ func TestAgent_InputMessageCloned(t *testing.T) {
 	if err := conn.SendMessage(sent); err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	nextTurnEnd(t, conn)
 
 	// The turn is over, so the message is in session history. Mutating
 	// the caller's copy must not reach it.
@@ -627,14 +648,7 @@ func TestAgent_SendMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	nextTurnEnd(t, conn)
 	conn.Close()
 
 	response, err := conn.Output()
@@ -677,15 +691,7 @@ func TestAgent_SessionContext(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("test")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "test")
 	conn.Close()
 	conn.Output()
 
@@ -711,7 +717,7 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("trigger error")
+	sendText(t, conn, "trigger error")
 	conn.Close()
 
 	// A failed turn resolves the invocation gracefully rather than
@@ -735,6 +741,26 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 	if got := len(out.State.Messages); got != 0 {
 		t.Errorf("expected 0 messages in last-good state, got %d", got)
 	}
+}
+
+// defineCounterAgent defines a custom agent whose every turn appends a model
+// "reply" message and increments the custom counter: the minimal stateful
+// turn body shared by the snapshot and state-management tests. opts pass
+// through to DefineCustomAgent (e.g. WithSessionStore).
+func defineCounterAgent(reg api.Registry, name string, opts ...AgentOption[testState]) *Agent[testState] {
+	return DefineCustomAgent(reg, name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("reply"))
+				sess.UpdateCustom(func(s testState) testState {
+					s.Counter++
+					return s
+				})
+				return nil, nil
+			})
+		},
+		opts...,
+	)
 }
 
 // defineLastGoodTestAgent defines a client- or server-managed echo agent
@@ -781,9 +807,7 @@ func TestAgent_FailedTurn_ClientManagedReturnsLastGoodState(t *testing.T) {
 		t.Fatalf("StreamBidi: %v", err)
 	}
 	for _, text := range []string{"one", "two", "boom"} {
-		if err := conn.SendText(text); err != nil {
-			t.Fatalf("SendText(%q): %v", text, err)
-		}
+		sendText(t, conn, text)
 	}
 
 	out, err := conn.Output()
@@ -879,17 +903,12 @@ func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("one"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	turn0 := nextTurnEnd(t, conn)
+	turn0 := sendTurn(t, conn, "one")
 	if turn0.SnapshotID == "" {
 		t.Fatal("expected turn 0 snapshot")
 	}
 
-	if err := conn.SendText("boom"); err != nil {
-		t.Fatalf("SendText(boom): %v", err)
-	}
+	sendText(t, conn, "boom")
 	out, err := conn.Output()
 	if err != nil {
 		t.Fatalf("Output: %v", err)
@@ -974,9 +993,7 @@ func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "hi")
 
 	turnEnd := nextTurnEnd(t, conn)
 	close(turnEndSeen)
@@ -1028,9 +1045,7 @@ func TestAgent_CustomAgentContinuesAfterFailedTurn(t *testing.T) {
 		t.Fatalf("StreamBidi: %v", err)
 	}
 	for _, text := range []string{"one", "boom", "two"} {
-		if err := conn.SendText(text); err != nil {
-			t.Fatalf("SendText(%q): %v", text, err)
-		}
+		sendText(t, conn, text)
 	}
 
 	// A hang here means intake pacing after a failed turn is broken.
@@ -1140,15 +1155,7 @@ func TestAgent_SetMessages(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("original")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "original")
 	conn.Close()
 
 	response, err := conn.Output()
@@ -1203,17 +1210,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 
 	// Two turns.
 	for turn := range 2 {
-		if err := conn.SendText(fmt.Sprintf("turn %d", turn)); err != nil {
-			t.Fatalf("SendText failed on turn %d: %v", turn, err)
-		}
-		for chunk, err := range conn.Receive() {
-			if err != nil {
-				t.Fatalf("Receive error on turn %d: %v", turn, err)
-			}
-			if chunk.TurnEnd != nil {
-				break
-			}
-		}
+		sendTurn(t, conn, fmt.Sprintf("turn %d", turn))
 	}
 
 	conn.Close()
@@ -1276,18 +1273,10 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("hello")
+	sendText(t, conn, "hello")
 	var sawSnapshot bool
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			if chunk.TurnEnd.SnapshotID != "" {
-				sawSnapshot = true
-			}
-			break
-		}
+	if nextTurnEnd(t, conn).SnapshotID != "" {
+		sawSnapshot = true
 	}
 	conn.Close()
 	conn.Output()
@@ -1368,9 +1357,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 	}
 
 	// Turn 1.
-	if err := conn.SendText("hello"); err != nil {
-		t.Fatalf("SendText failed: %v", err)
-	}
+	sendText(t, conn, "hello")
 
 	var gotChunk bool
 	for chunk, err := range conn.Receive() {
@@ -1389,17 +1376,7 @@ func TestPromptAgent_Basic(t *testing.T) {
 	}
 
 	// Turn 2.
-	if err := conn.SendText("world"); err != nil {
-		t.Fatalf("SendText failed: %v", err)
-	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "world")
 
 	conn.Close()
 
@@ -1455,7 +1432,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 	}
 
 	// Turn 1.
-	conn.SendText("turn1")
+	sendText(t, conn, "turn1")
 	var turn1Response string
 	for chunk, err := range conn.Receive() {
 		if err != nil {
@@ -1476,7 +1453,7 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 	}
 
 	// Turn 2.
-	conn.SendText("turn2")
+	sendText(t, conn, "turn2")
 	var turn2Response string
 	for chunk, err := range conn.Receive() {
 		if err != nil {
@@ -1530,15 +1507,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("hello")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "hello")
 	conn.Close()
 
 	resp, err := conn.Output()
@@ -1554,15 +1523,7 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		t.Fatalf("StreamBidi with snapshot failed: %v", err)
 	}
 
-	conn2.SendText("continued")
-	for chunk, err := range conn2.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn2, "continued")
 	conn2.Close()
 
 	resp2, err := conn2.Output()
@@ -1669,15 +1630,7 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 		t.Fatalf("StreamBidi failed: %v", err)
 	}
 
-	conn.SendText("go")
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "go")
 	conn.Close()
 
 	response, err := conn.Output()
@@ -1806,18 +1759,7 @@ func TestAgent_RunText_WithState(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 
-	af := DefineCustomAgent(reg, "runStateFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-	)
+	af := defineCounterAgent(reg, "runStateFlow")
 
 	clientState := &SessionState[testState]{
 		Messages: []*ai.Message{
@@ -1847,19 +1789,7 @@ func TestAgent_RunText_WithSnapshot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	af := DefineCustomAgent(reg, "runSnapshotFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "runSnapshotFlow", WithSessionStore(store))
 
 	// First invocation via RunText.
 	resp1, err := af.RunText(ctx, "first")
@@ -1914,86 +1844,62 @@ func TestPromptAgent_RunText(t *testing.T) {
 	}
 }
 
-func TestPromptAgent_RejectsNonUserRole(t *testing.T) {
+// TestPromptAgent_RejectsInvalidInputMessage verifies the prompt-backed loop
+// rejects turn messages it cannot safely consume: a non-user role, or tool
+// request/response parts (which belong on AgentInput.Resume, not a turn
+// message). Each resolves as a failed output carrying an INVALID_ARGUMENT
+// error rather than reaching the model.
+func TestPromptAgent_RejectsInvalidInputMessage(t *testing.T) {
 	ctx := context.Background()
 	reg := setupPromptTestRegistry(t)
+	ai.DefinePrompt(reg, "rejectPrompt", ai.WithModelName("test/echo"))
+	af := DefineAgent[testState](reg, "rejectPrompt", FromPrompt())
 
-	ai.DefinePrompt(reg, "rejectRolePrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectRolePrompt", FromPrompt())
-
-	out, err := af.Run(ctx, &AgentInput{
-		Message: &ai.Message{
-			Role:    ai.RoleModel,
-			Content: []*ai.Part{ai.NewTextPart("hi")},
+	tests := []struct {
+		name    string
+		message *ai.Message
+		wantMsg string
+	}{
+		{
+			name:    "non-user role",
+			message: &ai.Message{Role: ai.RoleModel, Content: []*ai.Part{ai.NewTextPart("hi")}},
+			wantMsg: "role",
 		},
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
-	}
-	if out.Error == nil {
-		t.Fatal("expected output error for non-user role, got nil")
-	}
-	if out.Error.Status != core.INVALID_ARGUMENT {
-		t.Errorf("expected status %q, got %q", core.INVALID_ARGUMENT, out.Error.Status)
-	}
-	if !strings.Contains(out.Error.Message, "role") {
-		t.Errorf("expected role-related error, got %v", out.Error)
-	}
-}
-
-func TestPromptAgent_RejectsToolRequestPart(t *testing.T) {
-	ctx := context.Background()
-	reg := setupPromptTestRegistry(t)
-
-	ai.DefinePrompt(reg, "rejectToolReqPrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectToolReqPrompt", FromPrompt())
-
-	out, err := af.Run(ctx, &AgentInput{
-		Message: &ai.Message{
-			Role: ai.RoleUser,
-			Content: []*ai.Part{
+		{
+			name: "tool request part",
+			message: &ai.Message{Role: ai.RoleUser, Content: []*ai.Part{
 				ai.NewTextPart("hi"),
 				ai.NewToolRequestPart(&ai.ToolRequest{Name: "doThing", Ref: "1"}),
-			},
+			}},
+			wantMsg: "tool request",
 		},
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
-	}
-	if out.Error == nil || !strings.Contains(out.Error.Message, "tool request") {
-		t.Errorf("expected tool-request error, got %+v", out.Error)
-	}
-}
-
-func TestPromptAgent_RejectsToolResponsePart(t *testing.T) {
-	ctx := context.Background()
-	reg := setupPromptTestRegistry(t)
-
-	ai.DefinePrompt(reg, "rejectToolRespPrompt", ai.WithModelName("test/echo"))
-	af := DefineAgent[testState](reg, "rejectToolRespPrompt", FromPrompt())
-
-	out, err := af.Run(ctx, &AgentInput{
-		Message: &ai.Message{
-			Role: ai.RoleUser,
-			Content: []*ai.Part{
+		{
+			name: "tool response part",
+			message: &ai.Message{Role: ai.RoleUser, Content: []*ai.Part{
 				ai.NewToolResponsePart(&ai.ToolResponse{Name: "doThing", Ref: "1"}),
-			},
+			}},
+			wantMsg: "tool",
 		},
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
 	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("expected finish reason %q, got %q", AgentFinishReasonFailed, out.FinishReason)
-	}
-	if out.Error == nil || !strings.Contains(out.Error.Message, "tool") {
-		t.Errorf("expected tool-related error, got %+v", out.Error)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := af.Run(ctx, &AgentInput{Message: tc.message})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if out.FinishReason != AgentFinishReasonFailed {
+				t.Errorf("FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+			}
+			if out.Error == nil {
+				t.Fatal("expected output error, got nil")
+			}
+			if out.Error.Status != core.INVALID_ARGUMENT {
+				t.Errorf("Error.Status = %q, want %q", out.Error.Status, core.INVALID_ARGUMENT)
+			}
+			if !strings.Contains(out.Error.Message, tc.wantMsg) {
+				t.Errorf("Error.Message = %q, want substring %q", out.Error.Message, tc.wantMsg)
+			}
+		})
 	}
 }
 
@@ -2114,17 +2020,7 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 	}
 
 	// Turn 1: a plain text reply, so no tool request lands in history.
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "hi")
 
 	// Turn 2: forge a resume for a tool the model never requested.
 	if err := conn.SendResume(&ToolResume{
@@ -2161,19 +2057,7 @@ func TestAgent_SingleTurnSnapshot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	af := DefineCustomAgent(reg, "singleTurnFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "singleTurnFlow", WithSessionStore(store))
 
 	// Single-turn invocation: exactly 1 snapshot (the turn-end), which the
 	// output reuses as its resume point. There is no second invocation-end
@@ -2205,19 +2089,7 @@ func TestAgent_MultiTurnSnapshot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	af := DefineCustomAgent(reg, "multiDedupFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "multiDedupFlow", WithSessionStore(store))
 
 	// Multi-turn: one snapshot per turn; the output reuses the last one.
 	conn, err := af.StreamBidi(ctx)
@@ -2227,17 +2099,9 @@ func TestAgent_MultiTurnSnapshot(t *testing.T) {
 
 	var snapshotIDs []string
 	for i := 0; i < 3; i++ {
-		conn.SendText(fmt.Sprintf("turn %d", i))
-		for chunk, err := range conn.Receive() {
-			if err != nil {
-				t.Fatalf("Receive error on turn %d: %v", i, err)
-			}
-			if chunk.TurnEnd != nil {
-				if chunk.TurnEnd.SnapshotID != "" {
-					snapshotIDs = append(snapshotIDs, chunk.TurnEnd.SnapshotID)
-				}
-				break
-			}
+		sendText(t, conn, fmt.Sprintf("turn %d", i))
+		if te := nextTurnEnd(t, conn); te.SnapshotID != "" {
+			snapshotIDs = append(snapshotIDs, te.SnapshotID)
 		}
 	}
 	conn.Close()
@@ -2339,9 +2203,7 @@ func TestAgent_FnPanicResolvesAsFailedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("trigger"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "trigger")
 
 	// A hang here means the streaming goroutine leaked.
 	out, err := outputWithin(t, conn, 2*time.Second)
@@ -2394,9 +2256,7 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 
 	<-emitting
 	cancel()
@@ -2501,18 +2361,8 @@ func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 
 	var observed []TurnEnd
 	for turn := 0; turn < 3; turn++ {
-		if err := conn.SendText(fmt.Sprintf("turn %d", turn)); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
-		for chunk, err := range conn.Receive() {
-			if err != nil {
-				t.Fatalf("Receive: %v", err)
-			}
-			if chunk.TurnEnd != nil {
-				observed = append(observed, *chunk.TurnEnd)
-				break
-			}
-		}
+		sendText(t, conn, fmt.Sprintf("turn %d", turn))
+		observed = append(observed, *nextTurnEnd(t, conn))
 	}
 	conn.Close()
 	if _, err := conn.Output(); err != nil {
@@ -2572,19 +2422,11 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 	}
 
 	// Drain stream chunks in the background.
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
 	// Send A and wait for it to enter fn (so it's in-flight when detach
 	// arrives).
-	if err := conn.SendText("A"); err != nil {
-		t.Fatalf("SendText A: %v", err)
-	}
+	sendText(t, conn, "A")
 	select {
 	case <-entered:
 	case <-time.After(2 * time.Second):
@@ -2593,9 +2435,7 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 
 	// Send D, then Detach. The eager intake reader sees D queued and the
 	// detach signal immediately, even though the runner is blocked on A.
-	if err := conn.SendText("D"); err != nil {
-		t.Fatalf("SendText D: %v", err)
-	}
+	sendText(t, conn, "D")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -2667,20 +2507,12 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	}
 
 	// Background drainer.
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
 	// Run two normal turns.
 	for i := 0; i < 2; i++ {
 		release <- struct{}{} // pre-load release so this turn's fn doesn't block
-		if err := conn.SendText(fmt.Sprintf("sync-%d", i)); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
+		sendText(t, conn, fmt.Sprintf("sync-%d", i))
 		<-enter
 	}
 	// Brief settle so the second turn-end snapshot lands before detach.
@@ -2692,15 +2524,11 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 
 	// Now start a third turn but DON'T release it — the third turn is
 	// in-flight when detach lands.
-	if err := conn.SendText("inflight"); err != nil {
-		t.Fatalf("SendText inflight: %v", err)
-	}
+	sendText(t, conn, "inflight")
 	<-enter // third turn entered fn
 
 	// Send the queued input and detach.
-	if err := conn.SendText("detach-msg"); err != nil {
-		t.Fatalf("SendText detach-msg: %v", err)
-	}
+	sendText(t, conn, "detach-msg")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -2793,17 +2621,9 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	}
 
 	// Drain chunks so the responder isn't blocked.
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -2890,17 +2710,9 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -2958,17 +2770,9 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -3029,17 +2833,9 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -3096,20 +2892,10 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "hi")
 
 	var turnEndID string
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			turnEndID = chunk.TurnEnd.SnapshotID
-			break
-		}
-	}
+	turnEndID = nextTurnEnd(t, conn).SnapshotID
 	if turnEndID == "" {
 		t.Fatal("expected snapshot ID on TurnEnd chunk")
 	}
@@ -3158,17 +2944,9 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 	<-entered
 	cancel()
 
@@ -4107,19 +3885,7 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
 
-	af := DefineCustomAgent(reg, "resumeDetachedFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "resumeDetachedFlow", WithSessionStore(store))
 
 	ctx := context.Background()
 
@@ -4129,16 +3895,8 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
-	if err := conn.SendText("turn 1"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	drainInBackground(conn)
+	sendText(t, conn, "turn 1")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -4271,17 +4029,9 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
+	drainInBackground(conn)
 
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -4539,9 +4289,7 @@ func TestAgent_FinishReason_TurnAndInvocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "hi")
 
 	turnEnd := nextTurnEnd(t, conn)
 	if turnEnd.FinishReason != AgentFinishReasonStop {
@@ -4588,10 +4336,7 @@ func TestAgent_FinishReason_OmittedWhenNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	turnEnd := nextTurnEnd(t, conn)
+	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != "" {
 		t.Errorf("TurnEnd.FinishReason = %q, want empty", turnEnd.FinishReason)
 	}
@@ -4629,10 +4374,7 @@ func TestAgent_FinishReason_InvocationOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	turnEnd := nextTurnEnd(t, conn)
+	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != AgentFinishReasonStop {
 		t.Errorf("TurnEnd.FinishReason = %q, want %q (per-turn, unaffected by override)", turnEnd.FinishReason, AgentFinishReasonStop)
 	}
@@ -4671,9 +4413,7 @@ func TestAgent_FinishReason_MultiTurnDistinct(t *testing.T) {
 
 	var got []AgentFinishReason
 	for i := 0; i < len(reasons); i++ {
-		if err := conn.SendText("turn"); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
+		sendText(t, conn, "turn")
 		got = append(got, nextTurnEnd(t, conn).FinishReason)
 	}
 	for i, want := range reasons {
@@ -4715,10 +4455,7 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	turnEnd := nextTurnEnd(t, conn)
+	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != AgentFinishReasonLength {
 		t.Errorf("TurnEnd.FinishReason = %q, want %q", turnEnd.FinishReason, AgentFinishReasonLength)
 	}
@@ -4769,13 +4506,7 @@ func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: StreamBidi: %v", i, err)
 		}
-		go func() {
-			for _, err := range conn.Receive() {
-				if err != nil {
-					return
-				}
-			}
-		}()
+		drainInBackground(conn)
 		if err := conn.SendText("go"); err != nil {
 			t.Fatalf("iteration %d: SendText: %v", i, err)
 		}
@@ -4832,16 +4563,8 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StreamBidi: %v", err)
 		}
-		go func() {
-			for _, err := range conn.Receive() {
-				if err != nil {
-					return
-				}
-			}
-		}()
-		if err := conn.SendText("go"); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
+		drainInBackground(conn)
+		sendText(t, conn, "go")
 		if err := conn.Detach(); err != nil {
 			t.Fatalf("Detach: %v", err)
 		}
@@ -4888,16 +4611,8 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StreamBidi: %v", err)
 		}
-		go func() {
-			for _, err := range conn.Receive() {
-				if err != nil {
-					return
-				}
-			}
-		}()
-		if err := conn.SendText("go"); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
+		drainInBackground(conn)
+		sendText(t, conn, "go")
 		if err := conn.Detach(); err != nil {
 			t.Fatalf("Detach: %v", err)
 		}
@@ -4943,16 +4658,8 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StreamBidi: %v", err)
 		}
-		go func() {
-			for _, err := range conn.Receive() {
-				if err != nil {
-					return
-				}
-			}
-		}()
-		if err := conn.SendText("go"); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
+		drainInBackground(conn)
+		sendText(t, conn, "go")
 		if err := conn.Detach(); err != nil {
 			t.Fatalf("Detach: %v", err)
 		}
@@ -5050,10 +4757,7 @@ func TestAgent_FinishReason_MultiTurnDistinct_Persisted(t *testing.T) {
 	}
 	var ids []string
 	for i := 0; i < len(reasons); i++ {
-		if err := conn.SendText("turn"); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
-		te := nextTurnEnd(t, conn)
+		te := sendTurn(t, conn, "turn")
 		if te.FinishReason != reasons[i] {
 			t.Errorf("turn %d TurnEnd.FinishReason = %q, want %q", i, te.FinishReason, reasons[i])
 		}
@@ -5099,9 +4803,7 @@ func TestAgent_FinishReason_OmittedPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("hi"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "hi")
 	snapID := nextTurnEnd(t, conn).SnapshotID
 	if _, err := conn.Output(); err != nil {
 		t.Fatalf("Output: %v", err)
@@ -5153,9 +4855,7 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("do it"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	sendText(t, conn, "do it")
 	var (
 		turnEnd      *TurnEnd
 		gotToolChunk bool
@@ -5223,16 +4923,8 @@ func TestAgent_Detach_CompletedHonorsResultOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	drainInBackground(conn)
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -5272,10 +4964,7 @@ func TestAgent_SessionID_AssignedAndStable(t *testing.T) {
 
 	var snapshotIDs []string
 	for _, text := range []string{"turn one", "turn two"} {
-		if err := conn.SendText(text); err != nil {
-			t.Fatalf("SendText: %v", err)
-		}
-		te := nextTurnEnd(t, conn)
+		te := sendTurn(t, conn, text)
 		if te.SnapshotID != "" {
 			snapshotIDs = append(snapshotIDs, te.SnapshotID)
 		}
@@ -5602,9 +5291,7 @@ func TestAgent_ResumeFromSessionID_AfterFailureResumesLastTurn(t *testing.T) {
 		t.Fatalf("StreamBidi: %v", err)
 	}
 	for _, text := range []string{"one", "two", "boom"} {
-		if err := conn.SendText(text); err != nil {
-			t.Fatalf("SendText(%q): %v", text, err)
-		}
+		sendText(t, conn, text)
 	}
 	out, err := conn.Output()
 	if err != nil {
@@ -5844,16 +5531,8 @@ func TestAgent_Detach_AssignsSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
-	if err := conn.SendText("go"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	drainInBackground(conn)
+	sendText(t, conn, "go")
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
@@ -5925,16 +5604,8 @@ func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	go func() {
-		for _, err := range conn.Receive() {
-			if err != nil {
-				return
-			}
-		}
-	}()
-	if err := conn.SendText("one"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
+	drainInBackground(conn)
+	sendText(t, conn, "one")
 	// Wait until the turn-end snapshot write is in flight, then detach
 	// while it is still blocked inside the store.
 	<-store.entered
@@ -5998,10 +5669,7 @@ func TestAgent_FailedTurn_OutputCarriesSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamBidi: %v", err)
 	}
-	if err := conn.SendText("turn one"); err != nil {
-		t.Fatalf("SendText: %v", err)
-	}
-	nextTurnEnd(t, conn)
+	sendTurn(t, conn, "turn one")
 	if err := conn.SendText("boom"); err != nil && !errors.Is(err, core.ErrActionCompleted) {
 		t.Fatalf("SendText: %v", err)
 	}
@@ -6222,17 +5890,7 @@ func TestAgent_SendNilInput_Rejected(t *testing.T) {
 	}
 
 	// The connection must remain usable after the rejected input.
-	if err := conn.SendText("hello"); err != nil {
-		t.Fatalf("SendText failed: %v", err)
-	}
-	for chunk, err := range conn.Receive() {
-		if err != nil {
-			t.Fatalf("Receive error: %v", err)
-		}
-		if chunk.TurnEnd != nil {
-			break
-		}
-	}
+	sendTurn(t, conn, "hello")
 	conn.Close()
 
 	response, err := conn.Output()
@@ -6324,9 +5982,7 @@ func TestAgent_ClientCancelMidStream(t *testing.T) {
 			if err != nil {
 				t.Fatalf("StreamBidi failed: %v", err)
 			}
-			if err := conn.SendText("hello"); err != nil {
-				t.Fatalf("SendText failed: %v", err)
-			}
+			sendText(t, conn, "hello")
 			// Close the input side so sess.Run ends cleanly and fn returns
 			// nil once its sends are accepted.
 			conn.Close()
