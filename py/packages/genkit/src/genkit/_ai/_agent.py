@@ -48,18 +48,18 @@ from genkit._ai._session import (
 from genkit._ai._tools import Tool
 from genkit._core._action import (
     QUEUE_SENTINEL,
+    Action,
     ActionKind,
     ActionRunContext,
     BidiAction,
     BidiConnection,
     QueueSentinel,
-    Action,
     define_bidi_action,
     get_current_context,
 )
 from genkit._core._error import GenkitError
 from genkit._core._middleware import BaseMiddleware
-from genkit._core._model import Document, GenerateActionOptions, Message, ModelConfig, ModelResponse
+from genkit._core._model import GenerateActionOptions, Message, ModelConfig, ModelResponse
 from genkit._core._registry import Registry
 from genkit._core._tracing import SpanMetadata, run_in_new_span
 from genkit._core._typing import (
@@ -85,7 +85,6 @@ from genkit._core._typing import (
     SnapshotEvent,
     SnapshotStatus,
     TextPart,
-    ToolChoice,
     ToolRequestPart,
     TurnEnd,
 )
@@ -574,12 +573,12 @@ class _AgentRuntime:
 
     async def _ensure_recovery_snapshot(self) -> str | None:
         """Persist last-good state after a failed turn when the callback skipped it."""
-        if self._store is None or self._sess.last_good_state is None:
+        if self._store is None or self._sess._last_good_state is None:
             return self._last_snapshot.snapshot_id if self._last_snapshot else None
 
         if (
-            self._sess.last_good_state_version is not None
-            and self._sess.last_good_state_version == self._last_snapshot_version
+            self._sess._last_good_state_version is not None
+            and self._sess._last_good_state_version == self._last_snapshot_version
         ):
             return self._last_snapshot.snapshot_id if self._last_snapshot else None
 
@@ -588,7 +587,7 @@ class _AgentRuntime:
 
         parent_id = self._last_snapshot.snapshot_id if self._last_snapshot else None
         now = datetime.now(timezone.utc).isoformat()
-        last_good = self._sess.last_good_state
+        last_good = self._sess._last_good_state
 
         def _recovery(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is not None and existing.status == SnapshotStatus.ABORTED:
@@ -600,23 +599,23 @@ class _AgentRuntime:
                 status=SnapshotStatus.DONE,
                 state=last_good,
                 created_at=now,
-                finish_reason=self._sess.last_good_finish_reason,
+                finish_reason=self._sess._last_good_finish_reason,
             )
 
         snap = await self._store.save_snapshot(None, _recovery)
         if snap is not None:
             self._last_snapshot = snap
-            if self._sess.last_good_state_version is not None:
-                self._last_snapshot_version = self._sess.last_good_state_version
+            if self._sess._last_good_state_version is not None:
+                self._last_snapshot_version = self._sess._last_good_state_version
             return snap.snapshot_id
         return self._last_snapshot.snapshot_id if self._last_snapshot else None
 
     async def _failed_agent_output(self, result: AgentResult | None) -> AgentOutput:
-        last_good = self._sess.last_good_state or await self._session.state()
+        last_good = self._sess._last_good_state or await self._session.state()
         msgs = list(last_good.messages or [])
         out = AgentOutput(
             finish_reason=AgentFinishReason.FAILED,
-            error=self._sess.last_turn_error,
+            error=self._sess._last_turn_error,
             message=msgs[-1] if msgs else (result.message if result else None),
             artifacts=list(last_good.artifacts or []) if last_good.artifacts else (result.artifacts if result else []),
         )
@@ -664,7 +663,7 @@ class _AgentRuntime:
             SnapshotEvent.TURNEND,
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.DONE,
-            error=self._sess.last_turn_error if is_failed else None,
+            error=self._sess._last_turn_error if is_failed else None,
             force=is_failed,
         )
         self._send_chunk(
@@ -696,7 +695,7 @@ class _AgentRuntime:
         else:
             result = result_holder[0] if result_holder else None
             finish_reason = (
-                result.finish_reason if result and result.finish_reason else self._sess.last_turn_finish_reason
+                result.finish_reason if result and result.finish_reason else self._sess._last_turn_finish_reason
             )
 
         def _finalize(existing: SessionSnapshot | None) -> SessionSnapshot | None:
@@ -834,7 +833,7 @@ class _AgentRuntime:
 
         result = result_holder[0] if result_holder else None
 
-        if self._sess.last_turn_finish_reason == AgentFinishReason.FAILED and self._sess.last_turn_error:
+        if self._sess._last_turn_finish_reason == AgentFinishReason.FAILED and self._sess._last_turn_error:
             return await self._failed_agent_output(result)
 
         if err_holder:
@@ -844,7 +843,7 @@ class _AgentRuntime:
         if not snapshot_id and self._last_snapshot is not None:
             snapshot_id = self._last_snapshot.snapshot_id
 
-        finish_reason = result.finish_reason if result else self._sess.last_turn_finish_reason
+        finish_reason = result.finish_reason if result else self._sess._last_turn_finish_reason
         out = AgentOutput(
             snapshot_id=snapshot_id or None,
             message=result.message if result else None,
@@ -943,16 +942,16 @@ class SessionRunner(Generic[StateT]):
         self._on_begin_turn = on_begin_turn
         self._on_end_turn = on_end_turn
         self.turn_index: int = 0
-        self.last_turn_finish_reason: AgentFinishReason | None = None
-        self.last_turn_error: Error | None = None
-        self.last_good_state: SessionState | None = None
-        self.last_good_state_version: int | None = None
-        self.last_good_finish_reason: AgentFinishReason | None = None
+        self._last_turn_finish_reason: AgentFinishReason | None = None
+        self._last_turn_error: Error | None = None
+        self._last_good_state: SessionState | None = None
+        self._last_good_state_version: int | None = None
+        self._last_good_finish_reason: AgentFinishReason | None = None
 
     async def seed_last_good_state(self) -> None:
         """Capture initial session state as the fallback for first-turn failures."""
-        self.last_good_state = await self._session.state()
-        self.last_good_state_version = self._session.version
+        self._last_good_state = await self._session.state()
+        self._last_good_state_version = self._session.version
 
     async def run(
         self,
@@ -965,8 +964,9 @@ class SessionRunner(Generic[StateT]):
         After fn returns, on_end_turn is called (snapshot + chunk emission)
         and turn_index is incremented.
 
-        Turn failures resolve gracefully: ``last_turn_finish_reason`` becomes
-        ``failed``, ``last_turn_error`` is populated, and the loop stops.
+        Turn failures resolve gracefully: the invocation finishes with
+        ``finish_reason=failed`` and ``error`` on ``AgentOutput``, and the
+        turn loop stops.
         """
         while True:
             inp = await self._intake.get()
@@ -989,21 +989,21 @@ class SessionRunner(Generic[StateT]):
                 with run_in_new_span(span_meta):
                     turn_result = await fn(inp)
                     finish_reason = turn_result.finish_reason if turn_result else None
-                    self.last_turn_finish_reason = finish_reason
-                    self.last_turn_error = None
+                    self._last_turn_finish_reason = finish_reason
+                    self._last_turn_error = None
 
                     if self._on_end_turn is not None:
                         await self._on_end_turn(finish_reason)
 
                     span_meta.output = {'finishReason': finish_reason}
 
-                self.last_good_state = await self._session.state()
-                self.last_good_state_version = self._session.version
-                self.last_good_finish_reason = self.last_turn_finish_reason
+                self._last_good_state = await self._session.state()
+                self._last_good_state_version = self._session.version
+                self._last_good_finish_reason = self._last_turn_finish_reason
                 self.turn_index += 1
             except Exception as exc:  # noqa: BLE001
-                self.last_turn_finish_reason = AgentFinishReason.FAILED
-                self.last_turn_error = _to_error_details(exc)
+                self._last_turn_finish_reason = AgentFinishReason.FAILED
+                self._last_turn_error = _to_error_details(exc)
 
                 if self._on_end_turn is not None:
                     await self._on_end_turn(AgentFinishReason.FAILED)
@@ -1018,7 +1018,7 @@ class SessionRunner(Generic[StateT]):
         return AgentResult(
             message=msg,
             artifacts=arts,
-            finish_reason=self.last_turn_finish_reason,
+            finish_reason=self._last_turn_finish_reason,
         )
 
     # --- Session passthrough helpers ---
@@ -1118,24 +1118,22 @@ def define_custom_agent(
         name=name,
         bidi_fn=_bidi_fn,
         description=description,
-        metadata={
-            **(metadata or {}),
-            'agent': {
-                'stateManagement': 'server' if store is not None else 'client'
-            }
-        },
+        metadata={**(metadata or {}), 'agent': {'stateManagement': 'server' if store is not None else 'client'}},
     )
 
     if store is not None:
-        async def _snapshot_fn(input_dict: Any) -> SessionSnapshot:
-            if not isinstance(input_dict, dict):
-                input_dict = getattr(input_dict, '__dict__', {})
-            snapshot_id = input_dict.get('snapshotId') or input_dict.get('snapshot_id')
+
+        async def _snapshot_fn(input_dict: object) -> SessionSnapshot:
+            if isinstance(input_dict, dict):
+                data: dict[str, object] = input_dict
+            else:
+                data = getattr(input_dict, '__dict__', {})
+            snapshot_id = data.get('snapshotId') or data.get('snapshot_id')
             if not snapshot_id:
-                raise ValueError("snapshotId required")
+                raise ValueError('snapshotId required')
             snap = await store.get_snapshot(snapshot_id=snapshot_id)
             if snap is None:
-                raise ValueError(f"Snapshot {snapshot_id} not found")
+                raise ValueError(f'Snapshot {snapshot_id} not found')
             return snap
 
         snapshot_action = Action(
@@ -1200,59 +1198,38 @@ def define_agent(
     registry: Registry,
     name: str,
     *,
-    variant: str | None = None,
     model: str | None = None,
-    config: dict[str, object] | ModelConfig | None = None,
-    description: str | None = None,
-    input_schema: type | dict[str, object] | str | None = None,
     system: str | list[Part] | None = None,
-    prompt: str | list[Part] | None = None,
-    messages: str | list[Message] | None = None,
-    output_format: str | None = None,
-    output_content_type: str | None = None,
-    output_instructions: str | None = None,
-    output_schema: type | dict[str, object] | str | None = None,
-    output_constrained: bool | None = None,
-    max_turns: int | None = None,
-    return_tool_requests: bool | None = None,
-    metadata: dict[str, object] | None = None,
     tools: Sequence[str | Tool] | None = None,
-    tool_choice: ToolChoice | None = None,
     use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-    docs: list[Document] | None = None,
-    resources: list[str] | None = None,
+    config: dict[str, object] | ModelConfig | None = None,
+    max_turns: int | None = None,
+    description: str | None = None,
+    metadata: dict[str, object] | None = None,
     store: SessionStore | None = None,
     snapshot_callback: SnapshotCallback | None = None,
     client_transform: ClientTransform | None = None,
     transform: StateTransform | None = None,
 ) -> Agent:
-    """Register a prompt-backed agent (define_prompt + define_prompt_agent)."""
+    """Register a prompt-backed agent.
+
+    Conversation input arrives via ``AgentConnection.send_text`` (or ``send``);
+    ``system`` is the only static preamble re-rendered each turn alongside
+    session history. For template variables, few-shot messages, RAG docs, or
+    prompt variants, use ``define_prompt`` + ``define_prompt_agent`` instead.
+    """
     executable_prompt = ExecutablePrompt(
         registry,
-        variant=variant,
         name=name,
         model=model,
         config=config,
         description=description,
-        input_schema=input_schema,
         system=system,
-        prompt=prompt,
-        messages=messages,
-        output_format=output_format,
-        output_content_type=output_content_type,
-        output_instructions=output_instructions,
-        output_schema=output_schema,
-        output_constrained=output_constrained,
         max_turns=max_turns,
-        return_tool_requests=return_tool_requests,
-        metadata=metadata,
         tools=tools,
-        tool_choice=tool_choice,
         use=use,
-        docs=docs,
-        resources=resources,
     )
-    register_prompt_actions(registry, executable_prompt, name, variant)
+    register_prompt_actions(registry, executable_prompt, name, None)
     return define_prompt_agent(
         registry=registry,
         name=name,
