@@ -1328,12 +1328,13 @@ tests:
             message: "Cannot use 'sessionId'"
 
   # ---------------------------------------------------------------------------
-  # snapshotId and sessionId are mutually exclusive
+  # snapshotId + sessionId: snapshotId selects, sessionId guards ownership
   # ---------------------------------------------------------------------------
-  - name: snapshotId and sessionId together rejected
+  - name: snapshotId and matching sessionId together resume
     description: >
-      init may carry a snapshotId (exact snapshot) or a sessionId (latest
-      snapshot) but not both. Providing both must be rejected.
+      init may carry both a snapshotId (the exact snapshot to resume) and a
+      sessionId. When the snapshot belongs to that session, the sessionId acts
+      as an ownership guard and the resume proceeds normally.
     agent: promptAgentWithStore
     steps:
       - type: send
@@ -1354,10 +1355,37 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
+        expectOutput:
+          finishReason: stop
+
+  - name: snapshotId with mismatched sessionId rejected
+    description: >
+      When init carries both a snapshotId and a sessionId, the snapshot must
+      belong to that session. A mismatch is rejected.
+    agent: promptAgentWithStore
+    steps:
+      - type: send
+        init: { sessionId: 55555555-5555-4555-8555-555555555555 }
+        inputs:
+          - message: { role: user, content: [{ text: first }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply1 }] }
+            finishReason: stop
+        captureSnapshotId: snap1
+
+      - type: send
+        init:
+          snapshotId: '{{snap1}}'
+          sessionId: 99999999-9999-4999-8999-999999999999
+        inputs:
+          - message: { role: user, content: [{ text: second }] }
+        modelResponses:
+          - message: { role: model, content: [{ text: reply2 }] }
+            finishReason: stop
         # Resolves gracefully with finishReason 'failed' and the original
         # INVALID_ARGUMENT status preserved.
         expectOutput:
           finishReason: failed
           errorContains:
             status: INVALID_ARGUMENT
-            message: 'Cannot send both'
+            message: 'does not belong to session'
