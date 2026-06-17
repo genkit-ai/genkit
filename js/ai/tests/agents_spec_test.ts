@@ -78,6 +78,15 @@ const SendInvocationSchema = z.object({
   streamChunks: z.array(z.array(z.any())).optional(),
   expectChunks: z.array(z.any()).optional(),
   expectOutput: OutputAssertionsSchema.optional(),
+  // If present, the turn is expected to throw an error (API misuse) rather than
+  // resolve with a graceful `finishReason: 'failed'` output. `status` is matched
+  // exactly and `message` as a substring.
+  expectError: z
+    .object({
+      status: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .optional(),
   captureSnapshotId: z.string().optional(),
 
   captureState: z.string().optional(),
@@ -579,6 +588,41 @@ async function executeSendInvocation(
     session.send(input);
   }
   session.close();
+
+  // expectError: the turn is expected to throw (API misuse) rather than resolve
+  // with a graceful `finishReason: 'failed'` output. Drain the stream and await
+  // the output, asserting that one of them throws an error whose `status`
+  // matches exactly and `message` contains the expected substring.
+  if (resolvedInvocation.expectError) {
+    const expectErr = resolvedInvocation.expectError;
+    let thrown: any;
+    try {
+      for await (const _chunk of session.stream) {
+        // Drain; the stream surfaces the thrown error.
+      }
+      await session.output;
+    } catch (e: any) {
+      thrown = e;
+    }
+    assert.ok(
+      thrown,
+      `Expected the turn to throw an error, but it resolved successfully.`
+    );
+    if (expectErr.status !== undefined) {
+      assert.strictEqual(
+        thrown.status,
+        expectErr.status,
+        `Expected thrown error.status '${expectErr.status}', got '${thrown.status}' (message: ${thrown.message})`
+      );
+    }
+    if (expectErr.message !== undefined) {
+      assert.ok(
+        thrown.message?.includes(expectErr.message),
+        `Expected thrown error.message to contain '${expectErr.message}', got: ${thrown.message}`
+      );
+    }
+    return;
+  }
 
   // Collect stream chunks
 

@@ -47,7 +47,9 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 | `streamChunks` | `GenerateResponseChunkData[][]` | Optional. Pre-programmed streaming chunks, indexed by model call. Each inner array is emitted as a stream before the corresponding `modelResponses` entry. |
 | `expectChunks` | `AgentStreamChunk[]` | **Strict ordered** list of expected stream chunks. |
 | `expectOutput` | Object | Expected fields on the `AgentOutput`. See [Output Assertions](#output-assertions). |
+| `expectError` | Object | Optional. Asserts the turn *throws* (rather than resolving with a graceful `finishReason: 'failed'` output). Used for API-misuse cases (e.g. sending `state` to a server-managed agent). Fields: `status` (matched exactly) and `message` (matched as a substring). Mutually exclusive with `expectOutput`. |
 | `captureSnapshotId` | `string` | Optional. Stores `output.snapshotId` under this name for use in later steps via `{{name}}`. |
+
 | `captureState` | `string` | Optional. Stores `output.state` under this name for use in later steps via `{{name}}`. |
 
 #### `getSnapshotData`
@@ -252,10 +254,11 @@ The spec currently covers the following categories (39 tests total):
 | Resume validation | Forged restart inputs rejected, non-existent tool respond rejected |
 | Snapshot chaining | Parent chain across steps |
 | Snapshot branching | Forking from a snapshot into independent histories |
-| Server-managed sessions by sessionId | Resume by `sessionId`, fetch latest snapshot by `sessionId`, branching session lookup rejected, non-UUID rejected, client-managed agent rejects `sessionId`, `snapshotId`+`sessionId` together rejected |
+| Server-managed sessions by sessionId | Resume by `sessionId`, fetch latest snapshot by `sessionId`, branching session lookup rejected, non-UUID `sessionId` accepted (any non-empty string), client-managed agent rejects `sessionId` (throws), `snapshotId`+`sessionId` mismatch rejected (throws) |
 | Client-managed state | State seeding across steps |
-| Server-managed state | Init state rejected for server-managed agents |
+| Server-managed state | Init state rejected for server-managed agents (throws) |
 | Detach | Background completion, background failure, pure detach without payload |
+
 | Abort | Pending agent, completed agent, non-existent snapshot, failed agent, already-aborted agent |
 | Error details | Failed snapshot includes error message |
 | Artifacts | Streamed chunks, deduplication by name, persistence across invocations (server-managed) |

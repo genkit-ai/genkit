@@ -380,22 +380,19 @@ export class SessionError extends Error {
   }
 }
 
-// Only UUID-shaped strings are accepted as a sessionId.
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
- * Validates that `sessionId` is a UUID, throwing a descriptive error otherwise.
+ * Validates that `sessionId` is a non-empty string, throwing a descriptive
+ * error otherwise.
  *
- * Session ids can be minted by the client, so we enforce a UUID shape to keep
- * them well-formed (and safe to use as a directory name in
+ * Session ids can be minted by the client and can be any non-empty string
+ * (e.g. a UUID, or an application-specific identifier). We only reject empty /
+ * blank values so the id stays usable as a key (and as a directory name in
  * {@link FileSessionStore}).
  */
 export function assertValidSessionId(sessionId: string): void {
-  if (!UUID_PATTERN.test(sessionId)) {
+  if (typeof sessionId !== 'string' || sessionId.trim() === '') {
     throw new Error(
-      `Invalid sessionId: expected a UUID, got "${sessionId}". ` +
-        `Session ids must be UUIDs (e.g. crypto.randomUUID()).`
+      `Invalid sessionId: expected a non-empty string, got "${sessionId}".`
     );
   }
 }
