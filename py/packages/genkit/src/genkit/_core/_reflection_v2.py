@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import traceback
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -100,7 +101,7 @@ class JsonRpcCallError(Exception):
 
 def _chunk_for_json(chunk: object) -> object:
     if isinstance(chunk, BaseModel):
-        return json.loads(chunk.model_dump_json())
+        return json.loads(chunk.model_dump_json(by_alias=True, exclude_none=True))
     return chunk
 
 
@@ -551,9 +552,17 @@ class ReflectionServerV2:
           3. Background task reads receive() → sends streamChunk notifications
           4. When output() resolves, send final runAction response
         """
-        # Parse init payload
         try:
-            init = AgentInit.model_validate(p.input) if p.input is not None else AgentInit()
+            agent_meta = (action.metadata or {}).get('agent')
+            has_store = isinstance(agent_meta, dict) and agent_meta.get('stateManagement') == 'server'
+
+            init = AgentInit.model_validate(p.input) if isinstance(p.input, dict) else AgentInit()
+
+            if has_store:
+                if not init.session_id and not init.snapshot_id:
+                    init.session_id = str(uuid.uuid4())
+                if init.state is not None:
+                    init.state = None
         except Exception as e:  # noqa: BLE001
             await self._send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid AgentInit input: {e}')
             return
