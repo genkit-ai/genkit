@@ -358,21 +358,19 @@ export default function CodingAgent() {
         // We don't use resume.restart for denial because that would re-trigger the
         // interrupt in a loop.
         turn = chat.sendStream({
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  text:
-                    `I denied the "${currentApproval.toolName}" tool call` +
-                    (currentApproval.toolName === 'run_shell'
-                      ? ` for command: "${currentApproval.input?.command}".`
-                      : ` for file: "${currentApproval.input?.filePath}".`) +
-                    ` Please continue without executing it, or suggest an alternative.`,
-                },
-              ],
-            },
-          ],
+          message: {
+            role: 'user',
+            content: [
+              {
+                text:
+                  `I denied the "${currentApproval.toolName}" tool call` +
+                  (currentApproval.toolName === 'run_shell'
+                    ? ` for command: "${currentApproval.input?.command}".`
+                    : ` for file: "${currentApproval.input?.filePath}".`) +
+                  ` Please continue without executing it, or suggest an alternative.`,
+              },
+            ],
+          },
         });
       }
 

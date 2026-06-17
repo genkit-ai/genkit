@@ -66,11 +66,10 @@ export const researchAgent = ai.defineCustomAgent(
     const session = ai.currentSession<ResearchState>();
 
     await sess.run(async (input) => {
-      const userText =
-        input.messages?.[input.messages.length - 1]?.content[0]?.text || '';
+      const userText = input.message?.content[0]?.text || '';
 
       // Build conversation history context (available for ALL steps).
-      // sess.run() adds the current input.messages to the session before
+      // sess.run() adds the current input.message to the session before
       // calling this handler, so getMessages() includes everything.
       const priorMessages = sess.getMessages();
       const historyContext =

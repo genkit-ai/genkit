@@ -879,7 +879,7 @@ async function executeWaitUntilCompletedInvocation(
 
   assert.ok(snapshotId, 'waitUntilCompleted invocation requires snapshotId');
 
-  const terminalStatuses = new Set(['done', 'failed', 'aborted']);
+  const terminalStatuses = new Set(['completed', 'failed', 'aborted']);
   const startTime = Date.now();
 
   let snapshot: any;

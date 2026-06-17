@@ -78,7 +78,7 @@ describe('InMemorySessionStore', () => {
       snapshotId: first,
       createdAt: new Date().toISOString(),
       event: 'turnEnd' as const,
-      status: 'done' as const,
+      status: 'completed' as const,
       state: { sessionId },
     }));
     await store.saveSnapshot(second, () => ({
@@ -86,7 +86,7 @@ describe('InMemorySessionStore', () => {
       parentId: first,
       createdAt: new Date().toISOString(),
       event: 'turnEnd' as const,
-      status: 'done' as const,
+      status: 'completed' as const,
       state: { sessionId },
     }));
 
@@ -110,7 +110,7 @@ describe('FileSessionStore', () => {
       parentId,
       createdAt: new Date().toISOString(),
       event: 'turnEnd',
-      status: 'done',
+      status: 'completed',
       state: { sessionId },
     };
   }
