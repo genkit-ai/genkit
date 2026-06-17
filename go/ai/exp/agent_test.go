@@ -4397,11 +4397,14 @@ func TestAgent_FinishReason_MultiTurnDistinct(t *testing.T) {
 	// Turn 0 reports "stop"; turn 1 reports "interrupted".
 	reasons := []AgentFinishReason{AgentFinishReasonStop, AgentFinishReasonInterrupted}
 
+	turn := 0
 	af := DefineCustomAgent(reg, "multiReasonFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
-				return &TurnResult{FinishReason: reasons[sess.TurnIndex]}, nil
+				r := reasons[turn]
+				turn++
+				return &TurnResult{FinishReason: r}, nil
 			})
 		},
 	)
@@ -4741,11 +4744,14 @@ func TestAgent_FinishReason_MultiTurnDistinct_Persisted(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	reasons := []AgentFinishReason{AgentFinishReasonStop, AgentFinishReasonInterrupted}
 
+	turn := 0
 	af := DefineCustomAgent(reg, "multiReasonPersistedFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.AddMessages(ai.NewModelTextMessage("ok"))
-				return &TurnResult{FinishReason: reasons[sess.TurnIndex]}, nil
+				r := reasons[turn]
+				turn++
+				return &TurnResult{FinishReason: r}, nil
 			})
 		},
 		WithSessionStore(store),

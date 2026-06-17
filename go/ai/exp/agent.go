@@ -47,16 +47,11 @@ import (
 type SessionRunner[State any] struct {
 	*Session[State]
 
-	// InputCh is the channel that delivers per-turn inputs from the client.
-	// It is consumed automatically by [SessionRunner.Run], but is exposed
-	// for advanced use cases that need direct access to the input stream
-	// (e.g., custom turn loops or fan-out patterns).
-	InputCh <-chan *AgentInput
-	// TurnIndex is the zero-based index of the current conversation turn.
-	// It is incremented automatically by [SessionRunner.Run], but is exposed
-	// for advanced use cases that need to track or manipulate turn ordering
-	// directly.
-	TurnIndex int
+	// inputCh delivers per-turn inputs from the client; consumed by Run.
+	inputCh <-chan *AgentInput
+	// turnIndex is the zero-based index of the current conversation turn,
+	// incremented by Run after each turn completes.
+	turnIndex int
 
 	onStartTurn       func()
 	onEndTurn         func(ctx context.Context)
@@ -151,7 +146,7 @@ type TurnResult struct {
 // failed [AgentOutput] carrying the error and the last-good state rather
 // than failing the action.
 func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Context, input *AgentInput) (*TurnResult, error)) error {
-	for input := range s.InputCh {
+	for input := range s.inputCh {
 		// Deep-copy at the framework boundary: an in-process caller
 		// retains the pointers it sent (message, resume parts) and may
 		// mutate them after Send returns, so everything past this point
@@ -164,7 +159,7 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			s.onStartTurn()
 		}
 		spanMeta := &tracing.SpanMetadata{
-			Name:    fmt.Sprintf("agent/turn/%d", s.TurnIndex),
+			Name:    fmt.Sprintf("agent/turn/%d", s.turnIndex),
 			Type:    "flowStep",
 			Subtype: "flowStep",
 		}
@@ -209,7 +204,7 @@ func (s *SessionRunner[State]) endTurn(ctx context.Context, reason AgentFinishRe
 	if !failed {
 		s.captureLastGood()
 	}
-	s.TurnIndex++
+	s.turnIndex++
 }
 
 // captureLastGood deep-copies the committed session state as the
@@ -778,7 +773,7 @@ func newAgentRuntime[State any](
 
 	rt.sess = &SessionRunner[State]{
 		Session: session,
-		InputCh: rt.intake.out(),
+		inputCh: rt.intake.out(),
 	}
 	if parent != nil {
 		// Resumed: chain the first turn's snapshot off the one we loaded, and
