@@ -319,15 +319,13 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
             }
 
             try {
-              // Build messages for the sub-agent.
-              const messages: MessageData[] = [];
-
               // Optionally include recent conversation history as context.
               // Only user/model messages are forwarded, and each is reduced to
               // its text parts. This avoids leaking tool/tool-request parts —
               // a model message mid-tool-loop can carry dangling `toolRequest`
               // parts with no matching tool response, which would confuse the
               // sub-agent model.
+              const historyMsgs: MessageData[] = [];
               if (historyLength > 0 && shared.conversationMessages.length > 0) {
                 const contextMsgs = shared.conversationMessages
                   .filter((m) => m.role === 'user' || m.role === 'model')
@@ -340,18 +338,31 @@ export const agents: GenerateMiddleware<typeof AgentsOptionsSchema> =
                     ),
                   }))
                   .filter((m) => m.content.length > 0);
-                messages.push(...contextMsgs);
+                historyMsgs.push(...contextMsgs);
               }
 
-              // The task itself as a user message.
-              messages.push({
-                role: 'user' as const,
-                content: [{ text: input.task }],
-              });
+              // The agent input accepts a single `message` (the task). Prior
+              // conversation is seeded via the session state (`init.state`),
+              // which only client-managed agents (no persistent store) accept —
+              // sending `state` to a server-managed agent throws a precondition
+              // error. Server-managed sub-agents can't be seeded with ad-hoc
+              // per-delegation history, so history forwarding is skipped for
+              // them (the task is still delivered).
+              const stateManagement =
+                agentAction.__action?.metadata?.agent?.stateManagement;
+              const init =
+                historyMsgs.length > 0 && stateManagement !== 'server'
+                  ? { state: { messages: historyMsgs } }
+                  : {};
 
               const actionResult = await agentAction.run(
-                { messages },
-                { init: {} }
+                {
+                  message: {
+                    role: 'user' as const,
+                    content: [{ text: input.task }],
+                  },
+                },
+                { init }
               );
               const agentOutput: AgentOutput = actionResult.result;
 
