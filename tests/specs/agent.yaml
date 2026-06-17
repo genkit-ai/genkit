@@ -23,7 +23,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: hi }] }]
+          - message: { role: user, content: [{ text: hi }] }
         modelResponses:
           - message: { role: model, content: [{ text: hello back }] }
             finishReason: stop
@@ -50,7 +50,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: hi }] }]
+          - message: { role: user, content: [{ text: hi }] }
         modelResponses:
           - message: { role: model, content: [{ text: hello back }] }
             finishReason: stop
@@ -65,7 +65,7 @@ tests:
       - type: getSnapshotData
         snapshotId: '{{snap1}}'
         expectSnapshot:
-          status: done
+          status: completed
           hasSessionId: true
 
   # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: hi }] }]
+          - message: { role: user, content: [{ text: hi }] }
         streamChunks:
           - [
               { index: 0, role: model, content: [{ text: 'hel' }] },
@@ -114,8 +114,8 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: turn1 }] }]
-          - messages: [{ role: user, content: [{ text: turn2 }] }]
+          - message: { role: user, content: [{ text: turn1 }] }
+          - message: { role: user, content: [{ text: turn2 }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
@@ -148,7 +148,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: do it }] }]
+          - message: { role: user, content: [{ text: do it }] }
         modelResponses:
           - message:
               role: model
@@ -194,7 +194,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: hello }] }]
+          - message: { role: user, content: [{ text: hello }] }
         modelResponses:
           - message:
               role: model
@@ -250,7 +250,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: do it }] }]
+          - message: { role: user, content: [{ text: do it }] }
         modelResponses:
           - message:
               role: model
@@ -305,7 +305,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: do it }] }]
+          - message: { role: user, content: [{ text: do it }] }
         modelResponses:
           - message:
               role: model
@@ -357,7 +357,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: hello }] }]
+          - message: { role: user, content: [{ text: hello }] }
         modelResponses:
           - message:
               role: model
@@ -407,7 +407,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
@@ -416,7 +416,7 @@ tests:
       - type: send
         init: { snapshotId: '{{snap1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
@@ -426,7 +426,7 @@ tests:
         snapshotId: '{{snap2}}'
         expectSnapshot:
           parentId: '{{snap1}}'
-          status: done
+          status: completed
           hasSessionId: true
           stateContains:
             messages:
@@ -449,7 +449,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
@@ -459,7 +459,7 @@ tests:
       - type: send
         init: { state: '{{state1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
@@ -491,7 +491,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: process this }] }]
+          - message: { role: user, content: [{ text: process this }] }
             detach: true
         modelResponses:
           - message: { role: model, content: [{ text: done in background }] }
@@ -503,7 +503,7 @@ tests:
       - type: waitUntilCompleted
         snapshotId: '{{snap1}}'
         expectSnapshot:
-          status: done
+          status: completed
           stateContains:
             messages:
               - { role: user, content: [{ text: process this }] }
@@ -518,7 +518,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: fail }] }]
+          - message: { role: user, content: [{ text: fail }] }
             detach: true
         expectOutput:
           hasSnapshotId: true
@@ -545,7 +545,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: do work }] }]
+          - message: { role: user, content: [{ text: do work }] }
             detach: true
         expectOutput:
           hasSnapshotId: true
@@ -571,7 +571,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: hi }] }]
+          - message: { role: user, content: [{ text: hi }] }
         modelResponses:
           - message: { role: model, content: [{ text: hello }] }
             finishReason: stop
@@ -579,12 +579,12 @@ tests:
 
       - type: abort
         snapshotId: '{{snap1}}'
-        expectPreviousStatus: done
+        expectPreviousStatus: completed
 
       - type: getSnapshotData
         snapshotId: '{{snap1}}'
         expectSnapshot:
-          status: done
+          status: completed
 
   - name: server-managed agent rejects init state
     description: >
@@ -601,7 +601,7 @@ tests:
             custom: { shouldBeIgnored: true }
             artifacts: []
         inputs:
-          - messages: [{ role: user, content: [{ text: fresh message }] }]
+          - message: { role: user, content: [{ text: fresh message }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply }] }
             finishReason: stop
@@ -623,7 +623,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: work }] }]
+          - message: { role: user, content: [{ text: work }] }
           - detach: true
         expectOutput:
           hasSnapshotId: true
@@ -647,7 +647,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: fail }] }]
+          - message: { role: user, content: [{ text: fail }] }
             detach: true
         expectOutput:
           hasSnapshotId: true
@@ -684,7 +684,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: go }] }]
+          - message: { role: user, content: [{ text: go }] }
         expectChunks:
           - artifact: { name: doc1, parts: [{ text: v1 }] }
           - artifact: { name: doc1, parts: [{ text: v2 }] }
@@ -710,7 +710,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: go }] }]
+          - message: { role: user, content: [{ text: go }] }
         expectOutput:
           message: { role: model, content: [{ text: done }] }
           stateContains:
@@ -726,7 +726,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         expectOutput:
           stateContains:
             custom: { counter: 1 }
@@ -735,7 +735,7 @@ tests:
       - type: send
         init: { state: '{{state1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         expectOutput:
           stateContains:
             custom: { counter: 2 }
@@ -758,7 +758,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: go }] }]
+          - message: { role: user, content: [{ text: go }] }
         expectChunks:
           - customPatch:
               - { op: replace, path: '', value: { counter: 1 } }
@@ -781,7 +781,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: go }] }]
+          - message: { role: user, content: [{ text: go }] }
         expectChunks:
           # First mutation -> whole-document replace at root.
           - customPatch:
@@ -816,7 +816,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: go }] }]
+          - message: { role: user, content: [{ text: go }] }
             detach: true
         # No customPatch (or any) chunks are streamed for a detached run.
         expectChunks: []
@@ -827,7 +827,7 @@ tests:
       - type: waitUntilCompleted
         snapshotId: '{{snap1}}'
         expectSnapshot:
-          status: done
+          status: completed
           stateContains:
             custom: { counter: 1 }
 
@@ -848,7 +848,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: root }] }]
+          - message: { role: user, content: [{ text: root }] }
         modelResponses:
           - message: { role: model, content: [{ text: rootReply }] }
             finishReason: stop
@@ -857,7 +857,7 @@ tests:
       - type: send
         init: { snapshotId: '{{snap1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: branch-a }] }]
+          - message: { role: user, content: [{ text: branch-a }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply-a }] }
             finishReason: stop
@@ -866,7 +866,7 @@ tests:
       - type: send
         init: { snapshotId: '{{snap1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: branch-b }] }]
+          - message: { role: user, content: [{ text: branch-b }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply-b }] }
             finishReason: stop
@@ -876,7 +876,7 @@ tests:
         snapshotId: '{{snap2a}}'
         expectSnapshot:
           parentId: '{{snap1}}'
-          status: done
+          status: completed
           stateContains:
             messages:
               - { role: user, content: [{ text: root }] }
@@ -888,7 +888,7 @@ tests:
         snapshotId: '{{snap2b}}'
         expectSnapshot:
           parentId: '{{snap1}}'
-          status: done
+          status: completed
           stateContains:
             messages:
               - { role: user, content: [{ text: root }] }
@@ -909,7 +909,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: do both }] }]
+          - message: { role: user, content: [{ text: do both }] }
         modelResponses:
           - message:
               role: model
@@ -950,7 +950,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: confirm both }] }]
+          - message: { role: user, content: [{ text: confirm both }] }
         modelResponses:
           - message:
               role: model
@@ -1007,7 +1007,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: check }] }]
+          - message: { role: user, content: [{ text: check }] }
         modelResponses:
           - message:
               role: model
@@ -1036,7 +1036,7 @@ tests:
       - type: getSnapshotData
         snapshotId: '{{snap2}}'
         expectSnapshot:
-          status: done
+          status: completed
           stateContains:
             messages:
               - { role: user, content: [{ text: check }] }
@@ -1071,7 +1071,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         expectOutput:
           hasSnapshotId: true
           artifactsContain:
@@ -1082,7 +1082,7 @@ tests:
       - type: send
         init: { snapshotId: '{{snap1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         expectOutput:
           artifactsContain:
             - name: doc1
@@ -1103,19 +1103,19 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         captureSnapshotId: snap1
 
       - type: send
         init: { snapshotId: '{{snap1}}' }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         captureSnapshotId: snap2
 
       - type: getSnapshotData
         snapshotId: '{{snap2}}'
         expectSnapshot:
-          status: done
+          status: completed
           stateContains:
             custom: { counter: 2 }
             messages:
@@ -1135,7 +1135,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: fail }] }]
+          - message: { role: user, content: [{ text: fail }] }
             detach: true
         expectOutput:
           hasSnapshotId: true
@@ -1165,7 +1165,7 @@ tests:
       - type: send
         init: {}
         inputs:
-          - messages: [{ role: user, content: [{ text: work }] }]
+          - message: { role: user, content: [{ text: work }] }
             detach: true
         expectOutput:
           hasSnapshotId: true
@@ -1208,7 +1208,7 @@ tests:
       - type: send
         init: { sessionId: 11111111-1111-4111-8111-111111111111 }
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
@@ -1219,7 +1219,7 @@ tests:
       - type: send
         init: { sessionId: 11111111-1111-4111-8111-111111111111 }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
@@ -1229,7 +1229,7 @@ tests:
         snapshotId: '{{snap2}}'
         expectSnapshot:
           parentId: '{{snap1}}'
-          status: done
+          status: completed
           stateContains:
             sessionId: 11111111-1111-4111-8111-111111111111
             messages:
@@ -1251,7 +1251,7 @@ tests:
       - type: send
         init: { sessionId: 22222222-2222-4222-8222-222222222222 }
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
@@ -1260,7 +1260,7 @@ tests:
       - type: send
         init: { sessionId: 22222222-2222-4222-8222-222222222222 }
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
@@ -1269,7 +1269,7 @@ tests:
         sessionId: 22222222-2222-4222-8222-222222222222
         expectSnapshot:
           parentId: '{{snap1}}'
-          status: done
+          status: completed
           hasSessionId: true
           stateContains:
             sessionId: 22222222-2222-4222-8222-222222222222
@@ -1291,7 +1291,7 @@ tests:
       - type: send
         init: { sessionId: not-a-uuid }
         inputs:
-          - messages: [{ role: user, content: [{ text: hi }] }]
+          - message: { role: user, content: [{ text: hi }] }
         modelResponses:
           - message: { role: model, content: [{ text: hello }] }
             finishReason: stop
@@ -1315,7 +1315,7 @@ tests:
       - type: send
         init: { sessionId: 44444444-4444-4444-8444-444444444444 }
         inputs:
-          - messages: [{ role: user, content: [{ text: hi }] }]
+          - message: { role: user, content: [{ text: hi }] }
         modelResponses:
           - message: { role: model, content: [{ text: hello }] }
             finishReason: stop
@@ -1339,7 +1339,7 @@ tests:
       - type: send
         init: { sessionId: 55555555-5555-4555-8555-555555555555 }
         inputs:
-          - messages: [{ role: user, content: [{ text: first }] }]
+          - message: { role: user, content: [{ text: first }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
@@ -1350,7 +1350,7 @@ tests:
           snapshotId: '{{snap1}}'
           sessionId: 55555555-5555-4555-8555-555555555555
         inputs:
-          - messages: [{ role: user, content: [{ text: second }] }]
+          - message: { role: user, content: [{ text: second }] }
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
