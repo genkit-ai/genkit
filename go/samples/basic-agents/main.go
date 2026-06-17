@@ -115,7 +115,6 @@ func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 			ai.WithSystem("You are a sarcastic pirate. Keep responses concise."),
 		),
 		aix.WithSessionStore(mustStore(name)),
-		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 		aix.WithDescription[any]("Sarcastic pirate (inline-defined prompt)"),
 	)
 }
@@ -134,7 +133,6 @@ func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	return genkit.DefineAgent(g, name,
 		aix.FromPrompt(ChatPromptInput{Personality: "a Michelin-starred chef who loves explaining technique"}),
 		aix.WithSessionStore(mustStore(name)),
-		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
 	)
 }
@@ -183,7 +181,6 @@ func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 			return sess.Result(), nil
 		},
 		aix.WithSessionStore(mustStore(name)),
-		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 		aix.WithDescription[any]("Concise code helper (custom per-turn loop)"),
 	)
 }

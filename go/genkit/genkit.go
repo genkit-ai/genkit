@@ -427,7 +427,7 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 //     loaded from a .prompt file).
 //
 // The State type parameter is inferred from the typed agent options
-// (e.g. [aix.WithSessionStore], [aix.WithSnapshotOn]); pass an explicit
+// (e.g. [aix.WithSessionStore], [aix.WithStateTransform]); pass an explicit
 // [State] only when no typed option is provided.
 //
 // The returned agent is an [api.BidiAction]; pass it to [Handler] to
@@ -441,8 +441,6 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In
 // # Options
 //
 //   - [aix.WithSessionStore]: Enable snapshot persistence
-//   - [aix.WithSnapshotCallback]: Control when snapshots are created
-//   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
 // Example (inline prompt):
@@ -496,8 +494,6 @@ func DefineAgent[State any](
 // # Options
 //
 //   - [aix.WithSessionStore]: Enable snapshot persistence
-//   - [aix.WithSnapshotCallback]: Control when snapshots are created
-//   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
 //   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
 // The State type parameter is the shape of the conversation's custom state

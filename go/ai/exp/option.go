@@ -48,7 +48,6 @@ type StateTransform[State any] = func(ctx context.Context, state *SessionState[S
 
 type agentOptions[State any] struct {
 	store       SessionStore[State]
-	callback    SnapshotCallback[State]
 	transform   StateTransform[State]
 	description string
 }
@@ -59,12 +58,6 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 			return errors.New("cannot set session store more than once (WithSessionStore)")
 		}
 		opts.store = o.store
-	}
-	if o.callback != nil {
-		if opts.callback != nil {
-			return errors.New("cannot set snapshot callback more than once (WithSnapshotCallback)")
-		}
-		opts.callback = o.callback
 	}
 	if o.transform != nil {
 		if opts.transform != nil {
@@ -87,26 +80,6 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 // that lacks that interface are rejected at runtime.
 func WithSessionStore[State any](store SessionStore[State]) AgentOption[State] {
 	return &agentOptions[State]{store: store}
-}
-
-// WithSnapshotCallback configures when snapshots are created.
-// If not provided and a store is configured, snapshots are always created.
-func WithSnapshotCallback[State any](cb SnapshotCallback[State]) AgentOption[State] {
-	return &agentOptions[State]{callback: cb}
-}
-
-// WithSnapshotOn configures snapshots to be created only for the specified events.
-// For example, WithSnapshotOn[MyState](SnapshotEventTurnEnd) skips the
-// invocation-end snapshot.
-func WithSnapshotOn[State any](events ...SnapshotEvent) AgentOption[State] {
-	set := make(map[SnapshotEvent]struct{}, len(events))
-	for _, e := range events {
-		set[e] = struct{}{}
-	}
-	return WithSnapshotCallback(func(_ context.Context, sc *SnapshotContext[State]) bool {
-		_, ok := set[sc.Event]
-		return ok
-	})
 }
 
 // WithStateTransform registers a transform applied to session state on

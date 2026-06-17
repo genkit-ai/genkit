@@ -30,22 +30,6 @@ import (
 
 // --- Snapshot ---
 
-// SnapshotContext provides context for snapshot decision callbacks.
-type SnapshotContext[State any] struct {
-	// State is the current state that will be snapshotted if the callback returns true.
-	State *SessionState[State]
-	// PrevState is the state at the last snapshot, or nil if none exists.
-	PrevState *SessionState[State]
-	// TurnIndex is the turn number in the current invocation.
-	TurnIndex int
-	// Event is what triggered this snapshot check.
-	Event SnapshotEvent
-}
-
-// SnapshotCallback decides whether to create a snapshot.
-// If not provided and a store is configured, snapshots are always created.
-type SnapshotCallback[State any] = func(ctx context.Context, sc *SnapshotContext[State]) bool
-
 // applyTransform returns the result of applying t to state, or state
 // unchanged if t is nil. A nil state is returned as-is.
 func applyTransform[State any](ctx context.Context, t StateTransform[State], state *SessionState[State]) *SessionState[State] {
@@ -108,8 +92,8 @@ type SnapshotWriter[State any] interface {
 	//   - UpdatedAt: stamped to the wall clock on every commit.
 	//   - Status: if the snapshot returned by fn has Status="", it is
 	//     defaulted to [SnapshotStatusCompleted] (the common case for
-	//     synchronous turn-end and invocation-end writes). Callers
-	//     writing a pending row must set Status explicitly.
+	//     synchronous turn-end writes). Callers writing a pending row must
+	//     set Status explicitly.
 	//
 	// fn receives the existing snapshot (or nil if id is empty or the
 	// row does not exist) and returns the snapshot to commit, or
@@ -337,10 +321,9 @@ func newSnapshotActions[State any](
 // Session holds conversation state and provides thread-safe read/write
 // access to messages, custom state, and artifacts.
 type Session[State any] struct {
-	mu      sync.RWMutex
-	state   SessionState[State]
-	store   SessionStore[State]
-	version uint64 // incremented on every mutation; used to skip redundant snapshots
+	mu    sync.RWMutex
+	state SessionState[State]
+	store SessionStore[State]
 
 	// onCustomChange, when set by the agent runtime, is invoked after every
 	// UpdateCustom mutation (outside the lock) so the runtime can emit a
@@ -393,7 +376,6 @@ func (s *Session[State]) AddMessages(messages ...*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Messages = append(s.state.Messages, messages...)
-	s.version++
 }
 
 // SetMessages replaces the conversation history with the given messages.
@@ -401,7 +383,6 @@ func (s *Session[State]) SetMessages(messages []*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Messages = messages
-	s.version++
 }
 
 // UpdateMessages atomically reads the current messages, applies the given
@@ -412,7 +393,6 @@ func (s *Session[State]) UpdateMessages(fn func([]*ai.Message) []*ai.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Messages = fn(s.state.Messages)
-	s.version++
 }
 
 // Custom returns the current user-defined custom state.
@@ -445,7 +425,6 @@ func (s *Session[State]) customJSON() any {
 func (s *Session[State]) UpdateCustom(fn func(State) State) {
 	s.mu.Lock()
 	s.state.Custom = fn(s.state.Custom)
-	s.version++
 	s.mu.Unlock()
 	// Emit the customPatch delta after releasing the lock: the hook reads
 	// session state (and may send on the wire), neither of which is safe to
@@ -487,7 +466,6 @@ func (s *Session[State]) AddArtifacts(artifacts ...*Artifact) {
 			s.state.Artifacts = append(s.state.Artifacts, a)
 		}
 	}
-	s.version++
 }
 
 // UpdateArtifacts atomically reads the current artifacts, applies the given
@@ -498,7 +476,6 @@ func (s *Session[State]) UpdateArtifacts(fn func([]*Artifact) []*Artifact) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Artifacts = fn(s.state.Artifacts)
-	s.version++
 }
 
 // copyStateLocked returns a deep copy of the state. Caller must hold mu (read or write).

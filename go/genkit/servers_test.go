@@ -766,7 +766,6 @@ func TestHandlerAgent(t *testing.T) {
 	}
 	DefineAgent(g, "agentServer", aix.FromInline(ai.WithModelName("test/echo")),
 		aix.WithSessionStore(store),
-		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
 
 	// Agents register under their own action type, so they surface through
@@ -972,7 +971,6 @@ func TestHandlerAgentRef(t *testing.T) {
 	}
 	agent := DefineAgent(g, "agentRef", aix.FromInline(ai.WithModelName("test/echo")),
 		aix.WithSessionStore(store),
-		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
 
 	// Handlers come straight off the ref; no registry iteration involved.

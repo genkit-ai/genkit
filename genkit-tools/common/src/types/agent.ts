@@ -37,30 +37,6 @@ export const ArtifactSchema = z.object({
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
 /**
- * Zod schema for snapshot event.
- *
- * - `turnEnd`: snapshot was triggered at the end of a turn.
- * - `invocationEnd`: snapshot was triggered at the end of the invocation.
- * - `detach`: snapshot was created when the client detached the invocation
- *   and the flow continues in the background. Initially written with
- *   `pending` status (and empty state) and rewritten with a terminal
- *   status and the final cumulative state once the background work
- *   finishes.
- * - `recovery`: snapshot was written retroactively by the failure path to
- *   preserve the last-good state (everything through the last successful
- *   turn) when a selective snapshot callback had skipped persisting it.
- *   It is a normal `completed` row carrying the last good turn's
- *   `finishReason`, resumable like any other; the callback is bypassed.
- */
-export const SnapshotEventSchema = z.enum([
-  'turnEnd',
-  'invocationEnd',
-  'detach',
-  'recovery',
-]);
-export type SnapshotEvent = z.infer<typeof SnapshotEventSchema>;
-
-/**
  * Zod schema for a snapshot's lifecycle status.
  *
  * - `pending`: a detached invocation is still processing the queued inputs.
@@ -236,13 +212,12 @@ export const AgentOutputSchema = z.object({
    */
   sessionId: z.string().optional(),
   /**
-   * ID of the newest snapshot capturing this invocation: the
-   * invocation-end snapshot, or the latest earlier snapshot when that
-   * write was skipped. Empty when no store is configured or the
-   * invocation persisted nothing. When `finishReason` is `detached` it
-   * is the pending detach snapshot; when `failed`, the most recent
-   * snapshot capturing the last-good state: everything through the last
-   * successful turn (see the `recovery` snapshot event).
+   * ID of the most recent turn-end snapshot for this invocation. Empty
+   * when no store is configured or no turn committed. When `finishReason`
+   * is `detached` it is the pending detach snapshot; when `failed`, it is
+   * the last committed turn's snapshot (the resume point, holding state
+   * through the last successful turn and excluding the failed turn's
+   * partial mutations).
    */
   snapshotId: z.string().optional(),
   /**
@@ -284,9 +259,8 @@ export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 export const TurnEndSchema = z.object({
   /**
    * ID of the snapshot persisted at the end of this turn. Empty if no
-   * snapshot was written (no store configured, the callback declined,
-   * nothing changed since the last snapshot, or snapshots were suspended
-   * after detach).
+   * snapshot was written (no store configured, the turn failed, or
+   * snapshots were suspended after detach).
    */
   snapshotId: z.string().optional(),
   /**
@@ -391,8 +365,6 @@ export const SessionSnapshotSchema = z.object({
   createdAt: z.string(),
   /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
   updatedAt: z.string().optional(),
-  /** What triggered this snapshot. */
-  event: SnapshotEventSchema,
   /** Lifecycle state of this snapshot. Empty is treated as `completed`. */
   status: SnapshotStatusSchema.optional(),
   /**

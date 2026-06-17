@@ -44,7 +44,6 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 				return &exp.SessionSnapshot[testState]{
 					SessionID: sessionID,
 					ParentID:  parentID,
-					Event:     exp.SnapshotEventTurnEnd,
 					Status:    status,
 					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
 				}, nil
@@ -90,7 +89,6 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 					return &exp.SessionSnapshot[testState]{
 						SessionID: rewrite,
 						ParentID:  existing.ParentID,
-						Event:     existing.Event,
 						Status:    exp.SnapshotStatusCompleted,
 						State:     &exp.SessionState[testState]{Custom: testState{Counter: 2}},
 					}, nil

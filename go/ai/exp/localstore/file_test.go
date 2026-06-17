@@ -459,7 +459,6 @@ func TestFileSessionStore_GetLatestSnapshot_SkipsUnparseableFiles(t *testing.T) 
 		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 			return &exp.SessionSnapshot[testState]{
 				SessionID: "sess-1",
-				Event:     exp.SnapshotEventTurnEnd,
 				Status:    exp.SnapshotStatusCompleted,
 			}, nil
 		}); err != nil {

@@ -204,13 +204,12 @@ type AgentOutput[State any] struct {
 	// invocation; only a session with persisted snapshots can be resumed by
 	// this ID.
 	SessionID string `json:"sessionId,omitempty"`
-	// SnapshotID is the ID of the newest snapshot capturing this invocation:
-	// the invocation-end snapshot, or the latest earlier snapshot when that
-	// write was skipped. Empty when no store is configured or the invocation
-	// persisted nothing. When FinishReason is [AgentFinishReasonDetached] it
-	// is the pending detach snapshot; when [AgentFinishReasonFailed], the most
-	// recent snapshot capturing the last-good state: everything through the
-	// last successful turn (see [SnapshotEventRecovery]).
+	// SnapshotID is the ID of the most recent turn-end snapshot for this
+	// invocation. Empty when no store is configured or no turn committed. When
+	// FinishReason is [AgentFinishReasonDetached] it is the pending detach
+	// snapshot; when [AgentFinishReasonFailed], it is the last committed turn's
+	// snapshot (the resume point, holding state through the last successful turn
+	// and excluding the failed turn's partial mutations).
 	SnapshotID string `json:"snapshotId,omitempty"`
 	// State contains the final conversation state.
 	// Only populated when state is client-managed (no store configured).
@@ -359,8 +358,6 @@ type SessionSnapshot[State any] struct {
 	// Error is the structured failure information for a snapshot in
 	// [SnapshotStatusFailed]. Nil otherwise.
 	Error *core.GenkitError `json:"error,omitempty"`
-	// Event is what triggered this snapshot.
-	Event SnapshotEvent `json:"event"`
 	// FinishReason is the semantic reason the turn or invocation captured here
 	// ended (e.g. [AgentFinishReasonStop], [AgentFinishReasonInterrupted],
 	// [AgentFinishReasonFailed], [AgentFinishReasonAborted]). It complements
@@ -414,29 +411,6 @@ type SessionState[State any] struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
-// SnapshotEvent identifies what triggered a snapshot.
-type SnapshotEvent string
-
-const (
-	// SnapshotEventTurnEnd indicates the snapshot was triggered at the end of a turn.
-	SnapshotEventTurnEnd SnapshotEvent = "turnEnd"
-	// SnapshotEventInvocationEnd indicates the snapshot was triggered at the end
-	// of the invocation.
-	SnapshotEventInvocationEnd SnapshotEvent = "invocationEnd"
-	// SnapshotEventDetach indicates the snapshot was created when the client
-	// detached the invocation and the work continues in the background. The
-	// snapshot is initially written with [SnapshotStatusPending] and rewritten
-	// with a terminal status once the background work finishes.
-	SnapshotEventDetach SnapshotEvent = "detach"
-	// SnapshotEventRecovery indicates the snapshot was written retroactively
-	// by the failure path to preserve the last-good state (everything through
-	// the last successful turn) when a selective snapshot callback had skipped
-	// persisting it. It is a normal [SnapshotStatusCompleted] row carrying the
-	// last good turn's finish reason, resumable like any other; the snapshot
-	// callback is bypassed and never sees this event.
-	SnapshotEventRecovery SnapshotEvent = "recovery"
-)
-
 // SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
 // written for synchronous turns or invocations are always
 // [SnapshotStatusCompleted] (an empty value is also treated as completed
@@ -482,8 +456,7 @@ type TurnEnd struct {
 	// sends fail with [core.ErrActionCompleted].
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
-	// Empty if no snapshot was written (no store configured, the callback
-	// declined, nothing changed since the last snapshot, or snapshots were
-	// suspended after detach).
+	// Empty if no snapshot was written (no store configured, the turn failed, or
+	// snapshots were suspended after detach).
 	SnapshotID string `json:"snapshotId,omitempty"`
 }

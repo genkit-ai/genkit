@@ -67,7 +67,6 @@ func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 	}
 	genkit.DefineAgent(g, "serverChat", aix.FromInline(ai.WithModelName("test/echo")),
 		aix.WithSessionStore(store),
-		aix.WithSnapshotOn[any](aix.SnapshotEventTurnEnd),
 	)
 	genkit.DefineAgent[any](g, "clientChat", aix.FromInline(ai.WithModelName("test/echo")))
 	genkit.DefineFlow(g, "greet", func(ctx context.Context, name string) (string, error) {

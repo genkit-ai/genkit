@@ -269,9 +269,6 @@
         "updatedAt": {
           "type": "string"
         },
-        "event": {
-          "$ref": "#/$defs/SnapshotEvent"
-        },
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
         },
@@ -287,8 +284,7 @@
       },
       "required": [
         "snapshotId",
-        "createdAt",
-        "event"
+        "createdAt"
       ],
       "additionalProperties": false
     },
@@ -313,15 +309,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "SnapshotEvent": {
-      "type": "string",
-      "enum": [
-        "turnEnd",
-        "invocationEnd",
-        "detach",
-        "recovery"
-      ]
     },
     "SnapshotStatus": {
       "type": "string",
