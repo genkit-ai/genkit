@@ -214,6 +214,7 @@ class ReflectionServerV2:
         data: object | None = None,
     ) -> None:
         """Emit a JSON-RPC error."""
+        logger.error(f'reflection V2 error: {message} (code={code}, id={req_id})')
         err: dict[str, Any] = {'code': code, 'message': _coerce_json_rpc_message(message)}
         if data is not None:
             err['data'] = data
@@ -556,7 +557,7 @@ class ReflectionServerV2:
             agent_meta = (action.metadata or {}).get('agent')
             has_store = isinstance(agent_meta, dict) and agent_meta.get('stateManagement') == 'server'
 
-            init = AgentInit.model_validate(p.input) if isinstance(p.input, dict) else AgentInit()
+            init = AgentInit.model_validate(p.init) if isinstance(p.init, dict) else AgentInit()
 
             if has_store:
                 if not init.session_id and not init.snapshot_id:
@@ -569,7 +570,7 @@ class ReflectionServerV2:
 
         ctx, labels = self._run_action_call_options(p)
         trace_holder: list[str | None] = [None]
-        on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=False)
+        on_trace_start = self._trace_start_callback(sid, trace_holder, register_for_cancel=True)
 
         try:
             conn = await action.stream_bidi(
@@ -578,29 +579,26 @@ class ReflectionServerV2:
                 on_trace_start=on_trace_start,
                 telemetry_labels=labels,
             )
+            self._bidi_connections[sid] = conn
+
+            if not p.stream_input:
+                inp = AgentInput.model_validate(p.input) if p.input is not None else AgentInput()
+                await conn.send(inp)
+                await conn.close()
+
+            async for chunk in conn.receive():
+                await self._notify_stream_chunk(sid, chunk)
+
+            out = await conn.output()
+            await self._respond_run_action_success(
+                sid,
+                out,
+                conn.trace_id or trace_holder[0],
+            )
         except (asyncio.CancelledError, Exception) as e:
             await self._send_run_action_error(sid, e, trace_holder)
-            return
-
-        self._bidi_connections[sid] = conn
-
-        async def _run() -> None:
-            try:
-                async for chunk in conn.receive():
-                    await self._notify_stream_chunk(sid, chunk)
-
-                out = await conn.output()
-                await self._respond_run_action_success(
-                    sid,
-                    out,
-                    conn.trace_id or trace_holder[0],
-                )
-            except (asyncio.CancelledError, Exception) as e:
-                await self._send_run_action_error(sid, e, trace_holder)
-            finally:
-                self._bidi_connections.pop(sid, None)
-
-        asyncio.create_task(_run())
+        finally:
+            self._bidi_connections.pop(sid, None)
 
     async def _handle_list_actions(self, req_id: str | int | None, _: dict[str, Any]) -> None:
         if req_id is None:
@@ -707,7 +705,7 @@ class ReflectionServerV2:
             return
 
         # --- Bidi (agent) path ---
-        if isinstance(action, BidiAction) or bool(p.stream_input):
+        if isinstance(action, BidiAction):
             if not isinstance(action, BidiAction):
                 await self._send_error(
                     sid,
