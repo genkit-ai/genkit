@@ -266,7 +266,7 @@ export class GenkitChatTransport implements ChatTransport<UIMessage> {
       }
 
       const genkitMsg = mapUIMessageToGenkit(lastUserMsg);
-      agentInput = { messages: [genkitMsg] };
+      agentInput = { message: genkitMsg };
     }
 
     // Call streamFlow — Genkit's native streaming protocol.
