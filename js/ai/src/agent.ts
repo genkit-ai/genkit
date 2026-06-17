@@ -85,10 +85,12 @@ export const AgentInitSchema = z.object({
 /**
  * Initialization options for an agent turn.
  *
- * For server-managed agents (with a `store`) provide *either* a `snapshotId`
- * (resume an exact snapshot, required for branching/snapshotting clients) *or*
- * a `sessionId` (resume the session's latest snapshot - the simple case used
- * by `useChat`-style clients). For client-managed agents (no store) provide
+ * For server-managed agents (with a `store`) provide a `snapshotId` (resume an
+ * exact snapshot, required for branching/snapshotting clients) and/or a
+ * `sessionId` (resume the session's latest snapshot - the simple case used by
+ * `useChat`-style clients). When both are provided, `snapshotId` selects the
+ * snapshot to resume and `sessionId` acts as an ownership guard: the snapshot
+ * must belong to that session. For client-managed agents (no store) provide
  * the full `state`.
  */
 export interface AgentInit<S = unknown> {
@@ -816,16 +818,6 @@ async function resolveSession<State>(
         `a server-managed store. Send 'snapshotId' or 'sessionId' instead.`,
     });
   }
-  if (init?.snapshotId && init?.sessionId) {
-    throw new GenkitError({
-      status: 'INVALID_ARGUMENT',
-      message:
-        `Cannot send both 'snapshotId' and 'sessionId' to agent ` +
-        `'${config.name}'. Provide exactly one (snapshotId for an exact ` +
-        `snapshot, sessionId for the session's latest snapshot).`,
-    });
-  }
-
   if (init?.snapshotId) {
     const snapshot = await store.getSnapshot({
       snapshotId: init.snapshotId,
@@ -835,6 +827,19 @@ async function resolveSession<State>(
       throw new GenkitError({
         status: 'NOT_FOUND',
         message: `Snapshot ${init.snapshotId} not found`,
+      });
+    }
+    // When both `snapshotId` and `sessionId` are supplied, `snapshotId` selects
+    // the exact snapshot to resume and `sessionId` acts as an ownership guard:
+    // the snapshot must belong to that session. Reject the mismatch instead of
+    // silently resuming a snapshot from a different conversation.
+    if (init.sessionId && snapshot.state?.sessionId !== init.sessionId) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          `Snapshot ${init.snapshotId} does not belong to session ` +
+          `${init.sessionId} (it belongs to ` +
+          `${snapshot.state?.sessionId ?? 'an unknown session'}).`,
       });
     }
     // Only `completed` snapshots are resumable. A failed/aborted/pending
