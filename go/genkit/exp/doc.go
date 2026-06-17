@@ -18,12 +18,13 @@
 Package exp holds experimental genkit helpers that are still taking shape.
 It currently provides:
 
-  - An HTTP route layout for serving agents and flows: the [Route] value, the
-    [AgentRoutes] / [AllAgentRoutes] / [FlowRoutes] / [AllFlowRoutes] builders,
-    and [Mount]. The handlers themselves come from the stable genkit package
-    ([genkit.Handler]); this package only lays out which paths map to which
-    actions, so the routing layer can evolve without touching genkit's stable
-    surface.
+  - An HTTP route layout for serving agents and flows: the [Route] value and
+    the [AgentRoutes] / [AllAgentRoutes] / [FlowRoutes] / [AllFlowRoutes]
+    builders. Range over the routes and wire each onto an [http.ServeMux] (or
+    any router) with [Route.Pattern] and [Route.Handler]. The handlers
+    themselves come from the stable genkit package ([genkit.Handler]); this
+    package only lays out which paths map to which actions, so the routing
+    layer can evolve without touching genkit's stable surface.
 
   - A channel-based streaming flow constructor, [DefineStreamingFlow]: an
     alternative to the callback-based [genkit.DefineStreamingFlow] for logic

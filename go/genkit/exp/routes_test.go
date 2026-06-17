@@ -144,15 +144,18 @@ func TestAllFlowRoutes(t *testing.T) {
 	}
 }
 
-// TestMount exercises the full path: build the all-agents layout, mount it
-// on a ServeMux, and drive the resulting endpoints. It proves every route
-// speaks the same enveloped Handler transport (the turn and the getSnapshot
-// companion alike) and that a client-managed agent has only its turn route.
-func TestMount(t *testing.T) {
+// TestRoutesServedOverServeMux exercises the full path: build the all-agents
+// layout, wire it onto a ServeMux, and drive the resulting endpoints. It
+// proves every route speaks the same enveloped Handler transport (the turn
+// and the getSnapshot companion alike) and that a client-managed agent has
+// only its turn route.
+func TestRoutesServedOverServeMux(t *testing.T) {
 	g := newRouteTestGenkit(t)
 
 	mux := http.NewServeMux()
-	Mount(mux, AllAgentRoutes(g))
+	for _, route := range AllAgentRoutes(g) {
+		mux.HandleFunc(route.Pattern(), route.Handler())
+	}
 
 	do := func(t *testing.T, method, path, body string) (int, string) {
 		t.Helper()

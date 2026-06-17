@@ -153,8 +153,8 @@ func main() {
 	)
 
 	// genkitx.AllAgentRoutes lays out a default HTTP surface for every
-	// registered agent, and genkitx.Mount wires it onto the mux. The layout
-	// follows each agent's capabilities, so server-managed and
+	// registered agent; range over the routes and wire each onto the mux.
+	// The layout follows each agent's capabilities, so server-managed and
 	// client-managed agents can be deployed side by side from one call:
 	//
 	//   "chat" (store-backed):
@@ -166,14 +166,18 @@ func main() {
 	//
 	// Every route is a POST taking the standard {"data": ...} envelope and
 	// returning {"result": ...}; the companions read the snapshotId from
-	// that body. HandlerOptions passed here (e.g. context providers for
-	// auth) apply to every route.
+	// that body. route.Pattern() is its "METHOD /path" and route.Handler()
+	// builds the genkit.Handler; pass HandlerOptions (e.g. context providers
+	// for auth) to Handler() to apply them per route. Any router works the
+	// same way (Gin, Chi, Echo): read Pattern and serve Handler.
 	//
 	// To serve specific agents instead of all of them, use
 	// genkitx.AgentRoutes(agent); to expose flows, genkitx.AllFlowRoutes(g).
 	// Mix them by concatenating the route slices. The genkitx (genkit/exp)
 	// package holds these helpers while the routing layer is experimental.
 	mux := http.NewServeMux()
-	genkitx.Mount(mux, genkitx.AllAgentRoutes(g))
+	for _, route := range genkitx.AllAgentRoutes(g) {
+		mux.HandleFunc(route.Pattern(), route.Handler())
+	}
 	log.Fatal(server.Start(ctx, "127.0.0.1:8080", mux))
 }

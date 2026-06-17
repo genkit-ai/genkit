@@ -17,7 +17,6 @@
 package exp
 
 import (
-	"log/slog"
 	"net/http"
 
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -35,9 +34,10 @@ const (
 // method and path to mount and the action to serve.
 //
 // [AgentRoutes], [AllAgentRoutes], [FlowRoutes], and [AllFlowRoutes]
-// produce Routes; [Mount] wires them onto an [http.ServeMux]. The fields
-// are exported so other routers (Gin, Chi, Echo) can mount the same
-// layout: read Method and Path and serve Action with [genkit.Handler].
+// produce Routes; range over them and wire each onto an [http.ServeMux]
+// with [Route.Pattern] and [Route.Handler]. The fields are exported so
+// other routers (Gin, Chi, Echo) can mount the same layout: read Method
+// and Path and serve Action with [genkit.Handler].
 // Every route is a POST that speaks the {"data": ...} / {"result": ...}
 // envelope of the reflection API (the agent turn route also streams via
 // ?stream=true), so a single client transport reaches all of them.
@@ -63,7 +63,8 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 
 // AllAgentRoutes returns the default serving layout for every agent
 // registered with g, the iterate-over-all counterpart to [AgentRoutes].
-// Pass the result to [Mount], or to a router of your choice. See
+// Mount the result onto an [http.ServeMux] (range over it and call
+// [Route.Handler]) or hand it to a router of your choice. See
 // [AgentRoutes] for the per-agent layout and the route set each agent
 // contributes.
 func AllAgentRoutes(g *genkit.Genkit) []Route {
@@ -85,8 +86,8 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 }
 
 // AgentRoutes returns the default serving layout for a single agent, so you
-// can mount specific agents rather than every registered one. Pass the
-// result to [Mount], or to a router of your choice.
+// can mount specific agents rather than every registered one. Mount the
+// result onto an [http.ServeMux], or onto a router of your choice.
 //
 // The route set mirrors what the agent can do:
 //
@@ -128,7 +129,7 @@ func buildAgentRoutes(name string, run, snapshot, abort api.Action) []Route {
 
 // AllFlowRoutes returns the default serving layout for every flow
 // registered with g, the iterate-over-all counterpart to [FlowRoutes].
-// Pass the result to [Mount], or to a router of your choice.
+// Mount the result onto an [http.ServeMux], or onto a router of your choice.
 func AllFlowRoutes(g *genkit.Genkit) []Route {
 	var routes []Route
 	for _, f := range genkit.ListFlows(g) {
@@ -147,18 +148,4 @@ func FlowRoutes(f api.Action) []Route {
 
 func buildFlowRoute(f api.Action) Route {
 	return Route{Method: http.MethodPost, Path: flowBasePath + "/" + f.Name(), Action: f}
-}
-
-// Mount registers routes on mux, building each route's handler with opts
-// (e.g. [genkit.WithContextProviders] shared across all of them). It is
-// the stdlib convenience over [Route.Handler]; routers other than
-// [http.ServeMux] can range over the routes and mount them directly.
-//
-// Compose layouts by concatenating: Mount(mux, append(AllAgentRoutes(g),
-// AllFlowRoutes(g)...), opts...).
-func Mount(mux *http.ServeMux, routes []Route, opts ...genkit.HandlerOption) {
-	for _, rt := range routes {
-		mux.HandleFunc(rt.Pattern(), rt.Handler(opts...))
-		slog.Debug("genkit/exp.Mount", "method", rt.Method, "path", rt.Path)
-	}
 }
