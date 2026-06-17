@@ -53,12 +53,31 @@ const { getAbortSignal } = TEST_ONLY;
 
 describe('Google AI Client', () => {
   let fetchSpy: sinon.SinonStub;
+  let runInNewSpanSpy: sinon.SinonStub;
   const apiKey = 'test-api-key';
   const defaultBaseUrl = 'https://generativelanguage.googleapis.com';
   const defaultApiVersion = 'v1beta';
 
   beforeEach(() => {
+    // In case a previous test failed and left stubs hanging, ensure a clean state
+    sinon.restore();
+
     fetchSpy = sinon.stub(global, 'fetch');
+
+    // We stub runInNewSpan via tracingHooks instead of importing the tracing
+    // module directly. This avoids ESM immutable binding issues where Sinon
+    // throws "descriptor for property 'runInNewSpan' is non-configurable".
+    runInNewSpanSpy = sinon
+      .stub(TEST_ONLY.tracingHooks, 'runInNewSpan')
+      .callsFake((async (...args: any[]) => {
+        // runInNewSpan takes either 2 or 3 arguments depending on the overload.
+        // We pop the last argument, which is always the callback function.
+        const fn = args.pop();
+        const options = args[0];
+        // Pass options.metadata to the callback so the caller can mutate it,
+        // allowing us to assert on input/output fields in our tests.
+        return await fn(options.metadata);
+      }) as any);
   });
 
   afterEach(() => {
@@ -108,12 +127,12 @@ describe('Google AI Client', () => {
 
     it('should build URL with resourceMethod', () => {
       const url = getGoogleAIUrl({
-        resourcePath: 'models/gemini-2.0-pro',
+        resourcePath: 'models/gemini-2.5-pro',
         resourceMethod: 'generateContent',
       });
       assert.strictEqual(
         url,
-        `${defaultBaseUrl}/${defaultApiVersion}/models/gemini-2.0-pro:generateContent`
+        `${defaultBaseUrl}/${defaultApiVersion}/models/gemini-2.5-pro:generateContent`
       );
     });
 
@@ -164,7 +183,7 @@ describe('Google AI Client', () => {
   describe('listModels', () => {
     it('should return a list of models', async () => {
       const mockModels: Model[] = [
-        { name: 'models/gemini-2.0-pro' } as Model,
+        { name: 'models/gemini-2.5-pro' } as Model,
         { name: 'models/gemini-2.5-flash' } as Model,
       ];
       mockFetchResponse({ models: mockModels });
@@ -181,6 +200,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
       });
     });
 
@@ -269,7 +289,7 @@ describe('Google AI Client', () => {
   });
 
   describe('generateContent', () => {
-    const model = 'gemini-2.0-pro';
+    const model = 'gemini-flash-latest';
     const request: GenerateContentRequest = {
       contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
     };
@@ -293,8 +313,46 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
+      // Should not trace by default
+      sinon.assert.notCalled(runInNewSpanSpy);
+    });
+
+    it('should trace generateContent if experimental_debugTraces is true', async () => {
+      const mockResponse: GenerateContentResponse = {
+        candidates: [
+          { index: 0, content: { role: 'model', parts: [{ text: 'world' }] } },
+        ],
+      };
+      mockFetchResponse(mockResponse);
+
+      const clientOptions: ClientOptions = { experimental_debugTraces: true };
+      const result = await generateContent(
+        apiKey,
+        model,
+        request,
+        clientOptions
+      );
+      assert.deepStrictEqual(result, mockResponse);
+
+      sinon.assert.calledOnce(runInNewSpanSpy);
+
+      const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+      assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+      assert.deepStrictEqual(traceMetadata.input, {
+        apiEndpoint: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        request: request,
+        model: model,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': '<REDACTED> (12 characters)', // "test-api-key"
+          'x-goog-api-client': getGenkitClientHeader(),
+        },
+      });
+      assert.deepStrictEqual(traceMetadata.output, mockResponse);
     });
 
     it('should throw on API error with JSON body', async () => {
@@ -364,8 +422,38 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
+      sinon.assert.notCalled(runInNewSpanSpy);
+    });
+
+    it('should trace embedContent if experimental_debugTraces is true', async () => {
+      const mockResponse: EmbedContentResponse = {
+        embedding: { values: [0.1, 0.2, 0.3] },
+      };
+      mockFetchResponse(mockResponse);
+
+      const clientOptions: ClientOptions = { experimental_debugTraces: true };
+      const result = await embedContent(apiKey, model, request, clientOptions);
+      assert.deepStrictEqual(result, mockResponse);
+
+      sinon.assert.calledOnce(runInNewSpanSpy);
+
+      const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+      assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+      assert.deepStrictEqual(traceMetadata.input, {
+        apiEndpoint: `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent`,
+        request: request,
+        model: model,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': '<REDACTED> (12 characters)',
+          'x-goog-api-client': getGenkitClientHeader(),
+        },
+      });
+      assert.deepStrictEqual(traceMetadata.output, mockResponse);
     });
 
     it('should throw on API error with JSON body', async () => {
@@ -417,6 +505,43 @@ describe('Google AI Client', () => {
     const defaultRequest: GenerateContentRequest = {
       contents: [{ role: 'user', parts: [{ text: 'stream test' }] }],
     };
+
+    it('should trace generateContentStream if experimental_debugTraces is true', async () => {
+      const chunks = [
+        'data: {"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": "Hello "}]}}]}\n\n',
+      ];
+      fetchSpy.resolves(createMockStream(chunks));
+
+      const clientOptions: ClientOptions = { experimental_debugTraces: true };
+      const result = await generateContentStream(
+        apiKey,
+        model,
+        defaultRequest,
+        clientOptions
+      );
+
+      const streamResults: GenerateContentResponse[] = [];
+      for await (const item of result.stream) {
+        streamResults.push(item);
+      }
+
+      sinon.assert.calledOnce(runInNewSpanSpy);
+
+      const traceMetadata = runInNewSpanSpy.firstCall.args[0].metadata;
+      assert.strictEqual(traceMetadata.name, 'httpRequest');
+
+      assert.deepStrictEqual(traceMetadata.input, {
+        apiEndpoint: `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+        request: defaultRequest,
+        model: model,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': '<REDACTED> (12 characters)',
+          'x-goog-api-client': getGenkitClientHeader(),
+        },
+      });
+      assert.strictEqual(traceMetadata.output, '[Streaming Response]');
+    });
 
     it('should process stream and return stream and aggregated response', async () => {
       const chunks = [
@@ -478,6 +603,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(defaultRequest),
       });
     });
@@ -720,6 +846,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
     });
@@ -776,6 +903,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
         body: JSON.stringify(request),
       });
     });
@@ -822,6 +950,7 @@ describe('Google AI Client', () => {
           'x-goog-api-key': apiKey,
           'x-goog-api-client': getGenkitClientHeader(),
         },
+        redirect: 'manual',
       });
     });
 

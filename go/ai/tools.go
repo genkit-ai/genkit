@@ -29,8 +29,10 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-var resumedCtxKey = base.NewContextKey[map[string]any]()
-var origInputCtxKey = base.NewContextKey[any]()
+var (
+	resumedCtxKey   = base.NewContextKey[map[string]any]()
+	origInputCtxKey = base.NewContextKey[any]()
+)
 
 // ToolFunc is the function type for tool implementations.
 type ToolFunc[In, Out any] = func(ctx *ToolContext, input In) (Out, error)
@@ -104,6 +106,13 @@ func IsToolInterruptError(err error) (bool, map[string]any) {
 		return true, tie.Metadata
 	}
 	return false, nil
+}
+
+// NewToolInterruptError creates a tool interrupt error with the given metadata.
+// This is intended for use in middleware that needs to interrupt tool execution
+// without calling the tool itself.
+func NewToolInterruptError(metadata map[string]any) error {
+	return &toolInterruptError{Metadata: metadata}
 }
 
 // InterruptOptions provides configuration for tool interruption.
@@ -237,14 +246,24 @@ func (tc *ToolContext) IsResumed() bool {
 	return tc.Resumed != nil
 }
 
-// ResumedValue retrieves a typed value from the Resumed metadata.
+// IsToolResumed reports whether the current context is a resumed tool execution.
+// This is intended for use in middleware that needs to distinguish between
+// first-time and restarted tool calls.
+func IsToolResumed(ctx context.Context) bool {
+	return resumedCtxKey.FromContext(ctx) != nil
+}
+
+// ResumedValue retrieves a typed value from the resumed metadata on ctx.
 // Returns the zero value and false if the key doesn't exist or the type doesn't match.
-func ResumedValue[T any](tc *ToolContext, key string) (T, bool) {
+// Accepts either a plain [context.Context] (useful in middleware) or a [*ToolContext],
+// which embeds [context.Context].
+func ResumedValue[T any](ctx context.Context, key string) (T, bool) {
 	var zero T
-	if tc.Resumed == nil {
+	m := resumedCtxKey.FromContext(ctx)
+	if m == nil {
 		return zero, false
 	}
-	v, ok := tc.Resumed[key]
+	v, ok := m[key]
 	if !ok {
 		return zero, false
 	}
@@ -259,6 +278,25 @@ func OriginalInputAs[T any](tc *ToolContext) (T, bool) {
 		return zero, false
 	}
 	return base.ConvertTo[T](tc.OriginalInput)
+}
+
+// toolStrictKey is the metadata key under metadata["tool"] used to carry the
+// per-tool strict-schema flag through the action metadata and onto
+// [ToolDefinition.Metadata]. Plugins consume this key directly.
+const toolStrictKey = "strict"
+
+// applyStrictMetadata sets metadata["tool"][toolStrictKey] = *strict when
+// strict is non-nil. A nil value leaves the metadata untouched.
+func applyStrictMetadata(metadata map[string]any, strict *bool) {
+	if strict == nil {
+		return
+	}
+	toolMeta, _ := metadata["tool"].(map[string]any)
+	if toolMeta == nil {
+		toolMeta = map[string]any{}
+		metadata["tool"] = toolMeta
+	}
+	toolMeta[toolStrictKey] = *strict
 }
 
 // DefineTool creates a new [ToolDef] and registers it.
@@ -285,6 +323,7 @@ func DefineTool[In, Out any](
 	}
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
 
 	// Also register under the "tool" action type for backward compatibility.
@@ -327,6 +366,7 @@ func NewTool[In, Out any](name, description string, fn ToolFunc[In, Out], opts .
 
 	metadata, wrappedFn := wrapToolFunc(name, description, fn)
 	metadata["dynamic"] = true
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
 	return &ToolDef[In, Out]{action: action, multipart: false}
 }
@@ -355,6 +395,7 @@ func DefineMultipartTool[In any](
 	}
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.DefineAction(r, name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
 	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true, registry: r}
 }
@@ -372,6 +413,7 @@ func NewMultipartTool[In any](name, description string, fn MultipartToolFunc[In]
 
 	metadata, wrappedFn := wrapMultipartToolFunc(name, description, fn)
 	metadata["dynamic"] = true
+	applyStrictMetadata(metadata, toolOpts.StrictSchema)
 	action := core.NewAction(name, api.ActionTypeToolV2, metadata, toolOpts.InputSchema, wrappedFn)
 	return &ToolDef[In, *MultipartToolResponse]{action: action, multipart: true}
 }
@@ -458,14 +500,21 @@ func (t *ToolDef[In, Out]) Definition() *ToolDefinition {
 		}
 	}
 
+	metadata := map[string]any{
+		"multipart": t.multipart,
+	}
+	if toolMeta, ok := desc.Metadata["tool"].(map[string]any); ok {
+		if s, ok := toolMeta[toolStrictKey].(bool); ok {
+			metadata[toolStrictKey] = s
+		}
+	}
+
 	return &ToolDefinition{
 		Name:         desc.Name,
 		Description:  desc.Description,
 		InputSchema:  inputSchema,
 		OutputSchema: outputSchema,
-		Metadata: map[string]any{
-			"multipart": t.multipart,
-		},
+		Metadata:     metadata,
 	}
 }
 
@@ -535,7 +584,6 @@ func LookupTool(r api.Registry, name string) Tool {
 		return nil
 	}
 
-	// Check if it's a multipart-only tool
 	desc := action.Desc()
 	multipart := false
 	if toolMeta, ok := desc.Metadata["tool"].(map[string]any); ok {

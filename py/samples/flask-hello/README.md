@@ -1,71 +1,24 @@
-# Flask hello example
+# Flask Hello
 
-## Setup environment
-
-### How to Get Your Gemini API Key
-
-To use the Google GenAI plugin, you need a Gemini API key.
-
-1.  **Visit AI Studio**: Go to [Google AI Studio](https://aistudio.google.com/).
-2.  **Create API Key**: Click on "Get API key" and create a key in a new or existing Google Cloud project.
-
-For more details, check out the [official documentation](https://ai.google.dev/gemini-api/docs/api-key).
-
-Export the API key as env variable `GEMINI_API_KEY`:
+Serve a Genkit flow through Flask and stream the model response back to the client.
 
 ```bash
-export GEMINI_API_KEY=<Your api key>
+export GEMINI_API_KEY=your-api-key
+uv sync
+uv run src/main.py
 ```
 
-### Monitoring and Running
-
-For an enhanced development experience, use the provided `run.sh` script to start the sample with automatic reloading:
+Then call it:
 
 ```bash
-./run.sh
+curl -X POST http://localhost:8080/chat \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: beginner-demo' \
+  -d '{"data":{"name":"Mittens"}}'
 ```
 
-This script uses `watchmedo` to monitor changes in:
-- `src/` (Python logic)
-- `../../packages` (Genkit core)
-- `../../plugins` (Genkit plugins)
-- File patterns: `*.py`, `*.prompt`, `*.json`
-
-Changes will automatically trigger a restart of the sample. You can also pass command-line arguments directly to the script, e.g., `./run.sh --some-flag`.
-
-## Run the sample
-
-TODO
+To inspect the flow in Dev UI instead:
 
 ```bash
-genkit start -- uv run flask --app src/main.py run
+genkit start -- uv run src/main.py
 ```
-
-```bash
-curl -X POST http://127.0.0.1:5000/chat -d '{"data": "banana"}' -H 'content-Type: application/json' -H 'accept: text/event-stream' -H 'Authorization: Pavel'
-```
-
-## Testing This Demo
-
-1. **Test the API endpoint**:
-   ```bash
-   # Basic request
-   curl -X POST http://localhost:5000/chat \
-     -H "Content-Type: application/json" \
-     -d '{"prompt": "Hello, who are you?"}'
-
-   # With authorization header (username context)
-   curl -X POST http://localhost:5000/chat \
-     -H "Content-Type: application/json" \
-     -H "Authorization: JohnDoe" \
-     -d '{"prompt": "What is my name?"}'
-   ```
-
-2. **Test via DevUI** at http://localhost:4000:
-   - [ ] Run the `chat` flow
-   - [ ] Verify response is generated
-
-3. **Expected behavior**:
-   - POST /chat returns AI-generated response
-   - Authorization header is passed as username in context
-   - Flow can access username via `ctx.context.get("username")`

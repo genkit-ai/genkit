@@ -18,16 +18,16 @@
 
 import json
 from functools import reduce
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from genkit import ModelRequest, ModelResponseChunk, TextPart, ToolRequestPart
 from genkit.plugins.compat_oai.models import OpenAIModel
-from genkit.types import GenerateRequest, GenerateResponseChunk, TextPart, ToolRequestPart
 
 
 @pytest.mark.asyncio
-async def test_generate_with_tool_calls_executes_tools(sample_request: GenerateRequest) -> None:
+async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequest) -> None:
     """Test generate with tool calls executes tools."""
     mock_tool_call = MagicMock()
     mock_tool_call.id = 'tool123'
@@ -39,6 +39,7 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: GenerateR
     first_message.role = 'assistant'
     first_message.tool_calls = [mock_tool_call]
     first_message.content = None
+    first_message.reasoning_content = None
 
     first_response = MagicMock()
     first_response.choices = [MagicMock(finish_reason='tool_calls', message=first_message)]
@@ -48,15 +49,18 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: GenerateR
     second_message.role = 'model'
     second_message.tool_calls = None
     second_message.content = 'final response'
+    second_message.reasoning_content = None
 
     second_response = MagicMock()
     second_response.choices = [MagicMock(finish_reason='stop', message=second_message)]
 
     mock_client = MagicMock()
-    mock_client.chat.completions.create.side_effect = [
-        first_response,
-        second_response,
-    ]
+    mock_client.chat.completions.create = AsyncMock(
+        side_effect=[
+            first_response,
+            second_response,
+        ]
+    )
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
 
@@ -82,7 +86,7 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: GenerateR
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_with_tool_calls(sample_request: GenerateRequest) -> None:
+async def test_generate_stream_with_tool_calls(sample_request: ModelRequest) -> None:
     """Test generate_stream processes tool calls streamed in chunks correctly."""
     mock_client = MagicMock()
 
@@ -111,28 +115,29 @@ async def test_generate_stream_with_tool_calls(sample_request: GenerateRequest) 
             delta_mock.content = None
             delta_mock.role = None
             delta_mock.tool_calls = [MockToolCall(id, index, name, args_chunk)]
+            delta_mock.reasoning_content = None
 
             choice_mock = MagicMock()
             choice_mock.delta = delta_mock
 
             return MagicMock(choices=[choice_mock])
 
-        def __iter__(self) -> 'MockStream':
+        def __aiter__(self) -> 'MockStream':
             return self
 
-        def __next__(self) -> object:
+        async def __anext__(self) -> object:
             if self._current >= len(self._chunks):
-                raise StopIteration
+                raise StopAsyncIteration
             chunk = self._chunks[self._current]
             self._current += 1
             return chunk
 
-    mock_client.chat.completions.create.return_value = MockStream()
+    mock_client.chat.completions.create = AsyncMock(return_value=MockStream())
 
     model = OpenAIModel(model='gpt-4', client=mock_client)
     collected_chunks = []
 
-    def callback(chunk: GenerateResponseChunk) -> None:
+    def callback(chunk: ModelResponseChunk) -> None:
         collected_chunks.append(chunk.content[0].root)
 
     await model._generate_stream(sample_request, callback)

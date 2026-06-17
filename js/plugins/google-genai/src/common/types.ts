@@ -143,13 +143,20 @@ export declare interface GoogleSearchRetrievalTool {
   /** Optional. {@link GoogleSearchRetrieval}. */
   googleSearchRetrieval?: GoogleSearchRetrieval;
   googleSearch?: GoogleSearchRetrieval;
+  google_search?: {
+    searchTypes?: {
+      webSearch?: {};
+      imageSearch?: {};
+    };
+  };
 }
 export function isGoogleSearchRetrievalTool(
   tool: Tool
 ): tool is GoogleSearchRetrievalTool {
   return (
     (tool as GoogleSearchRetrievalTool).googleSearchRetrieval !== undefined ||
-    (tool as GoogleSearchRetrievalTool).googleSearch !== undefined
+    (tool as GoogleSearchRetrievalTool).googleSearch !== undefined ||
+    (tool as GoogleSearchRetrievalTool).google_search !== undefined
   );
 }
 
@@ -275,7 +282,7 @@ export declare interface PromptFeedback {
  */
 export declare interface FileData {
   /** The IANA standard MIME type of the source data. */
-  mimeType: string;
+  mimeType?: string;
   /** URI of the file. */
   fileUri: string;
 }
@@ -476,6 +483,8 @@ export declare interface UsageMetadata {
   cachedContentTokenCount?: number;
   /** Optional. Number of tokens present in thoughts output. */
   thoughtsTokenCount?: number;
+  /** Optional. The traffic type for the request (e.g. ON_DEMAND_FLEX or ON_DEMAND_PRIORITY). */
+  trafficType?: string;
 }
 
 export const TaskTypeSchema = z.enum([
@@ -484,6 +493,9 @@ export const TaskTypeSchema = z.enum([
   'SEMANTIC_SIMILARITY',
   'CLASSIFICATION',
   'CLUSTERING',
+  'CODE_RETRIEVAL_QUERY',
+  'QUESTION_ANSWERING',
+  'FACT_VERIFICATION',
 ]);
 
 export type TaskType = z.infer<typeof TaskTypeSchema>;
@@ -752,6 +764,18 @@ export declare interface VideoMetadata {
   fps?: number;
 }
 
+export declare interface ToolCall {
+  id: string;
+  toolType: string;
+  args?: Record<string, unknown>;
+}
+
+export declare interface ToolResponse {
+  id: string;
+  toolType: string;
+  response?: Record<string, unknown>;
+}
+
 export enum MediaResolutionLevel {
   MEDIA_RESOUTION_LOW = 'MEDIA_RESOUTION_LOW',
   MEDIA_RESOLUTION_MEDIUM = 'MEDIA_RESOLUTION_MEDIUM',
@@ -776,10 +800,35 @@ export declare interface Part {
   thoughtSignature?: string;
   executableCode?: ExecutableCode;
   codeExecutionResult?: CodeExecutionResult;
+  toolCall?: ToolCall;
+  toolResponse?: ToolResponse;
   videoMetadata?: VideoMetadata;
   mediaResolution?: MediaResolution;
+  partMetadata?: Record<string, unknown>;
 }
 
+// A utility type that ensures an array contains all keys of T
+type KeysOf<T> = Array<keyof T>;
+
+// This will throw an error if you add a new field to 'Part'
+// but forget to add it to this list.
+// We use this to keep the aggregator/converter in sync.
+export const PART_KEYS: KeysOf<Required<Part>> = [
+  'text',
+  'inlineData',
+  'functionCall',
+  'functionResponse',
+  'fileData',
+  'thought',
+  'thoughtSignature',
+  'executableCode',
+  'codeExecutionResult',
+  'toolCall',
+  'toolResponse',
+  'videoMetadata',
+  'mediaResolution',
+  'partMetadata',
+] as const;
 /**
  * The base structured datatype containing multi-part content of a message.
  */
@@ -1050,6 +1099,18 @@ export declare interface GenerationConfig {
    * logprobs to return at each decoding step in the logprobsResult.
    */
   logprobs?: number;
+  /** Optional. The requested modalities of the response (TEXT, IMAGE, AUDIO). */
+  responseModalities?: string[];
+  /** Optional. Seed used in decoding for reproducibility. */
+  seed?: number;
+  /** Optional. Speech generation config. */
+  speechConfig?: Record<string, unknown>;
+  /** Optional. Thinking config. */
+  thinkingConfig?: Record<string, unknown>;
+  /** Optional. Image generation config. */
+  imageConfig?: Record<string, unknown>;
+  /** Optional. Media resolution config. */
+  mediaResolution?: string;
   /**
    * Optional. Output response mimetype of the generated candidate text.
    * Supported mimetype:
@@ -1153,6 +1214,8 @@ export declare interface ToolConfig {
   functionCallingConfig?: FunctionCallingConfig;
   /** Retrieval config */
   retrievalConfig?: RetrievalConfig;
+
+  includeServerSideToolInvocations?: boolean;
 }
 
 export declare interface GenerateContentRequest {
@@ -1181,6 +1244,8 @@ export declare interface GenerateContentRequest {
   tools?: Tool[];
   /** Optional. This config is shared for all tools provided in the request. */
   toolConfig?: ToolConfig;
+  /** Optional. Service tier (e.g. 'standard', 'flex', or 'priority'). */
+  serviceTier?: string;
 }
 
 /**

@@ -21,6 +21,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/internal/base"
+	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
@@ -188,12 +189,27 @@ func (g *ModelGenerator) WithTools(tools []*ai.ToolDefinition) *ModelGenerator {
 			continue
 		}
 
+		// Strict mode is opt-in. When enabled, recursively set
+		// additionalProperties: false on every object subschema; the caller
+		// is responsible for OpenAI's other strict requirements (e.g. every
+		// property must be listed in "required").
+		strict := false
+		if v, ok := tool.Metadata["strict"].(bool); ok {
+			strict = v
+		}
+		var params openai.FunctionParameters
+		if strict {
+			params = openai.FunctionParameters(pluginjsonschema.EnforceStrict(tool.InputSchema))
+		} else {
+			params = openai.FunctionParameters(tool.InputSchema)
+		}
+
 		toolParams = append(toolParams, openai.ChatCompletionToolParam{
 			Function: (shared.FunctionDefinitionParam{
 				Name:        tool.Name,
 				Description: openai.String(tool.Description),
-				Parameters:  openai.FunctionParameters(tool.InputSchema),
-				Strict:      openai.Bool(false), // TODO: implement strict mode
+				Parameters:  params,
+				Strict:      openai.Bool(strict),
 			}),
 		})
 	}
@@ -219,16 +235,51 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 	if len(g.messages) == 0 {
 		return nil, fmt.Errorf("no messages provided")
 	}
-	g.request.Messages = (g.messages)
+	g.request.Messages = g.messages
 
 	if len(g.tools) > 0 {
-		g.request.Tools = (g.tools)
+		g.request.Tools = g.tools
+	}
+
+	if req.Output != nil {
+		g.request.ResponseFormat = getResponseFormat(req.Output)
 	}
 
 	if handleChunk != nil {
 		return g.generateStream(ctx, handleChunk)
 	}
 	return g.generateComplete(ctx, req)
+}
+
+// getResponseFormat determines the appropriate response format based on the output configuration
+func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewParamsResponseFormatUnion {
+	var format openai.ChatCompletionNewParamsResponseFormatUnion
+
+	if output == nil {
+		return format
+	}
+
+	switch output.Format {
+	case "json":
+		if output.Schema != nil {
+			jsonSchemaParam := shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:   "output",
+					Schema: output.Schema,
+					Strict: openai.Bool(true),
+				},
+			}
+			format.OfJSONSchema = &jsonSchemaParam
+		} else {
+			jsonObjectParam := shared.NewResponseFormatJSONObjectParam()
+			format.OfJSONObject = &jsonObjectParam
+		}
+	case "text":
+		textParam := shared.NewResponseFormatTextParam()
+		format.OfText = &textParam
+	}
+
+	return format
 }
 
 // concatenateContent concatenates text content into a single string

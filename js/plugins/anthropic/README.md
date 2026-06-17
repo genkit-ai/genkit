@@ -1,6 +1,6 @@
 # Genkit Anthropic AI Plugin
 
-`@genkit-ai/anthropic` is Anthropic plugin for [Genkit](https://github.com/firebase/genkit).
+`@genkit-ai/anthropic` is Anthropic plugin for [Genkit](https://github.com/genkit-ai/genkit).
 It supersedes the earlier community package `genkitx-anthropic` and is now maintained by Google.
 
 ## Supported models

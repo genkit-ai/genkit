@@ -21,7 +21,7 @@ import { ai } from './genkit.js';
 // Define a prompt that includes the retrieved context documents
 
 export const augmentedPrompt = ai.definePrompt({
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   name: 'augmentedPrompt',
   input: {
     schema: z.object({

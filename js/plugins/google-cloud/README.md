@@ -78,6 +78,6 @@ const response = await ai.generate({
 
 Visit the [official Genkit documentation](https://genkit.dev/docs/get-started/) for more information.
 
-The sources for this package are in the main [Genkit](https://github.com/firebase/genkit) repo. Please file issues and pull requests against that repo.
+The sources for this package are in the main [Genkit](https://github.com/genkit-ai/genkit) repo. Please file issues and pull requests against that repo.
 
 License: Apache 2.0

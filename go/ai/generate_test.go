@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/internal/registry"
@@ -1628,7 +1630,7 @@ func TestMultipartTools(t *testing.T) {
 		}
 	})
 
-	t.Run("multipart tool returns content in response", func(t *testing.T) {
+	t.Run("multipart tool returns metadata and content in response", func(t *testing.T) {
 		r := registry.New()
 		ConfigureFormats(r)
 		DefineGenerateAction(context.Background(), r)
@@ -1636,7 +1638,8 @@ func TestMultipartTools(t *testing.T) {
 		multipartTool := DefineMultipartTool(r, "imageGenerator", "generates images",
 			func(ctx *ToolContext, input struct{ Prompt string }) (*MultipartToolResponse, error) {
 				return &MultipartToolResponse{
-					Output: map[string]any{"description": "generated image"},
+					Output:   map[string]any{"description": "generated image"},
+					Metadata: map[string]any{"size": 1},
 					Content: []*Part{
 						NewMediaPart("image/png", "data:image/png;base64,iVBORw0..."),
 					},
@@ -1651,7 +1654,10 @@ func TestMultipartTools(t *testing.T) {
 				if msg.Role == RoleTool {
 					for _, part := range msg.Content {
 						if part.IsToolResponse() {
-							// Verify the content is present
+							// Verify the metadata and content are present
+							if len(part.Metadata) == 0 {
+								return nil, fmt.Errorf("expected tool response to have metadata")
+							}
 							if len(part.ToolResponse.Content) == 0 {
 								return nil, fmt.Errorf("expected tool response to have content")
 							}
@@ -1931,6 +1937,31 @@ func TestGenerateStream(t *testing.T) {
 		}
 		if receivedErr == nil {
 			t.Error("expected error from cancelled context")
+		}
+	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		streamModel := DefineModel(r, "test/breakStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn: true,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart("chunk")}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: NewModelTextMessage("done"),
+			}, nil
+		})
+
+		for _, err := range GenerateStream(t.Context(), r, WithModel(streamModel)) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
 		}
 	})
 }
@@ -2226,6 +2257,35 @@ func TestGenerateDataStream(t *testing.T) {
 			t.Error("expected parsing error to be propagated")
 		}
 	})
+
+	t.Run("should not yield after stop", func(t *testing.T) {
+		streamModel := DefineModel(r, "test/breakDataStreamModel", &ModelOptions{
+			Supports: &ModelSupports{
+				Multiturn:   true,
+				Constrained: ConstrainedSupportAll,
+			},
+		}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			for i := range 3 {
+				if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewJSONPart(fmt.Sprintf(`{"name":"chunk","value":%d}`, i))}}); err != nil {
+					return nil, err
+				}
+			}
+			return &ModelResponse{
+				Request: req,
+				Message: &Message{
+					Role:    RoleModel,
+					Content: []*Part{NewJSONPart(`{"name":"done","value":4}`)},
+				},
+			}, nil
+		})
+
+		for _, err := range GenerateDataStream[streamingTestData](t.Context(), r, WithModel(streamModel)) {
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			break
+		}
+	})
 }
 
 func TestGenerateText(t *testing.T) {
@@ -2243,7 +2303,6 @@ func TestGenerateText(t *testing.T) {
 			WithModel(echoModel),
 			WithPrompt("hello"),
 		)
-
 		if err != nil {
 			t.Fatalf("GenerateText error: %v", err)
 		}
@@ -2276,7 +2335,6 @@ func TestGenerateData(t *testing.T) {
 			WithModel(jsonModel),
 			WithPrompt("get value"),
 		)
-
 		if err != nil {
 			t.Fatalf("GenerateData error: %v", err)
 		}
@@ -2414,4 +2472,138 @@ func TestOutputFrom(t *testing.T) {
 			t.Errorf("output.Count = %d, want 5", output.Count)
 		}
 	})
+}
+
+func TestGenerateWithMarkdownJSON(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(context.Background(), r)
+
+	// A model that returns JSON wrapped in markdown
+	markdownModel := DefineModel(r, "test/markdownJson", &ModelOptions{
+		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		jsonContent := "{\"name\": \"test\", \"value\": 123}"
+		return &ModelResponse{
+			Request: req,
+			Message: NewModelTextMessage("```json\n" + jsonContent + "\n```"),
+		}, nil
+	})
+
+	// A model that returns JSON wrapped in markdown with loose formatting (spaces)
+	looseMarkdownModel := DefineModel(r, "test/looseMarkdownJson", &ModelOptions{
+		Supports: &ModelSupports{Constrained: ConstrainedSupportAll},
+	}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		jsonContent := "{\"name\": \"test\", \"value\": 123}"
+		return &ModelResponse{
+			Request: req,
+			Message: NewModelTextMessage("Here is your JSON:\n ``` json \n" + jsonContent + "\n```"),
+		}, nil
+	})
+
+	type OutputData struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+
+	t.Run("Standard Markdown JSON", func(t *testing.T) {
+		resp, err := Generate(context.Background(), r,
+			WithModel(markdownModel),
+			WithPrompt("get data"),
+			WithOutputType(OutputData{}),
+		)
+		if err != nil {
+			t.Fatalf("Generate failed: %v", err)
+		}
+
+		var out OutputData
+		if err := resp.Output(&out); err != nil {
+			t.Fatalf("Output unmarshal failed: %v", err)
+		}
+
+		if out.Name != "test" || out.Value != 123 {
+			t.Errorf("Unexpected output: %+v", out)
+		}
+	})
+
+	t.Run("Loose Markdown JSON", func(t *testing.T) {
+		resp, err := Generate(context.Background(), r,
+			WithModel(looseMarkdownModel),
+			WithPrompt("get data"),
+			WithOutputType(OutputData{}),
+		)
+		if err != nil {
+			t.Fatalf("Generate failed: %v", err)
+		}
+
+		var out OutputData
+		if err := resp.Output(&out); err != nil {
+			t.Fatalf("Output unmarshal failed: %v", err)
+		}
+
+		if out.Name != "test" || out.Value != 123 {
+			t.Errorf("Unexpected output: %+v", out)
+		}
+	})
+}
+
+func TestGenerateNoGoroutineLeak(t *testing.T) {
+	r := registry.New()
+	ConfigureFormats(r)
+	DefineGenerateAction(t.Context(), r)
+
+	done := make(chan struct{})
+
+	slowTool := DefineTool(r, "slow", "slow",
+		func(*ToolContext, any) (any, error) {
+			<-done
+			return nil, nil
+		},
+	)
+
+	failTool := DefineTool(r, "fail", "fail",
+		func(*ToolContext, any) (any, error) {
+			return nil, errors.New("boom")
+		},
+	)
+
+	testModel := DefineModel(r, "test/testModel", &ModelOptions{
+		Supports: &ModelSupports{
+			Multiturn: true,
+			Tools:     true,
+		},
+	}, func(_ context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{
+			Request: req,
+			Message: &Message{
+				Role: RoleModel,
+				Content: []*Part{
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "a"}),
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "b"}),
+					NewToolRequestPart(&ToolRequest{Name: "slow", Input: map[string]any{}, Ref: "c"}),
+					NewToolRequestPart(&ToolRequest{Name: "fail", Input: map[string]any{}, Ref: "d"}),
+				},
+			},
+		}, nil
+	})
+
+	before := runtime.NumGoroutine()
+
+	if _, err := Generate(t.Context(), r,
+		WithModel(testModel),
+		WithTools(slowTool, failTool),
+	); err == nil {
+		t.Fatal("expected tool error")
+	}
+
+	close(done)
+
+	for i := 0; i < 100; i++ {
+		if runtime.NumGoroutine() <= before {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("goroutines leaked: %d", runtime.NumGoroutine()-before)
 }

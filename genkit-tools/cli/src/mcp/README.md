@@ -25,7 +25,9 @@ The following tools allow MCP-aware environments to interact with the Genkit ser
 | Tool Name | Description |
 | :--- | :--- |
 | **`get_usage_guide`** | Fetches the Genkit AI framework usage guide (specifiable by language). Intended for AI assistants. |
-| **`lookup_genkit_docs`** | Retrieves Genkit documentation (specifiable by language and files). |
+| **`list_genkit_docs`** | Lists all available Genkit documentation files for discovery. |
+| **`search_genkit_docs`** | Searches Genkit documentation using keywords. |
+| **`read_genkit_docs`** | Reads the content of specific Genkit documentation files. |
 | **`list_flows`** | Discovers and lists all defined Genkit flows with their input schemas. |
 | **`run_flow`** | Executes a specified Genkit flow, requiring `flowName` and a JSON `input` conforming to the flow's schema. |
 | **`get_trace`** | Retrieves the detailed execution trace for a flow using a `traceId`. |

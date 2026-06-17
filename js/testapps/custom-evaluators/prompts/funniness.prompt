@@ -10,14 +10,14 @@ Here is an example of an output that is a funny joke:
 Output:
 Why did the scarecrow win an award? Because he was outstanding in his field!
 Response:
-{ "reason": "This is a classic, simple joke with a play on words that's likely to elicit a chuckle.", "verdict":"FUNNY"}
+{ "reason": "This is a classic, simple joke with a play on words that's likely to elicit a chuckle.", "verdict":"FUNNY_JOKE"}
 
 Here is an example of an output that is not a funny joke:
 
 Output:
 Why did the chicken cross the road? To get to the other side!
 Response:
-{ "reason": "This is a classic joke that is not funny because it has been overused. It might elicit a sigh or a sarcastic haha.", "verdict":"NOT_FUNNY"}
+{ "reason": "This is a classic joke that is not funny because it has been overused. It might elicit a sigh or a sarcastic haha.", "verdict":"NOT_FUNNY_JOKE"}
 
 Here is an example of an output that is an offensive joke:
 

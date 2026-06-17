@@ -84,6 +84,7 @@ Cross-Language Parity:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from typing import Any
@@ -92,13 +93,13 @@ import structlog
 from opentelemetry import metrics
 from opentelemetry.sdk.trace import ReadableSpan
 
-from genkit.core import GENKIT_VERSION
+from genkit.plugin_api import GENKIT_VERSION, to_display_path
 
+from .gcp_logger import gcp_logger
 from .utils import (
     create_common_log_attributes,
     extract_error_name,
     extract_outer_feature_name_from_path,
-    to_display_path,
     truncate,
     truncate_path,
 )
@@ -298,17 +299,13 @@ class GenerateTelemetry:
 
         input_json = attrs.get('genkit:input')
         if input_json and isinstance(input_json, str):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 input_data = json.loads(input_json)
-            except json.JSONDecodeError:
-                pass
 
         output_json = attrs.get('genkit:output')
         if output_json and isinstance(output_json, str):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 output_data = json.loads(output_json)
-            except json.JSONDecodeError:
-                pass
 
         err_name = extract_error_name(list(span.events))
         feature_name = truncate(
@@ -427,12 +424,12 @@ class GenerateTelemetry:
             metadata['threadName'] = thread_name
 
         config = input_data.get('config', {})
-        if config.get('maxOutputTokens'):
-            metadata['maxOutputTokens'] = config['maxOutputTokens']
-        if config.get('stopSequences'):
-            metadata['stopSequences'] = config['stopSequences']
+        if config.get('max_output_tokens'):
+            metadata['maxOutputTokens'] = config['max_output_tokens']
+        if config.get('stop_sequences'):
+            metadata['stopSequences'] = config['stop_sequences']
 
-        logger.info(f'Config[{path}, {model}]', **metadata)
+        gcp_logger.log_structured(f'Config[{path}, {model}]', metadata)
 
     def _record_generate_action_input_logs(
         self,
@@ -478,7 +475,7 @@ class GenerateTelemetry:
                     'messageIndex': msg_idx,
                     'totalMessages': total_messages,
                 }
-                logger.info(f'Input[{path}, {model}] {part_counts}', **metadata)
+                gcp_logger.log_structured(f'Input[{path}, {model}] {part_counts}', metadata)
 
     def _record_generate_action_output_logs(
         self,
@@ -530,7 +527,7 @@ class GenerateTelemetry:
             if finish_message:
                 metadata['finishMessage'] = truncate(finish_message)
 
-            logger.info(f'Output[{path}, {model}] {part_counts}', **metadata)
+            gcp_logger.log_structured(f'Output[{path}, {model}] {part_counts}', metadata)
 
     def _to_part_counts(
         self,

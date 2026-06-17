@@ -24,6 +24,8 @@ import {
 } from 'genkit';
 import { embedderRef } from 'genkit/embedder';
 import { embedder as pluginEmbedder } from 'genkit/plugin';
+import { toGeminiMessage } from '../common/converters.js';
+import { isKnownKey } from '../common/utils.js';
 import { embedContent } from './client.js';
 import {
   ClientOptions,
@@ -52,9 +54,7 @@ export const EmbeddingConfigSchema = z
     version: z.string().optional(),
     /**
      * The `outputDimensionality` parameter allows you to specify the dimensionality of the embedding output.
-     * By default, the model generates embeddings with 768 dimensions. Models such as
-     * `text-embedding-005`, and `text-multilingual-embedding-002`
-     * allow the output dimensionality to be adjusted between 1 and 768.
+     * By default, `gemini-embedding-2`, `gemini-embedding-2-preview` and `gemini-embedding-001` generate embeddings with 3072 dimensions.
      * By selecting a smaller output dimensionality, users can save memory and storage space, leading to more efficient computations.
      **/
     outputDimensionality: z.number().min(1).optional(),
@@ -75,7 +75,7 @@ function commonRef(
     name: `googleai/${name}`,
     configSchema,
     info: info ?? {
-      dimensions: 768,
+      dimensions: 3072,
       supports: {
         input: ['text'],
       },
@@ -86,22 +86,46 @@ function commonRef(
 const GENERIC_MODEL = commonRef('embedder');
 
 const KNOWN_MODELS = {
+  'gemini-embedding-2-preview': commonRef('gemini-embedding-2-preview', {
+    supports: {
+      input: ['text', 'image', 'video'],
+    },
+  }),
+  'gemini-embedding-2': commonRef('gemini-embedding-2', {
+    supports: {
+      input: ['text', 'image', 'video'],
+    },
+  }),
   'gemini-embedding-001': commonRef('gemini-embedding-001'),
-};
+} as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+export type EmbedderModelName = `gemini-embedding-${string}`;
+export function isEmbedderName(value: string): value is EmbedderModelName {
+  return value.startsWith('gemini-embedding-');
+}
 
 export function model(
   version: string,
   config: EmbeddingConfig = {}
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
+
+  if (isKnownKey(name, KNOWN_MODELS)) {
+    const known = KNOWN_MODELS[name];
+    return embedderRef({
+      name: known.name,
+      info: known.info,
+      configSchema: known.configSchema,
+      config,
+    });
+  }
+
   return embedderRef({
     name: `googleai/${name}`,
-    config,
+    info: { ...GENERIC_MODEL.info },
     configSchema: GENERIC_MODEL.configSchema,
-    info: {
-      ...GENERIC_MODEL.info,
-    },
+    config,
   });
 }
 
@@ -136,6 +160,7 @@ export function defineEmbedder(
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,
     customHeaders: pluginOptions?.customHeaders,
+    experimental_debugTraces: pluginOptions?.experimental_debugTraces,
   };
 
   return pluginEmbedder(
@@ -159,10 +184,7 @@ export function defineEmbedder(
             {
               taskType: request.options?.taskType,
               title: request.options?.title,
-              content: {
-                role: '',
-                parts: [{ text: doc.text }],
-              },
+              content: toGeminiMessage({ role: 'user', content: doc.content }),
               outputDimensionality: request.options?.outputDimensionality,
             } as EmbedContentRequest,
             clientOptions

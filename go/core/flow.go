@@ -26,10 +26,10 @@ import (
 	"github.com/firebase/genkit/go/internal/base"
 )
 
-// A Flow is a user-defined Action. A Flow[In, Out, Stream, Init] represents a function from In to Out.
-// The Stream parameter is for flows that support streaming: providing their results incrementally. The Init parameter is for bidi flows.
-type Flow[In, Out, Stream, Init any] struct {
-	*Action[In, Out, Stream, Init]
+// A Flow is a user-defined Action. A Flow[In, Out, Stream] represents a function from In to Out.
+// The Stream parameter is for flows that support streaming: providing their results incrementally.
+type Flow[In, Out, Stream any] struct {
+	*Action[In, Out, Stream]
 }
 
 // StreamingFlowValue is either a streamed value or a final output of a flow.
@@ -47,9 +47,9 @@ type flowContext struct {
 	flowName string
 }
 
-// DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
-func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}, struct{}] {
-	return &Flow[In, Out, struct{}, struct{}]{DefineAction(r, name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
+// NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
+func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
+	return &Flow[In, Out, struct{}]{NewAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -58,17 +58,9 @@ func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flo
 	})}
 }
 
-// DefineStreamingFlow creates a streaming Flow that runs fn, and registers it as an action.
-//
-// fn takes an input of type In and returns an output of type Out, optionally
-// streaming values of type Stream incrementally by invoking a callback.
-//
-// If the function supports streaming and the callback is non-nil, it should
-// stream the results by invoking the callback periodically, ultimately returning
-// with a final return value that includes all the streamed data.
-// Otherwise, it should ignore the callback and just return a result.
-func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream, struct{}] {
-	return &Flow[In, Out, Stream, struct{}]{DefineStreamingAction(r, name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
+// NewStreamingFlow creates a streaming Flow that runs fn without registering it.
+func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
+	return &Flow[In, Out, Stream]{NewStreamingAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -80,20 +72,24 @@ func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn St
 	})}
 }
 
-// NewBidiFlow creates a bidirectional streaming Flow without registering it.
-// Flow context is injected so that [Run] works inside the bidi function.
-func NewBidiFlow[In, Out, Stream, Init any](name string, fn BidiFunc[In, Out, Stream, Init]) *Flow[In, Out, Stream, Init] {
-	wrapped := func(ctx context.Context, init Init, inCh <-chan In, outCh chan<- Stream) (Out, error) {
-		ctx = flowContextKey.NewContext(ctx, &flowContext{flowName: name})
-		return fn(ctx, init, inCh, outCh)
-	}
-	return &Flow[In, Out, Stream, Init]{NewBidiAction(name, api.ActionTypeFlow, nil, wrapped)}
+// DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
+func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
+	f := NewFlow(name, fn)
+	f.Register(r)
+	return f
 }
 
-// DefineBidiFlow creates a bidirectional streaming Flow that runs fn, and registers it as an action.
-// Flow context is injected so that [Run] works inside the bidi function.
-func DefineBidiFlow[In, Out, Stream, Init any](r api.Registry, name string, fn BidiFunc[In, Out, Stream, Init]) *Flow[In, Out, Stream, Init] {
-	f := NewBidiFlow(name, fn)
+// DefineStreamingFlow creates a streaming Flow that runs fn, and registers it as an action.
+//
+// fn takes an input of type In and returns an output of type Out, optionally
+// streaming values of type Stream incrementally by invoking a callback.
+//
+// If the function supports streaming and the callback is non-nil, it should
+// stream the results by invoking the callback periodically, ultimately returning
+// with a final return value that includes all the streamed data.
+// Otherwise, it should ignore the callback and just return a result.
+func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
+	f := NewStreamingFlow(name, fn)
 	f.Register(r)
 	return f
 }
@@ -126,7 +122,7 @@ func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out
 }
 
 // Run runs the flow in the context of another flow.
-func (f *Flow[In, Out, Stream, Init]) Run(ctx context.Context, input In) (Out, error) {
+func (f *Flow[In, Out, Stream]) Run(ctx context.Context, input In) (Out, error) {
 	return f.Action.Run(ctx, input, nil)
 }
 
@@ -142,18 +138,27 @@ func (f *Flow[In, Out, Stream, Init]) Run(ctx context.Context, input In) (Out, e
 // again.
 //
 // Otherwise the Stream field of the passed [StreamingFlowValue] holds a streamed result.
-func (f *Flow[In, Out, Stream, Init]) Stream(ctx context.Context, input In) func(func(*StreamingFlowValue[Out, Stream], error) bool) {
+func (f *Flow[In, Out, Stream]) Stream(ctx context.Context, input In) func(func(*StreamingFlowValue[Out, Stream], error) bool) {
 	return func(yield func(*StreamingFlowValue[Out, Stream], error) bool) {
+		done := false
 		cb := func(ctx context.Context, s Stream) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&StreamingFlowValue[Out, Stream]{Stream: s}, nil) {
+				done = true
 				return errStop
 			}
 			return nil
 		}
 		output, err := f.Action.Run(ctx, input, cb)
+		if done || errors.Is(err, errStop) {
+			// Consumer broke out of the loop; don't yield again.
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 		} else {
@@ -170,4 +175,17 @@ func FlowNameFromContext(ctx context.Context) string {
 		return fc.flowName
 	}
 	return ""
+}
+
+// WithFlowContext attaches flow-context metadata to ctx so that [Run] and
+// [FlowNameFromContext] work from within. Use it when wiring a custom
+// flow-like action (e.g. via [NewBidiAction] / [DefineBidiAction]) that
+// should behave like a flow from the user's perspective — letting them
+// call [Run] for sub-step tracking and see the flow name in spans —
+// without going through the flow constructors.
+//
+// The flow constructors attach this context themselves; direct callers
+// only need it when bypassing them, e.g. to set custom [BidiActionOptions].
+func WithFlowContext(ctx context.Context, flowName string) context.Context {
+	return flowContextKey.NewContext(ctx, &flowContext{flowName: flowName})
 }

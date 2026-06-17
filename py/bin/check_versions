@@ -1,0 +1,141 @@
+#!/bin/bash
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Check version consistency across all packages and plugins.
+# All publishable packages should have the same version as the core genkit package.
+#
+# Usage:
+#   ./bin/check_versions [--fix]
+#
+# Options:
+#   --fix    Automatically fix version mismatches (calls bump_version)
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Get the directory of this script and the py directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "$PY_DIR"
+
+FIX_MODE=false
+if [ "${1:-}" = "--fix" ]; then
+    FIX_MODE=true
+fi
+
+echo -e "${BLUE}=== Version Consistency Check ===${NC}"
+echo ""
+
+# Get core package version (source of truth)
+CORE_VERSION=$(grep '^version' packages/genkit/pyproject.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+echo -e "Core genkit version: ${GREEN}${CORE_VERSION}${NC}"
+echo ""
+
+ERRORS=0
+MISMATCHED_FILES=()
+
+# Function to check version
+check_version() {
+    local file="$1"
+    local expected="$2"
+    # $3 (pkg_type) available for future use
+    
+    if [ ! -f "$file" ]; then
+        return
+    fi
+    
+    local actual
+    actual=$(grep '^version' "$file" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    local pkg_name
+    pkg_name=$(grep '^name' "$file" | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    
+    if [ "$actual" != "$expected" ]; then
+        echo -e "  ${RED}✗${NC} $pkg_name: $actual (expected $expected)"
+        ERRORS=$((ERRORS + 1))
+        MISMATCHED_FILES+=("$file")
+    else
+        echo -e "  ${GREEN}✓${NC} $pkg_name: $actual"
+    fi
+}
+
+# Check core package
+echo -e "${YELLOW}Core package:${NC}"
+check_version "packages/genkit/pyproject.toml" "$CORE_VERSION" "core"
+
+# Check all plugins
+echo ""
+echo -e "${YELLOW}Plugins (should match core version):${NC}"
+PLUGIN_COUNT=0
+for f in plugins/*/pyproject.toml; do
+    if [ -f "$f" ]; then
+        check_version "$f" "$CORE_VERSION" "plugin"
+        PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
+    fi
+done
+echo -e "  Total plugins: $PLUGIN_COUNT"
+
+# Check samples (should also match core version)
+echo ""
+echo -e "${YELLOW}Samples (should match core version):${NC}"
+SAMPLE_COUNT=0
+for f in samples/*/pyproject.toml; do
+    if [ -f "$f" ]; then
+        check_version "$f" "$CORE_VERSION" "sample"
+        SAMPLE_COUNT=$((SAMPLE_COUNT + 1))
+    fi
+done
+echo -e "  Total samples: $SAMPLE_COUNT"
+
+# Summary
+echo ""
+echo -e "${BLUE}=== Summary ===${NC}"
+echo "Core version: $CORE_VERSION"
+echo "Plugins: $PLUGIN_COUNT"
+echo "Samples: $SAMPLE_COUNT"
+echo "Total publishable: $((1 + PLUGIN_COUNT))"
+echo ""
+
+if [ $ERRORS -gt 0 ]; then
+    echo -e "${RED}FAILED${NC}: $ERRORS version mismatch(es) found"
+    echo ""
+    echo "Mismatched files:"
+    for f in "${MISMATCHED_FILES[@]}"; do
+        echo "  - $f"
+    done
+    echo ""
+    
+    if $FIX_MODE; then
+        echo -e "${YELLOW}Fixing mismatches...${NC}"
+        ./bin/bump_version "$CORE_VERSION"
+    else
+        echo "To fix, run:"
+        echo "  ./bin/check_versions --fix"
+        echo "  # or"
+        echo "  ./bin/bump_version $CORE_VERSION"
+    fi
+    exit 1
+else
+    echo -e "${GREEN}PASSED${NC}: All publishable packages have consistent versions"
+    exit 0
+fi

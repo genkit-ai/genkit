@@ -13,10 +13,10 @@
 // limitations under the License.
 
 // x-agent-interrupts demonstrates the experimental tool interrupts API
-// using DefineSessionFlowFromPrompt. Unlike x-interrupts (which handles
-// interrupts inside a flow), this sample separates concerns: the session
-// flow streams interrupts to the client, and the client handles user
-// interaction and sends resume data back.
+// using a prompt-backed agent (DefineAgent + FromPrompt). Unlike
+// x-interrupts (which handles interrupts inside a flow), this sample
+// separates concerns: the agent streams interrupts to the client, and the
+// client handles user interaction and sends resume data back.
 package main
 
 import (
@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/tool"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
@@ -100,7 +101,7 @@ func main() {
 			}, nil
 		})
 
-	paymentAgent := genkit.DefineSessionFlowFromPrompt[any, any](g, "paymentAgent", nil)
+	paymentAgent := genkit.DefineAgent[any](g, "paymentAgent", exp.FromPrompt())
 
 	fmt.Println("Payment Agent (Prompt Agent + Interrupts)")
 	fmt.Printf("Balance: $%.2f\n", accountBalance)
@@ -143,7 +144,7 @@ func main() {
 				interrupts = append(interrupts, chunk.ModelChunk.Interrupts()...)
 			}
 
-			if chunk.EndTurn {
+			if chunk.TurnEnd != nil {
 				if len(interrupts) == 0 {
 					fmt.Println()
 					fmt.Println()
@@ -160,7 +161,7 @@ func main() {
 				}
 				interrupts = nil
 
-				if err := conn.SendToolRestarts(restarts...); err != nil {
+				if err := conn.SendResume(&exp.ToolResume{Restart: restarts}); err != nil {
 					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 					break
 				}

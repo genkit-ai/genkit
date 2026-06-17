@@ -6,10 +6,11 @@
 
 import json
 import os
+import pathlib
 import tempfile
 
-from genkit.ai._runtime import RuntimeManager
-from genkit.ai._server import ServerSpec
+from genkit._ai._runtime import RuntimeManager
+from genkit._core._reflection import ServerSpec
 
 
 def test_server_spec() -> None:
@@ -60,5 +61,5 @@ def test_runtime_manager() -> None:
         new_dir = os.path.join(temp_dir, 'new_dir')
         with RuntimeManager(spec=spec, runtime_dir=new_dir) as rm:
             runtime_path = rm.write_runtime_file()
-            assert os.path.exists(new_dir)
+            assert pathlib.Path(new_dir).exists()
             assert runtime_path.exists()

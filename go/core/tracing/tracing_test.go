@@ -56,6 +56,28 @@ func TestSpanMetadata(t *testing.T) {
 	}
 }
 
+func TestSpanMetadataInit(t *testing.T) {
+	sm := &spanMetadata{
+		Name:  "name",
+		State: spanStateSuccess,
+		Path:  "parent/name",
+		Input: "in",
+		Init:  map[string]string{"prefix": "PFX:"},
+	}
+
+	got := sm.attributes()
+	want := []attribute.KeyValue{
+		attribute.String("genkit:name", "name"),
+		attribute.String("genkit:state", "success"),
+		attribute.String("genkit:input", `"in"`),
+		attribute.String("genkit:path", "parent/name"),
+		attribute.String("genkit:init", `{"prefix":"PFX:"}`),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("\ngot  %v\nwant %v", got, want)
+	}
+}
+
 func TestSpanMetadataWithTypeAndSubtype(t *testing.T) {
 	const (
 		testInput  = "test input"

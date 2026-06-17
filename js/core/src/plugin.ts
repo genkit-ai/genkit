@@ -16,6 +16,7 @@
 
 import type { z } from 'zod';
 import type { Action, ActionMetadata } from './action.js';
+import type { BackgroundAction } from './background-action.js';
 import type { ActionType } from './registry.js';
 
 export interface Provider<T> {
@@ -48,3 +49,5 @@ export interface InitializedPlugin {
 }
 
 export type Plugin<T extends any[]> = (...args: T) => PluginProvider;
+
+export type ResolvableAction = Action | BackgroundAction;

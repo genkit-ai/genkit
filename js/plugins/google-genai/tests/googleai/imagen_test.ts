@@ -109,12 +109,28 @@ describe('Google AI Imagen', () => {
           personGeneration: 'allow_adult',
           apiKey: 'test-key', // This should be excluded from the result
           numberOfImages: 1,
+          addWatermark: false,
+          foo: 0, // New passthrough with a valid 0 value.
+          bar: undefined, // This should be excluded because its undefined
+          baz: null, // This should be excluded because its null
         },
       };
       const result = toImagenParameters(request);
       assert.strictEqual(result.sampleCount, 1);
       assert.strictEqual(result.aspectRatio, '16:9');
       assert.strictEqual(result.personGeneration, 'allow_adult');
+      assert.strictEqual(result.addWatermark, false);
+      assert.strictEqual(result['foo'], 0);
+      assert.strictEqual(
+        result.hasOwnProperty('bar'),
+        false,
+        'bar should not be in parameters'
+      );
+      assert.strictEqual(
+        result.hasOwnProperty('baz'),
+        false,
+        'baz should not be in parameters'
+      );
       assert.strictEqual(
         result.hasOwnProperty('apiKey'),
         false,

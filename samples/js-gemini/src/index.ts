@@ -201,8 +201,8 @@ ai.defineFlow(
   }
 );
 
-// Gemini reasoning example.
-ai.defineFlow('reasoning', async (_, { sendChunk }) => {
+// Legacy Gemini reasoning example.
+ai.defineFlow('gemini 2.5 reasoning', async (_, { sendChunk }) => {
   const { message } = await ai.generate({
     prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
     model: googleAI.model('gemini-2.5-pro'),
@@ -216,6 +216,23 @@ ai.defineFlow('reasoning', async (_, { sendChunk }) => {
   });
 
   return message;
+});
+
+// Current Gemini reasoning example
+ai.defineFlow('thinkingConfig', async (_, { sendChunk }) => {
+  const { text } = await ai.generate({
+    prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
+    model: googleAI.model('gemini-3.1-pro-preview'),
+    config: {
+      thinkingConfig: {
+        thinkingLevel: 'HIGH',
+        includeThoughts: true,
+      },
+    },
+    onChunk: sendChunk,
+  });
+
+  return text;
 });
 
 // Gemini code execution.
@@ -238,7 +255,7 @@ ai.defineFlow('gemini-image-editing', async (_) => {
   const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
 
   const { media } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash-image-preview'),
+    model: googleAI.model('gemini-2.5-flash-image'),
     prompt: [
       { text: 'add the plant to my room' },
       { media: { url: `data:image/png;base64,${plant}` } },
@@ -255,7 +272,7 @@ ai.defineFlow('gemini-image-editing', async (_) => {
 // A simple example of image generation with Gemini.
 ai.defineFlow('imagen-image-generation', async (_) => {
   const { media } = await ai.generate({
-    model: googleAI.model('imagen-3.0-generate-002'),
+    model: googleAI.model('imagen-4.0-generate-001'),
     prompt: `generate an image of a banana riding a bicycle`,
   });
 

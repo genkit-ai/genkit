@@ -22,7 +22,7 @@ Use **kebab-case** with colon separators for subcommands.
 Use **snake_case** for tool names to align with MCP standards.
 
 - **Format**: `verb_noun`
-- **Examples**: `list_flows`, `run_flow`, `lookup_genkit_docs`
+- **Examples**: `list_flows`, `run_flow`, `list_genkit_docs`, `read_genkit_docs`
 
 ## CLI Command Architecture
 

@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from genkit.ai import ActionKind
+from genkit import ActionKind
 from genkit.plugins.ollama import Ollama, ollama_name
 from genkit.plugins.ollama.embedders import EmbeddingDefinition
 from genkit.plugins.ollama.models import ModelDefinition
@@ -129,9 +129,9 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     class MockListResponse(BaseModel):
         models: list[MockModelResponse]
 
-    _client_mock = MagicMock()
+    client_mock = MagicMock()
     list_method_mock = AsyncMock()
-    _client_mock.list = list_method_mock
+    client_mock.list = list_method_mock
 
     list_method_mock.return_value = MockListResponse(
         models=[
@@ -141,7 +141,7 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     )
 
     def mock_client() -> MagicMock:
-        return _client_mock
+        return client_mock
 
     ollama_plugin_instance.client = mock_client
 

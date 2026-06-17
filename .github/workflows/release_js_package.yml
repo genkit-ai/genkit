@@ -65,7 +65,9 @@ jobs:
     - name: release script
       shell: bash
       run: |
-          cd ${{ inputs.packageDir }}
-          pnpm publish --tag ${{ inputs.releaseTag }} --publish-branch ${{ steps.extract_branch.outputs.branch }} --access=public --registry https://wombat-dressing-room.appspot.com
+          cd ${INPUTS_PACKAGEDIR}
+          pnpm publish --tag ${{ inputs.releaseTag }} --publish-branch ${STEPS_EXTRACT_BRANCH_OUTPUTS_BRANCH} --access=public --registry https://wombat-dressing-room.appspot.com
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+        INPUTS_PACKAGEDIR: ${{ inputs.packageDir }}
+        STEPS_EXTRACT_BRANCH_OUTPUTS_BRANCH: ${{ steps.extract_branch.outputs.branch }}

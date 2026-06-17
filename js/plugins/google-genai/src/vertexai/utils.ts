@@ -47,6 +47,11 @@ function parseFirebaseProjectId(): string | undefined {
   }
 }
 
+export function shouldUseLegacyEndpoint(model: string) {
+  // This only covers lyria models so far
+  return model === 'lyria-002';
+}
+
 let __mockDerivedOptions: ClientOptions | undefined = undefined;
 function setMockDerivedOptions(options: ClientOptions | undefined): void {
   __mockDerivedOptions = options;
@@ -147,6 +152,7 @@ async function getGlobalDerivedOptions(
     location: 'global',
     projectId,
     authClient,
+    experimental_debugTraces: options?.experimental_debugTraces,
   };
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;
@@ -162,6 +168,7 @@ function getExpressDerivedOptions(
   return {
     kind: 'express',
     apiKey,
+    experimental_debugTraces: options?.experimental_debugTraces,
   };
 }
 
@@ -217,6 +224,7 @@ async function getRegionalDerivedOptions(
     location,
     projectId,
     authClient,
+    experimental_debugTraces: options?.experimental_debugTraces,
   };
   if (options?.apiKey) {
     clientOpt.apiKey = options.apiKey;

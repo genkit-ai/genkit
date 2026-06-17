@@ -52,10 +52,10 @@ type ModelOperation = core.Operation[*ModelResponse]
 // StartModelOpFunc starts a background model operation.
 type StartModelOpFunc = func(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
 
-// CheckOperationFunc checks the status of a background model operation.
+// CheckModelOpFunc checks the status of a background model operation.
 type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
-// CancelOperationFunc cancels a background model operation.
+// CancelModelOpFunc cancels a background model operation.
 type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
 // BackgroundModelOptions holds configuration for defining a background model

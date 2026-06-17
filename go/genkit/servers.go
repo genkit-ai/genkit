@@ -84,20 +84,50 @@ func WithStreamManager(manager streaming.StreamManager) HandlerOption {
 
 // Handler returns an HTTP handler function that serves the action with the provided options.
 //
+// The provided HandlerOptions are applied during construction. If any option
+// fails to apply, Handler panics.
+//
 // Example:
 //
-//	genkit.Handler(g, genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
-//		return api.ActionContext{"myKey": "myValue"}, nil
-//	}))
+//	genkit.Handler(
+//		g,
+//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
+//			return api.ActionContext{"myKey": "myValue"}, nil
+//		}))
 func Handler(a api.Action, opts ...HandlerOption) http.HandlerFunc {
+	return wrapHandler(HandlerFunc(a, opts...))
+}
+
+// HandlerFunc returns an HTTP handler function that executes the given action
+// and returns an error instead of writing it directly to the response.
+//
+// It is intended for use with web frameworks that expect handlers with the
+// signature:
+//
+//	func(http.ResponseWriter, *http.Request) error
+//
+// so that errors can be handled centrally (e.g., by middleware).
+//
+// The provided HandlerOptions are applied during construction. If any option
+// fails to apply, HandlerFunc panics.
+//
+// Example:
+//
+//	genkit.HandlerFunc(
+//		g,
+//		genkit.WithContextProviders(func(ctx context.Context, req core.RequestData) (api.ActionContext, error) {
+//			return api.ActionContext{"myKey": "myValue"}, nil
+//		}),
+//	)
+func HandlerFunc(a api.Action, opts ...HandlerOption) func(http.ResponseWriter, *http.Request) error {
 	options := &handlerOptions{}
 	for _, opt := range opts {
 		if err := opt.applyHandler(options); err != nil {
-			panic(fmt.Errorf("genkit.Handler: error applying options: %w", err))
+			panic(fmt.Errorf("genkit.HandlerFunc: error applying options: %w", err))
 		}
 	}
 
-	return wrapHandler(handler(a, options))
+	return handler(a, options)
 }
 
 // wrapHandler wraps an HTTP handler function with common logging and error handling.
@@ -136,6 +166,7 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 
 		var body struct {
 			Data json.RawMessage `json:"data"`
+			Init json.RawMessage `json:"init,omitempty"` // Per-session init for bidi actions; rejected otherwise.
 		}
 		if r.Body != nil && r.ContentLength > 0 {
 			defer r.Body.Close()
@@ -144,36 +175,30 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 			}
 		}
 
+		// Rejected before the streaming branch commits to SSE headers, so a
+		// non-bidi action receiving init fails with a proper HTTP 400 on
+		// every path rather than an in-band SSE error event on a 200.
+		if err := checkInitSupported(a, body.Init); err != nil {
+			return err
+		}
+
+		run := func(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error) (json.RawMessage, error) {
+			r, err := runActionWithOptionalInit(ctx, a, input, body.Init, cb)
+			if err != nil {
+				return nil, err
+			}
+			return r.Result, nil
+		}
+
 		stream, err := parseBoolQueryParam(r, "stream")
 		if err != nil {
 			return err
 		}
 		stream = stream || r.Header.Get("Accept") == "text/event-stream"
 
-		ctx := r.Context()
-		if opts.ContextProviders != nil {
-			for _, ctxProvider := range opts.ContextProviders {
-				headers := make(map[string]string, len(r.Header))
-				for k, v := range r.Header {
-					headers[strings.ToLower(k)] = strings.Join(v, " ")
-				}
-
-				actionCtx, err := ctxProvider(ctx, core.RequestData{
-					Method:  r.Method,
-					Headers: headers,
-					Input:   body.Data,
-				})
-				if err != nil {
-					logger.FromContext(ctx).Error("error providing action context from request", "err", err)
-					return err
-				}
-
-				if existing := core.FromContext(ctx); existing != nil {
-					maps.Copy(existing, actionCtx)
-					actionCtx = existing
-				}
-				ctx = core.WithActionContext(ctx, actionCtx)
-			}
+		ctx, err := applyContextProviders(r.Context(), r, opts.ContextProviders, body.Data)
+		if err != nil {
+			return err
 		}
 
 		if stream {
@@ -189,14 +214,14 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 			w.Header().Set("Transfer-Encoding", "chunked")
 
 			if opts.StreamManager != nil {
-				return runWithDurableStreaming(ctx, w, a, opts.StreamManager, body.Data)
+				return runWithDurableStreaming(ctx, w, run, opts.StreamManager, body.Data)
 			}
 
-			return runWithStreaming(ctx, w, a, body.Data)
+			return runWithStreaming(ctx, w, run, body.Data)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		out, err := a.RunJSON(ctx, body.Data, nil)
+		out, err := run(ctx, body.Data, nil)
 		if err != nil {
 			return err
 		}
@@ -204,8 +229,44 @@ func handler(a api.Action, opts *handlerOptions) func(http.ResponseWriter, *http
 	}
 }
 
+// applyContextProviders runs the configured context providers against the
+// request and folds their results into ctx, so request-derived action
+// context (e.g. auth from headers) is available to the action. input is
+// handed to each provider as the request's decoded input
+// ([core.RequestData.Input]). A nil or empty providers slice returns ctx
+// unchanged.
+func applyContextProviders(ctx context.Context, r *http.Request, providers []core.ContextProvider, input json.RawMessage) (context.Context, error) {
+	for _, ctxProvider := range providers {
+		headers := make(map[string]string, len(r.Header))
+		for k, v := range r.Header {
+			headers[strings.ToLower(k)] = strings.Join(v, " ")
+		}
+
+		actionCtx, err := ctxProvider(ctx, core.RequestData{
+			Method:  r.Method,
+			Headers: headers,
+			Input:   input,
+		})
+		if err != nil {
+			logger.FromContext(ctx).Error("error providing action context from request", "err", err)
+			return ctx, err
+		}
+
+		if existing := core.FromContext(ctx); existing != nil {
+			maps.Copy(existing, actionCtx)
+			actionCtx = existing
+		}
+		ctx = core.WithActionContext(ctx, actionCtx)
+	}
+	return ctx, nil
+}
+
+// runJSONFunc abstracts over RunJSON and RunBidiJSON for the handler's
+// execution paths.
+type runJSONFunc = func(context.Context, json.RawMessage, func(context.Context, json.RawMessage) error) (json.RawMessage, error)
+
 // runWithStreaming executes the action with standard HTTP streaming (no durability).
-func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, input json.RawMessage) error {
+func runWithStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFunc, input json.RawMessage) error {
 	callback := func(ctx context.Context, msg json.RawMessage) error {
 		if err := writeSSEMessage(w, msg); err != nil {
 			return err
@@ -216,7 +277,7 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, 
 		return nil
 	}
 
-	out, err := a.RunJSON(ctx, input, callback)
+	out, err := run(ctx, input, callback)
 	if err != nil {
 		if werr := writeSSEError(w, err); werr != nil {
 			return werr
@@ -233,7 +294,7 @@ func runWithStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, 
 // original client disconnects, the flow continues running and writing to durable
 // storage. This allows other clients to subscribe to the stream and receive the
 // remaining chunks and final result.
-func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.Action, sm streaming.StreamManager, input json.RawMessage) error {
+func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, run runJSONFunc, sm streaming.StreamManager, input json.RawMessage) error {
 	streamID := uuid.New().String()
 
 	durableStream, err := sm.Open(ctx, streamID)
@@ -271,7 +332,7 @@ func runWithDurableStreaming(ctx context.Context, w http.ResponseWriter, a api.A
 		return nil
 	}
 
-	out, err := a.RunJSON(durableCtx, input, callback)
+	out, err := run(durableCtx, input, callback)
 	if err != nil {
 		durableStream.Error(durableCtx, err)
 		select {

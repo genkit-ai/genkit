@@ -23,7 +23,7 @@ const ai = genkit({
 
 const prompt = ai.definePrompt({
   name: 'Character Prompt',
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   input: {
     schema: z.object({
       inspiration: z.string(),

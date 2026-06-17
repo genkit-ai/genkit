@@ -18,19 +18,17 @@
 """Constants for context caching."""
 
 CONTEXT_CACHE_SUPPORTED_MODELS = [
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-001',
-    'gemini-1.5-pro',
-    'gemini-1.5-pro-001',
+    'gemini-2.0-flash',
     'gemini-2.0-flash-001',
-    'gemini-2.0-flash-exp',
     'gemini-3-flash-preview',
+    'gemini-3-pro-preview',
 ]
 
 INVALID_ARGUMENT_MESSAGES = {
     'modelVersion': (
-        'Model version is required for context caching, supported only in '
-        "${CONTEXT_CACHE_SUPPORTED_MODELS.join(',')} models."
+        'Model version is required for context caching. Supported models: '
+        + ', '.join(CONTEXT_CACHE_SUPPORTED_MODELS)
+        + '.'
     ),
     'tools': 'Context caching cannot be used simultaneously with tools.',
     'codeExecution': 'Context caching cannot be used simultaneously with code execution.',

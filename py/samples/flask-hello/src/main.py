@@ -14,42 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Flask integration sample - Serve Genkit flows via Flask.
+"""Flask + Genkit - Serve flows as HTTP endpoints. See README.md."""
 
-This sample demonstrates how to integrate Genkit flows with a Flask web server,
-enabling HTTP API endpoints that leverage AI capabilities.
-
-See README.md for testing instructions.
-
-Key Features
-============
-| Feature Description                     | Example Function / Code Snippet     |
-|-----------------------------------------|-------------------------------------|
-| Flask Integration                       | `genkit_flask_handler`              |
-| Context Provider                        | `my_context_provider`               |
-| Request Header Access                   | `request.request.headers`           |
-| Flow Context Usage                      | `ctx.context.get("username")`       |
-"""
-
-import os
 from typing import cast
 
 from flask import Flask
 from pydantic import BaseModel, Field
-from rich.traceback import install as install_rich_traceback
 
-from genkit.ai import Genkit
-from genkit.blocks.model import GenerateResponseWrapper
-from genkit.core.action import ActionRunContext
-from genkit.core.context import RequestData
+from genkit import Genkit, ModelResponse
+from genkit._core._action import ActionRunContext
+from genkit._core._context import RequestData
 from genkit.plugins.flask import genkit_flask_handler
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.google_genai.models.gemini import GoogleAIGeminiVersion
-
-install_rich_traceback(show_locals=True, width=120, extra_lines=3)
-
-if 'GEMINI_API_KEY' not in os.environ:
-    os.environ['GEMINI_API_KEY'] = input('Please enter your GEMINI_API_KEY: ')
 
 ai = Genkit(
     plugins=[GoogleAI()],
@@ -79,10 +56,17 @@ async def my_context_provider(request: RequestData[dict[str, object]]) -> dict[s
 async def say_hi(
     input: SayHiInput,
     ctx: ActionRunContext | None = None,
-) -> GenerateResponseWrapper:
+) -> ModelResponse:
     """Say hi to the user."""
     username = ctx.context.get('username') if ctx is not None else 'unknown'
-    return await ai.generate(
-        on_chunk=ctx.send_chunk if ctx is not None else None,
+    stream_response = ai.generate_stream(
         prompt=f'tell a medium sized joke about {input.name} for user {username}',
     )
+    async for chunk in stream_response.stream:
+        if ctx is not None and chunk.text:
+            ctx.send_chunk(chunk.text)
+    return await stream_response.response
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)  # noqa: S104

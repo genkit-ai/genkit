@@ -32,7 +32,7 @@ const EmptyPartSchema = z.object({
  * Zod schema for a text part.
  */
 export const TextPartSchema = EmptyPartSchema.extend({
-  /** The text of the document. */
+  /** The text of the message. */
   text: z.string(),
 });
 
@@ -89,6 +89,7 @@ export const ToolRequestSchema = z.object({
   /** Whether the request is a partial chunk. */
   partial: z.boolean().optional(),
 });
+export type ToolRequest = z.infer<typeof ToolRequestSchema>;
 
 /**
  * Zod schema of a tool request part.
@@ -103,6 +104,9 @@ export const ToolRequestPartSchema = EmptyPartSchema.extend({
  */
 export type ToolRequestPart = z.infer<typeof ToolRequestPartSchema>;
 
+/**
+ * Zod schema of a tool response.
+ */
 const ToolResponseSchemaBase = z.object({
   /** The call id or reference for a specific request. */
   ref: z.string().optional(),
@@ -134,6 +138,9 @@ export const ToolResponsePartSchema = EmptyPartSchema.extend({
   toolResponse: ToolResponseSchema,
 });
 
+/**
+ * Tool response part.
+ */
 export type ToolResponsePart = z.infer<typeof ToolResponsePartSchema>;
 
 /**
@@ -196,6 +203,7 @@ export type Part = z.infer<typeof PartSchema>;
 export const MultipartToolResponseSchema = z.object({
   output: z.unknown().optional(),
   content: z.array(PartSchema).optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export type MultipartToolResponse = z.infer<typeof MultipartToolResponseSchema>;

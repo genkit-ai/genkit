@@ -14,23 +14,31 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Anthropic model implementations."""
+"""Anthropic model implementations.
 
+Supports Prompt Caching, PDF/Document input, and extended thinking in
+addition to standard chat, vision, and tool-calling capabilities.
+
+See:
+    - Cache control: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+    - Document input: https://docs.anthropic.com/en/docs/build-with-claude/pdf-support
+"""
+
+import json
 from typing import Any
+
+import structlog
 
 from anthropic import AsyncAnthropic
 from anthropic.types import Message as AnthropicMessage
-from genkit.ai import ActionRunContext
-from genkit.blocks.model import get_basic_usage_stats
-from genkit.plugins.anthropic.model_info import get_model_info
-from genkit.types import (
+from genkit import (
     FinishReason,
-    GenerateRequest,
-    GenerateResponse,
-    GenerateResponseChunk,
-    GenerationUsage,
     MediaPart,
     Message,
+    ModelRequest,
+    ModelResponse,
+    ModelResponseChunk,
+    ModelUsage,
     Part,
     Role,
     TextPart,
@@ -38,15 +46,51 @@ from genkit.types import (
     ToolRequestPart,
     ToolResponsePart,
 )
+from genkit.model import get_basic_usage_stats
+from genkit.plugin_api import ActionRunContext
+from genkit.plugins.anthropic.model_info import get_model_info
+from genkit.plugins.anthropic.utils import (
+    build_cache_usage,
+    get_cache_control,
+    maybe_strip_fences,
+    to_anthropic_media,
+)
+
+logger = structlog.get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+
+
+def _to_anthropic_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Transform a JSON schema for Anthropic structured output.
+
+    Anthropic requires ``additionalProperties: false`` on all object
+    types.  This recursively adds it.
+
+    See:
+        https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs#json-schema-limitations
+    """
+    out = dict(schema)
+    out.pop('$schema', None)
+    if out.get('type') == 'object':
+        out['additionalProperties'] = False
+    for key, value in out.items():
+        if isinstance(value, dict):
+            out[key] = _to_anthropic_schema(value)
+    return out
 
 
 class AnthropicModel:
     """Represents an Anthropic language model for use with Genkit.
 
-    Encapsulates interaction logic for a specific Claude model
+    Encapsulates interaction logic for a specific Claude model,
     enabling its use within Genkit for generative tasks.
+
+    Supports:
+        - Prompt caching via ``cache_control`` metadata on content parts
+        - PDF and plain-text document input via ``DocumentBlockParam``
+        - Extended thinking via ``thinking`` config parameter
+        - Tool use / function calling
     """
 
     def __init__(self, model_name: str, client: AsyncAnthropic) -> None:
@@ -60,10 +104,11 @@ class AnthropicModel:
             client: AsyncAnthropic client instance.
         """
         model_info = get_model_info(model_name)
+        self._model_info = model_info
         self.model_name = model_info.versions[0] if model_info.versions else model_name
         self.client = client
 
-    async def generate(self, request: GenerateRequest, ctx: ActionRunContext | None = None) -> GenerateResponse:
+    async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
         """Generate response from Anthropic.
 
         Args:
@@ -76,13 +121,25 @@ class AnthropicModel:
         params = self._build_params(request)
         streaming = ctx and ctx.is_streaming
 
+        logger.debug('Anthropic generate request', model=self.model_name, streaming=bool(streaming))
+
         if streaming:
             assert ctx is not None  # streaming requires ctx
             response = await self._generate_streaming(params, ctx)
         else:
             response = await self.client.messages.create(**params)
 
+        logger.debug(
+            'Anthropic raw API response',
+            model=self.model_name,
+            stop_reason=str(response.stop_reason),
+            content_blocks=len(response.content),
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
+
         content = self._to_genkit_content(response.content)
+        content = maybe_strip_fences(request, content)
 
         response_message = Message(role=Role.MODEL, content=content)
         basic_usage = get_basic_usage_stats(input_=request.messages, response=response_message)
@@ -96,21 +153,37 @@ class AnthropicModel:
         stop_reason_str = str(response.stop_reason) if response.stop_reason else ''
         finish_reason = finish_reason_map.get(stop_reason_str, FinishReason.UNKNOWN)
 
-        return GenerateResponse(
+        # Build usage with cache-aware token counts.
+        usage = self._build_usage(response, basic_usage)
+
+        return ModelResponse(
             message=response_message,
-            usage=GenerationUsage(
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
-                total_tokens=response.usage.input_tokens + response.usage.output_tokens,
-                input_characters=basic_usage.input_characters,
-                output_characters=basic_usage.output_characters,
-                input_images=basic_usage.input_images,
-                output_images=basic_usage.output_images,
-            ),
+            usage=usage,
             finish_reason=finish_reason,
         )
 
-    def _build_params(self, request: GenerateRequest) -> dict[str, Any]:
+    def _build_usage(self, response: AnthropicMessage, basic_usage: ModelUsage) -> ModelUsage:
+        """Build usage stats including cache read/write token counts.
+
+        Delegates to :func:`utils.build_cache_usage` for the actual
+        construction.
+
+        Args:
+            response: The Anthropic API response.
+            basic_usage: Basic character/image usage from message content.
+
+        Returns:
+            ModelUsage with token and character counts.
+        """
+        return build_cache_usage(
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            basic_usage=basic_usage,
+            cache_creation_input_tokens=getattr(response.usage, 'cache_creation_input_tokens', None) or 0,
+            cache_read_input_tokens=getattr(response.usage, 'cache_read_input_tokens', None) or 0,
+        )
+
+    def _build_params(self, request: ModelRequest) -> dict[str, Any]:
         """Build Anthropic API parameters."""
         config = request.config
         params: dict[str, Any] = {}
@@ -119,7 +192,7 @@ class AnthropicModel:
             params = config.copy()
         elif config:
             if hasattr(config, 'model_dump'):
-                params = config.model_dump(exclude_none=True)
+                params = config.model_dump(exclude_none=True, by_alias=False)
             else:
                 params = {k: v for k, v in vars(config).items() if v is not None}
 
@@ -134,11 +207,6 @@ class AnthropicModel:
         thinking = params.pop('thinking', None)
         metadata = params.pop('metadata', None)
 
-        # Standard mapped fields are already in params if they share names (temperature, top_p, stop_sequences)
-        # But we ensure they are set correctly if valid
-        # Actually, if they are in params, they are good.
-        # We just need to handle renaming/logic.
-
         params['model'] = self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
@@ -146,28 +214,44 @@ class AnthropicModel:
         # Remove known genkit keys that don't map directly or are handled
         params.pop('version', None)  # If version was passed through config
 
-        if thinking:
-            if isinstance(thinking, dict):
-                anthropic_thinking: dict[str, str | int] = {}
-                # Handle boolean enabled -> type="enabled"
-                if thinking.get('enabled') is True or thinking.get('type') == 'enabled':
-                    anthropic_thinking['type'] = 'enabled'
+        if thinking and isinstance(thinking, dict):
+            anthropic_thinking: dict[str, str | int] = {}
+            # Handle boolean enabled -> type="enabled"
+            if thinking.get('enabled') is True or thinking.get('type') == 'enabled':
+                anthropic_thinking['type'] = 'enabled'
 
-                # Handle camelCase -> snake_case for budget tokens
-                tokens = thinking.get('budgetTokens', thinking.get('budget_tokens'))
-                if tokens:
-                    anthropic_thinking['budget_tokens'] = int(tokens)
+            # Handle camelCase -> snake_case for budget tokens
+            tokens = thinking.get('budgetTokens', thinking.get('budget_tokens'))
+            if tokens:
+                anthropic_thinking['budget_tokens'] = int(tokens)
 
-                if anthropic_thinking.get('type') == 'enabled':
-                    params['thinking'] = anthropic_thinking
-                    # Anthropic requires temperature to be None/excluded if thinking is enabled?
-                    # Actually standard behavior is: if thinking, extended thinking model rules apply.
-                    # We pass it if valid.
+            if anthropic_thinking.get('type') == 'enabled':
+                params['thinking'] = anthropic_thinking
 
         if metadata:
             params['metadata'] = metadata
 
         system = self._extract_system(request.messages)
+
+        # Handle JSON output constraint
+        if request.output_format == 'json':
+            supports_json = 'json' in (self._model_info.supports.output or []) if self._model_info.supports else False
+            if request.output_schema and supports_json:
+                # Use native structured outputs via output_config.
+                params['output_config'] = {
+                    'format': {
+                        'type': 'json_schema',
+                        'schema': _to_anthropic_schema(request.output_schema),
+                    }
+                }
+            else:
+                # Fall back to system prompt instruction.
+                instruction = '\n\nOutput valid JSON. Do not wrap the JSON in markdown code fences.'
+                if request.output_schema:
+                    schema_str = json.dumps(request.output_schema, indent=2)
+                    instruction += f'\n\nFollow this JSON schema:\n{schema_str}'
+                system = (system or '') + instruction
+
         if system:
             params['system'] = system
 
@@ -192,17 +276,78 @@ class AnthropicModel:
         return params
 
     async def _generate_streaming(self, params: dict[str, Any], ctx: ActionRunContext) -> AnthropicMessage:
-        """Handle streaming generation."""
+        """Handle streaming generation.
+
+        Processes Anthropic streaming events including text deltas and
+        tool-use blocks.  Tool-use blocks arrive as:
+
+        1. ``content_block_start`` with ``content_block.type == 'tool_use'``
+        2. Zero or more ``content_block_delta`` with ``delta.type == 'input_json_delta'``
+        3. ``content_block_stop``
+
+        We track in-progress tool calls and emit a
+        :class:`ModelResponseChunk` containing the tool request when
+        the block finishes.
+        """
+        # Track in-progress tool-use blocks by index.
+        pending_tools: dict[int, dict[str, Any]] = {}
+
         async with self.client.messages.stream(**params) as stream:
             async for chunk in stream:
-                if chunk.type == 'content_block_delta' and hasattr(chunk, 'delta') and hasattr(chunk.delta, 'text'):
-                    ctx.send_chunk(
-                        GenerateResponseChunk(
-                            role=Role.MODEL,
-                            index=0,
-                            content=[Part(root=TextPart(text=str(chunk.delta.text)))],
+                if chunk.type == 'content_block_start' and hasattr(chunk, 'content_block'):
+                    block = chunk.content_block
+                    if getattr(block, 'type', None) == 'tool_use':
+                        idx = getattr(chunk, 'index', None)
+                        if idx is not None:
+                            pending_tools[idx] = {
+                                'id': getattr(block, 'id', ''),
+                                'name': getattr(block, 'name', ''),
+                                'input_json': '',
+                            }
+
+                elif chunk.type == 'content_block_delta' and hasattr(chunk, 'delta'):
+                    delta = chunk.delta
+                    if getattr(delta, 'type', None) == 'text_delta' and hasattr(delta, 'text'):
+                        ctx.send_chunk(
+                            ModelResponseChunk(
+                                role=Role.MODEL,
+                                index=0,
+                                content=[Part(root=TextPart(text=str(delta.text)))],
+                            )
                         )
-                    )
+                    elif getattr(delta, 'type', None) == 'input_json_delta' and hasattr(delta, 'partial_json'):
+                        idx = getattr(chunk, 'index', None)
+                        if idx is not None and idx in pending_tools:
+                            pending_tools[idx]['input_json'] += delta.partial_json
+
+                elif chunk.type == 'content_block_stop':
+                    idx = getattr(chunk, 'index', None)
+                    if idx is not None and idx in pending_tools:
+                        tool_info = pending_tools.pop(idx)
+                        tool_input: object = {}
+                        if tool_info['input_json']:
+                            try:
+                                tool_input = json.loads(tool_info['input_json'])
+                            except (json.JSONDecodeError, TypeError):
+                                tool_input = tool_info['input_json']
+                        ctx.send_chunk(
+                            ModelResponseChunk(
+                                role=Role.MODEL,
+                                index=0,
+                                content=[
+                                    Part(
+                                        root=ToolRequestPart(
+                                            tool_request=ToolRequest(
+                                                ref=tool_info['id'],
+                                                name=tool_info['name'],
+                                                input=tool_input,
+                                            )
+                                        )
+                                    )
+                                ],
+                            )
+                        )
+
             return await stream.get_final_message()
 
     def _extract_system(self, messages: list[Message]) -> str | None:
@@ -218,7 +363,12 @@ class AnthropicModel:
         return None
 
     def _to_anthropic_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
-        """Convert Genkit messages to Anthropic format."""
+        """Convert Genkit messages to Anthropic format.
+
+        Handles text, media (images), tool use/result, and document
+        (PDF/plain-text) content parts. Applies ``cache_control``
+        metadata when present on a part's metadata.
+        """
         result = []
         for msg in messages:
             if msg.role == Role.SYSTEM:
@@ -227,41 +377,46 @@ class AnthropicModel:
             content: list[dict[str, Any]] = []
             for part in msg.content:
                 actual_part = part.root if isinstance(part, Part) else part
-                if isinstance(actual_part, TextPart):
-                    content.append({'type': 'text', 'text': actual_part.text})
-                elif isinstance(actual_part, MediaPart):
-                    content.append(self._to_anthropic_media(actual_part))
-                elif isinstance(actual_part, ToolRequestPart):
-                    content.append({
-                        'type': 'tool_use',
-                        'id': actual_part.tool_request.ref,
-                        'name': actual_part.tool_request.name,
-                        'input': actual_part.tool_request.input,
-                    })
-                elif isinstance(actual_part, ToolResponsePart):
-                    content.append({
-                        'type': 'tool_result',
-                        'tool_use_id': actual_part.tool_response.ref,
-                        'content': str(actual_part.tool_response.output),
-                    })
+                block = self._to_anthropic_block(actual_part)
+                if block is not None:
+                    # Apply cache_control from part metadata if present.
+                    cache_meta = get_cache_control(actual_part)
+                    if cache_meta:
+                        block['cache_control'] = cache_meta
+                    content.append(block)
             result.append({'role': role, 'content': content})
         return result
 
-    def _to_anthropic_media(self, media_part: MediaPart) -> dict[str, Any]:
-        """Convert media part to Anthropic format."""
-        url = media_part.media.url
-        if url.startswith('data:'):
-            _, base64_data = url.split(',', 1)
-            content_type = url.split(':')[1].split(';')[0]
+    def _to_anthropic_block(self, part: Any) -> dict[str, Any] | None:  # noqa: ANN401
+        """Convert a single Genkit content part to an Anthropic content block.
+
+        Handles TextPart, MediaPart (images + PDFs), ToolRequestPart,
+        and ToolResponsePart.
+
+        Args:
+            part: The actual (unwrapped) content part.
+
+        Returns:
+            An Anthropic content block dict, or None if unrecognized.
+        """
+        if isinstance(part, TextPart):
+            return {'type': 'text', 'text': part.text}
+        if isinstance(part, MediaPart):
+            return to_anthropic_media(part)
+        if isinstance(part, ToolRequestPart):
             return {
-                'type': 'image',
-                'source': {
-                    'type': 'base64',
-                    'media_type': content_type,
-                    'data': base64_data,
-                },
+                'type': 'tool_use',
+                'id': part.tool_request.ref,
+                'name': part.tool_request.name,
+                'input': part.tool_request.input,
             }
-        return {'type': 'image', 'source': {'type': 'url', 'url': url}}
+        if isinstance(part, ToolResponsePart):
+            return {
+                'type': 'tool_result',
+                'tool_use_id': part.tool_response.ref,
+                'content': str(part.tool_response.output),
+            }
+        return None
 
     def _to_genkit_content(self, content_blocks: list[Any]) -> list[Part]:
         """Convert Anthropic response to Genkit format."""

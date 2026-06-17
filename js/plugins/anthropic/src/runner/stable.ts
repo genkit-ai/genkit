@@ -40,17 +40,15 @@ import type {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 
-import { KNOWN_CLAUDE_MODELS, extractVersion } from '../models.js';
 import {
   AnthropicConfigSchema,
   type AnthropicDocumentOptions,
   type ClaudeRunnerParams,
 } from '../types.js';
-import { removeUndefinedProperties } from '../utils.js';
+import { checkModelName, removeUndefinedProperties } from '../utils.js';
 import { BaseRunner } from './base.js';
 import {
   citationsDeltaToPart,
-  inputJsonDeltaError,
   redactedThinkingBlockToPart,
   textBlockToPart,
   textDeltaToPart,
@@ -225,10 +223,9 @@ export class Runner extends BaseRunner<RunnerTypes> {
       );
     }
 
-    const model = KNOWN_CLAUDE_MODELS[modelName];
     const { system, messages } = this.toAnthropicMessages(request.messages);
     const mappedModelName =
-      request.config?.version ?? extractVersion(model, modelName);
+      request.config?.version ?? checkModelName(modelName);
 
     const thinkingConfig = this.toAnthropicThinkingConfig(
       request.config?.thinking
@@ -243,16 +240,19 @@ export class Runner extends BaseRunner<RunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
     const body: MessageCreateParamsNonStreaming = {
       model: mappedModelName,
-      max_tokens:
-        request.config?.maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
       messages,
       system: system as TextBlockParam[],
-      stop_sequences: request.config?.stopSequences,
+      stop_sequences: stopSequences,
       temperature: request.config?.temperature,
       top_k: topK,
       top_p: topP,
@@ -276,10 +276,9 @@ export class Runner extends BaseRunner<RunnerTypes> {
       );
     }
 
-    const model = KNOWN_CLAUDE_MODELS[modelName];
     const { system, messages } = this.toAnthropicMessages(request.messages);
     const mappedModelName =
-      request.config?.version ?? extractVersion(model, modelName);
+      request.config?.version ?? checkModelName(modelName);
 
     const thinkingConfig = this.toAnthropicThinkingConfig(
       request.config?.thinking
@@ -294,6 +293,10 @@ export class Runner extends BaseRunner<RunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
@@ -359,10 +362,7 @@ export class Runner extends BaseRunner<RunnerTypes> {
         return citationsDeltaToPart(delta);
       }
 
-      if (delta.type === 'input_json_delta') {
-        throw inputJsonDeltaError();
-      }
-
+      // input_json_delta - ignore
       // signature_delta - ignore
       return undefined;
     }
@@ -486,6 +486,7 @@ export class Runner extends BaseRunner<RunnerTypes> {
         },
       },
       custom: response,
+      raw: response,
     };
   }
 }

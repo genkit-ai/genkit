@@ -173,19 +173,24 @@ describe('dynamic action provider', () => {
 
   it('gets action metadata record', async () => {
     let callCount = 0;
+    const resource1 = defineAction(
+      registry,
+      { name: 'resource1', actionType: 'resource' },
+      async () => 'resource1'
+    );
     const dap = defineDynamicActionProvider(registry, 'my-dap', async () => {
       callCount++;
       return {
         tool: [tool1, tool2],
-        flow: [tool1],
+        resource: [resource1],
       };
     });
 
     const record = await dap.getActionMetadataRecord('dap/my-dap');
     assert.deepStrictEqual(record, {
-      'dap/my-dap:tool/tool1': tool1.__action,
-      'dap/my-dap:tool/tool2': tool2.__action,
-      'dap/my-dap:flow/tool1': tool1.__action,
+      '/dynamic-action-provider/my-dap:tool/tool1': tool1.__action,
+      '/dynamic-action-provider/my-dap:tool/tool2': tool2.__action,
+      '/dynamic-action-provider/my-dap:resource/resource1': resource1.__action,
     });
     assert.strictEqual(callCount, 1);
   });
@@ -237,18 +242,16 @@ describe('dynamic action provider', () => {
       };
     });
 
-    let runInput: any;
+    let runResult: any;
     const originalRun = dap.run.bind(dap);
     dap.run = async (input, options) => {
-      runInput = input;
-      return originalRun(input, options);
+      runResult = await originalRun(input, options);
+      return runResult;
     };
 
     await dap.__cache.getOrFetch();
 
-    assert.deepStrictEqual(runInput, {
-      tool: [tool1.__action, tool2.__action],
-    });
+    assert.deepStrictEqual(runResult.result, [tool1.__action, tool2.__action]);
   });
 
   it('skips trace when requested', async () => {
@@ -276,6 +279,53 @@ describe('dynamic action provider', () => {
     await dap.__cache.getOrFetch();
     assert.strictEqual(runCalled, true);
     assert.strictEqual(callCount, 2);
+  });
+
+  it('propagates the correct key for dynamically provided actions', async () => {
+    let callCount = 0;
+    const toolV2 = defineAction(
+      registry,
+      { name: 'toolV2', actionType: 'tool.v2' },
+      async () => 'toolV2'
+    );
+
+    const dap = defineDynamicActionProvider(registry, 'my-dap', async () => {
+      callCount++;
+      return {
+        tool: [tool1, tool2, toolV2],
+      };
+    });
+
+    const action1 = await dap.getAction('tool', 'tool1');
+    assert.ok(action1);
+    assert.strictEqual(
+      action1.__action.key,
+      '/dynamic-action-provider/my-dap:tool/tool1'
+    );
+    assert.strictEqual(action1, tool1);
+
+    // A tool.v2 returned under the `tool` namespace gets mapped into the `tool` namespace.
+    const actionV2 = await dap.getAction('tool', 'toolV2');
+    assert.ok(actionV2);
+    assert.strictEqual(
+      actionV2.__action.key,
+      '/dynamic-action-provider/my-dap:tool/toolV2'
+    );
+    assert.strictEqual(actionV2, toolV2);
+
+    const metadata = await dap.listActionMetadata('tool', '*');
+    assert.strictEqual(
+      metadata[0].key,
+      '/dynamic-action-provider/my-dap:tool/tool1'
+    );
+    assert.strictEqual(
+      metadata[1].key,
+      '/dynamic-action-provider/my-dap:tool/tool2'
+    );
+    assert.strictEqual(
+      metadata[2].key,
+      '/dynamic-action-provider/my-dap:tool/toolV2'
+    );
   });
 
   it('identifies dynamic action providers', async () => {

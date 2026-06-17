@@ -17,7 +17,6 @@
 package ollama
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -25,16 +24,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
+	"github.com/invopop/jsonschema"
 )
 
 const provider = "ollama"
@@ -56,7 +59,55 @@ var (
 		ai.RoleSystem: "system",
 		ai.RoleTool:   "tool",
 	}
+	// defaultOllamaSupports defines the default capabilities for dynamically
+	// discovered Ollama models. All capabilities are enabled since local models
+	// vary widely and we can't query their capabilities individually.
+	defaultOllamaSupports = ai.ModelSupports{
+		Multiturn:  true,
+		Media:      true,
+		Tools:      true,
+		SystemRole: true,
+	}
+
+	// thinkingRegex matches <think> or <thinking> tags case-insensitively across multiple lines.
+	// It uses non-greedy matching (.*?) to correctly extract individual blocks when
+	// multiple blocks are present in a single response.
+	thinkingRegex = regexp.MustCompile("(?si)<(think|thinking)>(.*?)</(?:think|thinking)>")
 )
+
+// ollamaTagsResponse represents the response from GET /api/tags.
+type ollamaTagsResponse struct {
+	Models []ollamaLocalModel `json:"models"`
+}
+
+// ollamaLocalModel represents a locally available Ollama model.
+type ollamaLocalModel struct {
+	Name  string `json:"name"`
+	Model string `json:"model"`
+}
+
+// listLocalModels calls GET /api/tags to list locally installed Ollama models.
+func (o *Ollama) listLocalModels(ctx context.Context) ([]ollamaLocalModel, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", o.ServerAddress+"/api/tags", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := o.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch local models from Ollama: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama /api/tags returned status %d", resp.StatusCode)
+	}
+
+	var tagsResp ollamaTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tagsResp); err != nil {
+		return nil, fmt.Errorf("failed to decode /api/tags response: %w", err)
+	}
+	return tagsResp.Models, nil
+}
 
 func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.ModelOptions) ai.Model {
 	o.mu.Lock()
@@ -83,9 +134,10 @@ func (o *Ollama) DefineModel(g *genkit.Genkit, model ModelDefinition, opts *ai.M
 		}
 	}
 	meta := &ai.ModelOptions{
-		Label:    "Ollama - " + model.Name,
-		Supports: modelOpts.Supports,
-		Versions: []string{},
+		Label:        "Ollama - " + model.Name,
+		Supports:     modelOpts.Supports,
+		Versions:     []string{},
+		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
 	}
 	gen := &generator{model: model, serverAddress: o.ServerAddress, timeout: o.Timeout}
 	return genkit.DefineModel(g, api.NewName(provider, model.Name), meta, gen.generate)
@@ -119,29 +171,89 @@ type ollamaMessage struct {
 	Content   string           `json:"content,omitempty"`
 	Images    []string         `json:"images,omitempty"`
 	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
+	Thinking  string           `json:"thinking,omitempty"`
 }
 
-// Ollama has two API endpoints, one with a chat interface and another with a generate response interface.
-// That's why have multiple request interfaces for the Ollama API below.
+// ThinkOption controls thinking/reasoning behavior for models that support it.
+// Use [ThinkEnabled] for Ollama models (e.g. deepseek-r1) or [ThinkEffort]
+// for GPT-OSS models.
+type ThinkOption struct {
+	value any // bool or string; unexported to enforce use of constructors
+}
 
-/*
-TODO: Support optional, advanced parameters:
-format: the format to return a response in. Currently the only accepted value is json
-options: additional model parameters listed in the documentation for the Modelfile such as temperature
-system: system message to (overrides what is defined in the Modelfile)
-template: the prompt template to use (overrides what is defined in the Modelfile)
-context: the context parameter returned from a previous request to /generate, this can be used to keep a short conversational memory
-stream: if false the response will be returned as a single response object, rather than a stream of objects
-raw: if true no formatting will be applied to the prompt. You may choose to use the raw parameter if you are specifying a full templated prompt in your request to the API
-keep_alive: controls how long the model will stay loaded into memory following the request (default: 5m)
-*/
-type ollamaChatRequest struct {
-	Messages []*ollamaMessage `json:"messages"`
-	Images   []string         `json:"images,omitempty"`
-	Model    string           `json:"model"`
-	Stream   bool             `json:"stream"`
-	Format   string           `json:"format,omitempty"`
-	Tools    []ollamaTool     `json:"tools,omitempty"`
+// ThinkEnabled creates a ThinkOption that enables or disables thinking mode.
+// This is used with Ollama models like deepseek-r1.
+func ThinkEnabled(enabled bool) *ThinkOption {
+	return &ThinkOption{value: enabled}
+}
+
+// ThinkEffort creates a ThinkOption with an effort level for GPT-OSS models.
+// Valid values: "low", "medium", "high".
+func ThinkEffort(level string) *ThinkOption {
+	return &ThinkOption{value: level}
+}
+
+// IsEnabled reports whether thinking is active.
+func (t *ThinkOption) IsEnabled() bool {
+	if t == nil {
+		return false
+	}
+	switch v := t.value.(type) {
+	case bool:
+		return v
+	case string:
+		return v != ""
+	default:
+		return false
+	}
+}
+
+func (t ThinkOption) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.value)
+}
+
+func (t *ThinkOption) UnmarshalJSON(data []byte) error {
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		t.value = b
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		t.value = s
+		return nil
+	}
+	return fmt.Errorf("think must be a boolean or string, got: %s", data)
+}
+
+// JSONSchema returns a schema allowing either a boolean or a string.
+func (ThinkOption) JSONSchema() *jsonschema.Schema {
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			{Type: "boolean"},
+			{Type: "string"},
+		},
+	}
+}
+
+type GenerateContentConfig struct {
+	// Think controls thinking/reasoning mode.
+	// Use ThinkEnabled(true/false) for Ollama models, or
+	// ThinkEffort("low"/"medium"/"high") for GPT-OSS models.
+	Think *ThinkOption `json:"think,omitempty"`
+
+	// Runtime options
+	Seed        *int     `json:"seed,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopK        *int     `json:"top_k,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	MinP        *float64 `json:"min_p,omitempty"`
+	Stop        []string `json:"stop,omitempty"`
+	NumCtx      *int     `json:"num_ctx,omitempty"`
+	NumPredict  *int     `json:"num_predict,omitempty"`
+
+	// Ollama-specific
+	KeepAlive string `json:"keep_alive,omitempty"`
 }
 
 type ollamaModelRequest struct {
@@ -184,6 +296,7 @@ type ollamaChatResponse struct {
 	Message   struct {
 		Role      string           `json:"role"`
 		Content   string           `json:"content"`
+		Thinking  string           `json:"thinking"`
 		ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
 }
@@ -199,8 +312,9 @@ type Ollama struct {
 	ServerAddress string // Server address of oLLama.
 	Timeout       int    // Response timeout in seconds (defaulted to 30 seconds)
 
-	mu      sync.Mutex // Mutex to control access.
-	initted bool       // Whether the plugin has been initialized.
+	mu      sync.Mutex   // Mutex to control access.
+	initted bool         // Whether the plugin has been initialized.
+	client  *http.Client // Shared HTTP client for API calls (e.g., /api/tags).
 }
 
 func (o *Ollama) Name() string {
@@ -223,26 +337,79 @@ func (o *Ollama) Init(ctx context.Context) []api.Action {
 	if o.Timeout == 0 {
 		o.Timeout = 30
 	}
+	o.client = &http.Client{}
 	return []api.Action{}
+}
+
+// newModel creates an Ollama model without registering it in the Genkit registry.
+// It is used by ListActions (to generate ActionDesc) and ResolveAction (to return an Action).
+func (o *Ollama) newModel(name string, opts ai.ModelOptions) ai.Model {
+	meta := &ai.ModelOptions{
+		Label:        "Ollama - " + name,
+		Supports:     opts.Supports,
+		Versions:     []string{},
+		ConfigSchema: core.InferSchemaMap(GenerateContentConfig{}),
+	}
+	gen := &generator{
+		model:         ModelDefinition{Name: name, Type: "chat"},
+		serverAddress: o.ServerAddress,
+		timeout:       o.Timeout,
+	}
+	return ai.NewModel(api.NewName(provider, name), meta, gen.generate)
+}
+
+// ListActions calls /api/tags to discover locally installed Ollama models.
+func (o *Ollama) ListActions(ctx context.Context) []api.ActionDesc {
+	models, err := o.listLocalModels(ctx)
+	if err != nil {
+		slog.Error("unable to list ollama models", "error", err)
+		return nil
+	}
+
+	var actions []api.ActionDesc
+	for _, m := range models {
+		name := m.Name
+		// Filter out embedding models (following JS: !m.model.includes('embed'))
+		if strings.Contains(name, "embed") {
+			continue
+		}
+		model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
+		if action, ok := model.(api.Action); ok {
+			actions = append(actions, action.Desc())
+		}
+	}
+	return actions
+}
+
+// ResolveAction dynamically creates a model action on demand.
+func (o *Ollama) ResolveAction(atype api.ActionType, name string) api.Action {
+	if atype != api.ActionTypeModel {
+		return nil
+	}
+	model := o.newModel(name, ai.ModelOptions{Supports: &defaultOllamaSupports})
+	if action, ok := model.(api.Action); ok {
+		return action
+	}
+	return nil
+}
+
+// Ptr returns a pointer to the given value.
+func Ptr[T any](v T) *T {
+	return &v
 }
 
 // Generate makes a request to the Ollama API and processes the response.
 func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb func(context.Context, *ai.ModelResponseChunk) error) (*ai.ModelResponse, error) {
 	stream := cb != nil
 	var payload any
+	var thinkingEnabled bool
 	isChatModel := g.model.Type == "chat"
 
-	// Check if this is an image model
-	hasMediaSupport := slices.Contains(mediaSupportedModels, g.model.Name)
-
-	// Extract images if the model supports them
-	var images []string
-	var err error
-	if hasMediaSupport {
-		images, err = concatImages(input, []ai.Role{ai.RoleUser, ai.RoleModel})
-		if err != nil {
-			return nil, fmt.Errorf("failed to grab image parts: %v", err)
-		}
+	// Extract images from the request. Ollama will handle unsupported media
+	// gracefully, matching the JS plugin behavior of unconditionally forwarding images.
+	images, err := concatImages(input, []ai.Role{ai.RoleUser, ai.RoleModel})
+	if err != nil {
+		return nil, fmt.Errorf("failed to grab image parts: %v", err)
 	}
 
 	if !isChatModel {
@@ -263,12 +430,18 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 			}
 			messages = append(messages, message)
 		}
+
 		chatReq := ollamaChatRequest{
 			Messages: messages,
 			Model:    g.model.Name,
 			Stream:   stream,
 			Images:   images,
 		}
+		if err := chatReq.ApplyOptions(input.Config); err != nil {
+			return nil, fmt.Errorf("failed to apply options: %v", err)
+		}
+		thinkingEnabled = chatReq.Think.IsEnabled()
+
 		if len(input.Tools) > 0 {
 			tools, err := convertTools(input.Tools)
 			if err != nil {
@@ -317,7 +490,7 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 
 		var response *ai.ModelResponse
 		if isChatModel {
-			response, err = translateChatResponse(body)
+			response, err = translateChatResponse(body, thinkingEnabled)
 		} else {
 			response, err = translateModelResponse(body)
 		}
@@ -328,28 +501,29 @@ func (g *generator) generate(ctx context.Context, input *ai.ModelRequest, cb fun
 		return response, nil
 	} else {
 		var chunks []*ai.ModelResponseChunk
-		scanner := bufio.NewScanner(resp.Body)
+		decoder := json.NewDecoder(resp.Body)
 		chunkCount := 0
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			var raw json.RawMessage
+			if err := decoder.Decode(&raw); err == io.EOF {
+				break
+			} else if err != nil {
+				return nil, fmt.Errorf("reading response stream: %v", err)
+			}
 			chunkCount++
 
 			var chunk *ai.ModelResponseChunk
 			if isChatModel {
-				chunk, err = translateChatChunk(line)
+				chunk, err = translateChatChunk(string(raw))
 			} else {
-				chunk, err = translateGenerateChunk(line)
+				chunk, err = translateGenerateChunk(string(raw))
 			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to translate chunk: %v", err)
 			}
 			chunks = append(chunks, chunk)
 			cb(ctx, chunk)
-		}
-
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("reading response stream: %v", err)
 		}
 
 		// Create a final response with the merged chunks
@@ -417,6 +591,8 @@ func convertParts(role ai.Role, parts []*ai.Part) (*ollamaMessage, error) {
 				return nil, fmt.Errorf("failed to marshal tool response: %v", err)
 			}
 			contentBuilder.WriteString(string(outputJSON))
+		} else if part.IsReasoning() {
+			contentBuilder.WriteString(part.Text)
 		} else {
 			return nil, errors.New("unsupported content type")
 		}
@@ -433,18 +609,40 @@ func convertParts(role ai.Role, parts []*ai.Part) (*ollamaMessage, error) {
 }
 
 // translateChatResponse translates Ollama chat response into a genkit response.
-func translateChatResponse(responseData []byte) (*ai.ModelResponse, error) {
+// When thinkingEnabled is true, the function will also parse <think>/<thinking>
+// tags from content text as a fallback for models that don't return a dedicated
+// "thinking" JSON field.
+func translateChatResponse(responseData []byte, thinkingEnabled bool) (*ai.ModelResponse, error) {
 	var response ollamaChatResponse
 
 	if err := json.Unmarshal(responseData, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
+
 	modelResponse := &ai.ModelResponse{
 		FinishReason: ai.FinishReason("stop"),
 		Message: &ai.Message{
 			Role: ai.RoleModel,
 		},
 	}
+
+	// Check for thinking/reasoning in the dedicated JSON field first.
+	if response.Message.Thinking != "" {
+		aiPart := ai.NewReasoningPart(response.Message.Thinking, nil)
+		modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
+	} else if thinkingEnabled {
+		// Only parse <think>/<thinking> tags from content when thinking was
+		// explicitly requested. Without this guard, a model could legitimately
+		// return these tags as part of normal text output and they would be
+		// incorrectly hijacked.
+		thinking, content := parseThinking(response.Message.Content)
+		if thinking != "" {
+			aiPart := ai.NewReasoningPart(thinking, nil)
+			modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
+			response.Message.Content = content
+		}
+	}
+
 	if len(response.Message.ToolCalls) > 0 {
 		for _, toolCall := range response.Message.ToolCalls {
 			toolRequest := &ai.ToolRequest{
@@ -454,7 +652,10 @@ func translateChatResponse(responseData []byte) (*ai.ModelResponse, error) {
 			toolPart := ai.NewToolRequestPart(toolRequest)
 			modelResponse.Message.Content = append(modelResponse.Message.Content, toolPart)
 		}
-	} else if response.Message.Content != "" {
+	}
+
+	// Add remaining content as text if present
+	if response.Message.Content != "" {
 		aiPart := ai.NewTextPart(response.Message.Content)
 		modelResponse.Message.Content = append(modelResponse.Message.Content, aiPart)
 	}
@@ -490,6 +691,17 @@ func translateChatChunk(input string) (*ai.ModelResponseChunk, error) {
 		return nil, fmt.Errorf("failed to parse response JSON: %v", err)
 	}
 	chunk := &ai.ModelResponseChunk{}
+
+	// Check for thinking/reasoning first
+	if response.Message.Thinking != "" {
+		aiPart := ai.NewReasoningPart(response.Message.Thinking, nil)
+		chunk.Content = append(chunk.Content, aiPart)
+	}
+
+	if response.Message.Content != "" {
+		aiPart := ai.NewTextPart(response.Message.Content)
+		chunk.Content = append(chunk.Content, aiPart)
+	}
 	if len(response.Message.ToolCalls) > 0 {
 		for _, toolCall := range response.Message.ToolCalls {
 			toolRequest := &ai.ToolRequest{
@@ -499,9 +711,6 @@ func translateChatChunk(input string) (*ai.ModelResponseChunk, error) {
 			toolPart := ai.NewToolRequestPart(toolRequest)
 			chunk.Content = append(chunk.Content, toolPart)
 		}
-	} else if response.Message.Content != "" {
-		aiPart := ai.NewTextPart(response.Message.Content)
-		chunk.Content = append(chunk.Content, aiPart)
 	}
 
 	return chunk, nil
@@ -575,4 +784,20 @@ func concatImages(input *ai.ModelRequest, roleFilter []ai.Role) ([]string, error
 		}
 	}
 	return images, nil
+}
+
+// parseThinking extracts the thinking content from the response string.
+func parseThinking(content string) (string, string) {
+	matches := thinkingRegex.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return "", content
+	}
+
+	var thinkingParts []string
+	for _, match := range matches {
+		thinkingParts = append(thinkingParts, strings.TrimSpace(match[2]))
+	}
+
+	rest := thinkingRegex.ReplaceAllString(content, "")
+	return strings.Join(thinkingParts, "\n\n"), strings.TrimSpace(rest)
 }

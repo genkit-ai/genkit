@@ -20,69 +20,257 @@ package exp
 
 import (
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core"
+	"time"
 )
 
-// SessionFlowInit is the input for starting an session flow invocation.
-// Provide either SnapshotID (to load from store) or State (direct state).
-type SessionFlowInit[State any] struct {
-	// SnapshotID loads state from a persisted snapshot.
-	// Mutually exclusive with State.
+// AbortSnapshotRequest is the input for the abortSnapshot companion action.
+type AbortSnapshotRequest struct {
+	// SnapshotID identifies the snapshot whose invocation should be aborted.
+	SnapshotID string `json:"snapshotId"`
+}
+
+// AbortSnapshotResponse is the output of the abortSnapshot companion action.
+type AbortSnapshotResponse struct {
+	// Status is the snapshot's status after the abort attempt. For a
+	// pending snapshot this is [SnapshotStatusAborted]. For an
+	// already-terminal snapshot this is the existing terminal status (the
+	// abort is a no-op).
+	Status SnapshotStatus `json:"status,omitempty"`
+}
+
+// AgentFinishReason is why an agent turn or invocation finished.
+//
+// The first group mirrors the model-level [ai.FinishReason] so a turn backed
+// by a single generate call can forward its reason verbatim:
+// [AgentFinishReasonStop], [AgentFinishReasonLength],
+// [AgentFinishReasonBlocked], [AgentFinishReasonInterrupted],
+// [AgentFinishReasonOther] and [AgentFinishReasonUnknown].
+//
+// The remaining values are agent-specific outcomes with no generate-level
+// equivalent (they never arise from forwarding a model finish reason):
+// [AgentFinishReasonAborted], [AgentFinishReasonDetached] and
+// [AgentFinishReasonFailed].
+type AgentFinishReason string
+
+const (
+	// AgentFinishReasonStop indicates the model stopped naturally.
+	AgentFinishReasonStop AgentFinishReason = "stop"
+	// AgentFinishReasonLength indicates generation hit the token limit.
+	AgentFinishReasonLength AgentFinishReason = "length"
+	// AgentFinishReasonBlocked indicates generation was blocked (e.g. safety).
+	AgentFinishReasonBlocked AgentFinishReason = "blocked"
+	// AgentFinishReasonInterrupted indicates the model paused on a tool request
+	// awaiting input (e.g. human approval). The turn can be resumed by sending an
+	// [AgentInput] with a Resume payload.
+	AgentFinishReasonInterrupted AgentFinishReason = "interrupted"
+	// AgentFinishReasonOther indicates generation stopped for some other reason.
+	AgentFinishReasonOther AgentFinishReason = "other"
+	// AgentFinishReasonUnknown indicates the reason was unspecified.
+	AgentFinishReasonUnknown AgentFinishReason = "unknown"
+	// AgentFinishReasonAborted indicates the turn or invocation was aborted
+	// (e.g. a detached invocation aborted via the abortSnapshot companion action).
+	AgentFinishReasonAborted AgentFinishReason = "aborted"
+	// AgentFinishReasonDetached indicates the invocation was moved to the
+	// background because the client detached. The returned [AgentOutput] reports
+	// this reason; the persisted snapshot is later finalized with how the
+	// background work actually ended.
+	AgentFinishReasonDetached AgentFinishReason = "detached"
+	// AgentFinishReasonFailed indicates the turn or invocation terminated with an
+	// error.
+	AgentFinishReasonFailed AgentFinishReason = "failed"
+)
+
+// AgentInit is the input for starting an agent invocation.
+// SessionID, SnapshotID, and State are competing conversation sources,
+// and which are valid depends on the agent's state management:
+//   - Server-managed state (a session store is configured): callers may
+//     use SessionID (resume the session's latest snapshot), SnapshotID
+//     (resume a specific snapshot), or both (the session ID is asserted
+//     against the snapshot); sending State is rejected.
+//   - Client-managed state (no session store): callers may use State,
+//     which carries the conversation's identity inside it
+//     ([SessionState.SessionID]); sending SessionID or SnapshotID is
+//     rejected.
+//
+// Sending no fields starts a fresh invocation with empty state.
+type AgentInit[State any] struct {
+	// SessionID identifies the session (conversation) to resume or start.
+	// Only valid when the agent is server-managed (a session store is
+	// configured); mutually exclusive with State (a client-managed
+	// conversation carries its identity inside [SessionState.SessionID]).
+	// Alone, it resumes the session from its latest snapshot: the most
+	// recently updated row, whatever its status. If that row is a failed,
+	// aborted, or still-pending dead end the resume is rejected (pass
+	// SnapshotID to continue from a specific earlier point); if the session's
+	// history was forked by resuming an earlier snapshot again, the most
+	// recently updated branch wins. If the session has no snapshots yet, a
+	// brand-new conversation is started under this caller-chosen ID, and
+	// every snapshot it persists carries it. Combined with SnapshotID, it
+	// asserts which session the snapshot belongs to, and a mismatch is
+	// rejected.
+	SessionID string `json:"sessionId,omitempty"`
+	// SnapshotID loads state from a persisted snapshot. Only valid when the
+	// agent is server-managed (a session store is configured). May be
+	// combined with SessionID to validate that the snapshot belongs to that
+	// session. Mutually exclusive with State.
 	SnapshotID string `json:"snapshotId,omitempty"`
-	// State provides direct state for the invocation.
-	// Mutually exclusive with SnapshotID.
+	// State provides direct state for the invocation. Only valid when the
+	// agent is client-managed (no session store). The conversation's
+	// identity rides inside it ([SessionState.SessionID]): the framework
+	// mints one on the conversation's first invocation and echoes it on the
+	// output state, so resending the state object keeps the identity without
+	// tracking a separate field. Mutually exclusive with SessionID and
+	// SnapshotID.
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// SessionFlowInput is the input sent to an session flow during a conversation turn.
-type SessionFlowInput struct {
-	// Messages contains the user's input for this turn.
-	Messages []*ai.Message `json:"messages,omitempty"`
-	// ToolRestarts contains tool request parts to re-execute interrupted tools.
-	// Use [ai.ToolDef.RestartWith] to create these parts from an interrupted
-	// tool request. When set, the generate call resumes with these restarts
-	// instead of treating Messages as tool responses.
-	ToolRestarts []*ai.Part `json:"toolRestarts,omitempty"`
+// AgentInput is the input sent to an agent during a conversation turn.
+type AgentInput struct {
+	// Detach signals that the client wishes to disconnect after this input is
+	// accepted. The server writes a single pending snapshot (with empty
+	// state), returns [AgentOutput] with that snapshot ID, and continues
+	// processing any already-buffered inputs in a background context. The
+	// pending snapshot is finalized with the cumulative final state once all
+	// queued inputs are processed (or the invocation is aborted via the
+	// abortSnapshot companion action).
+	Detach bool `json:"detach,omitempty"`
+	// Message is the user's input for this turn.
+	Message *ai.Message `json:"message,omitempty"`
+	// Resume provides options for resuming an interrupted generation.
+	// Construct using [ai.ToolDef.RestartWith] / [ai.ToolDef.RespondWith]
+	// parts. When set, the generate call resumes with these parts instead
+	// of treating Message as a tool response.
+	Resume *ToolResume `json:"resume,omitempty"`
 }
 
-// SessionFlowOutput is the output when an session flow invocation completes.
-// It wraps SessionFlowResult with framework-managed fields.
-type SessionFlowOutput[State any] struct {
+// ToolResume holds the parts that resume an interrupted agent turn.
+// Mirrors [ai.GenerateActionResume] but is named for the tool-call
+// callsite where it is set on an [AgentInput].
+type ToolResume struct {
+	// Respond contains tool response parts to send to the model when resuming.
+	Respond []*ai.Part `json:"respond,omitempty"`
+	// Restart contains tool request parts to restart when resuming.
+	Restart []*ai.Part `json:"restart,omitempty"`
+}
+
+// AgentMetadata is the value placed under metadata["agent"] on an agent's
+// action descriptor. It exposes capability information so the Dev UI and
+// other reflective callers can render the right surface (e.g. hide the
+// Abort button when the configured store doesn't support it) without
+// round-tripping through the reflection API.
+type AgentMetadata struct {
+	// Abortable reports whether the agent's invocations can be aborted
+	// (true when the store implements [SnapshotAborter]).
+	Abortable bool `json:"abortable,omitempty"`
+	// StateManagement reports who owns session state.
+	StateManagement AgentStateManagement `json:"stateManagement,omitempty"`
+	// StateSchema is the JSON schema for the agent's custom session state
+	// (the Custom field of [SessionState]), inferred from the agent's state
+	// type. It lets the Dev UI and other reflective callers render or
+	// validate state without the agent describing it separately. Nil when the
+	// state type carries no schema to infer (e.g. an unstructured any state).
+	StateSchema map[string]any `json:"stateSchema,omitempty"`
+}
+
+// AgentOutput is the output when an agent invocation completes.
+// It wraps AgentResult with framework-managed fields.
+type AgentOutput[State any] struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
+	// Error is the structured failure information when the invocation ended in
+	// failure (FinishReason is [AgentFinishReasonFailed]). Its Status preserves
+	// the original error category (e.g. INVALID_ARGUMENT, FAILED_PRECONDITION,
+	// INTERNAL) so callers can still branch on it. Nil otherwise.
+	Error *core.GenkitError `json:"error,omitempty"`
+	// FinishReason is why the invocation finished. It is
+	// [AgentFinishReasonDetached] when the client detached and the work continues
+	// in the background, or [AgentFinishReasonFailed] when the invocation ended
+	// in failure (see [AgentOutput.Error]); otherwise it is the last turn's
+	// reason (or the value a custom agent set on its [AgentResult]).
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
-	// SnapshotID is the ID of the snapshot created at the end of this invocation.
-	// Empty if no snapshot was created (callback returned false or no store configured).
+	// SessionID is the ID of the session this invocation belongs to,
+	// assigned by the framework when the invocation starts. With
+	// server-managed state, a fresh invocation adopts the caller-supplied
+	// session ID (see [AgentInit.SessionID]) or mints a new one, resumed
+	// invocations inherit the chain's, and resuming a snapshot from before
+	// session IDs existed mints a fresh one. With client-managed state it
+	// echoes the ID carried inside the state object
+	// ([SessionState.SessionID]), minting one on the conversation's first
+	// invocation; only a session with persisted snapshots can be resumed by
+	// this ID.
+	SessionID string `json:"sessionId,omitempty"`
+	// SnapshotID is the ID of the most recent turn-end snapshot for this
+	// invocation. Empty when no store is configured or no turn committed. When
+	// FinishReason is [AgentFinishReasonDetached] it is the pending detach
+	// snapshot; when [AgentFinishReasonFailed], it is the last committed turn's
+	// snapshot (the resume point, holding state through the last successful turn
+	// and excluding the failed turn's partial mutations).
 	SnapshotID string `json:"snapshotId,omitempty"`
 	// State contains the final conversation state.
 	// Only populated when state is client-managed (no store configured).
+	// When FinishReason is [AgentFinishReasonFailed], it is the last-good state:
+	// everything through the last successful turn, excluding the failed turn's
+	// partial mutations.
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
-// SessionFlowResult is the return value from an SessionFlowFunc.
+// AgentResult is the return value from an AgentFunc.
 // It contains the user-specified outputs of the agent invocation.
-type SessionFlowResult struct {
+type AgentResult struct {
 	// Artifacts contains artifacts produced during the session.
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
+	// FinishReason is why the invocation finished. A custom agent may set it to
+	// override the default (the last turn's reason); leave it empty to accept the
+	// default.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
 }
 
-// SessionFlowStreamChunk represents a single item in the session flow's output stream.
+// AgentStateManagement enumerates who owns session state for an
+// agent: "server" (a [SessionStore] is configured and snapshots are
+// persisted server-side) or "client" (no store; state flows through
+// invocation init / output).
+type AgentStateManagement string
+
+const (
+	// AgentStateManagementServer indicates the agent is wired with
+	// a [SessionStore] and persists snapshots server-side.
+	AgentStateManagementServer AgentStateManagement = "server"
+	// AgentStateManagementClient indicates the agent has no store;
+	// session state is client-managed and round-trips through invocation
+	// init and output.
+	AgentStateManagementClient AgentStateManagement = "client"
+)
+
+// AgentStreamChunk represents a single item in the agent's output stream.
 // Multiple fields can be populated in a single chunk.
-type SessionFlowStreamChunk[Stream any] struct {
+type AgentStreamChunk struct {
 	// Artifact contains a newly produced artifact.
 	Artifact *Artifact `json:"artifact,omitempty"`
-	// EndTurn signals that the session flow has finished processing the current input.
-	// When true, the client should stop iterating and may send the next input.
-	EndTurn bool `json:"endTurn,omitempty"`
+	// CustomPatch is an RFC 6902 JSON Patch describing a delta applied to the
+	// session's custom state. The runtime emits it automatically whenever the
+	// agent mutates custom state (e.g. via [Session.UpdateCustom]); agents do not
+	// hand-craft patches. Pointers are rooted at the custom document (e.g.
+	// "/agentStatus"), with no "/custom" prefix. The first patch of every turn is a
+	// whole-document replace at the root pointer ("") that re-bases clients which
+	// may not share the server's baseline; subsequent patches are incremental diffs
+	// against the last sent value. The diff is computed on the client-facing custom
+	// state (after any [WithStateTransform]), so streamed deltas honor redaction and
+	// stay consistent with the full state in turn-end snapshots and final output.
+	// Apply it with [ApplyPatch] to keep a local copy of custom live as the turn
+	// streams.
+	CustomPatch JSONPatch `json:"customPatch,omitempty"`
 	// ModelChunk contains generation tokens from the model.
 	ModelChunk *ai.ModelResponseChunk `json:"modelChunk,omitempty"`
-	// SnapshotID contains the ID of a snapshot that was just persisted.
-	SnapshotID string `json:"snapshotId,omitempty"`
-	// Status contains user-defined structured status information.
-	// The Stream type parameter defines the shape of this data.
-	Status Stream `json:"status,omitempty"`
+	// TurnEnd is non-nil when the agent has finished processing the current
+	// input. It groups all turn-end signals (snapshot ID, etc.) so callers can
+	// check a single field. When set, the client should stop iterating and may
+	// send the next input.
+	TurnEnd *TurnEnd `json:"turnEnd,omitempty"`
 }
 
 // Artifact represents a named collection of parts produced during a session.
@@ -96,6 +284,112 @@ type Artifact struct {
 	Parts []*ai.Part `json:"parts"`
 }
 
+// GetSnapshotRequest is the input for an agent's getSnapshot companion
+// action, registered under the agent's name (action type agent-snapshot)
+// when the agent has a session store configured. The action is intended
+// for Dev UI and client-side reconnect flows. It returns the stored
+// [SessionSnapshot], with [WithStateTransform] applied to its state if
+// configured.
+//
+// At least one of SnapshotID or SessionID must be set; they are not
+// mutually exclusive. SnapshotID fetches a specific snapshot; SessionID
+// alone fetches the session's latest snapshot (via the store's
+// [SnapshotReader.GetLatestSnapshot], whatever its status). When both are
+// set, the fetched snapshot must belong to that session, or the request
+// is rejected.
+type GetSnapshotRequest struct {
+	// SessionID identifies the session whose latest snapshot to fetch.
+	// Optional when SnapshotID is given. The latest snapshot is the session's
+	// most recently updated row regardless of status (pending, failed, or
+	// aborted included).
+	SessionID string `json:"sessionId,omitempty"`
+	// SnapshotID identifies the snapshot to fetch. Optional when SessionID is
+	// given; when both are present the fetched snapshot must belong to that
+	// session.
+	SnapshotID string `json:"snapshotId,omitempty"`
+}
+
+// JSONPatch is an RFC 6902 JSON Patch: an ordered list of operations applied in
+// sequence. Use [Diff] to compute the patch between two values and [ApplyPatch]
+// to apply one to a document.
+type JSONPatch []*JSONPatchOperation
+
+// JSONPatchOp is the kind of a JSON Patch operation (RFC 6902): one of
+// [JSONPatchOpAdd], [JSONPatchOpRemove], [JSONPatchOpReplace], [JSONPatchOpMove],
+// [JSONPatchOpCopy], or [JSONPatchOpTest].
+type JSONPatchOp string
+
+const (
+	JSONPatchOpAdd     JSONPatchOp = "add"
+	JSONPatchOpRemove  JSONPatchOp = "remove"
+	JSONPatchOpReplace JSONPatchOp = "replace"
+	JSONPatchOpMove    JSONPatchOp = "move"
+	JSONPatchOpCopy    JSONPatchOp = "copy"
+	JSONPatchOpTest    JSONPatchOp = "test"
+)
+
+// JSONPatchOperation is a single RFC 6902 (JSON Patch) operation. A [JSONPatch]
+// applies an ordered list of these to transform one JSON document into another.
+type JSONPatchOperation struct {
+	// From is a JSON Pointer to the source location; required for "move" and "copy".
+	From string `json:"from,omitempty"`
+	// Op is the operation to perform.
+	Op JSONPatchOp `json:"op"`
+	// Path is a JSON Pointer (RFC 6901) to the target location, e.g. "/agentStatus".
+	// The empty pointer "" refers to the whole document. It must always be present on
+	// the wire (a whole-document replace carries path ""), so it is not omitted when
+	// empty.
+	Path string `json:"path"`
+	// Value is the operand for "add", "replace", and "test". It is not omitted when
+	// null so an explicit null operand survives the wire (omitempty cannot tell a
+	// null operand from an absent one, and dropping it makes a peer applier set the
+	// member to undefined or remove it instead of null); for "remove", "move", and
+	// "copy" it is null and ignored.
+	Value any `json:"value"`
+}
+
+// SessionSnapshot is a persisted point-in-time capture of session state. It
+// is the canonical record written to and read from a [SessionStore].
+type SessionSnapshot[State any] struct {
+	// CreatedAt is when the snapshot was created.
+	CreatedAt time.Time `json:"createdAt"`
+	// Error is the structured failure information for a snapshot in
+	// [SnapshotStatusFailed]. Nil otherwise.
+	Error *core.GenkitError `json:"error,omitempty"`
+	// FinishReason is the semantic reason the turn or invocation captured here
+	// ended (e.g. [AgentFinishReasonStop], [AgentFinishReasonInterrupted],
+	// [AgentFinishReasonFailed], [AgentFinishReasonAborted]). It complements
+	// [SessionSnapshot.Status] (the persistence lifecycle) so a resumed or
+	// background task can report how it ended without re-deriving it from the
+	// messages.
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
+	// ParentID is the ID of the previous snapshot in this timeline. It is
+	// informational lineage (for debugging and UI history trees) and plays
+	// no part in resolving a session's latest snapshot.
+	ParentID string `json:"parentId,omitempty"`
+	// SessionID is the ID of the session this snapshot belongs to. Assigned
+	// by the agent framework when the conversation's first invocation starts
+	// and stamped on every later snapshot in the chain, including across
+	// resumed invocations. Stores preserve it across rewrites; rows written
+	// without one (data from before session IDs existed) belong to no
+	// session.
+	SessionID string `json:"sessionId,omitempty"`
+	// SnapshotID is the unique identifier for this snapshot (UUID).
+	SnapshotID string `json:"snapshotId"`
+	// State is the conversation state captured at this point. Nil on a
+	// pending snapshot (the live state is not yet committed; the background
+	// invocation is still processing queued inputs); populated on terminal
+	// snapshots with the cumulative final state.
+	State *SessionState[State] `json:"state,omitempty"`
+	// Status is the lifecycle state of this snapshot. Empty is treated as
+	// [SnapshotStatusCompleted] for backwards compatibility.
+	Status SnapshotStatus `json:"status,omitempty"`
+	// UpdatedAt is when the snapshot was last written. For pending snapshots
+	// it equals CreatedAt; once the snapshot is finalized it reflects the
+	// terminal write.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
 // SessionState is the portable conversation state that flows between client
 // and server. It contains only the data needed for conversation continuity.
 type SessionState[State any] struct {
@@ -103,20 +397,64 @@ type SessionState[State any] struct {
 	Artifacts []*Artifact `json:"artifacts,omitempty"`
 	// Custom is the user-defined state associated with this conversation.
 	Custom State `json:"custom,omitempty"`
-	// InputVariables is the input used for session flows that require input variables
-	// (e.g. prompt-backed session flows).
-	InputVariables any `json:"inputVariables,omitempty"`
 	// Messages is the conversation history (user/model exchanges).
 	// Does NOT include prompt-rendered messages — those are rendered fresh each turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
+	// SessionID is the ID of the session (conversation) this state belongs to.
+	// Framework-owned: assigned when the conversation's first invocation
+	// starts and re-stamped on outbound state, so client-managed callers can
+	// round-trip the state object opaquely without tracking a separate
+	// identifier. For server-managed agents the snapshot row's
+	// [SessionSnapshot.SessionID] is canonical and this field mirrors it.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
-// SnapshotEvent identifies what triggered a snapshot.
-type SnapshotEvent string
+// SnapshotStatus describes the lifecycle state of a snapshot. Snapshots
+// written for synchronous turns or invocations are always
+// [SnapshotStatusCompleted] (an empty value is also treated as completed
+// for backwards compatibility).
+//
+// When a client sets [AgentInput.Detach], the server writes a single
+// snapshot with [SnapshotStatusPending] (and empty state) and returns its
+// ID immediately. Background processing then either rewrites that snapshot
+// with the cumulative final state and [SnapshotStatusCompleted] /
+// [SnapshotStatusFailed] when the agent finishes, or with
+// [SnapshotStatusAborted] if the client called abortSnapshot in the
+// meantime.
+type SnapshotStatus string
 
 const (
-	// TurnEnd indicates the snapshot was triggered at the end of a turn.
-	SnapshotEventTurnEnd SnapshotEvent = "turnEnd"
-	// InvocationEnd indicates the snapshot was triggered at the end of the invocation.
-	SnapshotEventInvocationEnd SnapshotEvent = "invocationEnd"
+	// SnapshotStatusPending indicates a detached invocation is still
+	// processing the queued inputs. The snapshot will be rewritten with a
+	// terminal status once the background work finishes.
+	SnapshotStatusPending SnapshotStatus = "pending"
+	// SnapshotStatusCompleted indicates the snapshot captures a settled state.
+	SnapshotStatusCompleted SnapshotStatus = "completed"
+	// SnapshotStatusAborted indicates the snapshot's invocation was aborted
+	// while detached (e.g. via the abortSnapshot companion action).
+	SnapshotStatusAborted SnapshotStatus = "aborted"
+	// SnapshotStatusFailed indicates the invocation terminated with an error.
+	// The snapshot's Error field describes the failure and resume is
+	// rejected with that same error.
+	SnapshotStatusFailed SnapshotStatus = "failed"
 )
+
+// TurnEnd groups the signals emitted when an agent turn finishes.
+// A TurnEnd value is emitted exactly once per turn, regardless of whether a
+// snapshot was persisted.
+type TurnEnd struct {
+	// FinishReason is why this turn finished (e.g. [AgentFinishReasonStop],
+	// [AgentFinishReasonInterrupted]). It lets a caller react to a turn boundary
+	// (such as pausing on an interrupt) without scanning the message content.
+	// Empty when the turn reported no reason.
+	//
+	// [AgentFinishReasonFailed] reports a failed turn; unless the agent
+	// recovers and keeps processing, the invocation then resolves with a failed
+	// [AgentOutput] carrying the error and the last-good state, and further
+	// sends fail with [core.ErrActionCompleted].
+	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
+	// SnapshotID is the ID of the snapshot persisted at the end of this turn.
+	// Empty if no snapshot was written (no store configured, the turn failed, or
+	// snapshots were suspended after detach).
+	SnapshotID string `json:"snapshotId,omitempty"`
+}

@@ -21,12 +21,12 @@ from typing import Any
 
 import pytest
 
-from genkit.core.extract import extract_items, extract_json, parse_partial_json
+from genkit._core._extract_json import extract_json, extract_json_array_from_text, parse_partial_json
 
 # TODO(#4356): consider extracting these tests into shared yaml spec. They are already
 # duplicated in js/ai/tests/extract_test.ts
 
-test_cases_extract_items = [
+test_cases_extract_json_array_from_text = [
     (
         'handles simple array in chunks',
         [
@@ -85,16 +85,16 @@ test_cases_extract_items = [
 
 @pytest.mark.parametrize(
     'name, steps',
-    test_cases_extract_items,
-    ids=[tc[0] for tc in test_cases_extract_items],
+    test_cases_extract_json_array_from_text,
+    ids=[tc[0] for tc in test_cases_extract_json_array_from_text],
 )
-def test_extract_items(name: str, steps: list[dict[str, Any]]) -> None:
+def test_extract_json_array_from_text(name: str, steps: list[dict[str, Any]]) -> None:
     """Test extraction of incomplete json that can be fixed."""
     text = ''
     cursor = 0
     for step in steps:
         text += step['chunk']
-        result = extract_items(text, cursor)
+        result = extract_json_array_from_text(text, cursor)
         assert result.items == step['want']
         cursor = result.cursor
 

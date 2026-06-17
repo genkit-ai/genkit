@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';
 
@@ -29,7 +29,7 @@ export const menuSuggestionFlow = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
     return text;
@@ -51,7 +51,7 @@ export const menuSuggestionFlowWithSchema = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -72,7 +72,7 @@ export const menuSuggestionFlowMarkdown = ai.defineFlow(
   },
   async (restaurantTheme) => {
     const { output } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
       output: { schema: MenuItemSchema },
     });
@@ -94,7 +94,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
   },
   async (restaurantTheme, { sendChunk }) => {
     const response = await ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Invent a menu item for a ${restaurantTheme} themed restaurant.`,
     });
 
@@ -178,7 +178,7 @@ Today's menu
       }
     );
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       system: "Help the user answer questions about today's menu.",
       prompt: input,
       docs: [{ content: [{ text: menu }] }],

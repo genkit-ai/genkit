@@ -30,12 +30,12 @@ export function defineTraceTools(server: McpServer, options: McpToolOptions) {
     'get_trace',
     {
       title: 'Get Genkit Trace',
-      description: 'Returns the trace details',
+      description: 'Returns the trace details.',
       inputSchema: getCommonSchema(options.explicitProjectRoot, {
         traceId: z
           .string()
           .describe(
-            'trace id (typically returned after running a flow or other actions)'
+            'trace id (typically returned after running a flow or other actions); type: string'
           ),
       }),
     },

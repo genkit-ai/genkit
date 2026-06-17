@@ -19,6 +19,7 @@ package genkit
 import (
 	"context"
 	"testing"
+	"testing/fstest"
 
 	"github.com/firebase/genkit/go/core"
 )
@@ -122,4 +123,64 @@ func TestDefineSchemaWithType_Error(t *testing.T) {
 	}
 
 	DefineSchemaFor[Invalid](g)
+}
+
+func TestWithPromptFS(t *testing.T) {
+	tests := []struct {
+		name       string
+		fsys       fstest.MapFS
+		promptDir  string
+		promptName string
+	}{
+		{
+			name: "with custom prompt directory",
+			fsys: fstest.MapFS{
+				"custom-prompts/test.prompt": &fstest.MapFile{
+					Data: []byte(`---
+model: googleai/gemini-2.5-flash
+input:
+  schema:
+    text: string
+---
+{{text}}`),
+				},
+			},
+			promptDir:  "custom-prompts",
+			promptName: "test",
+		},
+		{
+			name: "with default prompts directory",
+			fsys: fstest.MapFS{
+				"prompts/test.prompt": &fstest.MapFile{
+					Data: []byte(`---
+model: googleai/gemini-2.5-flash
+input:
+  schema:
+    text: string
+---
+{{text}}`),
+				},
+			},
+			promptDir:  "", // empty means use default
+			promptName: "test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			var opts []GenkitOption
+			opts = append(opts, WithPromptFS(tt.fsys))
+			if tt.promptDir != "" {
+				opts = append(opts, WithPromptDir(tt.promptDir))
+			}
+
+			g := Init(ctx, opts...)
+
+			prompt := LookupPrompt(g, tt.promptName)
+			if prompt == nil {
+				t.Fatalf("Expected prompt %q to be loaded", tt.promptName)
+			}
+		})
+	}
 }

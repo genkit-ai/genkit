@@ -19,7 +19,7 @@ import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
 import { createInterface } from 'readline';
-import type { RuntimeManager } from '../manager';
+import type { BaseRuntimeManager } from '../manager';
 import {
   findToolsConfig,
   isEvalField,
@@ -323,7 +323,7 @@ async function readLines(fileName: string): Promise<string[]> {
 }
 
 export async function hasAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
 }): Promise<boolean> {
   const { manager, actionRef } = { ...params };
@@ -333,7 +333,7 @@ export async function hasAction(params: {
 }
 
 export async function getAction(params: {
-  manager: RuntimeManager;
+  manager: BaseRuntimeManager;
   actionRef: string;
 }): Promise<Action | undefined> {
   const { manager, actionRef } = { ...params };

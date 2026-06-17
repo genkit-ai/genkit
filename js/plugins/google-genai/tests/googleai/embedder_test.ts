@@ -236,7 +236,7 @@ describe('defineGoogleAIEmbedder', () => {
       const fetchArgs1 = fetchStub.firstCall.args;
       assert.strictEqual(fetchArgs1[0], expectedUrl);
       const expectedRequest1 = {
-        content: { role: '', parts: [{ text: 'Hello' }] },
+        content: { role: 'user', parts: [{ text: 'Hello' }] },
       };
       assert.deepStrictEqual(JSON.parse(fetchArgs1[1].body), expectedRequest1);
 
@@ -244,12 +244,53 @@ describe('defineGoogleAIEmbedder', () => {
       const fetchArgs2 = fetchStub.secondCall.args;
       assert.strictEqual(fetchArgs2[0], expectedUrl);
       const expectedRequest2 = {
-        content: { role: '', parts: [{ text: 'World' }] },
+        content: { role: 'user', parts: [{ text: 'World' }] },
       };
       assert.deepStrictEqual(JSON.parse(fetchArgs2[1].body), expectedRequest2);
 
       assert.deepStrictEqual(result.result, {
         embeddings: [{ embedding: [0.1, 0.2] }, { embedding: [0.3, 0.4] }],
+      });
+    });
+
+    it('calls embedContent with multimodal input', async () => {
+      const embedder = defineEmbedder(
+        'gemini-embedding-2-preview',
+        defaultPluginOptions
+      );
+      mockFetchResponse({ embedding: { values: [0.5, 0.6] } });
+
+      const doc = new Document({
+        content: [
+          { text: 'Look at this' },
+          {
+            media: {
+              url: 'data:image/jpeg;base64,12345',
+              contentType: 'image/jpeg',
+            },
+          },
+        ],
+      });
+      const result = await embedder.run({ input: [doc] });
+
+      sinon.assert.calledOnce(fetchStub);
+      const fetchArgs = fetchStub.firstCall.args;
+      const expectedUrl =
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent';
+      assert.strictEqual(fetchArgs[0], expectedUrl);
+
+      const expectedRequest = {
+        content: {
+          role: 'user',
+          parts: [
+            { text: 'Look at this' },
+            { inlineData: { mimeType: 'image/jpeg', data: '12345' } },
+          ],
+        },
+      };
+      assert.deepStrictEqual(JSON.parse(fetchArgs[1].body), expectedRequest);
+      assert.deepStrictEqual(result.result, {
+        embeddings: [{ embedding: [0.5, 0.6] }],
       });
     });
 
@@ -275,7 +316,7 @@ describe('defineGoogleAIEmbedder', () => {
       assert.strictEqual(body.title, 'Doc Title');
       assert.strictEqual(body.outputDimensionality, 256);
       assert.deepStrictEqual(body.content, {
-        role: '',
+        role: 'user',
         parts: [{ text: 'Hello' }],
       });
     });

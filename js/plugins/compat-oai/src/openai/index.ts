@@ -24,8 +24,8 @@ import {
   ModelReference,
   z,
 } from 'genkit';
-import { ResolvableAction, type GenkitPluginV2 } from 'genkit/plugin';
-import { ActionType } from 'genkit/registry';
+import { type GenkitPluginV2, type ResolvableAction } from 'genkit/plugin';
+import { type ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import {
   defineCompatOpenAISpeechModel,
@@ -56,6 +56,12 @@ import {
 } from './gpt.js';
 import { openAITranscriptionModelRef, SUPPORTED_STT_MODELS } from './stt.js';
 import { openAISpeechModelRef, SUPPORTED_TTS_MODELS } from './tts.js';
+import {
+  defineOpenAIWhisperModel,
+  openAIWhisperModelRef,
+  SUPPORTED_WHISPER_MODELS,
+  WhisperConfigSchema,
+} from './whisper.js';
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
@@ -88,10 +94,15 @@ function createResolver(pluginOptions: PluginOptions) {
         pluginOptions,
         modelRef,
       });
-    } else if (
-      actionName.includes('whisper') ||
-      actionName.includes('transcribe')
-    ) {
+    } else if (actionName.includes('whisper')) {
+      const modelRef = openAIWhisperModelRef({ name: actionName });
+      return defineOpenAIWhisperModel({
+        name: modelRef.name,
+        client,
+        pluginOptions,
+        modelRef,
+      });
+    } else if (actionName.includes('transcribe')) {
       const modelRef = openAITranscriptionModelRef({
         name: actionName,
       });
@@ -147,10 +158,16 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           info: modelRef.info,
           configSchema: modelRef.configSchema,
         });
-      } else if (
-        model.id.includes('whisper') ||
-        model.id.includes('transcribe')
-      ) {
+      } else if (model.id.includes('whisper')) {
+        const modelRef =
+          SUPPORTED_WHISPER_MODELS[model.id] ??
+          openAIWhisperModelRef({ name: model.id });
+        return modelActionMetadata({
+          name: modelRef.name,
+          info: modelRef.info,
+          configSchema: modelRef.configSchema,
+        });
+      } else if (model.id.includes('transcribe')) {
         const modelRef =
           SUPPORTED_STT_MODELS[model.id] ??
           openAITranscriptionModelRef({ name: model.id });
@@ -210,6 +227,16 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
         )
       );
       models.push(
+        ...Object.values(SUPPORTED_WHISPER_MODELS).map((modelRef) =>
+          defineOpenAIWhisperModel({
+            name: modelRef.name,
+            client,
+            pluginOptions,
+            modelRef,
+          })
+        )
+      );
+      models.push(
         ...Object.values(SUPPORTED_STT_MODELS).map((modelRef) =>
           defineCompatOpenAITranscriptionModel({
             name: modelRef.name,
@@ -256,10 +283,11 @@ export type OpenAIPlugin = {
     config?: z.infer<typeof SpeechConfigSchema>
   ): ModelReference<typeof SpeechConfigSchema>;
   model(
-    name:
-      | keyof typeof SUPPORTED_STT_MODELS
-      | (`whisper-${string}` & {})
-      | (`${string}-transcribe` & {}),
+    name: keyof typeof SUPPORTED_WHISPER_MODELS | (`whisper-${string}` & {}),
+    config?: z.infer<typeof WhisperConfigSchema>
+  ): ModelReference<typeof WhisperConfigSchema>;
+  model(
+    name: keyof typeof SUPPORTED_STT_MODELS | (`${string}-transcribe` & {}),
     config?: z.infer<typeof TranscriptionConfigSchema>
   ): ModelReference<typeof TranscriptionConfigSchema>;
   model(
@@ -292,7 +320,13 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
       config,
     });
   }
-  if (name.includes('whisper') || name.includes('transcribe')) {
+  if (name.includes('whisper')) {
+    return openAIWhisperModelRef({
+      name,
+      config,
+    });
+  }
+  if (name.includes('transcribe')) {
     return openAITranscriptionModelRef({
       name,
       config,

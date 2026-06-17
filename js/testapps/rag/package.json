@@ -1,5 +1,5 @@
 {
-  "name": "rag",
+  "name": "rag-testapp",
   "version": "1.0.0",
   "description": "",
   "main": "lib/index.js",
@@ -35,6 +35,6 @@
     "cross-env": "^7.0.3",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.1",
-    "typescript": "^5.3.3"
+    "typescript": "^5.9.3"
   }
 }

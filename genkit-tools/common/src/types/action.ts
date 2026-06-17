@@ -23,7 +23,13 @@ extendZodWithOpenApi(z);
 // There's no way around this without defining a custom type. `z.array()` needs an inner type which runs into the same issue.
 
 export const SingularAnySchema = z
-  .union([z.string(), z.number(), z.bigint(), z.boolean(), z.object({})])
+  .union([
+    z.string(),
+    z.number(),
+    z.bigint(),
+    z.boolean(),
+    z.object({}).passthrough(),
+  ])
   .openapi('SingularAny');
 
 export const CustomAnySchema = z
@@ -57,6 +63,23 @@ export const ActionSchema = z
   .openapi('Action');
 
 export type Action = z.infer<typeof ActionSchema>;
+
+export const ActionMetadataSchema = z
+  .object({
+    key: z.string().optional(),
+    actionType: z.string().optional(),
+    name: z.string(),
+    description: z.string().optional(),
+    inputSchema: z.unknown().optional(),
+    inputJsonSchema: JSONSchema7Schema.optional(),
+    outputSchema: z.unknown().optional(),
+    outputJsonSchema: JSONSchema7Schema.optional(),
+    streamSchema: z.unknown().optional(),
+    metadata: z.record(z.string(), CustomAnySchema).optional(),
+  })
+  .openapi('ActionMetadata');
+
+export type ActionMetadata = z.infer<typeof ActionMetadataSchema>;
 
 export const RunActionResponseSchema = z.object({
   result: z.unknown().optional(),

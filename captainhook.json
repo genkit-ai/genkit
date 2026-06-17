@@ -21,7 +21,7 @@
             "allow-failure": true
           },
           "options": {
-            "max-size": "1M"
+            "max-size": "2M"
           }
         },
         {

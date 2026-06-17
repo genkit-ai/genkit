@@ -16,7 +16,7 @@
 
 """Anthropic Models for Genkit."""
 
-from genkit.types import (
+from genkit import (
     Constrained,
     ModelInfo,
     Supports,
@@ -39,9 +39,22 @@ CLAUDE_3_5_HAIKU = ModelInfo(
     versions=['claude-3-5-haiku-20241022'],
     supports=Supports(
         multiturn=True,
+        media=False,
+        tools=True,
+        system_role=True,
+    ),
+)
+
+
+CLAUDE_3_5_SONNET = ModelInfo(
+    label='Anthropic - Claude 3.5 Sonnet',
+    versions=['claude-3-5-sonnet-20241022', 'claude-3-5-sonnet-20240620'],
+    supports=Supports(
+        multiturn=True,
         media=True,
         tools=True,
         system_role=True,
+        output=['text', 'json'],
     ),
 )
 
@@ -119,15 +132,33 @@ CLAUDE_OPUS_4_5 = ModelInfo(
     ),
 )
 
+# Source: https://docs.anthropic.com/en/docs/about-claude/models
+# Released: February 5, 2026. Most capable model — excels in coding, agents,
+# and enterprise workflows. Supports 1M context window (beta).
+CLAUDE_OPUS_4_6 = ModelInfo(
+    label='Anthropic - Claude Opus 4.6',
+    versions=['claude-opus-4-6'],
+    supports=Supports(
+        multiturn=True,
+        media=True,
+        tools=True,
+        system_role=True,
+        output=['text', 'json'],
+        constrained=Constrained.ALL,
+    ),
+)
+
 SUPPORTED_ANTHROPIC_MODELS: dict[str, ModelInfo] = {
     'claude-3-haiku': CLAUDE_3_HAIKU,
     'claude-3-5-haiku': CLAUDE_3_5_HAIKU,
+    'claude-3-5-sonnet': CLAUDE_3_5_SONNET,
     'claude-sonnet-4': CLAUDE_SONNET_4,
     'claude-opus-4': CLAUDE_OPUS_4,
     'claude-sonnet-4-5': CLAUDE_SONNET_4_5,
     'claude-haiku-4-5': CLAUDE_HAIKU_4_5,
     'claude-opus-4-1': CLAUDE_OPUS_4_1,
     'claude-opus-4-5': CLAUDE_OPUS_4_5,
+    'claude-opus-4-6': CLAUDE_OPUS_4_6,
 }
 
 DEFAULT_SUPPORTS = Supports(

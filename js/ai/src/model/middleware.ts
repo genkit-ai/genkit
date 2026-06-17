@@ -173,6 +173,7 @@ export function simulateSystemPrompt(options?: {
   };
 }
 
+/** Options for the {@link augmentWithContext} middleware. */
 export interface AugmentWithContextOptions {
   /** Preceding text to place before the rendered context documents. */
   preface?: string | null;
@@ -182,6 +183,7 @@ export interface AugmentWithContextOptions {
   citationKey?: string | null;
 }
 
+/** Default preface text inserted before context documents in the prompt. */
 export const CONTEXT_PREFACE =
   '\n\nUse the following information to complete your task:\n\n';
 const CONTEXT_ITEM_TEMPLATE = (
@@ -199,6 +201,10 @@ const CONTEXT_ITEM_TEMPLATE = (
   return out;
 };
 
+/**
+ * Model middleware that appends retrieved context documents to the last user message
+ * so models without native document/context support can still use RAG-style augmentation.
+ */
 export function augmentWithContext(
   options?: AugmentWithContextOptions
 ): ModelMiddleware {
@@ -242,6 +248,7 @@ export function augmentWithContext(
 
 /**
  * Options for the `retry` middleware.
+ * @deprecated Use `retry` from the `@genkit-ai/middleware` package instead.
  */
 export interface RetryOptions {
   /**
@@ -320,9 +327,11 @@ const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
 /**
  * Creates a middleware that retries requests on specific error statuses.
  *
+ * @deprecated Use `retry` from the `@genkit-ai/middleware` package instead.
+ *
  * ```ts
  * const { text } = await ai.generate({
- *   model: googleAI.model('gemini-2.5-pro'),
+ *   model: googleAI.model('gemini-pro-latest'),
  *   prompt: 'You are a helpful AI assistant named Walt, say hello',
  *   use: [
  *     retry({
@@ -384,6 +393,7 @@ export function retry(options: RetryOptions = {}): ModelMiddleware {
 
 /**
  * Options for the `fallback` middleware.
+ * @deprecated Use `fallback` from the `@genkit-ai/middleware` package instead.
  */
 export interface FallbackOptions {
   /**
@@ -404,13 +414,15 @@ export interface FallbackOptions {
 /**
  * Creates a middleware that falls back to a different model on specific error statuses.
  *
+ * @deprecated Use `fallback` from the `@genkit-ai/middleware` package instead.
+ *
  * ```ts
  * const { text } = await ai.generate({
- *   model: googleAI.model('gemini-2.5-pro'),
+ *   model: googleAI.model('gemini-pro-latest'),
  *   prompt: 'You are a helpful AI assistant named Walt, say hello',
  *   use: [
  *     fallback(ai, {
- *       models: [googleAI.model('gemini-2.5-flash')],
+ *       models: [googleAI.model('gemini-flash-latest')],
  *       statuses: ['RESOURCE_EXHAUSTED'],
  *     }),
  *   ],
@@ -450,6 +462,7 @@ export function fallback(
   };
 }
 
+/** Options for the {@link simulateConstrainedGeneration} middleware. */
 export interface SimulatedConstrainedGenerationOptions {
   instructionsRenderer?: (schema: Record<string, any>) => string;
 }

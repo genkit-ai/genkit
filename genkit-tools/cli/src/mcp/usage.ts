@@ -29,11 +29,11 @@ export async function defineUsageGuideTool(server: McpServer) {
     {
       title: 'Genkit Instructions',
       description:
-        'Use this tool to look up the Genkit usage guide before implementing any AI feature',
+        'Use this tool to look up the official Genkit usage guide, including project setup instructions and API best practices. ALWAYS call this before implementing Genkit features.',
       inputSchema: {
         language: z
           .enum(['js', 'go'])
-          .describe('which language this usage guide is for')
+          .describe('which language this usage guide is for; type: string')
           .default('js')
           .optional(),
       },

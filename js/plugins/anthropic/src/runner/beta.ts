@@ -42,13 +42,12 @@ import type {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 
-import { KNOWN_CLAUDE_MODELS, extractVersion } from '../models.js';
 import {
   AnthropicConfigSchema,
   type AnthropicDocumentOptions,
   type ClaudeRunnerParams,
 } from '../types.js';
-import { removeUndefinedProperties } from '../utils.js';
+import { checkModelName, removeUndefinedProperties } from '../utils.js';
 import { BaseRunner } from './base.js';
 import {
   betaServerToolUseBlockToPart,
@@ -57,7 +56,6 @@ import {
 } from './converters/beta.js';
 import {
   citationsDeltaToPart,
-  inputJsonDeltaError,
   redactedThinkingBlockToPart,
   textBlockToPart,
   textDeltaToPart,
@@ -89,6 +87,7 @@ const BETA_APIS = [
   'effort-2025-11-24',
   // 'advanced-tool-use-2025-11-20',
   'structured-outputs-2025-11-13',
+  'task-budgets-2026-03-13',
 ];
 
 /**
@@ -306,10 +305,9 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
     modelName: string,
     request: GenerateRequest<typeof AnthropicConfigSchema>
   ): BetaMessageCreateParamsNonStreaming {
-    const model = KNOWN_CLAUDE_MODELS[modelName];
     const { system, messages } = this.toAnthropicMessages(request.messages);
     const mappedModelName =
-      request.config?.version ?? extractVersion(model, modelName);
+      request.config?.version ?? checkModelName(modelName);
 
     const thinkingConfig = this.toAnthropicThinkingConfig(
       request.config?.thinking
@@ -324,16 +322,19 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
     const body = {
       model: mappedModelName,
-      max_tokens:
-        request.config?.maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
       messages,
       system: system as BetaTextBlockParam[],
-      stop_sequences: request.config?.stopSequences,
+      stop_sequences: stopSequences,
       temperature: request.config?.temperature,
       top_k: topK,
       top_p: topP,
@@ -363,10 +364,9 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
     modelName: string,
     request: GenerateRequest<typeof AnthropicConfigSchema>
   ): BetaMessageCreateParamsStreaming {
-    const model = KNOWN_CLAUDE_MODELS[modelName];
     const { system, messages } = this.toAnthropicMessages(request.messages);
     const mappedModelName =
-      request.config?.version ?? extractVersion(model, modelName);
+      request.config?.version ?? checkModelName(modelName);
 
     const thinkingConfig = this.toAnthropicThinkingConfig(
       request.config?.thinking
@@ -381,17 +381,20 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       topK,
       apiVersion: _1,
       thinking: _2,
+      maxOutputTokens,
+      stopSequences,
+      version,
+      apiKey,
       ...restConfig
     } = request.config ?? {};
 
     const body = {
       model: mappedModelName,
-      max_tokens:
-        request.config?.maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
+      max_tokens: maxOutputTokens ?? this.DEFAULT_MAX_OUTPUT_TOKENS,
       messages,
       stream: true,
       system: system as BetaTextBlockParam[],
-      stop_sequences: request.config?.stopSequences,
+      stop_sequences: stopSequences,
       temperature: request.config?.temperature,
       top_k: topK,
       top_p: topP,
@@ -433,6 +436,7 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
         outputTokens: message.usage.output_tokens,
       },
       custom: message,
+      raw: message,
     };
   }
 
@@ -450,9 +454,7 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
       if (event.delta.type === 'citations_delta') {
         return citationsDeltaToPart(event.delta);
       }
-      if (event.delta.type === 'input_json_delta') {
-        throw inputJsonDeltaError();
-      }
+      // input_json_delta - ignore
       // signature_delta - ignore
       return undefined;
     }

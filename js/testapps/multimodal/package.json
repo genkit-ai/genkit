@@ -36,7 +36,6 @@
     "cross-env": "^7.0.3",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.1",
-    "typescript": "^5.3.3",
-    "vertexai": "link:@types/@genkit-ai/vertexai"
+    "typescript": "^5.9.3"
   }
 }

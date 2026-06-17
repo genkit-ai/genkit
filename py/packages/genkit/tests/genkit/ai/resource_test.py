@@ -25,16 +25,17 @@ from typing import Any, cast
 
 import pytest
 
-from genkit.blocks.resource import (
+from genkit._ai._resource import (
     ResourceInput,
     define_resource,
+    find_matching_resource,
+    is_dynamic_resource_action,
     resolve_resources,
     resource,
 )
-from genkit.core.action import ActionRunContext
-from genkit.core.action.types import ActionKind
-from genkit.core.registry import Registry
-from genkit.core.typing import Metadata, Part, TextPart
+from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._registry import Registry
+from genkit._core._typing import Part, TextPart
 
 
 @pytest.mark.asyncio
@@ -121,9 +122,6 @@ async def test_find_matching_resource() -> None:
     dynamic_res = resource({'uri': 'baz://qux'}, dynamic_fn)
 
     # Match static from registry
-    from genkit.blocks.resource import find_matching_resource
-
-    # Match static from registry
     res = await find_matching_resource(registry, [], ResourceInput(uri='bar://baz'))
     assert res == static_res
 
@@ -147,7 +145,6 @@ def test_is_dynamic_resource_action() -> None:
     - Unregistered resources created with `resource()` are dynamic.
     - Registered resources created with `define_resource()` are not dynamic.
     """
-    from genkit.blocks.resource import is_dynamic_resource_action
 
     async def fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
         return {'content': []}
@@ -175,15 +172,11 @@ async def test_parent_metadata() -> None:
     registry = Registry()
 
     async def fn(input: ResourceInput, ctx: ActionRunContext) -> dict[str, object]:
-        return {
-            'content': [
-                Part(TextPart(text='sub1', metadata=Metadata(root={'resource': {'uri': f'{input.uri}/sub1.txt'}})))
-            ]
-        }
+        return {'content': [Part(TextPart(text='sub1', metadata={'resource': {'uri': f'{input.uri}/sub1.txt'}}))]}
 
     res = define_resource(registry, {'template': 'file://{id}'}, fn)
 
-    output = await res.arun({'uri': 'file://dir'})
+    output = await res.run({'uri': 'file://dir'})
     # output is ActionResponse
     # content is in output.response['content'] because wrapped_fn ensures serialization
 

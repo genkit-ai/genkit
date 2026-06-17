@@ -36,7 +36,7 @@ const ai = genkit({
   ],
 });
 
-export const anthropicModel = ai.defineFlow(
+export const anthropicSonnet4Model = ai.defineFlow(
   {
     name: 'claude-sonnet-4 - toolCallingFlow',
     inputSchema: z.string().default('Paris, France'),
@@ -62,13 +62,194 @@ export const anthropicModel = ai.defineFlow(
   }
 );
 
+export const anthropicSonnet45ThinkingModel = ai.defineFlow(
+  {
+    name: 'claude-sonnet-4-5 - thinking',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-4-5'),
+      config: {
+        location: 'us-east5',
+        thinking: {
+          enabled: true,
+          budgetTokens: 2000,
+        },
+      },
+      prompt: `You are a helpful assistant. Please think step-by-step and solve for x: 3x^2 - 14x + 8 = 0. Show all of your reasoning clearly.`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicSonnet46Model = ai.defineFlow(
+  {
+    name: 'claude-sonnet-4-6 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-sonnet-4-6'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+const someListFilesTool = ai.defineTool(
+  {
+    name: 'someListFilesTool',
+    inputSchema: z.object({}),
+    description: 'lists files',
+  },
+  async () => {
+    return { files: ['file1', 'file2'] };
+  }
+);
+
+export const thinkingFlow = ai.defineFlow(
+  {
+    name: 'claude-thinking',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const claude = vertexModelGarden
+      .model('claude-opus-4-7')
+      .withConfig({ cache_control: { type: 'ephemeral' }, location: 'global' });
+    const { response, stream } = ai.generateStream({
+      model: claude,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              text: 'think hard about 17*23, then call listFiles, then compute 19*31 and call listFiles again',
+            },
+          ],
+        },
+      ],
+      tools: [someListFilesTool],
+      config: {
+        thinking: { adaptive: true, display: 'summarized' },
+        output_config: { effort: 'high' },
+      },
+    });
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+    return (await response).text;
+  }
+);
+
+export const anthropicFable5Model = ai.defineFlow(
+  {
+    name: 'claude-fable-5',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-fable-5'),
+      config: {
+        location: 'global',
+        thinking: {
+          adaptive: true,
+          display: 'summarized',
+        },
+        output_config: {
+          effort: 'xhigh',
+        },
+      },
+      prompt: `You are a helpful assistant. Write a Fable about a sunny day`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicOpus48Model = ai.defineFlow(
+  {
+    name: 'claude-opus-4-8 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-opus-4-8'),
+      config: {
+        location: 'global',
+        thinking: {
+          adaptive: true,
+          display: 'summarized',
+        },
+        output_config: {
+          effort: 'xhigh',
+        },
+      },
+      prompt: `You are a helpful assistant. Write a Sonnet about a sunny day`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
+export const anthropicOpus46Model = ai.defineFlow(
+  {
+    name: 'claude-opus-4-6 - basic',
+    outputSchema: z.string(),
+    streamSchema: z.any(),
+  },
+  async (_input, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexModelGarden.model('claude-opus-4-6'),
+      config: {
+        temperature: 1,
+        location: 'global',
+      },
+      prompt: `You are a helpful assistant named Walt. Say hello`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk);
+    }
+
+    return (await response).text;
+  }
+);
+
 export const llamaModel = ai.defineFlow(
   {
     name: 'llama4 - basicFlow',
     outputSchema: z.string(),
     streamSchema: z.any(),
   },
-  async (location, { sendChunk }) => {
+  async (_input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
       model: vertexModelGarden.model(
         'meta/llama-4-maverick-17b-128e-instruct-maas'

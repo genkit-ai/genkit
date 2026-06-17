@@ -52,7 +52,7 @@ type Prompt interface {
 
 // prompt is a prompt template that can be executed to generate a model response.
 type prompt struct {
-	core.Action[any, *GenerateActionOptions, struct{}, struct{}]
+	core.Action[any, *GenerateActionOptions, struct{}]
 	promptOptions
 	registry api.Registry
 }
@@ -104,6 +104,11 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 
 	baseName, variant, _ := strings.Cut(name, ".")
 
+	use, err := configsToRefs(pOpts.commonGenOptions.Use)
+	if err != nil {
+		panic(fmt.Errorf("ai.DefinePrompt: error processing middleware: %w", err))
+	}
+
 	promptMetadata := map[string]any{
 		"name":         baseName,
 		"description":  p.Description,
@@ -113,7 +118,11 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		"output":       map[string]any{"schema": p.OutputSchema},
 		"defaultInput": p.DefaultInput,
 		"tools":        tools,
+		"toolChoice":   pOpts.ToolChoice,
 		"maxTurns":     p.MaxTurns,
+	}
+	if len(use) > 0 {
+		promptMetadata["use"] = use
 	}
 	if variant != "" {
 		promptMetadata["variant"] = variant
@@ -132,7 +141,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 // LookupPrompt looks up a [Prompt] registered by [DefinePrompt].
 // It returns nil if the prompt was not defined.
 func LookupPrompt(r api.Registry, name string) Prompt {
-	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}, struct{}](r, api.ActionTypeExecutablePrompt, name)
+	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}](r, api.ActionTypeExecutablePrompt, name)
 	if action == nil {
 		return nil
 	}
@@ -249,6 +258,14 @@ func (p *prompt) Execute(ctx context.Context, opts ...PromptExecuteOption) (*Mod
 		}
 	}
 
+	refs, err := configsToRefs(execOpts.Use)
+	if err != nil {
+		return nil, fmt.Errorf("Prompt.Execute: %w", err)
+	}
+	if len(refs) > 0 {
+		actionOpts.Use = refs
+	}
+
 	return GenerateWithRequest(ctx, r, actionOpts, execOpts.Middleware, execOpts.Stream)
 }
 
@@ -268,18 +285,26 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 			return
 		}
 
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			if !yield(&ModelStreamValue{Chunk: chunk}, nil) {
-				return errPromptStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
 
 		allOpts := append(slices.Clone(opts), WithStreaming(cb))
 		resp, err := p.Execute(ctx, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return
@@ -288,9 +313,6 @@ func (p *prompt) ExecuteStream(ctx context.Context, opts ...PromptExecuteOption)
 		yield(&ModelStreamValue{Done: true, Response: resp}, nil)
 	}
 }
-
-// errPromptStop is a sentinel error used to signal early termination of streaming.
-var errPromptStop = errors.New("stop")
 
 // Render renders the prompt template based on user input.
 func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions, error) {
@@ -313,21 +335,30 @@ func (p *prompt) Render(ctx context.Context, input any) (*GenerateActionOptions,
 // Desc returns a descriptor of the prompt with resolved schema references.
 func (p *prompt) Desc() api.ActionDesc {
 	desc := p.Action.Desc()
-	promptMeta := desc.Metadata["prompt"].(map[string]any)
-	if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
-		if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
-				inputMeta["schema"] = resolved
+	descMeta := maps.Clone(desc.Metadata)
+	if promptMeta, ok := descMeta["prompt"].(map[string]any); ok {
+		promptMeta = maps.Clone(promptMeta)
+		if inputMeta, ok := promptMeta["input"].(map[string]any); ok {
+			inputMeta = maps.Clone(inputMeta)
+			if inputSchema, ok := inputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, inputSchema); err == nil {
+					inputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["input"] = inputMeta
 		}
-	}
-	if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
-		if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
-			if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
-				outputMeta["schema"] = resolved
+		if outputMeta, ok := promptMeta["output"].(map[string]any); ok {
+			outputMeta = maps.Clone(outputMeta)
+			if outputSchema, ok := outputMeta["schema"].(map[string]any); ok {
+				if resolved, err := core.ResolveSchema(p.registry, outputSchema); err == nil {
+					outputMeta["schema"] = resolved
+				}
 			}
+			promptMeta["output"] = outputMeta
 		}
+		descMeta["prompt"] = promptMeta
 	}
+	desc.Metadata = descMeta
 	return desc
 }
 
@@ -439,6 +470,11 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		return nil, core.NewError(core.INVALID_ARGUMENT, "invalid output schema for prompt %q: %v", p.Name(), err)
 	}
 
+	useRefs, err := configsToRefs(p.Use)
+	if err != nil {
+		return nil, fmt.Errorf("prompt %q: %w", p.Name(), err)
+	}
+
 	return &GenerateActionOptions{
 		Model:              modelName,
 		Config:             config,
@@ -447,6 +483,7 @@ func (p *prompt) buildRequest(ctx context.Context, input any) (*GenerateActionOp
 		ReturnToolRequests: p.ReturnToolRequests != nil && *p.ReturnToolRequests,
 		Messages:           messages,
 		Tools:              tools,
+		Use:                useRefs,
 		Output: &GenerateActionOutputConfig{
 			Format:       p.OutputFormat,
 			JsonSchema:   outputSchema,
@@ -773,6 +810,12 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 		opts.ReturnToolRequests = &returnToolRequests
 	}
 
+	if uses, err := parseDotpromptUse(metadata.Raw["use"]); err != nil {
+		return nil, fmt.Errorf("prompt %q: %w", name, err)
+	} else if len(uses) > 0 {
+		opts.Use = uses
+	}
+
 	if inputSchema, ok := metadata.Input.Schema.(*jsonschema.Schema); ok {
 		if inputSchema.Ref != "" {
 			opts.InputSchema = core.SchemaRef(inputSchema.Ref)
@@ -820,6 +863,40 @@ func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Promp
 	prompt := DefinePrompt(r, key, opts, WithPrompt(parsedPrompt.Template))
 
 	return prompt, nil
+}
+
+// parseDotpromptUse converts the value of the dotprompt `use:` frontmatter
+// field into a slice of lazy [Middleware] references. Each entry may be a
+// bare string (interpreted as a registered middleware name) or a map with
+// `name` and optional `config`, mirroring the TypeScript MiddlewareRef shape.
+// Returns nil if the input is nil or an empty slice.
+func parseDotpromptUse(raw any) ([]Middleware, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	entries, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("`use` must be a list, got %T", raw)
+	}
+	uses := make([]Middleware, 0, len(entries))
+	for i, entry := range entries {
+		switch v := entry.(type) {
+		case string:
+			if v == "" {
+				return nil, fmt.Errorf("`use[%d]` is an empty string", i)
+			}
+			uses = append(uses, middlewareRefArg{name: v})
+		case map[string]any:
+			name, _ := v["name"].(string)
+			if name == "" {
+				return nil, fmt.Errorf("`use[%d]` is missing required `name` field", i)
+			}
+			uses = append(uses, middlewareRefArg{name: name, config: v["config"]})
+		default:
+			return nil, fmt.Errorf("`use[%d]` must be a string or map, got %T", i, entry)
+		}
+	}
+	return uses, nil
 }
 
 // LoadPromptDir loads prompts and partials from a directory on the local filesystem.
@@ -962,13 +1039,18 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 			return
 		}
 
+		done := false
 		cb := func(ctx context.Context, chunk *ModelResponseChunk) error {
+			if done {
+				return errStop
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			streamValue, err := extractTypedOutput[Out](chunk)
 			if err != nil {
 				yield(nil, err)
+				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
@@ -976,13 +1058,17 @@ func (dp *DataPrompt[In, Out]) ExecuteStream(ctx context.Context, input In, opts
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
-				return errGenerateStop
+				done = true
+				return errStop
 			}
 			return nil
 		}
 
 		allOpts := append(slices.Clone(opts), WithInput(input), WithStreaming(cb))
 		resp, err := dp.prompt.Execute(ctx, allOpts...)
+		if done || errors.Is(err, errStop) {
+			return
+		}
 		if err != nil {
 			yield(nil, err)
 			return

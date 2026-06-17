@@ -91,7 +91,7 @@ describe('Vertex AI Imagen', () => {
     });
 
     it('should return a ModelReference with TryOn schema', () => {
-      const modelName = 'virtual-try-on-preview-08-04';
+      const modelName = 'virtual-try-on-001';
       const ref = model(modelName);
       assert.strictEqual(ref.name, `vertexai/${modelName}`);
       assert.strictEqual(ref.configSchema, ImagenTryOnConfigSchema);

@@ -17,9 +17,8 @@
 """Tests for the default telemetry exporter module.
 
 This module tests:
-    - TelemetryServerSpanExporter: Exports spans to a telemetry server
+    - TraceServerExporter: Exports spans to a telemetry server
     - extract_span_data: Extracts span data for export
-    - is_realtime_telemetry_enabled: Checks if realtime telemetry is enabled
     - create_span_processor: Creates appropriate span processor based on environment
     - init_telemetry_server_exporter: Initializes the telemetry server exporter
 """
@@ -29,99 +28,35 @@ from unittest import mock
 from unittest.mock import MagicMock, patch
 
 from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace import Event, ReadableSpan
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
 
-from genkit.core.environment import EnvVar, GenkitEnvironment
-from genkit.core.trace.default_exporter import (
-    TelemetryServerSpanExporter,
+from genkit._core._environment import GENKIT_ENV, GenkitEnvironment
+from genkit._core._trace._default_exporter import (
+    TraceServerExporter,
     create_span_processor,
     extract_span_data,
     init_telemetry_server_exporter,
-    is_realtime_telemetry_enabled,
 )
-from genkit.core.trace.realtime_processor import RealtimeSpanProcessor
-
-# =============================================================================
-# Tests for is_realtime_telemetry_enabled
-# =============================================================================
-
-
-def test_is_realtime_telemetry_enabled_when_not_set() -> None:
-    """Test that realtime telemetry is disabled when env var is not set."""
-    with mock.patch.dict(os.environ, clear=True):
-        assert is_realtime_telemetry_enabled() is False
-
-
-def test_is_realtime_telemetry_enabled_when_true() -> None:
-    """Test that realtime telemetry is enabled when env var is 'true'."""
-    with mock.patch.dict(os.environ, {'GENKIT_ENABLE_REALTIME_TELEMETRY': 'true'}):
-        assert is_realtime_telemetry_enabled() is True
-
-
-def test_is_realtime_telemetry_enabled_when_true_uppercase() -> None:
-    """Test that realtime telemetry is enabled regardless of case."""
-    with mock.patch.dict(os.environ, {'GENKIT_ENABLE_REALTIME_TELEMETRY': 'TRUE'}):
-        assert is_realtime_telemetry_enabled() is True
-
-
-def test_is_realtime_telemetry_enabled_when_true_mixed_case() -> None:
-    """Test that realtime telemetry is enabled with mixed case."""
-    with mock.patch.dict(os.environ, {'GENKIT_ENABLE_REALTIME_TELEMETRY': 'True'}):
-        assert is_realtime_telemetry_enabled() is True
-
-
-def test_is_realtime_telemetry_enabled_when_false() -> None:
-    """Test that realtime telemetry is disabled when env var is 'false'."""
-    with mock.patch.dict(os.environ, {'GENKIT_ENABLE_REALTIME_TELEMETRY': 'false'}):
-        assert is_realtime_telemetry_enabled() is False
-
-
-def test_is_realtime_telemetry_enabled_when_invalid() -> None:
-    """Test that realtime telemetry is disabled with invalid value."""
-    with mock.patch.dict(os.environ, {'GENKIT_ENABLE_REALTIME_TELEMETRY': 'invalid'}):
-        assert is_realtime_telemetry_enabled() is False
-
-
-def test_is_realtime_telemetry_enabled_when_empty() -> None:
-    """Test that realtime telemetry is disabled when env var is empty."""
-    with mock.patch.dict(os.environ, {'GENKIT_ENABLE_REALTIME_TELEMETRY': ''}):
-        assert is_realtime_telemetry_enabled() is False
-
+from genkit._core._trace._realtime_processor import RealtimeSpanProcessor
 
 # =============================================================================
 # Tests for create_span_processor
 # =============================================================================
 
 
-def test_create_span_processor_returns_realtime_in_dev_with_env_var() -> None:
-    """Test that RealtimeSpanProcessor is returned in dev mode with env var set."""
+def test_create_span_processor_returns_realtime_in_dev() -> None:
+    """Test that RealtimeSpanProcessor is returned in dev mode."""
     mock_exporter = MagicMock()
 
     with mock.patch.dict(
         os.environ,
         {
-            EnvVar.GENKIT_ENV: GenkitEnvironment.DEV,
-            'GENKIT_ENABLE_REALTIME_TELEMETRY': 'true',
+            GENKIT_ENV: GenkitEnvironment.DEV,
         },
     ):
         processor = create_span_processor(mock_exporter)
         assert isinstance(processor, RealtimeSpanProcessor)
-
-
-def test_create_span_processor_returns_simple_in_dev_without_env_var() -> None:
-    """Test that SimpleSpanProcessor is returned in dev mode without env var."""
-    mock_exporter = MagicMock()
-
-    with mock.patch.dict(
-        os.environ,
-        {
-            EnvVar.GENKIT_ENV: GenkitEnvironment.DEV,
-        },
-        clear=True,
-    ):
-        processor = create_span_processor(mock_exporter)
-        assert isinstance(processor, SimpleSpanProcessor)
 
 
 def test_create_span_processor_returns_batch_in_prod() -> None:
@@ -131,7 +66,7 @@ def test_create_span_processor_returns_batch_in_prod() -> None:
     with mock.patch.dict(
         os.environ,
         {
-            EnvVar.GENKIT_ENV: GenkitEnvironment.PROD,
+            GENKIT_ENV: GenkitEnvironment.PROD,
         },
     ):
         processor = create_span_processor(mock_exporter)
@@ -147,22 +82,6 @@ def test_create_span_processor_returns_batch_when_no_env_set() -> None:
         assert isinstance(processor, BatchSpanProcessor)
 
 
-def test_create_span_processor_ignores_realtime_env_in_prod() -> None:
-    """Test that realtime env var is ignored in production mode (matches JS behavior)."""
-    mock_exporter = MagicMock()
-
-    with mock.patch.dict(
-        os.environ,
-        {
-            EnvVar.GENKIT_ENV: GenkitEnvironment.PROD,
-            'GENKIT_ENABLE_REALTIME_TELEMETRY': 'true',
-        },
-    ):
-        processor = create_span_processor(mock_exporter)
-        # Should still return BatchSpanProcessor in prod, not RealtimeSpanProcessor
-        assert isinstance(processor, BatchSpanProcessor)
-
-
 # =============================================================================
 # Tests for init_telemetry_server_exporter
 # =============================================================================
@@ -173,7 +92,7 @@ def test_init_telemetry_server_exporter_returns_exporter_when_url_set() -> None:
     with mock.patch.dict(os.environ, {'GENKIT_TELEMETRY_SERVER': 'http://localhost:4000'}):
         exporter = init_telemetry_server_exporter()
         assert exporter is not None
-        assert isinstance(exporter, TelemetryServerSpanExporter)
+        assert isinstance(exporter, TraceServerExporter)
         assert exporter.telemetry_server_url == 'http://localhost:4000'
 
 
@@ -185,21 +104,21 @@ def test_init_telemetry_server_exporter_returns_none_when_url_not_set() -> None:
 
 
 # =============================================================================
-# Tests for TelemetryServerSpanExporter
+# Tests for TraceServerExporter
 # =============================================================================
 
 
 def test_telemetry_server_exporter_init_default_endpoint() -> None:
-    """Test TelemetryServerSpanExporter initialization with default endpoint."""
-    exporter = TelemetryServerSpanExporter(telemetry_server_url='http://localhost:4000')
+    """Test TraceServerExporter initialization with default endpoint."""
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
 
     assert exporter.telemetry_server_url == 'http://localhost:4000'
     assert exporter.telemetry_server_endpoint == '/api/traces'
 
 
 def test_telemetry_server_exporter_init_custom_endpoint() -> None:
-    """Test TelemetryServerSpanExporter initialization with custom endpoint."""
-    exporter = TelemetryServerSpanExporter(
+    """Test TraceServerExporter initialization with custom endpoint."""
+    exporter = TraceServerExporter(
         telemetry_server_url='http://localhost:4000',
         telemetry_server_endpoint='/custom/traces',
     )
@@ -210,7 +129,7 @@ def test_telemetry_server_exporter_init_custom_endpoint() -> None:
 
 def test_telemetry_server_exporter_force_flush_returns_true() -> None:
     """Test that force_flush always returns True (no buffering)."""
-    exporter = TelemetryServerSpanExporter(telemetry_server_url='http://localhost:4000')
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
 
     result = exporter.force_flush()
     assert result is True
@@ -218,13 +137,13 @@ def test_telemetry_server_exporter_force_flush_returns_true() -> None:
 
 def test_telemetry_server_exporter_force_flush_ignores_timeout() -> None:
     """Test that force_flush ignores the timeout parameter."""
-    exporter = TelemetryServerSpanExporter(telemetry_server_url='http://localhost:4000')
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
 
     result = exporter.force_flush(timeout_millis=1)
     assert result is True
 
 
-@patch('genkit.core.trace.default_exporter.httpx.Client')
+@patch('genkit._core._trace._default_exporter.httpx.Client')
 def test_telemetry_server_exporter_export_sends_http_post(mock_client_class: MagicMock) -> None:
     """Test that export sends HTTP POST requests for each span."""
     # Setup mock client
@@ -232,7 +151,7 @@ def test_telemetry_server_exporter_export_sends_http_post(mock_client_class: Mag
     mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
 
-    exporter = TelemetryServerSpanExporter(telemetry_server_url='http://localhost:4000')
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
 
     # Create a mock span
     mock_span = create_mock_span()
@@ -245,7 +164,7 @@ def test_telemetry_server_exporter_export_sends_http_post(mock_client_class: Mag
     mock_client.post.assert_called_once()
 
 
-@patch('genkit.core.trace.default_exporter.httpx.Client')
+@patch('genkit._core._trace._default_exporter.httpx.Client')
 def test_telemetry_server_exporter_export_multiple_spans(mock_client_class: MagicMock) -> None:
     """Test that export sends HTTP POST for each span in the sequence."""
     # Setup mock client
@@ -253,7 +172,7 @@ def test_telemetry_server_exporter_export_multiple_spans(mock_client_class: Magi
     mock_client_class.return_value.__enter__ = MagicMock(return_value=mock_client)
     mock_client_class.return_value.__exit__ = MagicMock(return_value=None)
 
-    exporter = TelemetryServerSpanExporter(telemetry_server_url='http://localhost:4000')
+    exporter = TraceServerExporter(telemetry_server_url='http://localhost:4000')
 
     # Create multiple mock spans
     mock_spans = [create_mock_span() for _ in range(3)]
@@ -350,6 +269,7 @@ def test_extract_span_data_includes_status() -> None:
     span_info = data['spans'][span_id_hex]
     assert 'status' in span_info
     assert span_info['status']['code'] == trace_api.StatusCode.OK.value  # OK status is 1
+    assert 'message' not in span_info['status']
 
 
 def test_extract_span_data_includes_instrumentation_library() -> None:
@@ -378,6 +298,51 @@ def test_extract_span_data_handles_none_times() -> None:
     assert span_info['endTime'] == 0
 
 
+def test_extract_span_data_ensures_exception_message_from_status_when_events_empty() -> None:
+    """If OTel events are missing but status is ERROR with description, Dev UI still gets a message."""
+    mock_span = create_mock_span()
+    mock_status = MagicMock()
+    mock_status.status_code = trace_api.StatusCode.ERROR
+    mock_status.description = 'patched from status only'
+    mock_span.status = mock_status
+    mock_span.events = ()
+
+    data = extract_span_data(mock_span)
+    span_id_hex = format(67890, '016x')
+    span_info = data['spans'][span_id_hex]
+    assert span_info['status']['code'] == 2
+    assert span_info['status']['message'] == 'patched from status only'
+    te = span_info['timeEvents']['timeEvent']
+    assert len(te) == 1
+    assert te[0]['annotation']['attributes']['exception.message'] == 'patched from status only'
+
+
+def test_extract_span_data_includes_exception_time_events() -> None:
+    """OTel exception events must appear as timeEvents so Dev UI shows the message (not plain 'Error')."""
+    exc_msg = 'DEV_UI_ERROR_TRACE_TEST_2026: deliberate failure'
+    ev = Event(
+        'exception',
+        attributes={
+            'exception.type': 'RuntimeError',
+            'exception.message': exc_msg,
+            'exception.stacktrace': 'traceback...',
+        },
+        timestamp=1_500_000_000,
+    )
+    mock_span = create_mock_span(events=(ev,))
+
+    data = extract_span_data(mock_span)
+
+    span_id_hex = format(67890, '016x')
+    span_info = data['spans'][span_id_hex]
+    assert 'timeEvents' in span_info
+    te = span_info['timeEvents']['timeEvent']
+    assert len(te) == 1
+    assert te[0]['annotation']['description'] == 'exception'
+    assert te[0]['annotation']['attributes']['exception.message'] == exc_msg
+    assert te[0]['time'] == 1500.0
+
+
 # =============================================================================
 # Helper functions
 # =============================================================================
@@ -390,6 +355,7 @@ def create_mock_span(
     start_time: int | None = 1000000000,
     end_time: int | None = 2000000000,
     attributes: dict | None = None,
+    events: tuple[Event, ...] | None = None,
 ) -> MagicMock:
     """Create a mock ReadableSpan for testing.
 
@@ -427,5 +393,7 @@ def create_mock_span(
     mock_status.status_code = trace_api.StatusCode.OK
     mock_status.description = None
     mock_span.status = mock_status
+
+    mock_span.events = events if events is not None else ()
 
     return mock_span

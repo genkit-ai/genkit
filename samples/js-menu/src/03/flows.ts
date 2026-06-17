@@ -77,7 +77,7 @@ export const s03_multiTurnChatFlow = ai.defineFlow(
 
     // Generate the response
     const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       messages: history,
       prompt: {
         text: input.question,

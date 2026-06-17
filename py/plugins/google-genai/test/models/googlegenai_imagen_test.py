@@ -17,23 +17,23 @@
 
 """Tests for the Imagen model implementation."""
 
-import urllib.request
+import base64
 
 import pytest
 from google import genai
 from pytest_mock import MockerFixture
 
-from genkit.ai import ActionRunContext
-from genkit.plugins.google_genai.models.imagen import ImagenModel, ImagenVersion
-from genkit.types import (
-    GenerateRequest,
-    GenerateResponse,
+from genkit import (
+    ActionRunContext,
     MediaPart,
     Message,
+    ModelRequest,
+    ModelResponse,
     Part,
     Role,
     TextPart,
 )
+from genkit.plugins.google_genai.models.imagen import ImagenModel, ImagenVersion
 
 
 @pytest.mark.asyncio
@@ -44,7 +44,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     response_byte_string = b'\x89PNG\r\n\x1a\n'
     response_mimetype = 'image/png'
 
-    request = GenerateRequest(
+    request = ModelRequest(
         messages=[
             Message(
                 role=Role.USER,
@@ -74,12 +74,16 @@ async def test_generate_media_response(mocker: MockerFixture, version: ImagenVer
     googleai_client_mock.assert_has_calls([
         mocker.call.aio.models.generate_images(model=version, prompt=request_text, config=None)
     ])
-    assert isinstance(response, GenerateResponse)
+    assert isinstance(response, ModelResponse)
     assert response.message is not None
     content = response.message.content[0]
     assert isinstance(content.root, MediaPart)
 
     assert content.root.media.content_type == response_mimetype
 
-    with urllib.request.urlopen(content.root.media.url) as response:
-        assert response.read() == response_byte_string
+    # Verify the data URL contains the correct base64-encoded content
+    # Data URLs have format: data:<mimetype>;base64,<data>
+    data_url = content.root.media.url
+    assert data_url.startswith(f'data:{response_mimetype};base64,')
+    encoded_data = data_url.split(',', 1)[1]
+    assert base64.b64decode(encoded_data) == response_byte_string

@@ -138,9 +138,10 @@ func (o *Ollama) DefineEmbedder(g *genkit.Genkit, serverAddress string, model st
 	return genkit.DefineEmbedder(g, api.NewName(provider, serverAddress), embedOpts, func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
 		if req.Options == nil {
 			req.Options = &EmbedOptions{Model: model}
-		}
-		if req.Options.(*EmbedOptions).Model == "" {
-			req.Options.(*EmbedOptions).Model = model
+		} else if opts, ok := req.Options.(*EmbedOptions); ok {
+			if opts.Model == "" {
+				opts.Model = model
+			}
 		}
 		return embed(ctx, serverAddress, req)
 	})

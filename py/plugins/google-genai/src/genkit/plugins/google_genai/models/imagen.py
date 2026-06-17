@@ -24,27 +24,32 @@ if sys.version_info < (3, 11):
 else:
     from enum import StrEnum
 
+import json
 from functools import cached_property
+from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from genkit.ai import ActionRunContext
-from genkit.codec import dump_dict, dump_json
-from genkit.core.tracing import tracer
-from genkit.types import (
-    GenerateRequest,
-    GenerateResponse,
+from genkit import (
     Media,
     MediaPart,
     Message,
     ModelInfo,
+    ModelRequest,
+    ModelResponse,
     Part,
     Role,
     Supports,
     TextPart,
 )
+from genkit.plugin_api import ActionRunContext, tracer
+
+
+def _to_dict(obj: Any) -> Any:  # noqa: ANN401
+    """Convert object to dict if it's a Pydantic model, otherwise return as-is."""
+    return obj.model_dump() if isinstance(obj, BaseModel) else obj
 
 
 class ImagenVersion(StrEnum):
@@ -62,7 +67,7 @@ SUPPORTED_MODELS = {
             media=True,
             multiturn=False,
             tools=False,
-            system_role=False,
+            system_role=True,
             output=['media'],
         ),
     ),
@@ -72,7 +77,7 @@ SUPPORTED_MODELS = {
             media=False,
             multiturn=False,
             tools=False,
-            system_role=False,
+            system_role=True,
             output=['media'],
         ),
     ),
@@ -82,7 +87,7 @@ SUPPORTED_MODELS = {
             media=False,
             multiturn=False,
             tools=False,
-            system_role=False,
+            system_role=True,
             output=['media'],
         ),
     ),
@@ -92,7 +97,7 @@ DEFAULT_IMAGE_SUPPORT = Supports(
     media=True,
     multiturn=False,
     tools=False,
-    system_role=False,
+    system_role=True,
     output=['media'],
 )
 
@@ -136,7 +141,7 @@ class ImagenModel:
         self._version = version
         self._client = client
 
-    def _build_prompt(self, request: GenerateRequest) -> str:
+    def _build_prompt(self, request: ModelRequest) -> str:
         """Build prompt request from Genkit request.
 
         Args:
@@ -154,7 +159,7 @@ class ImagenModel:
                     raise ValueError('Non-text messages are not supported')
         return ' '.join(prompt)
 
-    async def generate(self, request: GenerateRequest, _: ActionRunContext) -> GenerateResponse:
+    async def generate(self, request: ModelRequest, _: ActionRunContext) -> ModelResponse:
         """Handle a generation request.
 
         Args:
@@ -166,29 +171,31 @@ class ImagenModel:
         """
         prompt = self._build_prompt(request)
         config = self._get_config(request)
+        if request.tools:
+            raise ValueError('Tools are not supported for this model.')
 
         with tracer.start_as_current_span('generate_images') as span:
             span.set_attribute(
                 'genkit:input',
-                dump_json({
-                    'config': dump_dict(config),
+                json.dumps({
+                    'config': _to_dict(config),
                     'contents': prompt,
                     'model': self._version,
                 }),
             )
             response = await self._client.aio.models.generate_images(model=self._version, prompt=prompt, config=config)
-            span.set_attribute('genkit:output', dump_json(response))
+            span.set_attribute('genkit:output', json.dumps(_to_dict(response), default=str))
 
         content = self._contents_from_response(response)
 
-        return GenerateResponse(
+        return ModelResponse(
             message=Message(
                 content=content,
                 role=Role.MODEL,
             )
         )
 
-    def _get_config(self, request: GenerateRequest) -> genai_types.GenerateImagesConfigOrDict | None:
+    def _get_config(self, request: ModelRequest) -> genai_types.GenerateImagesConfigOrDict | None:
         cfg = None
 
         if request.config:
@@ -241,10 +248,10 @@ class ImagenModel:
         if self._version in SUPPORTED_MODELS:
             model_supports = SUPPORTED_MODELS[self._version].supports  # pyrefly: ignore[bad-index]
             if model_supports:
-                supports = model_supports.model_dump()
+                supports = model_supports.model_dump(by_alias=True)
         else:
             model_supports = vertexai_image_model_info(self._version).supports
             if model_supports:
-                supports = model_supports.model_dump()
+                supports = model_supports.model_dump(by_alias=True)
 
         return {'model': {'supports': supports}}

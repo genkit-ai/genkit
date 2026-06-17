@@ -17,11 +17,7 @@
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { googleAI } from '@genkit-ai/google-genai';
-import {
-  claude3Sonnet,
-  llama31,
-  vertexAIModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit } from 'genkit';
 import { chroma } from 'genkitx-chromadb';
 import { pinecone } from 'genkitx-pinecone';
@@ -41,24 +37,23 @@ async function getCloudRunAuthClient(aud: string) {
 export const ai = genkit({
   plugins: [
     googleAI(),
-    vertexAIModelGarden({
+    vertexModelGarden({
       location: 'us-central1',
-      models: [claude3Sonnet, llama31],
     }),
     pinecone([
       {
         indexId: 'cat-facts',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
       {
         indexId: 'pdf-chat',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
     chroma([
       {
         collectionName: 'dogfacts_collection',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
         createCollectionIfMissing: true,
         clientParams: async () => {
           // Replace this with your Cloud Run Instance URL
@@ -79,11 +74,11 @@ export const ai = genkit({
     devLocalVectorstore([
       {
         indexName: 'dog-facts',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
       {
         indexName: 'pdfQA',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
     genkitEval({
@@ -111,5 +106,5 @@ export const ai = genkit({
       metrics: [GenkitMetric.FAITHFULNESS, GenkitMetric.MALICIOUSNESS],
     }),
   ],
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
 });

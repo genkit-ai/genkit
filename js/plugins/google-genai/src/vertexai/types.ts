@@ -105,6 +105,9 @@ interface BaseClientOptions {
   /** timeout in milli seconds. time out value needs to be non negative. */
   timeout?: number;
   signal?: AbortSignal;
+  customHeaders?: Record<string, string>;
+  /** Enables additional debug traces (e.g. raw model API call details). */
+  experimental_debugTraces?: boolean;
 }
 
 export interface RegionalClientOptions extends BaseClientOptions {
@@ -351,7 +354,6 @@ export declare interface Operation {
     message: string;
     details?: unknown;
   };
-  clientOptions?: ClientOptions; // Added so we can call check with the same ones
 }
 
 export declare interface VeoOperation extends Operation {

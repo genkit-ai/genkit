@@ -14,34 +14,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Genkit built-in evaluators: regex, deep_equal, jsonata."""
 
-"""RAGAS Evaluators Plugin for Genkit.
+from genkit.plugins.evaluators.plugin import genkit_eval_name, register_genkit_evaluators
 
-This plugin provides Genkit evaluators, built as wrappers on RAGAS.
-"""
-
-from genkit.plugins.evaluators.constant import (
-    GenkitMetricType,
-    MetricConfig,
-    PluginOptions,
-)
-from genkit.plugins.evaluators.helpers import define_genkit_evaluators, evaluators_name
-
-
-def package_name() -> str:
-    """Get the package name for the Google AI plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit.plugins.evaluators'
-
-
-__all__ = [
-    'package_name',
-    'define_genkit_evaluators',
-    'evaluators_name',
-    'GenkitMetricType',
-    'MetricConfig',
-    'PluginOptions',
-]
+__all__ = ['genkit_eval_name', 'register_genkit_evaluators']

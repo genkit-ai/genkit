@@ -1,0 +1,13 @@
+{
+  "service": "acme-weather",
+  "port": 8080,
+  "upstream": {
+    "provider": "openweather",
+    "timeoutSeconds": 5,
+    "cacheTTLSeconds": 60
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  }
+}

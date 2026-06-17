@@ -109,7 +109,8 @@ type commonGenOptions struct {
 	ToolChoice         ToolChoice        // Whether tool calls are required, disabled, or optional.
 	MaxTurns           int               // Maximum number of tool call iterations.
 	ReturnToolRequests *bool             // Whether to return tool requests instead of making the tool calls and continuing the generation.
-	Middleware         []ModelMiddleware // Middleware to apply to the model request and model response.
+	Middleware         []ModelMiddleware // Deprecated: Use WithUse instead. Middleware to apply to the model request and model response.
+	Use                []Middleware      // Middleware to apply to generation (Generate, Model, and Tool hooks).
 }
 
 type CommonGenOption interface {
@@ -181,6 +182,13 @@ func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) error {
 		opts.Middleware = o.Middleware
 	}
 
+	if o.Use != nil {
+		if opts.Use != nil {
+			return errors.New("cannot set middleware more than once (WithUse)")
+		}
+		opts.Use = o.Use
+	}
+
 	return nil
 }
 
@@ -233,8 +241,25 @@ func WithModelName(name string) CommonGenOption {
 }
 
 // WithMiddleware sets middleware to apply to the model request.
+//
+// Deprecated: Use [WithUse] instead, which supports Generate, Model, and Tool hooks.
 func WithMiddleware(middleware ...ModelMiddleware) CommonGenOption {
 	return &commonGenOptions{Middleware: middleware}
+}
+
+// WithUse sets middleware to apply to generation. Middleware hooks wrap
+// the generate loop, model calls, and tool executions.
+//
+// Accepts either a middleware config struct (produced by a plugin) or an
+// inline adapter via [MiddlewareFunc]. The chain applies outer-to-inner, so
+// WithUse(A, B) expands to A { B { ... } }.
+func WithUse(middleware ...Middleware) CommonGenOption {
+	return &commonGenOptions{Use: middleware}
+}
+
+// WithStepName sets a custom name for the generation step in traces.
+func WithStepName(name string) GenerateOption {
+	return &generateOptions{StepName: name}
 }
 
 // WithMaxTurns sets the maximum number of tool call iterations before erroring.
@@ -869,6 +894,7 @@ type generateOptions struct {
 	documentOptions
 	RespondParts []*Part // Tool responses to return from interrupted tool calls.
 	RestartParts []*Part // Tool requests to restart interrupted tools with.
+	StepName     string  // Custom name for the generation step in traces.
 }
 
 // GenerateOption is an option for generating a model response. It applies only to Generate().
@@ -912,6 +938,13 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) error {
 		genOpts.RestartParts = o.RestartParts
 	}
 
+	if o.StepName != "" {
+		if genOpts.StepName != "" {
+			return errors.New("cannot set step name more than once (WithStepName)")
+		}
+		genOpts.StepName = o.StepName
+	}
+
 	return nil
 }
 
@@ -931,6 +964,7 @@ func WithToolRestarts(parts ...*Part) GenerateOption {
 // toolOptions holds configuration options for defining tools.
 type toolOptions struct {
 	inputOptions
+	StrictSchema *bool
 }
 
 // ToolOption is an option for defining a tool.
@@ -940,7 +974,24 @@ type ToolOption interface {
 
 // applyTool applies the option to the tool options.
 func (o *toolOptions) applyTool(opts *toolOptions) error {
+	if o.StrictSchema != nil {
+		if opts.StrictSchema != nil {
+			return errors.New("cannot set strict schema more than once (WithStrictSchema)")
+		}
+		opts.StrictSchema = o.StrictSchema
+	}
 	return o.inputOptions.applyTool(opts)
+}
+
+// WithStrictSchema controls whether the provider enforces strict JSON schema
+// validation on this tool's input. Strict mode requires recursive
+// additionalProperties: false and may reject some JSON Schema keywords
+// (e.g. minItems/maxItems on Anthropic).
+//
+// When unset, the provider's default applies. Providers without strict-tool
+// support ignore this option.
+func WithStrictSchema(strict bool) ToolOption {
+	return &toolOptions{StrictSchema: &strict}
 }
 
 // promptExecutionOptions are options for generating a model response by executing a prompt.

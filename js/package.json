@@ -23,11 +23,11 @@
     "npm-run-all": "^4.1.5",
     "only-allow": "^1.2.1",
     "tsx": "^4.20.3",
-    "typedoc": "^0.27.9",
-    "typedoc-github-theme": "^0.2.1",
-    "typedoc-plugin-markdown": "^4.6.4",
-    "typedoc-plugin-zod": "^1.4.2",
-    "typescript": "^4.9.5"
+    "typedoc": "^0.28.17",
+    "typedoc-github-theme": "^0.4.0",
+    "typedoc-plugin-markdown": "^4.10.0",
+    "typedoc-plugin-zod": "^1.4.3",
+    "typescript": "^5.9.3"
   },
   "pnpm": {
     "overrides": {

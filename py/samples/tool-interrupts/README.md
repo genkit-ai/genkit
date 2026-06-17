@@ -1,69 +1,33 @@
-# Hello world
+# Tool interrupts
 
-## Setup environment
+Usually the generate loop calls a tool, your code runs, returns a value, and then restarts the generate loop again until it terminates on its own or hits a stopping condition.
 
-### How to Get Your Gemini API Key
+With an **interrupt**, the tool **doesn’t** finish that way: a tool can `raise Interrupt(...)` and **hand control back to your application**. Think of it as the tool saying “you handle this step”—collect input, call another service, enforce policy—**instead of** returning a final tool result in one shot.
 
-To use the Google GenAI plugin, you need a Gemini API key.
+The Genkit SDK **stops that generation turn**, surfaces the pending tool call (with your payload on `metadata["interrupt"]`), and you `generate` again later with the **same `messages`** plus `resume_respond` or `resume_restart`. Either you **inject the tool outcome** (respond) or you **ask the SDK to run the tool again** with new input and metadata.
 
-1.  **Visit AI Studio**: Go to [Google AI Studio](https://aistudio.google.com/).
-2.  **Create API Key**: Click on "Get API key" and create a key in a new or existing Google Cloud project.
+## Samples
 
-For more details, check out the [official documentation](https://ai.google.dev/gemini-api/docs/api-key).
+`respond_example.py` — Trivia: the “tool” hands off to the CLI; your answer **is** the tool result (`respond_to_interrupt` + `resume_respond`). Prompt: `prompts/trivia_host_cli.prompt`.
 
-Export the API key as env variable `GEMINI_API_KEY`:
+`approval_example.py` — Bank demo: `y` restarts the tool (`resume_restart`); `n` declines with respond (`resume_respond`). `USER_MESSAGE` is hardcoded; you only type y/n. Prompt: `prompts/bank_transfer_host_cli.prompt`.
 
-```bash
-export GEMINI_API_KEY=<Your api key>
-```
+## Run
 
-### Monitoring and Running
-
-For an enhanced development experience, use the provided `run.sh` script to start the sample with automatic reloading:
+`GEMINI_API_KEY` (Google AI plugin):
 
 ```bash
-./run.sh
+export GEMINI_API_KEY=your-api-key
+uv sync
+uv run src/respond_example.py
+uv run src/approval_example.py
 ```
 
-This script uses `watchmedo` to monitor changes in:
-- `src/` (Python logic)
-- `../../packages` (Genkit core)
-- `../../plugins` (Genkit plugins)
-- File patterns: `*.py`, `*.prompt`, `*.json`
-
-Changes will automatically trigger a restart of the sample. You can also pass command-line arguments directly to the script, e.g., `./run.sh --some-flag`.
+From repo root:
 
 ```bash
-uv venv
-source .venv/bin/activate
+uv run --directory py/samples/tool-interrupts python src/respond_example.py
+uv run --directory py/samples/tool-interrupts python src/approval_example.py
 ```
 
-## Run the sample
-
-```bash
-genkit start -- uv run src/main.py
-```
-
-## Testing This Demo
-
-1. **Run the demo** (CLI-based):
-   ```bash
-   uv run python src/main.py
-   ```
-
-2. **Test the trivia game**:
-   - [ ] The AI greets you and asks for a trivia theme
-   - [ ] Type a theme (e.g., "science", "movies")
-   - [ ] When questions appear, they're tool interrupts
-   - [ ] Answer the questions and see AI reactions
-
-3. **Test interrupt flow**:
-   - [ ] Verify `present_questions` tool triggers interrupt
-   - [ ] Check that game waits for your input
-   - [ ] Confirm AI responds to your answers appropriately
-
-4. **Expected behavior**:
-   - AI acts as enthusiastic game host
-   - Questions pause for user input (interrupt)
-   - Answers are evaluated with dramatic responses
-   - Game loop continues until you exit (Ctrl+C)
+Wire detail: `MESSAGE_SHAPES.md`.

@@ -19,22 +19,17 @@ import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 import {
+  fallback,
+  filesystem,
+  retry,
+  skills,
+  toolApproval,
+} from '@genkit-ai/middleware';
+import {
   VertexAIEvaluationMetricType,
   vertexAIEvaluation,
 } from '@genkit-ai/vertexai/evaluation';
-import {
-  claude35Sonnet,
-  claude35SonnetV2,
-  claude3Haiku,
-  claude3Opus,
-  claude3Sonnet,
-  codestral,
-  llama31,
-  llama32,
-  mistralLarge,
-  mistralNemo,
-  vertexAIModelGarden,
-} from '@genkit-ai/vertexai/modelgarden';
+import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit } from 'genkit';
 import { logger } from 'genkit/logging';
 import { chroma } from 'genkitx-chromadb';
@@ -81,12 +76,12 @@ export const PERMISSIVE_SAFETY_SETTINGS: any = {
 // a second instance, just for fun
 export const ai2 = genkit({
   name: 'Instance Two',
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   plugins: [googleAI()],
 });
 
 export const ai = genkit({
-  model: googleAI.model('gemini-2.5-flash'),
+  model: googleAI.model('gemini-flash-latest'),
   // load at least one plugin representing each action type
   plugins: [
     // model providers
@@ -105,28 +100,19 @@ export const ai = genkit({
     vertexAI({
       location: 'us-central1',
     }),
-    vertexAIModelGarden({
-      location: 'us-central1', // gemini, llama
-      // location: 'us-east5', // anthropic
-      models: [
-        claude35Sonnet,
-        claude35SonnetV2,
-        claude3Haiku,
-        claude3Opus,
-        claude3Sonnet,
-        codestral,
-        llama31,
-        llama32,
-        mistralLarge,
-        mistralNemo,
-      ],
+    vertexModelGarden({
+      location: 'us-central1',
     }),
     vertexAIEvaluation({
       location: 'us-central1',
       metrics: [
         VertexAIEvaluationMetricType.BLEU,
+        VertexAIEvaluationMetricType.FLUENCY,
         VertexAIEvaluationMetricType.GROUNDEDNESS,
         VertexAIEvaluationMetricType.SAFETY,
+        VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS,
+        VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY,
+        VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY,
         {
           type: VertexAIEvaluationMetricType.ROUGE,
           metricSpec: {
@@ -142,21 +128,21 @@ export const ai = genkit({
     chroma([
       {
         collectionName: 'chroma-collection',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),
     devLocalVectorstore([
       {
         indexName: 'naive-index',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),
     pinecone([
       {
         indexId: 'pinecone-index',
-        embedder: googleAI.embedder('text-embedding-004'),
+        embedder: googleAI.embedder('gemini-embedding-001'),
         embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
       },
     ]),
@@ -165,12 +151,20 @@ export const ai = genkit({
     genkitEval({
       judge: googleAI.model('gemini-2.5-flash'),
       judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
-      embedder: googleAI.embedder('text-embedding-004'),
+      embedder: googleAI.embedder('gemini-embedding-001'),
       metrics: [
+        GenkitMetric.ANSWER_ACCURACY,
         GenkitMetric.ANSWER_RELEVANCY,
         GenkitMetric.FAITHFULNESS,
         GenkitMetric.MALICIOUSNESS,
       ],
     }),
+
+    //middleware
+    fallback.plugin(),
+    filesystem.plugin(),
+    retry.plugin(),
+    skills.plugin(),
+    toolApproval.plugin(),
   ],
 });

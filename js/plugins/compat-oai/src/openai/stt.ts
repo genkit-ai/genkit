@@ -17,7 +17,7 @@
 
 import { z } from 'genkit';
 import { ModelInfo } from 'genkit/model';
-import { compatOaiTranscriptionModelRef } from '../audio';
+import { compatOaiTranscriptionModelRef } from '../audio.js';
 
 /** OpenAI transcription ModelRef helper, same as the OpenAI-compatible spec. */
 export function openAITranscriptionModelRef<
@@ -37,8 +37,5 @@ export const SUPPORTED_STT_MODELS = {
   }),
   'gpt-4o-mini-transcribe': openAITranscriptionModelRef({
     name: 'gpt-4o-mini-transcribe',
-  }),
-  'whisper-1': openAITranscriptionModelRef({
-    name: 'whisper-1',
   }),
 };

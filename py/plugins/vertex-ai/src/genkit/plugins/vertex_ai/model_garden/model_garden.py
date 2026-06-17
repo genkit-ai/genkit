@@ -17,12 +17,16 @@
 
 """Model Garden implementation."""
 
+from __future__ import annotations
+
 import typing
 from collections.abc import Callable
-from typing import cast
 
 if typing.TYPE_CHECKING:
-    from openai import OpenAI
+    from openai import AsyncOpenAI
+
+    from genkit import ModelRequest, ModelResponse
+    from genkit.plugin_api import ActionRunContext
 
 from genkit.plugins.compat_oai.models import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
@@ -62,7 +66,10 @@ class ModelGarden:
         location: str,
         project_id: str,
     ) -> None:
-        """Initializes the ModelGarden instance.
+        """Initialize the ModelGarden instance.
+
+        Client creation is deferred to ``create_client()`` (async) so the
+        blocking credential refresh never runs on the event loop.
 
         Args:
             model: The name of the specific model to be used from Model Garden
@@ -73,11 +80,21 @@ class ModelGarden:
                 model is deployed.
         """
         self.name = model
-        openai_params = {'location': location, 'project_id': project_id}
-        self.client = OpenAIClient(**openai_params)
+        self._openai_params = {'location': location, 'project_id': project_id}
+
+    async def create_client(self) -> AsyncOpenAI:
+        """Create the AsyncOpenAI client with refreshed credentials.
+
+        This offloads the blocking ``credentials.refresh()`` call to a
+        thread via ``OpenAIClient.create()``.
+
+        Returns:
+            The authenticated AsyncOpenAI client.
+        """
+        return await OpenAIClient.create(**self._openai_params)
 
     def get_model_info(self) -> dict[str, object] | None:
-        """Retrieves metadata and supported features for the specified model.
+        """Retrieve metadata and supported features for the specified model.
 
         This method looks up the model's information from a predefined list
         of supported OpenAI-compatible models or provides default information.
@@ -92,19 +109,24 @@ class ModelGarden:
         supports = model_info.supports
         return {
             'name': model_info.label,
-            'supports': supports.model_dump() if supports and hasattr(supports, 'model_dump') else {},
+            'supports': (
+                supports.model_dump(by_alias=False, exclude_none=False)
+                if supports and hasattr(supports, 'model_dump')
+                else {}
+            ),
         }
 
     def to_openai_compatible_model(self) -> Callable:
-        """Converts the Model Garden model into an OpenAI-compatible Genkit model function.
-
-        This method wraps the underlying Model Garden client and its generation
-        logic into a callable that adheres to the OpenAI model interface expected
-        by Genkit, specifically providing a `generate` method.
+        """Convert the Model Garden model into an OpenAI-compatible Genkit model function.
 
         Returns:
-            A callable function (specifically, the `generate` method of an
-            `OpenAIModel` instance) that can be used by Genkit.
+            A callable function (specifically, the ``generate`` method of an
+            ``OpenAIModel`` instance) that can be used by Genkit.
         """
-        openai_model = OpenAIModel(self.name, cast('OpenAI', self.client))
-        return openai_model.generate
+
+        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            client = await self.create_client()
+            openai_model = OpenAIModel(self.name, client)
+            return await openai_model.generate(request, ctx)
+
+        return _generate

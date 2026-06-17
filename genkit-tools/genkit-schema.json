@@ -1,6 +1,179 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$defs": {
+    "AbortSnapshotRequest": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshotId"
+      ],
+      "additionalProperties": false
+    },
+    "AbortSnapshotResponse": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentFinishReason": {
+      "type": "string",
+      "enum": [
+        "stop",
+        "length",
+        "blocked",
+        "interrupted",
+        "other",
+        "unknown",
+        "aborted",
+        "detached",
+        "failed"
+      ]
+    },
+    "AgentInit": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentInput": {
+      "type": "object",
+      "properties": {
+        "detach": {
+          "type": "boolean"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "resume": {
+          "type": "object",
+          "properties": {
+            "respond": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ToolResponsePart"
+              }
+            },
+            "restart": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ToolRequestPart"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentMetadata": {
+      "type": "object",
+      "properties": {
+        "stateManagement": {
+          "$ref": "#/$defs/AgentStateManagement"
+        },
+        "abortable": {
+          "type": "boolean"
+        },
+        "stateSchema": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "stateManagement",
+        "abortable"
+      ],
+      "additionalProperties": false
+    },
+    "AgentOutput": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "snapshotId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        },
+        "error": {
+          "$ref": "#/$defs/RuntimeError"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentResult": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStateManagement": {
+      "type": "string",
+      "enum": [
+        "server",
+        "client"
+      ]
+    },
+    "AgentStreamChunk": {
+      "type": "object",
+      "properties": {
+        "modelChunk": {
+          "$ref": "#/$defs/ModelResponseChunk"
+        },
+        "customPatch": {
+          "$ref": "#/$defs/JsonPatch"
+        },
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        },
+        "turnEnd": {
+          "$ref": "#/$defs/TurnEnd"
+        }
+      },
+      "additionalProperties": false
+    },
     "Artifact": {
       "type": "object",
       "properties": {
@@ -23,94 +196,98 @@
       ],
       "additionalProperties": false
     },
-    "SessionFlowInit": {
+    "GetSnapshotRequest": {
       "type": "object",
       "properties": {
         "snapshotId": {
           "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "JsonPatchOp": {
+      "type": "string",
+      "enum": [
+        "add",
+        "remove",
+        "replace",
+        "move",
+        "copy",
+        "test"
+      ]
+    },
+    "JsonPatchOperation": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/JsonPatchOp"
+        },
+        "path": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "value": {}
+      },
+      "required": [
+        "op",
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "JsonPatch": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/JsonPatchOperation"
+      }
+    },
+    "SessionSnapshot": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SnapshotStatus"
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        },
+        "error": {
+          "$ref": "#/$defs/RuntimeError"
         },
         "state": {
           "$ref": "#/$defs/SessionState"
         }
       },
-      "additionalProperties": false
-    },
-    "SessionFlowInput": {
-      "type": "object",
-      "properties": {
-        "messages": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Message"
-          }
-        },
-        "toolRestarts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Part"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowOutput": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "state": {
-          "$ref": "#/$defs/SessionState"
-        },
-        "message": {
-          "$ref": "#/$defs/Message"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Artifact"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowResult": {
-      "type": "object",
-      "properties": {
-        "message": {
-          "$ref": "#/$defs/Message"
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Artifact"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "SessionFlowStreamChunk": {
-      "type": "object",
-      "properties": {
-        "modelChunk": {
-          "$ref": "#/$defs/ModelResponseChunk"
-        },
-        "status": {},
-        "artifact": {
-          "$ref": "#/$defs/Artifact"
-        },
-        "snapshotId": {
-          "type": "string"
-        },
-        "endTurn": {
-          "type": "boolean"
-        }
-      },
+      "required": [
+        "snapshotId",
+        "createdAt"
+      ],
       "additionalProperties": false
     },
     "SessionState": {
       "type": "object",
       "properties": {
+        "sessionId": {
+          "type": "string"
+        },
         "messages": {
           "type": "array",
           "items": {
@@ -123,17 +300,30 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
-        },
-        "inputVariables": {}
+        }
       },
       "additionalProperties": false
     },
-    "SnapshotEvent": {
+    "SnapshotStatus": {
       "type": "string",
       "enum": [
-        "turnEnd",
-        "invocationEnd"
+        "pending",
+        "completed",
+        "aborted",
+        "failed"
       ]
+    },
+    "TurnEnd": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "finishReason": {
+          "$ref": "#/$defs/AgentFinishReason"
+        }
+      },
+      "additionalProperties": false
     },
     "DocumentData": {
       "type": "object",
@@ -404,6 +594,65 @@
       ],
       "additionalProperties": false
     },
+    "RuntimeError": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {}
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "MiddlewareDesc": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "configSchema": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "MiddlewareRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "config": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
     "CandidateError": {
       "type": "object",
       "properties": {
@@ -558,6 +807,12 @@
             "type": "string"
           }
         },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "toolChoice": {
           "type": "string",
           "enum": [
@@ -600,6 +855,12 @@
         },
         "stepName": {
           "type": "string"
+        },
+        "use": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MiddlewareRef"
+          }
         }
       },
       "required": [
@@ -735,28 +996,38 @@
       "type": "object",
       "properties": {
         "version": {
-          "type": "string"
+          "type": "string",
+          "description": "A specific version of a model family, e.g. `gemini-2.5-flash` for the `googleai` family."
         },
         "temperature": {
-          "type": "number"
+          "type": "number",
+          "description": "Controls the degree of randomness in token selection. A lower value is good for a more predictable response. A higher value leads to more diverse or unexpected results."
         },
         "maxOutputTokens": {
-          "type": "number"
+          "type": "number",
+          "description": "The maximum number of tokens to include in the response."
         },
         "topK": {
-          "type": "number"
+          "type": "number",
+          "description": "The maximum number of tokens to consider when sampling."
         },
         "topP": {
-          "type": "number"
+          "type": "number",
+          "description": "Decides how many possible words to consider. A higher value means that the model looks at more possible words, even the less likely ones, which makes the generated text more diverse."
         },
         "stopSequences": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Set of character sequences (up to 5) that will stop output generation."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "API Key to use for the model call, overrides API key provided in plugin config."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": true
     },
     "GenerationUsage": {
       "type": "object",
@@ -944,6 +1215,19 @@
       },
       "additionalProperties": false
     },
+    "ModelReference": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "config": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
     "ModelRequest": {
       "type": "object",
       "properties": {
@@ -1040,6 +1324,10 @@
           "items": {
             "$ref": "#/$defs/Part"
           }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {}
         }
       },
       "additionalProperties": false
@@ -1256,6 +1544,9 @@
       "type": "object",
       "properties": {
         "name": {
+          "type": "string"
+        },
+        "key": {
           "type": "string"
         },
         "description": {
@@ -1500,6 +1791,285 @@
       ],
       "additionalProperties": false
     },
+    "ActionMetadata": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "actionType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "inputSchema": {},
+        "inputJsonSchema": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false,
+              "description": "A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object."
+        },
+        "outputSchema": {},
+        "outputJsonSchema": {
+          "$ref": "#/$defs/ActionMetadata/properties/inputJsonSchema",
+          "description": "A JSON Schema Draft 7 (http://json-schema.org/draft-07/schema) object."
+        },
+        "streamSchema": {},
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ActionMetadata/properties/metadata/additionalProperties/anyOf/0"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionCancelActionParams": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "traceId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionCancelActionResponse": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionConfigureParams": {
+      "type": "object",
+      "properties": {
+        "telemetryServerUrl": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReflectionEndInputStreamParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionListActionsResponse": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ActionMetadata"
+          }
+        }
+      },
+      "required": [
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionListValuesParams": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionListValuesResponse": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionRegisterParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "genkitVersion": {
+          "type": "string"
+        },
+        "reflectionApiSpecVersion": {
+          "type": "number"
+        },
+        "envs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "pid"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionRunActionParams": {
+      "type": "object",
+      "properties": {
+        "runtimeId": {
+          "type": "string",
+          "description": "ID of the Genkit runtime to run the action on. Typically $pid-$port."
+        },
+        "key": {
+          "type": "string",
+          "description": "Action key that consists of the action type and ID."
+        },
+        "input": {
+          "description": "An input with the type that this action expects."
+        },
+        "init": {
+          "description": "Initialization parameters to establish long running session states."
+        },
+        "context": {
+          "description": "Additional runtime context data (ex. auth context data)."
+        },
+        "telemetryLabels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Labels to be applied to telemetry data."
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "streamInput": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionRunActionStateParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "state": {
+          "type": "object",
+          "properties": {
+            "traceId": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionSendInputStreamChunkParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "chunk": {}
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ReflectionStreamChunkParams": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string"
+        },
+        "chunk": {}
+      },
+      "required": [
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
     "CommonRetrieverOptions": {
       "type": "object",
       "properties": {
@@ -1734,6 +2304,7 @@
         },
         "input": {},
         "output": {},
+        "init": {},
         "isRoot": {
           "type": "boolean"
         },

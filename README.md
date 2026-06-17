@@ -5,7 +5,8 @@
 
 - **JavaScript/TypeScript**: Production-ready with full feature support
 - **Go**: Production-ready with full feature support
-- **Python (Alpha)**: Early development with core functionality
+- **Python (Beta)**: Wide feature support approaching production-readiness
+- **Dart (Preview)**: Early development with core functionality
 
 It offers a unified interface for integrating AI models from providers like [Google](https://genkit.dev/docs/plugins/google-genai), [OpenAI](https://genkit.dev/docs/plugins/openai), [Anthropic](https://thefireco.github.io/genkit-plugins/docs/plugins/genkitx-anthropic), [Ollama](https://genkit.dev/docs/plugins/ollama/), and more. Rapidly build and deploy production-ready chatbots, automations, and recommendation systems using streamlined APIs for multimodal content, structured outputs, tool calling, and agentic workflows.
 
@@ -18,8 +19,8 @@ import { googleAI } from '@genkit-ai/google-genai';
 const ai = genkit({ plugins: [googleAI()] });
 
 const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
-    prompt: 'Why is Firebase awesome?'
+    model: googleAI.model('gemini-flash-latest'),
+    prompt: 'What is the meaning of life?'
 });
 ```
 
@@ -50,7 +51,7 @@ them, at no cost to you.
   </tr>
   <tr>
     <td><strong>Cross-language support</strong></td>
-    <td>Build with the language that best fits your project. Genkit provides SDKs for JavaScript/TypeScript, Go, and Python (Alpha) with consistent APIs and capabilities across all supported languages.</td>
+    <td>Build with the language that best fits your project. Genkit provides SDKs for JavaScript/TypeScript, Go, Python (Beta), and Dart (Preview) with consistent APIs and capabilities across all supported languages.</td>
   </tr>
   <tr>
     <td><strong>Deploy anywhere</strong></td>
@@ -92,7 +93,7 @@ Genkit is designed for server-side deployment in multiple language environments,
 <tr>
   <td><span>1</span></td>
   <td>Choose your language and model provider</td>
-  <td>Select the Genkit SDK for your preferred language (JavaScript/TypeScript, Go, or Python (Alpha)). Choose a model provider like <a href="https://genkit.dev/docs/plugins/google-genai">Google Gemini</a> or Anthropic, and get an API key. Some providers, like <a href="https://genkit.dev/docs/plugins/vertex-ai">Vertex AI</a>, may rely on a different means of authentication.</td>
+  <td>Select the Genkit SDK for your preferred language (JavaScript/TypeScript, Go, Python (Beta), Dart (Preview)). Choose a model provider like <a href="https://genkit.dev/docs/plugins/google-genai">Google Gemini</a> or Anthropic, and get an API key. Some providers, like <a href="https://genkit.dev/docs/plugins/vertex-ai">Vertex AI</a>, may rely on a different means of authentication.</td>
 </tr>
 <tr>
   <td><span>2</span></td>
@@ -113,9 +114,10 @@ Genkit is designed for server-side deployment in multiple language environments,
 
 ## Get started
 
-- [JavaScript/TypeScript quickstart](https://genkit.dev/docs/get-started)
-- [Go quickstart](https://genkit.dev/go/docs/get-started-go)
-- [Python quickstart](https://genkit.dev/python/docs/get-started/) (Alpha)
+- [JavaScript/TypeScript quickstart](https://genkit.dev/docs/js/get-started/)
+- [Go quickstart](https://genkit.dev/docs/go/get-started/)
+- [Python quickstart](https://genkit.dev/docs/python/get-started/) (Beta)
+- [Dart quickstart](https://genkit.dev/docs/dart/get-started/) (Preview)
 
 ## Development tools
 
@@ -140,22 +142,15 @@ Key features:
 
 <img src="docs/resources/readme-ui-traces-screenshot.png" width="700" alt="Screenshot of Genkit Developer UI showing traces">
 
-## Try Genkit in Firebase Studio
-
-Want to skip the local setup? Click below to try out Genkit using [Firebase Studio](https://firebase.studio), Google's AI-assisted workspace for full-stack app development in the cloud.
-
-<a href="https://studio.firebase.google.com/new/genkit">
-  <img
-    height="32"
-    alt="Open in Firebase Studio"
-    src="https://cdn.firebasestudio.dev/btn/open_bright_32.svg">
-</a>
-
 ## Connect with us
 
+- [**Follow us on X/Twitter**](https://x.com/GenkitFramework) – Get the latest
+news, updates, releases, tips and samples from the Genkit team.
+- [**Join us on Reddit**](https://reddit.com/r/GenkitFramework) – Post questions,
+ learn advanced features, connect with the team and read the latest developments.
 - [**Join us on Discord**](https://discord.gg/qXt5zzQKpc) – Get help, share
 ideas, and chat with other developers.
-- [**Contribute on GitHub**](https://github.com/firebase/genkit/issues) – Report
+- [**Contribute on GitHub**](https://github.com/genkit-ai/genkit/issues) – Report
 bugs, suggest features, or explore the source code.
 - [**Contribute to Documentation and Samples**](https://github.com/genkit-ai/) – Report
 issues in Genkit's [documentation](https://github.com/genkit-ai/docsite), or contribute to the [samples](https://github.com/genkit-ai/samples).
@@ -168,4 +163,4 @@ Contributions to Genkit are welcome and highly appreciated! See our [Contributio
 
 ## Authors
 
-Genkit is built by [Firebase](https://firebase.google.com/) with contributions from the [Open Source Community](https://github.com/firebase/genkit/graphs/contributors).
+Genkit is built by [Google](https://developers.google.com/) with contributions from the [Open Source Community](https://github.com/genkit-ai/genkit/graphs/contributors).

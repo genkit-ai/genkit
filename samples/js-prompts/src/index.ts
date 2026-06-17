@@ -16,7 +16,7 @@
 
 // Import the Genkit core libraries and plugins.
 import { startFlowServer } from '@genkit-ai/express';
-import { googleAI } from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, z } from 'genkit';
 
 const ai = genkit({

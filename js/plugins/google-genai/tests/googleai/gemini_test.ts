@@ -109,12 +109,12 @@ describe('Google AI Gemini', () => {
     describe('API Key Handling', () => {
       it('throws if no API key is provided', () => {
         assert.throws(() => {
-          defineModel('gemini-2.0-flash');
+          defineModel('gemini-2.5-flash');
         }, MISSING_API_KEY_ERROR);
       });
 
       it('uses API key from pluginOptions', async () => {
-        const model = defineModel('gemini-2.0-flash', {
+        const model = defineModel('gemini-2.5-flash', {
           apiKey: 'plugin-key',
         });
         mockFetchResponse(defaultApiResponse);
@@ -129,7 +129,7 @@ describe('Google AI Gemini', () => {
 
       it('uses API key from GEMINI_API_KEY env var', async () => {
         process.env.GEMINI_API_KEY = 'gemini-key';
-        const model = defineModel('gemini-2.0-flash');
+        const model = defineModel('gemini-2.5-flash');
         mockFetchResponse(defaultApiResponse);
         await model.run(minimalRequest);
         const fetchOptions = fetchStub.lastCall.args[1];
@@ -141,13 +141,13 @@ describe('Google AI Gemini', () => {
 
       it('works if apiKey is false and not in call config', async () => {
         mockFetchResponse(defaultApiResponse);
-        const model = defineModel('gemini-2.0-flash', { apiKey: false });
+        const model = defineModel('gemini-2.5-flash', { apiKey: false });
         assert.ok(await model.run(minimalRequest));
         sinon.assert.calledOnce(fetchStub);
       });
 
       it('uses API key from call config if apiKey is false', async () => {
-        const model = defineModel('gemini-2.0-flash', { apiKey: false });
+        const model = defineModel('gemini-2.5-flash', { apiKey: false });
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
           ...minimalRequest,
@@ -305,6 +305,150 @@ describe('Google AI Gemini', () => {
         });
       });
 
+      it('constructs google_search tool for images with empty searchTypes', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-image-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {},
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          google_search: {},
+        });
+      });
+
+      it('constructs google_search tool for images with webSearch', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-image-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {
+              searchTypes: { webSearch: {} },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          google_search: { searchTypes: { webSearch: {} } },
+        });
+      });
+
+      it('constructs google_search tool for images with imageSearch', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-image-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {
+              searchTypes: { imageSearch: {} },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          google_search: { searchTypes: { imageSearch: {} } },
+        });
+      });
+
+      it('constructs google_search tool for images with both webSearch and imageSearch', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-image-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiImageConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            google_search: {
+              searchTypes: { webSearch: {}, imageSearch: {} },
+            },
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.strictEqual(apiRequest.tools?.length, 1);
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          google_search: { searchTypes: { webSearch: {}, imageSearch: {} } },
+        });
+      });
+
+      it('constructs toolConfig with retrievalConfig and googleMaps tool correctly', async () => {
+        const model = defineModel(
+          'gemini-3.1-pro-preview',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            tools: [{ googleMaps: {} }],
+            retrievalConfig: {
+              latLng: {
+                latitude: 43.0896,
+                longitude: -79.0849,
+              },
+            },
+          } as any,
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.ok(Array.isArray(apiRequest.tools));
+        assert.deepStrictEqual(apiRequest.tools?.[0], {
+          googleMaps: {},
+        });
+        assert.deepStrictEqual(apiRequest.toolConfig, {
+          retrievalConfig: {
+            latLng: {
+              latitude: 43.0896,
+              longitude: -79.0849,
+            },
+          },
+        });
+        assert.strictEqual(
+          (apiRequest.generationConfig as any).retrievalConfig,
+          undefined,
+          'retrievalConfig should not be in generationConfig'
+        );
+      });
+
       it('uses baseUrl and apiVersion from call config', async () => {
         const model = defineModel('gemini-2.5-flash', {
           ...defaultPluginOptions,
@@ -327,7 +471,10 @@ describe('Google AI Gemini', () => {
       });
 
       it('passes thinkingLevel to the API', async () => {
-        const model = defineModel('gemini-3-pro-preview', defaultPluginOptions);
+        const model = defineModel(
+          'gemini-3.1-pro-preview',
+          defaultPluginOptions
+        );
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
           ...minimalRequest,
@@ -347,6 +494,23 @@ describe('Google AI Gemini', () => {
             thinkingLevel: 'HIGH',
           },
         });
+      });
+
+      it('passes serviceTier to the API', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            serviceTier: 'flex',
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.serviceTier, 'flex');
       });
 
       it('passes imageConfig to the API', async () => {
@@ -374,13 +538,135 @@ describe('Google AI Gemini', () => {
             aspectRatio: '16:9',
             imageSize: '2K',
           },
+          responseModalities: ['TEXT', 'IMAGE'],
         });
+      });
+
+      it('defaults responseModalities to AUDIO for TTS models', async () => {
+        const model = defineModel(
+          'gemini-2.5-flash-preview-tts',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          apiRequest.generationConfig?.responseModalities,
+          ['AUDIO']
+        );
+      });
+
+      it('does not override responseModalities if specified for TTS models', async () => {
+        const model = defineModel(
+          'gemini-2.5-flash-preview-tts',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiTtsConfigSchema> = {
+          ...minimalRequest,
+          config: {
+            responseModalities: ['TEXT'],
+          },
+        };
+        await model.run(request);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          apiRequest.generationConfig?.responseModalities,
+          ['TEXT']
+        );
+      });
+
+      it('does not default responseModalities to AUDIO for non-TTS models', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.generationConfig?.responseModalities,
+          undefined
+        );
+      });
+
+      it('defaults responseModalities to TEXT, IMAGE for image models', async () => {
+        const model = defineModel(
+          'gemini-2.5-flash-image',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(
+          apiRequest.generationConfig?.responseModalities,
+          ['TEXT', 'IMAGE']
+        );
+      });
+    });
+
+    describe('Media Handling', () => {
+      const imageUrl = 'https://example.com/image.png';
+
+      it('passes external URLs for non-Gemini 2.0 models', async () => {
+        const model = defineModel(
+          'gemini-3-flash-preview',
+          defaultPluginOptions
+        );
+
+        fetchStub.callsFake(async (url: string | Request) => {
+          if (typeof url === 'string' && url === imageUrl) {
+            return new Response('image-data', {
+              headers: { 'Content-Type': 'image/png' },
+              status: 200,
+            });
+          }
+          return new Response(JSON.stringify(defaultApiResponse), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        });
+
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          messages: [
+            {
+              role: 'user',
+              content: [{ media: { url: imageUrl, contentType: 'image/png' } }],
+            },
+          ],
+        };
+
+        await model.run(request);
+
+        // Verify image was NOT downloaded
+        assert.ok(
+          !fetchStub.calledWith(imageUrl),
+          'Should NOT attempt to download image for Gemini 3.0'
+        );
+
+        // Verify API request contained fileData
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        const part = apiRequest.contents[0].parts[0];
+        assert.ok(part.fileData, 'Should be fileData');
+        assert.strictEqual(part.fileData?.mimeType, 'image/png');
+        assert.strictEqual(part.fileData?.fileUri, imageUrl);
       });
     });
 
     describe('Error Handling', () => {
       it('throws if no candidates are returned', async () => {
-        const model = defineModel('gemini-2.0-flash', defaultPluginOptions);
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
         mockFetchResponse({ candidates: [] });
         await assert.rejects(
           model.run(minimalRequest),
@@ -389,7 +675,7 @@ describe('Google AI Gemini', () => {
       });
 
       it('throws on fetch error', async () => {
-        const model = defineModel('gemini-2.0-flash', defaultPluginOptions);
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
         fetchStub.rejects(new Error('Network error'));
         await assert.rejects(model.run(minimalRequest), /Failed to fetch/);
       });
@@ -408,7 +694,7 @@ describe('Google AI Gemini', () => {
       });
 
       it('API call works with debugTraces: false', async () => {
-        const model = defineModel('gemini-2.0-flash', {
+        const model = defineModel('gemini-2.5-flash', {
           ...defaultPluginOptions,
           experimental_debugTraces: false,
         });
@@ -422,7 +708,7 @@ describe('Google AI Gemini', () => {
 
   describe('gemini() function', () => {
     it('returns a ModelReference for a known model string', () => {
-      const name = 'gemini-2.0-flash';
+      const name = 'gemini-2.5-flash';
       const modelRef = model(name);
       assert.strictEqual(modelRef.name, `googleai/${name}`);
       assert.strictEqual(modelRef.info?.supports?.multiturn, true);
@@ -431,6 +717,14 @@ describe('Google AI Gemini', () => {
 
     it('returns a ModelReference for a tts type model string', () => {
       const name = 'gemini-2.5-flash-preview-tts';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `googleai/${name}`);
+      assert.strictEqual(modelRef.info?.supports?.multiturn, false);
+      assert.strictEqual(modelRef.configSchema, GeminiTtsConfigSchema);
+    });
+
+    it('returns a ModelReference for gemini-3.1-flash-tts-preview', () => {
+      const name = 'gemini-3.1-flash-tts-preview';
       const modelRef = model(name);
       assert.strictEqual(modelRef.name, `googleai/${name}`);
       assert.strictEqual(modelRef.info?.supports?.multiturn, false);

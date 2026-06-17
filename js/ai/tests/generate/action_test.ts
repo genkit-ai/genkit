@@ -25,13 +25,14 @@ import {
   defineGenerateAction,
   type GenerateAction,
 } from '../../src/generate/action.js';
+import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   GenerateActionOptionsSchema,
   GenerateResponseChunkSchema,
   GenerateResponseSchema,
   type GenerateResponseChunkData,
 } from '../../src/model.js';
-import { defineTool } from '../../src/tool.js';
+import { defineTool, tool } from '../../src/tool.js';
 import { defineProgrammableModel, type ProgrammableModel } from '../helpers.js';
 
 initNodeFeatures();
@@ -88,6 +89,16 @@ describe('spec', () => {
         '/util/generate'
       )) as GenerateAction;
 
+      // Patch the expected response to include key for tools if needed,
+      // as the yaml file shouldn't be updated until all languages support it.
+      if (test.expectResponse?.request?.tools) {
+        test.expectResponse.request.tools =
+          test.expectResponse.request.tools.map((t: any) => ({
+            ...t,
+            key: `/tool/${t.name}`,
+          }));
+      }
+
       if (test.stream) {
         const { output, stream } = action.stream(test.input);
 
@@ -111,5 +122,54 @@ describe('spec', () => {
         );
       }
     });
+  });
+});
+
+describe('generateAction middleware injection', () => {
+  let registry: Registry;
+  let pm: ProgrammableModel;
+
+  beforeEach(() => {
+    registry = new Registry();
+    defineGenerateAction(registry);
+    pm = defineProgrammableModel(registry);
+  });
+
+  it('supports injecting tools through middleware definitions directly via action route', async () => {
+    const injectedTool = tool(
+      {
+        name: 'injectedTool',
+        description: 'desc',
+        inputSchema: z.object({ arg: z.string() }),
+      },
+      async (input) => `Result: ${input.arg}`
+    );
+
+    let toolsSeen = false;
+    pm.handleResponse = async (req) => {
+      if (req.tools?.find((t) => t.name === 'injectedTool')) {
+        toolsSeen = true;
+      }
+      return {
+        message: { role: 'model', content: [{ text: 'done' }] },
+        finishReason: 'stop',
+      } as any;
+    };
+
+    const dummyMw = generateMiddleware({ name: 'dummyMw' }, () => ({
+      tools: [injectedTool],
+    }));
+
+    const action = await registry.lookupAction('/util/generate');
+    await action({
+      model: 'programmableModel',
+      messages: [{ role: 'user', content: [{ text: 'test' }] }],
+      use: [dummyMw()],
+    } as any);
+
+    assert.ok(
+      toolsSeen,
+      'Tool was not successfully passed to the model from action generated route.'
+    );
   });
 });

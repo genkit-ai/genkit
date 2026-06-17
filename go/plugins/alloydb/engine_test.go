@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestApplyEngineOptionsConfig(t *testing.T) {
@@ -89,10 +88,16 @@ func TestApplyEngineOptionsConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := applyEngineOptions(tc.opts)
 			if tc.wantErr {
-				assert.Error(t, err)
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
 			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tc.wantIpType, cfg.ipType)
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if got, want := cfg.ipType, tc.wantIpType; got != want {
+					t.Errorf("ipType = %v, want %v", got, want)
+				}
 			}
 		})
 	}
@@ -132,11 +137,19 @@ func TestGetUser(t *testing.T) {
 			ctx := context.Background()
 			user, iamAuth, err := getUser(ctx, tc.cfg)
 			if tc.wantErr {
-				assert.Error(t, err)
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
 			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tc.wantUser, user)
-				assert.Equal(t, tc.wantIAMAuth, iamAuth)
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if got, want := user, tc.wantUser; got != want {
+					t.Errorf("user = %q, want %q", got, want)
+				}
+				if got, want := iamAuth, tc.wantIAMAuth; got != want {
+					t.Errorf("iamAuth = %v, want %v", got, want)
+				}
 			}
 		})
 	}

@@ -21,12 +21,17 @@ from functools import partial
 import structlog
 
 import ollama as ollama_api
-from genkit.ai import Plugin
-from genkit.blocks.embedding import EmbedderOptions, EmbedderSupports, embedder_action_metadata
-from genkit.blocks.model import model_action_metadata
-from genkit.core.action import Action, ActionMetadata
-from genkit.core.registry import ActionKind
-from genkit.core.schema import to_json_schema
+from genkit import ModelConfig
+from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
+from genkit.model import model_action_metadata
+from genkit.plugin_api import (
+    Action,
+    ActionKind,
+    ActionMetadata,
+    Plugin,
+    loop_local_client,
+    to_json_schema,
+)
 from genkit.plugins.ollama.constants import (
     DEFAULT_OLLAMA_SERVER_URL,
     OllamaAPITypes,
@@ -39,7 +44,6 @@ from genkit.plugins.ollama.models import (
     ModelDefinition,
     OllamaModel,
 )
-from genkit.types import GenerationCommonConfig
 
 OLLAMA_PLUGIN_NAME = 'ollama'
 logger = structlog.get_logger(__name__)
@@ -89,7 +93,7 @@ class Ollama(Plugin):
         self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
         self.request_headers = request_headers or {}
 
-        self.client = partial(ollama_api.AsyncClient, host=self.server_address)
+        self.client = loop_local_client(partial(ollama_api.AsyncClient, host=self.server_address))
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
@@ -141,18 +145,18 @@ class Ollama(Plugin):
             Action object for the model.
         """
         # Extract local name (remove plugin prefix)
-        _clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
+        clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
 
         # Try to find the model definition from pre-configured models
         model_ref = None
         for model_def in self.models:
-            if model_def.name == _clean_name:
+            if model_def.name == clean_name:
                 model_ref = model_def
                 break
 
         # If not found in pre-configured models, create a default one
         if model_ref is None:
-            model_ref = ModelDefinition(name=_clean_name)
+            model_ref = ModelDefinition(name=clean_name)
 
         model = OllamaModel(
             client=self.client,
@@ -165,13 +169,13 @@ class Ollama(Plugin):
             fn=model.generate,
             metadata={
                 'model': {
-                    'label': f'Ollama - {_clean_name}',
+                    'label': f'Ollama - {clean_name}',
                     'multiturn': model_ref.api_type == OllamaAPITypes.CHAT,
                     'system_role': True,
                     'tools': model_ref.supports.tools,
                     'output': ['text', 'json'],
                     'constrained': 'all',
-                    'customOptions': to_json_schema(GenerationCommonConfig),
+                    'customOptions': to_json_schema(ModelConfig),
                 },
             },
         )
@@ -186,9 +190,9 @@ class Ollama(Plugin):
             Action object for the embedder.
         """
         # Extract local name (remove plugin prefix)
-        _clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
+        clean_name = name.replace(OLLAMA_PLUGIN_NAME + '/', '') if name.startswith(OLLAMA_PLUGIN_NAME) else name
 
-        embedder_ref = EmbeddingDefinition(name=_clean_name)
+        embedder_ref = EmbeddingDefinition(name=clean_name)
         embedder = OllamaEmbedder(
             client=self.client,
             embedding_definition=embedder_ref,
@@ -200,7 +204,7 @@ class Ollama(Plugin):
             fn=embedder.embed,
             metadata={
                 'embedder': {
-                    'label': f'Ollama Embedding - {_clean_name}',
+                    'label': f'Ollama Embedding - {clean_name}',
                     'dimensions': embedder_ref.dimensions,
                     'supports': {'input': ['text']},
                     'customOptions': to_json_schema(ollama_api.Options),
@@ -218,21 +222,21 @@ class Ollama(Plugin):
                 - info (dict): The metadata dictionary describing the model configuration and properties.
                 - config_schema (type): The schema class used for validating the model's configuration.
         """
-        _client = self.client()
-        response = await _client.list()
+        client = self.client()
+        response = await client.list()
 
         actions = []
         for model in response.models:
-            _name = model.model
-            if not _name:
+            name = model.model
+            if not name:
                 continue
-            if 'embed' in _name:
+            if 'embed' in name:
                 actions.append(
                     embedder_action_metadata(
-                        name=ollama_name(_name),
+                        name=ollama_name(name),
                         options=EmbedderOptions(
                             config_schema=to_json_schema(ollama_api.Options),
-                            label=f'Ollama Embedding - {_name}',
+                            label=f'Ollama Embedding - {name}',
                             supports=EmbedderSupports(input=['text']),
                         ),
                     )
@@ -240,10 +244,10 @@ class Ollama(Plugin):
             else:
                 actions.append(
                     model_action_metadata(
-                        name=ollama_name(_name),
-                        config_schema=GenerationCommonConfig,
+                        name=ollama_name(name),
+                        config_schema=ModelConfig,
                         info={
-                            'label': f'Ollama - {_name}',
+                            'label': f'Ollama - {name}',
                             'multiturn': True,
                             'system_role': True,
                             'tools': True,

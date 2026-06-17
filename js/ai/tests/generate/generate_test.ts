@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { z, type PluginProvider } from '@genkit-ai/core';
+import {
+  defineDynamicActionProvider,
+  z,
+  type PluginProvider,
+} from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -22,10 +26,12 @@ import { beforeEach, describe, it } from 'node:test';
 import {
   generate,
   generateStream,
+  normalizeMiddleware,
   toGenerateActionOptions,
   toGenerateRequest,
   type GenerateOptions,
 } from '../../src/generate.js';
+import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   defineModel,
   type ModelAction,
@@ -33,7 +39,7 @@ import {
   type ModelMiddlewareWithOptions,
 } from '../../src/model.js';
 import { defineResource } from '../../src/resource.js';
-import { defineTool } from '../../src/tool.js';
+import { defineTool, tool } from '../../src/tool.js';
 
 initNodeFeatures();
 
@@ -69,6 +75,28 @@ describe('toGenerateRequest', () => {
       outputSchema: z.number(),
     },
     async ({ a, b }) => a + b
+  );
+
+  defineDynamicActionProvider(
+    registry,
+    {
+      name: 'my-dap',
+    },
+    async () => {
+      return {
+        tool: [
+          tool(
+            {
+              name: 'dapJokeTool',
+              description: 'DAP joke tool',
+              inputSchema: z.object({ topic: z.string() }),
+              outputSchema: z.string(),
+            },
+            async ({ topic }) => `DAP joke about ${topic}`
+          ),
+        ],
+      };
+    }
   );
 
   const testCases = [
@@ -120,6 +148,7 @@ describe('toGenerateRequest', () => {
               additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/tellAFunnyJoke',
           },
         ],
         output: {},
@@ -152,7 +181,10 @@ describe('toGenerateRequest', () => {
               $schema: 'http://json-schema.org/draft-07/schema#',
               type: 'number',
             },
-            metadata: { originalName: 'namespaced/add' },
+            key: '/tool/namespaced/add',
+            metadata: {
+              originalName: 'namespaced/add',
+            },
           },
         ],
         output: {},
@@ -189,6 +221,40 @@ describe('toGenerateRequest', () => {
               additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
+            key: '/tool/tellAFunnyJoke',
+          },
+        ],
+        output: {},
+      },
+    },
+    {
+      should: 'translate a string prompt correctly with a DAP tool',
+      prompt: {
+        model: 'vertexai/gemini-1.0-pro',
+        tools: ['my-dap:tool/dapJokeTool'],
+        prompt: 'Call DAP tool',
+      },
+      expectedOutput: {
+        messages: [{ role: 'user', content: [{ text: 'Call DAP tool' }] }],
+        config: undefined,
+        docs: undefined,
+        resources: [],
+        tools: [
+          {
+            name: 'dapJokeTool',
+            description: 'DAP joke tool',
+            inputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              type: 'object',
+              properties: { topic: { type: 'string' } },
+              required: ['topic'],
+              additionalProperties: true,
+            },
+            outputSchema: {
+              $schema: 'http://json-schema.org/draft-07/schema#',
+              type: 'string',
+            },
+            key: '/dynamic-action-provider/my-dap:tool/dapJokeTool',
           },
         ],
         output: {},
@@ -632,6 +698,7 @@ describe('generate', () => {
         return {
           output: 'main output',
           content: [{ text: 'part 1' }],
+          metadata: { custom: 'data' },
         };
       }
     );
@@ -699,6 +766,7 @@ describe('generate', () => {
                 },
               ],
             },
+            metadata: { custom: 'data' },
           },
         ],
       },
@@ -959,5 +1027,66 @@ describe('generate', () => {
 
     const context = JSON.parse(response.text.substring('Context: '.length));
     assert.deepStrictEqual(context.val, ['A', 'B']);
+  });
+});
+
+describe('normalizeMiddleware', () => {
+  it('handles legacy functional middleware by wrapping it', async () => {
+    const registry = new Registry();
+    const legacyMw = async (req: any, next: any) => {
+      return next(req);
+    };
+
+    const refs = await normalizeMiddleware(registry, [legacyMw]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.match(refs[0].name, /^dynamic-middleware-\d+-/);
+
+    const registered = await registry.lookupValue<any>(
+      'middleware',
+      refs[0].name
+    );
+    assert.ok(registered);
+  });
+
+  it('handles MiddlewareRef objects created by calling middleware', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+
+    // Call it to get a MiddlewareRef
+    const refs = await normalizeMiddleware(registry, [myMw()]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].name, 'myMw');
+
+    const registered = await registry.lookupValue<any>('middleware', 'myMw');
+    assert.ok(registered);
+  });
+
+  it('handles MiddlewareRef objects', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+    registry.registerValue('middleware', 'myMw', myMw);
+
+    const refs = await normalizeMiddleware(registry, [{ name: 'myMw' }]);
+
+    assert.strictEqual(refs.length, 1);
+    assert.strictEqual(refs[0].name, 'myMw');
+  });
+
+  it('throws when uncalled middleware definition is passed as a function', async () => {
+    const registry = new Registry();
+    const myMw = generateMiddleware({ name: 'myMw' }, () => ({}));
+
+    // Pass the definition function itself, which has .instantiate and .plugin
+    await assert.rejects(
+      async () => {
+        await normalizeMiddleware(registry, [myMw as any]);
+      },
+      {
+        name: 'GenkitError',
+        status: 'INVALID_ARGUMENT',
+      }
+    );
   });
 });

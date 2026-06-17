@@ -89,7 +89,7 @@ interface ParsedRegistryKey {
 /**
  * Parses the registry key into key parts as per the key format convention. Ex:
  *  - mcp-host:tool/my-tool
- *  - /model/googleai/gemini-2.0-flash
+ *  - /model/googleai/gemini-2.5-flash
  *  - /prompt/my-plugin/folder/my-prompt
  *  - /util/generate
  */
@@ -125,7 +125,7 @@ export function parseRegistryKey(
     // Invalid key format
     return undefined;
   }
-  // ex: /model/googleai/gemini-2.0-flash or /prompt/my-plugin/folder/my-prompt
+  // ex: /model/googleai/gemini-2.5-flash or /prompt/my-plugin/folder/my-prompt
   if (tokens.length >= 4) {
     return {
       actionType: tokens[1] as ActionType,
@@ -197,7 +197,7 @@ export class Registry {
     const parsedKey = parseRegistryKey(key);
     if (parsedKey?.dynamicActionHost) {
       const hostId = `/dynamic-action-provider/${parsedKey.dynamicActionHost}`;
-      const dap = await this.actionsById[hostId];
+      const dap = await this.lookupAction(hostId);
       if (!dap || !isDynamicActionProvider(dap)) {
         return [];
       }
@@ -288,6 +288,7 @@ export class Registry {
       !action.__action.name.startsWith(`${opts.namespace}/`)
     ) {
       action.__action.name = `${opts.namespace}/${action.__action.name}`;
+      action.__action.key = `/${type}/${action.__action.name}`;
     }
     const key = `/${type}/${action.__action.name}`;
     logger.debug(`registering ${key}`);
@@ -335,6 +336,7 @@ export class Registry {
     await Promise.all(
       Object.entries(this.actionsById).map(async ([key, action]) => {
         actions[key] = await action;
+        actions[key].__action.key = key; // For async actions with namespace
       })
     );
     return {

@@ -14,14 +14,21 @@
  * limitations under the License.
  */
 
-import { GenkitError, StatusName } from 'genkit';
+import { GenkitError, StatusName, type ErrorResponseMetadata } from 'genkit';
 import { logger } from 'genkit/logging';
+import { runInNewSpan } from 'genkit/tracing';
 import { GoogleAuth } from 'google-auth-library';
 import {
+  buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
+  parseRetryAfterMs,
   processStream,
 } from '../common/utils.js';
+import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from './interaction-types.js';
 import {
   ClientOptions,
   EmbedContentRequest,
@@ -41,6 +48,58 @@ import {
 } from './types.js';
 import { calculateApiKey, checkSupportedResourceMethod } from './utils.js';
 
+export const tracingHooks = { runInNewSpan };
+
+interface TraceOptions<T> {
+  request?: unknown;
+  model?: string;
+  streaming?: boolean;
+  processFn?: (resp: Response) => Promise<T>;
+  clientOptions?: ClientOptions;
+}
+
+async function maybeTraceRequest<T>(
+  url: string,
+  fetchOptions: RequestInit,
+  traceOptions: TraceOptions<T>
+): Promise<T> {
+  const call = async () => {
+    const response = await makeRequest(url, fetchOptions);
+    let processedResponse: Promise<T>;
+    if (traceOptions.processFn) {
+      // This is for streaming etc.
+      processedResponse = traceOptions.processFn(response);
+    } else {
+      // default processing is just get the json response
+      processedResponse = await response.json();
+    }
+    return processedResponse;
+  };
+
+  if (traceOptions.clientOptions?.experimental_debugTraces) {
+    return tracingHooks.runInNewSpan(
+      { metadata: { name: 'httpRequest' } },
+      async (metadata) => {
+        metadata.input = buildTraceMetadataInput(
+          url,
+          fetchOptions,
+          traceOptions
+        );
+        const processedResponse = await call();
+
+        if (traceOptions.streaming) {
+          metadata.output = '[Streaming Response]';
+        } else {
+          metadata.output = processedResponse;
+        }
+
+        return processedResponse;
+      }
+    );
+  }
+  return call();
+}
+
 export async function listModels(
   clientOptions: ClientOptions
 ): Promise<Model[]> {
@@ -56,6 +115,28 @@ export async function listModels(
   const response = await makeRequest(url, fetchOptions);
   const modelResponse = (await response.json()) as ListModelsResponse;
   return modelResponse.publisherModels;
+}
+
+export async function createInteraction(
+  createInteractionRequest: CreateInteractionRequest,
+  clientOptions: ClientOptions
+): Promise<GeminiInteraction> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: `interactions`,
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'POST',
+    clientOptions,
+    body: JSON.stringify(createInteractionRequest),
+  });
+
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    request: createInteractionRequest,
+    clientOptions,
+  });
 }
 
 export async function generateContent(
@@ -85,10 +166,12 @@ export async function generateContent(
     clientOptions,
     body: JSON.stringify(generateContentRequest),
   });
-  const response = await makeRequest(url, fetchOptions);
 
-  const responseJson = (await response.json()) as GenerateContentResponse;
-  return responseJson;
+  return maybeTraceRequest<GenerateContentResponse>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    clientOptions,
+  });
 }
 
 export async function generateContentStream(
@@ -118,15 +201,23 @@ export async function generateContentStream(
     clientOptions,
     body: JSON.stringify(generateContentRequest),
   });
-  const response = await makeRequest(url, fetchOptions);
-  return processStream(response);
+
+  return maybeTraceRequest<GenerateContentStreamResult>(url, fetchOptions, {
+    model: model,
+    request: generateContentRequest,
+    streaming: true,
+    clientOptions,
+    processFn: async (response) => {
+      return processStream(response);
+    },
+  });
 }
 
-async function internalPredict(
+async function internalPredict<T>(
   model: string,
-  body: string,
+  requestPayload: unknown,
   clientOptions: ClientOptions
-): Promise<Response> {
+): Promise<T> {
   const url = getVertexAIUrl({
     includeProjectAndLocation: true,
     resourcePath: `publishers/google/models/${model}`,
@@ -137,10 +228,14 @@ async function internalPredict(
   const fetchOptions = await getFetchOptions({
     method: 'POST',
     clientOptions,
-    body,
+    body: JSON.stringify(requestPayload),
   });
 
-  return await makeRequest(url, fetchOptions);
+  return maybeTraceRequest<T>(url, fetchOptions, {
+    model: model,
+    request: requestPayload,
+    clientOptions,
+  });
 }
 
 export async function embedContent(
@@ -148,12 +243,11 @@ export async function embedContent(
   embedContentRequest: EmbedContentRequest,
   clientOptions: ClientOptions
 ): Promise<EmbedContentResponse> {
-  const response = await internalPredict(
+  return internalPredict<EmbedContentResponse>(
     model,
-    JSON.stringify(embedContentRequest),
+    embedContentRequest,
     clientOptions
   );
-  return response.json() as Promise<EmbedContentResponse>;
 }
 
 export async function imagenPredict(
@@ -161,12 +255,11 @@ export async function imagenPredict(
   imagenPredictRequest: ImagenPredictRequest,
   clientOptions: ClientOptions
 ): Promise<ImagenPredictResponse> {
-  const response = await internalPredict(
+  return internalPredict<ImagenPredictResponse>(
     model,
-    JSON.stringify(imagenPredictRequest),
+    imagenPredictRequest,
     clientOptions
   );
-  return response.json() as Promise<ImagenPredictResponse>;
 }
 
 export async function lyriaPredict(
@@ -174,12 +267,11 @@ export async function lyriaPredict(
   lyriaPredictRequest: LyriaPredictRequest,
   clientOptions: ClientOptions
 ): Promise<LyriaPredictResponse> {
-  const response = await internalPredict(
+  return internalPredict<LyriaPredictResponse>(
     model,
-    JSON.stringify(lyriaPredictRequest),
+    lyriaPredictRequest,
     clientOptions
   );
-  return response.json() as Promise<LyriaPredictResponse>;
 }
 
 export async function veoPredict(
@@ -200,10 +292,11 @@ export async function veoPredict(
     body: JSON.stringify(veoPredictRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  const operation = await response.json();
-  operation.clientOptions = clientOptions; // for the check
-  return operation as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    model: model,
+    request: veoPredictRequest,
+    clientOptions,
+  });
 }
 
 export async function veoCheckOperation(
@@ -223,10 +316,11 @@ export async function veoCheckOperation(
     body: JSON.stringify(veoOperationRequest),
   });
 
-  const response = await makeRequest(url, fetchOptions);
-  const operation = await response.json();
-  operation.clientOptions = clientOptions; // for future checks
-  return operation as Promise<VeoOperation>;
+  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
+    model: model,
+    request: veoOperationRequest,
+    clientOptions,
+  });
 }
 
 export function getVertexAIUrl(params: {
@@ -283,6 +377,7 @@ async function getFetchOptions(params: {
   const fetchOptions: RequestInit = {
     method: params.method,
     headers: await getHeaders(params.clientOptions),
+    redirect: 'manual',
   };
   if (params.body) {
     fetchOptions.body = params.body;
@@ -312,12 +407,14 @@ function getAbortSignal(clientOptions: ClientOptions): AbortSignal | undefined {
 }
 
 async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
+  const customHeaders = clientOptions.customHeaders || {};
   if (clientOptions.kind == 'express') {
     const headers: HeadersInit = {
       'x-goog-api-key': calculateApiKey(clientOptions.apiKey, undefined),
       'Content-Type': 'application/json',
       'X-Goog-Api-Client': getGenkitClientHeader(),
       'User-Agent': getGenkitClientHeader(),
+      ...customHeaders,
     };
     return headers;
   } else {
@@ -328,6 +425,7 @@ async function getHeaders(clientOptions: ClientOptions): Promise<HeadersInit> {
       'Content-Type': 'application/json',
       'X-Goog-Api-Client': getGenkitClientHeader(),
       'User-Agent': getGenkitClientHeader(),
+      ...customHeaders,
     };
     if (clientOptions.apiKey) {
       headers['x-goog-api-key'] = clientOptions.apiKey;
@@ -363,10 +461,29 @@ async function makeRequest(
     if (!response.ok) {
       let errorText = await response.text();
       let errorMessage = errorText;
+      let errorDetail: unknown;
       try {
         const json = JSON.parse(errorText);
+        errorDetail = json;
         if (json.error && json.error.message) {
           errorMessage = json.error.message;
+          if (Array.isArray(json.error.details)) {
+            const detailsText = json.error.details
+              .map((d: any) => {
+                if (d.detail && typeof d.detail === 'string') {
+                  const match = d.detail.match(
+                    /\[ORIGINAL ERROR\]\s*(?:generic::[^:]+:\s*)?(.*?)(?:\s+\[|\s+\d+\s+\{|$)/
+                  );
+                  return match ? match[1].trim() : d.detail;
+                }
+                return JSON.stringify(d);
+              })
+              .filter(Boolean)
+              .join('\n');
+            if (detailsText) {
+              errorMessage += `\nDetails: ${detailsText}`;
+            }
+          }
         }
       } catch (e) {
         // Not JSON or expected format, use the raw text
@@ -386,9 +503,19 @@ async function makeRequest(
           status = 'UNAVAILABLE';
           break;
       }
+      // Capture Retry-After header for retry middleware to use
+      const retryAfterHeader = response.headers.get('retry-after');
+      const retryAfterMs = retryAfterHeader
+        ? parseRetryAfterMs(retryAfterHeader)
+        : undefined;
+      const responseMetadata: ErrorResponseMetadata | undefined =
+        retryAfterMs !== undefined ? { retryAfterMs } : undefined;
+
       throw new GenkitError({
         status,
         message: `Error fetching from ${url}: [${response.status} ${response.statusText}] ${errorMessage}`,
+        detail: errorDetail,
+        responseMetadata,
       });
     }
     return response;
@@ -406,4 +533,5 @@ export const TEST_ONLY = {
   getAbortSignal,
   getHeaders,
   makeRequest,
+  tracingHooks,
 };

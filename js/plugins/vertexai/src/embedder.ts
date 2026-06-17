@@ -49,7 +49,7 @@ export const VertexEmbeddingConfigSchema = z.object({
   /**
    * The `outputDimensionality` parameter allows you to specify the dimensionality of the embedding output.
    * By default, the model generates embeddings with 768 dimensions. Models such as
-   * `text-embedding-004`, `text-embedding-005`, and `text-multilingual-embedding-002`
+   * `gemini-embedding-001`, `text-embedding-005`, and `text-multilingual-embedding-002`
    * allow the output dimensionality to be adjusted between 1 and 768.
    * By selecting a smaller output dimensionality, users can save memory and storage space, leading to more efficient computations.
    **/

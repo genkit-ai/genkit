@@ -19,33 +19,200 @@ set -euo pipefail
 
 TOP_DIR=$(git rev-parse --show-toplevel)
 
-GO_DIR="${TOP_DIR}/go"
+# shellcheck disable=SC2034
+GO_DIR="${TOP_DIR}/go"  # Reserved for future Go linting
 PY_DIR="${TOP_DIR}/py"
-JS_DIR="${TOP_DIR}/js"
+# shellcheck disable=SC2034
+JS_DIR="${TOP_DIR}/js"  # Reserved for future JS linting
 
+# ── Phase 1: Sequential (modifies files) ──────────────────────────────
+# ruff fix/format must complete before any read-only checks see the source.
 uv run --directory "${PY_DIR}" ruff check --fix --preview --unsafe-fixes .
 uv run --directory "${PY_DIR}" ruff format --preview .
-# Ensure Python test files follow the *_test.py naming convention.
-if find "${PY_DIR}" -name "test_*.py" -not -path "*/.*" | grep -q .; then
-  echo "Error: Found Python test files starting with 'test_'. Please use the '*_test.py' format instead:"
-  find "${PY_DIR}" -name "test_*.py" -not -path "*/.*"
+
+echo "--- 🔒 Checking lockfile is up to date ---"
+uv lock --check --directory "${PY_DIR}"
+
+# ── Phase 2: Parallel read-only checks ────────────────────────────────
+# All checks below are read-only and independent. Run them concurrently
+# and collect results at the end.
+
+TMPDIR_LINT=$(mktemp -d)
+# shellcheck disable=SC2064
+trap "rm -rf '${TMPDIR_LINT}'" EXIT
+
+declare -a PIDS=()
+declare -a NAMES=()
+
+# Helper: launch a check in the background, capturing output.
+run_check() {
+  local name="$1"; shift
+  local logfile="${TMPDIR_LINT}/${name}.log"
+  (
+    echo "--- ${name} ---"
+    "$@" 2>&1
+  ) > "${logfile}" 2>&1 &
+  PIDS+=($!)
+  NAMES+=("${name}")
+}
+
+# Type checkers
+run_check "🔍 Ty Type Check"      uv run --directory "${PY_DIR}" ty check .
+run_check "🔍 Pyrefly Type Check"  uv run --directory "${PY_DIR}" pyrefly check .
+run_check "🔍 Pyright Type Check"  bash -c "cd \"${PY_DIR}\" && uv run pyright packages/"
+
+# Security
+run_check "🔒 Security Checks"     "${PY_DIR}/bin/run_python_security_checks"
+
+# License
+run_check "📜 License Check"       "${TOP_DIR}/bin/check_license"
+run_check "📜 Dep License Check"   uv run --directory "${PY_DIR}" liccheck -s pyproject.toml
+
+# Consistency
+run_check "🔍 Consistency Checks"  "${PY_DIR}/bin/check_consistency"
+
+# Actionlint (GitHub Actions workflow validation)
+_run_actionlint() {
+  if ! command -v actionlint &> /dev/null; then
+    echo "⚠️  actionlint not found."
+    # Auto-install prompt (only if stdin is a terminal)
+    if [ -t 0 ]; then
+      read -r -p "    Install actionlint via 'go install'? [Y/n] " answer
+      case "${answer:-Y}" in
+        [Yy]*)
+          if command -v go &> /dev/null; then
+            go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          elif command -v brew &> /dev/null; then
+            brew install actionlint
+          else
+            echo "    ❌ Neither 'go' nor 'brew' found. Install manually:"
+            echo "       https://github.com/rhysd/actionlint#quick-start"
+            return 0
+          fi
+          echo "✅ actionlint installed. Please re-run the linter."
+          return 0
+          ;;
+        *)
+          echo "    Skipping actionlint (install: go install github.com/rhysd/actionlint/cmd/actionlint@latest)"
+          return 0
+          ;;
+      esac
+    else
+      echo "    Skipping (install: go install github.com/rhysd/actionlint/cmd/actionlint@latest)"
+      return 0
+    fi
+  fi
+  local workflow_files=()
+  # Workflow directories (actionlint validates workflow syntax).
+  # NOTE: actionlint does NOT support composite action.yml files —
+  # it only validates workflow files.  Composite actions in
+  # .github/actions/ are validated indirectly when referenced by
+  # workflows via `uses:`.
+  local workflow_dirs=(
+    "${TOP_DIR}/.github/workflows"
+  )
+  for dir in "${workflow_dirs[@]}"; do
+    while IFS= read -r -d '' f; do
+      workflow_files+=("$f")
+    done < <(find "${dir}" \( -name '*.yml' -o -name '*.yaml' \) -type f -print0 2>/dev/null)
+  done
+
+  if [ ${#workflow_files[@]} -eq 0 ]; then
+    echo "ℹ️  No workflow files found — skipping"
+    return 0
+  fi
+
+  # -ignore 'shellcheck' suppresses all embedded shellcheck warnings since
+  # we already run shellcheck separately. Actionlint's shellcheck integration
+  # also produces false positives for ${{ }} expression expansions.
+  if actionlint -ignore 'shellcheck' "${workflow_files[@]}" 2>&1; then
+    echo "✅ All ${#workflow_files[@]} workflow files pass actionlint"
+  else
+    return 1
+  fi
+}
+run_check "🔧 Actionlint"  _run_actionlint
+
+# Shellcheck (inline — slightly more complex, but still read-only)
+_run_shellcheck() {
+  if ! command -v shellcheck &> /dev/null; then
+    echo "⚠️  shellcheck not found."
+    if [ -t 0 ]; then
+      read -r -p "    Install shellcheck via 'brew install'? [Y/n] " answer
+      case "${answer:-Y}" in
+        [Yy]*)
+          if command -v brew &> /dev/null; then
+            brew install shellcheck
+          else
+            echo "    ❌ 'brew' not found. Install manually: https://github.com/koalaman/shellcheck#installing"
+            return 0
+          fi
+          echo "✅ shellcheck installed. Please re-run the linter."
+          return 0
+          ;;
+        *)
+          echo "    Skipping shellcheck (install: brew install shellcheck)"
+          return 0
+          ;;
+      esac
+    else
+      echo "    Skipping (install: brew install shellcheck)"
+      return 0
+    fi
+  fi
+  local shell_errors=0
+  local shell_scripts=()
+
+  for script in "${TOP_DIR}"/bin/* "${PY_DIR}"/bin/*; do
+    if [ -f "$script" ] && file "$script" | grep -qE "shell|bash|sh script" 2>/dev/null; then
+      local script_name
+      script_name=$(basename "$script")
+      if [[ "$script_name" == *.py ]] || [[ "$script" == */.venv/* ]]; then
+        continue
+      fi
+      shell_scripts+=("$script")
+    fi
+  done
+
+  while IFS= read -r -d '' script; do
+    shell_scripts+=("$script")
+  done < <(find "${PY_DIR}/samples" -not -path '*/.venv/*' -name '*.sh' -type f -print0 2>/dev/null)
+
+  for script in "${shell_scripts[@]}"; do
+    if ! shellcheck -x -e SC1091 "$script" 2>&1; then
+      shell_errors=$((shell_errors + 1))
+    fi
+  done
+
+  if [ $shell_errors -gt 0 ]; then
+    echo "⚠️  $shell_errors shell script(s) have shellcheck warnings"
+    return 1
+  else
+    echo "✅ All ${#shell_scripts[@]} shell scripts pass shellcheck"
+  fi
+}
+run_check "🐚 Shellcheck"  _run_shellcheck
+
+# ── Collect results ───────────────────────────────────────────────────
+failures=0
+for i in "${!PIDS[@]}"; do
+  pid="${PIDS[$i]}"
+  name="${NAMES[$i]}"
+  if ! wait "${pid}"; then
+    echo ""
+    echo "❌ FAILED: ${name}"
+    cat "${TMPDIR_LINT}/${name}.log"
+    failures=$((failures + 1))
+  else
+    echo "✅ ${name}"
+  fi
+done
+
+if [ $failures -gt 0 ]; then
+  echo ""
+  echo "❌ ${failures} check(s) failed"
   exit 1
 fi
-
-# Fast type checkers first (blocking)
-# Note: ty reads its config (environment.root) from py/pyproject.toml
-echo "--- 🔍 Running Ty Type Check ---"
-uv run --directory "${PY_DIR}" ty check .
-
-# Pyrefly checks the full workspace (config in pyproject.toml handles PEP 420 namespace packages)
-echo "--- 🔍 Running Pyrefly Type Check ---"
-uv run --directory "${PY_DIR}" pyrefly check .
-
-# Pyright runs on packages/ only (blocking)
-echo "--- 🔍 Running Pyright Type Check ---"
-uv run --directory "${PY_DIR}" pyright packages/
-
-"${PY_DIR}/bin/run_python_security_checks"
 
 # Disabled because there are many lint errors.
 #pushd "${GO_DIR}" &>/dev/null

@@ -22,8 +22,8 @@ import {
   Part,
 } from '@genkit-ai/tools-common';
 import {
+  BaseRuntimeManager,
   GenkitToolsError,
-  RuntimeManager,
 } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
@@ -475,7 +475,7 @@ const TEST_CASES: Record<string, TestCase> = {
   },
 };
 
-async function waitForRuntime(manager: RuntimeManager) {
+async function waitForRuntime(manager: BaseRuntimeManager) {
   // Poll for runtimes
   for (let i = 0; i < 20; i++) {
     if (manager.listRuntimes().length > 0) return;
@@ -484,8 +484,58 @@ async function waitForRuntime(manager: RuntimeManager) {
   logger.warn('Runtime not detected after 10 seconds.');
 }
 
+/**
+ * Waits until all model actions referenced by the test suites are registered
+ * with the runtime's reflection server. This prevents 404 errors caused by
+ * dispatching tests before the runtime has finished registering actions.
+ */
+async function waitForActions(
+  manager: BaseRuntimeManager,
+  suites: TestSuite[]
+): Promise<void> {
+  const requiredKeys = new Set<string>();
+  for (const suite of suites) {
+    if (suite.model) {
+      const key = suite.model.startsWith('/')
+        ? suite.model
+        : `/model/${suite.model}`;
+      requiredKeys.add(key);
+    }
+  }
+  if (requiredKeys.size === 0) return;
+
+  const maxAttempts = 60; // 30 seconds total
+  const delayMs = 500;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const actions = await manager.listActions();
+      const registeredKeys = new Set(Object.keys(actions));
+      const missing = [...requiredKeys].filter((k) => !registeredKeys.has(k));
+      if (missing.length === 0) {
+        logger.info(
+          `All ${requiredKeys.size} model actions registered. Starting tests.`
+        );
+        return;
+      }
+      if (attempt % 10 === 0 && attempt > 0) {
+        logger.info(
+          `Waiting for ${missing.length} model action(s) to register: ${missing.join(', ')}...`
+        );
+      }
+    } catch (e) {
+      // Actions endpoint not ready yet, keep polling.
+      logger.debug(`Polling for actions failed, will retry: ${e}`);
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  logger.warn(
+    'Not all model actions registered after 30 seconds. Proceeding anyway.'
+  );
+}
+
 async function runTest(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   model: string,
   testCase: TestCase
 ): Promise<boolean> {
@@ -541,7 +591,7 @@ async function runTest(
 }
 
 async function runTestSuite(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   suite: TestSuite,
   defaultSupports: string[]
 ): Promise<{ passed: number; failed: number }> {
@@ -615,7 +665,7 @@ export const devTestModel = new Command('dev:test-model')
         if (args) cmd = args;
       }
 
-      let manager: RuntimeManager;
+      let manager: BaseRuntimeManager;
 
       if (cmd.length > 0) {
         const result = await startDevProcessManager(
@@ -625,7 +675,7 @@ export const devTestModel = new Command('dev:test-model')
         );
         manager = result.manager;
       } else {
-        manager = await startManager(projectRoot, false);
+        manager = await startManager({ projectRoot, manageHealth: false });
       }
 
       await waitForRuntime(manager);
@@ -654,6 +704,10 @@ export const devTestModel = new Command('dev:test-model')
         const defaultSupports = options.supports
           .split(',')
           .map((s) => s.trim());
+
+        // Wait for all model actions to be registered before dispatching tests.
+        // This prevents 404 errors when the runtime is still initializing.
+        await waitForActions(manager, suites);
 
         for (const suite of suites) {
           if (!suite.model) {

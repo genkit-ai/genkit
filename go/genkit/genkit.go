@@ -33,8 +33,20 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 )
+
+// genkitCtxKey is the context key for the Genkit instance.
+var genkitCtxKey = base.NewContextKey[*Genkit]()
+
+// FromContext returns the [*Genkit] instance stored in the context.
+// This is set automatically by [Generate] and related functions.
+// Middleware implementations can use this to access the Genkit instance
+// during generation.
+func FromContext(ctx context.Context) *Genkit {
+	return genkitCtxKey.FromContext(ctx)
+}
 
 // Genkit encapsulates a Genkit instance, providing access to its registry,
 // configuration, and core functionalities. It serves as the central hub for
@@ -70,9 +82,6 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		if gOpts.PromptDir != "" {
 			return errors.New("cannot set prompt directory more than once (WithPromptDir)")
 		}
-		if gOpts.PromptFS != nil {
-			return errors.New("cannot use WithPromptDir together with WithPromptFS")
-		}
 		gOpts.PromptDir = o.PromptDir
 	}
 
@@ -80,11 +89,7 @@ func (o *genkitOptions) apply(gOpts *genkitOptions) error {
 		if gOpts.PromptFS != nil {
 			return errors.New("cannot set prompt filesystem more than once (WithPromptFS)")
 		}
-		if gOpts.PromptDir != "" {
-			return errors.New("cannot use WithPromptFS together with WithPromptDir")
-		}
 		gOpts.PromptFS = o.PromptFS
-		gOpts.PromptDir = o.PromptDir
 	}
 
 	if len(o.Plugins) > 0 {
@@ -229,6 +234,16 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 			action.Register(r)
 		}
 		r.RegisterPlugin(plugin.Name(), plugin)
+
+		if mp, ok := plugin.(ai.MiddlewarePlugin); ok {
+			descs, err := mp.Middlewares(ctx)
+			if err != nil {
+				panic(fmt.Errorf("genkit.Init: plugin %q Middlewares failed: %w", plugin.Name(), err))
+			}
+			for _, d := range descs {
+				d.Register(r)
+			}
+		}
 	}
 
 	ai.ConfigureFormats(r)
@@ -250,14 +265,20 @@ func Init(ctx context.Context, opts ...GenkitOption) *Genkit {
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
 
-		go func() {
-			if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
-				return
-			}
-			if err := <-errCh; err != nil {
-				slog.Error("reflection server error", "err", err)
-			}
-		}()
+		if v2URL := os.Getenv("GENKIT_REFLECTION_V2_SERVER"); v2URL != "" {
+			// V2: connect to the CLI's WebSocket server.
+			go startReflectionServerV2(ctx, g, reflectionServerV2Options{URL: v2URL}, errCh, serverStartCh)
+		} else {
+			// V1: start an HTTP reflection server.
+			go func() {
+				if s := startReflectionServer(ctx, g, errCh, serverStartCh); s == nil {
+					return
+				}
+				if err := <-errCh; err != nil {
+					slog.Error("reflection server error", "err", err)
+				}
+			}()
+		}
 
 		select {
 		case err := <-errCh:
@@ -283,6 +304,19 @@ func RegisterAction(g *Genkit, action api.Registerable) {
 	action.Register(g.reg)
 }
 
+// LookupAction returns the action registered with g under key, or nil if
+// none is registered. key is an action's fully qualified
+// "/type/provider/name" identifier; build it with [api.NewKey] or
+// [api.KeyFromName]. For example, an agent's getSnapshot companion is keyed
+// by api.KeyFromName(api.ActionTypeAgentSnapshot, agentName).
+//
+// This is the generic, type-agnostic lookup. Prefer a typed accessor
+// ([LookupModel], [LookupPrompt], etc.) when one exists for the kind of
+// action you need.
+func LookupAction(g *Genkit, key string) api.Action {
+	return g.reg.LookupAction(key)
+}
+
 // DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
 // and returns a [core.Flow] runner.
 // The provided function `fn` takes an input of type `In` and returns an output of type `Out`.
@@ -305,7 +339,7 @@ func RegisterAction(g *Genkit, action api.Registerable) {
 //		// handle error
 //	}
 //	fmt.Println(result) // Output: Hello, World!
-func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}, struct{}] {
+func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
 	return core.DefineFlow(g.reg, name, fn)
 }
 
@@ -356,209 +390,155 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 //			fmt.Println("Stream Chunk:", result.Stream) // Outputs: 1, 2, 3, 4, 5
 //		}
 //	}
-func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream, struct{}] {
+func DefineStreamingFlow[In, Out, Stream any](g *Genkit, name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
 	return core.DefineStreamingFlow(g.reg, name, fn)
 }
 
-// DefineBidiFlow defines a bidirectional streaming flow, registers it as a [core.Action] of type Flow,
-// and returns a [core.Flow] capable of bidirectional streaming.
-//
-// The provided function `fn` receives initialization data of type `Init`, reads
-// inputs of type `In` from an input channel, and writes streamed outputs of type
-// `Stream` to an output channel. It returns a final output of type `Out` when complete.
-//
-// Example:
-//
-//	chatFlow := genkit.DefineBidiFlow(g, "chat",
-//		func(ctx context.Context, init struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
-//			var count int
-//			for input := range inCh {
-//				count++
-//				outCh <- fmt.Sprintf("reply: %s", input)
-//			}
-//			return fmt.Sprintf("processed %d messages", count), nil
-//		},
-//	)
-//
-//	// Start a bidi connection:
-//	conn, err := chatFlow.StreamBidi(ctx, struct{}{})
-//	if err != nil {
-//		// handle error
-//	}
-//
-//	// Send messages concurrently:
-//	go func() {
-//		conn.Send("hello")
-//		conn.Send("world")
-//		conn.Close()
-//	}()
-//
-//	// Receive streamed responses:
-//	for chunk, err := range conn.Receive() {
-//		if err != nil {
-//			// handle error
-//		}
-//		fmt.Println(chunk) // Outputs: "reply: hello", "reply: world"
-//	}
-//
-//	// Get the final output:
-//	output, err := conn.Output()
-//	fmt.Println(output) // Output: "processed 2 messages"
-func DefineBidiFlow[In, Out, Stream, Init any](g *Genkit, name string, fn core.BidiFunc[In, Out, Stream, Init]) *core.Flow[In, Out, Stream, Init] {
-	return core.DefineBidiFlow(g.reg, name, fn)
+// NewFlow creates a [core.Flow] without registering it as an action.
+// To register the flow later, call [RegisterAction].
+func NewFlow[In, Out any](name string, fn core.Func[In, Out]) *core.Flow[In, Out, struct{}] {
+	return core.NewFlow(name, fn)
 }
 
-// DefineSessionFlow defines a custom session flow with full control over the
-// conversation loop, registers it as a [core.Action] of type Flow, and
-// returns an [aix.SessionFlow].
+// NewStreamingFlow creates a streaming [core.Flow] without registering it as an action.
+// To register the flow later, call [RegisterAction].
+func NewStreamingFlow[In, Out, Stream any](name string, fn core.StreamingFunc[In, Out, Stream]) *core.Flow[In, Out, Stream] {
+	return core.NewStreamingFlow(name, fn)
+}
+
+// DefineAgent defines a prompt-backed agent and registers it as an
+// action on the registry. Returns an [aix.Agent].
 //
 // Experimental: This API is under active development and may change in any
 // minor version release.
 //
-// An SessionFlow is a stateful, multi-turn conversational flow. It builds on
+// An Agent is a stateful, multi-turn conversational action. It builds on
 // bidirectional streaming to enable ongoing conversations where each turn's
 // input and output are streamed between client and server. The framework
 // handles session state, conversation history, and optional snapshot
 // persistence automatically.
+//
+// source selects how the prompt is backed:
+//
+//   - [aix.FromInline] defines the prompt inline from a set of
+//     [ai.PromptOption] values; the prompt is registered under name.
+//   - [aix.FromPrompt] references an existing prompt registered with
+//     the registry under name (e.g. one defined via [DefinePrompt] or
+//     loaded from a .prompt file).
+//
+// The State type parameter is inferred from the typed agent options
+// (e.g. [aix.WithSessionStore], [aix.WithStateTransform]); pass an explicit
+// [State] only when no typed option is provided.
+//
+// The returned agent is an [api.BidiAction]; pass it to [Handler] to
+// serve it over HTTP, one turn per request. Server-managed agents also
+// register companion actions for the snapshot lifecycle; serve them
+// alongside the agent via [aix.Agent.GetSnapshotAction] and
+// [aix.Agent.AbortSnapshotAction].
+//
+// For full control over the per-turn loop, use [DefineCustomAgent].
+//
+// # Options
+//
+//   - [aix.WithSessionStore]: Enable snapshot persistence
+//   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
+//
+// Example (inline prompt):
+//
+//	chatAgent := genkit.DefineAgent(g, "chat",
+//		aix.FromInline(
+//			ai.WithModelName("googleai/gemini-3-flash-preview"),
+//			ai.WithSystem("You are a helpful assistant."),
+//		),
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+//	)
+//
+// Example (existing prompt):
+//
+//	type ChatInput struct {
+//		Personality string `json:"personality"`
+//	}
+//
+//	chatAgent := genkit.DefineAgent(g, "chat",
+//		aix.FromPrompt(ChatInput{Personality: "a sarcastic pirate"}),
+//		aix.WithSessionStore(localstore.NewInMemorySessionStore[any]()),
+//	)
+func DefineAgent[State any](
+	g *Genkit,
+	name string,
+	source aix.AgentSource,
+	opts ...aix.AgentOption[State],
+) *aix.Agent[State] {
+	return aix.DefineAgent(g.reg, name, source, opts...)
+}
+
+// DefineCustomAgent defines an agent with full control over the conversation
+// loop, registers it as an action of type agent, and returns an
+// [aix.Agent].
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
 //
 // The provided function fn receives a [aix.Responder] for streaming output
 // to the client and an [aix.SessionRunner] for accessing conversation state.
 // Call [aix.SessionRunner.Run] to enter the turn loop, which blocks until the
 // client sends the next message.
 //
-// For prompt-backed agents that follow a standard render-generate-stream loop,
-// use [DefineSessionFlowFromPrompt] instead.
+// Like [DefineAgent], the returned agent is an [api.BidiAction] servable
+// via [Handler], with companion actions on [aix.Agent.GetSnapshotAction]
+// and [aix.Agent.AbortSnapshotAction].
+//
+// For agents backed by a prompt, use [DefineAgent] with [aix.FromInline]
+// (inline prompt) or [aix.FromPrompt] (existing prompt) instead.
 //
 // # Options
 //
-//   - [aix.WithSessionStore]: Enable snapshot persistence with a [aix.SessionStore]
-//   - [aix.WithSnapshotCallback]: Control when snapshots are created
-//   - [aix.WithSnapshotOn]: Create snapshots only for specific [aix.SnapshotEvent] types
+//   - [aix.WithSessionStore]: Enable snapshot persistence
+//   - [aix.WithStateTransform]: Rewrite session state on its way out to the client
 //
-// Type parameters:
-//   - Stream: Type for custom status updates sent via [aix.Responder.SendStatus]
-//   - State: Type for user-defined state persisted in snapshots
+// The State type parameter is the shape of the conversation's custom state
+// ([aix.SessionState.Custom]); mutating it via [aix.Session.UpdateCustom]
+// streams an [aix.AgentStreamChunk.CustomPatch] delta to the client.
 //
 // Example:
 //
-//	chatAgent := genkit.DefineSessionFlow(g, "chat",
-//		func(ctx context.Context, resp aix.Responder[any], sess *aix.SessionRunner[any]) (*aix.SessionFlowResult, error) {
+//	chatAgent := genkit.DefineCustomAgent(g, "chat",
+//		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 //			var lastMessage *ai.Message
-//			err := sess.Run(ctx, func(ctx context.Context, input *aix.SessionFlowInput) error {
-//				sess.AddMessages(input.Messages...)
+//			err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
+//				var reason aix.AgentFinishReason
 //				for result, err := range genkit.GenerateStream(ctx, g,
 //					ai.WithModelName("googleai/gemini-3-flash-preview"),
 //					ai.WithMessages(sess.Messages()...),
 //				) {
 //					if err != nil {
-//						return err
+//						return nil, err
 //					}
 //					if result.Done {
 //						lastMessage = result.Response.Message
+//						reason = aix.AgentFinishReason(result.Response.FinishReason)
 //						sess.AddMessages(lastMessage)
 //					} else {
 //						resp.SendModelChunk(result.Chunk)
 //					}
 //				}
-//				return nil
+//				// Report how the turn ended; the framework forwards it on
+//				// the TurnEnd chunk and persists it on the snapshot.
+//				return &aix.TurnResult{FinishReason: reason}, nil
 //			})
 //			if err != nil {
 //				return nil, err
 //			}
-//			return &aix.SessionFlowResult{Message: lastMessage}, nil
+//			return &aix.AgentResult{Message: lastMessage}, nil
 //		},
 //	)
-//
-//	// Start a conversation:
-//	conn, err := chatAgent.StreamBidi(ctx)
-//	if err != nil {
-//		// handle error
-//	}
-//
-//	// Send a message and stream the response:
-//	conn.SendText("Hello!")
-//	for chunk, err := range conn.Receive() {
-//		if chunk.EndTurn {
-//			break
-//		}
-//		fmt.Print(chunk.ModelChunk.Text())
-//	}
-//	conn.Close()
-func DefineSessionFlow[Stream, State any](
+func DefineCustomAgent[State any](
 	g *Genkit,
 	name string,
-	fn aix.SessionFlowFunc[Stream, State],
-	opts ...aix.SessionFlowOption[State],
-) *aix.SessionFlow[Stream, State] {
-	return aix.DefineSessionFlow(g.reg, name, fn, opts...)
-}
-
-// DefineSessionFlowFromPrompt defines a prompt-backed session flow, registers it as a
-// [core.Action] of type Flow, and returns an [aix.SessionFlow].
-//
-// Experimental: This API is under active development and may change in any
-// minor version release.
-//
-// This is a higher-level alternative to [DefineSessionFlow] for agents backed
-// by a prompt (defined via [DefinePrompt] or loaded from a .prompt file). The
-// conversation loop is handled automatically: each turn renders the prompt,
-// appends conversation history, calls the model with streaming, and updates
-// session state.
-//
-// The prompt is looked up by promptName from the registry. The defaultInput
-// provides template variables for prompt rendering (e.g., personality, tone)
-// and can be overridden per invocation via [aix.WithInputVariables].
-//
-// DefineSessionFlowFromPrompt accepts the same options as [DefineSessionFlow]. See
-// [DefineSessionFlow] for available options.
-//
-// Type parameters:
-//   - State: Type for user-defined state persisted in snapshots
-//   - PromptIn: The prompt input type (inferred from defaultInput)
-//
-// Example:
-//
-//	// Given a .prompt file "chat.prompt" loaded via WithPromptDir:
-//	//   ---
-//	//   model: googleai/gemini-3-flash-preview
-//	//   input:
-//	//     schema:
-//	//       personality: string
-//	//   ---
-//	//   {{role "system"}}
-//	//   You are {{personality}}.
-//
-//	type ChatInput struct {
-//		Personality string `json:"personality"`
-//	}
-//
-//	chatAgent := genkit.DefineSessionFlowFromPrompt(g, "chat",
-//		ChatInput{Personality: "a helpful assistant"},
-//		aix.WithSessionStore(aix.NewInMemorySessionStore[any]()),
-//	)
-//
-//	// Start a conversation:
-//	conn, err := chatAgent.StreamBidi(ctx)
-//	if err != nil {
-//		// handle error
-//	}
-//
-//	// Send a message and stream the response:
-//	conn.SendText("Hello!")
-//	for chunk, err := range conn.Receive() {
-//		if chunk.EndTurn {
-//			break
-//		}
-//		fmt.Print(chunk.ModelChunk.Text())
-//	}
-//	conn.Close()
-func DefineSessionFlowFromPrompt[State, PromptIn any](
-	g *Genkit,
-	promptName string,
-	defaultInput PromptIn,
-	opts ...aix.SessionFlowOption[State],
-) *aix.SessionFlow[any, State] {
-	return aix.DefineSessionFlowFromPrompt(g.reg, promptName, defaultInput, opts...)
+	fn aix.AgentFunc[State],
+	opts ...aix.AgentOption[State],
+) *aix.Agent[State] {
+	return aix.DefineCustomAgent(g.reg, name, fn, opts...)
 }
 
 // Run executes the given function `fn` within the context of the current flow run,
@@ -609,6 +589,24 @@ func ListFlows(g *Genkit) []api.Action {
 		}
 	}
 	return flows
+}
+
+// ListAgents returns a slice of all [api.Action] instances that represent
+// agents registered with the Genkit instance `g`. Like [ListFlows], this is
+// useful for introspection or for dynamically exposing agent endpoints in an
+// HTTP server; an agent served via [Handler] runs one turn per request.
+//
+// Experimental: This API is under active development and may change in any
+// minor version release.
+func ListAgents(g *Genkit) []api.Action {
+	acts := listActions(g)
+	agents := []api.Action{}
+	for _, act := range acts {
+		if act.Type == api.ActionTypeAgent {
+			agents = append(agents, g.reg.LookupAction(act.Key))
+		}
+	}
+	return agents
 }
 
 // ListTools returns a slice of all [ai.Tool] instances that are registered
@@ -1002,6 +1000,68 @@ func LookupTool(g *Genkit, name string) ai.Tool {
 	return ai.LookupTool(g.reg, name)
 }
 
+// DefineMiddleware registers a middleware descriptor with the Genkit instance
+// and returns the resulting [*ai.MiddlewareDesc]. Registered middleware is
+// surfaced to the Dev UI and addressable by name for cross-runtime dispatch.
+//
+// This is the path for application code that declares its own middleware
+// directly. Plugins should instead construct descriptors with [ai.NewMiddleware]
+// (no registration) and return them from [ai.MiddlewarePlugin.Middlewares];
+// [Init] registers those descriptors during plugin setup.
+//
+// The `description` is a human-readable explanation shown in the Dev UI. The
+// `prototype` is a value of a type that implements [ai.Middleware]. Its
+// [ai.Middleware.Name] method supplies the registered name, and its fields
+// (both exported JSON config and unexported plugin-level state) are captured
+// by a value-copy inside the descriptor so JSON-dispatched invocations
+// preserve prototype state across calls.
+//
+// For pure Go use, registration is not strictly required: passing a middleware
+// config directly to [ai.WithUse] invokes its [ai.Middleware.New] method on
+// the local fast path without a registry lookup. Registration is what makes
+// the middleware visible to the Dev UI and callable from other runtimes. For
+// ad-hoc one-off middleware that doesn't need Dev UI visibility, use
+// [ai.MiddlewareFunc] instead of defining a type.
+//
+// Example:
+//
+//	type Trace struct {
+//		Label string `json:"label,omitempty"`
+//	}
+//
+//	func (Trace) Name() string { return "mine/trace" }
+//
+//	func (t Trace) New(ctx context.Context) (*ai.Hooks, error) {
+//		return &ai.Hooks{
+//			WrapModel: func(ctx context.Context, p *ai.ModelParams, next ai.ModelNext) (*ai.ModelResponse, error) {
+//				start := time.Now()
+//				resp, err := next(ctx, p)
+//				log.Printf("[%s] model call took %s", t.Label, time.Since(start))
+//				return resp, err
+//			},
+//		}, nil
+//	}
+//
+//	// Register so it appears in the Dev UI and can be called by name:
+//	genkit.DefineMiddleware(g, "logs model call latency", Trace{})
+//
+//	// Use it per-call:
+//	resp, err := genkit.Generate(ctx, g,
+//		ai.WithPrompt("hello"),
+//		ai.WithUse(Trace{Label: "debug"}),
+//	)
+func DefineMiddleware[M ai.Middleware](g *Genkit, description string, prototype M) *ai.MiddlewareDesc {
+	return ai.DefineMiddleware(g.reg, description, prototype)
+}
+
+// LookupMiddleware retrieves a registered middleware descriptor by its name.
+// It returns the descriptor if found, or `nil` if no middleware with the
+// given name is registered (e.g., via [DefineMiddleware] or through a
+// plugin's [ai.MiddlewarePlugin.Middlewares] method).
+func LookupMiddleware(g *Genkit, name string) *ai.MiddlewareDesc {
+	return ai.LookupMiddleware(g.reg, name)
+}
+
 // DefinePrompt defines a prompt programmatically, registers it as a [core.Action]
 // of type Prompt, and returns an executable [ai.Prompt].
 //
@@ -1279,7 +1339,7 @@ func GenerateWithRequest(ctx context.Context, g *Genkit, actionOpts *ai.Generate
 //
 //	fmt.Println(resp.Text())
 func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelResponse, error) {
-	return ai.Generate(ctx, g.reg, opts...)
+	return ai.Generate(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateStream generates a model response and streams the output.
@@ -1311,7 +1371,7 @@ func Generate(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.Mo
 //		}
 //	}
 func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.ModelStreamValue, error] {
-	return ai.GenerateStream(ctx, g.reg, opts...)
+	return ai.GenerateStream(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateOperation performs a model generation request using a flexible set of options
@@ -1348,7 +1408,7 @@ func GenerateStream(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) i
 //	// Get the result of the operation
 //	fmt.Println(op.Output.Text())
 func GenerateOperation(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*ai.ModelOperation, error) {
-	return ai.GenerateOperation(ctx, g.reg, opts...)
+	return ai.GenerateOperation(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // CheckModelOperation checks the status of a background model operation by looking up the model and calling its Check method.
@@ -1373,7 +1433,7 @@ func CheckModelOperation(ctx context.Context, g *Genkit, op *ai.ModelOperation) 
 //	}
 //	fmt.Println(joke)
 func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (string, error) {
-	return ai.GenerateText(ctx, g.reg, opts...)
+	return ai.GenerateText(genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateData performs a model generation request, expecting structured output
@@ -1402,7 +1462,7 @@ func GenerateText(ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (st
 //
 //	log.Printf("Book: %+v\n", book) // Output: Book: {Title:The Hitchhiker's Guide to the Galaxy Author:Douglas Adams Year:1979}
 func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) (*Out, *ai.ModelResponse, error) {
-	return ai.GenerateData[Out](ctx, g.reg, opts...)
+	return ai.GenerateData[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // GenerateDataStream generates a model response with streaming and returns strongly-typed output.
@@ -1441,7 +1501,7 @@ func GenerateData[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOp
 //		}
 //	}
 func GenerateDataStream[Out any](ctx context.Context, g *Genkit, opts ...ai.GenerateOption) iter.Seq2[*ai.StreamValue[Out, Out], error] {
-	return ai.GenerateDataStream[Out](ctx, g.reg, opts...)
+	return ai.GenerateDataStream[Out](genkitCtxKey.NewContext(ctx, g), g.reg, opts...)
 }
 
 // Retrieve performs a document retrieval request using a flexible set of options

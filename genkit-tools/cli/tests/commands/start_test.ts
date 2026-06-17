@@ -47,6 +47,11 @@ describe('start command', () => {
   let startServerSpy: any;
 
   beforeEach(() => {
+    jest.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
+      envVars: {},
+      telemetryServerUrl: 'http://localhost:4033',
+      reflectionV2Port: 3200,
+    });
     startDevProcessManagerSpy = jest
       .spyOn(managerUtils, 'startDevProcessManager')
       .mockResolvedValue({
@@ -92,7 +97,14 @@ describe('start command', () => {
 
     await serverStartedPromise;
 
-    expect(startManagerSpy).toHaveBeenCalledWith('/mock/root', true);
+    expect(startManagerSpy).toHaveBeenCalledWith({
+      projectRoot: '/mock/root',
+      manageHealth: true,
+      corsOrigin: undefined,
+      experimentalReflectionV2: undefined,
+      reflectionV2Port: 3200,
+      telemetryServerUrl: 'http://localhost:4033',
+    });
     expect(startDevProcessManagerSpy).not.toHaveBeenCalled();
     expect(startServerSpy).toHaveBeenCalled();
   });

@@ -18,7 +18,7 @@ import {
   devLocalIndexerRef,
   devLocalRetrieverRef,
 } from '@genkit-ai/dev-local-vectorstore';
-import googleAI from '@genkit-ai/googleai';
+import { googleAI } from '@genkit-ai/google-genai';
 import { z } from 'genkit';
 import { EvalStatusEnum, type BaseEvalDataPoint } from 'genkit/evaluator';
 import { Document } from 'genkit/retriever';
@@ -70,7 +70,7 @@ export const pdfQA = ai.defineFlow(
       context: docs.map((d) => d.text).join('\n\n'),
     });
     const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: augmentedPrompt,
     });
     return llmResponse.text;
@@ -86,7 +86,7 @@ export const simpleStructured = ai.defineFlow(
   },
   async (i) => {
     const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: i.query,
     });
     return { response: llmResponse.text };
@@ -102,7 +102,7 @@ export const simpleEcho = ai.defineFlow(
   },
   async (i) => {
     const llmResponse = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: i,
     });
     return llmResponse.text;

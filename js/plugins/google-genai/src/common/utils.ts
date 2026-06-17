@@ -30,9 +30,49 @@ import {
   GenerateContentCandidate,
   GenerateContentResponse,
   GenerateContentStreamResult,
+  PART_KEYS,
   Part,
   isObject,
 } from './types.js';
+
+export function buildTraceMetadataInput(
+  url: string,
+  fetchOptions: RequestInit,
+  traceOptions: {
+    request?: unknown;
+    model?: string;
+    clientOptions?: { timeout?: number };
+  }
+): Record<string, unknown> {
+  const safeHeaders = { ...(fetchOptions.headers as Record<string, string>) };
+
+  const redactString = (str: string | undefined): string | undefined => {
+    if (!str) return str;
+    return `<REDACTED> (${str.length} characters)`;
+  };
+
+  if (safeHeaders['x-goog-api-key']) {
+    safeHeaders['x-goog-api-key'] = redactString(
+      safeHeaders['x-goog-api-key']
+    )!;
+  }
+  if (safeHeaders['Authorization']) {
+    safeHeaders['Authorization'] = redactString(safeHeaders['Authorization'])!;
+  }
+
+  const safeOptions: any = {};
+  if (traceOptions.clientOptions?.timeout) {
+    safeOptions.timeout = traceOptions.clientOptions.timeout;
+  }
+
+  return {
+    apiEndpoint: url,
+    request: traceOptions.request,
+    headers: safeHeaders,
+    ...(Object.keys(safeOptions).length > 0 ? { options: safeOptions } : {}),
+    ...(traceOptions.model ? { model: traceOptions.model } : {}),
+  };
+}
 
 /**
  * Safely extracts the error message from the error.
@@ -345,6 +385,7 @@ function getResponseStream(
           .read()
           .then(({ value, done }) => {
             if (done) {
+              reader.releaseLock();
               if (currentText.trim()) {
                 controller.error(new Error('Failed to parse stream'));
                 return;
@@ -360,6 +401,7 @@ function getResponseStream(
               try {
                 parsedResponse = JSON.parse(match[1]);
               } catch (e) {
+                reader.releaseLock();
                 controller.error(
                   new Error(`Error parsing JSON response: "${match[1]}"`)
                 );
@@ -372,6 +414,7 @@ function getResponseStream(
             return pump();
           })
           .catch((e: Error) => {
+            reader.releaseLock();
             let err = e;
             err.stack = e.stack;
             if (err.name === 'AbortError') {
@@ -386,6 +429,10 @@ function getResponseStream(
           });
       }
     },
+    cancel() {
+      // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
+      reader.cancel().catch(() => {});
+    },
   });
   return stream;
 }
@@ -394,12 +441,16 @@ async function* generateResponseSequence(
   stream: ReadableStream<GenerateContentResponse>
 ): AsyncGenerator<GenerateContentResponse> {
   const reader = stream.getReader();
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      yield value;
     }
-    yield value;
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -408,12 +459,16 @@ async function getResponsePromise(
 ): Promise<GenerateContentResponse> {
   const allResponses: GenerateContentResponse[] = [];
   const reader = stream.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      return aggregateResponses(allResponses);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return aggregateResponses(allResponses);
+      }
+      allResponses.push(value);
     }
-    allResponses.push(value);
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -539,15 +594,26 @@ function aggregateResponses(
 
         for (const part of candidate.content.parts) {
           const newPart: Partial<Part> = {};
-          if (part.thought) {
-            newPart.thought = part.thought;
+
+          // Instead of iterating over the keys in the Object, which might
+          // Contain new, unsupported things, we iterate over the PART_KEYS
+          // which is the list of Part keys we know about.
+          // This keeps us in sync
+          for (const key of PART_KEYS) {
+            if (key === 'functionCall') {
+              // shouldContinue in the functionCall logic below applies to the
+              // top level for loop, not this nested one.
+              continue;
+            } else if (key === 'text') {
+              if (typeof part.text === 'string') {
+                newPart.text = part.text;
+              }
+            } else if (part[key]) {
+              // Essentially newPart[key] = part[key] with type safety.
+              Object.assign(newPart, { [key]: part[key] });
+            }
           }
-          if (part.thoughtSignature) {
-            newPart.thoughtSignature = part.thoughtSignature;
-          }
-          if (typeof part.text === 'string') {
-            newPart.text = part.text;
-          }
+
           if (part.functionCall) {
             // function calls are special, there can be partials, so we need aggregate
             // the partials into final functionCall.
@@ -559,15 +625,7 @@ function aggregateResponses(
             }
             activePartialToolRequest = newActivePartialToolRequest;
           }
-          if (part.executableCode) {
-            newPart.executableCode = part.executableCode;
-          }
-          if (part.codeExecutionResult) {
-            newPart.codeExecutionResult = part.codeExecutionResult;
-          }
-          if (part.inlineData) {
-            newPart.inlineData = part.inlineData;
-          }
+
           if (Object.keys(newPart).length === 0) {
             newPart.text = '';
           }
@@ -613,6 +671,38 @@ export function getGenkitClientHeader() {
     return defaultGetClientHeader() + ' firebase-studio-vm';
   }
   return defaultGetClientHeader();
+}
+
+export function isKnownKey<T extends object>(
+  key: string | number | symbol,
+  obj: T
+): key is keyof T {
+  return key in obj;
+}
+
+/**
+ * Parses the value of a `Retry-After` HTTP header into milliseconds.
+ * Supports both delay-seconds (e.g. "60") and HTTP-date formats
+ * (e.g. "Mon, 19 May 2026 12:00:00 GMT") per RFC 7231 §7.1.3.
+ *
+ * @param value The raw Retry-After header value.
+ * @returns The delay in milliseconds, or undefined if the value cannot be parsed.
+ */
+export function parseRetryAfterMs(value: string): number | undefined {
+  if (!value || !value.trim()) {
+    return undefined;
+  }
+  // Try as delay-seconds (e.g., "60")
+  const seconds = Number(value);
+  if (!isNaN(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  // Try as HTTP-date (e.g., "Mon, 19 May 2026 12:00:00 GMT")
+  const date = new Date(value);
+  if (!isNaN(date.getTime())) {
+    return Math.max(0, date.getTime() - Date.now());
+  }
+  return undefined;
 }
 
 export const TEST_ONLY = { aggregateResponses };

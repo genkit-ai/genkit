@@ -125,7 +125,7 @@ describe('Vertex AI Gemini', () => {
 
   describe('model() function', () => {
     it('returns a ModelReference for a known model string', () => {
-      const name = 'gemini-2.0-flash';
+      const name = 'gemini-2.5-flash';
       const modelRef: ModelReference<typeof GeminiConfigSchema> = model(name);
       assert.strictEqual(modelRef.name, `vertexai/${name}`);
       assert.ok(modelRef.info?.supports?.multiturn);
@@ -159,7 +159,7 @@ describe('Vertex AI Gemini', () => {
     it('applies options to the ModelReference', () => {
       const options = { temperature: 0.9, topK: 20 };
       const modelRef: ModelReference<typeof GeminiConfigSchema> = model(
-        'gemini-2.0-flash',
+        'gemini-2.5-flash',
         options
       );
       assert.deepStrictEqual(modelRef.config, options);
@@ -255,6 +255,14 @@ describe('Vertex AI Gemini', () => {
         assert.strictEqual(body.labels, undefined);
 
         assert.deepStrictEqual(options.headers, getExpectedHeaders());
+        assert.strictEqual(
+          options.headers['X-Vertex-AI-LLM-Shared-Request-Type'],
+          undefined
+        );
+        assert.strictEqual(
+          options.headers['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
 
         assert.ok(result.result.candidates);
         assert.strictEqual(result.result.candidates.length, 1);
@@ -366,7 +374,7 @@ describe('Vertex AI Gemini', () => {
             },
           },
         };
-        const model = defineModel('gemini-3-pro-preview', clientOptions);
+        const model = defineModel('gemini-3.1-pro-preview', clientOptions);
         await model.run(request);
 
         const apiRequest: GenerateContentRequest = JSON.parse(
@@ -680,35 +688,95 @@ describe('Vertex AI Gemini', () => {
         assert.strictEqual(url, expectedUrl);
         assert.ok(url.includes(overrideLocation));
       });
+
+      it('handles config.payGo priority spillover mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'priority' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'priority'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+      });
+
+      it('handles config.payGo priority-only mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'priority-only' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'priority'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          'shared'
+        );
+      });
+
+      it('handles config.payGo flex spillover mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'flex' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'flex'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          undefined
+        );
+      });
+
+      it('handles config.payGo flex-only mode', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const request: GenerateRequest<typeof GeminiConfigSchema> = {
+          ...minimalRequest,
+          config: { payGo: 'flex-only' },
+        };
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run(request);
+        sinon.assert.calledOnce(fetchStub);
+
+        const fetchHeaders = fetchStub.lastCall.args[1].headers;
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Shared-Request-Type'],
+          'flex'
+        );
+        assert.strictEqual(
+          fetchHeaders['X-Vertex-AI-LLM-Request-Type'],
+          'shared'
+        );
+      });
     });
   }
 
   describe('defineModel - Regional Client', () => {
     runCommonTests(defaultRegionalClientOptions);
-
-    it('handles googleSearchRetrieval tool for gemini-1.5', async () => {
-      const model = defineModel('gemini-1.5-pro', defaultRegionalClientOptions);
-      mockFetchResponse(defaultApiResponse);
-      const request: GenerateRequest<typeof GeminiConfigSchema> = {
-        ...minimalRequest,
-        config: {
-          googleSearchRetrieval: {},
-        },
-      };
-      await model.run(request);
-      const apiRequest: GenerateContentRequest = JSON.parse(
-        fetchStub.lastCall.args[1].body
-      );
-      const searchTool = apiRequest.tools?.find(isGoogleSearchRetrievalTool);
-      assert.ok(searchTool, 'Expected GoogleSearchRetrievalTool');
-      if (searchTool) {
-        assert.ok(
-          searchTool.googleSearchRetrieval,
-          'Expected googleSearchRetrieval property'
-        );
-        assert.deepStrictEqual(searchTool, { googleSearchRetrieval: {} });
-      }
-    });
   });
 
   describe('defineModel - Global Client', () => {

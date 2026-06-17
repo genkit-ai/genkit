@@ -14,19 +14,28 @@
  * limitations under the License.
  */
 
+import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { z } from 'zod';
-import { action, defineAction } from '../src/action.js';
+import { action, defineAction, defineActionAsync } from '../src/action.js';
 import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
+import { enableTelemetry } from '../src/tracing.js';
+import { TestSpanExporter } from './utils.js';
 
 initNodeFeatures();
+
+const spanExporter = new TestSpanExporter();
+enableTelemetry({
+  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
+});
 
 describe('action', () => {
   var registry: Registry;
   beforeEach(() => {
     registry = new Registry();
+    spanExporter.exportedSpans = [];
   });
 
   it('applies middleware', async () => {
@@ -191,6 +200,71 @@ describe('action', () => {
     ]);
   });
 
+  it('cancels the underlying stream when the consumer stops reading early', async () => {
+    // The producer keeps sending chunks until it is told to stop. Before the
+    // fix, abandoning the stream early left the reader holding the lock and
+    // never cancelled the underlying stream, so the producer happily kept
+    // pushing chunks. After the fix, the generator's `finally` cancels the
+    // reader, which closes the chunk stream and surfaces back to the producer
+    // as a failing `sendChunk`.
+    const totalChunks = 20;
+    let producedCount = 0;
+    let sendChunkError: unknown;
+    let releaseProducer: () => void;
+    const producerDone = new Promise<void>((resolve) => {
+      releaseProducer = resolve;
+    });
+
+    const act = defineAction(
+      registry,
+      { name: 'streamer', actionType: 'custom' },
+      async (input, { sendChunk }) => {
+        try {
+          for (let i = 0; i < totalChunks; i++) {
+            // Yield to the event loop so the consumer can interleave / bail out.
+            await new Promise((r) => setTimeout(r, 1));
+            producedCount = i + 1;
+            sendChunk({ count: i + 1 });
+          }
+        } catch (e) {
+          sendChunkError = e;
+          throw e;
+        } finally {
+          releaseProducer();
+        }
+        return `hi ${input}`;
+      }
+    );
+
+    const response = act.stream('Pavel');
+    // The action throws once the stream is cancelled, so its output rejects.
+    // Swallow it to avoid an unhandled rejection failing the test runner.
+    response.output.catch(() => {});
+
+    const gotChunks: any[] = [];
+    for await (const chunk of response.stream) {
+      gotChunks.push(chunk);
+      if (gotChunks.length === 2) {
+        break; // consumer abandons the stream early
+      }
+    }
+
+    await producerDone;
+
+    // Consumer only ever saw the first two chunks.
+    assert.deepStrictEqual(gotChunks, [{ count: 1 }, { count: 2 }]);
+    // The producer was stopped well before emitting all 20 chunks.
+    assert.ok(
+      producedCount < totalChunks,
+      `expected producer to be cancelled early, but it produced ${producedCount}/${totalChunks} chunks`
+    );
+    // Cancelling the reader closed the chunk stream, so the next sendChunk threw.
+    assert.ok(
+      sendChunkError,
+      'expected sendChunk to throw after the consumer abandoned the stream'
+    );
+  });
+
   it('should inherit context from parent action invocation', async () => {
     const child = defineAction(
       registry,
@@ -264,5 +338,43 @@ describe('action', () => {
     await act(undefined, { abortSignal: signal });
 
     assert.strictEqual(gotAbortSignal, signal);
+  });
+
+  it('includes genkit:key in telemetry', async () => {
+    const act = defineAction(
+      registry,
+      {
+        name: 'keyedAction',
+        actionType: 'custom',
+      },
+      async () => {
+        return 'success';
+      }
+    );
+
+    await act();
+
+    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(
+      spanExporter.exportedSpans[0].attributes['genkit:key'],
+      '/custom/keyedAction'
+    );
+  });
+
+  it('sets genkit:key on action metadata when using defineActionAsync', async () => {
+    const actPromise = defineActionAsync(
+      registry,
+      'custom',
+      'asyncKeyedAction',
+      Promise.resolve({
+        name: 'asyncKeyedAction',
+        actionType: 'custom',
+        fn: async () => 'success',
+      })
+    );
+
+    const act = await actPromise;
+
+    assert.strictEqual(act.__action.key, '/custom/asyncKeyedAction');
   });
 });

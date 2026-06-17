@@ -405,7 +405,7 @@ describe('expressHandler', async () => {
       assert.strictEqual(await subscription.output, 'Echo: durable');
     });
 
-    it.only('should return 204 for a non-existent stream', async () => {
+    it('should return 204 for a non-existent stream', async () => {
       try {
         const result = streamFlow({
           url: `http://localhost:${port}/streamingFlowDurable`,
@@ -420,6 +420,22 @@ describe('expressHandler', async () => {
       } catch (err: any) {
         assert.strictEqual(err.message, 'NOT_FOUND: Stream not found.');
       }
+    });
+
+    it('detects streaming for a multi-value, mixed-case Accept header', async () => {
+      // Clients/proxies can send a media-type list and mixed casing, e.g.
+      // "Text/Event-Stream, */*"; the handler should still stream rather than
+      // fall back to a single JSON response.
+      const response = await fetch(`http://localhost:${port}/streamingFlow`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'Text/Event-Stream, */*',
+        },
+        body: JSON.stringify({ data: { question: 'hi' } }),
+      });
+      const text = await response.text();
+      assert.match(text, /^data: /m); // SSE frames, not a single JSON body
     });
 
     it('stream a model', async () => {

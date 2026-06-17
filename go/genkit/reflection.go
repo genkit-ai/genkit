@@ -37,6 +37,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 type streamingCallback[Stream any] = func(context.Context, Stream) error
@@ -129,7 +130,13 @@ func startReflectionServer(ctx context.Context, g *Genkit, errCh chan<- error, s
 
 	var addr string
 	if envPort := os.Getenv("GENKIT_REFLECTION_PORT"); envPort != "" {
-		addr = "127.0.0.1:" + envPort
+		// Validate that the user-provided port is a valid integer.
+		_, err := strconv.Atoi(envPort)
+		if err != nil {
+			errCh <- fmt.Errorf("invalid GENKIT_REFLECTION_PORT: %w", err)
+			return nil
+		}
+		addr = net.JoinHostPort("127.0.0.1", envPort)
 	} else {
 		var err error
 		addr, err = findAvailablePort(3100)
@@ -217,8 +224,10 @@ func (s *reflectionServer) writeRuntimeFile(url string) error {
 	// remove colons to avoid problems with different OS file name restrictions
 	timestamp = strings.ReplaceAll(timestamp, ":", "_")
 
-	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s.json", os.Getpid(), timestamp))
+	// Extract port from the URL string.
+	_, port, _ := net.SplitHostPort(url)
 
+	s.RuntimeFilePath = filepath.Join(runtimesDir, fmt.Sprintf("%d-%s-%s.json", os.Getpid(), port, timestamp))
 	data := runtimeFileData{
 		ID:                       runtimeID,
 		PID:                      os.Getpid(),
@@ -303,6 +312,7 @@ func serveMux(g *Genkit, s *reflectionServer) *http.ServeMux {
 	mux.HandleFunc("POST /api/runAction", wrapReflectionHandler(handleRunAction(g, s.activeActions)))
 	mux.HandleFunc("POST /api/notify", wrapReflectionHandler(handleNotify()))
 	mux.HandleFunc("POST /api/cancelAction", wrapReflectionHandler(handleCancelAction(s.activeActions)))
+	mux.HandleFunc("GET /api/values", wrapReflectionHandler(handleListValues(g)))
 	return mux
 }
 
@@ -340,6 +350,7 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 		var body struct {
 			Key             string          `json:"key"`
 			Input           json.RawMessage `json:"input"`
+			Init            json.RawMessage `json:"init"`
 			Context         json.RawMessage `json:"context"`
 			TelemetryLabels json.RawMessage `json:"telemetryLabels"`
 		}
@@ -415,14 +426,14 @@ func handleRunAction(g *Genkit, activeActions *activeActionsMap) func(w http.Res
 			}
 		}
 
-		var contextMap core.ActionContext = nil
+		contextMap := core.ActionContext{}
 		if body.Context != nil {
 			json.Unmarshal(body.Context, &contextMap)
 		}
 
 		// Attach telemetry callback to context so action can invoke it when span is created
 		actionCtx = tracing.WithTelemetryCallback(actionCtx, telemetryCb)
-		resp, err := runAction(actionCtx, g, body.Key, body.Input, body.TelemetryLabels, cb, contextMap)
+		resp, err := runAction(actionCtx, g, body.Key, body.Input, body.Init, body.TelemetryLabels, cb, contextMap)
 
 		// Clean up active action using the trace ID from response
 		if resp != nil && resp.Telemetry.TraceID != "" {
@@ -557,6 +568,15 @@ func handleCancelAction(activeActions *activeActionsMap) func(w http.ResponseWri
 	}
 }
 
+// configureTelemetry sets up the telemetry client if not already configured via env var.
+// Shared between V1 and V2 reflection servers.
+func configureTelemetry(url string) {
+	if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && url != "" {
+		tracing.WriteTelemetryImmediate(tracing.NewHTTPTelemetryClient(url))
+		slog.Debug("connected to telemetry server", "url", url)
+	}
+}
+
 // handleNotify configures the telemetry server URL from the request.
 func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
@@ -570,10 +590,7 @@ func handleNotify() func(w http.ResponseWriter, r *http.Request) error {
 			return core.NewError(core.INVALID_ARGUMENT, err.Error())
 		}
 
-		if os.Getenv("GENKIT_TELEMETRY_SERVER") == "" && body.TelemetryServerURL != "" {
-			tracing.WriteTelemetryImmediate(tracing.NewHTTPTelemetryClient(body.TelemetryServerURL))
-			slog.Debug("connected to telemetry server", "url", body.TelemetryServerURL)
-		}
+		configureTelemetry(body.TelemetryServerURL)
 
 		if body.ReflectionApiSpecVersion != internal.GENKIT_REFLECTION_API_SPEC_VERSION {
 			slog.Error("Genkit CLI version is not compatible with runtime library. Please use `genkit-cli` version compatible with runtime library version.")
@@ -598,6 +615,26 @@ func handleListActions(g *Genkit) func(w http.ResponseWriter, r *http.Request) e
 	}
 }
 
+// handleListValues returns registered values filtered by type query parameter.
+// Matches JS: GET /api/values?type=middleware
+func handleListValues(g *Genkit) func(w http.ResponseWriter, r *http.Request) error {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		valueType := r.URL.Query().Get("type")
+		if valueType == "" {
+			return core.NewError(core.INVALID_ARGUMENT, `query parameter "type" is required`)
+		}
+		prefix := "/" + valueType + "/"
+		result := map[string]any{}
+		for key, val := range g.reg.ListValues() {
+			if strings.HasPrefix(key, prefix) {
+				name := strings.TrimPrefix(key, prefix)
+				result[name] = val
+			}
+		}
+		return writeJSON(r.Context(), w, result)
+	}
+}
+
 // listActions lists all the registered actions.
 func listActions(g *Genkit) []api.ActionDesc {
 	ads := []api.ActionDesc{}
@@ -615,9 +652,14 @@ func listActions(g *Genkit) []api.ActionDesc {
 }
 
 // listResolvableActions lists all the registered and resolvable actions.
+// Schema references in the descriptors are resolved to their concrete schemas
+// so that consumers (e.g., the Dev UI) don't have to perform secondary lookups.
 func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	ads := listActions(g)
-	keys := make(map[string]struct{})
+	keys := make(map[string]struct{}, len(ads))
+	for _, d := range ads {
+		keys[d.Name] = struct{}{}
+	}
 
 	plugins := g.reg.ListPlugins()
 	for _, p := range plugins {
@@ -629,6 +671,7 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 
 		for _, desc := range dp.ListActions(ctx) {
 			if _, exists := keys[desc.Name]; !exists {
+				resolveDescSchemas(g.reg, &desc)
 				ads = append(ads, desc)
 				keys[desc.Name] = struct{}{}
 			}
@@ -640,6 +683,18 @@ func listResolvableActions(ctx context.Context, g *Genkit) []api.ActionDesc {
 	})
 
 	return ads
+}
+
+// resolveDescSchemas best-effort resolves any "genkit:" schema references in
+// the descriptor's InputSchema and OutputSchema. Unresolvable references are
+// left as-is.
+func resolveDescSchemas(r api.Registry, desc *api.ActionDesc) {
+	if resolved, err := core.ResolveSchema(r, desc.InputSchema); err == nil {
+		desc.InputSchema = resolved
+	}
+	if resolved, err := core.ResolveSchema(r, desc.OutputSchema); err == nil {
+		desc.OutputSchema = resolved
+	}
 }
 
 // TODO: Pull these from common types in genkit-tools.
@@ -657,14 +712,12 @@ type errorResponse struct {
 	Error core.ReflectionError `json:"error"`
 }
 
-func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
+func runAction(ctx context.Context, g *Genkit, key string, input, init json.RawMessage, telemetryLabels json.RawMessage, cb streamingCallback[json.RawMessage], runtimeContext map[string]any) (*runActionResponse, error) {
 	action := g.reg.ResolveAction(key)
 	if action == nil {
 		return nil, core.NewError(core.NOT_FOUND, "action %q not found", key)
 	}
-	if runtimeContext != nil {
-		ctx = core.WithActionContext(ctx, runtimeContext)
-	}
+	ctx = core.WithActionContext(ctx, runtimeContext)
 
 	// Parse telemetry attributes if provided
 	var telemetryAttributes map[string]string
@@ -678,7 +731,7 @@ func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage
 	// Run the action and capture trace ID. We need to ensure there's a valid trace context.
 	var traceID string
 	output, err := func() (json.RawMessage, error) {
-		r, err := action.RunJSONWithTelemetry(ctx, input, cb)
+		r, err := runActionWithOptionalInit(ctx, action, input, init, cb)
 		if r != nil {
 			traceID = r.TraceId
 		}
@@ -697,6 +750,35 @@ func runAction(ctx context.Context, g *Genkit, key string, input json.RawMessage
 		Result:    output,
 		Telemetry: telemetry{TraceID: traceID},
 	}, nil
+}
+
+// checkInitSupported rejects an init payload aimed at an action that cannot
+// accept one: it returns INVALID_ARGUMENT when init carries a value and the
+// action is not bidi, and nil otherwise. Transports call it before committing
+// to a response shape (e.g. before writing SSE headers) so the rejection
+// surfaces as a proper request error on every path.
+func checkInitSupported(a api.Action, init json.RawMessage) error {
+	if base.HasJSONValue(init) {
+		if _, ok := a.(api.BidiAction); !ok {
+			return core.NewError(core.INVALID_ARGUMENT, "action %q does not accept init", a.Name())
+		}
+	}
+	return nil
+}
+
+// runActionWithOptionalInit runs an action through its JSON surface,
+// dispatching to the bidi one-shot path when init carries a value. Init on a
+// non-bidi action is rejected with INVALID_ARGUMENT. Shared by the reflection
+// servers and the HTTP action handler so the init-acceptance contract stays
+// in one place.
+func runActionWithOptionalInit(ctx context.Context, a api.Action, input, init json.RawMessage, cb streamingCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if err := checkInitSupported(a, init); err != nil {
+		return nil, err
+	}
+	if bidi, ok := a.(api.BidiAction); ok && base.HasJSONValue(init) {
+		return bidi.RunBidiJSON(ctx, input, cb, &api.BidiSessionOptions{Init: init})
+	}
+	return a.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // writeJSON writes a JSON-marshaled value to the response writer.

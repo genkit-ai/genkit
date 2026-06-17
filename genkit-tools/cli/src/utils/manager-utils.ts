@@ -15,11 +15,13 @@
  */
 
 import {
+  LocalFileLogStore,
   LocalFileTraceStore,
   startTelemetryServer,
 } from '@genkit-ai/telemetry-server';
 import type { Status } from '@genkit-ai/tools-common';
 import {
+  BaseRuntimeManager,
   ProcessManager,
   RuntimeEvent,
   RuntimeManager,
@@ -33,9 +35,10 @@ import getPort, { makeRange } from 'get-port';
  *
  * This function is not idempotent. Typically you want to make sure it's called only once per cli instance.
  */
-export async function resolveTelemetryServer(
-  projectRoot: string
-): Promise<string> {
+export async function resolveTelemetryServer(options: {
+  projectRoot: string;
+  corsOrigin?: string;
+}): Promise<string> {
   let telemetryServerUrl = process.env.GENKIT_TELEMETRY_SERVER;
   if (!telemetryServerUrl) {
     const telemetryPort = await getPort({ port: makeRange(4033, 4999) });
@@ -43,9 +46,14 @@ export async function resolveTelemetryServer(
     await startTelemetryServer({
       port: telemetryPort,
       traceStore: new LocalFileTraceStore({
-        storeRoot: projectRoot,
-        indexRoot: projectRoot,
+        storeRoot: options.projectRoot,
+        indexRoot: options.projectRoot,
       }),
+      logStore: new LocalFileLogStore({
+        storeRoot: options.projectRoot,
+        indexRoot: options.projectRoot,
+      }),
+      corsOrigin: options.corsOrigin,
     });
   }
   return telemetryServerUrl;
@@ -54,15 +62,22 @@ export async function resolveTelemetryServer(
 /**
  * Starts the runtime manager and its dependencies.
  */
-export async function startManager(
-  projectRoot: string,
-  manageHealth?: boolean
-): Promise<RuntimeManager> {
-  const telemetryServerUrl = await resolveTelemetryServer(projectRoot);
+export async function startManager(options: {
+  projectRoot: string;
+  manageHealth?: boolean;
+  corsOrigin?: string;
+  experimentalReflectionV2?: boolean;
+  reflectionV2Port?: number;
+  telemetryServerUrl?: string;
+}): Promise<BaseRuntimeManager> {
+  const telemetryServerUrl =
+    options.telemetryServerUrl ?? (await resolveTelemetryServer(options));
   const manager = RuntimeManager.create({
     telemetryServerUrl,
-    manageHealth,
-    projectRoot,
+    manageHealth: options.manageHealth,
+    projectRoot: options.projectRoot,
+    experimentalReflectionV2: options.experimentalReflectionV2,
+    reflectionV2Port: options.reflectionV2Port,
   });
   return manager;
 }
@@ -73,6 +88,44 @@ export interface DevProcessManagerOptions {
   healthCheck?: boolean;
   timeout?: number;
   cwd?: string;
+  corsOrigin?: string;
+  experimentalReflectionV2?: boolean;
+  envVars?: Record<string, string>;
+  reflectionV2Port?: number;
+  telemetryServerUrl?: string;
+}
+
+export async function getDevEnvVars(
+  projectRoot: string,
+  options?: DevProcessManagerOptions
+): Promise<{
+  envVars: Record<string, string>;
+  reflectionV2Port?: number;
+  telemetryServerUrl: string;
+}> {
+  const telemetryServerUrl = await resolveTelemetryServer({
+    projectRoot,
+    corsOrigin: options?.corsOrigin,
+  });
+  const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
+  const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
+
+  let reflectionV2Port: number | undefined;
+  const envVars: Record<string, string> = {
+    GENKIT_TELEMETRY_SERVER: telemetryServerUrl,
+    GENKIT_ENV: 'dev',
+  };
+
+  if (experimentalReflectionV2) {
+    reflectionV2Port = await getPort({ port: makeRange(3200, 3400) });
+    envVars.GENKIT_REFLECTION_V2_SERVER = `ws://localhost:${reflectionV2Port}`;
+  }
+
+  if (!disableRealtimeTelemetry) {
+    envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
+  }
+
+  return { envVars, reflectionV2Port, telemetryServerUrl };
 }
 
 export async function startDevProcessManager(
@@ -80,16 +133,21 @@ export async function startDevProcessManager(
   command: string,
   args: string[],
   options?: DevProcessManagerOptions
-): Promise<{ manager: RuntimeManager; processPromise: Promise<void> }> {
-  const telemetryServerUrl = await resolveTelemetryServer(projectRoot);
+): Promise<{ manager: BaseRuntimeManager; processPromise: Promise<void> }> {
+  const { envVars, reflectionV2Port, telemetryServerUrl } =
+    options?.envVars &&
+    options?.telemetryServerUrl &&
+    (!options?.experimentalReflectionV2 || options?.reflectionV2Port)
+      ? {
+          envVars: options.envVars,
+          reflectionV2Port: options.reflectionV2Port,
+          telemetryServerUrl: options.telemetryServerUrl,
+        }
+      : await getDevEnvVars(projectRoot, options);
+
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
-  const envVars: Record<string, string> = {
-    GENKIT_TELEMETRY_SERVER: telemetryServerUrl,
-    GENKIT_ENV: 'dev',
-  };
-  if (!disableRealtimeTelemetry) {
-    envVars.GENKIT_ENABLE_REALTIME_TELEMETRY = 'true';
-  }
+  const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
+
   const processManager = new ProcessManager(command, args, envVars);
   const manager = await RuntimeManager.create({
     telemetryServerUrl,
@@ -97,6 +155,8 @@ export async function startDevProcessManager(
     projectRoot,
     processManager,
     disableRealtimeTelemetry,
+    experimentalReflectionV2,
+    reflectionV2Port,
   });
   const processPromise = processManager.start({ ...options });
 
@@ -112,7 +172,7 @@ export async function startDevProcessManager(
  * Rejects if the process exits or if the timeout is reached.
  */
 export async function waitForRuntime(
-  manager: RuntimeManager,
+  manager: BaseRuntimeManager,
   processPromise: Promise<void>,
   timeoutMs: number = 30000
 ): Promise<void> {
@@ -163,16 +223,59 @@ export async function waitForRuntime(
 /**
  * Runs the given function with a runtime manager.
  */
+export interface RunWithManagerOptions {
+  /** Command to start the runtime process. If provided, an ephemeral manager is used. */
+  runtimeCommand?: string[];
+}
+
 export async function runWithManager(
   projectRoot: string,
-  fn: (manager: RuntimeManager) => Promise<void>
+  fn: (manager: BaseRuntimeManager) => Promise<void>,
+  options?: RunWithManagerOptions
 ) {
-  let manager: RuntimeManager;
+  const useEphemeral =
+    options?.runtimeCommand && options.runtimeCommand.length > 0;
+  let manager: BaseRuntimeManager;
+  const oldLevel = logger.level;
+
   try {
-    manager = await startManager(projectRoot, false); // Don't manage health in this case.
+    if (useEphemeral) {
+      const devEnv = await getDevEnvVars(projectRoot, {
+        experimentalReflectionV2: true,
+      });
+      const { envVars, telemetryServerUrl, reflectionV2Port } = devEnv;
+
+      logger.level = 'warn';
+
+      const result = await startDevProcessManager(
+        projectRoot,
+        options!.runtimeCommand![0],
+        options!.runtimeCommand!.slice(1),
+        {
+          experimentalReflectionV2: true,
+          healthCheck: true,
+          envVars,
+          telemetryServerUrl,
+          reflectionV2Port,
+          nonInteractive: true,
+        }
+      );
+      manager = result.manager;
+    } else {
+      manager = await startManager({
+        projectRoot,
+        manageHealth: false,
+      });
+    }
   } catch (e) {
+    logger.error('Failed to start manager', e);
     process.exit(1);
+  } finally {
+    if (useEphemeral) {
+      logger.level = oldLevel;
+    }
   }
+
   try {
     await fn(manager);
   } catch (err) {
@@ -183,13 +286,17 @@ export async function runWithManager(
       const { code, details, message } = errorStatus;
       logger.error(`\tCode: ${code}`);
       logger.error(`\tMessage: ${message}`);
-      logger.error(
-        `\tTrace: http://localhost:4200/traces/${details.traceId}\n`
-      );
+      if (details?.traceId) {
+        logger.error(`\tTrace ID: ${details.traceId}\n`);
+      }
     } else {
       logger.error(`\tMessage: ${error.data}\n`);
     }
     logger.error('Stack trace:');
     logger.error(`${error.stack}`);
+  } finally {
+    if (manager) {
+      await manager.stop();
+    }
   }
 }

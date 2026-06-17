@@ -47,7 +47,6 @@ bump_version js/plugins/dev-local-vectorstore @genkit-ai/dev-local-vectorstore d
 bump_version js/plugins/evaluators @genkit-ai/evaluator evaluator-v
 bump_version js/plugins/firebase @genkit-ai/firebase firebase-v
 bump_version js/plugins/google-cloud @genkit-ai/google-cloud google-cloud-v
-bump_version js/plugins/googleai @genkit-ai/googleai googleai-v
 bump_version js/plugins/langchain genkitx-langchain
 bump_version js/plugins/next @genkit-ai/next next-v
 bump_version js/plugins/ollama genkitx-ollama

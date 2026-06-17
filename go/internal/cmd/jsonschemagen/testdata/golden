@@ -181,7 +181,7 @@ type Message struct {
 type Operation struct {
 	BlockedOnStep *OperationBlockedOnStep `json:"blockedOnStep,omitempty"`
 	// If the value is false, it means the operation is still in progress. If true, the operation is completed, and either error or response is available.
-	Done bool `json:"done,omitempty"`
+	Done bool `json:"done"`
 	// Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time.
 	Metadata any `json:"metadata,omitempty"`
 	// server-assigned name, which is only unique within the same service that originally returns it.

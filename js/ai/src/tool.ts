@@ -38,6 +38,11 @@ import {
 import { MultipartToolResponseSchema } from './parts.js';
 import { isExecutablePrompt, type ExecutablePrompt } from './prompt.js';
 
+/**
+ * Interface for tools that support the interrupts / human-in-the-loop pattern.
+ * Provides `respond` and `restart` methods for resuming interrupted tool calls.
+ * @beta
+ */
 export interface Resumable<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
@@ -138,6 +143,7 @@ export type DynamicToolAction<
     };
   };
 
+/** Runtime options passed to a tool when it is executed by the framework. */
 export interface ToolRunOptions extends ActionRunOptions<z.ZodTypeAny> {
   /**
    * If resumed is supplied to a tool at runtime, that means that it was previously interrupted and this is a second
@@ -273,6 +279,10 @@ export function toToolDefinition(
     })!,
   };
 
+  if (tool.__action.key) {
+    out.key = tool.__action.key;
+  }
+
   if (originalName !== name) {
     out.metadata = { originalName };
   }
@@ -280,6 +290,7 @@ export function toToolDefinition(
   return out;
 }
 
+/** Options available inside a tool's implementation function, including `interrupt` and `context`. */
 export interface ToolFnOptions extends ActionFnArg<never> {
   /**
    * A function that can be called during tool execution that will result in the tool
@@ -290,17 +301,20 @@ export interface ToolFnOptions extends ActionFnArg<never> {
   context: ActionContext;
 }
 
+/** The implementation function for a standard tool. Receives typed input and {@link ToolFnOptions}. */
 export type ToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
   input: z.infer<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<z.infer<O>>;
 
+/** The implementation function for a multipart tool that can return structured output, content parts, and metadata. */
 export type MultipartToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
   input: z.infer<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<{
   output?: z.infer<O>;
   content?: Part[];
+  metadata?: Record<string, any>;
 }>;
 
 export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -347,20 +361,11 @@ function implementTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
         "The 'tool.reply' method is part of the 'interrupts' beta feature."
       );
     }
-    parseSchema(responseData, {
+    responseData = parseSchema(responseData, {
       jsonSchema: config.outputJsonSchema,
       schema: config.outputSchema,
     });
-    return {
-      toolResponse: stripUndefinedProps({
-        name: interrupt.toolRequest.name,
-        ref: interrupt.toolRequest.ref,
-        output: responseData,
-      }),
-      metadata: {
-        interruptResponse: options?.metadata || true,
-      },
-    };
+    return respondTool(interrupt, responseData, options);
   };
 
   (a as ToolAction<I, O>).restart = (interrupt, resumedMetadata, options) => {
@@ -378,19 +383,7 @@ function implementTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
         jsonSchema: config.inputJsonSchema,
       });
     }
-    return {
-      toolRequest: stripUndefinedProps({
-        name: interrupt.toolRequest.name,
-        ref: interrupt.toolRequest.ref,
-        input: replaceInput || interrupt.toolRequest.input,
-      }),
-      metadata: stripUndefinedProps({
-        ...interrupt.metadata,
-        resumed: resumedMetadata || true,
-        // annotate the original input if replacing it
-        replacedInput: replaceInput ? interrupt.toolRequest.input : undefined,
-      }),
-    };
+    return restartTool(interrupt, resumedMetadata, { replaceInput });
   };
 }
 
@@ -407,6 +400,72 @@ export type InterruptConfig<
       ) => Record<string, any> | Promise<Record<string, any>>);
 };
 
+/**
+ * restartTool constructs a tool request corresponding to the provided interrupt tool request
+ * that will then re-trigger the tool after e.g. a user confirms. In contrast to ToolAction.restart,
+ * this is a standalone utility that does not require an active ToolAction instance.
+ *
+ * @param interrupt The interrupt tool request you want to restart.
+ * @param resumedMetadata The metadata you want to provide to the tool to aide in reprocessing. Defaults to `true` if none is supplied.
+ * @param options Additional options for restarting the tool.
+ *
+ * @beta
+ */
+export function restartTool(
+  interrupt: ToolRequestPart,
+  resumedMetadata?: any,
+  options?: {
+    /**
+     * Replace the existing input arguments to the tool with different ones.
+     **/
+    replaceInput?: any;
+  }
+): ToolRequestPart {
+  let replaceInput = options?.replaceInput;
+  return {
+    toolRequest: stripUndefinedProps({
+      name: interrupt.toolRequest.name,
+      ref: interrupt.toolRequest.ref,
+      input: replaceInput ?? interrupt.toolRequest.input,
+    }),
+    metadata: stripUndefinedProps({
+      ...interrupt.metadata,
+      resumed: resumedMetadata ?? true,
+      // annotate the original input if replacing it
+      replacedInput:
+        replaceInput !== undefined ? interrupt.toolRequest.input : undefined,
+    }),
+  };
+}
+
+/**
+ * respondTool constructs a tool response part corresponding to the provided interrupt tool request
+ * that bypasses normal tool execution and sends a manual output result. In contrast to ToolAction.respond,
+ * this is a standalone utility that does not require an active ToolAction instance.
+ *
+ * @param interrupt The interrupt tool request you are responding to.
+ * @param responseData The manual output result you want to send back to the model.
+ * @param options Additional options for responding to the tool.
+ *
+ * @beta
+ */
+export function respondTool(
+  interrupt: ToolRequestPart,
+  responseData: any,
+  options?: { metadata?: any }
+): ToolResponsePart {
+  return {
+    toolResponse: stripUndefinedProps({
+      name: interrupt.toolRequest.name,
+      ref: interrupt.toolRequest.ref,
+      output: responseData,
+    }),
+    metadata: stripUndefinedProps({
+      interruptResponse: options?.metadata ?? true,
+    }),
+  };
+}
+
 export function isToolRequest(part: Part): part is ToolRequestPart {
   return !!part.toolRequest;
 }
@@ -415,8 +474,13 @@ export function isToolResponse(part: Part): part is ToolResponsePart {
   return !!part.toolResponse;
 }
 
-export function isDynamicTool(t: unknown): t is ToolAction {
+export function isDynamicTool(
+  t: unknown
+): t is ToolAction | MultipartToolAction {
   return isAction(t) && t.__action?.metadata?.dynamic === true;
+}
+export function isMultipartTool(t: unknown): t is MultipartToolAction {
+  return isAction(t) && t.__action?.metadata?.type === 'tool.v2';
 }
 
 export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -424,12 +488,21 @@ export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
 ): ToolAction<I, O> {
   const { requestMetadata, ...toolConfig } = config;
 
-  return tool<I, O>(toolConfig, async (input, { interrupt }) => {
-    if (!config.requestMetadata) interrupt();
-    else if (typeof config.requestMetadata === 'object')
-      interrupt(config.requestMetadata);
-    else interrupt(await Promise.resolve(config.requestMetadata(input)));
-  });
+  return tool<I, O>(
+    {
+      ...toolConfig,
+      metadata: {
+        ...(toolConfig.metadata || {}),
+        tool: { ...toolConfig.metadata?.tool, restartable: false },
+      },
+    },
+    async (input, { interrupt }) => {
+      if (!config.requestMetadata) interrupt();
+      else if (typeof config.requestMetadata === 'object')
+        interrupt(config.requestMetadata);
+      else interrupt(await Promise.resolve(config.requestMetadata(input)));
+    }
+  );
 }
 
 export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
@@ -437,6 +510,7 @@ export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   config: InterruptConfig<I, O>
 ): ToolAction<I, O> {
   const i = interrupt(config);
+  delete i.__action.metadata.dynamic;
   registry.registerAction('tool', i);
   return i;
 }
@@ -459,6 +533,11 @@ function interruptTool(registry?: Registry) {
   return (metadata?: Record<string, any>): never => {
     if (registry) {
       assertUnstable(registry, 'beta', 'Tool interrupts are a beta feature.');
+    }
+    if (metadata) {
+      setCustomMetadataAttributes({
+        interrupt: JSON.stringify(metadata),
+      });
     }
     throw new ToolInterruptError(metadata);
   };
@@ -484,6 +563,15 @@ export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   return config.multipart ? multipartTool(config, fn) : basicTool(config, fn);
 }
 
+function recordResumedMetadata(runOptions: any) {
+  const optionsMetadata = runOptions.metadata;
+  if (optionsMetadata?.resumed) {
+    setCustomMetadataAttributes({
+      resumed: JSON.stringify(optionsMetadata.resumed),
+    });
+  }
+}
+
 function basicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
@@ -495,6 +583,7 @@ function basicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
       metadata: { ...(config.metadata || {}), type: 'tool', dynamic: true },
     },
     (i, runOptions) => {
+      recordResumedMetadata(runOptions);
       const interrupt = interruptTool(runOptions.registry);
       if (fn) {
         return fn(i, {
@@ -537,10 +626,12 @@ function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
       metadata: {
         ...(config.metadata || {}),
         type: 'tool.v2',
-        tool: { multipart: true },
+        tool: { ...config.metadata?.tool, multipart: true },
+        dynamic: true,
       },
     },
     (i, runOptions) => {
+      recordResumedMetadata(runOptions);
       const interrupt = interruptTool(runOptions.registry);
       if (fn) {
         return fn(i, {
