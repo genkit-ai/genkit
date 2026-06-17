@@ -785,24 +785,32 @@ export interface Agent<State = unknown>
 }
 
 /**
- * Resolves the {@link Session} (and originating snapshot, if any) for an agent
- * turn from its {@link AgentInit}, validating that the init strategy matches
- * the agent's state-management mode.
+ * Error thrown for agent init *API misuse* that should surface to the caller as
+ * a real, thrown error (mapped to an HTTP status by the server handler) rather
+ * than being absorbed into a graceful `finishReason: 'failed'` result.
  *
- * Server-managed agents (with a store) resume via a `snapshotId` (an exact
- * snapshot) or a `sessionId` (the session's latest snapshot); client-managed
- * agents (no store) supply the full `state` blob. Throws a {@link GenkitError}
- * on any mismatch, missing snapshot, or invalid custom state - the caller is
- * expected to translate that into a graceful `finishReason: 'failed'` result.
+ * Covers calling an agent with an init that does not match its state-management
+ * mode (e.g. sending `state` to a server-managed agent, or `snapshotId`/
+ * `sessionId` to a client-managed one) and the snapshot/session ownership
+ * guard. Other pre-turn failures (missing snapshot, non-resumable snapshot,
+ * invalid custom state) remain graceful.
  */
-async function resolveSession<State>(
-  config: { name: string; store?: SessionStore<State> },
-  store: SessionStore<State>,
-  init: AgentInit | undefined,
-  validateCustomState: (custom: unknown) => void
-): Promise<{ session: Session<State>; snapshot?: SessionSnapshot<State> }> {
+export class AgentInitError extends GenkitError {}
+
+/**
+ * Asserts that the init strategy matches the agent's state-management mode,
+ * throwing an {@link AgentInitError} on a mismatch.
+ *
+ * Server-managed agents (with a store) resume via a `snapshotId` / `sessionId`;
+ * client-managed agents (no store) supply the full `state` blob. This is API
+ * misuse, so it propagates as a thrown error rather than a graceful failure.
+ */
+function assertInitMatchesStateManagement(
+  config: { name: string; store?: SessionStore<unknown> },
+  init: AgentInit | undefined
+): void {
   if ((init?.snapshotId || init?.sessionId) && !config.store) {
-    throw new GenkitError({
+    throw new AgentInitError({
       status: 'FAILED_PRECONDITION',
       message:
         `Cannot use '${init.snapshotId ? 'snapshotId' : 'sessionId'}' with ` +
@@ -811,13 +819,33 @@ async function resolveSession<State>(
     });
   }
   if (init?.state && config.store) {
-    throw new GenkitError({
+    throw new AgentInitError({
       status: 'FAILED_PRECONDITION',
       message:
         `Cannot send 'state' to agent '${config.name}': this agent uses ` +
         `a server-managed store. Send 'snapshotId' or 'sessionId' instead.`,
     });
   }
+}
+
+/**
+ * Resolves the {@link Session} (and originating snapshot, if any) for an agent
+ * turn from its {@link AgentInit}.
+ *
+ * Server-managed agents (with a store) resume via a `snapshotId` (an exact
+ * snapshot) or a `sessionId` (the session's latest snapshot); client-managed
+ * agents (no store) supply the full `state` blob. Throws a {@link GenkitError}
+ * on a missing snapshot, non-resumable snapshot, or invalid custom state - the
+ * caller is expected to translate that into a graceful `finishReason: 'failed'`
+ * result. The state-management mismatch checks are performed up front by
+ * {@link assertInitMatchesStateManagement} and throw {@link AgentInitError}.
+ */
+async function resolveSession<State>(
+  config: { name: string; store?: SessionStore<State> },
+  store: SessionStore<State>,
+  init: AgentInit | undefined,
+  validateCustomState: (custom: unknown) => void
+): Promise<{ session: Session<State>; snapshot?: SessionSnapshot<State> }> {
   if (init?.snapshotId) {
     const snapshot = await store.getSnapshot({
       snapshotId: init.snapshotId,
@@ -831,10 +859,11 @@ async function resolveSession<State>(
     }
     // When both `snapshotId` and `sessionId` are supplied, `snapshotId` selects
     // the exact snapshot to resume and `sessionId` acts as an ownership guard:
-    // the snapshot must belong to that session. Reject the mismatch instead of
-    // silently resuming a snapshot from a different conversation.
+    // the snapshot must belong to that session. A mismatch is API misuse, so it
+    // propagates as a thrown error (AgentInitError) rather than being absorbed
+    // into a graceful failure.
     if (init.sessionId && snapshot.state?.sessionId !== init.sessionId) {
-      throw new GenkitError({
+      throw new AgentInitError({
         status: 'INVALID_ARGUMENT',
         message:
           `Snapshot ${init.snapshotId} does not belong to session ` +
@@ -842,6 +871,7 @@ async function resolveSession<State>(
           `${snapshot.state?.sessionId ?? 'an unknown session'}).`,
       });
     }
+
     // Only `completed` snapshots are resumable. A failed/aborted/pending
     // snapshot is persisted for inspection but is not a valid resume target.
     if (snapshot.status !== 'completed') {
@@ -1052,6 +1082,12 @@ export function defineCustomAgent<State = unknown>(
       const init = arg.init;
       const store = config.store || new InMemorySessionStore<State>();
 
+      // API-misuse checks (init does not match the agent's state-management
+      // mode) throw out of the generator so the server handler maps them to a
+      // proper HTTP status, rather than being absorbed into a graceful
+      // `finishReason: 'failed'` result below.
+      assertInitMatchesStateManagement(config, init);
+
       let session!: Session<State>;
       let snapshot: SessionSnapshot<State> | undefined;
 
@@ -1063,11 +1099,18 @@ export function defineCustomAgent<State = unknown>(
           validateCustomState
         ));
       } catch (e: any) {
-        // Pre-turn / setup failure (state-vs-store mismatch, missing snapshot,
-        // invalid client state). Resolve gracefully with `finishReason: 'failed'`
-        // - preserving the original `error.status` - rather than throwing, so
-        // the caller gets a structured, inspectable result. There is no
-        // last-good turn yet; echo back the client-supplied state when present.
+        // An AgentInitError signals API misuse (e.g. the snapshot/session
+        // ownership guard) that must surface as a thrown error; re-throw it so
+        // the server handler maps it to a proper HTTP status.
+        if (e instanceof AgentInitError) {
+          throw e;
+        }
+        // Other pre-turn / setup failures (missing snapshot, non-resumable
+        // snapshot, invalid client state). Resolve gracefully with
+        // `finishReason: 'failed'` - preserving the original `error.status` -
+        // rather than throwing, so the caller gets a structured, inspectable
+        // result. There is no last-good turn yet; echo back the
+        // client-supplied state when present.
         return {
           finishReason: 'failed' as AgentFinishReason,
           error: toErrorDetails(e),
