@@ -183,6 +183,9 @@ class Genkit:
         # daemon thread so it's available regardless of which web framework (or
         # none) the user chooses.
         if is_dev_environment():
+            from genkit._ai._runtime import setup_signal_handlers
+
+            setup_signal_handlers()
             self._start_reflection_background()
 
         # Load prompts
