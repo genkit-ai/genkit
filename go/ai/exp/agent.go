@@ -1835,6 +1835,96 @@ func validateUserMessage(m *ai.Message) error {
 	return nil
 }
 
+// ValidateResumeAgainstHistory ensures every restart and respond entry on a
+// resume payload references a tool request the model actually issued, so a
+// caller cannot drive a tool the model never asked for and interrupted on.
+// For restart entries it additionally checks the input is unchanged from the
+// original request, preventing a client from forging tool inputs on the
+// interrupted call. The whole history is searched (every model message), not
+// just the last turn. On a violation it returns an INVALID_ARGUMENT error.
+//
+// The prompt-backed agent loop ([FromPrompt]) calls this automatically. A
+// custom agent ([DefineCustomAgent]) that accepts an [AgentInput.Resume] from
+// untrusted callers should call it before forwarding the payload to the model:
+//
+//	if input.Resume != nil {
+//		if err := ValidateResumeAgainstHistory(input.Resume, sess.Messages()); err != nil {
+//			return nil, err
+//		}
+//	}
+func ValidateResumeAgainstHistory(resume *ToolResume, history []*ai.Message) error {
+	if resume == nil {
+		return nil
+	}
+
+	// Collect every tool request from all model messages in history.
+	var requests []*ai.ToolRequest
+	for _, msg := range history {
+		if msg == nil || msg.Role != ai.RoleModel {
+			continue
+		}
+		for _, p := range msg.Content {
+			if p.IsToolRequest() && p.ToolRequest != nil {
+				requests = append(requests, p.ToolRequest)
+			}
+		}
+	}
+	find := func(name, ref string) *ai.ToolRequest {
+		for _, req := range requests {
+			if req.Name == name && req.Ref == ref {
+				return req
+			}
+		}
+		return nil
+	}
+
+	// Restart entries: name + ref must exist and the input must match the
+	// original request exactly. IsToolRequest only checks the part kind, so
+	// guard the pointer too: a hand-built NewToolRequestPart(nil) is kind
+	// PartToolRequest with a nil ToolRequest.
+	for _, p := range resume.Restart {
+		if !p.IsToolRequest() || p.ToolRequest == nil {
+			continue
+		}
+		req := p.ToolRequest
+		match := find(req.Name, req.Ref)
+		if match == nil {
+			return core.NewError(core.INVALID_ARGUMENT,
+				"resume.restart references tool %q%s which was not found in session history",
+				req.Name, toolRefSuffix(req.Ref))
+		}
+		if !jsonEqual(normalizeJSON(req.Input), normalizeJSON(match.Input)) {
+			return core.NewError(core.INVALID_ARGUMENT,
+				"resume.restart for tool %q%s has modified inputs that do not match the original tool request in session history; restart inputs must exactly match the interrupted tool request",
+				req.Name, toolRefSuffix(req.Ref))
+		}
+	}
+
+	// Respond entries: name + ref must match a tool request in history.
+	for _, p := range resume.Respond {
+		if !p.IsToolResponse() || p.ToolResponse == nil {
+			continue
+		}
+		resp := p.ToolResponse
+		if find(resp.Name, resp.Ref) == nil {
+			return core.NewError(core.INVALID_ARGUMENT,
+				"resume.respond references tool %q%s which was not found in session history",
+				resp.Name, toolRefSuffix(resp.Ref))
+		}
+	}
+
+	return nil
+}
+
+// toolRefSuffix renders a " (ref: X)" clause for resume validation errors, or
+// "" when the tool request carried no ref.
+func toolRefSuffix(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (ref: %s)", ref)
+}
+
 // agentLoop returns the per-turn function for a prompt-backed agent. Each
 // turn renders the prompt, appends conversation history, calls the model
 // with streaming, and updates the session.
@@ -1876,12 +1966,18 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 			}
 
 			// Append conversation history after the base messages.
-			actionOpts.Messages = append(base, sess.Messages()...)
+			history := sess.Messages()
+			actionOpts.Messages = append(base, history...)
 
-			// If a resume payload was provided, forward it to the
-			// generate call so handleResumeOption re-executes the
-			// interrupted tools and / or applies the responses.
+			// If a resume payload was provided, validate that every
+			// restart / respond entry references a tool request the model
+			// actually issued, then forward it to the generate call so
+			// handleResumeOption re-executes the interrupted tools and / or
+			// applies the responses.
 			if input.Resume != nil {
+				if err := ValidateResumeAgainstHistory(input.Resume, history); err != nil {
+					return nil, err
+				}
 				actionOpts.Resume = &ai.GenerateActionResume{
 					Respond: input.Resume.Respond,
 					Restart: input.Resume.Restart,
