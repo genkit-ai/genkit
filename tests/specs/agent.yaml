@@ -588,9 +588,11 @@ tests:
 
   - name: server-managed agent rejects init state
     description: >
-      When a server-managed agent receives init.state, it should throw a
-      FAILED_PRECONDITION error. Server-managed agents expect a snapshotId,
-      not the full state blob.
+      When a server-managed agent receives init.state, it must throw a
+      FAILED_PRECONDITION error (mapped to an HTTP status by the server
+      handler). Server-managed agents expect a snapshotId, not the full state
+      blob. This is API misuse, so it is a thrown error rather than a graceful
+      'failed' output.
     agent: promptAgentWithStore
     steps:
       - type: send
@@ -605,13 +607,11 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: reply }] }
             finishReason: stop
-        # Pre-turn validation fails gracefully with finishReason 'failed' and
-        # the original FAILED_PRECONDITION status preserved.
-        expectOutput:
-          finishReason: failed
-          errorContains:
-            status: FAILED_PRECONDITION
-            message: Cannot send 'state' to agent
+        # API misuse: the turn throws rather than resolving with a graceful
+        # 'failed' output.
+        expectError:
+          status: FAILED_PRECONDITION
+          message: Cannot send 'state' to agent
 
   - name: pure detach without payload
     description: >
@@ -1280,27 +1280,36 @@ tests:
               - { role: model, content: [{ text: reply2 }] }
 
   # ---------------------------------------------------------------------------
-  # Non-UUID sessionId rejected
+  # Non-UUID sessionId accepted
   # ---------------------------------------------------------------------------
-  - name: non-UUID sessionId rejected
+  - name: non-UUID sessionId accepted
     description: >
-      A sessionId must be a bare UUID. Sending a non-UUID sessionId to a
-      server-managed agent must be rejected.
+      A sessionId can be any non-empty string (not necessarily a UUID).
+      Sending an application-specific (non-UUID) sessionId to a server-managed
+      agent is accepted; the session is bound to that id and is resumable by it.
     agent: promptAgentWithStore
     steps:
       - type: send
-        init: { sessionId: not-a-uuid }
+        init: { sessionId: my-app-session-123 }
         inputs:
-          - message: { role: user, content: [{ text: hi }] }
+          - message: { role: user, content: [{ text: first }] }
         modelResponses:
-          - message: { role: model, content: [{ text: hello }] }
+          - message: { role: model, content: [{ text: reply1 }] }
             finishReason: stop
-        # Resolves gracefully with finishReason 'failed'. The non-UUID check
-        # surfaces as a plain Error (no status), so only the message is asserted.
         expectOutput:
-          finishReason: failed
-          errorContains:
-            message: expected a UUID
+          finishReason: stop
+          hasSnapshotId: true
+        captureSnapshotId: snap1
+
+      - type: getSnapshotData
+        sessionId: my-app-session-123
+        expectSnapshot:
+          status: completed
+          stateContains:
+            sessionId: my-app-session-123
+            messages:
+              - { role: user, content: [{ text: first }] }
+              - { role: model, content: [{ text: reply1 }] }
 
   # ---------------------------------------------------------------------------
   # Client-managed agent rejects sessionId
@@ -1319,13 +1328,11 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: hello }] }
             finishReason: stop
-        # Resolves gracefully with finishReason 'failed' and the original
-        # FAILED_PRECONDITION status preserved.
-        expectOutput:
-          finishReason: failed
-          errorContains:
-            status: FAILED_PRECONDITION
-            message: "Cannot use 'sessionId'"
+        # API misuse: the turn throws with the original FAILED_PRECONDITION
+        # status rather than resolving with a graceful 'failed' output.
+        expectError:
+          status: FAILED_PRECONDITION
+          message: "Cannot use 'sessionId'"
 
   # ---------------------------------------------------------------------------
   # snapshotId + sessionId: snapshotId selects, sessionId guards ownership
@@ -1382,10 +1389,8 @@ tests:
         modelResponses:
           - message: { role: model, content: [{ text: reply2 }] }
             finishReason: stop
-        # Resolves gracefully with finishReason 'failed' and the original
-        # INVALID_ARGUMENT status preserved.
-        expectOutput:
-          finishReason: failed
-          errorContains:
-            status: INVALID_ARGUMENT
-            message: 'does not belong to session'
+        # API misuse: the turn throws with the original INVALID_ARGUMENT status
+        # rather than resolving with a graceful 'failed' output.
+        expectError:
+          status: INVALID_ARGUMENT
+          message: 'does not belong to session'

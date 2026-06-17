@@ -116,7 +116,20 @@ export const SendInvocationSchema = z.object({
   expectChunks: z.array(AgentStreamChunkSchema).optional(),
   /** Expected fields on the AgentOutput. */
   expectOutput: OutputAssertionsSchema.optional(),
+  /**
+   * If present, the turn is expected to throw an error (rather than resolve
+   * with a graceful `finishReason: 'failed'` output). Asserts on the thrown
+   * error: `status` is matched exactly and `message` as a substring. Used for
+   * API-misuse cases (e.g. sending `state` to a server-managed agent).
+   */
+  expectError: z
+    .object({
+      status: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .optional(),
   /** Capture output.snapshotId under this name for {{name}} references. */
+
   captureSnapshotId: z.string().optional(),
   /** Capture output.state under this name for {{name}} references. */
   captureState: z.string().optional(),
