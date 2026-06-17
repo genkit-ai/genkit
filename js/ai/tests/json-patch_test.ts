@@ -50,6 +50,44 @@ describe('json-patch', () => {
       ]);
     });
 
+    it('treats an undefined-valued member as absent (no op)', () => {
+      // JSON.stringify drops undefined members, so { a: 1, b: undefined } and
+      // { a: 1 } are equivalent - the diff must be empty in both directions.
+      assert.deepStrictEqual(diff({ a: 1 }, { a: 1, b: undefined }), []);
+      assert.deepStrictEqual(diff({ a: 1, b: undefined }, { a: 1 }), []);
+      assert.deepStrictEqual(
+        diff({ a: 1, b: undefined }, { a: 1, b: undefined }),
+        []
+      );
+    });
+
+    it('does not emit valueless ops for nested undefined members', () => {
+      // Regression: a reconstructed parent ({}) vs a live object carrying an
+      // explicit `metadata: undefined` must not emit a bogus `add` with no
+      // value.
+      assert.deepStrictEqual(
+        diff(
+          { messages: [{ role: 'user' }] },
+          {
+            messages: [{ role: 'user', metadata: undefined }],
+          }
+        ),
+        []
+      );
+    });
+
+    it('emits a remove when a member becomes undefined', () => {
+      assert.deepStrictEqual(diff({ a: 1, b: 2 }, { a: 1, b: undefined }), [
+        { op: 'remove', path: '/b' },
+      ]);
+    });
+
+    it('emits an add when a member changes from undefined to a value', () => {
+      assert.deepStrictEqual(diff({ a: 1, b: undefined }, { a: 1, b: 2 }), [
+        { op: 'add', path: '/b', value: 2 },
+      ]);
+    });
+
     it('diffs nested objects', () => {
       assert.deepStrictEqual(
         diff({ a: { b: { c: 1 } } }, { a: { b: { c: 2 } } }),
