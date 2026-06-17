@@ -402,8 +402,9 @@ describe('Agent', () => {
         }
       );
 
-      // Pass init.state - should fail gracefully with finishReason 'failed' and
-      // a FAILED_PRECONDITION error for server-managed agents.
+      // Pass init.state - this is API misuse for a server-managed agent and
+      // must throw a FAILED_PRECONDITION error (rather than resolving with a
+      // graceful finishReason 'failed' output).
       const session = flow.streamBidi({
         state: {
           custom: { foo: 'should-be-rejected' },
@@ -416,16 +417,20 @@ describe('Agent', () => {
       });
       session.close();
 
-      for await (const _ of session.stream) {
+      let thrown: any;
+      try {
+        for await (const _ of session.stream) {
+        }
+        await session.output;
+      } catch (e: any) {
+        thrown = e;
       }
-      const output = await session.output;
 
-      assert.strictEqual(output.finishReason, 'failed');
-      assert.ok(output.error);
-      assert.strictEqual(output.error!.status, 'FAILED_PRECONDITION');
+      assert.ok(thrown, 'Expected the turn to throw an error');
+      assert.strictEqual(thrown.status, 'FAILED_PRECONDITION');
       assert.ok(
-        output.error!.message.includes("Cannot send 'state' to agent"),
-        `Expected FAILED_PRECONDITION message, got: ${output.error!.message}`
+        thrown.message.includes("Cannot send 'state' to agent"),
+        `Expected FAILED_PRECONDITION message, got: ${thrown.message}`
       );
     });
 
@@ -831,7 +836,8 @@ describe('Agent', () => {
       const output1 = await session1.output;
       const snapshotId = output1.snapshotId!;
 
-      // Resume that snapshot but claim it belongs to a different session.
+      // Resume that snapshot but claim it belongs to a different session. This
+      // is API misuse and must throw (rather than resolving gracefully).
       const session2 = flow.streamBidi({
         snapshotId,
         sessionId: 'a-different-session-id',
@@ -840,14 +846,21 @@ describe('Agent', () => {
         message: { role: 'user' as const, content: [{ text: 'bye' }] },
       });
       session2.close();
-      for await (const _ of session2.stream) {
-      }
-      const output2 = await session2.output;
 
-      assert.strictEqual(output2.finishReason, 'failed');
+      let thrown: any;
+      try {
+        for await (const _ of session2.stream) {
+        }
+        await session2.output;
+      } catch (e: any) {
+        thrown = e;
+      }
+
+      assert.ok(thrown, 'Expected the turn to throw an error');
+      assert.strictEqual(thrown.status, 'INVALID_ARGUMENT');
       assert.ok(
-        output2.error!.message.includes('does not belong to session'),
-        `Expected an ownership-mismatch error, got: ${output2.error!.message}`
+        thrown.message.includes('does not belong to session'),
+        `Expected an ownership-mismatch error, got: ${thrown.message}`
       );
     });
   });
