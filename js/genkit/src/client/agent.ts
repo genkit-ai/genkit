@@ -144,11 +144,15 @@ export function remoteAgent<State = unknown>(
 
     async abort(snapshotId: string) {
       const headers = await resolveHeaders();
-      return runFlow<SessionSnapshot['status'] | undefined>({
+      const result = await runFlow<{
+        snapshotId: string;
+        status?: SessionSnapshot['status'];
+      }>({
         url: abortUrl,
-        input: snapshotId,
+        input: { snapshotId },
         headers,
       });
+      return result?.status;
     },
   };
 

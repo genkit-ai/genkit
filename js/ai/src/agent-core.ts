@@ -298,7 +298,7 @@ export interface AgentTransport {
   abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined>;
 }
 
-const TERMINAL_STATUSES = new Set(['done', 'failed', 'aborted']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'aborted']);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -306,7 +306,7 @@ function sleep(ms: number): Promise<void> {
 
 function toAgentInput(input: string | AgentInput): AgentInput {
   if (typeof input === 'string') {
-    return { messages: [{ role: 'user', content: [{ text: input }] }] };
+    return { message: { role: 'user', content: [{ text: input }] } };
   }
   return input;
 }
@@ -772,8 +772,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     opts?: { abortSignal?: AbortSignal }
   ): AgentTurn<State> {
     const agentInput = toAgentInput(input);
-    if (agentInput.messages?.length) {
-      this.messages.push(...agentInput.messages);
+    if (agentInput.message) {
+      this.messages.push(agentInput.message);
     }
     const init = this.buildInit();
 
@@ -860,8 +860,8 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   async detach(input: string | AgentInput): Promise<DetachedTask<State>> {
     const agentInput: AgentInput = { ...toAgentInput(input), detach: true };
-    if (agentInput.messages?.length) {
-      this.messages.push(...agentInput.messages);
+    if (agentInput.message) {
+      this.messages.push(agentInput.message);
     }
     const init = this.buildInit();
     const controller = new AbortController();

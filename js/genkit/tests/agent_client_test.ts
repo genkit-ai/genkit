@@ -147,7 +147,7 @@ describe('remoteAgent', () => {
     assert.equal(mock.requests.length, 1);
     assert.equal(mock.requests[0].url, '/api/weatherAgent');
     assert.deepEqual(mock.requests[0].body.data, {
-      messages: [{ role: 'user', content: [{ text: 'Weather in Tokyo?' }] }],
+      message: { role: 'user', content: [{ text: 'Weather in Tokyo?' }] },
     });
   });
 
@@ -415,7 +415,7 @@ describe('remoteAgent', () => {
           state: {
             messages: [{ role: 'user', content: [{ text: 'earlier' }] }],
           },
-          status: 'done',
+          status: 'completed',
         },
       });
     });
@@ -436,7 +436,7 @@ describe('remoteAgent', () => {
           createdAt: '2026',
           event: 'turnEnd',
           state: {},
-          status: 'done',
+          status: 'completed',
         },
       });
     });
@@ -448,8 +448,10 @@ describe('remoteAgent', () => {
   it('abort posts to the abort endpoint', async () => {
     mock.onNext((req) => {
       assert.equal(req.url, '/api/a/abort');
-      assert.equal(req.body.data, 'snap-1');
-      return jsonResponse({ result: 'pending' });
+      assert.deepEqual(req.body.data, { snapshotId: 'snap-1' });
+      return jsonResponse({
+        result: { snapshotId: 'snap-1', status: 'pending' },
+      });
     });
     const agent = remoteAgent({ url: '/api/a' });
     const status = await agent.abort('snap-1');
@@ -476,12 +478,12 @@ describe('remoteAgent', () => {
           createdAt: '2026',
           event: 'turnEnd',
           state: {},
-          status: 'done',
+          status: 'completed',
         },
       })
     );
     const snap = await task.wait({ intervalMs: 1 });
-    assert.equal(snap.status, 'done');
+    assert.equal(snap.status, 'completed');
   });
 
   it('applies static and async headers', async () => {

@@ -192,8 +192,8 @@ describe('Agent', () => {
     it('should loop over inputs and call handler', async () => {
       const session = new Session({});
       const inputs = [
-        { messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }] },
-        { messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }] },
+        { message: { role: 'user' as const, content: [{ text: 'hi' }] } },
+        { message: { role: 'user' as const, content: [{ text: 'bye' }] } },
       ];
 
       async function* inputGen() {
@@ -220,7 +220,7 @@ describe('Agent', () => {
       const store = new InMemorySessionStore();
       const session = new Session({});
       const inputs = [
-        { messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }] },
+        { message: { role: 'user' as const, content: [{ text: 'hi' }] } },
       ];
 
       async function* inputGen() {
@@ -256,7 +256,7 @@ describe('Agent', () => {
 
       async function* inputGen() {
         yield {
-          messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+          message: { role: 'user' as const, content: [{ text: 'hi' }] },
         };
       }
 
@@ -297,10 +297,10 @@ describe('Agent', () => {
 
       async function* inputGen() {
         yield {
-          messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+          message: { role: 'user' as const, content: [{ text: 'one' }] },
         };
         yield {
-          messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+          message: { role: 'user' as const, content: [{ text: 'two' }] },
         };
       }
 
@@ -325,7 +325,7 @@ describe('Agent', () => {
 
       async function* inputGen() {
         yield {
-          messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+          message: { role: 'user' as const, content: [{ text: 'hi' }] },
         };
       }
 
@@ -412,7 +412,7 @@ describe('Agent', () => {
         },
       });
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+        message: { role: 'user', content: [{ text: 'hello' }] },
       });
       session.close();
 
@@ -453,7 +453,7 @@ describe('Agent', () => {
         },
       });
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+        message: { role: 'user', content: [{ text: 'hello' }] },
       });
       session.close();
 
@@ -502,7 +502,7 @@ describe('Agent', () => {
           let receivedInput = false;
           await sess.run(async (input) => {
             receivedInput = true;
-            assert.strictEqual(input.messages?.[0].role, 'user');
+            assert.strictEqual(input.message?.role, 'user');
           });
           assert.ok(receivedInput);
           return { message: { role: 'model', content: [{ text: 'done' }] } };
@@ -512,7 +512,7 @@ describe('Agent', () => {
       const session = flow.streamBidi({});
 
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -544,7 +544,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -574,7 +574,7 @@ describe('Agent', () => {
       );
 
       const session = flow.streamBidi({});
-      session.send({ messages: [{ role: 'user', content: [{ text: 'go' }] }] });
+      session.send({ message: { role: 'user', content: [{ text: 'go' }] } });
       session.close();
 
       const chunks: AgentStreamChunk[] = [];
@@ -604,7 +604,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -640,7 +640,7 @@ describe('Agent', () => {
       // Turn 1: fresh session
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session1.close();
       for await (const _ of session1.stream) {
@@ -652,7 +652,7 @@ describe('Agent', () => {
       // Turn 2: pass state back (client-managed)
       const session2 = flow.streamBidi({ state: output1.state });
       session2.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }],
+        message: { role: 'user' as const, content: [{ text: 'bye' }] },
       });
       session2.close();
       for await (const _ of session2.stream) {
@@ -681,7 +681,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -722,7 +722,7 @@ describe('Agent', () => {
       // Turn 1
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session1.close();
       for await (const _ of session1.stream) {
@@ -739,7 +739,7 @@ describe('Agent', () => {
       // Turn 2: resume from snapshot
       const session2 = flow.streamBidi({ snapshotId: firstSnapshotId });
       session2.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'bye' }] }],
+        message: { role: 'user' as const, content: [{ text: 'bye' }] },
       });
       session2.close();
       for await (const _ of session2.stream) {
@@ -774,7 +774,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -813,7 +813,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
         detach: true,
       });
 
@@ -827,8 +827,12 @@ describe('Agent', () => {
       resolvePromise();
       session.close();
 
-      const snapDone = await waitForSnapshotStatus(store, snapshotId!, 'done');
-      assert.strictEqual(snapDone.status, 'done');
+      const snapDone = await waitForSnapshotStatus(
+        store,
+        snapshotId!,
+        'completed'
+      );
+      assert.strictEqual(snapDone.status, 'completed');
     });
 
     it('should abort a detached agent', async () => {
@@ -859,7 +863,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
         detach: true,
       });
 
@@ -896,7 +900,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
       const output = await session.output;
@@ -906,17 +910,17 @@ describe('Agent', () => {
       const snapBefore = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
-      assert.strictEqual(snapBefore?.status, 'done');
+      assert.strictEqual(snapBefore?.status, 'completed');
 
       // Abort returns the previous status but does not override terminal states
       const previousStatus = await flow.abort(output.snapshotId!);
-      assert.strictEqual(previousStatus, 'done');
+      assert.strictEqual(previousStatus, 'completed');
 
       // Snapshot should still be 'done' - the mutator skips terminal states
       const snapAfter = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
-      assert.strictEqual(snapAfter?.status, 'done');
+      assert.strictEqual(snapAfter?.status, 'completed');
     });
 
     it('should return undefined when aborting a non-existent snapshot', async () => {
@@ -958,7 +962,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
         detach: true,
       });
 
@@ -1000,7 +1004,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
         detach: true,
       });
 
@@ -1055,7 +1059,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
         detach: true,
       });
 
@@ -1096,7 +1100,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
       const output = await session.output;
@@ -1127,7 +1131,7 @@ describe('Agent', () => {
 
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'first' }] }],
+        message: { role: 'user' as const, content: [{ text: 'first' }] },
       });
       session1.close();
       const output1 = await session1.output;
@@ -1137,7 +1141,7 @@ describe('Agent', () => {
       });
 
       session2.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'second' }] }],
+        message: { role: 'user' as const, content: [{ text: 'second' }] },
       });
       session2.close();
       const output2 = await session2.output;
@@ -1174,9 +1178,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [
-          { role: 'user' as const, content: [{ text: 'heavy task' }] },
-        ],
+        message: { role: 'user' as const, content: [{ text: 'heavy task' }] },
       });
       session.send({
         detach: true,
@@ -1212,9 +1214,10 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [
-          { role: 'user' as const, content: [{ text: 'appended message' }] },
-        ],
+        message: {
+          role: 'user' as const,
+          content: [{ text: 'appended message' }],
+        },
         detach: true,
       });
 
@@ -1224,7 +1227,7 @@ describe('Agent', () => {
       const snapDone = await waitForSnapshotStatus(
         store,
         output.snapshotId!,
-        'done'
+        'completed'
       );
       assert.ok(snapDone.state.messages);
       assert.strictEqual(snapDone.state.messages.length, 1);
@@ -1252,10 +1255,10 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'turn1' }] }],
+        message: { role: 'user' as const, content: [{ text: 'turn1' }] },
       });
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'turn2' }] }],
+        message: { role: 'user' as const, content: [{ text: 'turn2' }] },
       });
       session.close();
 
@@ -1336,7 +1339,7 @@ describe('Agent', () => {
 
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+        message: { role: 'user', content: [{ text: 'hello' }] },
       });
       session1.close(); // IMPORTANT: close the stream so it doesn't hang!
 
@@ -1464,9 +1467,7 @@ describe('Agent', () => {
 
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [
-          { role: 'user', content: [{ text: 'please delete files' }] },
-        ],
+        message: { role: 'user', content: [{ text: 'please delete files' }] },
       });
       session1.close();
 
@@ -1602,7 +1603,7 @@ describe('Agent', () => {
 
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user', content: [{ text: 'do it' }] }],
+        message: { role: 'user', content: [{ text: 'do it' }] },
       });
       session1.close();
       for await (const _ of session1.stream) {
@@ -1692,7 +1693,7 @@ describe('Agent', () => {
 
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session1.close();
       for await (const _ of session1.stream) {
@@ -1763,7 +1764,7 @@ describe('Agent', () => {
 
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session1.close();
       for await (const _ of session1.stream) {
@@ -1825,10 +1826,10 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'task 1' }] }],
+        message: { role: 'user' as const, content: [{ text: 'task 1' }] },
       });
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'task 2' }] }],
+        message: { role: 'user' as const, content: [{ text: 'task 2' }] },
       });
       session.send({ detach: true });
 
@@ -1839,9 +1840,9 @@ describe('Agent', () => {
       const snapDone = await waitForSnapshotStatus(
         store,
         output.snapshotId!,
-        'done'
+        'completed'
       );
-      assert.strictEqual(snapDone.status, 'done');
+      assert.strictEqual(snapDone.status, 'completed');
       assert.strictEqual(processedCount, 2);
 
       session.close();
@@ -1882,7 +1883,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -1917,7 +1918,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -1972,7 +1973,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2043,7 +2044,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2111,7 +2112,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
         detach: true,
       });
 
@@ -2157,7 +2158,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2191,7 +2192,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2248,7 +2249,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2297,7 +2298,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2340,7 +2341,7 @@ describe('Agent', () => {
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        message: { role: 'user', content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2412,8 +2413,8 @@ describe('Agent', () => {
 
       const { output, modelRequests } = await runAgent(agent, pm, {
         inputs: [
-          { messages: [{ role: 'user', content: [{ text: 'turn1' }] }] },
-          { messages: [{ role: 'user', content: [{ text: 'turn2' }] }] },
+          { message: { role: 'user', content: [{ text: 'turn1' }] } },
+          { message: { role: 'user', content: [{ text: 'turn2' }] } },
         ],
         modelResponses: [
           {
@@ -2484,8 +2485,8 @@ describe('Agent', () => {
 
       const { output, modelRequests } = await runAgent(agent, pm, {
         inputs: [
-          { messages: [{ role: 'user', content: [{ text: 'turn1' }] }] },
-          { messages: [{ role: 'user', content: [{ text: 'turn2' }] }] },
+          { message: { role: 'user', content: [{ text: 'turn1' }] } },
+          { message: { role: 'user', content: [{ text: 'turn2' }] } },
         ],
         modelResponses: [
           {
@@ -2538,9 +2539,7 @@ describe('Agent', () => {
 
       // Invocation 1
       const result1 = await runAgent(agent, pm, {
-        inputs: [
-          { messages: [{ role: 'user', content: [{ text: 'first' }] }] },
-        ],
+        inputs: [{ message: { role: 'user', content: [{ text: 'first' }] } }],
         modelResponses: [
           {
             message: { role: 'model', content: [{ text: 'reply1' }] },
@@ -2552,9 +2551,7 @@ describe('Agent', () => {
       // Invocation 2: seed with state from invocation 1
       const result2 = await runAgent(agent, pm, {
         init: { state: result1.output.state },
-        inputs: [
-          { messages: [{ role: 'user', content: [{ text: 'second' }] }] },
-        ],
+        inputs: [{ message: { role: 'user', content: [{ text: 'second' }] } }],
         modelResponses: [
           {
             message: { role: 'model', content: [{ text: 'reply2' }] },
@@ -2600,8 +2597,8 @@ describe('Agent', () => {
 
       const { modelRequests } = await runAgent(agent, pm, {
         inputs: [
-          { messages: [{ role: 'user', content: [{ text: 'q1' }] }] },
-          { messages: [{ role: 'user', content: [{ text: 'q2' }] }] },
+          { message: { role: 'user', content: [{ text: 'q1' }] } },
+          { message: { role: 'user', content: [{ text: 'q2' }] } },
         ],
         modelResponses: [
           {
@@ -2680,8 +2677,8 @@ Now respond to the latest message.`,
 
       const { output, modelRequests } = await runAgent(agent, pm, {
         inputs: [
-          { messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
-          { messages: [{ role: 'user', content: [{ text: 'how are you' }] }] },
+          { message: { role: 'user', content: [{ text: 'hello' }] } },
+          { message: { role: 'user', content: [{ text: 'how are you' }] } },
         ],
         modelResponses: [
           {
@@ -2830,7 +2827,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2865,7 +2862,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2892,7 +2889,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2924,7 +2921,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -2955,7 +2952,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -3018,7 +3015,7 @@ Now respond to the latest message.`,
       // holds `custom: undefined` rather than `{}`.
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
       });
       session1.close();
       for await (const _ of session1.stream) {
@@ -3036,7 +3033,7 @@ Now respond to the latest message.`,
       // never-set custom state stays `undefined` rather than `{}`.
       const session2 = flow.streamBidi({ snapshotId: output1.snapshotId });
       session2.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+        message: { role: 'user' as const, content: [{ text: 'two' }] },
       });
       session2.close();
       for await (const _ of session2.stream) {
@@ -3073,7 +3070,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -3136,7 +3133,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
@@ -3171,10 +3168,10 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
       });
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+        message: { role: 'user' as const, content: [{ text: 'two' }] },
       });
       session.close();
 
@@ -3219,10 +3216,10 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
       });
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+        message: { role: 'user' as const, content: [{ text: 'two' }] },
       });
       session.close();
 
@@ -3258,7 +3255,7 @@ Now respond to the latest message.`,
       const lastGood = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
-      assert.strictEqual(lastGood?.status, 'done');
+      assert.strictEqual(lastGood?.status, 'completed');
       assert.strictEqual((lastGood!.state.custom as any).count, 1);
 
       // The raw store still returns the failed leaf for a sessionId lookup -
@@ -3274,7 +3271,7 @@ Now respond to the latest message.`,
       const sessionId = lastGood!.state.sessionId!;
       const resumeSession = flow.streamBidi({ sessionId });
       resumeSession.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'three' }] }],
+        message: { role: 'user' as const, content: [{ text: 'three' }] },
       });
       resumeSession.close();
       for await (const _ of resumeSession.stream) {
@@ -3309,7 +3306,7 @@ Now respond to the latest message.`,
       // First turn fails, persisting a `failed` snapshot.
       const session1 = flow.streamBidi({});
       session1.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
       });
       session1.close();
       const chunks: AgentStreamChunk[] = [];
@@ -3325,7 +3322,7 @@ Now respond to the latest message.`,
       // Resuming that failed snapshot by snapshotId is rejected.
       const session2 = flow.streamBidi({ snapshotId: failedTurnSnapshotId });
       session2.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'two' }] }],
+        message: { role: 'user' as const, content: [{ text: 'two' }] },
       });
       session2.close();
       for await (const _ of session2.stream) {
@@ -3362,7 +3359,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'one' }] }],
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
       });
       session.close();
 
@@ -3410,7 +3407,7 @@ Now respond to the latest message.`,
 
       const session = flow.streamBidi({});
       session.send({
-        messages: [{ role: 'user' as const, content: [{ text: 'hi' }] }],
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
       });
       session.close();
 
