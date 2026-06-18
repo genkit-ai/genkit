@@ -45,6 +45,17 @@ from genkit._ai._session import (
     SnapshotCallback,
     SnapshotContext,
 )
+from genkit._ai._session_stores import (
+    LatestStateStore,
+    InMemoryLatestStateStore,
+    FileLatestStateStore,
+    LinearSessionStore,
+    InMemoryLinearSessionStore,
+    FileLinearSessionStore,
+    BranchingSessionStore,
+    InMemoryBranchingSessionStore,
+    FileBranchingSessionStore,
+)
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
     AgentFinishReason,
@@ -85,6 +96,15 @@ __all__ = [
     'SessionStore',
     'SnapshotAborter',
     'InMemorySessionStore',
+    'LatestStateStore',
+    'InMemoryLatestStateStore',
+    'FileLatestStateStore',
+    'LinearSessionStore',
+    'InMemoryLinearSessionStore',
+    'FileLinearSessionStore',
+    'BranchingSessionStore',
+    'InMemoryBranchingSessionStore',
+    'FileBranchingSessionStore',
     # Callbacks and transforms
     'SnapshotCallback',
     'SnapshotContext',
