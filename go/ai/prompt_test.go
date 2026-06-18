@@ -26,7 +26,6 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
 	"github.com/google/go-cmp/cmp"
@@ -2329,19 +2328,16 @@ func TestPromptExecuteStream(t *testing.T) {
 	})
 }
 
-// TestSessionStateInjection tests that session state is automatically injected
-// into prompt templates and accessible via {{@state.field}} syntax.
+// TestSessionStateInjection tests that state attached to the context via
+// base.WithPromptState is automatically injected into prompt templates and
+// accessible via {{@state.field}} syntax. Sessions attach their custom state
+// this way (see exp.NewSessionContext), decoupled so go/ai needs no dependency
+// on the session package.
 func TestSessionStateInjection(t *testing.T) {
 	r := registry.New()
 	ConfigureFormats(r)
 
-	// Define a test state type
-	type UserState struct {
-		Name        string            `json:"name"`
-		Preferences map[string]string `json:"preferences"`
-	}
-
-	t.Run("session state accessible in prompt template", func(t *testing.T) {
+	t.Run("state accessible in prompt template", func(t *testing.T) {
 		var capturedPrompt string
 
 		testModel := DefineModel(r, "test/sessionStateModel", &ModelOptions{
@@ -2360,33 +2356,27 @@ func TestSessionStateInjection(t *testing.T) {
 			WithPrompt("Hello {{@state.name}}, your theme is {{@state.preferences.theme}}"),
 		)
 
-		// Create a session with state
-		ctx := context.Background()
-		sess, err := session.New(ctx, session.WithInitialState(UserState{
-			Name:        "Alice",
-			Preferences: map[string]string{"theme": "dark"},
-		}))
-		if err != nil {
-			t.Fatalf("Failed to create session: %v", err)
-		}
+		// Attach state to the context the way a session does.
+		ctx := base.WithPromptState(context.Background(), func() any {
+			return map[string]any{
+				"name":        "Alice",
+				"preferences": map[string]any{"theme": "dark"},
+			}
+		})
 
-		// Attach session to context
-		ctx = session.NewContext(ctx, sess)
-
-		// Execute prompt with session in context
-		_, err = p.Execute(ctx)
-		if err != nil {
+		// Execute prompt with state in context
+		if _, err := p.Execute(ctx); err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}
 
-		// Verify the session state was injected into the template
+		// Verify the state was injected into the template
 		expected := "Hello Alice, your theme is dark"
 		if capturedPrompt != expected {
 			t.Errorf("Expected prompt %q, got %q", expected, capturedPrompt)
 		}
 	})
 
-	t.Run("prompt works without session in context", func(t *testing.T) {
+	t.Run("prompt works without state in context", func(t *testing.T) {
 		var capturedPrompt string
 
 		testModel := DefineModel(r, "test/noSessionModel", &ModelOptions{
@@ -2421,7 +2411,7 @@ func TestSessionStateInjection(t *testing.T) {
 		}
 	})
 
-	t.Run("session state and input variables can be used together", func(t *testing.T) {
+	t.Run("state and input variables can be used together", func(t *testing.T) {
 		var capturedPrompt string
 
 		testModel := DefineModel(r, "test/mixedModel", &ModelOptions{
@@ -2443,18 +2433,13 @@ func TestSessionStateInjection(t *testing.T) {
 			}{}),
 		)
 
-		// Create session
-		ctx := context.Background()
-		sess, err := session.New(ctx, session.WithInitialState(UserState{
-			Name: "Charlie",
-		}))
-		if err != nil {
-			t.Fatalf("Failed to create session: %v", err)
-		}
-		ctx = session.NewContext(ctx, sess)
+		// Attach state to the context the way a session does.
+		ctx := base.WithPromptState(context.Background(), func() any {
+			return map[string]any{"name": "Charlie"}
+		})
 
-		// Execute with both session and input
-		_, err = p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
+		// Execute with both state and input
+		_, err := p.Execute(ctx, WithInput(map[string]any{"question": "What is the weather?"}))
 		if err != nil {
 			t.Fatalf("Execute failed: %v", err)
 		}

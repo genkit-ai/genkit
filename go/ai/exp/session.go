@@ -465,8 +465,15 @@ func (s *Session[State]) copyStateLocked() SessionState[State] {
 var sessionCtxKey = base.NewContextKey[any]()
 
 // NewSessionContext returns a new context with the session attached.
+//
+// It also publishes a type-erased view of the session's custom state so prompt
+// rendering can inject it into templates as {{@state}}. go/ai cannot import this
+// package (this package imports go/ai), so the custom state is exposed through a
+// getter in internal/base, evaluated at render time so templates see the latest
+// values.
 func NewSessionContext[State any](ctx context.Context, s *Session[State]) context.Context {
-	return sessionCtxKey.NewContext(ctx, s)
+	ctx = sessionCtxKey.NewContext(ctx, s)
+	return base.WithPromptState(ctx, func() any { return s.customJSON() })
 }
 
 // SessionFromContext retrieves the current session from context.
