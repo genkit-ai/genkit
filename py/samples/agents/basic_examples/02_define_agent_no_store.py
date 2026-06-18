@@ -15,12 +15,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_agent without store — pass out.state into the next AgentInit."""
+"""Backend: define_agent without store — client-managed state using AgentAPI."""
 
 from __future__ import annotations
 
 from genkit import Genkit
-from genkit.agent import AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -33,21 +32,23 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit())
-    await conn.send_text('My name is Ada. Remember it.')
-    await conn.close()
-    async for chunk in conn.receive():
-        print('turn1 chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-    out1 = await conn.output()
-    print('turn1 state:', out1.state)
+    session = agent.connect()
+    # Turn 1
+    print("--- SENDING TURN 1 ---")
+    turn1 = session.send('My name is Ada. Remember it.')
+    async for chunk in turn1.stream:
+        print('turn1 chunk:', chunk)
+    out1 = await turn1.output
+    print('turn1 state:', session.state)
 
-    conn2 = await agent.stream_bidi(AgentInit(state=out1.state))
-    await conn2.send_text('What is my name? One word.')
-    await conn2.close()
-    async for chunk in conn2.receive():
-        print('turn2 chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-    out2 = await conn2.output()
-    print('turn2 output:', out2.model_dump(by_alias=True, exclude_none=True))
+    # Turn 2
+    print("--- SENDING TURN 2 ---")
+    turn2 = session.send('What is my name? One word.')
+    async for chunk in turn2.stream:
+        print('turn2 chunk:', chunk)
+    out2 = await turn2.output
+    print('turn2 output:', out2)
+    await session.close()
 
 
 if __name__ == '__main__':

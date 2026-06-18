@@ -15,15 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_agent + store — two invocations, same session_id.
-
-Pattern:
-  conn = await agent.stream_bidi(AgentInit(session_id=...))
-  await conn.send_text(...)
-  await conn.close()
-  async for chunk in conn.receive(): ...
-  out = await conn.output()
-"""
+"""Backend: define_agent + store — two turns in a persistent session."""
 
 from __future__ import annotations
 
@@ -33,7 +25,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import InMemorySessionStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 
@@ -70,25 +62,23 @@ agent = ai.define_agent(
 async def main() -> None:
     session_id = str(uuid4())
 
-    conn = await agent.stream_bidi(AgentInit(session_id=session_id))
-    await conn.send_text('Weather in Paris?')
-    await conn.close()
+    session = agent.connect(AgentInit(session_id=session_id))
+    # Turn 1
+    print("--- SENDING TURN 1 ---")
+    turn1 = session.send('Weather in Paris?')
+    async for chunk in turn1.stream:
+        print('turn1 chunk:', chunk)
+    out1 = await turn1.output
+    print('turn1 output:', out1)
 
-    async for chunk in conn.receive():
-        print('turn1 chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out1 = await conn.output()
-    print('turn1 output:', out1.model_dump(by_alias=True, exclude_none=True))
-
-    conn2 = await agent.stream_bidi(AgentInit(session_id=session_id))
-    await conn2.send_text('What city did I ask about? One word.')
-    await conn2.close()
-
-    async for chunk in conn2.receive():
-        print('turn2 chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out2 = await conn2.output()
-    print('turn2 output:', out2.model_dump(by_alias=True, exclude_none=True))
+    # Turn 2
+    print("--- SENDING TURN 2 ---")
+    turn2 = session.send('What city did I ask about? One word.')
+    async for chunk in turn2.stream:
+        print('turn2 chunk:', chunk)
+    out2 = await turn2.output
+    print('turn2 output:', out2)
+    await session.close()
 
 
 if __name__ == '__main__':

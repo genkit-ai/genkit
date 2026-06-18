@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: graceful turn failure — finish_reason failed + error on AgentOutput."""
+"""Backend: graceful turn failure — using AgentAPI."""
 
 from __future__ import annotations
 
@@ -24,12 +24,12 @@ from uuid import uuid4
 from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
 from genkit.agent import (
     AgentFinishReason,
-    AgentInit,
     AgentInput,
     AgentResult,
     InMemorySessionStore,
     SessionRunner,
     TurnResult,
+    AgentInit,
 )
 from genkit.plugins.google_genai import GoogleAI
 
@@ -61,21 +61,23 @@ agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 async def main() -> None:
     session_id = str(uuid4())
 
-    conn = await agent.stream_bidi(AgentInit(session_id=session_id))
-    await conn.send_text('hello')
-    await conn.close()
-    out_ok = await conn.output()
-    print('ok turn:', out_ok.model_dump(by_alias=True, exclude_none=True))
+    session = agent.connect(AgentInit(session_id=session_id))
+    try:
+        print("--- SENDING TURN 1 (OK) ---")
+        turn1 = session.send('hello')
+        async for chunk in turn1.stream:
+            print('ok chunk:', chunk)
+        out_ok = await turn1.output
+        print('ok turn output:', out_ok)
 
-    conn2 = await agent.stream_bidi(AgentInit(session_id=session_id))
-    await conn2.send_text('please fail now')
-    await conn2.close()
-
-    async for chunk in conn2.receive():
-        print('fail chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out_fail = await conn2.output()
-    print('fail turn:', out_fail.model_dump(by_alias=True, exclude_none=True))
+        print("\n--- SENDING TURN 2 (FAIL) ---")
+        turn2 = session.send('please fail now')
+        async for chunk in turn2.stream:
+            print('fail chunk:', chunk)
+        out_fail = await turn2.output
+        print('fail turn output:', out_fail)
+    finally:
+        await session.close()
 
 
 if __name__ == '__main__':

@@ -15,11 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: interrupt + resume without store — carry out.state between stream_bidi calls.
-
-Uses ToolApproval middleware: transferMoney is gated until the client resumes with
-``restart_tool(..., resumed_metadata={'tool_approved': True})``.
-"""
+"""Backend: interrupt + resume without store — client-managed state using AgentAPI."""
 
 from __future__ import annotations
 
@@ -27,10 +23,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, ToolRequestPart, restart_tool
-from genkit.agent import AgentInit, Resume
+from genkit import Genkit, restart_tool
+from genkit.agent import Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
+from genkit._core._typing import ToolRequestPart, ToolRequest
 
 
 class TransferInput(BaseModel):
@@ -66,41 +63,39 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
+    session = agent.connect()
+    # --- Turn 1: user message → stream until interrupted ---
+    print("--- SENDING TURN 1 ---")
+    turn1 = session.send('Transfer $100 to account 999 for lunch.')
+    async for chunk in turn1.stream:
+        print('turn 1 chunk:', chunk)
 
-    conn = await agent.stream_bidi(AgentInit())
-    await conn.send_text('Transfer $100 to account 999 for lunch.')
-    await conn.close()
-
-    interrupt_trp: ToolRequestPart | None = None
-    async for chunk in conn.receive():
-        mc = chunk.model_chunk
-        if mc and mc.content:
-            for part in mc.content:
-                root = getattr(part, 'root', part)
-                tr = getattr(root, 'tool_request', None)
-                if tr and tr.name == 'transferMoney' and isinstance(root, ToolRequestPart):
-                    interrupt_trp = root
-
-    out1 = await conn.output()
+    out1 = await turn1.output
     if out1.finish_reason != 'interrupted':
         raise RuntimeError(f'expected interrupted, got {out1.finish_reason}')
-    if interrupt_trp is None:
-        raise RuntimeError('expected transferMoney interrupt chunk')
 
-    restart_part = restart_tool(
-        interrupt=interrupt_trp,
-        resumed_metadata={'tool_approved': True},
-    )
+    # Inspect the interrupt to approve
+    if turn1.interrupt:
+        print(f'client would show approval UI for: {turn1.interrupt.name}')
+        
+        trp = ToolRequestPart(
+            tool_request=ToolRequest(
+                name=turn1.interrupt.name,
+                input=turn1.interrupt.input_data,
+                ref=turn1.interrupt.ref,
+            )
+        )
+        restarts = [restart_tool(interrupt=trp, resumed_metadata={'tool_approved': True})]
 
-    conn2 = await agent.stream_bidi(AgentInit(state=out1.state))
-    await conn2.send_resume(Resume(restart=[restart_part]))
-    await conn2.close()
+        # --- Turn 2: resume within same session ---
+        print("\n--- SENDING TURN 2 (RESUME) ---")
+        turn2 = session.resume(Resume(restart=restarts))
+        async for chunk in turn2.stream:
+            print('turn 2 chunk:', chunk)
 
-    async for chunk in conn2.receive():
-        print('chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out2 = await conn2.output()
-    print('output:', out2.model_dump(by_alias=True, exclude_none=True))
+        out2 = await turn2.output
+        print('turn 2 output:', out2)
+    await session.close()
 
 
 if __name__ == '__main__':

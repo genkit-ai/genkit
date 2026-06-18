@@ -14,11 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Echo agent and turn helpers for the branching samples.
-
-No model calls — keeps the examples about snapshot wiring, runnable without
-an API key.
-"""
+"""Echo agent and turn helpers for the branching samples using AgentAPI."""
 
 from __future__ import annotations
 
@@ -33,6 +29,8 @@ from genkit.agent import (
     AgentOutput,
     AgentResult,
     InMemorySessionStore,
+    InProcessAgentTransport,
+    AgentAPI,
 )
 
 
@@ -50,12 +48,20 @@ def model_text(out: AgentOutput) -> str:
 
 
 async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
-    conn = await agent.stream_bidi(init)
-    await conn.send_text(text)
-    await conn.close()
-    async for _chunk in conn.receive():
-        pass
-    return await conn.output()
+    transport = InProcessAgentTransport(agent, store_configured=True)
+    api = AgentAPI(transport)
+    
+    session_id = None
+    if init.state and init.state.session_id:
+        session_id = init.state.session_id
+    elif init.session_id:
+        session_id = init.session_id
+
+    async with api.connect(AgentInit(session_id=session_id, snapshot_id=init.snapshot_id)) as session:
+        turn = session.send(text)
+        async for _chunk in turn.stream:
+            pass
+        return await turn.output
 
 
 def define_echo_agent(

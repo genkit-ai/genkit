@@ -26,6 +26,17 @@ from genkit._ai._agent import (
     StateTransform,
     TurnResult,
 )
+from genkit._ai._agent_client import (
+    AgentAPI,
+    AgentChunk,
+    AgentInterrupt,
+    AgentSession,
+    AgentTransport,
+    AgentTurn,
+    DetachedTask,
+    InProcessAgentTransport,
+    WebSocketAgentTransport,
+)
 from genkit._ai._session import (
     InMemorySessionStore,
     Session,
@@ -54,6 +65,16 @@ from genkit._core._typing import (
 __all__ = [
     'Agent',
     'AgentConnection',
+    # Agent Client APIs
+    'AgentAPI',
+    'AgentSession',
+    'AgentTurn',
+    'AgentChunk',
+    'AgentInterrupt',
+    'DetachedTask',
+    'AgentTransport',
+    'InProcessAgentTransport',
+    'WebSocketAgentTransport',
     # Agent function protocol
     'ActionRunContext',
     'AgentFn',
@@ -85,3 +106,4 @@ __all__ = [
     'SnapshotStatus',
     'TurnEnd',
 ]
+

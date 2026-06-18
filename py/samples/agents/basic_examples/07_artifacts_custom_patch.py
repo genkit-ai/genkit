@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: customPatch + artifact stream chunks (from update_custom / add_artifacts)."""
+"""Backend: customPatch + artifact stream chunks using AgentAPI."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ from uuid import uuid4
 from genkit import ActionRunContext, FinishReason, Genkit, Message, Part, TextPart
 from genkit.agent import (
     AgentFinishReason,
-    AgentInit,
     AgentInput,
     AgentResult,
     AgentStreamChunk,
@@ -32,6 +31,7 @@ from genkit.agent import (
     InMemorySessionStore,
     SessionRunner,
     TurnResult,
+    AgentInit,
 )
 from genkit.plugins.google_genai import GoogleAI
 
@@ -52,7 +52,7 @@ async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult
             messages=messages,
         )
         async for chunk in stream_resp.stream:
-            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
+            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk.model_dump()))
 
         res = await stream_resp.response
         if res.message:
@@ -69,16 +69,17 @@ agent = ai.define_custom_agent(name='statefulAgent', fn=stateful_fn, store=store
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
-    await conn.send_text('Go')
-    await conn.close()
+    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    print("--- SENDING TURN ---")
+    turn = session.send('Go')
+    async for chunk in turn.stream:
+        print('chunk:', chunk)
 
-    async for chunk in conn.receive():
-        dumped = chunk.model_dump(by_alias=True, exclude_none=True)
-        print('chunk:', dumped)
-
-    out = await conn.output()
-    print('output:', out.model_dump(by_alias=True, exclude_none=True))
+    out = await turn.output
+    print('output:', out)
+    print('accumulated artifacts:', session.artifacts)
+    print('accumulated custom state:', session.state)
+    await session.close()
 
 
 if __name__ == '__main__':

@@ -15,19 +15,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: model writes session artifacts via the Artifacts middleware.
-
-``define_agent`` with ``use=[Artifacts()]`` injects ``read_artifact`` / ``write_artifact``
-and refreshes an ``<artifacts>`` listing in the system prompt each generate. No
-custom system prompt or session closure is required.
-"""
+"""Backend: model writes session artifacts via the Artifacts middleware using AgentAPI."""
 
 from __future__ import annotations
 
 from uuid import uuid4
 
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import InMemorySessionStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Artifacts, Middleware
 
@@ -43,15 +38,15 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
-    await conn.send_text('Write poem.txt with a short poem about Python agents.')
-    await conn.close()
+    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    print("--- SENDING TURN ---")
+    turn = session.send('Write poem.txt with a short poem about Python agents.')
+    async for chunk in turn.stream:
+        print('chunk:', chunk)
 
-    async for chunk in conn.receive():
-        print('chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out = await conn.output()
-    print('output artifacts:', [a.model_dump(by_alias=True) for a in (out.artifacts or [])])
+    out = await turn.output
+    print('session artifacts:', session.artifacts)
+    await session.close()
 
 
 if __name__ == '__main__':

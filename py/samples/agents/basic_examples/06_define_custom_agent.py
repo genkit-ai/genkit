@@ -15,7 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_custom_agent (hand-written sess.run + generate loop)."""
+"""Backend: define_custom_agent using AgentAPI."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ from uuid import uuid4
 from genkit import ActionRunContext, FinishReason, Genkit, Message
 from genkit.agent import (
     AgentFinishReason,
-    AgentInit,
     AgentInput,
     AgentResult,
     AgentStreamChunk,
     InMemorySessionStore,
     SessionRunner,
     TurnResult,
+    AgentInit,
 )
 from genkit.plugins.google_genai import GoogleAI
 
@@ -49,7 +49,7 @@ async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentRe
             messages=messages,
         )
         async for chunk in stream_resp.stream:
-            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
+            ctx.send_chunk(AgentStreamChunk(model_chunk=chunk.model_dump(by_alias=True, exclude_none=True)))
 
         res = await stream_resp.response
         if res.message:
@@ -66,15 +66,15 @@ agent = ai.define_custom_agent(name='customCoder', fn=custom_coder_fn, store=sto
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
-    await conn.send_text('What is a Python list comprehension?')
-    await conn.close()
+    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    print("--- SENDING TURN ---")
+    turn = session.send('What is a Python list comprehension?')
+    async for chunk in turn.stream:
+        print('chunk:', chunk)
 
-    async for chunk in conn.receive():
-        print('chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out = await conn.output()
-    print('output:', out.model_dump(by_alias=True, exclude_none=True))
+    out = await turn.output
+    print('output:', out)
+    await session.close()
 
 
 if __name__ == '__main__':

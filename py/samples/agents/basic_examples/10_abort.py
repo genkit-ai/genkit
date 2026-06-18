@@ -15,12 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: abort a detached invocation via store.abort_snapshot().
-
-Python has no conn.abort() — after detach(), call abort on the agent's store
-with the snapshot_id from conn.output(). That flips the pending snapshot to
-aborted and signals abort_signal inside the still-running agent fn.
-"""
+"""Backend: abort a detached invocation via task.abort() using AgentAPI."""
 
 from __future__ import annotations
 
@@ -28,7 +23,7 @@ import asyncio
 from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import InMemorySessionStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -37,11 +32,17 @@ store = InMemorySessionStore()
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
 async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-    for _i in range(30):
-        if ctx.abort_signal.is_set():
-            raise GenkitError(status='ABORTED', message='Task aborted')
-        await asyncio.sleep(0.5)
-    return {'done': True}
+    try:
+        for i in range(30):
+            if ctx.abort_signal.is_set():
+                print('[slowWork] Abort signal detected!')
+                raise GenkitError(status='ABORTED', message='Task aborted')
+            print(f'[slowWork] working step {i+1}/30...')
+            await asyncio.sleep(0.5)
+        return {'done': True}
+    except asyncio.CancelledError:
+        print('[slowWork] cancelled!')
+        raise
 
 
 agent = ai.define_agent(
@@ -54,21 +55,20 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
-    await conn.send_text('Please run a long task using slowWork.')
-    await conn.detach()
+    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    print("--- SUBMITTING DETACHED TASK ---")
+    task = await session.detach('Please run a long task using slowWork.')
+    print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
-    async for chunk in conn.receive():
-        print('chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
+    await asyncio.sleep(2.0)
 
-    out = await conn.output()
-    snap_id = out.snapshot_id
-    if snap_id is None:
-        raise RuntimeError('expected snapshot_id after detach')
-    print('detached snapshot_id:', snap_id)
+    print("\n--- ABORTING TASK ---")
+    status = await task.abort()
+    print('abort returned status:', status)
 
-    status = await store.abort_snapshot(snap_id)
-    print('abort_snapshot returned:', status)
+    # Wait a little to let the background logs print
+    await asyncio.sleep(1.0)
+    await session.close()
 
 
 if __name__ == '__main__':

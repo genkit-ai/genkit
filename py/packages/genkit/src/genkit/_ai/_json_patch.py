@@ -94,3 +94,53 @@ def _diff_recursive(from_value: Any, to_value: Any, pointer: str, patch: list[Js
         return
 
     patch.append(JsonPatchOperation(op='replace', path=pointer, value=_clone(to_value)))
+
+
+def apply_json_patch(doc: Any, patch: list[JsonPatchOperation]) -> Any:
+    """Apply RFC 6902 JSON Patch operations to a document and return the transformed copy."""
+    doc = _clone(doc)
+    for op in patch:
+        path = op.path
+        # Split pointer into unescaped keys
+        parts = [p.replace('~1', '/').replace('~0', '~') for p in path.split('/')]
+        # First part is always empty (since pointer starts with '/')
+        if parts and parts[0] == '':
+            parts.pop(0)
+
+        if op.op == 'replace' and not parts:
+            doc = _clone(op.value)
+            continue
+
+        curr = doc
+        for part in parts[:-1]:
+            if isinstance(curr, dict):
+                curr = curr[part]
+            elif isinstance(curr, list):
+                curr = curr[int(part)]
+            else:
+                raise ValueError(f"Invalid path traversal: cannot index into non-container type {type(curr)}")
+
+        if not parts:
+            continue
+        last_part = parts[-1]
+
+        if op.op == 'replace':
+            if isinstance(curr, dict):
+                curr[last_part] = _clone(op.value)
+            elif isinstance(curr, list):
+                curr[int(last_part)] = _clone(op.value)
+        elif op.op == 'add':
+            if isinstance(curr, dict):
+                curr[last_part] = _clone(op.value)
+            elif isinstance(curr, list):
+                if last_part == '-':
+                    curr.append(_clone(op.value))
+                else:
+                    curr.insert(int(last_part), _clone(op.value))
+        elif op.op == 'remove':
+            if isinstance(curr, dict):
+                del curr[last_part]
+            elif isinstance(curr, list):
+                curr.pop(int(last_part))
+    return doc
+

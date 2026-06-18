@@ -17,11 +17,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import copy
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Generic, TypedDict, TypeVar
+from typing import Any, Generic, TypedDict, TypeVar, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from genkit._ai._agent_client import AgentSession
 
 from opentelemetry import trace as trace_api
 
@@ -1053,6 +1057,8 @@ class SessionRunner(Generic[StateT]):
 class Agent:
     """Registered bidi agent — call ``stream_bidi()`` for an ``AgentConnection``."""
 
+    _store: SessionStore | None = None
+
     def __init__(self, bidi_action: BidiAction) -> None:
         self._action = bidi_action
 
@@ -1068,6 +1074,15 @@ class Agent:
         """Start a new agent session. Returns an AgentConnection."""
         conn = await self._action.stream_bidi(init or AgentInit(), context=context)
         return AgentConnection(conn)
+
+    def connect(
+        self,
+        init: AgentInit | None = None,
+    ) -> AgentSession[Any, Any]:
+        """Starts a new in-process session, or attaches to one via init."""
+        from genkit._ai._agent_client import InProcessAgentTransport, AgentAPI
+        transport = InProcessAgentTransport(self, store_configured=(self._store is not None))
+        return AgentAPI(transport).connect(init)
 
 
 def define_custom_agent(
@@ -1129,8 +1144,8 @@ def define_custom_agent(
             else:
                 data = getattr(input_dict, '__dict__', {})
             snapshot_id = data.get('snapshotId') or data.get('snapshot_id')
-            if not snapshot_id:
-                raise ValueError('snapshotId required')
+            if not isinstance(snapshot_id, str):
+                raise ValueError('snapshotId required and must be a string')
             snap = await store.get_snapshot(snapshot_id=snapshot_id)
             if snap is None:
                 raise ValueError(f'Snapshot {snapshot_id} not found')
@@ -1143,7 +1158,10 @@ def define_custom_agent(
         )
         registry.register_action_from_instance(snapshot_action)
 
-    return Agent(action)
+    agent = Agent(action)
+    if store is not None:
+        agent._store = store
+    return agent
 
 
 async def _generate_prompt_agent_turn(

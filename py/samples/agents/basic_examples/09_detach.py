@@ -15,10 +15,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: conn.detach() — early AgentOutput while work continues in background.
-
-Requires a store on the agent. Returns finish_reason detached + snapshot_id.
-"""
+"""Backend: session.detach() — early return + poll background execution using AgentAPI."""
 
 from __future__ import annotations
 
@@ -26,7 +23,7 @@ import asyncio
 from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import InMemorySessionStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -35,9 +32,10 @@ store = InMemorySessionStore()
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
 async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-    for _i in range(30):
+    for i in range(10):
         if ctx.abort_signal.is_set():
             raise GenkitError(status='ABORTED', message='Task aborted')
+        print(f'[slowWork] working step {i+1}/10...')
         await asyncio.sleep(0.5)
     return {'done': True}
 
@@ -52,16 +50,18 @@ agent = ai.define_agent(
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
-    await conn.send_text('Please run a long task using slowWork.')
-    await conn.detach()
+    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    print("--- SUBMITTING DETACHED TASK ---")
+    task = await session.detach('Please run a long task using slowWork.')
+    print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
-    async for chunk in conn.receive():
-        print('chunk (may stop after detach):', chunk.model_dump(by_alias=True, exclude_none=True))
+    # We can poll or wait for the task to complete
+    print("\n--- POLLING TASK STATUS ---")
+    async for snap in task.poll(interval_ms=1000):
+        print(f'Task Status: {snap.status}, Messages: {len(snap.state.messages or [])}')
 
-    out = await conn.output()
-    print('detached output:', out.model_dump(by_alias=True, exclude_none=True))
-    print('snapshot_id for abort:', out.snapshot_id)
+    print("Finished!")
+    await session.close()
 
 
 if __name__ == '__main__':

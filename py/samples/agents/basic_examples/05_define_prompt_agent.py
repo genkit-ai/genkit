@@ -15,14 +15,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Backend: define_prompt_agent."""
+"""Backend: define_prompt_agent using AgentAPI."""
 
 from __future__ import annotations
 
 from uuid import uuid4
 
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import InMemorySessionStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -37,15 +37,15 @@ agent = ai.define_prompt_agent(name='greeterPrompt', store=store)
 
 
 async def main() -> None:
-    conn = await agent.stream_bidi(AgentInit(session_id=str(uuid4())))
-    await conn.send_text('Hello!')
-    await conn.close()
+    session = agent.connect(AgentInit(session_id=str(uuid4())))
+    print("--- SENDING TURN ---")
+    turn = session.send('Hello!')
+    async for chunk in turn.stream:
+        print('chunk:', chunk)
 
-    async for chunk in conn.receive():
-        print('chunk:', chunk.model_dump(by_alias=True, exclude_none=True))
-
-    out = await conn.output()
-    print('output:', out.model_dump(by_alias=True, exclude_none=True))
+    out = await turn.output
+    print('output:', out)
+    await session.close()
 
 
 if __name__ == '__main__':
