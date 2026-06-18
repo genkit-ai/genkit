@@ -806,6 +806,45 @@ GEMINI_3_1_FLASH_LITE_PREVIEW = ModelInfo(
     ),
 )
 
+GEMINI_IMAGE_SUPPORTS = Supports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    tool_choice=True,
+    system_role=True,
+    constrained=Constrained.ALL,
+)
+
+GEMINI_3_PRO_IMAGE = ModelInfo(
+    label='Google AI - Gemini 3 Pro Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_IMAGE = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_1_FLASH_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3.1 Flash Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_3_PRO_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 3 Pro Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_IMAGE = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Image',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
+GEMINI_2_5_FLASH_IMAGE_PREVIEW = ModelInfo(
+    label='Google AI - Gemini 2.5 Flash Image Preview',
+    supports=GEMINI_IMAGE_SUPPORTS,
+)
+
 GENERIC_GEMINI_MODEL = ModelInfo(
     label='Google AI - Gemini',
     supports=Supports(
@@ -833,15 +872,7 @@ GENERIC_TTS_MODEL = ModelInfo(
 
 GENERIC_IMAGE_MODEL = ModelInfo(
     label='Google AI - Gemini Image',
-    supports=Supports(
-        multiturn=False,
-        media=True,
-        tools=False,
-        tool_choice=False,
-        system_role=True,
-        constrained=Constrained.ALL,
-        output=['media'],
-    ),
+    supports=GEMINI_IMAGE_SUPPORTS,
 )
 
 GENERIC_GEMMA_MODEL = ModelInfo(
@@ -885,6 +916,8 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported    |
     | `gemini-2.5-flash-preview-tts`       | Gemini 2.5 Flash Preview TTS         | Supported    |
     | `gemini-2.5-pro-preview-tts`         | Gemini 2.5 Pro Preview TTS           | Supported    |
+    | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported    |
+    | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported    |
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported    |
     | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported    |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported    |
@@ -909,6 +942,8 @@ class VertexAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
     GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
     GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
+    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
+    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
@@ -943,6 +978,9 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     | `gemini-2.5-flash-lite`              | Gemini 2.5 Flash Lite                | Supported  |
     | `gemini-2.5-flash-preview-tts`       | Gemini 2.5 Flash Preview TTS         | Supported  |
     | `gemini-2.5-pro-preview-tts`         | Gemini 2.5 Pro Preview TTS           | Supported  |
+    | `gemini-3-pro-image`                 | Gemini 3 Pro Image                   | Supported  |
+    | `gemini-3.1-flash-image`             | Gemini 3.1 Flash Image               | Supported  |
+    | `gemini-3.1-flash-image-preview`     | Gemini 3.1 Flash Image Preview       | Supported  |
     | `gemini-3-pro-image-preview`         | Gemini 3 Pro Image Preview           | Supported  |
     | `gemini-2.5-flash-image-preview`     | Gemini 2.5 Flash Image Preview       | Supported  |
     | `gemini-2.5-flash-image`             | Gemini 2.5 Flash Image               | Supported  |
@@ -970,6 +1008,9 @@ class GoogleAIGeminiVersion(StrEnum, metaclass=Deprecations):  # pyrefly: ignore
     GEMINI_2_5_FLASH_LITE = 'gemini-2.5-flash-lite'
     GEMINI_2_5_FLASH_PREVIEW_TTS = 'gemini-2.5-flash-preview-tts'
     GEMINI_2_5_PRO_PREVIEW_TTS = 'gemini-2.5-pro-preview-tts'
+    GEMINI_3_PRO_IMAGE = 'gemini-3-pro-image'
+    GEMINI_3_1_FLASH_IMAGE = 'gemini-3.1-flash-image'
+    GEMINI_3_1_FLASH_IMAGE_PREVIEW = 'gemini-3.1-flash-image-preview'
     GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview'
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = 'gemini-2.5-flash-image-preview'
     GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image'
@@ -1013,6 +1054,12 @@ _add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
 _add_model(GEMINI_3_1_PRO_PREVIEW, ['gemini-3.1-pro-preview'])
 _add_model(GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, ['gemini-3.1-pro-preview-customtools'])
 _add_model(GEMINI_3_1_FLASH_LITE_PREVIEW, ['gemini-3.1-flash-lite-preview'])
+_add_model(GEMINI_3_PRO_IMAGE, ['gemini-3-pro-image'])
+_add_model(GEMINI_3_1_FLASH_IMAGE, ['gemini-3.1-flash-image'])
+_add_model(GEMINI_3_1_FLASH_IMAGE_PREVIEW, ['gemini-3.1-flash-image-preview'])
+_add_model(GEMINI_3_PRO_IMAGE_PREVIEW, ['gemini-3-pro-image-preview'])
+_add_model(GEMINI_2_5_FLASH_IMAGE_PREVIEW, ['gemini-2.5-flash-image-preview'])
+_add_model(GEMINI_2_5_FLASH_IMAGE, ['gemini-2.5-flash-image'])
 
 
 DEFAULT_SUPPORTS_MODEL = Supports(
