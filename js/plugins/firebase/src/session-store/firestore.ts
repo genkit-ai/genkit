@@ -255,28 +255,42 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     sessionId?: string;
   }): Promise<SessionSnapshot<S> | undefined> {
     const { snapshotId, sessionId } = this.normalize(opts);
-    const reader = this.reader();
 
-    if (sessionId) {
-      const pointerSnap = await this.pointers.doc(sessionId).get();
-      if (!pointerSnap.exists) return undefined;
-      const pointer = pointerSnap.data() as PointerDoc;
-      // Reconstruct straight from the pointer's checkpoint metadata - one
-      // batched round-trip, no extra read of the leaf document.
-      const reconstructed = await this.reconstructFrom(
-        reader,
-        pointer.checkpointId,
-        pointer.checkpointShardCount,
-        pointer.segmentPath,
-        pointer.currentSnapshotId
-      );
-      if (!reconstructed) return undefined;
-      return this.toSnapshot(reconstructed.doc, reconstructed.state);
-    }
+    // Reconstruct inside a read-only transaction so the pointer read and the
+    // batched shard/diff reads all observe a single, consistent point in time.
+    // Without this, a concurrent checkpoint write - which overwrites a
+    // checkpoint's shards in place and may delete now-stale trailing shards
+    // (see `writeShards`) - could let a reader stitch together a mix of old and
+    // new chunks, yielding a `DATA_LOSS` (missing shard) error or a corrupt
+    // `JSON.parse`. A read-only transaction also avoids the contention/retries
+    // of a read-write one.
+    return this.db.runTransaction(
+      async (tx) => {
+        const reader = this.reader(tx);
 
-    const reconstructed = await this.reconstruct(reader, snapshotId!);
-    if (!reconstructed) return undefined;
-    return this.toSnapshot(reconstructed.doc, reconstructed.state);
+        if (sessionId) {
+          const pointerSnap = await tx.get(this.pointers.doc(sessionId));
+          if (!pointerSnap.exists) return undefined;
+          const pointer = pointerSnap.data() as PointerDoc;
+          // Reconstruct straight from the pointer's checkpoint metadata - one
+          // batched round-trip, no extra read of the leaf document.
+          const reconstructed = await this.reconstructFrom(
+            reader,
+            pointer.checkpointId,
+            pointer.checkpointShardCount,
+            pointer.segmentPath,
+            pointer.currentSnapshotId
+          );
+          if (!reconstructed) return undefined;
+          return this.toSnapshot(reconstructed.doc, reconstructed.state);
+        }
+
+        const reconstructed = await this.reconstruct(reader, snapshotId!);
+        if (!reconstructed) return undefined;
+        return this.toSnapshot(reconstructed.doc, reconstructed.state);
+      },
+      { readOnly: true }
+    );
   }
 
   async saveSnapshot(
@@ -468,19 +482,24 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   }
 
   /**
-   * Validates that exactly one of `snapshotId` / `sessionId` is provided.
+   * Validates that exactly one of `snapshotId` / `sessionId` is provided, and
+   * that the provided one is a non-blank string. Blank / whitespace-only ids
+   * are rejected up front (rather than silently treated as "absent") so callers
+   * get a clear `INVALID_ARGUMENT` instead of an unusable document key.
    */
   private normalize(opts: { snapshotId?: string; sessionId?: string }): {
     snapshotId?: string;
     sessionId?: string;
   } {
-    const { snapshotId, sessionId } = opts;
+    const snapshotId = opts.snapshotId?.trim() ? opts.snapshotId : undefined;
+    const sessionId = opts.sessionId?.trim() ? opts.sessionId : undefined;
     if (!!snapshotId === !!sessionId) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
         message:
-          `getSnapshot requires exactly one of 'snapshotId' or 'sessionId' ` +
-          `(got ${snapshotId ? 'snapshotId' : 'neither'}${sessionId ? ' and sessionId' : ''}).`,
+          `getSnapshot requires exactly one non-empty 'snapshotId' or ` +
+          `'sessionId' (got ${snapshotId ? 'snapshotId' : opts.snapshotId !== undefined ? 'blank snapshotId' : 'neither'}` +
+          `${sessionId ? ' and sessionId' : opts.sessionId !== undefined ? ' and blank sessionId' : ''}).`,
       });
     }
     return { snapshotId, sessionId };

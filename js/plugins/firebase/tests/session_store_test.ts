@@ -388,4 +388,268 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(data?.currentState, undefined);
     assert.strictEqual(typeof data?.checkpointId, 'string');
   });
+
+  it('rejects getSnapshot with both or neither id', async () => {
+    await assert.rejects(
+      store.getSnapshot({ snapshotId: 'x', sessionId: 'y' }),
+      /exactly one/
+    );
+    await assert.rejects(store.getSnapshot({}), /exactly one/);
+  });
+
+  it('rejects getSnapshot with a blank id', async () => {
+    // A whitespace-only id is treated as absent and surfaced as a clear
+    // INVALID_ARGUMENT rather than being used as an (unusable) document key.
+    await assert.rejects(
+      store.getSnapshot({ sessionId: '   ' }),
+      /exactly one/
+    );
+    await assert.rejects(store.getSnapshot({ snapshotId: '' }), /exactly one/);
+  });
+
+  it('rejects saveSnapshot when state.sessionId is missing', async () => {
+    await assert.rejects(
+      store.saveSnapshot('no-sess', () =>
+        snapshot({ snapshotId: 'no-sess', state: { custom: { counter: 1 } } })
+      ),
+      /state\.sessionId/
+    );
+  });
+
+  it('mints a UUID when neither call nor result supplies a snapshotId', async () => {
+    const id = await store.saveSnapshot(undefined, () =>
+      snapshot({ state: { sessionId: 'sess-uuid', custom: { counter: 1 } } })
+    );
+    assert.ok(id, 'expected a generated id');
+    // A v4 UUID, not one we supplied.
+    assert.match(
+      id!,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+
+    const read = await store.getSnapshot({ snapshotId: id! });
+    assert.strictEqual(read?.state.custom?.counter, 1);
+  });
+
+  it('promotes an oversized diff to a sharded checkpoint', async () => {
+    // A shard size small enough that a single turn's diff exceeds it, forcing
+    // the diff -> checkpoint promotion path. A large interval ensures the turn
+    // would otherwise be a plain diff.
+    const promoteStore = makeStore({ shardSize: 256, checkpointInterval: 100 });
+
+    await promoteStore.saveSnapshot('d1', () =>
+      snapshot({
+        snapshotId: 'd1',
+        state: { sessionId: 'sess-promote', custom: { counter: 0 } },
+      })
+    );
+    // A child whose new state adds a large blob: the resulting diff is bigger
+    // than shardSize and must be stored as a checkpoint instead.
+    const bigNotes = Array.from({ length: 300 }, (_, i) => `note-${i}`);
+    await promoteStore.saveSnapshot('d2', () =>
+      snapshot({
+        snapshotId: 'd2',
+        parentId: 'd1',
+        state: {
+          sessionId: 'sess-promote',
+          custom: { counter: 1, notes: bigNotes },
+        },
+      })
+    );
+
+    // Round-trips correctly.
+    const read = await promoteStore.getSnapshot({ snapshotId: 'd2' });
+    assert.deepStrictEqual(read?.state.custom?.notes, bigNotes);
+
+    // The promoted document is a checkpoint with no statePatch.
+    const db = getFirestore(app);
+    const colName = (promoteStore as any).snapshots.id as string;
+    const raw = await db.collection(colName).doc('d2').get();
+    assert.strictEqual(raw.data()?.kind, 'checkpoint');
+    assert.strictEqual(raw.data()?.statePatch, undefined);
+  });
+
+  it('deletes stale trailing shards when a re-checkpoint shrinks', async () => {
+    const shrinkStore = makeStore({ shardSize: 64 });
+
+    // Initial large state spanning several shards.
+    const bigNotes = Array.from({ length: 100 }, (_, i) => `note-${i}`);
+    await shrinkStore.saveSnapshot('k1', () =>
+      snapshot({
+        snapshotId: 'k1',
+        state: {
+          sessionId: 'sess-shrink',
+          custom: { counter: 1, notes: bigNotes },
+        },
+      })
+    );
+
+    const db = getFirestore(app);
+    const colName = (shrinkStore as any).snapshots.id as string;
+    const shardCol = `${colName}-shards`;
+    const before = await db.collection(shardCol).get();
+    assert.ok(before.size > 1, `expected multiple shards, got ${before.size}`);
+
+    // Upsert the same (leaf, checkpoint) snapshot with a much smaller state.
+    await shrinkStore.saveSnapshot('k1', (current) => ({
+      ...current!,
+      state: { sessionId: 'sess-shrink', custom: { counter: 2 } },
+    }));
+
+    const after = await db.collection(shardCol).get();
+    assert.ok(
+      after.size < before.size,
+      `expected fewer shards after shrink (before=${before.size}, after=${after.size})`
+    );
+
+    // And it still reads back correctly with no leftover/corrupt shards.
+    const read = await shrinkStore.getSnapshot({ snapshotId: 'k1' });
+    assert.strictEqual(read?.state.custom?.counter, 2);
+    assert.strictEqual(read?.state.custom?.notes, undefined);
+  });
+
+  it('treats a snapshot with an orphaned parent as a fresh checkpoint', async () => {
+    await store.saveSnapshot('o1', () =>
+      snapshot({
+        snapshotId: 'o1',
+        parentId: 'does-not-exist',
+        state: { sessionId: 'sess-orphan', custom: { counter: 7 } },
+      })
+    );
+
+    const read = await store.getSnapshot({ snapshotId: 'o1' });
+    assert.strictEqual(read?.state.custom?.counter, 7);
+
+    // It was stored as a checkpoint (root of a new chain), not a diff.
+    const db = getFirestore(app);
+    const colName = (store as any).snapshots.id as string;
+    const raw = await db.collection(colName).doc('o1').get();
+    assert.strictEqual(raw.data()?.kind, 'checkpoint');
+  });
+
+  it('persists and round-trips finishReason, error, and updatedAt', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00.000Z').toISOString();
+    await store.saveSnapshot('f1', () => ({
+      snapshotId: 'f1',
+      createdAt,
+      event: 'turnEnd',
+      status: 'failed',
+      finishReason: 'interrupted',
+      error: { status: 'INTERNAL', message: 'boom', details: { code: 42 } },
+      state: { sessionId: 'sess-fields', custom: { counter: 1 } },
+    }));
+
+    const read = await store.getSnapshot({ snapshotId: 'f1' });
+    assert.strictEqual(read?.status, 'failed');
+    assert.strictEqual(read?.finishReason, 'interrupted');
+    assert.deepStrictEqual(read?.error, {
+      status: 'INTERNAL',
+      message: 'boom',
+      details: { code: 42 },
+    });
+    // updatedAt defaults to createdAt until the snapshot is rewritten.
+    assert.strictEqual(read?.updatedAt, createdAt);
+
+    // Upsert with an explicit, later updatedAt.
+    const updatedAt = new Date('2026-01-02T00:00:00.000Z').toISOString();
+    await store.saveSnapshot('f1', (current) => ({
+      ...current!,
+      updatedAt,
+      status: 'completed',
+    }));
+    const read2 = await store.getSnapshot({ snapshotId: 'f1' });
+    assert.strictEqual(read2?.updatedAt, updatedAt);
+    assert.strictEqual(read2?.createdAt, createdAt);
+  });
+
+  it('diffs and reconstructs messages and artifacts across a chain', async () => {
+    await store.saveSnapshot('m1', () =>
+      snapshot({
+        snapshotId: 'm1',
+        state: {
+          sessionId: 'sess-msgs',
+          messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+          artifacts: [{ name: 'a', parts: [{ text: 'one' }] }],
+        },
+      })
+    );
+    await store.saveSnapshot('m2', () =>
+      snapshot({
+        snapshotId: 'm2',
+        parentId: 'm1',
+        state: {
+          sessionId: 'sess-msgs',
+          messages: [
+            { role: 'user', content: [{ text: 'hi' }] },
+            { role: 'model', content: [{ text: 'hello' }] },
+          ],
+          artifacts: [
+            { name: 'a', parts: [{ text: 'one' }] },
+            { name: 'b', parts: [{ text: 'two' }] },
+          ],
+        },
+      })
+    );
+
+    const leaf = await store.getSnapshot({ sessionId: 'sess-msgs' });
+    assert.strictEqual(leaf?.state.messages?.length, 2);
+    assert.strictEqual(leaf?.state.messages?.[1].role, 'model');
+    assert.strictEqual(leaf?.state.artifacts?.length, 2);
+    assert.strictEqual(leaf?.state.artifacts?.[1].name, 'b');
+
+    // The child stored only a diff, not the full message array.
+    const db = getFirestore(app);
+    const colName = (store as any).snapshots.id as string;
+    const raw = await db.collection(colName).doc('m2').get();
+    assert.strictEqual(raw.data()?.kind, 'diff');
+    assert.ok(Array.isArray(raw.data()?.statePatch));
+  });
+
+  it('throws DATA_LOSS when a checkpoint shard is missing', async () => {
+    await store.saveSnapshot('g1', () =>
+      snapshot({
+        snapshotId: 'g1',
+        state: { sessionId: 'sess-dataloss', custom: { counter: 1 } },
+      })
+    );
+
+    // Manually delete the checkpoint's only shard to simulate corruption.
+    const db = getFirestore(app);
+    const colName = (store as any).snapshots.id as string;
+    await db.collection(`${colName}-shards`).doc('g1_0').delete();
+
+    await assert.rejects(
+      store.getSnapshot({ snapshotId: 'g1' }),
+      /missing checkpoint shard/
+    );
+  });
+
+  it('treats every snapshot as a checkpoint when checkpointInterval is 1', async () => {
+    const cp1Store = makeStore({ checkpointInterval: 1 });
+
+    let parentId: string | undefined;
+    for (let i = 0; i < 4; i++) {
+      const id = `i${i}`;
+      await cp1Store.saveSnapshot(id, () =>
+        snapshot({
+          snapshotId: id,
+          parentId,
+          state: { sessionId: 'sess-cp1', custom: { counter: i } },
+        })
+      );
+      parentId = id;
+    }
+
+    const leaf = await cp1Store.getSnapshot({ sessionId: 'sess-cp1' });
+    assert.strictEqual(leaf?.state.custom?.counter, 3);
+
+    // Every document is a checkpoint; none is a diff.
+    const db = getFirestore(app);
+    const colName = (cp1Store as any).snapshots.id as string;
+    const diffs = await db
+      .collection(colName)
+      .where('kind', '==', 'diff')
+      .get();
+    assert.strictEqual(diffs.size, 0);
+  });
 });
