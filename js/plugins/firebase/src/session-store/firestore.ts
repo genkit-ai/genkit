@@ -35,11 +35,22 @@ import {
   type SnapshotMutator,
 } from 'genkit/beta';
 
-/** Default number of turns between full-state checkpoints. */
-const DEFAULT_CHECKPOINT_INTERVAL = 100;
+/**
+ * Default number of turns between full-state checkpoints.
+ *
+ * Chosen to favor the common chat / `useChat` workload, where per-turn state is
+ * small and read cost dominates. Per-save reconstruction reads grow ~linearly
+ * with the interval while checkpoint write/storage cost shrinks with it, so the
+ * op-cost optimum is roughly `sqrt(6 * checkpointShardCount)` (≈small for tiny
+ * state); 25 sits near that optimum for chat while staying conservative for
+ * larger states. Raise it (e.g. 50-100) for large per-turn state retained
+ * long-term; lower it (e.g. 10) for small-state, read-heavy sessions.
+ */
+const DEFAULT_CHECKPOINT_INTERVAL = 25;
 
 /**
  * Default maximum size (in bytes) of a single shard / diff document. Kept well
+
  * under Firestore's 1 MiB per-document limit so that no individual write can be
  * rejected for being too large.
  */
@@ -66,8 +77,15 @@ export interface FirestoreSessionStoreOptions {
    * fewer (but reconstructs over more) diffs; a smaller value reconstructs
    * faster at the cost of more frequent full-state writes. Defaults to
    * {@link DEFAULT_CHECKPOINT_INTERVAL}.
+   *
+   * Cost tuning: per-save reconstruction reads grow ~linearly with this value
+   * (so per-interval read work is ~quadratic in it), while checkpoint write and
+   * storage cost shrink with it. Lower it (e.g. 10) for small-state, read-heavy
+   * sessions; raise it (e.g. 50-100) for large per-turn state retained for a
+   * long time, where checkpoint write/storage amplification dominates.
    */
   checkpointInterval?: number;
+
   /**
    * Maximum size in bytes of a single shard / diff document. Checkpoint state
    * is split into chunks of this size, and any diff exceeding it is promoted to
