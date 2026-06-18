@@ -340,25 +340,44 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         // state/metadata change. Callers must only upsert the *leaf* -
         // rewriting a non-leaf snapshot's state would invalidate its
         // descendants' diffs.
-        kind = existing.doc.kind;
-        if (kind === 'checkpoint') {
-          checkpointId = id;
-          segmentPath = [];
-          checkpointShardCount = this.writeShards(
+        if (existing.doc.kind === 'checkpoint') {
+          ({
+            kind,
+            checkpointId,
+            checkpointShardCount,
+            segmentPath,
+            statePatch,
+          } = this.writeCheckpoint(
             tx,
             id,
             newState,
             existing.doc.checkpointShardCount
-          );
+          ));
         } else {
-          checkpointId = existing.doc.checkpointId;
-          checkpointShardCount = existing.doc.checkpointShardCount;
-          segmentPath = existing.doc.segmentPath;
           // Reads phase 3 (diff upsert): resolve parent state for the patch.
           const parentState = existing.doc.parentId
             ? (await this.reconstruct(reader, existing.doc.parentId))?.state
             : undefined;
-          statePatch = diff(parentState, newState);
+          const candidatePatch = diff(parentState, newState);
+          // Promote an oversized diff to a (sharded) checkpoint so even an
+          // in-place leaf rewrite can never push the document past the 1 MiB
+          // limit. Safe because callers only upsert the leaf, which has no
+          // descendants depending on its chain position.
+          if (this.byteLength(candidatePatch) > this.shardSize) {
+            ({
+              kind,
+              checkpointId,
+              checkpointShardCount,
+              segmentPath,
+              statePatch,
+            } = this.writeCheckpoint(tx, id, newState));
+          } else {
+            kind = 'diff';
+            checkpointId = existing.doc.checkpointId;
+            checkpointShardCount = existing.doc.checkpointShardCount;
+            segmentPath = existing.doc.segmentPath;
+            statePatch = candidatePatch;
+          }
         }
       } else {
         // New snapshot: resolve the parent's *chain metadata* (no state) to
@@ -375,23 +394,22 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
           );
         }
 
-        if (!result.parentId || !parentMeta) {
-          // Session root (or an orphaned parent) starts a fresh checkpoint.
-          kind = 'checkpoint';
-          checkpointId = id;
-          segmentPath = [];
-          checkpointShardCount = this.writeShards(tx, id, newState);
-        } else if (
-          parentMeta.segmentPath.length + 1 >=
-          this.checkpointInterval
+        if (
+          !result.parentId ||
+          !parentMeta ||
+          parentMeta.segmentPath.length + 1 >= this.checkpointInterval
         ) {
-          // Reached the checkpoint interval: write a full checkpoint without
-          // ever reconstructing the parent's state (the longest, costliest
-          // segment is exactly the one we'd otherwise pay for here).
-          kind = 'checkpoint';
-          checkpointId = id;
-          segmentPath = [];
-          checkpointShardCount = this.writeShards(tx, id, newState);
+          // Write a full checkpoint without ever reconstructing the parent's
+          // state, for any of: a session root, an orphaned parent, or reaching
+          // the checkpoint interval (whose final segment is exactly the longest,
+          // costliest one we'd otherwise pay to reconstruct here).
+          ({
+            kind,
+            checkpointId,
+            checkpointShardCount,
+            segmentPath,
+            statePatch,
+          } = this.writeCheckpoint(tx, id, newState));
         } else {
           // Diff candidate: now we must materialize the parent's state to
           // compute the patch.
@@ -407,13 +425,14 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
           const candidatePatch = diff(parentState, newState);
           // Promote oversized diffs to checkpoints so a single large turn is
           // sharded rather than rejected by the 1 MiB limit.
-          const diffTooLarge = this.byteLength(candidatePatch) > this.shardSize;
-
-          if (diffTooLarge) {
-            kind = 'checkpoint';
-            checkpointId = id;
-            segmentPath = [];
-            checkpointShardCount = this.writeShards(tx, id, newState);
+          if (this.byteLength(candidatePatch) > this.shardSize) {
+            ({
+              kind,
+              checkpointId,
+              checkpointShardCount,
+              segmentPath,
+              statePatch,
+            } = this.writeCheckpoint(tx, id, newState));
           } else {
             kind = 'diff';
             checkpointId = parentMeta.checkpointId;
@@ -663,6 +682,41 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       tx.delete(this.shards.doc(`${checkpointId}_${i}`));
     }
     return count;
+  }
+
+  /**
+   * Writes a full-state checkpoint at `id` (sharding the state via
+   * {@link writeShards}) and returns the snapshot metadata describing it: a
+   * checkpoint anchors itself (`checkpointId === id`), has an empty
+   * `segmentPath`, and carries no `statePatch`.
+   *
+   * This is the shared promotion path used whenever a snapshot must be a
+   * checkpoint rather than a diff - the session root, an orphaned parent, a
+   * checkpoint-interval boundary, an in-place checkpoint rewrite, and the
+   * promotion of an oversized diff (whether new turn or leaf upsert) so that no
+   * single document approaches Firestore's 1 MiB limit. Pass `oldShardCount`
+   * when re-checkpointing an existing checkpoint so stale trailing shards are
+   * pruned.
+   */
+  private writeCheckpoint(
+    tx: Transaction,
+    id: string,
+    state: SessionState<S>,
+    oldShardCount = 0
+  ): {
+    kind: 'checkpoint';
+    checkpointId: string;
+    checkpointShardCount: number;
+    segmentPath: string[];
+    statePatch: undefined;
+  } {
+    return {
+      kind: 'checkpoint',
+      checkpointId: id,
+      checkpointShardCount: this.writeShards(tx, id, state, oldShardCount),
+      segmentPath: [],
+      statePatch: undefined,
+    };
   }
 
   /** Concatenates ordered shard documents and parses the materialized state. */

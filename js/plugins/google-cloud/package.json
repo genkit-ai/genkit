@@ -23,7 +23,8 @@
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",
     "build:watch": "tsup-node --watch",
-    "test": "firebase emulators:exec 'node node_modules/jest/bin/jest --runInBand --verbose' --config tests/emulator/firebase.json"
+    "test": "firebase emulators:exec 'node node_modules/jest/bin/jest --runInBand --verbose' --config tests/emulator/firebase.json",
+    "test:session-store": "firebase emulators:exec 'node node_modules/jest/bin/jest session_store --runInBand --verbose' --config tests/emulator/firebase.json"
   },
   "repository": {
     "type": "git",

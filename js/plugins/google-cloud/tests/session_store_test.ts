@@ -462,6 +462,62 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(raw.data()?.statePatch, undefined);
   });
 
+  it('promotes an oversized diff upsert to a sharded checkpoint', async () => {
+    // A leaf that starts as a small diff can grow past the limit on an
+    // in-place rewrite; the upsert path must promote it to a checkpoint rather
+    // than write an oversized statePatch.
+    const promoteStore = makeStore({ shardSize: 256, checkpointInterval: 100 });
+
+    await promoteStore.saveSnapshot('e1', () =>
+      snapshot({
+        snapshotId: 'e1',
+        state: { sessionId: 'sess-upsert-promote', custom: { counter: 0 } },
+      })
+    );
+    // A small child diff (well under shardSize).
+    await promoteStore.saveSnapshot('e2', () =>
+      snapshot({
+        snapshotId: 'e2',
+        parentId: 'e1',
+        state: {
+          sessionId: 'sess-upsert-promote',
+          custom: { counter: 1 },
+        },
+      })
+    );
+
+    // It started life as a diff.
+    const colName = (promoteStore as any).snapshots.id as string;
+    const before = await db.collection(colName).doc('e2').get();
+    assert.strictEqual(before.data()?.kind, 'diff');
+
+    // Rewrite the leaf in place with a much larger state: the diff would now
+    // exceed shardSize and must be promoted to a sharded checkpoint.
+    const bigNotes = Array.from({ length: 300 }, (_, i) => `note-${i}`);
+    await promoteStore.saveSnapshot('e2', (current) => ({
+      ...current!,
+      state: {
+        sessionId: 'sess-upsert-promote',
+        custom: { counter: 2, notes: bigNotes },
+      },
+    }));
+
+    // Round-trips correctly.
+    const read = await promoteStore.getSnapshot({ snapshotId: 'e2' });
+    assert.deepStrictEqual(read?.state.custom?.notes, bigNotes);
+    assert.strictEqual(read?.state.custom?.counter, 2);
+
+    // The promoted document is now a checkpoint with no statePatch, and its
+    // state was sharded across more than one document.
+    const after = await db.collection(colName).doc('e2').get();
+    assert.strictEqual(after.data()?.kind, 'checkpoint');
+    assert.strictEqual(after.data()?.statePatch, undefined);
+    assert.ok(
+      after.data()?.checkpointShardCount > 1,
+      `expected multiple shards, got ${after.data()?.checkpointShardCount}`
+    );
+  });
+
   it('deletes stale trailing shards when a re-checkpoint shrinks', async () => {
     const shrinkStore = makeStore({ shardSize: 64 });
 
