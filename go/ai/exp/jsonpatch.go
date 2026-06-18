@@ -118,17 +118,10 @@ func diffWalk(from, to any, pointer string, patch *JSONPatch) {
 // value. The input is not mutated; a normalized clone is patched and returned.
 // Operating on the root pointer ("") replaces or removes the whole document.
 //
-// Apply is lenient to keep streaming robust: an add or replace whose parent
+// It is lenient to keep streaming robust: an add or replace whose parent
 // container is missing initializes it as an object, and a remove or replace of
 // a missing member is a no-op. A test operation is honored and returns an error
 // on mismatch. Other unknown operations also return an error.
-//
-// Apply diverges from the JS reference applier (applyPatch in json-patch.ts)
-// only on inputs [Diff] never emits: an add or replace at an out-of-range array
-// index is a no-op here (JS splices/grows the array, back-filling with null),
-// and a test against a missing path may pass here where JS throws. The runtime
-// applies only Diff output, which is always in range and never a test, so the
-// server and a JS client agree on every patch the streaming protocol produces.
 func ApplyPatch(document any, patch JSONPatch) (any, error) {
 	return applyOps(cloneJSON(normalizeJSON(document)), patch)
 }

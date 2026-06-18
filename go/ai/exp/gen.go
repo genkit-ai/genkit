@@ -95,45 +95,33 @@ const (
 //
 // Sending no fields starts a fresh invocation with empty state.
 type AgentInit[State any] struct {
-	// SessionID identifies the session (conversation) to resume or start.
-	// Only valid when the agent is server-managed (a session store is
-	// configured); mutually exclusive with State (a client-managed
-	// conversation carries its identity inside [SessionState.SessionID]).
-	// Alone, it resumes the session from its latest snapshot: the most
-	// recently updated row, whatever its status. If that row is a failed,
-	// aborted, or still-pending dead end the resume is rejected (pass
-	// SnapshotID to continue from a specific earlier point); if the session's
-	// history was forked by resuming an earlier snapshot again, the most
-	// recently updated branch wins. If the session has no snapshots yet, a
-	// brand-new conversation is started under this caller-chosen ID, and
-	// every snapshot it persists carries it. Combined with SnapshotID, it
-	// asserts which session the snapshot belongs to, and a mismatch is
-	// rejected.
+	// SessionID identifies the session (conversation) to resume or start. Only
+	// valid when the agent is server-managed (a session store is configured);
+	// mutually exclusive with State. Alone, it resumes the session's latest
+	// snapshot, rejected if that snapshot is a failed, aborted, or pending dead
+	// end. If the session has no snapshots yet, a fresh conversation starts under
+	// this caller-chosen ID. Combined with SnapshotID, it asserts the snapshot
+	// belongs to that session.
 	SessionID string `json:"sessionId,omitempty"`
 	// SnapshotID loads state from a persisted snapshot. Only valid when the
 	// agent is server-managed (a session store is configured). May be
 	// combined with SessionID to validate that the snapshot belongs to that
 	// session. Mutually exclusive with State.
 	SnapshotID string `json:"snapshotId,omitempty"`
-	// State provides direct state for the invocation. Only valid when the
-	// agent is client-managed (no session store). The conversation's
-	// identity rides inside it ([SessionState.SessionID]): the framework
-	// mints one on the conversation's first invocation and echoes it on the
-	// output state, so resending the state object keeps the identity without
-	// tracking a separate field. Mutually exclusive with SessionID and
+	// State provides direct state for the invocation. Only valid when the agent
+	// is client-managed (no session store). The conversation's identity rides
+	// inside it ([SessionState.SessionID]). Mutually exclusive with SessionID and
 	// SnapshotID.
 	State *SessionState[State] `json:"state,omitempty"`
 }
 
 // AgentInput is the input sent to an agent during a conversation turn.
 type AgentInput struct {
-	// Detach signals that the client wishes to disconnect after this input is
-	// accepted. The server writes a single pending snapshot (with empty
-	// state), returns [AgentOutput] with that snapshot ID, and continues
-	// processing any already-buffered inputs in a background context. The
-	// pending snapshot is finalized with the cumulative final state once all
-	// queued inputs are processed (or the invocation is aborted via the
-	// abortSnapshot companion action).
+	// Detach signals the client will disconnect after this input is accepted. The
+	// server writes a pending snapshot, returns [AgentOutput] with its ID, and
+	// keeps processing any already-buffered inputs in the background. The pending
+	// snapshot is finalized with the cumulative final state once the queued inputs
+	// are processed (or the invocation is aborted).
 	Detach bool `json:"detach,omitempty"`
 	// Message is the user's input for this turn.
 	Message *ai.Message `json:"message,omitempty"`
@@ -155,10 +143,9 @@ type ToolResume struct {
 }
 
 // AgentMetadata is the value placed under metadata["agent"] on an agent's
-// action descriptor. It exposes capability information so the Dev UI and
-// other reflective callers can render the right surface (e.g. hide the
-// Abort button when the configured store doesn't support it) without
-// round-tripping through the reflection API.
+// action descriptor. It exposes capability information so the Dev UI and other
+// reflective callers can render the right surface (e.g. hide the Abort button
+// when the store doesn't support it).
 type AgentMetadata struct {
 	// Abortable reports whether the agent's invocations can be aborted
 	// (true when the store implements [SnapshotAborter]).
@@ -191,16 +178,10 @@ type AgentOutput[State any] struct {
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
 	// Message is the last model response message from the conversation.
 	Message *ai.Message `json:"message,omitempty"`
-	// SessionID is the ID of the session this invocation belongs to,
-	// assigned by the framework when the invocation starts. With
-	// server-managed state, a fresh invocation adopts the caller-supplied
-	// session ID (see [AgentInit.SessionID]) or mints a new one, resumed
-	// invocations inherit the chain's, and resuming a snapshot from before
-	// session IDs existed mints a fresh one. With client-managed state it
-	// echoes the ID carried inside the state object
-	// ([SessionState.SessionID]), minting one on the conversation's first
-	// invocation; only a session with persisted snapshots can be resumed by
-	// this ID.
+	// SessionID is the ID of the session this invocation belongs to, assigned by
+	// the framework when the invocation starts and stable across resumes. Pass it
+	// to [WithSessionID] to resume a server-managed session; with client-managed
+	// state it also rides inside [AgentOutput.State] ([SessionState.SessionID]).
 	SessionID string `json:"sessionId,omitempty"`
 	// SnapshotID is the ID of the most recent turn-end snapshot for this
 	// invocation. Empty when no store is configured or no turn committed. When
@@ -251,18 +232,13 @@ const (
 type AgentStreamChunk struct {
 	// Artifact contains a newly produced artifact.
 	Artifact *Artifact `json:"artifact,omitempty"`
-	// CustomPatch is an RFC 6902 JSON Patch describing a delta applied to the
-	// session's custom state. The runtime emits it automatically whenever the
-	// agent mutates custom state (e.g. via [Session.UpdateCustom]); agents do not
-	// hand-craft patches. Pointers are rooted at the custom document (e.g.
-	// "/agentStatus"), with no "/custom" prefix. The first patch of every turn is a
-	// whole-document replace at the root pointer ("") that re-bases clients which
-	// may not share the server's baseline; subsequent patches are incremental diffs
-	// against the last sent value. The diff is computed on the client-facing custom
-	// state (after any [WithStateTransform]), so streamed deltas honor redaction and
-	// stay consistent with the full state in turn-end snapshots and final output.
-	// Apply it with [ApplyPatch] to keep a local copy of custom live as the turn
-	// streams.
+	// CustomPatch is an RFC 6902 JSON Patch describing a delta to the session's
+	// custom state, emitted automatically whenever the agent mutates it (e.g. via
+	// [Session.UpdateCustom]). Pointers are rooted at the custom document (e.g.
+	// "/agentStatus"), with no "/custom" prefix. The first patch of each turn is a
+	// whole-document replace at the root pointer ("") to re-base the client; later
+	// patches are incremental diffs. Apply it with [ApplyPatch] to keep a local
+	// copy of custom state live as the turn streams.
 	CustomPatch JSONPatch `json:"customPatch,omitempty"`
 	// ModelChunk contains generation tokens from the model.
 	ModelChunk *ai.ModelResponseChunk `json:"modelChunk,omitempty"`
@@ -284,19 +260,15 @@ type Artifact struct {
 	Parts []*ai.Part `json:"parts"`
 }
 
-// GetSnapshotRequest is the input for an agent's getSnapshot companion
-// action, registered under the agent's name (action type agent-snapshot)
-// when the agent has a session store configured. The action is intended
-// for Dev UI and client-side reconnect flows. It returns the stored
-// [SessionSnapshot], with [WithStateTransform] applied to its state if
-// configured.
+// GetSnapshotRequest is the input for an agent's getSnapshot companion action,
+// available when the agent has a session store configured. Intended for Dev UI
+// and client reconnect flows, it returns the stored [SessionSnapshot] with
+// [WithStateTransform] applied to its state if configured.
 //
-// At least one of SnapshotID or SessionID must be set; they are not
-// mutually exclusive. SnapshotID fetches a specific snapshot; SessionID
-// alone fetches the session's latest snapshot (via the store's
-// [SnapshotReader.GetLatestSnapshot], whatever its status). When both are
-// set, the fetched snapshot must belong to that session, or the request
-// is rejected.
+// At least one of SnapshotID or SessionID must be set. SnapshotID fetches a
+// specific snapshot; SessionID alone fetches the session's latest snapshot
+// (whatever its status). When both are set, the fetched snapshot must belong
+// to that session, or the request is rejected.
 type GetSnapshotRequest struct {
 	// SessionID identifies the session whose latest snapshot to fetch.
 	// Optional when SnapshotID is given. The latest snapshot is the session's
@@ -336,15 +308,10 @@ type JSONPatchOperation struct {
 	// Op is the operation to perform.
 	Op JSONPatchOp `json:"op"`
 	// Path is a JSON Pointer (RFC 6901) to the target location, e.g. "/agentStatus".
-	// The empty pointer "" refers to the whole document. It must always be present on
-	// the wire (a whole-document replace carries path ""), so it is not omitted when
-	// empty.
+	// The empty pointer "" refers to the whole document.
 	Path string `json:"path"`
-	// Value is the operand for "add", "replace", and "test". It is not omitted when
-	// null so an explicit null operand survives the wire (omitempty cannot tell a
-	// null operand from an absent one, and dropping it makes a peer applier set the
-	// member to undefined or remove it instead of null); for "remove", "move", and
-	// "copy" it is null and ignored.
+	// Value is the operand for "add", "replace", and "test"; an explicit null is a
+	// valid operand. Ignored for "remove", "move", and "copy".
 	Value any `json:"value"`
 }
 
@@ -367,12 +334,10 @@ type SessionSnapshot[State any] struct {
 	// informational lineage (for debugging and UI history trees) and plays
 	// no part in resolving a session's latest snapshot.
 	ParentID string `json:"parentId,omitempty"`
-	// SessionID is the ID of the session this snapshot belongs to. Assigned
-	// by the agent framework when the conversation's first invocation starts
-	// and stamped on every later snapshot in the chain, including across
-	// resumed invocations. Stores preserve it across rewrites; rows written
-	// without one (data from before session IDs existed) belong to no
-	// session.
+	// SessionID is the ID of the session this snapshot belongs to. Assigned by the
+	// framework on the conversation's first invocation and stamped on every later
+	// snapshot in the chain, across resumed invocations; stores preserve it across
+	// rewrites.
 	SessionID string `json:"sessionId,omitempty"`
 	// SnapshotID is the unique identifier for this snapshot (UUID).
 	SnapshotID string `json:"snapshotId"`
@@ -401,10 +366,9 @@ type SessionState[State any] struct {
 	// Does NOT include prompt-rendered messages — those are rendered fresh each turn.
 	Messages []*ai.Message `json:"messages,omitempty"`
 	// SessionID is the ID of the session (conversation) this state belongs to.
-	// Framework-owned: assigned when the conversation's first invocation
-	// starts and re-stamped on outbound state, so client-managed callers can
-	// round-trip the state object opaquely without tracking a separate
-	// identifier. For server-managed agents the snapshot row's
+	// Framework-owned: assigned on the conversation's first invocation and
+	// re-stamped on outbound state, so client-managed callers can round-trip the
+	// state object opaquely. For server-managed agents the snapshot row's
 	// [SessionSnapshot.SessionID] is canonical and this field mirrors it.
 	SessionID string `json:"sessionId,omitempty"`
 }

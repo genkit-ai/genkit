@@ -36,18 +36,11 @@ import (
 // on the local filesystem. Each snapshot is written to its own file named
 // "<snapshotID>.json" in the configured directory.
 //
-// The store is safe for concurrent use within a single process. It does NOT
-// coordinate writes with other processes that may share the same directory:
-// the only synchronization is the per-instance mutex. If multiple processes
-// write to the same directory the last successful rename wins; readers may
-// also observe a brief window during which a snapshot is still being written
-// by another process (the rename itself is atomic, but cross-process
-// linearization is not guaranteed).
-//
-// [FileSessionStore.OnSnapshotStatusChange] uses in-process channels and only
-// reflects status transitions caused by calls on this store instance.
-// External writes to the directory and writes from other processes are not
-// observed.
+// The store is safe for concurrent use within a single process, but does NOT
+// coordinate with other processes sharing the directory: the last successful
+// rename wins, and a reader may briefly observe a snapshot another process is
+// still writing. [FileSessionStore.OnSnapshotStatusChange] likewise reflects
+// only status changes made through this instance.
 type FileSessionStore[State any] struct {
 	// mu serializes the read-modify-write paths and the subscriber bookkeeping.
 	// File I/O happens under the lock; this matches the simplicity of
@@ -84,10 +77,9 @@ func (s *FileSessionStore[State]) GetSnapshot(_ context.Context, snapshotID stri
 	return s.readLocked(snapshotID)
 }
 
-// SaveSnapshot atomically reads, applies fn, and persists. See the
-// [exp.SnapshotWriter] interface for the full contract; this implementation
-// satisfies it by holding s.mu for the entire read-modify-write so fn is
-// called exactly once per SaveSnapshot call.
+// SaveSnapshot atomically reads, applies fn, and persists. See
+// [exp.SnapshotWriter] for the full contract; this implementation calls fn
+// exactly once per call.
 func (s *FileSessionStore[State]) SaveSnapshot(
 	_ context.Context,
 	id string,
@@ -150,16 +142,10 @@ type snapshotHeader struct {
 // regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
 // contract.
 //
-// Recency is judged by file mtime, which for snapshots written by this
-// package advances with [exp.SessionSnapshot.UpdatedAt] (each save
-// creates a fresh temp file and renames it into place); if a file is
-// touched externally, mtime wins. The scan walks files newest first and
-// stops at the first row for the session, so resolving the most recently
-// active session costs one read in the common case. Only header fields
-// are decoded per candidate (the winner is the only full parse), the
-// store lock is held per file rather than across the whole scan, and a
-// file that vanishes mid-scan or fails to parse is skipped so one
-// corrupted row cannot poison every session in the directory.
+// Recency is judged by file mtime, which for snapshots written by this package
+// advances with [exp.SessionSnapshot.UpdatedAt]; if a file is touched
+// externally, mtime wins. A file that fails to parse or vanishes mid-scan is
+// skipped, so one corrupted row cannot hide every other session.
 func (s *FileSessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("FileSessionStore: session ID is empty")

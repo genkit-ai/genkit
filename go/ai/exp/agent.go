@@ -312,19 +312,15 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 
 // --- Responder ---
 
-// Responder is the output channel for an agent. Artifacts sent through
-// it are added to the session synchronously: by the time a Send method
-// returns, the chunk's session-level side effects have been applied, so
-// a state read ([SessionRunner.Result], [Session.Artifacts]) or a
-// turn-end snapshot that follows the call observes them. Only the wire
-// forward to the client is asynchronous.
+// Responder is an agent's output channel to the client. Its Send methods are
+// fire-and-forget: they return no error, and the agent function should stop
+// producing once its own context is cancelled.
 //
-// All Send methods are ctx-aware: if the agent's work context is
-// cancelled (typically client disconnect, abort during detach, or fn
-// completion), Send returns promptly with the chunk dropped from the
-// wire; the session-level side effects still apply. Send itself remains
-// fire-and-forget and returns no error; the user fn is expected to
-// observe cancellation through its own ctx check and stop producing.
+// A Send applies its session-level side effects synchronously, so a state read
+// ([SessionRunner.Result], [Session.Artifacts]) or turn-end snapshot taken
+// afterward observes them. Only the forward to the client is asynchronous, and
+// it is dropped once the work context is cancelled (client disconnect, abort,
+// or agent completion); the side effects still apply.
 type Responder struct {
 	in  chan<- *AgentStreamChunk
 	ctx context.Context
@@ -340,14 +336,9 @@ func (r Responder) SendModelChunk(chunk *ai.ModelResponseChunk) {
 	r.send(&AgentStreamChunk{ModelChunk: chunk})
 }
 
-// SendArtifact sends an artifact to the stream and adds it to the session.
-// If an artifact with the same name already exists in the session, it is
-// replaced. The artifact is in the session by the time SendArtifact
-// returns, and the session stores a deep copy captured at the call, so
-// later mutations of the caller's artifact do not affect session state.
-// The session-level side effect happens whether or not detach has landed;
-// only the wire forward to the client is suppressed post-detach, when
-// there is no longer a client to receive it.
+// SendArtifact streams an artifact to the client and adds it to the session,
+// replacing any existing artifact with the same name. The session keeps a deep
+// copy, so later mutations of artifact do not affect session state.
 func (r Responder) SendArtifact(artifact *Artifact) {
 	r.send(&AgentStreamChunk{Artifact: artifact})
 }
@@ -383,11 +374,10 @@ type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *Sess
 
 // Agent is a bidirectional streaming agent with automatic snapshot management.
 //
-// Agent implements [api.BidiAction], so generic transports accept it
-// directly (e.g. pass it to genkit.Handler to serve it over HTTP, one turn
-// per request). The [Agent.Run], [Agent.RunText], and [Agent.StreamBidi]
-// methods are typed conveniences over the same underlying action; both
-// surfaces run the identical per-invocation runtime.
+// Agent implements [api.BidiAction], so generic transports accept it directly
+// (e.g. pass it to genkit.Handler to serve it over HTTP, one turn per request).
+// [Agent.Run], [Agent.RunText], and [Agent.StreamBidi] are typed conveniences
+// over the same underlying action.
 //
 // Server-managed agents (those with a [SessionStore] configured) also
 // register companion actions for the snapshot lifecycle, available via
@@ -573,11 +563,10 @@ func DefineAgent[State any](
 // registered conditionally, or moved between registries). For the common
 // case, [DefineCustomAgent] creates and registers in one step.
 //
-// There is no NewAgent counterpart for prompt-backed agents: a prompt is
-// bound to the registry it renders and generates against, so a
-// prompt-backed agent cannot be built before it has one. To get
-// prompt-like behavior without registration, write a custom agent that
-// renders and generates with your own [genkit.Genkit] inside fn.
+// There is no NewAgent for prompt-backed agents: a prompt is bound to the
+// registry it renders against, so it cannot be built before one exists. For
+// prompt-like behavior without registration, render and generate with your own
+// [genkit.Genkit] inside a custom fn.
 func NewCustomAgent[State any](
 	name string,
 	fn AgentFunc[State],
@@ -2117,15 +2106,14 @@ func (a *Agent[State]) resolveOptions(opts []InvocationOption[State]) (*AgentIni
 
 // --- AgentConnection ---
 
-// AgentConnection wraps BidiConnection with agent-specific Send helpers
-// (SendMessage / SendText / SendResume / Detach) and an Output that
-// always waits for finalization (so detached invocations see the
-// pending snapshot ID rather than a context-cancellation error).
+// AgentConnection is an active agent invocation with bidirectional streaming,
+// adding agent-specific Send helpers (SendMessage, SendText, SendResume,
+// Detach) over the core connection.
 //
-// It also tracks the conversation's custom state live: as [AgentConnection.Receive]
-// yields chunks, it applies each chunk's [AgentStreamChunk.CustomPatch] to an
-// internal copy, exposed by [AgentConnection.Custom], so callers observe custom
-// state as it streams without applying patches themselves.
+// It also tracks custom state live: as [AgentConnection.Receive] yields chunks,
+// it applies each chunk's [AgentStreamChunk.CustomPatch] to an internal copy,
+// exposed by [AgentConnection.Custom], so callers see custom state as it
+// streams without applying patches themselves.
 type AgentConnection[State any] struct {
 	conn *core.BidiConnection[*AgentInput, *AgentOutput[State], *AgentStreamChunk]
 
@@ -2173,12 +2161,11 @@ func (c *AgentConnection[State]) SendResume(resume *ToolResume) error {
 // finalized with the cumulative final state once the queued inputs
 // are processed.
 //
-// Streamed chunks emitted after detach are not forwarded over the wire
-// (the connection is gone), but their session-level side effects still
-// apply: artifacts sent via [Responder.SendArtifact] land in the
-// session and end up in the final snapshot's state.
+// Chunks emitted after detach are not forwarded over the wire, but their
+// session-level side effects still apply: an artifact sent via
+// [Responder.SendArtifact] still lands in the final snapshot's state.
 //
-// To send a final input as part of the same wire message, use
+// To send a final input in the same wire message, call
 // Send(&AgentInput{Detach: true, Message: ...}) directly.
 func (c *AgentConnection[State]) Detach() error {
 	return c.conn.Send(&AgentInput{Detach: true})
@@ -2245,29 +2232,21 @@ func (c *AgentConnection[State]) Custom() (State, error) {
 	return out, nil
 }
 
-// Output finalizes the connection and returns the agent's result.
+// Output finalizes the connection and returns the agent's result. It closes
+// the input side, drains any chunks not consumed via Receive, and blocks until
+// the agent finalizes. It is idempotent: later calls return the same value, and
+// the returned pointer is shared, so treat it as read-only.
 //
-// Output is the single "I'm done" call: it implicitly closes the input
-// side, drains any chunks the caller did not consume via Receive, and
-// blocks until the agent finalizes. Calling Close first is allowed but
-// redundant. Output is idempotent: subsequent calls return the same
-// (*AgentOutput, error); the returned pointer is shared across calls,
-// so treat it as read-only.
+// In-band failures resolve rather than error. A failed turn returns an
+// [AgentOutput] with [AgentFinishReasonFailed], the error on [AgentOutput.Error],
+// and the last-good state on [AgentOutput.State] (client-managed) or behind
+// [AgentOutput.SnapshotID] (server-managed), so a failure costs only the failed
+// turn, not the session. A detached invocation resolves with the pending
+// snapshot ID. A non-nil error means the invocation never started (a rejected
+// init payload) or could not run to a result (e.g. its context was cancelled).
 //
-// In-band failures resolve rather than error: a failed turn returns an
-// [AgentOutput] with [AgentFinishReasonFailed], the error on
-// [AgentOutput.Error] (original status intact), and the last-good state
-// on [AgentOutput.State] (client-managed) or behind
-// [AgentOutput.SnapshotID] (server-managed), so a failure costs the
-// caller only the failed turn, never the session. A detached invocation
-// resolves with the pending snapshot ID rather than a cancellation
-// error. A non-nil error here means the invocation never started (a
-// rejected init payload) or could not run to a result (e.g. the
-// connection's context was cancelled).
-//
-// Do not call Output concurrently with a goroutine iterating Receive;
-// both consume from the same stream and chunks would be split between
-// them. Finish Receive first, then call Output.
+// Do not call Output concurrently with a goroutine iterating Receive; both
+// consume the stream and would split chunks between them. Finish Receive first.
 func (c *AgentConnection[State]) Output() (*AgentOutput[State], error) {
 	_ = c.conn.Close()
 	// The core connection applies backpressure and its Output does not

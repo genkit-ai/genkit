@@ -48,26 +48,18 @@ type SnapshotReader[State any] interface {
 	GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
 
 	// GetLatestSnapshot returns the session's most recently updated
-	// snapshot as a full row (the runtime loads its state to resume),
-	// whatever its status: a pending, failed, or aborted row is returned
-	// like any other. Returns nil if the session has no rows (unknown
-	// session ID), and an error if sessionID is empty.
+	// snapshot, whatever its status: a pending, failed, or aborted row is
+	// returned like any other, and the caller applies its own policy.
+	// Returns nil if the session has no rows, and an error if sessionID is
+	// empty.
 	//
-	// "Most recently updated" means the greatest
-	// [SessionSnapshot.UpdatedAt], falling back to CreatedAt on rows that
-	// lack one; ties may be broken arbitrarily but deterministically (e.g.
-	// by SnapshotID). The latest row is returned unconditionally, so the
-	// two callers can each apply their own policy: the getSnapshot
-	// companion action surfaces it verbatim (a client reconnecting wants to
-	// see a pending/failed tip), and the session-ID resume path rejects a
-	// failed/aborted/pending tip rather than continuing from a dead end.
-	//
-	// The contract is a plain max-timestamp lookup, so stores can implement
-	// it as a single indexed query (e.g. WHERE sessionId = ? ORDER BY
-	// updatedAt DESC LIMIT 1). ParentID is informational lineage and plays
-	// no part in resolution: when a session's history was forked by
-	// re-resuming an earlier snapshot, the most recently updated branch
-	// simply wins.
+	// "Most recently updated" means the greatest [SessionSnapshot.UpdatedAt],
+	// falling back to CreatedAt on rows that lack one; break ties
+	// deterministically (e.g. by SnapshotID). This is a plain max-timestamp
+	// lookup, implementable as a single indexed query (e.g. WHERE sessionId = ?
+	// ORDER BY updatedAt DESC LIMIT 1). ParentID is informational lineage and
+	// plays no part in resolution: when history forks, the most recently
+	// updated branch wins.
 	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
 }
 
@@ -84,9 +76,7 @@ type SnapshotWriter[State any] interface {
 	//   - SessionID: the ID of the session (chain of snapshots) the row
 	//     belongs to: preserved from the existing row on update (a row's
 	//     session never changes once set), otherwise taken from fn's row
-	//     as-is. Stores never mint or infer session IDs; the agent
-	//     runtime assigns one when an invocation starts and stamps it on
-	//     every row it writes.
+	//     as-is. Stores never mint or infer session IDs.
 	//   - CreatedAt: stamped to the wall clock on first write; preserved
 	//     from the existing row on update.
 	//   - UpdatedAt: stamped to the wall clock on every commit.
@@ -113,23 +103,12 @@ type SnapshotWriter[State any] interface {
 	) (*SessionSnapshot[State], error)
 }
 
-// SnapshotAborter is the optional capability layered on [SessionStore]
-// that lets an agent's invocations be aborted. It bundles the two
-// methods that must be implemented together for the abort lifecycle to
-// function:
-//
-//   - [SnapshotAborter.AbortSnapshot] flips a pending snapshot's status
-//     to aborted (typically called by the abortSnapshot companion
-//     action or directly by a Go caller holding the store).
-//
-//   - [SnapshotAborter.OnSnapshotStatusChange] lets the agent runtime
-//     observe the flip without polling, so it can promptly cancel the
-//     work context.
-//
-// They are bundled because neither is useful alone: flipping status
-// with no observer means the running fn never learns it was aborted;
-// observing without a way to trigger the flip means no abort can
-// happen.
+// SnapshotAborter is the optional capability layered on [SessionStore] that
+// lets an agent's invocations be aborted. The two methods work together:
+// [SnapshotAborter.AbortSnapshot] flips a pending snapshot's status to aborted,
+// and [SnapshotAborter.OnSnapshotStatusChange] lets the agent runtime observe
+// the flip without polling so it can promptly cancel the work context. A store
+// must implement both or neither.
 type SnapshotAborter interface {
 	// AbortSnapshot atomically transitions a snapshot from
 	// [SnapshotStatusPending] to [SnapshotStatusAborted] and returns the
@@ -139,9 +118,8 @@ type SnapshotAborter interface {
 	// callers can distinguish "not found" from a real error.
 	//
 	// Implementations must perform the read-and-write atomically (e.g., a
-	// transaction or a compare-and-swap). The agent's abortSnapshot
-	// action and finalizer rely on this to avoid a pending row being
-	// clobbered by a racing terminal write.
+	// transaction or a compare-and-swap) so a racing terminal write cannot
+	// clobber the pending row.
 	AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error)
 
 	// OnSnapshotStatusChange returns a channel that yields the snapshot's
@@ -150,9 +128,8 @@ type SnapshotAborter interface {
 	// cancelled. If the snapshot does not exist when the subscription is
 	// established, the channel is closed without yielding a value.
 	//
-	// Implementations may push changes from a transaction log, a CDC
-	// feed, or fall back to polling internally; the contract just spares
-	// callers the choice.
+	// Implementations may push changes from a transaction log or CDC feed,
+	// or poll internally.
 	OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus
 }
 
@@ -332,19 +309,11 @@ type Session[State any] struct {
 	onCustomChange func()
 }
 
-// SessionID returns the ID of the session this conversation belongs to.
-// The agent runtime settles it before the agent function runs: a fresh
-// invocation mints a new ID, server-managed resumes inherit the chain's
-// (a snapshot from before session IDs existed gets a fresh one), and a
-// client-managed invocation keeps the ID carried inside the state object
-// it was given ([SessionState.SessionID]), minting one if absent.
-//
-// The ID is stable for the lifetime of the invocation; it lives in
-// [SessionState.SessionID], so it is stamped on every snapshot the
-// invocation persists and rides inside the state returned to
-// client-managed callers. It is safe to use as a key for external
-// resources tied to the conversation, including from code that
-// retrieves the session via [SessionFromContext].
+// SessionID returns the ID of the session this conversation belongs to. The
+// agent runtime settles it before the agent function runs and keeps it stable
+// for the invocation's lifetime, stamping it on every snapshot persisted. It is
+// safe to use as a key for external resources tied to the conversation,
+// including from code that retrieves the session via [SessionFromContext].
 func (s *Session[State]) SessionID() string {
 	// Written once at construction, before fn runs and before the session
 	// is shared, then never mutated; safe to read without holding mu.
