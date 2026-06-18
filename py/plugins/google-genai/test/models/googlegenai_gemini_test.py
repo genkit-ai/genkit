@@ -451,6 +451,25 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
                 ),
             ),
         ),
+        (
+            # An unregistered image model falls back to GENERIC_IMAGE_MODEL via
+            # is_image_model(). That fallback must stay restrictive (single-turn,
+            # no tools, output=['media']) because pure image-generation models are
+            # not conversational/tool-capable.
+            'gemini-2.0-flash-preview-image-generation',
+            ModelInfo(
+                label='Google AI - Gemini Image',
+                supports=Supports(
+                    multiturn=False,
+                    media=True,
+                    tools=False,
+                    tool_choice=False,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                    output=['media'],
+                ),
+            ),
+        ),
     ],
 )
 def test_google_model_info(input: str, expected: ModelInfo) -> None:

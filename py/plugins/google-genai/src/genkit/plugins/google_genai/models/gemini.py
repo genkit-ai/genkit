@@ -872,7 +872,15 @@ GENERIC_TTS_MODEL = ModelInfo(
 
 GENERIC_IMAGE_MODEL = ModelInfo(
     label='Google AI - Gemini Image',
-    supports=GEMINI_IMAGE_SUPPORTS,
+    supports=Supports(
+        multiturn=False,
+        media=True,
+        tools=False,
+        tool_choice=False,
+        system_role=True,
+        constrained=Constrained.ALL,
+        output=['media'],
+    ),
 )
 
 GENERIC_GEMMA_MODEL = ModelInfo(
