@@ -302,3 +302,88 @@ async def test_in_process_persistent_connection() -> None:
             chunks2.append(chunk)
         res2 = await turn2.output
         assert res2.message.content[0].root.text == "Echo 2"
+
+
+@pytest.mark.asyncio
+async def test_attached_turn_abort() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    from genkit.agent import InMemorySessionStore
+    store = InMemorySessionStore()
+
+    # Define a slow tool that blocks until we cancel it
+    tool_executed = False
+    tool_cancelled = False
+
+    @ai.tool()
+    async def slow_tool(arg: str) -> str:
+        nonlocal tool_executed, tool_cancelled
+        tool_executed = True
+        try:
+            # Sleep indefinitely until task gets cancelled
+            await asyncio.sleep(10)
+            return "Slow tool complete"
+        except asyncio.CancelledError:
+            tool_cancelled = True
+            raise
+
+    ai.define_prompt(name='abortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool])
+    agent = ai.define_prompt_agent(name='abortAgent', store=store)
+
+    # Model returns tool call
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(
+                        ToolRequestPart(
+                            tool_request=ToolRequest(
+                                name="slow_tool",
+                                ref="call_1",
+                                input="blocking",
+                            )
+                        )
+                    )
+                ]
+            ),
+        )
+    )
+
+    async with agent.connect() as session:
+        turn = session.send("Trigger slow action")
+
+        # Start draining the stream in the background to drive execution
+        async def drain_stream():
+            try:
+                async for _ in turn.stream:
+                    pass
+            except Exception:
+                pass
+
+        drain_task = asyncio.create_task(drain_stream())
+
+        # Wait a short moment to let the model run and tool start executing
+        await asyncio.sleep(0.5)
+        
+        # Abort the active turn
+        turn.abort()
+
+        # Awaiting output should resolve with aborted or raise CancelledError
+        # because the connection was aborted.
+        try:
+            await turn.output
+        except BaseException:
+            pass
+
+        # Wait for the background drain task to finish
+        try:
+            await drain_task
+        except BaseException:
+            pass
+
+        # Verify that the tool was started AND it was successfully cancelled!
+        assert tool_executed
+        assert tool_cancelled

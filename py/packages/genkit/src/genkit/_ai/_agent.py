@@ -744,6 +744,7 @@ class _AgentRuntime:
             while True:
                 item = await in_queue.get()
                 if isinstance(item, QueueSentinel):
+                    fn_task.cancel()
                     await self._intake.put(QUEUE_SENTINEL)
                     return
                 if getattr(item, 'detach', False):

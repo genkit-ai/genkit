@@ -862,7 +862,15 @@ class BidiAction(Action[InputT, OutputT, ChunkT]):
                     execute=_execute_bidi,
                 )
                 result_future.set_result(response.response)
+            except asyncio.CancelledError as e:
+                # CancelledError must propagate out of the background task so that
+                # the asyncio loop can correctly mark it as CANCELLED.
+                result_future.set_exception(e)
+                raise
             except Exception as e:  # noqa: BLE001
+                # Standard exceptions are forwarded to the client's result_future.
+                # We swallow them here to prevent asyncio from duplicate-logging
+                # "exception was never retrieved" warnings on the background task.
                 result_future.set_exception(e)
             finally:
                 # Sentinel tells BidiConnection.receive() to stop.

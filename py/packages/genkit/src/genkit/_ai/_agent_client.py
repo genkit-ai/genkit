@@ -246,11 +246,14 @@ class AgentSession(Generic[StateT, StreamT]):
             self.messages.extend(agent_input.messages)
 
         output_future = asyncio.get_event_loop().create_future()
+        abort_event = asyncio.Event()
 
         async def turn_stream_generator() -> AsyncIterator[AgentChunk[StreamT]]:
             try:
                 init = self._build_init()
-                raw_stream, raw_output = await self._transport.run_turn(agent_input, init)
+                raw_stream, raw_output = await self._transport.run_turn(
+                    agent_input, init, abort_event=abort_event
+                )
 
                 accumulated_text = ""
                 accumulated_artifacts = []
@@ -306,7 +309,7 @@ class AgentSession(Generic[StateT, StreamT]):
                 self._apply_output(raw_output_res)
                 if not output_future.done():
                     output_future.set_result(raw_output_res)
-            except Exception as e:
+            except (Exception, asyncio.CancelledError) as e:
                 if not output_future.done():
                     output_future.set_exception(e)
                 raise e
@@ -314,6 +317,7 @@ class AgentSession(Generic[StateT, StreamT]):
         turn = AgentTurn(
             stream=turn_stream_generator(),
             output=output_future,
+            abort_fn=lambda: abort_event.set(),
         )
         return turn
 
@@ -516,6 +520,20 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
         await conn.send(input)
 
         output_future = asyncio.get_event_loop().create_future()
+
+        async def watch_abort() -> None:
+            if abort_event is not None:
+                await abort_event.wait()
+                await conn.close()
+                try:
+                    await conn.output()
+                except asyncio.CancelledError:
+                    pass
+                if not output_future.done():
+                    output_future.set_exception(asyncio.CancelledError())
+
+        abort_task = asyncio.create_task(watch_abort())
+        output_future.add_done_callback(lambda _: abort_task.cancel())
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             try:
