@@ -1,5 +1,5 @@
 /**
- * Copyright 2025 Google LLC
+ * Copyright 2026 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,10 @@ import * as assert from 'assert';
 import { deleteApp, initializeApp, type App } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import type { SessionSnapshotInput } from 'genkit/beta';
-import { FirestoreSessionStore } from '../src/session-store/firestore';
+import {
+  FirestoreSessionStore,
+  type FirestoreSessionStoreOptions,
+} from '../src/session-store/firestore';
 
 interface Custom {
   counter?: number;
@@ -43,22 +46,43 @@ function snapshot(
 describe('FirestoreSessionStore', () => {
   let app: App;
   let store: FirestoreSessionStore<Custom>;
+  // Collections created during a test, cleaned up afterwards. We only delete
+  // what this file created (not every project collection) so it can run in
+  // parallel with the other Firestore emulator test files.
+  let createdCollections: string[];
+
+  /** Creates a store and registers its collections for cleanup. */
+  function makeStore(
+    opts?: Omit<FirestoreSessionStoreOptions, 'db' | 'collection'> & {
+      collection?: string;
+    }
+  ): FirestoreSessionStore<Custom> {
+    const collection =
+      opts?.collection ??
+      `sessions-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    createdCollections.push(
+      collection,
+      `${collection}-pointers`,
+      `${collection}-shards`
+    );
+    return new FirestoreSessionStore<Custom>({
+      ...opts,
+      db: getFirestore(app),
+      collection,
+    });
+  }
 
   beforeEach(() => {
     process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
     app = initializeApp({ projectId: 'genkit-test' }, `app-${Math.random()}`);
-    store = new FirestoreSessionStore<Custom>({
-      db: getFirestore(app),
-      // Random collection for test isolation.
-      collection: `sessions-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-    });
+    createdCollections = [];
+    store = makeStore();
   });
 
   afterEach(async () => {
     const db = getFirestore(app);
-    const collections = await db.listCollections();
-    for (const collection of collections) {
-      await db.recursiveDelete(collection);
+    for (const name of createdCollections) {
+      await db.recursiveDelete(db.collection(name));
     }
     await deleteApp(app);
   });
@@ -271,5 +295,97 @@ describe('FirestoreSessionStore', () => {
     }));
 
     await aborted;
+  });
+
+  it('creates periodic checkpoints and reconstructs across them', async () => {
+    // A small interval forces several checkpoints over a long linear chain.
+    const cpStore = makeStore({ checkpointInterval: 5 });
+
+    const turns = 23;
+    let parentId: string | undefined;
+    for (let i = 0; i < turns; i++) {
+      const id = `t${i}`;
+      await cpStore.saveSnapshot(id, () =>
+        snapshot({
+          snapshotId: id,
+          parentId,
+          state: {
+            sessionId: 'long',
+            custom: {
+              counter: i,
+              notes: Array.from({ length: i + 1 }, (_, j) => `n${j}`),
+            },
+          },
+        })
+      );
+      parentId = id;
+    }
+
+    // Leaf reconstructs the full accumulated state.
+    const leaf = await cpStore.getSnapshot({ sessionId: 'long' });
+    assert.strictEqual(leaf?.snapshotId, `t${turns - 1}`);
+    assert.strictEqual(leaf?.state.custom?.counter, turns - 1);
+    assert.strictEqual(leaf?.state.custom?.notes?.length, turns);
+
+    // An arbitrary middle snapshot reconstructs correctly across a checkpoint.
+    const mid = await cpStore.getSnapshot({ snapshotId: 't12' });
+    assert.strictEqual(mid?.state.custom?.counter, 12);
+    assert.strictEqual(mid?.state.custom?.notes?.length, 13);
+
+    // Several documents were promoted to checkpoints (root + every 5 turns).
+    const db = getFirestore(app);
+    const colName = (cpStore as any).snapshots.id as string;
+    const all = await db
+      .collection(colName)
+      .where('kind', '==', 'checkpoint')
+      .get();
+    assert.ok(
+      all.size >= turns / 5,
+      `expected multiple checkpoints, got ${all.size}`
+    );
+  });
+
+  it('shards large checkpoint state across multiple documents', async () => {
+    // Tiny shard size to force multi-shard storage of a modest state.
+    const shardStore = makeStore({ shardSize: 256 });
+
+    const notes = Array.from({ length: 200 }, (_, i) => `note-number-${i}`);
+    await shardStore.saveSnapshot('big', () =>
+      snapshot({
+        snapshotId: 'big',
+        state: { sessionId: 'sess-shard', custom: { counter: 1, notes } },
+      })
+    );
+
+    // Round-trips correctly despite being split into many shards.
+    const read = await shardStore.getSnapshot({ snapshotId: 'big' });
+    assert.deepStrictEqual(read?.state.custom?.notes, notes);
+
+    // The state really was sharded across more than one document.
+    const db = getFirestore(app);
+    const colName = (shardStore as any).snapshots.id as string;
+    const shardCol = `${colName}-shards`;
+    const shards = await db.collection(shardCol).get();
+    assert.ok(shards.size > 1, `expected multiple shards, got ${shards.size}`);
+  });
+
+  it('does not cache full state in the pointer document', async () => {
+    await store.saveSnapshot('p1', () =>
+      snapshot({
+        snapshotId: 'p1',
+        state: { sessionId: 'sess-ptr', custom: { counter: 1 } },
+      })
+    );
+
+    const db = getFirestore(app);
+    const colName = (store as any).snapshots.id as string;
+    const pointer = await db
+      .collection(`${colName}-pointers`)
+      .doc('sess-ptr')
+      .get();
+    const data = pointer.data();
+    assert.strictEqual(data?.currentSnapshotId, 'p1');
+    assert.strictEqual(data?.currentState, undefined);
+    assert.strictEqual(typeof data?.checkpointId, 'string');
   });
 });
