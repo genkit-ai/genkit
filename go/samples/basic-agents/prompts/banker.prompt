@@ -1,0 +1,10 @@
+---
+model: googleai/gemini-flash-latest
+config:
+  thinkingConfig:
+    thinkingBudget: 0
+tools:
+  - transferMoney
+---
+{{role "system"}}
+You are a careful banking assistant. When the user wants to transfer money, use the transferMoney tool. Always confirm the result with the user in plain language.

@@ -52,11 +52,36 @@ import (
 // bubbles up through openAgent and breaks runCLI's outer loop.
 var errQuit = errors.New("quit")
 
+// agentEntry pairs an agent with the optional, agent-specific hooks the
+// generic CLI needs to drive it. The CLI itself knows nothing about any
+// particular agent: it lists them, streams their turns, and (when set)
+// routes tool interrupts to onInterrupt. Agents without interruptible
+// tools leave onInterrupt nil and the rest of the flow is identical. That
+// split is what lets this same cli.go back any future sample, with tool
+// interrupts or without.
+type agentEntry struct {
+	agent       *aix.Agent[any]
+	onInterrupt InterruptHandler
+}
+
+// InterruptHandler resolves a single tool interrupt into a resume part. It
+// receives the interrupted tool-request part (read its typed payload with
+// tool.InterruptAs) and a Prompter for asking the user questions through
+// the CLI's input stream. It returns one of:
+//
+//   - a restart part (tool.Resume) to re-run the tool with resume data,
+//   - a response part (tool.Respond) to answer the tool directly, or
+//   - nil to leave this interrupt unresolved.
+//
+// The CLI sorts the returned part into the right half of aix.ToolResume,
+// so handlers never touch the wire shape.
+type InterruptHandler func(p *Prompter, interrupt *ai.Part) (*ai.Part, error)
+
 // runCLI is the entry point for the interactive client. It alternates
 // between two screens forever: the agent list and a per-agent chat.
 // Returning from a chat brings the user back to the agent list. /quit
 // (anywhere) and Ctrl-C both unwind back here and exit cleanly.
-func runCLI(ctx context.Context, agents []*aix.Agent[any]) error {
+func runCLI(ctx context.Context, agents []agentEntry) error {
 	fmt.Println("Genkit Basic Agents")
 	fmt.Println("===================")
 	fmt.Println()
@@ -71,6 +96,10 @@ func runCLI(ctx context.Context, agents []*aix.Agent[any]) error {
 	fmt.Println("                     state.")
 	fmt.Println("  /back              return to the agent list")
 	fmt.Println("  /quit              exit the program")
+	fmt.Println()
+	fmt.Println("Some agents pause mid-turn to ask for input (a tool")
+	fmt.Println("interrupt). When that happens, the CLI prompts you inline and")
+	fmt.Println("resumes the turn with your answer.")
 
 	// lastSession remembers, per agent, the session ID of the most recent
 	// conversation this process ran with it. That is all a client needs to
@@ -86,26 +115,27 @@ func runCLI(ctx context.Context, agents []*aix.Agent[any]) error {
 		if !ok {
 			return nil
 		}
-		a := agents[choice]
-		sessionID, err := openAgent(ctx, inputCh, a, lastSession[a.Name()])
+		entry := agents[choice]
+		sessionID, err := openAgent(ctx, inputCh, entry, lastSession[entry.agent.Name()])
 		if err != nil {
 			if errors.Is(err, errQuit) {
 				return nil
 			}
 			return err
 		}
-		lastSession[a.Name()] = sessionID
+		lastSession[entry.agent.Name()] = sessionID
 	}
 }
 
 // pickAgent renders the agent list and reads the user's choice. The
 // list is re-rendered between selections so the user can see updated
 // pending/terminal status after returning from a chat.
-func pickAgent(ctx context.Context, inputCh <-chan string, agents []*aix.Agent[any], lastSession map[string]string) (int, bool) {
+func pickAgent(ctx context.Context, inputCh <-chan string, agents []agentEntry, lastSession map[string]string) (int, bool) {
 	for {
 		fmt.Println()
 		fmt.Println("Agents:")
-		for i, a := range agents {
+		for i, entry := range agents {
+			a := entry.agent
 			fmt.Printf("  %d. %s — %s\n", i+1, a.Name(), a.Desc().Description)
 			if summary := summarizeLatest(ctx, a, lastSession[a.Name()]); summary != "" {
 				fmt.Printf("       last: %s\n", summary)
@@ -141,7 +171,8 @@ func pickAgent(ctx context.Context, inputCh <-chan string, agents []*aix.Agent[a
 // so the rest of the flow is uniform: ok=false means the user backed
 // out, otherwise hand the chosen snapshot (or nil for fresh) to
 // runChat.
-func openAgent(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], lastSessionID string) (string, error) {
+func openAgent(ctx context.Context, inputCh <-chan string, entry agentEntry, lastSessionID string) (string, error) {
+	a := entry.agent
 	// Resolve where the last conversation left off. With no tracked
 	// session (a first visit this run) there is nothing to resume;
 	// otherwise the store resolves the session's latest snapshot, which
@@ -171,7 +202,7 @@ func openAgent(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], la
 	if !ok {
 		return lastSessionID, nil
 	}
-	return runChat(ctx, inputCh, a, resume, lastSessionID)
+	return runChat(ctx, inputCh, entry, resume, lastSessionID)
 }
 
 // handlePending offers the three reasonable responses when a previous
@@ -293,7 +324,9 @@ func resumeOption(ctx context.Context, a *aix.Agent[any], resume *aix.SessionSna
 // detaches the connection, leaving a pending snapshot for the user to
 // observe. It returns the session ID the chat ran under (falling back to
 // prevSessionID) so the caller can offer to resume it later.
-func runChat(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], resume *aix.SessionSnapshot[any], prevSessionID string) (string, error) {
+func runChat(ctx context.Context, inputCh <-chan string, entry agentEntry, resume *aix.SessionSnapshot[any], prevSessionID string) (string, error) {
+	a := entry.agent
+	prompter := &Prompter{ctx: ctx, inputCh: inputCh}
 	fmt.Printf("\n=== Chatting with %s ===\n", a.Name())
 	if resume != nil {
 		fmt.Printf("Resumed from %s\n", shortID(resume.SnapshotID))
@@ -365,33 +398,26 @@ repl:
 			break
 		}
 		fmt.Println()
-		for chunk, err := range conn.Receive() {
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				break
-			}
-			if chunk.ModelChunk != nil {
-				fmt.Print(chunk.ModelChunk.Text())
-			}
-			if chunk.TurnEnd != nil {
-				// finishReason rides the turn-end signal, so the client
-				// learns how the turn ended without scanning the message
-				// content (e.g. it could pause here on "interrupted").
-				if r := chunk.TurnEnd.FinishReason; r != "" {
-					fmt.Printf("\n  [turn: %s]", r)
-				}
-				if chunk.TurnEnd.SnapshotID != "" {
-					fmt.Printf("\n  [snapshot %s]", shortID(chunk.TurnEnd.SnapshotID))
-				}
-				fmt.Println()
-				fmt.Println()
-				if chunk.TurnEnd.FinishReason == aix.AgentFinishReasonFailed {
-					// A failed turn ends the invocation; Output below
-					// reports the error and the last-good snapshot.
-					break repl
-				}
-				break
-			}
+		end, ok := streamReply(conn, entry, prompter)
+		if !ok {
+			// The stream errored or closed before the turn settled; the
+			// error was already reported. Output below reports the outcome.
+			break repl
+		}
+		// finishReason rides the turn-end signal, so the client learns how
+		// the turn ended without scanning the message content.
+		if r := end.FinishReason; r != "" {
+			fmt.Printf("\n  [turn: %s]", r)
+		}
+		if end.SnapshotID != "" {
+			fmt.Printf("\n  [snapshot %s]", shortID(end.SnapshotID))
+		}
+		fmt.Println()
+		fmt.Println()
+		if end.FinishReason == aix.AgentFinishReasonFailed {
+			// A failed turn ends the invocation; Output below reports the
+			// error and the last-good snapshot.
+			break repl
 		}
 	}
 
@@ -431,6 +457,97 @@ repl:
 		return sessionID, errQuit
 	}
 	return sessionID, nil
+}
+
+// streamReply consumes one user turn end to end: it streams the model's
+// reply and, whenever the turn pauses on tool interrupts, routes them
+// through the agent's handler and resumes — repeating until the turn
+// settles on its own (or the stream ends). It returns the settling TurnEnd
+// (ok=true) or signals a stream error/close (ok=false, already reported).
+//
+// Interrupt rounds reuse the connection: per AgentConnection.Receive, a
+// caller may break on TurnEnd, send the next input (here a resume), and
+// range Receive again for the continuation. A resumed turn can interrupt
+// again, so this loops rather than handling just one round.
+func streamReply(conn *aix.AgentConnection[any], entry agentEntry, p *Prompter) (*aix.TurnEnd, bool) {
+	for {
+		interrupts, end, ok := streamTurn(conn)
+		if !ok {
+			return nil, false
+		}
+		if len(interrupts) == 0 {
+			return end, true
+		}
+		resume := resolveInterrupts(entry, p, interrupts)
+		if resume == nil {
+			// Nothing could be resolved (no handler, or the handler declined
+			// every interrupt). Surface the interrupted turn as-is rather
+			// than sending an empty resume the agent can't act on.
+			return end, true
+		}
+		if err := conn.SendResume(resume); err != nil {
+			fmt.Fprintf(os.Stderr, "\nResume error: %v\n", err)
+			return nil, false
+		}
+		// The resumed turn streams on the next Receive; loop to consume it.
+	}
+}
+
+// streamTurn streams a single turn's chunks: it prints model text as it
+// arrives and collects any tool interrupts. It returns when the turn ends
+// (end != nil, ok=true) or the stream errors/closes (ok=false).
+func streamTurn(conn *aix.AgentConnection[any]) (interrupts []*ai.Part, end *aix.TurnEnd, ok bool) {
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
+			return nil, nil, false
+		}
+		if chunk.ModelChunk != nil {
+			fmt.Print(chunk.ModelChunk.Text())
+			interrupts = append(interrupts, chunk.ModelChunk.Interrupts()...)
+		}
+		if chunk.TurnEnd != nil {
+			return interrupts, chunk.TurnEnd, true
+		}
+	}
+	// Stream closed without a turn end (e.g. ctx canceled / connection gone).
+	return nil, nil, false
+}
+
+// resolveInterrupts turns a batch of tool interrupts into one resume
+// payload by asking the agent's handler about each. The handler builds the
+// resume part (tool.Resume or tool.Respond); this sorts each into the
+// matching half of aix.ToolResume by part kind — a restart is a tool
+// request, a direct response is a tool response — so handlers never deal
+// with the wire shape. Returns nil when nothing could be resolved.
+func resolveInterrupts(entry agentEntry, p *Prompter, interrupts []*ai.Part) *aix.ToolResume {
+	if entry.onInterrupt == nil {
+		// An interruptible tool fired on an agent the CLI wasn't told how to
+		// resume. That's a wiring bug in the sample, not user input, so say
+		// so plainly instead of hanging on a prompt that never comes.
+		fmt.Printf("\n[%s paused on %d tool interrupt(s), but no interrupt handler is registered for it]\n",
+			entry.agent.Name(), len(interrupts))
+		return nil
+	}
+	fmt.Println() // separate the streamed reply from the interrupt prompts
+	resume := &aix.ToolResume{}
+	for _, interrupt := range interrupts {
+		part, err := entry.onInterrupt(p, interrupt)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "Interrupt handler error: %v\n", err)
+		case part == nil:
+			// Handler chose not to resolve this one; leave it out.
+		case part.ToolResponse != nil:
+			resume.Respond = append(resume.Respond, part)
+		case part.ToolRequest != nil:
+			resume.Restart = append(resume.Restart, part)
+		}
+	}
+	if len(resume.Restart) == 0 && len(resume.Respond) == 0 {
+		return nil
+	}
+	return resume
 }
 
 // summarizeLatest is the one-line summary printed under each agent in the
@@ -521,6 +638,69 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// Prompter lets an InterruptHandler ask the user questions through the same
+// input stream and cancellation semantics the rest of the CLI uses, so a
+// handler never touches os.Stdin directly. Every read honors Ctrl-C/EOF: a
+// false (Ask/Confirm) or -1 (Choose) return means input closed mid-question.
+type Prompter struct {
+	ctx     context.Context
+	inputCh <-chan string
+}
+
+// Printf prints informational text to the user. Use it for context the
+// handler wants to show before asking (e.g. why the tool paused).
+func (p *Prompter) Printf(format string, args ...any) {
+	fmt.Printf(format, args...)
+}
+
+// Ask prints prompt and returns the user's trimmed reply. ok=false if the
+// input stream closed or the context was canceled.
+func (p *Prompter) Ask(prompt string) (reply string, ok bool) {
+	fmt.Print(prompt)
+	line, ok := readLine(p.ctx, p.inputCh)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(line), true
+}
+
+// Confirm asks a yes/no question, defaulting to yes on empty input and
+// returning false on anything else (including a closed input stream).
+func (p *Prompter) Confirm(question string) bool {
+	reply, ok := p.Ask(question + " [Y/n] ")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(reply) {
+	case "", "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// Choose prints a numbered menu and returns the selected option's index
+// (0-based), re-prompting until the input is valid. It returns -1 if the
+// input stream closed.
+func (p *Prompter) Choose(title string, options ...string) int {
+	for {
+		if title != "" {
+			fmt.Println(title)
+		}
+		for i, opt := range options {
+			fmt.Printf("  %d. %s\n", i+1, opt)
+		}
+		reply, ok := p.Ask("> ")
+		if !ok {
+			return -1
+		}
+		if n, err := strconv.Atoi(reply); err == nil && n >= 1 && n <= len(options) {
+			return n - 1
+		}
+		fmt.Printf("Enter a number between 1 and %d.\n", len(options))
+	}
 }
 
 // readLine reads one line from inputCh, returning false if the channel
