@@ -34,6 +34,7 @@ from pytest_mock import MockerFixture
 
 from genkit import (
     ActionRunContext,
+    Constrained,
     MediaPart,
     Message,
     ModelInfo,
@@ -372,6 +373,31 @@ def test_google_model_info(input: str, expected: ModelInfo) -> None:
     model_info = google_model_info(input)
 
     assert model_info == expected
+
+
+@pytest.mark.parametrize(
+    'model_name',
+    [
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-pro-preview-customtools',
+        'gemini-3.1-flash-lite-preview',
+    ],
+)
+def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
+    """Gemini 3.1 text models resolve to explicit ModelInfo, not the generic fallback.
+
+    The generic fallback (DEFAULT_SUPPORTS_MODEL) leaves ``output`` unset, so asserting
+    ``output == ['text', 'json']`` alongside tools/constrained proves these names are
+    registered with real capability metadata matching the JS/Go registries.
+    """
+    model_info = google_model_info(model_name)
+
+    assert model_info.label.startswith('Google AI - Gemini 3.1')
+    assert model_info.supports is not None
+    assert model_info.supports.tools is True
+    assert model_info.supports.tool_choice is True
+    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.output == ['text', 'json']
 
 
 @pytest.fixture

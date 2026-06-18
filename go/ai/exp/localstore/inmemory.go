@@ -69,9 +69,7 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 // GetLatestSnapshot returns the session's most recently updated snapshot
 // regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
 // contract. Ties on UpdatedAt are broken by SnapshotID so resolution is
-// deterministic. The scan runs under the read lock, so the stored rows
-// (which other calls mutate in place) never escape it; the winner is
-// returned as a deep copy.
+// deterministic. The returned snapshot is a deep copy.
 func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("InMemorySessionStore: session ID is empty")
@@ -112,10 +110,9 @@ func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotI
 	return snap.Status, nil
 }
 
-// SaveSnapshot atomically reads, applies fn, and persists. See the
-// [exp.SnapshotWriter] interface for the full contract; this implementation
-// satisfies it by holding s.mu for the entire read-modify-write so fn is
-// called exactly once per SaveSnapshot call.
+// SaveSnapshot atomically reads, applies fn, and persists. See
+// [exp.SnapshotWriter] for the full contract; this implementation calls fn
+// exactly once per call.
 func (s *InMemorySessionStore[State]) SaveSnapshot(
 	_ context.Context,
 	id string,

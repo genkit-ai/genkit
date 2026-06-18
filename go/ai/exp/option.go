@@ -30,20 +30,16 @@ type AgentOption[State any] interface {
 	applyAgent(*agentOptions[State]) error
 }
 
-// StateTransform rewrites session state on its way out to a client. It
-// is applied to the State returned by the getSnapshot companion action
-// and to [AgentOutput.State] when state is client-managed (no store).
-// It is not applied to state persisted in the store or to state passed
-// to the user agent function.
+// StateTransform rewrites session state on its way out to a client: it is
+// applied to the state returned by the getSnapshot companion action and to
+// [AgentOutput.State] for client-managed agents, but not to state persisted in
+// the store or passed to the agent function. Typical uses are PII redaction and
+// stripping secrets.
 //
-// ctx is the request or invocation context: cancellation, deadlines,
-// and context-scoped values (e.g. the caller's identity for RBAC-aware
-// redaction) flow through here.
-//
-// state is a fresh deep copy made for this call: the transform owns it
-// and may mutate in place, return a new pointer, or return nil to omit
-// state from the response entirely. Do not retain the pointer past the
-// call; the framework drops its reference after the transform returns.
+// state is a fresh deep copy the transform owns: it may mutate in place, return
+// a new pointer, or return nil to omit state from the response. ctx is the
+// request or invocation context, carrying deadlines and values such as the
+// caller's identity for RBAC-aware redaction.
 type StateTransform[State any] = func(ctx context.Context, state *SessionState[State]) *SessionState[State]
 
 type agentOptions[State any] struct {
@@ -82,20 +78,15 @@ func WithSessionStore[State any](store SessionStore[State]) AgentOption[State] {
 	return &agentOptions[State]{store: store}
 }
 
-// WithStateTransform registers a transform applied to session state on
-// its way out to a client via the getSnapshot companion action or via
-// [AgentOutput.State] when state is client-managed. Typical use is PII
-// redaction or stripping secrets. The transform is not applied to state
-// persisted in the store or to state passed to the user agent function.
+// WithStateTransform registers a [StateTransform] applied to session state on
+// its way out to a client (via the getSnapshot companion action or
+// [AgentOutput.State]). Typical uses are PII redaction and stripping secrets.
 func WithStateTransform[State any](transform StateTransform[State]) AgentOption[State] {
 	return &agentOptions[State]{transform: transform}
 }
 
-// WithDescription sets a human-readable description of the agent. It is
-// stored on the agent action's descriptor (read back via [Agent.Desc] and
-// surfaced in the Dev UI's action listing), the same place every other
-// primitive carries its description, so reflective tooling can render it
-// without a separate field.
+// WithDescription sets a human-readable description of the agent, stored on its
+// action descriptor (read back via [Agent.Desc] and shown in the Dev UI).
 func WithDescription[State any](description string) AgentOption[State] {
 	return &agentOptions[State]{description: description}
 }
@@ -149,15 +140,13 @@ func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State
 	return nil
 }
 
-// WithState sets the initial state for the invocation.
-// Use this for client-managed state where the client sends state directly.
-// The conversation's identity rides inside the state object
-// ([SessionState.SessionID]): the framework mints one on the
-// conversation's first invocation and echoes it on the output state, so
-// resending the state keeps the identity without tracking a separate
-// field. The framework deep-copies the state when the invocation starts,
-// so the caller keeps ownership of the object it passed and may reuse it
-// freely. Mutually exclusive with [WithSessionID] and [WithSnapshotID].
+// WithState sets the initial state for the invocation, for client-managed
+// agents where the client sends state directly. The conversation's identity
+// rides inside the state ([SessionState.SessionID]); the framework mints it on
+// the first invocation and echoes it on the output, so resending the state
+// keeps the identity. The state is deep-copied at the start, so the caller may
+// reuse the object freely. Mutually exclusive with [WithSessionID] and
+// [WithSnapshotID].
 func WithState[State any](state *SessionState[State]) InvocationOption[State] {
 	return &invocationOptions[State]{state: state}
 }
@@ -171,32 +160,22 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{snapshotID: id}
 }
 
-// WithSessionID resumes the session (conversation) with the given ID
-// from its latest snapshot: the most recently updated one that is not a
-// failed/aborted dead end (see [SnapshotReader.GetLatestSnapshot]). Use
-// this when the caller tracks the conversation rather than individual
-// snapshots; the session ID is assigned when the conversation's first
-// invocation starts (see [AgentOutput.SessionID]) and stays stable
-// across resumed invocations.
+// WithSessionID resumes the conversation with the given ID from its latest
+// snapshot (see [SnapshotReader.GetLatestSnapshot]). Use it when the caller
+// tracks the conversation rather than individual snapshots; the ID is assigned
+// on the conversation's first invocation (see [AgentOutput.SessionID]) and
+// stays stable across resumes.
 //
-// Only valid when the agent is server-managed (a session store is
-// configured) and therefore mutually exclusive with [WithState]: a
-// client-managed conversation carries its identity inside the state
-// object ([SessionState.SessionID]) instead. Combined with
-// [WithSnapshotID], the snapshot picks the exact resume point and the
-// session ID is validated against it, so an invocation never silently
-// continues a conversation other than the one named.
+// Valid only for server-managed agents, and so mutually exclusive with
+// [WithState] (a client-managed conversation carries its identity inside the
+// state). Combined with [WithSnapshotID], the snapshot picks the resume point
+// and the session ID is validated against it.
 //
-// A pending latest snapshot means a detached invocation is still
-// running; the resume is rejected so it cannot race the background
-// work. Wait for the snapshot to finalize, or abort it. If the
-// session's history was forked (an earlier snapshot was resumed again,
-// or two invocations resumed the session concurrently), the most
-// recently updated branch wins; use [WithSnapshotID] to continue a
-// specific branch instead.
-//
-// Passing an empty ID is an error rather than a no-op, so an unset
-// [AgentOutput.SessionID] cannot silently start a fresh conversation.
+// The resume is rejected if the latest snapshot is a failed, aborted, or
+// pending dead end; a pending tip means a detached invocation is still running,
+// so wait for it to finalize or abort it. If history was forked, the most
+// recently updated branch wins; use [WithSnapshotID] for a specific branch. An
+// empty ID is an error, not a no-op.
 func WithSessionID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{sessionID: id, sessionIDSet: true}
 }
