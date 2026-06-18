@@ -25,7 +25,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.agent import InMemorySessionStore, AgentInit
+from genkit.agent import InMemoryLinearSessionStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 
@@ -39,7 +39,7 @@ class WeatherOutput(BaseModel):
 
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore()
+store = InMemoryLinearSessionStore()
 
 
 @ai.tool(name='getWeather', description='Get weather for a city.')

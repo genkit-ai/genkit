@@ -28,7 +28,7 @@ from genkit.agent import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
-    InMemorySessionStore,
+    InMemoryLatestStateStore,
     SessionRunner,
     TurnResult,
     AgentInit,
@@ -36,7 +36,7 @@ from genkit.agent import (
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore()
+store = InMemoryLatestStateStore()
 
 
 async def stateful_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:

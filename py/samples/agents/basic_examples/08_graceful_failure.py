@@ -26,7 +26,7 @@ from genkit.agent import (
     AgentFinishReason,
     AgentInput,
     AgentResult,
-    InMemorySessionStore,
+    InMemoryLinearSessionStore,
     SessionRunner,
     TurnResult,
     AgentInit,
@@ -34,7 +34,7 @@ from genkit.agent import (
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore()
+store = InMemoryLinearSessionStore()
 
 
 async def flaky_fn(sess: SessionRunner, _ctx: ActionRunContext) -> AgentResult:

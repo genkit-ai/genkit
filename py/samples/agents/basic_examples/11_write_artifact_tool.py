@@ -22,12 +22,12 @@ from __future__ import annotations
 from uuid import uuid4
 
 from genkit import Genkit
-from genkit.agent import InMemorySessionStore, AgentInit
+from genkit.agent import InMemoryLatestStateStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Artifacts, Middleware
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
-store = InMemorySessionStore()
+store = InMemoryLatestStateStore()
 
 agent = ai.define_agent(
     name='workspaceAgent',

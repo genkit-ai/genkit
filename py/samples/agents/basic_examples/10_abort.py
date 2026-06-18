@@ -23,11 +23,11 @@ import asyncio
 from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemorySessionStore, AgentInit
+from genkit.agent import InMemoryLatestStateStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore()
+store = InMemoryLatestStateStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')

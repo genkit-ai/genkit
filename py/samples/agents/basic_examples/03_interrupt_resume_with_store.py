@@ -24,7 +24,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, restart_tool
-from genkit.agent import InMemorySessionStore, Resume, AgentInit
+from genkit.agent import InMemoryLinearSessionStore, Resume, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
 from genkit._core._typing import ToolRequestPart, ToolRequest
@@ -66,7 +66,7 @@ async def check_balance(_input: BalanceInput) -> BalanceOutput:
     return BalanceOutput(balance=1_234.56)
 
 
-store = InMemorySessionStore()
+store = InMemoryLinearSessionStore()
 
 agent = ai.define_agent(
     name='bankingAgent',

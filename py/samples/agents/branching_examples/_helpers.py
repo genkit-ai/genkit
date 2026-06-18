@@ -28,7 +28,7 @@ from genkit.agent import (
     AgentInput,
     AgentOutput,
     AgentResult,
-    InMemorySessionStore,
+    InMemoryBranchingSessionStore,
     InProcessAgentTransport,
     AgentAPI,
 )
@@ -66,7 +66,7 @@ async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
 
 def define_echo_agent(
     ai: Genkit,
-    store: InMemorySessionStore,
+    store: InMemoryBranchingSessionStore,
     *,
     name: str = 'branchEcho',
 ) -> Agent:

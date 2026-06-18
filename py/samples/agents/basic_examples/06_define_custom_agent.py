@@ -27,7 +27,7 @@ from genkit.agent import (
     AgentInput,
     AgentResult,
     AgentStreamChunk,
-    InMemorySessionStore,
+    InMemoryLatestStateStore,
     SessionRunner,
     TurnResult,
     AgentInit,
@@ -35,7 +35,7 @@ from genkit.agent import (
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore()
+store = InMemoryLatestStateStore()
 
 
 async def custom_coder_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:

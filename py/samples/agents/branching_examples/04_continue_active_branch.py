@@ -29,10 +29,10 @@ from uuid import uuid4
 from _helpers import define_echo_agent, model_text, run_turn
 
 from genkit import Genkit
-from genkit.agent import AgentInit, InMemorySessionStore
+from genkit.agent import AgentInit, InMemoryBranchingSessionStore
 
 ai = Genkit()
-store = InMemorySessionStore()
+store = InMemoryBranchingSessionStore()
 agent = define_echo_agent(ai, store)
 
 

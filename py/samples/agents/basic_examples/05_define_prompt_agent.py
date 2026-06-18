@@ -22,11 +22,11 @@ from __future__ import annotations
 from uuid import uuid4
 
 from genkit import Genkit
-from genkit.agent import InMemorySessionStore, AgentInit
+from genkit.agent import InMemoryLatestStateStore, AgentInit
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
-store = InMemorySessionStore()
+store = InMemoryLatestStateStore()
 
 ai.define_prompt(
     name='greeterPrompt',
