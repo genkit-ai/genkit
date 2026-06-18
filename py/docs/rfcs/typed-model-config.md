@@ -1,9 +1,5 @@
 # Typed model handles for Python config — 1-pager
 
-**Issue:** genkit-ai/genkit#5553 (Tier 2)
-**Status:** proposal — decisions resolved, scoped to a pragmatic first cut
-**Scope:** Python SDK + the big-3 plugins (google-genai, compat-oai, anthropic)
-
 ## Problem
 
 App developers pass model config as a plain dict — that's the ergonomic path, and it
