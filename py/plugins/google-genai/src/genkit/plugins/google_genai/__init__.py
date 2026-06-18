@@ -133,7 +133,7 @@ Supported Models:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │ Plugin     │ Models                                                     │
     ├────────────┼─────────────────────────────────────────────────────────────┤
-    │ GoogleAI   │ gemini-2.0-flash, gemini-2.5-flash, gemini-2.5-pro, etc.  │
+    │ GoogleAI   │ gemini-flash-latest, gemini-pro-latest, etc.              │
     │ VertexAI   │ Same Gemini models + imagen-4.0-generate-001               │
     └────────────┴─────────────────────────────────────────────────────────────┘
 
@@ -157,7 +157,7 @@ Example:
     from genkit.plugins.google_genai import GoogleAI
 
     # Uses GEMINI_API_KEY env var or pass api_key explicitly
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-2.0-flash')
+    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
 
     response = await ai.generate(prompt='Hello, world!')
     print(response.text)
@@ -178,7 +178,7 @@ Example:
     # Uses default GCP credentials; optionally pass project/location
     ai = Genkit(
         plugins=[VertexAI(project='my-project', location='us-central1')],
-        model='vertexai/gemini-2.0-flash',
+        model='vertexai/gemini-flash-latest',
     )
 
     response = await ai.generate(prompt='Hello, world!')
