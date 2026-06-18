@@ -90,7 +90,7 @@ app.post('/myDurableRtdbFlow', expressHandler(myFlow, { streamManager: rtdb }));
 
 ## Session Store (Beta)
 
-`FirestoreSessionStore` is a Firestore-backed `SessionStore` for persisting agent session snapshots. Unlike a naive single-document store, it persists each turn as an incremental JSON Patch diff anchored to periodic, sharded full-state checkpoints, so:
+`FirestoreSessionStore` is a Firestore-backed `SessionStore` for persisting agent session snapshots. It is a thin Firebase wrapper around the core implementation in [`@genkit-ai/google-cloud`](https://www.npmjs.com/package/@genkit-ai/google-cloud), adding a `firebaseApp` option for deriving the Firestore instance from a Firebase app. Unlike a naive single-document store, it persists each turn as an incremental JSON Patch diff anchored to periodic, sharded full-state checkpoints, so:
 
 *   No single document approaches Firestore's [1 MiB limit](https://firebase.google.com/docs/firestore/quotas) (state is sharded across documents).
 *   The number of documents read/written per turn is bounded by `checkpointInterval` rather than total session length, so it scales to arbitrarily long sessions (e.g. long-lived chatbots, coding agents).

@@ -34,6 +34,7 @@ samples/**/.genkit
 go/**/.genkit
 ui-debug.log
 firebase-debug.log
+firestore-debug.log
 **/*.env
 # RAG sample files
 js/testapps/rag/*.json
