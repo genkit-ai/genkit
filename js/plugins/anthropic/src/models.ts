@@ -103,6 +103,7 @@ function commonRef(
 }
 
 const KNOWN_MODELS = {
+  'claude-fable-5': commonRef('claude-fable-5', ADVANCED_MODEL_INFO),
   'claude-opus-4-8': commonRef('claude-opus-4-8', ADVANCED_MODEL_INFO),
   'claude-opus-4-7': commonRef('claude-opus-4-7', ADVANCED_MODEL_INFO),
   'claude-opus-4-6': commonRef('claude-opus-4-6', ADVANCED_MODEL_INFO),
