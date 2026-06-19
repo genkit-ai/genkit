@@ -817,6 +817,8 @@ GEMINI_3_1_FLASH_LITE = ModelInfo(
         constrained=Constrained.ALL,
         output=['text', 'json'],
     ),
+)
+
 GEMINI_IMAGE_SUPPORTS = Supports(
     multiturn=True,
     media=True,
