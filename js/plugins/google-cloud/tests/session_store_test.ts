@@ -71,6 +71,32 @@ describe('FirestoreSessionStore', () => {
     });
   }
 
+  /** The base collection name a store was configured with. */
+  function baseCollection(s: FirestoreSessionStore<Custom>): string {
+    return (s as any).collection as string;
+  }
+
+  /** The (per-tenant) snapshots subcollection used by the store. */
+  function snapshotsCol(s: FirestoreSessionStore<Custom>, prefix = 'global') {
+    return db.collection(baseCollection(s)).doc(prefix).collection('snapshots');
+  }
+
+  /** The (per-tenant) shards subcollection used by the store. */
+  function shardsCol(s: FirestoreSessionStore<Custom>, prefix = 'global') {
+    return db
+      .collection(`${baseCollection(s)}-shards`)
+      .doc(prefix)
+      .collection('shards');
+  }
+
+  /** The (per-tenant) pointers subcollection used by the store. */
+  function pointersCol(s: FirestoreSessionStore<Custom>, prefix = 'global') {
+    return db
+      .collection(`${baseCollection(s)}-pointers`)
+      .doc(prefix)
+      .collection('pointers');
+  }
+
   beforeEach(() => {
     process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
     db = new Firestore({ projectId: 'genkit-test' });
@@ -179,8 +205,7 @@ describe('FirestoreSessionStore', () => {
     });
 
     // The stored document only persists a diff, not the full state.
-    const colName = (store as any).snapshots.id as string;
-    const raw = await db.collection(colName).doc('c3').get();
+    const raw = await snapshotsCol(store).doc('c3').get();
     const data = raw.data();
     assert.ok(Array.isArray(data?.statePatch));
     assert.strictEqual(data?.state, undefined);
@@ -330,9 +355,7 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(mid?.state.custom?.notes?.length, 13);
 
     // Several documents were promoted to checkpoints (root + every 5 turns).
-    const colName = (cpStore as any).snapshots.id as string;
-    const all = await db
-      .collection(colName)
+    const all = await snapshotsCol(cpStore)
       .where('kind', '==', 'checkpoint')
       .get();
     assert.ok(
@@ -358,9 +381,7 @@ describe('FirestoreSessionStore', () => {
     assert.deepStrictEqual(read?.state.custom?.notes, notes);
 
     // The state really was sharded across more than one document.
-    const colName = (shardStore as any).snapshots.id as string;
-    const shardCol = `${colName}-shards`;
-    const shards = await db.collection(shardCol).get();
+    const shards = await shardsCol(shardStore).get();
     assert.ok(shards.size > 1, `expected multiple shards, got ${shards.size}`);
   });
 
@@ -372,11 +393,7 @@ describe('FirestoreSessionStore', () => {
       })
     );
 
-    const colName = (store as any).snapshots.id as string;
-    const pointer = await db
-      .collection(`${colName}-pointers`)
-      .doc('sess-ptr')
-      .get();
+    const pointer = await pointersCol(store).doc('sess-ptr').get();
     const data = pointer.data();
     assert.strictEqual(data?.currentSnapshotId, 'p1');
     assert.strictEqual(data?.currentState, undefined);
@@ -456,8 +473,7 @@ describe('FirestoreSessionStore', () => {
     assert.deepStrictEqual(read?.state.custom?.notes, bigNotes);
 
     // The promoted document is a checkpoint with no statePatch.
-    const colName = (promoteStore as any).snapshots.id as string;
-    const raw = await db.collection(colName).doc('d2').get();
+    const raw = await snapshotsCol(promoteStore).doc('d2').get();
     assert.strictEqual(raw.data()?.kind, 'checkpoint');
     assert.strictEqual(raw.data()?.statePatch, undefined);
   });
@@ -487,8 +503,7 @@ describe('FirestoreSessionStore', () => {
     );
 
     // It started life as a diff.
-    const colName = (promoteStore as any).snapshots.id as string;
-    const before = await db.collection(colName).doc('e2').get();
+    const before = await snapshotsCol(promoteStore).doc('e2').get();
     assert.strictEqual(before.data()?.kind, 'diff');
 
     // Rewrite the leaf in place with a much larger state: the diff would now
@@ -509,7 +524,7 @@ describe('FirestoreSessionStore', () => {
 
     // The promoted document is now a checkpoint with no statePatch, and its
     // state was sharded across more than one document.
-    const after = await db.collection(colName).doc('e2').get();
+    const after = await snapshotsCol(promoteStore).doc('e2').get();
     assert.strictEqual(after.data()?.kind, 'checkpoint');
     assert.strictEqual(after.data()?.statePatch, undefined);
     assert.ok(
@@ -533,9 +548,7 @@ describe('FirestoreSessionStore', () => {
       })
     );
 
-    const colName = (shrinkStore as any).snapshots.id as string;
-    const shardCol = `${colName}-shards`;
-    const before = await db.collection(shardCol).get();
+    const before = await shardsCol(shrinkStore).get();
     assert.ok(before.size > 1, `expected multiple shards, got ${before.size}`);
 
     // Upsert the same (leaf, checkpoint) snapshot with a much smaller state.
@@ -544,7 +557,7 @@ describe('FirestoreSessionStore', () => {
       state: { sessionId: 'sess-shrink', custom: { counter: 2 } },
     }));
 
-    const after = await db.collection(shardCol).get();
+    const after = await shardsCol(shrinkStore).get();
     assert.ok(
       after.size < before.size,
       `expected fewer shards after shrink (before=${before.size}, after=${after.size})`
@@ -569,8 +582,7 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(read?.state.custom?.counter, 7);
 
     // It was stored as a checkpoint (root of a new chain), not a diff.
-    const colName = (store as any).snapshots.id as string;
-    const raw = await db.collection(colName).doc('o1').get();
+    const raw = await snapshotsCol(store).doc('o1').get();
     assert.strictEqual(raw.data()?.kind, 'checkpoint');
   });
 
@@ -645,8 +657,7 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(leaf?.state.artifacts?.[1].name, 'b');
 
     // The child stored only a diff, not the full message array.
-    const colName = (store as any).snapshots.id as string;
-    const raw = await db.collection(colName).doc('m2').get();
+    const raw = await snapshotsCol(store).doc('m2').get();
     assert.strictEqual(raw.data()?.kind, 'diff');
     assert.ok(Array.isArray(raw.data()?.statePatch));
   });
@@ -660,8 +671,7 @@ describe('FirestoreSessionStore', () => {
     );
 
     // Manually delete the checkpoint's only shard to simulate corruption.
-    const colName = (store as any).snapshots.id as string;
-    await db.collection(`${colName}-shards`).doc('g1_0').delete();
+    await shardsCol(store).doc('g1_0').delete();
 
     await assert.rejects(
       store.getSnapshot({ snapshotId: 'g1' }),
@@ -689,11 +699,101 @@ describe('FirestoreSessionStore', () => {
     assert.strictEqual(leaf?.state.custom?.counter, 3);
 
     // Every document is a checkpoint; none is a diff.
-    const colName = (cp1Store as any).snapshots.id as string;
-    const diffs = await db
-      .collection(colName)
+    const diffs = await snapshotsCol(cp1Store)
       .where('kind', '==', 'diff')
       .get();
     assert.strictEqual(diffs.size, 0);
+  });
+
+  describe('snapshotPathPrefix (multi-tenant isolation)', () => {
+    // A prefix derived from the call context's user id, mirroring how an app
+    // would scope snapshots to the authenticated user.
+    const byUser = (options?: { context?: { auth?: { uid?: string } } }) =>
+      options?.context?.auth?.uid ?? 'anonymous';
+
+    const ctx = (uid: string) => ({ context: { auth: { uid } } });
+
+    it('isolates snapshots per tenant: a snapshotId is not readable across tenants', async () => {
+      const tenantStore = makeStore({ snapshotPathPrefix: byUser });
+
+      await tenantStore.saveSnapshot(
+        'shared-id',
+        () =>
+          snapshot({
+            snapshotId: 'shared-id',
+            state: { sessionId: 'sess-a', custom: { counter: 1 } },
+          }),
+        ctx('alice')
+      );
+
+      // Alice can read her own snapshot.
+      const asAlice = await tenantStore.getSnapshot({
+        snapshotId: 'shared-id',
+        context: ctx('alice').context,
+      });
+      assert.strictEqual(asAlice?.state.custom?.counter, 1);
+
+      // Bob, with the very same snapshotId, sees nothing.
+      const asBob = await tenantStore.getSnapshot({
+        snapshotId: 'shared-id',
+        context: ctx('bob').context,
+      });
+      assert.strictEqual(asBob, undefined);
+    });
+
+    it('isolates sessionId lookups per tenant', async () => {
+      const tenantStore = makeStore({ snapshotPathPrefix: byUser });
+
+      await tenantStore.saveSnapshot(
+        'a1',
+        () =>
+          snapshot({
+            snapshotId: 'a1',
+            state: { sessionId: 'shared-sess', custom: { counter: 11 } },
+          }),
+        ctx('alice')
+      );
+
+      // Same sessionId, different tenant: no leaf.
+      const asBob = await tenantStore.getSnapshot({
+        sessionId: 'shared-sess',
+        context: ctx('bob').context,
+      });
+      assert.strictEqual(asBob, undefined);
+
+      // Alice resolves her own leaf.
+      const asAlice = await tenantStore.getSnapshot({
+        sessionId: 'shared-sess',
+        context: ctx('alice').context,
+      });
+      assert.strictEqual(asAlice?.snapshotId, 'a1');
+      assert.strictEqual(asAlice?.state.custom?.counter, 11);
+    });
+
+    it('writes documents under the tenant-scoped subcollection', async () => {
+      const tenantStore = makeStore({ snapshotPathPrefix: byUser });
+
+      await tenantStore.saveSnapshot(
+        'doc-1',
+        () =>
+          snapshot({
+            snapshotId: 'doc-1',
+            state: { sessionId: 'sess-scope', custom: { counter: 1 } },
+          }),
+        ctx('carol')
+      );
+
+      // Present under carol's prefix.
+      const scoped = await snapshotsCol(tenantStore, 'carol')
+        .doc('doc-1')
+        .get();
+      assert.ok(scoped.exists);
+
+      // Absent under the default 'global' prefix.
+      const global = await snapshotsCol(tenantStore, 'global')
+        .doc('doc-1')
+        .get();
+      assert.strictEqual(global.exists, false);
+    });
   });
 });
