@@ -54,6 +54,12 @@ const DEFAULT_CHECKPOINT_INTERVAL = 25;
 const DEFAULT_SHARD_SIZE = 512 * 1024;
 
 /**
+ * Fallback prefix used when no {@link FirestoreSessionStoreOptions.snapshotPathPrefix}
+ * is configured.
+ */
+const DEFAULT_PREFIX = 'global';
+
+/**
  * Options for {@link FirestoreSessionStore}.
  */
 export interface FirestoreSessionStoreOptions {
@@ -92,6 +98,21 @@ export interface FirestoreSessionStoreOptions {
    * limit. Defaults to {@link DEFAULT_SHARD_SIZE}.
    */
   shardSize?: number;
+
+  /**
+   * Returns a per-tenant prefix derived from the call's
+   * {@link SessionStoreOptions} (e.g. the authenticated user id from
+   * `options.context`). When set, all snapshot, pointer and shard documents are
+   * nested under a tenant-scoped subcollection keyed by this prefix, so reads
+   * and writes are isolated per tenant: one tenant can never see (or even
+   * address) another's snapshots, even if they get hold of a `snapshotId` -
+   * resolving it still requires the matching, auth-derived prefix. Defaults to
+   * `"global"`.
+   *
+   * The prefix is used only to build document paths; the stored ids
+   * (`snapshotId`, `parentId`, `checkpointId`, ...) remain prefix-agnostic.
+   */
+  snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
 }
 
 /**
@@ -208,15 +229,19 @@ function sanitize<T>(value: T): T {
  * incremental JSON Patch diffs anchored to periodic, sharded full-state
  * checkpoints.
  *
- * Storage layout:
+ * Storage layout (the `<prefix>` segment is the per-tenant prefix returned by
+ * {@link FirestoreSessionStoreOptions.snapshotPathPrefix}, or `"global"` when
+ * none is configured):
  *
- * - `<collection>/<snapshotId>` - one document per snapshot. A `diff` document
- *   holds the patch from its parent (`statePatch`); a `checkpoint` document
- *   holds a full-state materialization (sharded out of band).
- * - `<collection>-shards/<checkpointId>_<index>` - the sharded full state for a
- *   checkpoint.
- * - `<collection>-pointers/<sessionId>` - one document per session pointing at
- *   the latest leaf snapshot and the metadata needed to reconstruct it.
+ * - `<collection>/<prefix>/snapshots/<snapshotId>` - one document per snapshot.
+ *   A `diff` document holds the patch from its parent (`statePatch`); a
+ *   `checkpoint` document holds a full-state materialization (sharded out of
+ *   band).
+ * - `<collection>-shards/<prefix>/shards/<checkpointId>_<index>` - the sharded
+ *   full state for a checkpoint.
+ * - `<collection>-pointers/<prefix>/pointers/<sessionId>` - one document per
+ *   session pointing at the latest leaf snapshot and the metadata needed to
+ *   reconstruct it.
  *
  * Reconstruction uses only document-ID lookups (`getAll`), so it needs no
  * secondary indexes and is strongly consistent. No single document approaches
@@ -230,28 +255,58 @@ function sanitize<T>(value: T): T {
  */
 export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   protected db: Firestore;
-  protected snapshots: CollectionReference;
-  protected pointers: CollectionReference;
-  protected shards: CollectionReference;
+  protected collection: string;
   protected checkpointInterval: number;
   protected shardSize: number;
+  protected snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
 
   constructor(opts?: FirestoreSessionStoreOptions) {
-    const collection = opts?.collection ?? 'genkit-sessions';
     this.db = opts?.db ?? new Firestore();
-    this.snapshots = this.db.collection(collection);
-    this.pointers = this.db.collection(`${collection}-pointers`);
-    this.shards = this.db.collection(`${collection}-shards`);
+    this.collection = opts?.collection ?? 'genkit-sessions';
     this.checkpointInterval =
       opts?.checkpointInterval ?? DEFAULT_CHECKPOINT_INTERVAL;
     this.shardSize = opts?.shardSize ?? DEFAULT_SHARD_SIZE;
+    this.snapshotPathPrefix = opts?.snapshotPathPrefix;
+  }
+
+  /** Resolves the (per-tenant) prefix for the given call options. */
+  private prefixFor(options?: SessionStoreOptions): string {
+    return this.snapshotPathPrefix
+      ? this.snapshotPathPrefix(options)
+      : DEFAULT_PREFIX;
+  }
+
+  /** The (per-tenant) snapshots subcollection. */
+  private snapshotsCol(options?: SessionStoreOptions): CollectionReference {
+    return this.db
+      .collection(this.collection)
+      .doc(this.prefixFor(options))
+      .collection('snapshots');
+  }
+
+  /** The (per-tenant) pointers subcollection. */
+  private pointersCol(options?: SessionStoreOptions): CollectionReference {
+    return this.db
+      .collection(`${this.collection}-pointers`)
+      .doc(this.prefixFor(options))
+      .collection('pointers');
+  }
+
+  /** The (per-tenant) shards subcollection. */
+  private shardsCol(options?: SessionStoreOptions): CollectionReference {
+    return this.db
+      .collection(`${this.collection}-shards`)
+      .doc(this.prefixFor(options))
+      .collection('shards');
   }
 
   async getSnapshot(opts: {
     snapshotId?: string;
     sessionId?: string;
+    context?: SessionStoreOptions['context'];
   }): Promise<SessionSnapshot<S> | undefined> {
     const { snapshotId, sessionId } = this.normalize(opts);
+    const options: SessionStoreOptions = { context: opts.context };
 
     // Reconstruct inside a read-only transaction so the pointer read and the
     // batched shard/diff reads all observe a single, consistent point in time.
@@ -266,7 +321,9 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         const reader = this.reader(tx);
 
         if (sessionId) {
-          const pointerSnap = await tx.get(this.pointers.doc(sessionId));
+          const pointerSnap = await tx.get(
+            this.pointersCol(options).doc(sessionId)
+          );
           if (!pointerSnap.exists) return undefined;
           const pointer = pointerSnap.data() as PointerDoc;
           // Reconstruct straight from the pointer's checkpoint metadata - one
@@ -276,13 +333,18 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
             pointer.checkpointId,
             pointer.checkpointShardCount,
             pointer.segmentPath,
-            pointer.currentSnapshotId
+            pointer.currentSnapshotId,
+            options
           );
           if (!reconstructed) return undefined;
           return this.toSnapshot(reconstructed.doc, reconstructed.state);
         }
 
-        const reconstructed = await this.reconstruct(reader, snapshotId!);
+        const reconstructed = await this.reconstruct(
+          reader,
+          snapshotId!,
+          options
+        );
         if (!reconstructed) return undefined;
         return this.toSnapshot(reconstructed.doc, reconstructed.state);
       },
@@ -293,7 +355,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   async saveSnapshot(
     snapshotId: string | undefined,
     mutator: SnapshotMutator<S>,
-    _options?: SessionStoreOptions
+    options?: SessionStoreOptions
   ): Promise<string | null> {
     return this.db.runTransaction(async (tx) => {
       const reader = this.reader(tx);
@@ -302,7 +364,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       // inspect the current full state.
       let existing: { doc: SnapshotDoc; state: SessionState<S> } | undefined;
       if (snapshotId) {
-        existing = await this.reconstruct(reader, snapshotId);
+        existing = await this.reconstruct(reader, snapshotId, options);
       }
       const current = existing
         ? this.toSnapshot(existing.doc, existing.state)
@@ -323,7 +385,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       const newState = (result.state ?? {}) as SessionState<S>;
 
       // Reads phase 2: the per-session pointer (current leaf metadata).
-      const pointerRef = this.pointers.doc(sessionId);
+      const pointerRef = this.pointersCol(options).doc(sessionId);
       const pointerSnap = await tx.get(pointerRef);
       const pointer = pointerSnap.exists
         ? (pointerSnap.data() as PointerDoc)
@@ -351,12 +413,14 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
             tx,
             id,
             newState,
+            options,
             existing.doc.checkpointShardCount
           ));
         } else {
           // Reads phase 3 (diff upsert): resolve parent state for the patch.
           const parentState = existing.doc.parentId
-            ? (await this.reconstruct(reader, existing.doc.parentId))?.state
+            ? (await this.reconstruct(reader, existing.doc.parentId, options))
+                ?.state
             : undefined;
           const candidatePatch = diff(parentState, newState);
           // Promote an oversized diff to a (sharded) checkpoint so even an
@@ -370,7 +434,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
               checkpointShardCount,
               segmentPath,
               statePatch,
-            } = this.writeCheckpoint(tx, id, newState));
+            } = this.writeCheckpoint(tx, id, newState, options));
           } else {
             kind = 'diff';
             checkpointId = existing.doc.checkpointId;
@@ -390,7 +454,8 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
           parentMeta = await this.loadParentChainMeta(
             reader,
             result.parentId,
-            pointer
+            pointer,
+            options
           );
         }
 
@@ -409,7 +474,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
             checkpointShardCount,
             segmentPath,
             statePatch,
-          } = this.writeCheckpoint(tx, id, newState));
+          } = this.writeCheckpoint(tx, id, newState, options));
         } else {
           // Diff candidate: now we must materialize the parent's state to
           // compute the patch.
@@ -419,7 +484,8 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
               parentMeta.checkpointId,
               parentMeta.checkpointShardCount,
               parentMeta.segmentPath,
-              result.parentId
+              result.parentId,
+              options
             )
           )?.state;
           const candidatePatch = diff(parentState, newState);
@@ -432,7 +498,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
               checkpointShardCount,
               segmentPath,
               statePatch,
-            } = this.writeCheckpoint(tx, id, newState));
+            } = this.writeCheckpoint(tx, id, newState, options));
           } else {
             kind = 'diff';
             checkpointId = parentMeta.checkpointId;
@@ -460,7 +526,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         segmentPath,
         statePatch,
       };
-      tx.set(this.snapshots.doc(id), sanitize(doc));
+      tx.set(this.snapshotsCol(options).doc(id), sanitize(doc));
 
       // Advance the pointer when this is a new leaf, or refresh it when we just
       // rewrote the current leaf. Upserts of older, non-leaf snapshots leave
@@ -487,12 +553,15 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   onSnapshotStateChange(
     snapshotId: string,
     callback: (snapshot: SessionSnapshot<S>) => void,
-    _options?: SessionStoreOptions
+    options?: SessionStoreOptions
   ): void | (() => void) {
-    const ref = this.snapshots.doc(snapshotId);
+    const ref = this.snapshotsCol(options).doc(snapshotId);
     return ref.onSnapshot(async (docSnap) => {
       if (!docSnap.exists) return;
-      const snapshot = await this.getSnapshot({ snapshotId });
+      const snapshot = await this.getSnapshot({
+        snapshotId,
+        context: options?.context,
+      });
       if (snapshot) callback(snapshot);
     });
   }
@@ -552,7 +621,8 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   private async loadParentChainMeta(
     reader: Reader,
     parentId: string,
-    pointer: PointerDoc | undefined
+    pointer: PointerDoc | undefined,
+    options?: SessionStoreOptions
   ): Promise<ParentChainMeta | undefined> {
     if (pointer && pointer.currentSnapshotId === parentId) {
       return {
@@ -561,7 +631,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         segmentPath: pointer.segmentPath,
       };
     }
-    const snap = await reader.get(this.snapshots.doc(parentId));
+    const snap = await reader.get(this.snapshotsCol(options).doc(parentId));
     if (!snap.exists) return undefined;
     const d = snap.data() as SnapshotDoc;
     return {
@@ -578,9 +648,10 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
    */
   private async reconstruct(
     reader: Reader,
-    id: string
+    id: string,
+    options?: SessionStoreOptions
   ): Promise<{ doc: SnapshotDoc; state: SessionState<S> } | undefined> {
-    const snap = await reader.get(this.snapshots.doc(id));
+    const snap = await reader.get(this.snapshotsCol(options).doc(id));
     if (!snap.exists) return undefined;
     const d = snap.data() as SnapshotDoc;
     return this.reconstructFrom(
@@ -588,7 +659,8 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       d.checkpointId,
       d.checkpointShardCount,
       d.segmentPath,
-      id
+      id,
+      options
     );
   }
 
@@ -609,14 +681,17 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     checkpointId: string,
     shardCount: number,
     segmentPath: string[],
-    targetId: string
+    targetId: string,
+    options?: SessionStoreOptions
   ): Promise<{ doc: SnapshotDoc; state: SessionState<S> } | undefined> {
     const targetIsCheckpoint = segmentPath.length === 0;
-    const checkpointRef = this.snapshots.doc(checkpointId);
+    const snapshotsCol = this.snapshotsCol(options);
+    const shardsCol = this.shardsCol(options);
+    const checkpointRef = snapshotsCol.doc(checkpointId);
     const shardRefs = Array.from({ length: shardCount }, (_, i) =>
-      this.shards.doc(`${checkpointId}_${i}`)
+      shardsCol.doc(`${checkpointId}_${i}`)
     );
-    const segRefs = segmentPath.map((sid) => this.snapshots.doc(sid));
+    const segRefs = segmentPath.map((sid) => snapshotsCol.doc(sid));
 
     const snaps = await reader.getAll([
       // The checkpoint document is only needed when it is itself the target;
@@ -665,8 +740,10 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     tx: Transaction,
     checkpointId: string,
     state: SessionState<S>,
+    options?: SessionStoreOptions,
     oldShardCount = 0
   ): number {
+    const shardsCol = this.shardsCol(options);
     // `JSON.stringify` already drops `undefined` members, so it produces the
     // same bytes as `sanitize(state)` without the extra parse+stringify round
     // trip - a meaningful saving when checkpointing large states.
@@ -674,12 +751,12 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     const count = Math.max(1, Math.ceil(buf.length / this.shardSize));
     for (let i = 0; i < count; i++) {
       const chunk = buf.subarray(i * this.shardSize, (i + 1) * this.shardSize);
-      tx.set(this.shards.doc(`${checkpointId}_${i}`), {
+      tx.set(shardsCol.doc(`${checkpointId}_${i}`), {
         chunk,
       } satisfies ShardDoc);
     }
     for (let i = count; i < oldShardCount; i++) {
-      tx.delete(this.shards.doc(`${checkpointId}_${i}`));
+      tx.delete(shardsCol.doc(`${checkpointId}_${i}`));
     }
     return count;
   }
@@ -702,6 +779,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     tx: Transaction,
     id: string,
     state: SessionState<S>,
+    options?: SessionStoreOptions,
     oldShardCount = 0
   ): {
     kind: 'checkpoint';
@@ -713,7 +791,13 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     return {
       kind: 'checkpoint',
       checkpointId: id,
-      checkpointShardCount: this.writeShards(tx, id, state, oldShardCount),
+      checkpointShardCount: this.writeShards(
+        tx,
+        id,
+        state,
+        options,
+        oldShardCount
+      ),
       segmentPath: [],
       statePatch: undefined,
     };
