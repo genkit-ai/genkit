@@ -148,6 +148,7 @@ override-dependencies = ["werkzeug>=3.1.6"]
 
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
+anthropic-sample     = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }
 django-hello         = { workspace = true }
