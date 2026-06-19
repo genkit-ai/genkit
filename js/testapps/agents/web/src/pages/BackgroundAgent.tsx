@@ -40,7 +40,8 @@ type TaskStatus =
   | 'pending'
   | 'done'
   | 'failed'
-  | 'aborted';
+  | 'aborted'
+  | 'expired';
 
 export default function BackgroundAgent() {
   const [topic, setTopic] = useState('');
@@ -95,6 +96,15 @@ export default function BackgroundAgent() {
             setError('The background task failed on the server.');
           } else if (s === 'aborted') {
             setStatus('aborted');
+          } else if (s === 'expired') {
+            // The background worker stopped sending heartbeats (e.g. the server
+            // was restarted), so the task can never complete. Surface it as a
+            // terminal expired state.
+            setStatus('expired');
+            setError(
+              'The background task expired: its worker stopped responding ' +
+                '(the server may have been restarted).'
+            );
           }
         }
       } catch (err: any) {
@@ -227,13 +237,20 @@ export default function BackgroundAgent() {
           </div>
         )}
 
-        {/* ── Failed / Aborted ────────────────────────────────────────── */}
-        {(status === 'failed' || status === 'aborted') && (
+        {/* ── Failed / Aborted / Expired ──────────────────────────────── */}
+        {(status === 'failed' ||
+          status === 'aborted' ||
+          status === 'expired') && (
           <div className="background-result">
             <div className="background-result-header">
               <span className={`background-status-badge ${status}`}>
-                {status === 'aborted' ? '🛑 Aborted' : '❌ Failed'}
+                {status === 'aborted'
+                  ? '🛑 Aborted'
+                  : status === 'expired'
+                    ? '⌛ Expired'
+                    : '❌ Failed'}
               </span>
+
               {snapshotId && (
                 <code className="background-snapshot-id">{snapshotId}</code>
               )}

@@ -104,7 +104,16 @@ export interface SessionSnapshot<S = unknown> {
   updatedAt?: string;
   event: 'turnEnd' | 'invocationEnd';
   state: SessionState<S>;
-  status?: 'pending' | 'completed' | 'failed' | 'aborted';
+  status?: 'pending' | 'completed' | 'failed' | 'aborted' | 'expired';
+
+  /**
+   * Heartbeat timestamp (RFC 3339) refreshed periodically while a detached
+   * (background) turn is in flight. Used to detect a dead background worker:
+   * if a `pending` snapshot's heartbeat goes stale (older than the configured
+   * timeout), reads surface its status as `expired` (the dead process can no
+   * longer persist a terminal status itself).
+   */
+  heartbeatAt?: string;
 
   /**
    * Semantic reason the turn/invocation finished (e.g. `interrupted`,
