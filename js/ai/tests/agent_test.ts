@@ -988,6 +988,148 @@ describe('Agent', () => {
       assert.strictEqual(aborted, true);
     });
 
+    it('should stamp a heartbeat on the pending detached snapshot', async () => {
+      const store = new InMemorySessionStore<{ foo: string }>();
+      let resolvePromise: () => void = () => {};
+      const releasePromise = new Promise<void>((resolve) => {
+        resolvePromise = resolve;
+      });
+
+      const flow = defineCustomAgent<{ foo: string }>(
+        new Registry(),
+        {
+          name: 'heartbeatStampTest',
+          store,
+        },
+        async (sess) => {
+          await sess.run(async () => {
+            await releasePromise;
+          });
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'hi' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+        detach: true,
+      });
+
+      const output = await session.output;
+      const snapshotId = output.snapshotId!;
+      assert.ok(snapshotId);
+
+      const snapPending = await store.getSnapshot({ snapshotId });
+      assert.strictEqual(snapPending?.status, 'pending');
+      assert.ok(
+        snapPending?.heartbeatAt,
+        'pending detached snapshot should carry a heartbeatAt'
+      );
+
+      resolvePromise();
+      session.close();
+      await waitForSnapshotStatus(store, snapshotId, 'completed');
+    });
+
+    it('reports a pending snapshot with a stale heartbeat as expired', async () => {
+      const store = new InMemorySessionStore<{ foo: string }>();
+
+      const flow = defineCustomAgent<{ foo: string }>(
+        new Registry(),
+        {
+          name: 'heartbeatExpiredTest',
+          store,
+        },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { artifacts: [] };
+        }
+      );
+
+      // Simulate an orphaned detached snapshot: pending, with a heartbeat that
+      // is older than the expiry timeout (default 60s).
+      const stale = new Date(Date.now() - 120_000).toISOString();
+      const snapshotId = await store.saveSnapshot(undefined, () => ({
+        createdAt: stale,
+        updatedAt: stale,
+        heartbeatAt: stale,
+        event: 'turnEnd',
+        status: 'pending',
+        state: { sessionId: 'sess-expired', custom: { foo: 'bar' } },
+      }));
+      assert.ok(snapshotId);
+
+      // The raw store still has it as pending (compute-on-read does not write
+      // back), but getSnapshotData surfaces it as expired.
+      const raw = await store.getSnapshot({ snapshotId: snapshotId! });
+      assert.strictEqual(raw?.status, 'pending');
+
+      const viaData = await flow.getSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(viaData?.status, 'expired');
+    });
+
+    it('keeps a pending snapshot with a fresh heartbeat as pending', async () => {
+      const store = new InMemorySessionStore<{ foo: string }>();
+
+      const flow = defineCustomAgent<{ foo: string }>(
+        new Registry(),
+        {
+          name: 'heartbeatFreshTest',
+          store,
+        },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { artifacts: [] };
+        }
+      );
+
+      const now = new Date().toISOString();
+      const snapshotId = await store.saveSnapshot(undefined, () => ({
+        createdAt: now,
+        updatedAt: now,
+        heartbeatAt: now,
+        event: 'turnEnd',
+        status: 'pending',
+        state: { sessionId: 'sess-fresh', custom: { foo: 'bar' } },
+      }));
+      assert.ok(snapshotId);
+
+      const viaData = await flow.getSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(viaData?.status, 'pending');
+    });
+
+    it('does not expire a pending snapshot that has no heartbeat yet', async () => {
+      const store = new InMemorySessionStore<{ foo: string }>();
+
+      const flow = defineCustomAgent<{ foo: string }>(
+        new Registry(),
+        {
+          name: 'heartbeatNoneTest',
+          store,
+        },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { artifacts: [] };
+        }
+      );
+
+      const old = new Date(Date.now() - 120_000).toISOString();
+      const snapshotId = await store.saveSnapshot(undefined, () => ({
+        createdAt: old,
+        updatedAt: old,
+        event: 'turnEnd',
+        status: 'pending',
+        state: { sessionId: 'sess-noheartbeat', custom: { foo: 'bar' } },
+      }));
+      assert.ok(snapshotId);
+
+      const viaData = await flow.getSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(viaData?.status, 'pending');
+    });
+
     it('should not override terminal status when aborting an already-completed flow', async () => {
       const store = new InMemorySessionStore<{ foo: string }>();
 
