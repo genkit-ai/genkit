@@ -73,6 +73,7 @@ class SnapshotStatus(StrEnum):
     COMPLETED = 'completed'
     ABORTED = 'aborted'
     FAILED = 'failed'
+    EXPIRED = 'expired'
 
 
 class EvalStatusEnum(StrEnum):
@@ -229,6 +230,7 @@ class SessionSnapshot(GenkitModel):
     parent_id: str | None = None
     created_at: str = Field(...)
     updated_at: str | None = None
+    heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
     error: GenkitRuntimeError | None = None

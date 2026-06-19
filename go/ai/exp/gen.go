@@ -148,7 +148,7 @@ type ToolResume struct {
 // when the store doesn't support it).
 type AgentMetadata struct {
 	// Abortable reports whether the agent's invocations can be aborted
-	// (true when the store implements [SnapshotAborter]).
+	// (true when the store implements [SnapshotSubscriber]).
 	Abortable bool `json:"abortable,omitempty"`
 	// StateManagement reports who owns session state.
 	StateManagement AgentStateManagement `json:"stateManagement,omitempty"`
@@ -330,6 +330,14 @@ type SessionSnapshot[State any] struct {
 	// background task can report how it ended without re-deriving it from the
 	// messages.
 	FinishReason AgentFinishReason `json:"finishReason,omitempty"`
+	// HeartbeatAt is refreshed periodically while a detached (background) turn is
+	// in flight, so a reader can detect a dead background worker: if a pending
+	// snapshot's heartbeat goes stale (older than the configured timeout), reads
+	// surface its status as [SnapshotStatusExpired] (the dead worker can no longer
+	// persist a terminal status itself). Refreshing it does not advance
+	// [SessionSnapshot.UpdatedAt], so liveness stays distinct from state changes. Nil
+	// on snapshots that never detached.
+	HeartbeatAt *time.Time `json:"heartbeatAt,omitempty"`
 	// ParentID is the ID of the previous snapshot in this timeline. It is
 	// informational lineage (for debugging and UI history trees) and plays
 	// no part in resolving a session's latest snapshot.
@@ -349,9 +357,10 @@ type SessionSnapshot[State any] struct {
 	// Status is the lifecycle state of this snapshot. Empty is treated as
 	// [SnapshotStatusCompleted] for backwards compatibility.
 	Status SnapshotStatus `json:"status,omitempty"`
-	// UpdatedAt is when the snapshot was last written. For pending snapshots
-	// it equals CreatedAt; once the snapshot is finalized it reflects the
-	// terminal write.
+	// UpdatedAt is when the snapshot's state was last written. A heartbeat refresh on
+	// a pending snapshot deliberately does not advance it, so a pending snapshot's
+	// UpdatedAt equals CreatedAt until the snapshot is finalized, whose terminal write
+	// advances it.
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
@@ -385,6 +394,10 @@ type SessionState[State any] struct {
 // [SnapshotStatusFailed] when the agent finishes, or with
 // [SnapshotStatusAborted] if the client called abortSnapshot in the
 // meantime.
+//
+// [SnapshotStatusExpired] is never persisted: it is computed on read for a
+// pending snapshot whose background worker is presumed dead (its heartbeat
+// went stale), surfacing the orphan rather than leaving it pending forever.
 type SnapshotStatus string
 
 const (
@@ -401,6 +414,11 @@ const (
 	// The snapshot's Error field describes the failure and resume is
 	// rejected with that same error.
 	SnapshotStatusFailed SnapshotStatus = "failed"
+	// SnapshotStatusExpired indicates a pending snapshot whose detached background
+	// worker is presumed dead: its [SessionSnapshot.HeartbeatAt] went stale. It is
+	// computed on read (never persisted), so the raw store row stays
+	// [SnapshotStatusPending] while a read surfaces it as expired.
+	SnapshotStatusExpired SnapshotStatus = "expired"
 )
 
 // TurnEnd groups the signals emitted when an agent turn finishes.

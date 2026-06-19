@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/firebase/genkit/go/ai/exp"
 	"github.com/google/uuid"
@@ -37,7 +36,7 @@ import (
 // is lost when the process exits; use [FileSessionStore] or a real backend
 // when persistence is needed.
 //
-// It implements [exp.SessionStore] and [exp.SnapshotAborter].
+// It implements [exp.SessionStore] and [exp.SnapshotSubscriber].
 type InMemorySessionStore[State any] struct {
 	// mu is RWMutex so GetSnapshot (which JSON-marshals while holding the
 	// lock) can run concurrently with other readers. All writers (Save,
@@ -66,9 +65,9 @@ func (s *InMemorySessionStore[State]) GetSnapshot(_ context.Context, snapshotID 
 	return copySnapshot(snap)
 }
 
-// GetLatestSnapshot returns the session's most recently updated snapshot
+// GetLatestSnapshot returns the session's most recently created snapshot
 // regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
-// contract. Ties on UpdatedAt are broken by SnapshotID so resolution is
+// contract. Ties on CreatedAt are broken by SnapshotID so resolution is
 // deterministic. The returned snapshot is a deep copy.
 func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
 	if sessionID == "" {
@@ -81,8 +80,8 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessi
 		if snap.SessionID != sessionID {
 			continue
 		}
-		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) ||
-			(snap.UpdatedAt.Equal(latest.UpdatedAt) && snap.SnapshotID > latest.SnapshotID) {
+		if latest == nil || snap.CreatedAt.After(latest.CreatedAt) ||
+			(snap.CreatedAt.Equal(latest.CreatedAt) && snap.SnapshotID > latest.SnapshotID) {
 			latest = snap
 		}
 	}
@@ -90,24 +89,6 @@ func (s *InMemorySessionStore[State]) GetLatestSnapshot(_ context.Context, sessi
 		return nil, nil
 	}
 	return copySnapshot(latest)
-}
-
-// AbortSnapshot atomically flips a pending snapshot to aborted. If the
-// snapshot is already terminal the existing status is returned unchanged.
-// Returns an empty status if the snapshot is not found.
-func (s *InMemorySessionStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (exp.SnapshotStatus, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	snap, ok := s.snapshots[snapshotID]
-	if !ok {
-		return "", nil
-	}
-	if snap.Status == exp.SnapshotStatusPending {
-		snap.Status = exp.SnapshotStatusAborted
-		snap.UpdatedAt = time.Now()
-		s.notifyLocked(snapshotID, snap.Status)
-	}
-	return snap.Status, nil
 }
 
 // SaveSnapshot atomically reads, applies fn, and persists. See
@@ -143,16 +124,11 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	}
 
 	next.SnapshotID = id
-	now := time.Now()
-	if existing != nil {
-		next.CreatedAt = existing.CreatedAt
-		if existing.SessionID != "" {
-			next.SessionID = existing.SessionID // a row's session never changes
-		}
-	} else {
-		next.CreatedAt = now
+	// SessionID is preserved (a row's session never changes); CreatedAt,
+	// UpdatedAt, and HeartbeatAt are caller-managed and persisted verbatim.
+	if existing != nil && existing.SessionID != "" {
+		next.SessionID = existing.SessionID
 	}
-	next.UpdatedAt = now
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
@@ -167,9 +143,7 @@ func (s *InMemorySessionStore[State]) SaveSnapshot(
 	}
 	// Return next (the freshly-allocated struct from fn) rather than
 	// copied: copied is the pointer the store retains, so returning it
-	// would alias the caller's view with the stored row and let future
-	// in-place mutations (e.g. AbortSnapshot updating UpdatedAt) leak
-	// through.
+	// would alias the caller's view with the stored row.
 	return next, nil
 }
 

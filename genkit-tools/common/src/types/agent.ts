@@ -48,12 +48,17 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   `abortSnapshot` companion action while detached.
  * - `failed`: the invocation terminated with an error. The snapshot's `error`
  *   field describes the failure and resume is rejected with that same error.
+ * - `expired`: a `pending` snapshot whose detached background worker is
+ *   presumed dead because its heartbeat went stale. Computed on read from a
+ *   stale `heartbeatAt`; never persisted (the dead worker can no longer write
+ *   a terminal status itself).
  */
 export const SnapshotStatusSchema = z.enum([
   'pending',
   'completed',
   'aborted',
   'failed',
+  'expired',
 ]);
 export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
 
@@ -363,8 +368,20 @@ export const SessionSnapshotSchema = z.object({
   parentId: z.string().optional(),
   /** When the snapshot was first written (RFC 3339). */
   createdAt: z.string(),
-  /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
+  /**
+   * When the snapshot's state was last written (RFC 3339). Equals `createdAt`
+   * until rewritten; a heartbeat refresh on a pending snapshot does not advance
+   * it, so liveness stays distinct from state changes.
+   */
   updatedAt: z.string().optional(),
+  /**
+   * Heartbeat timestamp (RFC 3339) refreshed periodically while a detached
+   * (background) turn is in flight. Used to detect a dead background worker:
+   * if a `pending` snapshot's heartbeat goes stale (older than the configured
+   * timeout), reads surface its status as `expired` (the dead worker can no
+   * longer persist a terminal status itself).
+   */
+  heartbeatAt: z.string().optional(),
   /** Lifecycle state of this snapshot. Empty is treated as `completed`. */
   status: SnapshotStatusSchema.optional(),
   /**

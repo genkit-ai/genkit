@@ -2672,6 +2672,257 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	}
 }
 
+// getSnapshotViaAction invokes the agent's getSnapshot companion action the
+// way a remote client (or the Dev UI) would. Unlike a direct store read it
+// resolves compute-on-read status such as expired.
+func getSnapshotViaAction[State any](t *testing.T, reg *registry.Registry, agentName, snapshotID string) *SessionSnapshot[State] {
+	t.Helper()
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[State], struct{}](
+		reg, api.ActionTypeAgentSnapshot, agentName)
+	if action == nil {
+		t.Fatalf("getSnapshot action not registered for %q", agentName)
+	}
+	resp, err := action.Run(context.Background(), &GetSnapshotRequest{SnapshotID: snapshotID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot action: %v", err)
+	}
+	return resp
+}
+
+// savePendingWithHeartbeat writes a pending snapshot carrying the given
+// heartbeat (nil for none) directly into the store, returning its ID. It
+// stands in for an orphaned detached invocation whose worker died without
+// finalizing the row.
+func savePendingWithHeartbeat(t *testing.T, store *testInMemStore[testState], sessionID string, heartbeat *time.Time) string {
+	t.Helper()
+	now := time.Now()
+	saved, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Status:      SnapshotStatusPending,
+				HeartbeatAt: heartbeat,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				State:       &SessionState[testState]{SessionID: sessionID, Custom: testState{Counter: 7}},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot pending: %v", err)
+	}
+	return saved.SnapshotID
+}
+
+// defineNoopHeartbeatAgent registers a trivial server-managed agent so its
+// getSnapshot companion action exists; the heartbeat compute-on-read tests
+// drive that action against snapshots they write into the store directly.
+func defineNoopHeartbeatAgent(t *testing.T, reg *registry.Registry, name string, store *testInMemStore[testState]) {
+	t.Helper()
+	DefineCustomAgent(reg, name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+}
+
+func TestAgent_Detach_StampsHeartbeatOnPendingSnapshot(t *testing.T) {
+	// A detached invocation's pending snapshot carries an initial heartbeat,
+	// which the background refresh loop later advances and a reader uses to
+	// tell a live worker from a dead one.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+
+	af := DefineCustomAgent(reg, "heartbeatStamp",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.StreamBidi(context.Background())
+	if err != nil {
+		t.Fatalf("StreamBidi: %v", err)
+	}
+	drainInBackground(conn)
+
+	sendText(t, conn, "go")
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flow did not enter work phase")
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected snapshot ID after detach")
+	}
+
+	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot pending: %v", err)
+	}
+	if pending == nil {
+		t.Fatal("pending snapshot not written")
+	}
+	if pending.Status != SnapshotStatusPending {
+		t.Errorf("status = %q, want %q", pending.Status, SnapshotStatusPending)
+	}
+	if pending.HeartbeatAt == nil {
+		t.Error("pending detached snapshot should carry a heartbeatAt")
+	}
+
+	// Release; the finalizer stops the heartbeat and rewrites the row.
+	close(release)
+	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
+}
+
+func TestAgent_GetSnapshotAction_StaleHeartbeatReportsExpired(t *testing.T) {
+	// An orphaned pending snapshot (heartbeat older than the expiry timeout) is
+	// surfaced as expired on read, while the raw store row stays pending:
+	// compute-on-read never writes the expired status back.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineNoopHeartbeatAgent(t, reg, "heartbeatExpired", store)
+
+	stale := time.Now().Add(-2 * defaultHeartbeatTimeout)
+	id := savePendingWithHeartbeat(t, store, "sess-expired", &stale)
+
+	raw, err := store.GetSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if raw.Status != SnapshotStatusPending {
+		t.Errorf("raw store status = %q, want %q (compute-on-read must not write back)", raw.Status, SnapshotStatusPending)
+	}
+
+	viaAction := getSnapshotViaAction[testState](t, reg, "heartbeatExpired", id)
+	if viaAction.Status != SnapshotStatusExpired {
+		t.Errorf("getSnapshot status = %q, want %q", viaAction.Status, SnapshotStatusExpired)
+	}
+}
+
+func TestAgent_GetSnapshotAction_FreshHeartbeatStaysPending(t *testing.T) {
+	// A pending snapshot whose heartbeat is fresh is reported as pending: its
+	// worker is presumed alive.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineNoopHeartbeatAgent(t, reg, "heartbeatFresh", store)
+
+	fresh := time.Now()
+	id := savePendingWithHeartbeat(t, store, "sess-fresh", &fresh)
+
+	viaAction := getSnapshotViaAction[testState](t, reg, "heartbeatFresh", id)
+	if viaAction.Status != SnapshotStatusPending {
+		t.Errorf("getSnapshot status = %q, want %q", viaAction.Status, SnapshotStatusPending)
+	}
+}
+
+func TestAgent_GetSnapshotAction_NoHeartbeatStaysPending(t *testing.T) {
+	// A pending snapshot that has not written a first heartbeat yet is not
+	// expired: the beat may simply not have fired.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineNoopHeartbeatAgent(t, reg, "heartbeatNone", store)
+
+	id := savePendingWithHeartbeat(t, store, "sess-noheartbeat", nil)
+
+	viaAction := getSnapshotViaAction[testState](t, reg, "heartbeatNone", id)
+	if viaAction.Status != SnapshotStatusPending {
+		t.Errorf("getSnapshot status = %q, want %q", viaAction.Status, SnapshotStatusPending)
+	}
+}
+
+func TestAgent_Heartbeat_BeatAdvancesHeartbeatNotUpdatedAt(t *testing.T) {
+	// A beat advances the liveness timestamp but must NOT advance UpdatedAt: a
+	// heartbeat is not a state change, which is the whole reason HeartbeatAt is
+	// a field of its own rather than reusing UpdatedAt.
+	store := newTestInMemStore[testState]()
+	old := time.Now().Add(-time.Hour)
+	id := savePendingWithHeartbeat(t, store, "sess", &old)
+	before, err := store.GetSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+
+	if err := beatHeartbeat(context.Background(), store, id); err != nil {
+		t.Fatalf("beatHeartbeat: %v", err)
+	}
+
+	after, err := store.GetSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if after.HeartbeatAt == nil || !after.HeartbeatAt.After(*before.HeartbeatAt) {
+		t.Errorf("HeartbeatAt did not advance: before=%v after=%v", before.HeartbeatAt, after.HeartbeatAt)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("UpdatedAt changed on heartbeat: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+	}
+	if after.Status != SnapshotStatusPending {
+		t.Errorf("status = %q, want %q", after.Status, SnapshotStatusPending)
+	}
+}
+
+func TestAgent_Heartbeat_BeatIsNoopOnTerminalSnapshot(t *testing.T) {
+	// A stray beat against a settled snapshot must never resurrect or mutate
+	// it: the mutator's pending-guard returns nil, so no write happens.
+	store := newTestInMemStore[testState]()
+	saved, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Status: SnapshotStatusCompleted,
+				State:  &SessionState[testState]{SessionID: "sess"},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	before, err := store.GetSnapshot(context.Background(), saved.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+
+	if err := beatHeartbeat(context.Background(), store, saved.SnapshotID); err != nil {
+		t.Fatalf("beatHeartbeat: %v", err)
+	}
+
+	after, err := store.GetSnapshot(context.Background(), saved.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if after.Status != SnapshotStatusCompleted {
+		t.Errorf("status = %q, want %q (beat must not change it)", after.Status, SnapshotStatusCompleted)
+	}
+	if after.HeartbeatAt != nil {
+		t.Errorf("beat stamped a heartbeat on a terminal snapshot: %v", after.HeartbeatAt)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("beat bumped UpdatedAt on a terminal snapshot: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
 func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	// SendArtifact must behave the same way regardless of whether detach
 	// has landed: the artifact is added to the session and shows up in
@@ -2851,7 +3102,7 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 
 	// Abort via the store. The local caller already has the store
 	// reference from WithSessionStore.
-	status, err := store.AbortSnapshot(context.Background(), out.SnapshotID)
+	status, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID)
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
@@ -3194,12 +3445,15 @@ func TestAgent_GetSnapshotAction_BySessionID(t *testing.T) {
 	// The session-ID lookup returns the latest row whatever its status, so a
 	// reconnecting client can observe a failed/pending tip (unlike resume,
 	// which rejects it).
+	failedAt := time.Now()
 	failed, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID:    out1.SessionID,
 			ParentID:     out2.SnapshotID,
 			Status:       SnapshotStatusFailed,
 			FinishReason: AgentFinishReasonFailed,
+			CreatedAt:    failedAt,
+			UpdatedAt:    failedAt,
 		}, nil
 	})
 	if err != nil {
@@ -3423,7 +3677,7 @@ func (s wrongSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	return s.SessionStore.GetSnapshot(ctx, s.snapshotID)
 }
 
-// minimalStore is a SessionStore that does NOT implement SnapshotAborter.
+// minimalStore is a SessionStore that does NOT implement SnapshotSubscriber.
 // Used to verify the abort action stays unregistered for stores that
 // lack the capability.
 type minimalStore[State any] struct{}
@@ -3570,11 +3824,11 @@ func TestAgent_AgentMetadata_StateSchema(t *testing.T) {
 
 func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 	// Verify the abort companion action is only registered when the
-	// store implements SnapshotAborter. The getSnapshot action is
+	// store implements SnapshotSubscriber. The getSnapshot action is
 	// registered regardless.
 	t.Run("aborter capability → both registered", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		store := newTestInMemStore[testState]() // implements SnapshotAborter
+		store := newTestInMemStore[testState]() // implements SnapshotSubscriber
 		DefineCustomAgent(reg, "fullCaps",
 			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, nil
@@ -3589,7 +3843,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "fullCaps")
 		if abortAction == nil {
-			t.Error("abortSnapshot action should be registered when store implements SnapshotAborter")
+			t.Error("abortSnapshot action should be registered when store implements SnapshotSubscriber")
 		}
 	})
 
@@ -3604,12 +3858,12 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 			reg, api.ActionTypeAgentSnapshot, "minCaps")
 		if getAction == nil {
-			t.Error("getSnapshot action should be registered even when store lacks SnapshotAborter")
+			t.Error("getSnapshot action should be registered even when store lacks SnapshotSubscriber")
 		}
 		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
-			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter")
+			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotSubscriber")
 		}
 	})
 }
@@ -3677,8 +3931,8 @@ func TestAgent_Store(t *testing.T) {
 		}
 		// The returned store is usable directly, and store-specific
 		// capabilities are reachable by type assertion.
-		if _, ok := af.Store().(SnapshotAborter); !ok {
-			t.Error("expected the configured store to satisfy SnapshotAborter")
+		if _, ok := af.Store().(SnapshotSubscriber); !ok {
+			t.Error("expected the configured store to satisfy SnapshotSubscriber")
 		}
 	})
 
@@ -3926,29 +4180,34 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 	}
 }
 
-func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
+func TestAbortPendingSnapshot_AtomicAndIdempotent(t *testing.T) {
+	// Aborting is an ordinary SaveSnapshot flip (abortPendingSnapshot); this
+	// exercises its CAS semantics against the store's atomic read-mutate-write.
 	ctx := context.Background()
 	store := newTestInMemStore[testState]()
 
 	// Abort on missing snapshot returns empty status, no error.
-	if status, err := store.AbortSnapshot(ctx, "nope"); err != nil || status != "" {
-		t.Fatalf("AbortSnapshot(missing) = %q, %v; want \"\", nil", status, err)
+	if status, err := abortPendingSnapshot(ctx, store, "nope"); err != nil || status != "" {
+		t.Fatalf("abort(missing) = %q, %v; want \"\", nil", status, err)
 	}
 
 	// Pending → aborted, UpdatedAt advances (verified via GetSnapshot).
+	seedNow := time.Now()
 	pending, err := store.SaveSnapshot(ctx, "snap-cas",
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
-				Status: SnapshotStatusPending,
+				Status:    SnapshotStatusPending,
+				CreatedAt: seedNow,
+				UpdatedAt: seedNow,
 			}, nil
 		})
 	if err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 	time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
-	status, err := store.AbortSnapshot(ctx, "snap-cas")
+	status, err := abortPendingSnapshot(ctx, store, "snap-cas")
 	if err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abort: %v", err)
 	}
 	if status != SnapshotStatusAborted {
 		t.Errorf("status after first abort = %q, want aborted", status)
@@ -3963,9 +4222,9 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 
 	// Idempotent: second abort returns aborted, no error, no further mutation.
 	firstUpdate := afterFirst.UpdatedAt
-	status2, err := store.AbortSnapshot(ctx, "snap-cas")
+	status2, err := abortPendingSnapshot(ctx, store, "snap-cas")
 	if err != nil {
-		t.Fatalf("AbortSnapshot (second): %v", err)
+		t.Fatalf("abort (second): %v", err)
 	}
 	if status2 != SnapshotStatusAborted {
 		t.Errorf("status after second abort = %q, want aborted", status2)
@@ -3987,9 +4246,9 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
-	status3, err := store.AbortSnapshot(ctx, "snap-complete")
+	status3, err := abortPendingSnapshot(ctx, store, "snap-complete")
 	if err != nil {
-		t.Fatalf("AbortSnapshot on complete: %v", err)
+		t.Fatalf("abort on complete: %v", err)
 	}
 	if status3 != SnapshotStatusCompleted {
 		t.Errorf("abort on complete returned status=%q, want completed", status3)
@@ -4043,7 +4302,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	}
 
 	// Externally abort before releasing fn.
-	if _, err := store.AbortSnapshot(context.Background(), out.SnapshotID); err != nil {
+	if _, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID); err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
 
@@ -4098,7 +4357,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 	}
 
 	// Abort flips status; subscriber observes aborted.
-	if _, err := store.AbortSnapshot(ctx, "snap-sub"); err != nil {
+	if _, err := abortPendingSnapshot(ctx, store, "snap-sub"); err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
 	select {
@@ -4147,7 +4406,7 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 
-	status, err := store.AbortSnapshot(ctx, out.SnapshotID)
+	status, err := abortPendingSnapshot(ctx, store, out.SnapshotID)
 	if err != nil {
 		t.Fatalf("AbortSnapshot: %v", err)
 	}
@@ -4672,7 +4931,7 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Output: %v", err)
 		}
-		if _, err := store.AbortSnapshot(context.Background(), out.SnapshotID); err != nil {
+		if _, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID); err != nil {
 			t.Fatalf("AbortSnapshot: %v", err)
 		}
 		// AbortSnapshot flips status=aborted (finishReason still empty); the
@@ -5195,13 +5454,17 @@ func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 	// A failed detach-style row chained off the tip, as a background
-	// invocation that failed would leave behind.
+	// invocation that failed would leave behind. Created after out1, so it is
+	// the session's latest by CreatedAt.
+	failedAt := time.Now()
 	if _, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID:    out1.SessionID,
 			ParentID:     out1.SnapshotID,
 			Status:       SnapshotStatusFailed,
 			FinishReason: AgentFinishReasonFailed,
+			CreatedAt:    failedAt,
+			UpdatedAt:    failedAt,
 		}, nil
 	}); err != nil {
 		t.Fatalf("SaveSnapshot failed row: %v", err)
@@ -5353,11 +5616,15 @@ func TestAgent_ResumeFromSessionID_PendingTipRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
+	// Chained off the tip and created later, so it is the session's latest.
+	pendingAt := time.Now()
 	if _, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID: out1.SessionID,
 			ParentID:  out1.SnapshotID,
 			Status:    SnapshotStatusPending,
+			CreatedAt: pendingAt,
+			UpdatedAt: pendingAt,
 		}, nil
 	}); err != nil {
 		t.Fatalf("SaveSnapshot pending row: %v", err)

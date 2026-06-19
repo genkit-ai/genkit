@@ -66,14 +66,17 @@ func TestFileSessionStore(t *testing.T) {
 
 	t.Run("SaveWithFixedID", func(t *testing.T) {
 		store := newFileStore(t)
+		now := time.Now()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				if existing != nil {
 					t.Errorf("expected nil existing on first save, got %+v", existing)
 				}
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					CreatedAt: now,
+					UpdatedAt: now,
 				}, nil
 			})
 		if err != nil {
@@ -82,9 +85,10 @@ func TestFileSessionStore(t *testing.T) {
 		if saved.SnapshotID != "snap-1" {
 			t.Errorf("saved SnapshotID = %q, want %q", saved.SnapshotID, "snap-1")
 		}
-		if saved.CreatedAt.IsZero() || saved.UpdatedAt.IsZero() {
-			t.Errorf("expected CreatedAt/UpdatedAt stamped, got created=%v updated=%v",
-				saved.CreatedAt, saved.UpdatedAt)
+		// Timestamps are caller-managed: the store persists them verbatim.
+		if !saved.CreatedAt.Equal(now) || !saved.UpdatedAt.Equal(now) {
+			t.Errorf("expected caller-set timestamps persisted, got created=%v updated=%v want %v",
+				saved.CreatedAt, saved.UpdatedAt, now)
 		}
 	})
 
@@ -160,24 +164,31 @@ func TestFileSessionStore(t *testing.T) {
 		}
 	})
 
-	t.Run("PreservesCreatedAtOnUpdate", func(t *testing.T) {
+	t.Run("PersistsCallerTimestamps", func(t *testing.T) {
+		// Timestamps are caller-managed: the store round-trips them verbatim
+		// (it does not stamp). The caller preserves CreatedAt and advances
+		// UpdatedAt across a rewrite.
 		store := newFileStore(t)
+		created := time.Now()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
 			})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		time.Sleep(time.Millisecond)
+		later := time.Now()
 		updated, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				if existing == nil {
 					t.Fatal("expected non-nil existing on update")
 				}
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 2}},
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 2}},
+					CreatedAt: existing.CreatedAt,
+					UpdatedAt: later,
 				}, nil
 			})
 		if err != nil {
@@ -199,11 +210,7 @@ func TestFileSessionStore(t *testing.T) {
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		status, err := store.AbortSnapshot(context.Background(), "snap-1")
-		if err != nil {
-			t.Fatalf("AbortSnapshot: %v", err)
-		}
-		if status != exp.SnapshotStatusAborted {
+		if status := abortViaSave(t, store, "snap-1"); status != exp.SnapshotStatusAborted {
 			t.Errorf("status = %q, want %q", status, exp.SnapshotStatusAborted)
 		}
 		snap, _ := store.GetSnapshot(context.Background(), "snap-1")
@@ -220,22 +227,14 @@ func TestFileSessionStore(t *testing.T) {
 			}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		status, err := store.AbortSnapshot(context.Background(), "snap-1")
-		if err != nil {
-			t.Fatalf("AbortSnapshot: %v", err)
-		}
-		if status != exp.SnapshotStatusCompleted {
+		if status := abortViaSave(t, store, "snap-1"); status != exp.SnapshotStatusCompleted {
 			t.Errorf("status = %q, want %q (no-op on terminal)", status, exp.SnapshotStatusCompleted)
 		}
 	})
 
 	t.Run("AbortMissingReturnsEmpty", func(t *testing.T) {
 		store := newFileStore(t)
-		status, err := store.AbortSnapshot(context.Background(), "nonexistent")
-		if err != nil {
-			t.Fatalf("AbortSnapshot: %v", err)
-		}
-		if status != "" {
+		if status := abortViaSave(t, store, "nonexistent"); status != "" {
 			t.Errorf("status = %q, want empty (not found)", status)
 		}
 	})
@@ -261,9 +260,7 @@ func TestFileSessionStore(t *testing.T) {
 			t.Fatal("timeout waiting for initial status")
 		}
 
-		if _, err := store.AbortSnapshot(context.Background(), "snap-1"); err != nil {
-			t.Fatalf("AbortSnapshot: %v", err)
-		}
+		abortViaSave(t, store, "snap-1")
 		select {
 		case s := <-ch:
 			if s != exp.SnapshotStatusAborted {
@@ -368,9 +365,6 @@ func TestFileSessionStore(t *testing.T) {
 					}); err == nil {
 					t.Errorf("SaveSnapshot(%q): expected error, got nil", id)
 				}
-				if _, err := store.AbortSnapshot(context.Background(), id); err == nil {
-					t.Errorf("AbortSnapshot(%q): expected error, got nil", id)
-				}
 			})
 		}
 	})
@@ -392,9 +386,9 @@ func TestFileSessionStore(t *testing.T) {
 		}
 	})
 
-	t.Run("ImplementsSessionStoreAndAborter", func(t *testing.T) {
+	t.Run("ImplementsSessionStoreAndSubscriber", func(t *testing.T) {
 		var _ exp.SessionStore[testState] = (*FileSessionStore[testState])(nil)
-		var _ exp.SnapshotAborter = (*FileSessionStore[testState])(nil)
+		var _ exp.SnapshotSubscriber = (*FileSessionStore[testState])(nil)
 	})
 }
 
@@ -437,6 +431,16 @@ func TestFileSessionStore_FinishReasonPersistsAcrossReopen(t *testing.T) {
 
 func TestFileSessionStore_SessionIDs(t *testing.T) {
 	runSessionIDStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		store, err := NewFileSessionStore[testState](t.TempDir())
+		if err != nil {
+			t.Fatalf("NewFileSessionStore: %v", err)
+		}
+		return store
+	})
+}
+
+func TestFileSessionStore_Heartbeat(t *testing.T) {
+	runHeartbeatStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
 		store, err := NewFileSessionStore[testState](t.TempDir())
 		if err != nil {
 			t.Fatalf("NewFileSessionStore: %v", err)

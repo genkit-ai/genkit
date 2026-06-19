@@ -31,6 +31,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
@@ -39,6 +40,35 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/google/uuid"
 )
+
+// --- Heartbeat ---
+
+// A detached (background) turn refreshes its pending snapshot's heartbeat on an
+// interval so a reader can tell a live background worker from a dead one. Each
+// beat is a store write; if the beats stop (the worker died) the heartbeat goes
+// stale and reads surface the pending snapshot as [SnapshotStatusExpired]
+// rather than leaving it pending forever.
+const (
+	// defaultHeartbeatInterval is how often a detached turn refreshes its
+	// pending snapshot's heartbeat.
+	defaultHeartbeatInterval = 30 * time.Second
+	// defaultHeartbeatTimeout is the staleness threshold after which a pending
+	// snapshot whose heartbeat has not advanced is reported as expired on read.
+	// It is comfortably larger than defaultHeartbeatInterval so a single missed
+	// beat does not trip expiry.
+	defaultHeartbeatTimeout = 60 * time.Second
+)
+
+// isHeartbeatExpired reports whether snap is a pending (detached, in-flight)
+// snapshot whose heartbeat is older than timeout, i.e. its background worker is
+// presumed dead. A pending snapshot that has not yet written a first heartbeat
+// is not considered expired (the beat may simply not have fired yet).
+func isHeartbeatExpired[State any](snap *SessionSnapshot[State], timeout time.Duration) bool {
+	if snap.Status != SnapshotStatusPending || snap.HeartbeatAt == nil {
+		return false
+	}
+	return time.Since(*snap.HeartbeatAt) > timeout
+}
 
 // --- SessionRunner ---
 
@@ -289,6 +319,9 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 
 	parentID := s.lastSnapshotID
 	sessionID := s.SessionID()
+	// Timestamps are caller-managed (the store persists them verbatim); a fresh
+	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
+	now := time.Now()
 	saved, err := s.store.SaveSnapshot(ctx, "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
@@ -297,6 +330,8 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 				Status:       SnapshotStatusCompleted,
 				FinishReason: finishReason,
 				State:        &state,
+				CreatedAt:    now,
+				UpdatedAt:    now,
 			}, nil
 		})
 	if err != nil {
@@ -420,11 +455,11 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 // which asks the background work behind a pending snapshot (e.g. a
 // detached invocation) to stop (input [AbortSnapshotRequest], output
 // [AbortSnapshotResponse]). It returns nil when the agent has no
-// [SessionStore] or the store does not implement [SnapshotAborter].
+// [SessionStore] or the store does not implement [SnapshotSubscriber].
 //
 // Use it to expose aborting over a transport (e.g. mount it with
-// genkit.Handler next to the agent itself); local Go code should call the
-// store's [SnapshotAborter.AbortSnapshot] directly.
+// genkit.Handler next to the agent itself); local Go code aborts by writing
+// the aborted status through the store's [SnapshotWriter.SaveSnapshot].
 func (a *Agent[State]) AbortSnapshotAction() api.Action {
 	return a.abortSnapshot
 }
@@ -436,7 +471,7 @@ func (a *Agent[State]) AbortSnapshotAction() api.Action {
 //
 // The store is returned as the [SessionStore] interface, not its concrete
 // type; a caller needing a store-specific capability (e.g.
-// [SnapshotAborter]) type-asserts for it.
+// [SnapshotSubscriber]) type-asserts for it.
 func (a *Agent[State]) Store() SessionStore[State] {
 	return a.store
 }
@@ -656,7 +691,9 @@ func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	abortable := false
 	if store != nil {
 		mgmt = AgentStateManagementServer
-		_, abortable = store.(SnapshotAborter)
+		// Abortable iff the runtime can observe the abort it writes via
+		// SaveSnapshot, i.e. the store can subscribe to status changes.
+		_, abortable = store.(SnapshotSubscriber)
 	}
 	return AgentMetadata{
 		StateManagement: mgmt,
@@ -901,17 +938,17 @@ func (rt *agentRuntime[State]) run(
 
 // checkDetachCapabilities reports whether the configured store is capable
 // of supporting detach. Detach requires a writable store (to persist the
-// pending snapshot) and a [SnapshotAborter] (which bundles both abort
-// triggering and status-change subscription so the runtime can react to
-// the abort without polling).
+// pending snapshot, and to abort it and refresh its heartbeat via ordinary
+// SaveSnapshot writes) and a [SnapshotSubscriber] (so the runtime can observe
+// the abort flip and promptly cancel the background work without polling).
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
 		return core.NewError(core.FAILED_PRECONDITION,
 			"agent %q: detach requires a session store", rt.name)
 	}
-	if _, ok := rt.cfg.store.(SnapshotAborter); !ok {
+	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
 		return core.NewError(core.FAILED_PRECONDITION,
-			"agent %q: detach requires a session store implementing SnapshotAborter", rt.name)
+			"agent %q: detach requires a session store implementing SnapshotSubscriber", rt.name)
 	}
 	return nil
 }
@@ -1060,12 +1097,25 @@ func (rt *agentRuntime[State]) handleDetach(
 	// Detach intends to outlive the client connection. If clientCtx was
 	// already cancelled (or cancels mid-write), we still want the pending
 	// row durable so observers can find it later. Decouple this write.
+	//
+	// checkDetachCapabilities (run before detach is honored) guarantees the
+	// store is a SnapshotSubscriber, so the runtime can observe the abort flip.
+	subscriber := rt.cfg.store.(SnapshotSubscriber)
+
+	// Stamp the pending row's timestamps and an initial heartbeat (refreshed on
+	// an interval below). Timestamps are caller-managed; a reader treats a
+	// pending snapshot whose heartbeat has gone stale as expired (its background
+	// worker is presumed dead).
+	now := time.Now()
 	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
-				SessionID: sessionID,
-				ParentID:  parentID,
-				Status:    SnapshotStatusPending,
+				SessionID:   sessionID,
+				ParentID:    parentID,
+				Status:      SnapshotStatusPending,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				HeartbeatAt: &now,
 			}, nil
 		})
 	if err != nil {
@@ -1078,14 +1128,20 @@ func (rt *agentRuntime[State]) handleDetach(
 	// trashes any further chunks.
 	rt.router.stopAndWait()
 
+	// Refresh the heartbeat on an interval, decoupled from clientCtx (the work
+	// outlives the client connection); stopped when the turn settles or an abort
+	// lands, both below.
+	hbCtx, stopHeartbeat := context.WithCancel(context.WithoutCancel(clientCtx))
+	go rt.runHeartbeat(hbCtx, pending.SnapshotID)
+
 	abortedByUser := &atomic.Bool{}
 	subCtx, stopSub := context.WithCancel(workCtx)
-	aborter := rt.cfg.store.(SnapshotAborter) // safe: checkDetachCapabilities ran already
-	statusCh := aborter.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
+	statusCh := subscriber.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
 	go func() {
 		for status := range statusCh {
 			if status == SnapshotStatusAborted {
 				abortedByUser.Store(true)
+				stopHeartbeat()
 				cancelWork()
 				return
 			}
@@ -1096,6 +1152,10 @@ func (rt *agentRuntime[State]) handleDetach(
 	go func() {
 		res := <-rt.fnDone
 		stopSub()
+		// The turn has settled; stop refreshing the heartbeat before the
+		// finalize write so no beat races it. (A stray beat would be a no-op
+		// anyway: the mutator only touches a still-pending row.)
+		stopHeartbeat()
 		rt.intake.stopAndWait()
 		rt.router.close()
 		rt.finalizePendingSnapshot(finalizeCtx, pending, res.result, res.err, abortedByUser.Load())
@@ -1110,6 +1170,79 @@ func (rt *agentRuntime[State]) handleDetach(
 		SnapshotID:   pending.SnapshotID,
 		FinishReason: AgentFinishReasonDetached,
 	}, nil
+}
+
+// runHeartbeat refreshes the detached pending snapshot's heartbeat every
+// defaultHeartbeatInterval until ctx is cancelled (the turn settled or an abort
+// landed). A transient store error is logged and the loop continues; a
+// persistently failing worker simply stops beating, which is exactly the
+// staleness a reader detects as expired.
+func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID string) {
+	ticker := time.NewTicker(defaultHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := beatHeartbeat(ctx, rt.cfg.store, snapshotID); err != nil {
+				logger.FromContext(ctx).Debug("agent: heartbeat refresh failed",
+					"snapshotId", snapshotID, "err", err)
+			}
+		}
+	}
+}
+
+// beatHeartbeat refreshes a pending snapshot's HeartbeatAt via an ordinary
+// SaveSnapshot: the mutator carries the existing row through unchanged but for
+// HeartbeatAt, so the caller-managed CreatedAt/UpdatedAt are preserved and a
+// beat does not register as a state change - no dedicated store method needed.
+// It only touches a still-pending row (returning nil otherwise), so a beat
+// never resurrects a terminal snapshot or clobbers a concurrent abort/finalize.
+// Shared by runHeartbeat and exercised directly in tests.
+func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) error {
+	now := time.Now()
+	_, err := store.SaveSnapshot(ctx, snapshotID,
+		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			if existing == nil || existing.Status != SnapshotStatusPending {
+				return nil, nil
+			}
+			updated := *existing
+			updated.HeartbeatAt = &now
+			return &updated, nil
+		})
+	return err
+}
+
+// abortSnapshot flips a pending snapshot to aborted via an ordinary
+// SaveSnapshot and returns the resulting status: aborted when the row was
+// pending, the existing terminal status when it was already settled (a no-op
+// verbatim rewrite), or "" when the snapshot does not exist. SaveSnapshot's
+// atomic read-mutate-write makes the flip safe against a racing terminal write,
+// and the status change drives any [SnapshotSubscriber.OnSnapshotStatusChange]
+// subscription, so the store needs no dedicated abort method.
+func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
+	now := time.Now()
+	saved, err := store.SaveSnapshot(ctx, snapshotID,
+		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			if existing == nil {
+				return nil, nil // not found
+			}
+			if existing.Status != SnapshotStatusPending {
+				return existing, nil // already terminal: re-persist so the return carries its status
+			}
+			updated := *existing
+			updated.Status = SnapshotStatusAborted
+			updated.UpdatedAt = now
+			return &updated, nil
+		})
+	if err != nil {
+		return "", err
+	}
+	if saved == nil {
+		return "", nil
+	}
+	return saved.Status, nil
 }
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
@@ -1128,16 +1261,17 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 ) {
 	finalState := *rt.session.State()
 	// Captured outside the SaveSnapshot callback (which must stay pure): the
-	// finalizer runs after fn returned, so this is stable. The abort/error
+	// finalizer runs after fn returned, so these are stable. The abort/error
 	// branches below own their reasons and ignore this clean-success default.
 	completedReason := rt.sess.invocationReason(result)
+	now := time.Now()
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			// Late abort wins over the terminal we were about to land: keep
 			// the aborted status and whatever state the abort left, but
 			// stamp the aborted finish reason so the snapshot is
-			// self-describing. (AbortSnapshot only flips status; the runtime
+			// self-describing. (The abort write only flips status; the runtime
 			// owns the semantic reason.) Skip the write once already stamped.
 			if existing != nil && existing.Status == SnapshotStatusAborted {
 				if existing.FinishReason == AgentFinishReasonAborted {
@@ -1145,6 +1279,11 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				}
 				annotated := *existing
 				annotated.FinishReason = AgentFinishReasonAborted
+				annotated.UpdatedAt = now
+				// The row is terminal now; drop the liveness heartbeat so it
+				// does not linger on a settled snapshot. CreatedAt is preserved
+				// from the copy, so recency ordering is unaffected.
+				annotated.HeartbeatAt = nil
 				return &annotated, nil
 			}
 
@@ -1167,6 +1306,9 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				snapErr = core.AsGenkitError(fnErr)
 			}
 
+			// Preserve the pending row's CreatedAt (so the finalize does not
+			// move it ahead of newer rows in createdAt-ordered resolution) and
+			// advance UpdatedAt: this rewrite is a real state change.
 			return &SessionSnapshot[State]{
 				SessionID:    pending.SessionID,
 				ParentID:     pending.ParentID,
@@ -1174,6 +1316,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				FinishReason: finishReason,
 				Error:        snapErr,
 				State:        &finalState,
+				CreatedAt:    pending.CreatedAt,
+				UpdatedAt:    now,
 			}, nil
 		})
 	if err != nil {

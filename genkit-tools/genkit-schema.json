@@ -263,6 +263,9 @@
         "updatedAt": {
           "type": "string"
         },
+        "heartbeatAt": {
+          "type": "string"
+        },
         "status": {
           "$ref": "#/$defs/SnapshotStatus"
         },
@@ -310,7 +313,8 @@
         "pending",
         "completed",
         "aborted",
-        "failed"
+        "failed",
+        "expired"
       ]
     },
     "TurnEnd": {
