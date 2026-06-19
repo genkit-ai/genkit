@@ -93,7 +93,7 @@ func WithDescription[State any](description string) AgentOption[State] {
 
 // --- InvocationOption ---
 
-// InvocationOption configures an agent invocation (StreamBidi, Run, or RunText).
+// InvocationOption configures an agent invocation (Connect, Run, or RunText).
 type InvocationOption[State any] interface {
 	applyInvocation(*invocationOptions[State]) error
 }

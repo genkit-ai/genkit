@@ -99,9 +99,9 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Turn 1.
@@ -168,9 +168,9 @@ func TestAgentConnection_Custom_TracksStreamedPatches(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Before any patch arrives, Custom() is the zero value.
@@ -217,9 +217,9 @@ func TestAgent_WithSessionStore(t *testing.T) {
 
 	af := defineCounterAgent(reg, "snapshotFlow", WithSessionStore(store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "turn1")
@@ -266,9 +266,9 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	af := defineCounterAgent(reg, "resumeFlow", WithSessionStore(store))
 
 	// First invocation: create a snapshot.
-	conn1, err := af.StreamBidi(ctx)
+	conn1, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 	sendText(t, conn1, "first message")
 	for chunk, err := range conn1.Receive() {
@@ -289,9 +289,9 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	}
 
 	// Second invocation: resume from snapshot.
-	conn2, err := af.StreamBidi(ctx, WithSnapshotID[testState](resp1.SnapshotID))
+	conn2, err := af.Connect(ctx, WithSnapshotID[testState](resp1.SnapshotID))
 	if err != nil {
-		t.Fatalf("StreamBidi with snapshot failed: %v", err)
+		t.Fatalf("Connect with snapshot failed: %v", err)
 	}
 	sendTurn(t, conn2, "continued message")
 	conn2.Close()
@@ -341,9 +341,9 @@ func TestAgent_ClientManagedState(t *testing.T) {
 		Custom: testState{Counter: 5},
 	}
 
-	conn, err := af.StreamBidi(ctx, WithState(clientState))
+	conn, err := af.Connect(ctx, WithState(clientState))
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "new message")
@@ -403,9 +403,9 @@ func TestAgent_Artifacts(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "generate code")
@@ -512,9 +512,9 @@ func TestAgent_InputMessageCloned(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sent := ai.NewUserTextMessage("original")
@@ -638,9 +638,9 @@ func TestAgent_SendMessage(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Send a message via SendMessage.
@@ -686,9 +686,9 @@ func TestAgent_SessionContext(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "test")
@@ -712,9 +712,9 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "trigger error")
@@ -802,9 +802,9 @@ func TestAgent_FailedTurn_ClientManagedReturnsLastGoodState(t *testing.T) {
 
 	af := defineLastGoodTestAgent(reg, "lastGoodClient")
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	for _, text := range []string{"one", "two", "boom"} {
 		sendText(t, conn, text)
@@ -899,9 +899,9 @@ func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
 
 	af := defineLastGoodTestAgent(reg, "recoveryDedup", WithSessionStore[testState](store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turn0 := sendTurn(t, conn, "one")
 	if turn0.SnapshotID == "" {
@@ -989,9 +989,9 @@ func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 
@@ -1040,9 +1040,9 @@ func TestAgent_CustomAgentContinuesAfterFailedTurn(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	for _, text := range []string{"one", "boom", "two"} {
 		sendText(t, conn, text)
@@ -1150,9 +1150,9 @@ func TestAgent_SetMessages(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "original")
@@ -1203,9 +1203,9 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Two turns.
@@ -1268,9 +1268,9 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "hello")
@@ -1351,9 +1351,9 @@ func TestPromptAgent_Basic(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "testPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Turn 1.
@@ -1426,9 +1426,9 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "historyPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Turn 1.
@@ -1502,9 +1502,9 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "hello")
@@ -1518,9 +1518,9 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		t.Fatal("expected snapshot ID")
 	}
 
-	conn2, err := af.StreamBidi(ctx, WithSnapshotID[testState](resp.SnapshotID))
+	conn2, err := af.Connect(ctx, WithSnapshotID[testState](resp.SnapshotID))
 	if err != nil {
-		t.Fatalf("StreamBidi with snapshot failed: %v", err)
+		t.Fatalf("Connect with snapshot failed: %v", err)
 	}
 
 	sendTurn(t, conn2, "continued")
@@ -1625,9 +1625,9 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "toolPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "go")
@@ -2014,9 +2014,9 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "plainPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Turn 1: a plain text reply, so no tool request lands in history.
@@ -2092,9 +2092,9 @@ func TestAgent_MultiTurnSnapshot(t *testing.T) {
 	af := defineCounterAgent(reg, "multiDedupFlow", WithSessionStore(store))
 
 	// Multi-turn: one snapshot per turn; the output reuses the last one.
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	var snapshotIDs []string
@@ -2199,9 +2199,9 @@ func TestAgent_FnPanicResolvesAsFailedOutput(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "trigger")
 
@@ -2252,9 +2252,9 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "go")
 
@@ -2354,9 +2354,9 @@ func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	var observed []TurnEnd
@@ -2416,9 +2416,9 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Drain stream chunks in the background.
@@ -2501,9 +2501,9 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Background drainer.
@@ -2563,9 +2563,9 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach send: %v", err)
@@ -2615,9 +2615,9 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Drain chunks so the responder isn't blocked.
@@ -2752,9 +2752,9 @@ func TestAgent_Detach_StampsHeartbeatOnPendingSnapshot(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -2957,9 +2957,9 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -3017,9 +3017,9 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -3080,9 +3080,9 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -3139,9 +3139,9 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 
@@ -3191,9 +3191,9 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -4145,9 +4145,9 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 
 	// First invocation: detach to write a pending snapshot, then wait
 	// for finalize.
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "turn 1")
@@ -4284,9 +4284,9 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -4544,9 +4544,9 @@ func TestAgent_FinishReason_TurnAndInvocation(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 
@@ -4591,9 +4591,9 @@ func TestAgent_FinishReason_OmittedWhenNil(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != "" {
@@ -4629,9 +4629,9 @@ func TestAgent_FinishReason_InvocationOverride(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != AgentFinishReasonStop {
@@ -4668,9 +4668,9 @@ func TestAgent_FinishReason_MultiTurnDistinct(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	var got []AgentFinishReason
@@ -4713,9 +4713,9 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "lengthPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != AgentFinishReasonLength {
@@ -4764,9 +4764,9 @@ func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(ctx)
+		conn, err := af.Connect(ctx)
 		if err != nil {
-			t.Fatalf("iteration %d: StreamBidi: %v", i, err)
+			t.Fatalf("iteration %d: Connect: %v", i, err)
 		}
 		drainInBackground(conn)
 		if err := conn.SendText("go"); err != nil {
@@ -4821,9 +4821,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(context.Background())
+		conn, err := af.Connect(context.Background())
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		drainInBackground(conn)
 		sendText(t, conn, "go")
@@ -4869,9 +4869,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(context.Background())
+		conn, err := af.Connect(context.Background())
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		drainInBackground(conn)
 		sendText(t, conn, "go")
@@ -4916,9 +4916,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(context.Background())
+		conn, err := af.Connect(context.Background())
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		drainInBackground(conn)
 		sendText(t, conn, "go")
@@ -5016,9 +5016,9 @@ func TestAgent_FinishReason_MultiTurnDistinct_Persisted(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	var ids []string
 	for i := 0; i < len(reasons); i++ {
@@ -5064,9 +5064,9 @@ func TestAgent_FinishReason_OmittedPersisted(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 	snapID := nextTurnEnd(t, conn).SnapshotID
@@ -5116,9 +5116,9 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "interruptPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "do it")
 	var (
@@ -5184,9 +5184,9 @@ func TestAgent_Detach_CompletedHonorsResultOverride(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "go")
@@ -5222,9 +5222,9 @@ func TestAgent_SessionID_AssignedAndStable(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "sessionAssignFlow", WithSessionStore(store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	var snapshotIDs []string
@@ -5555,9 +5555,9 @@ func TestAgent_ResumeFromSessionID_AfterFailureResumesLastTurn(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "sessionRecoveryFlow", WithSessionStore[testState](store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	for _, text := range []string{"one", "two", "boom"} {
 		sendText(t, conn, text)
@@ -5800,9 +5800,9 @@ func TestAgent_Detach_AssignsSessionID(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "go")
@@ -5873,9 +5873,9 @@ func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
 	}
 	af := defineLastGoodTestAgent(reg, "detachMidWrite", WithSessionStore[testState](store))
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "one")
@@ -5938,9 +5938,9 @@ func TestAgent_FailedTurn_OutputCarriesSessionID(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "failedSessionFlow", WithSessionStore(store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendTurn(t, conn, "turn one")
 	if err := conn.SendText("boom"); err != nil && !errors.Is(err, core.ErrActionCompleted) {
@@ -6018,24 +6018,24 @@ func TestAgent_WithSessionID_OptionValidation(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "sessionOptFlow", WithSessionStore(store))
 
-	if _, err := af.StreamBidi(ctx, WithState(&SessionState[testState]{}), WithSnapshotID[testState]("x")); err == nil ||
+	if _, err := af.Connect(ctx, WithState(&SessionState[testState]{}), WithSnapshotID[testState]("x")); err == nil ||
 		!strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("WithState+WithSnapshotID: expected mutual-exclusion error, got %v", err)
 	}
-	if _, err := af.StreamBidi(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
+	if _, err := af.Connect(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
 		!strings.Contains(err.Error(), "more than once") {
 		t.Errorf("WithSessionID twice: expected duplicate-option error, got %v", err)
 	}
 	// An empty session ID is an explicit error, not a silent no-op: a
 	// pipelined AgentOutput.SessionID from a storeless invocation must not
 	// quietly start a fresh conversation.
-	if _, err := af.StreamBidi(ctx, WithSessionID[testState]("")); err == nil ||
+	if _, err := af.Connect(ctx, WithSessionID[testState]("")); err == nil ||
 		!strings.Contains(err.Error(), "session ID is empty") {
 		t.Errorf("WithSessionID(\"\"): expected empty-ID error, got %v", err)
 	}
 	// WithSessionID composes with WithSnapshotID: the option layer accepts
 	// the pair and the init-level checks (here: unknown snapshot) decide.
-	conn, err := af.StreamBidi(ctx, WithSessionID[testState]("s"), WithSnapshotID[testState]("x"))
+	conn, err := af.Connect(ctx, WithSessionID[testState]("s"), WithSnapshotID[testState]("x"))
 	if err != nil {
 		t.Fatalf("WithSessionID+WithSnapshotID: expected option layer to accept, got %v", err)
 	}
@@ -6153,9 +6153,9 @@ func TestAgent_SendNilInput_Rejected(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	if err := conn.Send(nil); err == nil {
@@ -6251,9 +6251,9 @@ func TestAgent_ClientCancelMidStream(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			conn, err := af.StreamBidi(ctx)
+			conn, err := af.Connect(ctx)
 			if err != nil {
-				t.Fatalf("StreamBidi failed: %v", err)
+				t.Fatalf("Connect failed: %v", err)
 			}
 			sendText(t, conn, "hello")
 			// Close the input side so sess.Run ends cleanly and fn returns
@@ -6312,9 +6312,9 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 	cancel()
 

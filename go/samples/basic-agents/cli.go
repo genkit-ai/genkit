@@ -311,7 +311,7 @@ func runChat(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], resu
 	if resume != nil {
 		opts = append(opts, resumeOption(ctx, a, resume))
 	}
-	conn, err := a.StreamBidi(ctx, opts...)
+	conn, err := a.Connect(ctx, opts...)
 	if err != nil {
 		return prevSessionID, fmt.Errorf("open agent %q: %w", a.Name(), err)
 	}

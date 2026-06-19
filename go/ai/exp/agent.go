@@ -411,7 +411,7 @@ type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *Sess
 //
 // Agent implements [api.BidiAction], so generic transports accept it directly
 // (e.g. pass it to genkit.Handler to serve it over HTTP, one turn per request).
-// [Agent.Run], [Agent.RunText], and [Agent.StreamBidi] are typed conveniences
+// [Agent.Run], [Agent.RunText], and [Agent.Connect] are typed conveniences
 // over the same underlying action.
 //
 // Server-managed agents (those with a [SessionStore] configured) also
@@ -533,15 +533,15 @@ func (a *Agent[State]) RunJSONWithTelemetry(ctx context.Context, input json.RawM
 // counterpart of the [InvocationOption] values) rides in opts: input is
 // delivered as the only chunk on the input stream and outgoing chunks are
 // forwarded to cb.
-func (a *Agent[State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiSessionOptions) (*api.ActionRunResult[json.RawMessage], error) {
+func (a *Agent[State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiJSONOptions) (*api.ActionRunResult[json.RawMessage], error) {
 	return a.action.RunBidiJSON(ctx, input, cb, opts)
 }
 
-// StreamBidiJSON starts a bidirectional streaming session using
+// ConnectJSON starts a bidirectional streaming session using
 // JSON-encoded messages. Local Go callers should prefer the typed
-// [Agent.StreamBidi].
-func (a *Agent[State]) StreamBidiJSON(ctx context.Context, opts *api.BidiSessionOptions) (api.BidiJSONConnection, error) {
-	return a.action.StreamBidiJSON(ctx, opts)
+// [Agent.Connect].
+func (a *Agent[State]) ConnectJSON(ctx context.Context, opts *api.BidiJSONOptions) (api.BidiJSONConnection, error) {
+	return a.action.ConnectJSON(ctx, opts)
 }
 
 // DefineAgent defines a prompt-backed agent and registers it. Each turn
@@ -2164,10 +2164,10 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 
 // --- Agent client API ---
 
-// StreamBidi starts a new agent invocation with bidirectional streaming.
+// Connect starts a new agent invocation with bidirectional streaming.
 // Use this for multi-turn interactions where you need to send multiple inputs
 // and receive streaming chunks. For single-turn usage, see Run and RunText.
-func (a *Agent[State]) StreamBidi(
+func (a *Agent[State]) Connect(
 	ctx context.Context,
 	opts ...InvocationOption[State],
 ) (*AgentConnection[State], error) {
@@ -2175,7 +2175,7 @@ func (a *Agent[State]) StreamBidi(
 	if err != nil {
 		return nil, err
 	}
-	conn, err := a.action.StreamBidi(ctx, init)
+	conn, err := a.action.Connect(ctx, init)
 	if err != nil {
 		return nil, err
 	}
@@ -2184,7 +2184,7 @@ func (a *Agent[State]) StreamBidi(
 
 // Run starts a single-turn agent invocation with the given input.
 // It sends the input, waits for the agent to complete, and returns the output.
-// For multi-turn interactions or streaming, use StreamBidi instead.
+// For multi-turn interactions or streaming, use Connect instead.
 //
 // In-band failures (e.g. a failed turn) resolve as a failed [AgentOutput]
 // rather than an error; a rejected init payload fails with an error, since
@@ -2194,7 +2194,7 @@ func (a *Agent[State]) Run(
 	input *AgentInput,
 	opts ...InvocationOption[State],
 ) (*AgentOutput[State], error) {
-	conn, err := a.StreamBidi(ctx, opts...)
+	conn, err := a.Connect(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2324,7 +2324,7 @@ func (c *AgentConnection[State]) Close() error {
 // of the iterator does not cancel the connection; multi-turn callers
 // routinely break on [TurnEnd], send the next input, then call Receive
 // again to consume the next batch. Call [AgentConnection.Output] to
-// finish the invocation, or cancel the ctx passed to StreamBidi to
+// finish the invocation, or cancel the ctx passed to Connect to
 // abort it.
 //
 // Each yielded chunk's [AgentStreamChunk.CustomPatch] is applied to the
