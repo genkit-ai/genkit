@@ -42,6 +42,7 @@ from genkit import (
     ModelResponse,
     Part,
     Role,
+    Supports,
     TextPart,
     ToolDefinition,
 )
@@ -364,6 +365,109 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             ModelInfo(
                 label='Google AI - gemini-4-0-pro-delux-max',
                 supports=DEFAULT_SUPPORTS_MODEL,
+            ),
+        ),
+        (
+            'gemini-3-pro-image',
+            ModelInfo(
+                label='Google AI - Gemini 3 Pro Image',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-3.1-flash-image',
+            ModelInfo(
+                label='Google AI - Gemini 3.1 Flash Image',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-3.1-flash-image-preview',
+            ModelInfo(
+                label='Google AI - Gemini 3.1 Flash Image Preview',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-3-pro-image-preview',
+            ModelInfo(
+                label='Google AI - Gemini 3 Pro Image Preview',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-2.5-flash-image',
+            ModelInfo(
+                label='Google AI - Gemini 2.5 Flash Image',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            'gemini-2.5-flash-image-preview',
+            ModelInfo(
+                label='Google AI - Gemini 2.5 Flash Image Preview',
+                supports=Supports(
+                    multiturn=True,
+                    media=True,
+                    tools=True,
+                    tool_choice=True,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                ),
+            ),
+        ),
+        (
+            # An unregistered image model falls back to GENERIC_IMAGE_MODEL via
+            # is_image_model(). That fallback must stay restrictive (single-turn,
+            # no tools, output=['media']) because pure image-generation models are
+            # not conversational/tool-capable.
+            'gemini-2.0-flash-preview-image-generation',
+            ModelInfo(
+                label='Google AI - Gemini Image',
+                supports=Supports(
+                    multiturn=False,
+                    media=True,
+                    tools=False,
+                    tool_choice=False,
+                    system_role=True,
+                    constrained=Constrained.ALL,
+                    output=['media'],
+                ),
             ),
         ),
     ],
@@ -929,6 +1033,12 @@ def test_gemini_model__normalize_config_respects_version_override() -> None:
     [
         ('gemini-2.5-flash-preview-tts', GeminiTtsConfigSchema),
         ('gemini-2.0-flash-preview-image-generation', GeminiImageConfigSchema),
+        ('gemini-3-pro-image', GeminiImageConfigSchema),
+        ('gemini-3.1-flash-image', GeminiImageConfigSchema),
+        ('gemini-3.1-flash-image-preview', GeminiImageConfigSchema),
+        ('gemini-3-pro-image-preview', GeminiImageConfigSchema),
+        ('gemini-2.5-flash-image', GeminiImageConfigSchema),
+        ('gemini-2.5-flash-image-preview', GeminiImageConfigSchema),
         ('gemma-2-27b-it', GemmaConfigSchema),
         ('gemini-2.0-flash-001', GeminiConfigSchema),
     ],
