@@ -368,15 +368,8 @@ async def test_attached_turn_abort() -> None:
         # Wait a short moment to let the model run and tool start executing
         await asyncio.sleep(0.5)
         
-        # Abort the active turn
-        turn.abort()
-
-        # Awaiting output should resolve with aborted or raise CancelledError
-        # because the connection was aborted.
-        try:
-            await turn.output
-        except BaseException:
-            pass
+        # Abort the active turn and wait for cancellation
+        await turn.abort()
 
         # Wait for the background drain task to finish
         try:
@@ -387,3 +380,22 @@ async def test_attached_turn_abort() -> None:
         # Verify that the tool was started AND it was successfully cancelled!
         assert tool_executed
         assert tool_cancelled
+
+        # Queue a second response on the mock model for the second turn
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(root=TextPart(text="Second turn echo"))]
+                ),
+            )
+        )
+
+        # We should be able to cleanly send a new turn and continue the conversation!
+        turn2 = session.send("Continue conversation")
+        chunks2 = []
+        async for chunk in turn2.stream:
+            chunks2.append(chunk)
+        res2 = await turn2.output
+        assert res2.message.content[0].root.text == "Second turn echo"

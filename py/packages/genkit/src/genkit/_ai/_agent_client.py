@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Awaitable
 from dataclasses import dataclass
@@ -151,10 +152,16 @@ class AgentTurn(Generic[StateT, StreamT]):
         """Returns the interrupt if the turn paused on one, otherwise None."""
         return self._interrupt
 
-    def abort(self) -> None:
-        """Aborts this turn."""
+    async def abort(self) -> None:
+        """Aborts this turn and blocks until all server/client tasks are fully terminated."""
         if self._abort_fn:
-            self._abort_fn()
+            res = self._abort_fn()
+            if inspect.isawaitable(res):
+                await res
+        try:
+            await self._output
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +532,7 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
             if abort_event is not None:
                 await abort_event.wait()
                 await conn.close()
+                self._conn = None
                 try:
                     await conn.output()
                 except asyncio.CancelledError:
