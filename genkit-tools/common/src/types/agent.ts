@@ -321,6 +321,7 @@ export const SnapshotStatusSchema = z.enum([
   'completed',
   'aborted',
   'failed',
+  'expired',
 ]);
 export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
 
@@ -349,6 +350,14 @@ export const SessionSnapshotSchema = z.object({
   createdAt: z.string(),
   /** When the snapshot was last written (RFC 3339). Equals `createdAt` until rewritten. */
   updatedAt: z.string().optional(),
+  /**
+   * Heartbeat timestamp (RFC 3339) refreshed periodically while a detached
+   * (background) turn is in flight. When a `pending` snapshot's heartbeat goes
+   * stale (older than the configured timeout), reads surface its status as
+   * `expired` - the background worker is presumed dead and can no longer
+   * persist a terminal status itself.
+   */
+  heartbeatAt: z.string().optional(),
   /** What triggered this snapshot. */
   /** Lifecycle state of this snapshot. Empty is treated as `succeeded`. */
   status: SnapshotStatusSchema.optional(),
