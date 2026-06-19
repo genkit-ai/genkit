@@ -25,6 +25,10 @@ import path from 'path';
 import type { GenkitToolsError } from '../manager';
 import type { BaseRuntimeManager } from '../manager/manager';
 import { writeToolsInfoFile } from '../utils';
+import {
+  getDevServerHost,
+  rejectNonLoopbackHost,
+} from '../utils/dev-server-security';
 import { logger } from '../utils/logger';
 import { toolsPackage } from '../utils/package';
 import { downloadAndExtractUiAssets } from '../utils/ui-assets';
@@ -97,6 +101,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
       exposedHeaders: ['X-Genkit-Trace-Id'],
     })
   );
+  app.use(rejectNonLoopbackHost);
 
   // Download UI assets from public GCS bucket and serve locally
   downloadAndExtractUiAssets({
@@ -320,7 +325,7 @@ export function startServer(manager: BaseRuntimeManager, port: number) {
   };
   app.use(errorHandler);
 
-  server = app.listen(port, async () => {
+  server = app.listen(port, getDevServerHost(), async () => {
     const uiUrl = 'http://localhost:' + port;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);
