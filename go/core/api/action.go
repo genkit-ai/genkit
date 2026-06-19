@@ -41,13 +41,15 @@ type Action interface {
 	Desc() ActionDesc
 }
 
-// BidiSessionOptions configures a bidirectional session started through the
-// JSON interfaces. A nil value is equivalent to zero options. The struct may
-// gain fields over time; construct it by field name.
+// BidiJSONOptions carries the options for a JSON-encoded call to a bidi
+// action, used by both the one-shot [BidiAction.RunBidiJSON] and the streaming
+// [BidiAction.ConnectJSON]. It is the JSON counterpart of the typed init
+// argument. A nil value is equivalent to zero options. The struct may gain
+// fields over time; construct it by field name.
 //
 // Experimental: bidirectional streaming is experimental and subject to change.
-type BidiSessionOptions struct {
-	// Init is the JSON-encoded initial configuration for the session,
+type BidiJSONOptions struct {
+	// Init is the JSON-encoded initial configuration for the call,
 	// decoded into the action's Init type and validated against its
 	// InitSchema. Empty or JSON-null means no init (the zero Init value).
 	Init json.RawMessage
@@ -64,10 +66,10 @@ type BidiAction interface {
 	// RunBidiJSON runs the bidi action as a single one-shot call: input is
 	// delivered as the only chunk on the input stream, outgoing chunks are
 	// forwarded to cb, and opts carries the session init.
-	RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *BidiSessionOptions) (*ActionRunResult[json.RawMessage], error)
-	// StreamBidiJSON starts a bidirectional streaming session using
+	RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *BidiJSONOptions) (*ActionRunResult[json.RawMessage], error)
+	// ConnectJSON starts a bidirectional streaming session using
 	// JSON-encoded messages.
-	StreamBidiJSON(ctx context.Context, opts *BidiSessionOptions) (BidiJSONConnection, error)
+	ConnectJSON(ctx context.Context, opts *BidiJSONOptions) (BidiJSONConnection, error)
 }
 
 // BidiJSONConnection is a JSON-encoded view of an active bidirectional
