@@ -776,7 +776,7 @@ func runActionWithOptionalInit(ctx context.Context, a api.Action, input, init js
 		return nil, err
 	}
 	if bidi, ok := a.(api.BidiAction); ok && base.HasJSONValue(init) {
-		return bidi.RunBidiJSON(ctx, input, cb, &api.BidiSessionOptions{Init: init})
+		return bidi.RunBidiJSON(ctx, input, cb, &api.BidiJSONOptions{Init: init})
 	}
 	return a.RunJSONWithTelemetry(ctx, input, cb)
 }

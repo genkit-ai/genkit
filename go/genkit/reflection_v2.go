@@ -559,7 +559,7 @@ func (s *reflectionServerV2) handleRunActionBidi(ctx context.Context, req *jsonR
 		actionCtx = core.WithActionContext(actionCtx, contextMap)
 	}
 
-	conn, err := bidi.StreamBidiJSON(actionCtx, &api.BidiSessionOptions{Init: params.Init})
+	conn, err := bidi.ConnectJSON(actionCtx, &api.BidiJSONOptions{Init: params.Init})
 	if err != nil {
 		s.sendErrorResponse(req.ID, jsonRPCServerError, err.Error(), nil)
 		return
