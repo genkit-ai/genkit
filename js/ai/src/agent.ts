@@ -74,6 +74,40 @@ import {
 } from './session.js';
 
 /**
+ * Default interval (ms) at which a detached (background) turn refreshes its
+ * pending snapshot's heartbeat. Each beat is a write to the session store.
+ */
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Default staleness threshold (ms) after which a `pending` snapshot whose
+ * heartbeat has not advanced is reported as `expired` on read. Should be
+ * comfortably larger than {@link DEFAULT_HEARTBEAT_INTERVAL_MS} so a single
+ * missed beat does not trip expiry.
+ */
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 60_000;
+
+/**
+ * Returns `true` when a snapshot is a `pending` (detached, in-flight) snapshot
+ * whose heartbeat is older than `timeoutMs` - i.e. its background worker is
+ * presumed dead. A pending snapshot that has not yet written a first heartbeat
+ * is not considered expired (the beat may simply not have fired yet).
+ */
+function isHeartbeatExpired(
+  snapshot: SessionSnapshot,
+  timeoutMs: number = DEFAULT_HEARTBEAT_TIMEOUT_MS
+): boolean {
+  if (snapshot.status !== 'pending' || !snapshot.heartbeatAt) {
+    return false;
+  }
+  const last = Date.parse(snapshot.heartbeatAt);
+  if (Number.isNaN(last)) {
+    return false;
+  }
+  return Date.now() - last > timeoutMs;
+}
+
+/**
  * Schema for initializing an agent turn.
  */
 export const AgentInitSchema = z.object({
@@ -626,6 +660,10 @@ export class SessionRunner<State = unknown> {
       // mutates state after the last turn); persisting it as `completed` keeps
       // it a valid resume target under the "only `completed` is resumable" rule.
       status: status ?? 'completed',
+      // Stamp an initial heartbeat on a `pending` (detached, in-flight)
+      // snapshot. A background heartbeat loop refreshes it; if it goes stale the
+      // snapshot is reported as `expired` on read (the worker is presumed dead).
+      ...(status === 'pending' && { heartbeatAt: new Date().toISOString() }),
       ...(finishReason && { finishReason }),
       error,
     };
@@ -732,7 +770,9 @@ export const AbortSnapshotRequestSchema = z.object({
  */
 export const AbortSnapshotResponseSchema = z.object({
   snapshotId: z.string(),
-  status: z.enum(['pending', 'completed', 'aborted', 'failed']).optional(),
+  status: z
+    .enum(['pending', 'completed', 'aborted', 'failed', 'expired'])
+    .optional(),
 });
 
 /**
@@ -1137,6 +1177,15 @@ export function defineCustomAgent<State = unknown>(
 
       const abortController = new AbortController();
       let unsubscribe: any = undefined;
+      // Background heartbeat timer for the detached snapshot. Started in
+      // `onDetach`, cleared when the flow settles (or on abort).
+      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+      const stopHeartbeat = () => {
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = undefined;
+        }
+      };
 
       let runner!: SessionRunner<State>;
 
@@ -1186,11 +1235,35 @@ export function defineCustomAgent<State = unknown>(
             resolveDetach();
           }
 
+          // Refresh the detached snapshot's heartbeat periodically. The mutator
+          // only touches a still-`pending` snapshot (returns null otherwise) so
+          // it never resurrects a terminal snapshot or clobbers a concurrent
+          // abort. If a read sees this heartbeat go stale, the snapshot is
+          // reported as `expired` (the worker is presumed dead). `unref` so the
+          // timer never keeps the process alive on its own.
+          const ctx = getContext();
+          heartbeatTimer = setInterval(() => {
+            void store
+              .saveSnapshot(
+                snapshotId,
+                (current) =>
+                  current?.status === 'pending'
+                    ? { ...current, heartbeatAt: new Date().toISOString() }
+                    : null,
+                { context: ctx }
+              )
+              .catch(() => {
+                // Best-effort heartbeat; ignore transient store errors.
+              });
+          }, DEFAULT_HEARTBEAT_INTERVAL_MS);
+          heartbeatTimer.unref?.();
+
           if (store.onSnapshotStateChange) {
             unsubscribe = store.onSnapshotStateChange(
               snapshotId,
               (snap) => {
                 if (snap.status === 'aborted') {
+                  stopHeartbeat();
                   abortController.abort();
                   if (unsubscribe) unsubscribe();
                 }
@@ -1265,6 +1338,9 @@ export function defineCustomAgent<State = unknown>(
           const finalSnapshotId = await runner.maybeSnapshot('invocationEnd');
           return { result, finalSnapshotId };
         } finally {
+          // The turn has settled (the snapshot reached a terminal status), so
+          // stop refreshing its heartbeat.
+          stopHeartbeat();
           if (unsubscribe) unsubscribe();
           session.off('artifactAdded', sendArtifactChunk);
           session.off('artifactUpdated', sendArtifactChunk);
@@ -1353,7 +1429,15 @@ export function defineCustomAgent<State = unknown>(
   ): Promise<SessionSnapshot | undefined> => {
     requireStore(config.store, 'getSnapshotData', config.name);
     const snapshot = await config.store.getSnapshot(lookup);
-    return snapshot ? toClientSnapshot(snapshot) : undefined;
+    if (!snapshot) return undefined;
+    // Compute `expired` on read: a `pending` snapshot whose heartbeat has gone
+    // stale is presumed orphaned (its background worker died), so surface it as
+    // `expired` rather than leaving it `pending` forever. This is read-only -
+    // the status is not written back to the store.
+    const effective = isHeartbeatExpired(snapshot)
+      ? { ...snapshot, status: 'expired' as const }
+      : snapshot;
+    return toClientSnapshot(effective);
   };
 
   const runAbort = (
