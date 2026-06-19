@@ -400,6 +400,31 @@ def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
     assert model_info.supports.output == ['text', 'json']
 
 
+@pytest.mark.parametrize(
+    'model_name',
+    [
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-flash-lite',
+        'gemini-3.5-flash',
+    ],
+)
+def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: str) -> None:
+    """VertexAI Gemini 3.1/3.5 text models resolve to explicit ModelInfo, not the generic fallback.
+
+    These names are now first-class ``VertexAIGeminiVersion`` members. The generic fallback
+    (DEFAULT_SUPPORTS_MODEL) leaves ``output`` unset, so asserting ``output == ['text', 'json']``
+    alongside tools/constrained proves they carry real capability metadata matching the JS Vertex
+    registry, not the fallback.
+    """
+    model_info = google_model_info(model_name)
+
+    assert model_info.supports is not None
+    assert model_info.supports.tools is True
+    assert model_info.supports.tool_choice is True
+    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.output == ['text', 'json']
+
+
 @pytest.fixture
 def gemini_model_instance() -> GeminiModel:
     """Common initialization of GeminiModel."""
