@@ -298,7 +298,12 @@ export interface AgentTransport {
   abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined>;
 }
 
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'aborted']);
+const TERMINAL_STATUSES = new Set([
+  'completed',
+  'failed',
+  'aborted',
+  'expired',
+]);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
