@@ -34,7 +34,7 @@ import anyio
 import uvicorn
 from pydantic import BaseModel
 
-from genkit._ai._agent import (
+from genkit._ai._agents._base import (
     Agent,
     AgentFn,
     ClientTransform,

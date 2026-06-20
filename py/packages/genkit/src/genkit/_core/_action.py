@@ -669,6 +669,19 @@ class QueueSentinel:
 QUEUE_SENTINEL = QueueSentinel()
 _SENTINEL = QUEUE_SENTINEL  # module-local alias; tests may import as _SENTINEL
 
+
+class AbortSentinel:
+    """Singleton marker for violent session abort on bidi asyncio queues."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return '<abort-sentinel>'
+
+
+ABORT_SENTINEL = AbortSentinel()
+_ABORT_SENTINEL = ABORT_SENTINEL
+
 StreamInT = TypeVar('StreamInT', default=Any)
 StreamOutT_co = TypeVar('StreamOutT_co', covariant=True, default=Any)
 BidiOutT_co = TypeVar('BidiOutT_co', covariant=True, default=Any)
@@ -715,6 +728,15 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         if not self._closed:
             self._closed = True
             await self._in_queue.put(_SENTINEL)
+
+    async def abort(self) -> None:
+        """Signal that the connection is being aborted violently.
+
+        Idempotent — safe to call more than once.
+        """
+        if not self._closed:
+            self._closed = True
+            await self._in_queue.put(_ABORT_SENTINEL)
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks.

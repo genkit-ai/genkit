@@ -18,7 +18,7 @@ import asyncio
 
 import pytest
 
-from genkit._ai._agent import _AgentRuntime
+from genkit._ai._agents._base import _AgentRuntime
 from genkit._ai._json_patch import diff_json
 from genkit._ai._session import Session
 from genkit._core._typing import AgentStreamChunk, ModelResponseChunk, Part, SessionState, TextPart

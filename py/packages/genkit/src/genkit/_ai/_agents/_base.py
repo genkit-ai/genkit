@@ -49,6 +49,7 @@ from genkit._ai._session import (
     _assert_valid_session_id,
     run_with_session,
 )
+from genkit._ai._agents._client import AgentClient, AgentSession, AgentTransport
 from genkit._ai._tools import Tool
 from genkit._core._action import (
     QUEUE_SENTINEL,
@@ -58,6 +59,7 @@ from genkit._core._action import (
     BidiAction,
     BidiConnection,
     QueueSentinel,
+    AbortSentinel,
     define_bidi_action,
     get_current_context,
 )
@@ -743,8 +745,12 @@ class _AgentRuntime:
         async def _forward() -> None:
             while True:
                 item = await in_queue.get()
-                if isinstance(item, QueueSentinel):
+                if isinstance(item, AbortSentinel):
+                    # Violent Abort! Kill the executing task immediately.
                     fn_task.cancel()
+                    return
+                elif isinstance(item, QueueSentinel):
+                    # Clean Close (Half-Close). Let the active turn finish!
                     await self._intake.put(QUEUE_SENTINEL)
                     return
                 if getattr(item, 'detach', False):
@@ -900,6 +906,10 @@ class AgentConnection(Generic[StreamT, StateT]):
     async def close(self) -> None:
         """Signal no more inputs will be sent."""
         await self._conn.close()
+
+    async def abort(self) -> None:
+        """Signal that this session is aborted violently."""
+        await self._conn.abort()
 
     async def receive(self) -> AsyncIterator[AgentStreamChunk]:
         """Async iterator of AgentStreamChunk from the server."""
@@ -1081,9 +1091,24 @@ class Agent:
         init: AgentInit | None = None,
     ) -> AgentSession[Any, Any]:
         """Starts a new in-process session, or attaches to one via init."""
-        from genkit._ai._agent_client import InProcessAgentTransport, AgentAPI
         transport = InProcessAgentTransport(self, store_configured=(self._store is not None))
-        return AgentAPI(transport).connect(init)
+        return AgentClient(transport).connect(init)
+
+    async def resume(self, snapshot_id: str) -> AgentSession[Any, Any]:
+        """Loads a server snapshot and returns a session with history restored."""
+        transport = InProcessAgentTransport(self, store_configured=(self._store is not None))
+        return await AgentClient(transport).resume(snapshot_id)
+
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[Any] | None:
+        """Reads a snapshot without starting a session."""
+        if self._store is None:
+            return None
+        return await self._store.get(snapshot_id)
+
+    async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
+        """Aborts a running snapshot on the server."""
+        transport = InProcessAgentTransport(self, store_configured=(self._store is not None))
+        return await AgentClient(transport).abort(snapshot_id)
 
 
 def define_custom_agent(
@@ -1327,3 +1352,80 @@ def define_prompt_agent(
         description=description,
         metadata=metadata,
     )
+
+
+class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
+    """Local, in-process agent transport that executes the agent action directly."""
+
+    def __init__(self, agent: Agent, store_configured: bool) -> None:
+        self._agent = agent
+        self.state_management = "server" if store_configured else "client"
+        self._conn: AgentConnection | None = None
+
+    async def run_turn(
+        self,
+        input: AgentInput,
+        init: AgentInit[StateT],
+    ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
+        if self._conn is None:
+            self._conn = await self._agent.stream_bidi(init=init)
+        conn = self._conn
+
+        await conn.send(input)
+
+        output_future = asyncio.get_event_loop().create_future()
+
+        async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
+            try:
+                async for chunk in conn.receive():
+                    if chunk.turn_end:
+                        snapshot_id = chunk.turn_end.snapshot_id
+                        state = None
+                        message = None
+                        artifacts = []
+                        if snapshot_id:
+                            snap = await self.get_snapshot(snapshot_id)
+                            if snap and snap.state:
+                                state = snap.state
+                                if snap.state.messages:
+                                    message = snap.state.messages[-1]
+                                if snap.state.artifacts:
+                                    artifacts = list(snap.state.artifacts)
+
+                        output = AgentOutput(
+                            snapshot_id=snapshot_id,
+                            finish_reason=chunk.turn_end.finish_reason,
+                            error=getattr(chunk.turn_end, "error", None),
+                            state=state,
+                            message=message,
+                            artifacts=artifacts,
+                        )
+                        if not output_future.done():
+                            output_future.set_result(output)
+                    yield chunk
+                    if chunk.turn_end:
+                        break
+            except BaseException as e:
+                if not output_future.done():
+                    output_future.set_exception(e)
+                raise e
+
+        return stream_generator(), output_future
+
+    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
+        store = getattr(self._agent, "_store", None)
+        if store is None:
+            return None
+        return await store.get_snapshot(snapshot_id=snapshot_id)
+
+    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
+        store = getattr(self._agent, "_store", None)
+        if store is None or not hasattr(store, "abort_snapshot"):
+            return None
+        return await store.abort_snapshot(snapshot_id)
+
+    async def close(self) -> None:
+        if self._conn is not None:
+            await self._conn.close()
+            self._conn = None
+

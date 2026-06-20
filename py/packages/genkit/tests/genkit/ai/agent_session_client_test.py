@@ -20,7 +20,7 @@ from typing import Any, Awaitable
 
 import pytest
 
-from genkit._ai._agent_client import (
+from genkit._ai._agents._client import (
     AgentAPI,
     AgentChunk,
     AgentInterrupt,
@@ -106,7 +106,6 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
         self,
         input: AgentInput,
         init: AgentInit[dict[str, Any]],
-        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[dict[str, Any]]]]:
         self.connect_init = init
         self.send_payloads.append(input)
@@ -312,26 +311,18 @@ async def test_attached_turn_abort() -> None:
     from genkit.agent import InMemorySessionStore
     store = InMemorySessionStore()
 
-    # Define a slow tool that blocks until we cancel it
     tool_executed = False
-    tool_cancelled = False
 
     @ai.tool()
     async def slow_tool(arg: str) -> str:
-        nonlocal tool_executed, tool_cancelled
+        nonlocal tool_executed
         tool_executed = True
-        try:
-            # Sleep indefinitely until task gets cancelled
-            await asyncio.sleep(10)
-            return "Slow tool complete"
-        except asyncio.CancelledError:
-            tool_cancelled = True
-            raise
+        await asyncio.sleep(5)
+        return "Slow tool complete"
 
     ai.define_prompt(name='abortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool])
     agent = ai.define_prompt_agent(name='abortAgent', store=store)
 
-    # Model returns tool call
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -355,33 +346,17 @@ async def test_attached_turn_abort() -> None:
     async with agent.connect() as session:
         turn = session.send("Trigger slow action")
 
-        # Start draining the stream in the background to drive execution
-        async def drain_stream():
-            try:
-                async for _ in turn.stream:
-                    pass
-            except Exception:
-                pass
+        # Let it run a bit
+        await asyncio.sleep(0.1)
 
-        drain_task = asyncio.create_task(drain_stream())
-
-        # Wait a short moment to let the model run and tool start executing
-        await asyncio.sleep(0.5)
-        
-        # Abort the active turn and wait for cancellation
+        # Abort the turn client-side (stops reading the stream)
         await turn.abort()
 
-        # Wait for the background drain task to finish
-        try:
-            await drain_task
-        except BaseException:
-            pass
+        # Verify turn.output raises CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await turn.output
 
-        # Verify that the tool was started AND it was successfully cancelled!
-        assert tool_executed
-        assert tool_cancelled
-
-        # Queue a second response on the mock model for the second turn
+        # Verify that we can still cleanly continue the session
         pm.responses.append(
             ModelResponse(
                 finish_reason=FinishReason.STOP,
@@ -392,10 +367,107 @@ async def test_attached_turn_abort() -> None:
             )
         )
 
-        # We should be able to cleanly send a new turn and continue the conversation!
         turn2 = session.send("Continue conversation")
-        chunks2 = []
-        async for chunk in turn2.stream:
-            chunks2.append(chunk)
         res2 = await turn2.output
         assert res2.message.content[0].root.text == "Second turn echo"
+
+
+@pytest.mark.asyncio
+async def test_session_abort() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    from genkit.agent import InMemorySessionStore
+    store = InMemorySessionStore()
+
+    tool_executed = False
+    tool_cancelled = False
+
+    @ai.tool()
+    async def slow_tool(arg: str) -> str:
+        nonlocal tool_executed, tool_cancelled
+        tool_executed = True
+        try:
+            await asyncio.sleep(10)
+            return "Slow tool complete"
+        except asyncio.CancelledError:
+            tool_cancelled = True
+            raise
+
+    ai.define_prompt(name='sessionAbortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool])
+    agent = ai.define_prompt_agent(name='sessionAbortAgent', store=store)
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(
+                        ToolRequestPart(
+                            tool_request=ToolRequest(
+                                name="slow_tool",
+                                ref="call_1",
+                                input="blocking",
+                            )
+                        )
+                    )
+                ]
+            ),
+        )
+    )
+
+    async with agent.connect() as session:
+        # Start a detached turn to get a snapshot ID on the server
+        task = await session.run_detached("Trigger slow action")
+        assert task.snapshot_id is not None
+
+        # Give it a tiny moment to start execution
+        await asyncio.sleep(0.2)
+
+        # Abort the running snapshot on the server (requires a store)
+        status = await session.abort()
+        assert status == SnapshotStatus.ABORTED
+
+        # Give the background task a moment to process cancellation
+        await asyncio.sleep(0.5)
+
+        # Verify the tool was started and successfully cancelled by the server abort!
+        assert tool_executed
+        assert tool_cancelled
+
+
+@pytest.mark.asyncio
+async def test_external_abort_signal() -> None:
+    ai = Genkit()
+    pm, _ = define_programmable_model(ai)
+
+    from genkit.agent import InMemorySessionStore
+    store = InMemorySessionStore()
+
+    ai.define_prompt(name='signalAgent', model='programmableModel', system='Hello')
+    agent = ai.define_prompt_agent(name='signalAgent', store=store)
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(root=TextPart(text="Response"))]
+            ),
+        )
+    )
+
+    async with agent.connect() as session:
+        abort_signal = asyncio.Event()
+
+        # Send a turn passing the external abort_signal in opts
+        turn = session.send("Hello", opts={"abort_signal": abort_signal})
+
+        # Trigger the external signal immediately
+        abort_signal.set()
+
+        # Verify the turn is aborted and raises CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await turn.output
+
