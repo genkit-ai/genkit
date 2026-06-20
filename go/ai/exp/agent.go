@@ -429,6 +429,11 @@ type Agent[State any] struct {
 	// agent. Retained so callers can reach it via Store without threading
 	// a separate reference.
 	store SessionStore[State]
+	// transform shapes session state on the way out to a client; see
+	// [WithStateTransform]. Retained so the typed read facade ([Agent.GetSnapshot],
+	// [Agent.GetLatestSnapshot]) applies it, matching the getSnapshot companion
+	// action. Nil when none was configured.
+	transform StateTransform[State]
 }
 
 // Name returns the agent's registered name. This is also the name under
@@ -445,8 +450,8 @@ func (a *Agent[State]) Name() string {
 // snapshot to fetch.
 //
 // Use it to expose snapshot polling over a transport (e.g. mount it with
-// genkit.Handler next to the agent itself); local Go code should read
-// from the store directly.
+// genkit.Handler next to the agent itself); local Go code should use
+// [Agent.GetSnapshot], which applies the configured state transform.
 func (a *Agent[State]) GetSnapshotAction() api.Action {
 	return a.getSnapshot
 }
@@ -458,22 +463,81 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 // [SessionStore] or the store does not implement [SnapshotSubscriber].
 //
 // Use it to expose aborting over a transport (e.g. mount it with
-// genkit.Handler next to the agent itself); local Go code aborts by writing
-// the aborted status through the store's [SnapshotWriter.SaveSnapshot].
+// genkit.Handler next to the agent itself); local Go code aborts with
+// [Agent.AbortSnapshot]; a store-only caller uses this companion action.
 func (a *Agent[State]) AbortSnapshotAction() api.Action {
 	return a.abortSnapshot
 }
 
 // Store returns the [SessionStore] the agent was configured with via
 // [WithSessionStore], or nil when the agent is client-managed (no store).
-// It lets local Go code read and write snapshots directly given an agent
-// reference, without threading a separate store variable.
+//
+// For reads and aborts prefer the typed facade [Agent.GetSnapshot],
+// [Agent.GetLatestSnapshot], and [Agent.AbortSnapshot]: they apply the
+// configured [WithStateTransform] and read-time shaping. Store exposes the raw
+// backend for advanced use; a direct [SnapshotReader.GetSnapshot] returns
+// untransformed state.
 //
 // The store is returned as the [SessionStore] interface, not its concrete
 // type; a caller needing a store-specific capability (e.g.
 // [SnapshotSubscriber]) type-asserts for it.
 func (a *Agent[State]) Store() SessionStore[State] {
 	return a.store
+}
+
+// GetSnapshot fetches a session snapshot by ID through the agent, applying the
+// configured [WithStateTransform] and the same read-time shaping the getSnapshot
+// companion action performs (a stale-heartbeat pending row is surfaced as
+// [SnapshotStatusExpired]; an empty status or zero UpdatedAt is defaulted).
+// Prefer it to reading [Agent.Store] directly, which returns raw, untransformed
+// state.
+//
+// It returns FAILED_PRECONDITION on a client-managed agent (no store) and
+// INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
+func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
+	if a.store == nil {
+		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetSnapshot requires a session store", a.Name())
+	}
+	if snapshotID == "" {
+		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetSnapshot: snapshotID is required", a.Name())
+	}
+	return readSnapshot(ctx, a.store, a.transform, snapshotID, "")
+}
+
+// GetLatestSnapshot fetches a session's most recently created snapshot (whatever
+// its status) through the agent, with the same transform and shaping as
+// [Agent.GetSnapshot]. It is the transform-applying counterpart to
+// [SnapshotReader.GetLatestSnapshot] and backs resume-by-session lookups.
+//
+// It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
+// when sessionID is empty; an unknown session is NOT_FOUND.
+func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
+	if a.store == nil {
+		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetLatestSnapshot requires a session store", a.Name())
+	}
+	if sessionID == "" {
+		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
+	}
+	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
+}
+
+// AbortSnapshot aborts the detached invocation behind a pending snapshot by
+// flipping it to [SnapshotStatusAborted]; the runtime observes the flip and
+// cancels the background work. A caller that has only a store (no agent) aborts
+// through the abortSnapshot companion action instead. It is a no-op on a missing
+// snapshot (returns
+// "") or an already-terminal one (returns the existing status).
+//
+// It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
+// when snapshotID is empty.
+func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+	if a.store == nil {
+		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: AbortSnapshot requires a session store", a.Name())
+	}
+	if snapshotID == "" {
+		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: AbortSnapshot: snapshotID is required", a.Name())
+	}
+	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
 
 // --- api.BidiAction implementation ---
@@ -658,6 +722,7 @@ func NewCustomAgent[State any](
 		getSnapshot:   getSnapshot,
 		abortSnapshot: abortSnapshot,
 		store:         cfg.store,
+		transform:     cfg.transform,
 	}
 }
 
@@ -1214,13 +1279,15 @@ func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], 
 	return err
 }
 
-// abortSnapshot flips a pending snapshot to aborted via an ordinary
+// abortPendingSnapshot flips a pending snapshot to aborted via an ordinary
 // SaveSnapshot and returns the resulting status: aborted when the row was
 // pending, the existing terminal status when it was already settled (a no-op
 // verbatim rewrite), or "" when the snapshot does not exist. SaveSnapshot's
 // atomic read-mutate-write makes the flip safe against a racing terminal write,
-// and the status change drives any [SnapshotSubscriber.OnSnapshotStatusChange]
-// subscription, so the store needs no dedicated abort method.
+// and the status change drives the runtime's
+// [SnapshotSubscriber.OnSnapshotStatusChange] subscription, so the store needs
+// no dedicated abort method. It backs [Agent.AbortSnapshot] and the abortSnapshot
+// companion action.
 func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
 	now := time.Now()
 	saved, err := store.SaveSnapshot(ctx, snapshotID,

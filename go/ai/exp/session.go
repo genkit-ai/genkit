@@ -194,6 +194,86 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // The [Agent] retains the returned actions (an absent one is nil) and
 // registers them alongside its run action; see [Agent.Register],
 // [Agent.GetSnapshotAction], and [Agent.AbortSnapshotAction].
+// readSnapshot resolves a snapshot by ID, or by the session's latest when
+// snapshotID is empty, and returns a normalized copy shaped for a client:
+// the documented defaults are applied (empty status means completed, zero
+// UpdatedAt means CreatedAt), a pending row whose heartbeat has gone stale is
+// surfaced as [SnapshotStatusExpired] (computed on read, never written back),
+// and transform shapes the outbound state. It backs both the getSnapshot
+// companion action and the typed [Agent.GetSnapshot] / [Agent.GetLatestSnapshot],
+// so Go callers, the Dev UI, and non-Go clients all observe identically shaped
+// snapshots. At least one of snapshotID / sessionID must be non-empty; callers
+// validate that before calling.
+func readSnapshot[State any](
+	ctx context.Context,
+	store SnapshotReader[State],
+	transform StateTransform[State],
+	snapshotID, sessionID string,
+) (*SessionSnapshot[State], error) {
+	// Resolve the snapshot. A snapshot ID fetches that exact row; a session ID
+	// alone fetches the session's latest row (whatever its status). When both
+	// are present the snapshot ID picks the row and the session ID asserts it
+	// belongs to that session, mirroring AgentInit's combined-ID check.
+	var (
+		snap *SessionSnapshot[State]
+		err  error
+	)
+	if snapshotID != "" {
+		snap, err = store.GetSnapshot(ctx, snapshotID)
+		if err != nil {
+			return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+		}
+		if snap == nil {
+			return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", snapshotID)
+		}
+		if sessionID != "" && snap.SessionID != sessionID {
+			return nil, core.NewError(core.INVALID_ARGUMENT,
+				"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", snapshotID, sessionID, snap.SessionID)
+		}
+	} else {
+		snap, err = store.GetLatestSnapshot(ctx, sessionID)
+		if err != nil {
+			return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+		}
+		if snap == nil {
+			return nil, core.NewError(core.NOT_FOUND, "getSnapshot: no snapshot found for session %q", sessionID)
+		}
+	}
+
+	// Return a normalized copy: the documented defaults (empty status means
+	// completed, zero UpdatedAt means CreatedAt) are resolved here so every
+	// caller sees the same shaping, and the state transform shapes what leaves
+	// the server. A failed snapshot's state is its last-good state, so it is
+	// returned like any other.
+	resp := *snap
+	// Surface a pending snapshot whose heartbeat has gone stale as expired: its
+	// detached background worker is presumed dead, so report the orphan rather
+	// than leaving it pending forever. Computed on read only, never written back
+	// to the store, so the raw row stays pending. Checked before the empty-status
+	// default below, which applies only to a row carrying no status at all.
+	if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
+		resp.Status = SnapshotStatusExpired
+	}
+	if resp.Status == "" {
+		resp.Status = SnapshotStatusCompleted
+	}
+	if resp.UpdatedAt.IsZero() {
+		resp.UpdatedAt = resp.CreatedAt
+	}
+	// Clone before transforming: the [StateTransform] contract promises a fresh
+	// deep copy the transform may mutate in place, and the store's row may share
+	// memory with its internal copy, which neither the transform nor the SessionID
+	// re-stamp below may write into.
+	resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
+	if resp.State != nil {
+		// SessionID is framework identity, not user data: re-stamp it from the
+		// row after the transform so outbound state always agrees with the
+		// snapshot it came from.
+		resp.State.SessionID = resp.SessionID
+	}
+	return &resp, nil
+}
+
 func newSnapshotActions[State any](
 	agentName string,
 	store SessionStore[State],
@@ -208,72 +288,7 @@ func newSnapshotActions[State any](
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId or sessionId is required")
 			}
 
-			// Resolve the snapshot. A snapshot ID fetches that exact row; a
-			// session ID alone fetches the session's latest row (whatever
-			// its status). When both are present the snapshot ID picks the
-			// row and the session ID asserts it belongs to that session,
-			// mirroring AgentInit's combined-ID check.
-			var (
-				snap *SessionSnapshot[State]
-				err  error
-			)
-			if req.SnapshotID != "" {
-				snap, err = store.GetSnapshot(ctx, req.SnapshotID)
-				if err != nil {
-					return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
-				}
-				if snap == nil {
-					return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", req.SnapshotID)
-				}
-				if req.SessionID != "" && snap.SessionID != req.SessionID {
-					return nil, core.NewError(core.INVALID_ARGUMENT,
-						"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", req.SnapshotID, req.SessionID, snap.SessionID)
-				}
-			} else {
-				snap, err = store.GetLatestSnapshot(ctx, req.SessionID)
-				if err != nil {
-					return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
-				}
-				if snap == nil {
-					return nil, core.NewError(core.NOT_FOUND, "getSnapshot: no snapshot found for session %q", req.SessionID)
-				}
-			}
-
-			// Return a normalized copy: the documented defaults (empty
-			// status means completed, zero UpdatedAt means CreatedAt) are
-			// resolved server-side so remote clients don't reimplement
-			// them, and the state transform shapes what leaves the server.
-			// A failed snapshot's state is its last-good state, so it is
-			// returned like any other.
-			resp := *snap
-			// Surface a pending snapshot whose heartbeat has gone stale as
-			// expired: its detached background worker is presumed dead, so
-			// report the orphan rather than leaving it pending forever. This is
-			// computed on read only, never written back to the store, so the
-			// raw row stays pending. Checked before the empty-status default
-			// below, which applies only to a row carrying no status at all.
-			if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
-				resp.Status = SnapshotStatusExpired
-			}
-			if resp.Status == "" {
-				resp.Status = SnapshotStatusCompleted
-			}
-			if resp.UpdatedAt.IsZero() {
-				resp.UpdatedAt = resp.CreatedAt
-			}
-			// Clone before transforming: the [StateTransform] contract
-			// promises a fresh deep copy the transform may mutate in
-			// place, and the store's row may share memory with its
-			// internal copy, which neither the transform nor the
-			// SessionID re-stamp below may write into.
-			resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
-			if resp.State != nil {
-				// SessionID is framework identity, not user data: re-stamp
-				// it from the row after the transform so outbound state
-				// always agrees with the snapshot it came from.
-				resp.State.SessionID = resp.SessionID
-			}
-			return &resp, nil
+			return readSnapshot(ctx, store, transform, req.SnapshotID, req.SessionID)
 		})
 
 	if _, ok := store.(SnapshotSubscriber); !ok {

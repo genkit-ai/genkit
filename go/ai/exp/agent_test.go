@@ -3058,7 +3058,7 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 }
 
 func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
-	// Client detaches, then calls AbortSnapshot. The store's status
+	// Client detaches, then calls abortPendingSnapshot. The store's status
 	// subscriber notifies the runtime, which cancels the work context, and
 	// the finalizer rewrites the snapshot with status=aborted.
 	reg := newTestRegistry(t)
@@ -3104,10 +3104,10 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 	// reference from WithSessionStore.
 	status, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID)
 	if err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 	if status != SnapshotStatusAborted {
-		t.Errorf("AbortSnapshot status = %q, want aborted", status)
+		t.Errorf("abortPendingSnapshot status = %q, want aborted", status)
 	}
 
 	// The subscriber wakes the runtime, cancels work, and the finalizer
@@ -3116,7 +3116,7 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 		return s.Status == SnapshotStatusAborted && s.UpdatedAt.After(s.CreatedAt)
 	})
 	// The flow only blocked on ctx — no state mutation expected. State
-	// may be nil (when AbortSnapshot landed before the finalizer's write
+	// may be nil (when abortPendingSnapshot landed before the finalizer's write
 	// could populate it) or a populated zero-value struct.
 	if finalSnap.State != nil && finalSnap.State.Custom.Counter != 0 {
 		t.Errorf("unexpected counter value in aborted snapshot: %d", finalSnap.State.Custom.Counter)
@@ -3336,6 +3336,161 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	}
 	if !foundRaw {
 		t.Error("expected stored snapshot to retain the original 'secret' text")
+	}
+}
+
+// assertGenkitStatus fails the test unless err is a *core.GenkitError with the
+// given status.
+func assertGenkitStatus(t *testing.T, err error, want core.StatusName, label string) {
+	t.Helper()
+	var ge *core.GenkitError
+	if !errors.As(err, &ge) {
+		t.Errorf("%s: expected *core.GenkitError, got %v", label, err)
+		return
+	}
+	if ge.Status != want {
+		t.Errorf("%s: status = %q, want %q", label, ge.Status, want)
+	}
+}
+
+// TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot is the crux of the
+// agent-as-facade design: reads through the agent apply the configured
+// [WithStateTransform], while a direct store read returns raw state. A caller
+// that reaches past the agent into the store therefore sees unredacted data,
+// which is exactly why GetSnapshot/GetLatestSnapshot live on the agent.
+func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+		for _, msg := range s.Messages {
+			for _, p := range msg.Content {
+				if p.Text != "" {
+					p.Text = strings.ReplaceAll(p.Text, "secret", "[REDACTED]")
+				}
+			}
+		}
+		return s
+	}
+
+	af := DefineCustomAgent(reg, "facadeTransform",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("the secret is out"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+		WithStateTransform[testState](transform),
+	)
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "tell me the secret")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	hasSecret := func(snap *SessionSnapshot[testState]) bool {
+		for _, msg := range snap.State.Messages {
+			for _, p := range msg.Content {
+				if strings.Contains(p.Text, "secret") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// Through the agent: transformed (redacted).
+	viaAgent, err := af.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("agent.GetSnapshot: %v", err)
+	}
+	if hasSecret(viaAgent) {
+		t.Error("agent.GetSnapshot returned untransformed state (found 'secret')")
+	}
+
+	// GetLatestSnapshot resolves the same row by session and also transforms.
+	viaLatest, err := af.GetLatestSnapshot(ctx, out.SessionID)
+	if err != nil {
+		t.Fatalf("agent.GetLatestSnapshot: %v", err)
+	}
+	if viaLatest.SnapshotID != out.SnapshotID {
+		t.Errorf("GetLatestSnapshot id = %q, want %q", viaLatest.SnapshotID, out.SnapshotID)
+	}
+	if hasSecret(viaLatest) {
+		t.Error("agent.GetLatestSnapshot returned untransformed state (found 'secret')")
+	}
+
+	// Directly via the store: raw, untransformed. This contrast is the point.
+	raw, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("store.GetSnapshot: %v", err)
+	}
+	if !hasSecret(raw) {
+		t.Error("raw store.GetSnapshot should retain the original 'secret' text")
+	}
+}
+
+// TestAgent_SnapshotFacade_Errors covers the guard rails on the agent facade:
+// a client-managed agent has no store, and empty IDs / missing rows are
+// rejected before touching the store.
+func TestAgent_SnapshotFacade_Errors(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	// Client-managed agent (no store): every facade method is FAILED_PRECONDITION.
+	client := defineCounterAgent(reg, "facadeClient")
+	_, e1 := client.GetSnapshot(ctx, "x")
+	assertGenkitStatus(t, e1, core.FAILED_PRECONDITION, "client GetSnapshot")
+	_, e2 := client.GetLatestSnapshot(ctx, "x")
+	assertGenkitStatus(t, e2, core.FAILED_PRECONDITION, "client GetLatestSnapshot")
+	_, e3 := client.AbortSnapshot(ctx, "x")
+	assertGenkitStatus(t, e3, core.FAILED_PRECONDITION, "client abortPendingSnapshot")
+
+	// Server-managed agent: empty IDs are INVALID_ARGUMENT, missing rows NOT_FOUND.
+	store := newTestInMemStore[testState]()
+	server := defineCounterAgent(reg, "facadeServer", WithSessionStore(store))
+	_, e4 := server.GetSnapshot(ctx, "")
+	assertGenkitStatus(t, e4, core.INVALID_ARGUMENT, "empty GetSnapshot")
+	_, e5 := server.GetLatestSnapshot(ctx, "")
+	assertGenkitStatus(t, e5, core.INVALID_ARGUMENT, "empty GetLatestSnapshot")
+	_, e6 := server.AbortSnapshot(ctx, "")
+	assertGenkitStatus(t, e6, core.INVALID_ARGUMENT, "empty abortPendingSnapshot")
+	_, e7 := server.GetSnapshot(ctx, "missing")
+	assertGenkitStatus(t, e7, core.NOT_FOUND, "missing GetSnapshot")
+}
+
+// TestAgent_AbortSnapshot_Method verifies the in-process convenience flips a
+// pending row to aborted through the store, mirroring the package-level
+// [abortPendingSnapshot] and the abortSnapshot companion action.
+func TestAgent_AbortSnapshot_Method(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+	af := defineCounterAgent(reg, "facadeAbort", WithSessionStore(store))
+
+	// Seed a pending row the way a detached turn would.
+	pending, err := store.SaveSnapshot(ctx, "", func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{SessionID: "s1", Status: SnapshotStatusPending}, nil
+	})
+	if err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+
+	status, err := af.AbortSnapshot(ctx, pending.SnapshotID)
+	if err != nil {
+		t.Fatalf("agent.AbortSnapshot: %v", err)
+	}
+	if status != SnapshotStatusAborted {
+		t.Errorf("returned status = %q, want aborted", status)
+	}
+	got, err := store.GetSnapshot(ctx, pending.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusAborted {
+		t.Errorf("stored status = %q, want aborted", got.Status)
 	}
 }
 
@@ -4303,7 +4458,7 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 
 	// Externally abort before releasing fn.
 	if _, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID); err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 
 	close(fnRelease)
@@ -4358,7 +4513,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 
 	// Abort flips status; subscriber observes aborted.
 	if _, err := abortPendingSnapshot(ctx, store, "snap-sub"); err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 	select {
 	case status, ok := <-statusCh:
@@ -4385,7 +4540,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 }
 
 func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
-	// Calling AbortSnapshot on an already-terminal snapshot is a no-op
+	// Calling abortPendingSnapshot on an already-terminal snapshot is a no-op
 	// that returns the existing status.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -4408,7 +4563,7 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 
 	status, err := abortPendingSnapshot(ctx, store, out.SnapshotID)
 	if err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 	if status != SnapshotStatusCompleted {
 		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusCompleted, status)
@@ -4932,9 +5087,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			t.Fatalf("Output: %v", err)
 		}
 		if _, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID); err != nil {
-			t.Fatalf("AbortSnapshot: %v", err)
+			t.Fatalf("abortPendingSnapshot: %v", err)
 		}
-		// AbortSnapshot flips status=aborted (finishReason still empty); the
+		// abortPendingSnapshot flips status=aborted (finishReason still empty); the
 		// finalizer then annotates the row with finishReason=aborted. Wait
 		// for that second write rather than the bare status flip.
 		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
