@@ -416,10 +416,17 @@ class AgentSession(Generic[StateT, StreamT]):
                 if cancelled_event.is_set():
                     watch_output_task.cancel()
 
+        def do_abort():
+            cancelled_event.set()
+            if not turn_output_future.done():
+                turn_output_future.cancel()
+            if not run_task.done():
+                run_task.cancel()
+
         turn = AgentTurn(
             stream=stream_generator(),
             output=turn_output_future,
-            abort_fn=cancelled_event.set,
+            abort_fn=do_abort,
         )
         return turn
 

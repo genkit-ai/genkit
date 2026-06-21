@@ -311,40 +311,25 @@ async def test_attached_turn_abort() -> None:
     from genkit.agent import InMemorySessionStore
     store = InMemorySessionStore()
 
-    tool_executed = False
-
-    @ai.tool()
-    async def slow_tool(arg: str) -> str:
-        nonlocal tool_executed
-        tool_executed = True
-        await asyncio.sleep(5)
-        return "Slow tool complete"
-
-    ai.define_prompt(name='abortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool])
+    # Define a simple agent
+    ai.define_prompt(name='abortAgent', model='programmableModel', system='Hello')
     agent = ai.define_prompt_agent(name='abortAgent', store=store)
 
-    pm.responses.append(
-        ModelResponse(
+    # We make the mock model sleep to simulate a slow response
+    async def slow_response(*args, **kwargs):
+        await asyncio.sleep(5)
+        return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(
                 role=Role.MODEL,
-                content=[
-                    Part(
-                        ToolRequestPart(
-                            tool_request=ToolRequest(
-                                name="slow_tool",
-                                ref="call_1",
-                                input="blocking",
-                            )
-                        )
-                    )
-                ]
-            ),
+                content=[Part(root=TextPart(text="Slow response finished"))]
+            )
         )
-    )
+
+    pm.handle_generate = slow_response
 
     async with agent.connect() as session:
-        turn = session.send("Trigger slow action")
+        turn = session.send("Hello")
 
         # Let it run a bit
         await asyncio.sleep(0.1)
@@ -356,7 +341,8 @@ async def test_attached_turn_abort() -> None:
         with pytest.raises(asyncio.CancelledError):
             await turn.output
 
-        # Verify that we can still cleanly continue the session
+        # Restore normal fast response for the second turn
+        pm.handle_generate = None
         pm.responses.append(
             ModelResponse(
                 finish_reason=FinishReason.STOP,
@@ -367,6 +353,7 @@ async def test_attached_turn_abort() -> None:
             )
         )
 
+        # We should be able to cleanly send a new turn and continue the conversation!
         turn2 = session.send("Continue conversation")
         res2 = await turn2.output
         assert res2.message.content[0].root.text == "Second turn echo"

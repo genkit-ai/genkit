@@ -59,7 +59,6 @@ from genkit._core._action import (
     BidiAction,
     BidiConnection,
     QueueSentinel,
-    AbortSentinel,
     define_bidi_action,
     get_current_context,
 )
@@ -745,11 +744,7 @@ class _AgentRuntime:
         async def _forward() -> None:
             while True:
                 item = await in_queue.get()
-                if isinstance(item, AbortSentinel):
-                    # Violent Abort! Kill the executing task immediately.
-                    fn_task.cancel()
-                    return
-                elif isinstance(item, QueueSentinel):
+                if isinstance(item, QueueSentinel):
                     # Clean Close (Half-Close). Let the active turn finish!
                     await self._intake.put(QUEUE_SENTINEL)
                     return
@@ -907,9 +902,7 @@ class AgentConnection(Generic[StreamT, StateT]):
         """Signal no more inputs will be sent."""
         await self._conn.close()
 
-    async def abort(self) -> None:
-        """Signal that this session is aborted violently."""
-        await self._conn.abort()
+
 
     async def receive(self) -> AsyncIterator[AgentStreamChunk]:
         """Async iterator of AgentStreamChunk from the server."""
