@@ -35,16 +35,19 @@ When passed to `ai.generate(model=handle, config={...})`, the type checker binds
 
 Below is a comparative code implementation demonstrating how a developer configures Gemini's Google Search Grounding and Safety Settings in both frameworks.
 
-### Pydantic AI: Verbose & Manual Type Casting
-To ensure the IDE validates the Google-specific settings and flags typos, the developer must bypass the inline dictionary and write manual annotations:
+### Pydantic AI: Verbose & Manual Type Casting (Only way to get type safety)
+
+To get type safety in Pydantic AI, you cannot write the configuration inline. You must import their specific `TypedDict` and annotate a separate variable to force the type checker to validate it:
 
 ```python
 # pydantic_ai_implementation.py
 from pydantic_ai import Agent
-# 1. Developer must import the Google-specific settings class
+
+# 1. IMPORT TAX: Must import the provider's specific TypedDict
 from pydantic_ai.models.google import GoogleModelSettings
 
-# 2. Developer must declare and explicitly annotate a separate variable
+# 2. SEPARATE VARIABLE TAX: Must declare and annotate a separate variable
+# (This forces the type checker to validate the keys against GoogleModelSettings)
 settings: GoogleModelSettings = {
     'google_search_grounding': True,
     'google_safety_settings': [
@@ -53,32 +56,58 @@ settings: GoogleModelSettings = {
     'temperature': 0.7
 }
 
-# 3. Pass the annotated variable to the agent constructor
+# 3. Pass the pre-validated variable to the constructor
 agent = Agent(
     'google:gemini-2.5-flash',
     model_settings=settings
 )
 ```
-*   **Friction:** Requires an extra deep import, a separate named variable, and an explicit type annotation.
-*   **Failure Mode:** If the developer writes this inline (e.g., `model_settings={'google_search_grounding': True}`), **the type checker cannot validate the keys**, and a typo (like `'google_search_groundin'`) will cause a runtime crash instead of a compile-time warning.
 
-### Genkit: Inline & Zero-Boilerplate
-In Genkit, the type safety is completely automatic and inline. No extra imports, variables, or annotations are required:
+#### The Inline Failure Case in Pydantic AI (What happens if you write it naturally)
+
+If a developer tries to write the configuration inline (which is how 90% of developers write configurations and how 100% of AIs generate them), **the type safety completely breaks**:
+
+```python
+# pydantic_ai_inline_failure.py
+from pydantic_ai import Agent
+
+agent = Agent(
+    'google:gemini-2.5-flash',
+    model_settings={
+        'temperature': 0.7,
+        'google_search_groundin': True  # 🔴 SILENT RUNTIME CRASH!
+        #
+        # 🔍 IDE Linter Output: "0 errors, 0 warnings" (Silent failure)
+        # Why? The constructor types this parameter as the base `ModelSettings` TypedDict.
+        # To avoid compile-time errors on provider keys, Pydantic AI must allow extra keys.
+        # This deactivates call-site validation. Typos only crash the app at runtime.
+    }
+)
+```
+
+---
+
+### Genkit: Inline & Zero-Boilerplate (Default Experience)
+
+In Genkit, the generic type safety is completely automatic and inline. No extra imports, variables, or annotations are required. The type checker knows the model is Gemini and validates the dictionary literal directly:
 
 ```python
 # genkit_implementation.py
 from genkit.plugins.google_genai import GoogleAI
 
-# The typed model handle automatically binds GeminiConfigDict to the config argument
+# The typed model handle automatically binds GeminiConfigDict (which inherits
+# from CommonModelConfigDict) to the config argument inline.
 await ai.generate(
     model=GoogleAI.model('gemini-2.0-flash'),
     config={
-        'google_search_grounding': True,  # Autocompleted and validated inline!
-        'google_safety_settings': [        # Autocompleted and validated inline!
+        'temperature': 0.7,                     # ✅ Autocompleted (Common key)
+        'google_search_grounding': True,        # ✅ Autocompleted (Gemini-specific!)
+        'google_safety_settings': [             # ✅ Autocompleted (Gemini-specific!)
             {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_LOW_AND_ABOVE'}
         ],
-        'temperature': 0.7,
-        'google_search_groundin': True    # 🔴 Statically flagged as unrecognized key!
+        'google_search_groundin': True          # 🔴 pyright: Unrecognized key 'google_search_groundin'
+        #
+        # 🔍 IDE Linter Output: "Error: Unrecognized key" (Caught in editor instantly!)
     }
 )
 ```
