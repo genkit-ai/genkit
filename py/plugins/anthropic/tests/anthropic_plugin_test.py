@@ -25,6 +25,7 @@ import pytest
 
 from genkit import (
     ActionKind,
+    Constrained,
     Message,
     ModelConfig,
     ModelRequest,
@@ -152,7 +153,7 @@ async def test_anthropic_runtime_clients_are_loop_local(mock_client_ctor: MagicM
 
 def test_supported_models() -> None:
     """Test that all supported models have proper metadata."""
-    assert len(SUPPORTED_MODELS) == 9
+    assert len(SUPPORTED_MODELS) == 11
     assert 'claude-3-haiku' not in SUPPORTED_MODELS
     for _name, info in SUPPORTED_MODELS.items():
         assert info.label is not None
@@ -167,6 +168,17 @@ def test_supported_models() -> None:
         else:
             assert info.supports.media is True
         assert info.supports.system_role is True
+
+    for model_name, expected_label in (
+        ('claude-opus-4-7', 'Anthropic - Claude Opus 4.7'),
+        ('claude-opus-4-8', 'Anthropic - Claude Opus 4.8'),
+    ):
+        info = SUPPORTED_MODELS[model_name]
+        assert info.label == expected_label
+        assert info.versions == [model_name]
+        assert info.supports is not None
+        assert info.supports.output == ['text', 'json']
+        assert info.supports.constrained == Constrained.ALL
 
 
 def test_get_model_info_known() -> None:

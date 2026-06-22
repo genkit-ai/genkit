@@ -711,12 +711,15 @@ async def to_generate_request(registry: Registry, options: GenerateActionOptions
             message='at least one message is required in generate request',
         )
 
-    output_config = OutputConfig(
-        content_type=options.output.content_type if options.output else None,
-        format=options.output.format if options.output else None,
-        schema_=options.output.json_schema if options.output else None,
-        constrained=options.output.constrained if options.output else None,
-    )
+    # Built via model_validate (with field aliases) rather than kwargs: OutputConfig.schema
+    # is emitted as `schema_` with `alias='schema'`, and type checkers disagree on which
+    # name the constructor accepts (ty wants `schema_`, pyrefly wants `schema`).
+    output_config = OutputConfig.model_validate({
+        'contentType': options.output.content_type if options.output else None,
+        'format': options.output.format if options.output else None,
+        'schema': options.output.json_schema if options.output else None,
+        'constrained': options.output.constrained if options.output else None,
+    })
     return ModelRequest(
         # Field validators auto-wrap MessageData -> Message and DocumentData -> Document
         messages=options.messages,  # type: ignore[arg-type]

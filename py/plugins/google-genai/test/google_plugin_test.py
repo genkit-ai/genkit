@@ -805,6 +805,45 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
 
 
 @pytest.mark.asyncio
+async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_instance: VertexAI) -> None:
+    """Regression test for #5572.
+
+    Vertex AI's ``client.models.list()`` returns publisher models with
+    ``supported_actions = None``. Discovery must categorize these by name
+    rather than skipping them, otherwise no Vertex models appear in the Dev UI.
+    """
+
+    def mock_model(name: str) -> MagicMock:
+        m = MagicMock()
+        m.name = name
+        m.supported_actions = None  # Vertex leaves this unset.
+        m.description = ''
+        return m
+
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = [
+        mock_model('publishers/google/models/gemini-2.5-pro'),
+        mock_model('publishers/google/models/gemini-embedding-001'),
+        mock_model('publishers/google/models/imagen-3.0-generate-002'),
+        mock_model('publishers/google/models/veo-2.0-generate-001'),
+    ]
+    vertexai_plugin_instance._runtime_client = lambda: mock_client
+
+    result = await vertexai_plugin_instance.list_actions()
+    names = {a.name for a in result}
+
+    # Gemini text model discovered despite supported_actions=None.
+    assert vertexai_name('gemini-2.5-pro') in names
+    # Imagen and Veo discovered.
+    assert vertexai_name('imagen-3.0-generate-002') in names
+    assert vertexai_name('veo-2.0-generate-001') in names
+
+    # gemini-embedding-001 is registered as an embedder, not a gemini model.
+    embedder = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
+    assert embedder.action_type == ActionKind.EMBEDDER
+
+
+@pytest.mark.asyncio
 async def test_googleai_resolve_background_model(googleai_plugin_instance: GoogleAI) -> None:
     """Test resolve action for background model."""
     plugin = googleai_plugin_instance
