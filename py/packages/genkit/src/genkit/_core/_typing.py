@@ -140,7 +140,7 @@ class AgentInput(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     detach: bool | None = None
     message: MessageData | None = None
-    resume: Resume | None = None
+    resume: AgentInputResume | None = None
 
 
 class AgentMetadata(GenkitModel):
@@ -969,8 +969,8 @@ class TraceMetadata(GenkitModel):
     timestamp: float = Field(...)
 
 
-class Resume(GenkitModel):
-    """Model for resume data."""
+class AgentInputResume(GenkitModel):
+    """Model for agentinputresume data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     respond: list[ToolResponsePart] | None = None
@@ -998,6 +998,15 @@ class GenkitErrorDetails(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
     stack: str | None = None
     trace_id: str = Field(...)
+
+
+class Resume(GenkitModel):
+    """Model for resume data."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='forbid', populate_by_name=True)
+    respond: list[ToolResponsePart] | None = None
+    restart: list[ToolRequestPart] | None = None
+    metadata: Metadata | None = None
 
 
 class Supports(GenkitModel):
