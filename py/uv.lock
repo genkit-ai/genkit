@@ -713,7 +713,6 @@ dependencies = [
     { name = "genkit-plugin-google-genai" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -722,7 +721,6 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "structlog", specifier = ">=24.0.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -1504,7 +1502,6 @@ dependencies = [
     { name = "genkit-plugin-google-genai" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -1513,7 +1510,6 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -1526,7 +1522,6 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -1536,7 +1531,6 @@ requires-dist = [
     { name = "httpx" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -3628,7 +3622,6 @@ dependencies = [
     { name = "genkit-plugin-middleware" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -3638,7 +3631,6 @@ requires-dist = [
     { name = "genkit-plugin-middleware", editable = "plugins/middleware" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "structlog", specifier = ">=24.0.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -3651,7 +3643,6 @@ dependencies = [
     { name = "genkit-plugin-middleware" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -3661,7 +3652,6 @@ requires-dist = [
     { name = "genkit-plugin-middleware", editable = "plugins/middleware" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -4581,7 +4571,6 @@ dependencies = [
     { name = "genkit-plugin-google-genai" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -4590,7 +4579,6 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -4976,7 +4964,6 @@ dependencies = [
     { name = "genkit-plugin-google-genai" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -4985,7 +4972,6 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
@@ -6489,7 +6475,6 @@ dependencies = [
     { name = "genkit-plugin-google-genai" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -6498,7 +6483,6 @@ requires-dist = [
     { name = "genkit-plugin-google-genai", editable = "plugins/google-genai" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
