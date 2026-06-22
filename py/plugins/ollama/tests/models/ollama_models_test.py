@@ -436,6 +436,24 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         sent_chunk = send_chunk.call_args.kwargs['chunk']
         self.assertEqual(cast(ModelResponseChunk, sent_chunk).role, Role.MODEL)
 
+    async def test_streaming_chat_tool_role_maps_to_tool(self) -> None:
+        """Streamed chunks explicitly labeled as tools should remain TOOL."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            yield ollama_api.ChatResponse(message=ollama_api.Message(role='tool', content='delta'))
+
+        self.mock_ollama_client_instance.chat.return_value = mock_streaming_chunks()
+
+        await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        send_chunk = cast(MagicMock, self.ctx.send_chunk)
+        send_chunk.assert_called_once()
+        sent_chunk = send_chunk.call_args.kwargs['chunk']
+        self.assertEqual(cast(ModelResponseChunk, sent_chunk).role, Role.TOOL)
+
     async def test_chat_with_output_format_string(self) -> None:
         """Test _chat_with_ollama with request.output.format string."""
         self.request.output_format = 'json'
@@ -615,17 +633,6 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
     [
         ({}, None),
         (
-            # Object schema inferred from ``properties`` when ``type`` is omitted.
-            {'properties': {'name': {'type': 'string'}}},
-            ollama_api.Tool.Function.Parameters(
-                type='object',
-                required=None,
-                properties={
-                    'name': ollama_api.Tool.Function.Parameters.Property(type='string', description=''),
-                },
-            ),
-        ),
-        (
             {'type': 'object'},
             ollama_api.Tool.Function.Parameters(type='object', properties={}),
         ),
@@ -708,6 +715,18 @@ def test_convert_parameters(input_schema: dict[str, Any], expected_output: objec
     """Unit Tests for _convert_parameters function with various input schemas."""
     result = _convert_parameters(input_schema)
     assert result == expected_output
+
+
+def test_convert_parameters_infers_object_from_properties() -> None:
+    """A schema with properties but no explicit type is treated as an object."""
+    result = _convert_parameters({'properties': {'name': {'type': 'string'}}})
+
+    assert result is not None
+    assert result.type == 'object'
+    assert result.required is None
+    assert result.properties is not None
+    assert result.properties['name'].type == 'string'
+    assert result.properties['name'].description == ''
 
 
 class TestBuildRequestOptions:
