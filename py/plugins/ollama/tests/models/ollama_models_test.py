@@ -30,6 +30,7 @@ from genkit import (
     Media,
     MediaPart,
     Message,
+    ModelConfig,
     ModelRequest,
     ModelResponseChunk,
     ModelUsage,
@@ -678,6 +679,25 @@ def test_convert_parameters(input_schema: dict[str, Any], expected_output: objec
     """Unit Tests for _convert_parameters function with various input schemas."""
     result = _convert_parameters(input_schema)
     assert result == expected_output
+
+
+class TestBuildRequestOptions:
+    """Tests for OllamaModel.build_request_options."""
+
+    def test_none_returns_empty_options(self) -> None:
+        """None config produces empty Options."""
+        options = OllamaModel.build_request_options(None)
+        assert options.model_dump(exclude_none=True) == {}
+
+    def test_model_config_top_p(self) -> None:
+        """ModelConfig.top_p maps to the Options.top_p server field."""
+        options = OllamaModel.build_request_options(ModelConfig(top_p=0.9))
+        assert options.top_p == 0.9
+
+    def test_raw_dict_camel_case_top_p(self) -> None:
+        """A camelCase ``topP`` knob is snake-cased onto Options.top_p."""
+        options = OllamaModel.build_request_options({'topP': 0.9})
+        assert options.top_p == 0.9
 
 
 class TestResolveImage(unittest.IsolatedAsyncioTestCase):

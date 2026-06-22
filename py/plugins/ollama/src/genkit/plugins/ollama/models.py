@@ -88,6 +88,7 @@ from typing import Any, Literal, cast
 
 import structlog
 from pydantic import BaseModel
+from pydantic.alias_generators import to_snake
 
 import ollama as ollama_api
 from genkit import (
@@ -417,14 +418,15 @@ class OllamaModel:
         if isinstance(config, ModelConfig):
             config = dict(
                 top_k=config.top_k,
-                topP=config.top_p,
+                top_p=config.top_p,
                 stop=config.stop_sequences,
                 temperature=config.temperature,
                 num_predict=config.max_output_tokens,
             )
         if isinstance(config, dict):
-            # Use cast to avoid type error with **spread of dict[str, object]
-            config = ollama_api.Options(**cast(dict[str, Any], config))
+            # Snake-case keys so camelCase knobs (e.g. ``topP``) map to the
+            # server field instead of being silently dropped by Options.
+            config = ollama_api.Options(**{to_snake(k): v for k, v in cast(dict[str, Any], config).items()})
 
         return config
 
