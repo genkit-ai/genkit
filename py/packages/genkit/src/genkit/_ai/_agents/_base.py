@@ -864,56 +864,6 @@ class _AgentRuntime:
         return out
 
 
-# ---------------------------------------------------------------------------
-# AgentConnection
-# ---------------------------------------------------------------------------
-
-
-class AgentConnection(Generic[StreamT, StateT]):
-    """Public handle for an active agent session.
-
-    Wraps the bidi connection with send helpers so callers need not build
-    ``AgentInput`` by hand.
-    """
-
-    def __init__(
-        self,
-        conn: BidiConnection[AgentInput, AgentStreamChunk, AgentOutput],
-    ) -> None:
-        self._conn = conn
-
-    async def send(self, input: AgentInput) -> None:  # noqa: A002
-        """Send a raw AgentInput."""
-        await self._conn.send(input)
-
-    async def send_text(self, text: str) -> None:
-        """Send a user text message for one turn."""
-        await self._conn.send(AgentInput(messages=[MessageData(role='user', content=[Part(root=TextPart(text=text))])]))
-
-    async def send_resume(self, resume: Resume) -> None:
-        """Send a resume payload to continue an interrupted tool call."""
-        await self._conn.send(AgentInput(resume=resume))
-
-    async def detach(self) -> None:
-        """v2: ask the server to background the invocation and close the connection."""
-        await self._conn.send(AgentInput(detach=True))
-
-    async def close(self) -> None:
-        """Signal no more inputs will be sent."""
-        await self._conn.close()
-
-
-
-    async def receive(self) -> AsyncIterator[AgentStreamChunk]:
-        """Async iterator of AgentStreamChunk from the server."""
-        async for chunk in self._conn.receive():
-            yield chunk
-
-    async def output(self) -> AgentOutput:
-        """Await the final AgentOutput."""
-        return await self._conn.output()
-
-
 def _agent_input_has_payload(inp: AgentInput) -> bool:
     """True when ``AgentInput`` carries turn data beyond a detach directive."""
     if inp.messages:
@@ -1059,7 +1009,7 @@ class SessionRunner(Generic[StateT]):
 
 
 class Agent:
-    """Registered bidi agent — call ``stream_bidi()`` for an ``AgentConnection``."""
+    """Registered bidi agent — call ``connect()`` for an ``AgentSession``."""
 
     _store: SessionStore | None = None
 
@@ -1069,15 +1019,6 @@ class Agent:
     @property
     def name(self) -> str:
         return self._action.name
-
-    async def stream_bidi(
-        self,
-        init: AgentInit | None = None,
-        context: dict[str, object] | None = None,
-    ) -> AgentConnection[Any, Any]:
-        """Start a new agent session. Returns an AgentConnection."""
-        conn = await self._action.stream_bidi(init or AgentInit(), context=context)
-        return AgentConnection(conn)
 
     def connect(
         self,
@@ -1250,7 +1191,7 @@ def define_agent(
 ) -> Agent:
     """Register a prompt-backed agent.
 
-    Conversation input arrives via ``AgentConnection.send_text`` (or ``send``);
+    Conversation input arrives via ``AgentSession.send``;
     ``system`` is the only static preamble re-rendered each turn alongside
     session history. For template variables, few-shot messages, RAG docs, or
     prompt variants, use ``define_prompt`` + ``define_prompt_agent`` instead.
@@ -1353,7 +1294,8 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
     def __init__(self, agent: Agent, store_configured: bool) -> None:
         self._agent = agent
         self.state_management = "server" if store_configured else "client"
-        self._conn: AgentConnection | None = None
+        self._conn: BidiConnection[AgentInput, AgentStreamChunk, AgentOutput] | None = None
+        self._final_output: AgentOutput | None = None
 
     async def run_turn(
         self,
@@ -1361,7 +1303,7 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
         init: AgentInit[StateT],
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
         if self._conn is None:
-            self._conn = await self._agent.stream_bidi(init=init)
+            self._conn = await self._agent._action.stream_bidi(init)
         conn = self._conn
 
         await conn.send(input)
@@ -1420,5 +1362,9 @@ class InProcessAgentTransport(AgentTransport[StateT, StreamT]):
     async def close(self) -> None:
         if self._conn is not None:
             await self._conn.close()
+            try:
+                self._final_output = await self._conn.output()
+            except Exception:  # noqa: BLE001
+                self._final_output = None
             self._conn = None
 

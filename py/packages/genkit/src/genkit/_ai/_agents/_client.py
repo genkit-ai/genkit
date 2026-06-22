@@ -296,6 +296,10 @@ class AgentSession(Generic[StateT, StreamT]):
                 try:
                     await external_signal.wait()
                     cancelled_event.set()
+                    if not turn_output_future.done():
+                        turn_output_future.cancel()
+                    if not run_task.done():
+                        run_task.cancel()
                 except asyncio.CancelledError:
                     pass
             watch_sig_task = asyncio.create_task(_watch_external())
@@ -473,6 +477,11 @@ class AgentSession(Generic[StateT, StreamT]):
     async def close(self) -> None:
         """Cleanly closes the underlying transport."""
         await self._transport.close()
+        # For in-process client-managed agents the full state (preamble stripped)
+        # is only available after the invocation completes.  Capture it here.
+        final = getattr(self._transport, '_final_output', None)
+        if final is not None and final.state is not None:
+            self._apply_output(final)
 
     def _apply_custom_patch(self, patch: Any) -> None:
         patch_list = patch.root if hasattr(patch, "root") else patch

@@ -19,7 +19,6 @@
 from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
 from genkit._ai._agents._base import (
     Agent,
-    AgentConnection,
     AgentFn,
     ChunkTransform,
     ClientTransform,
@@ -76,7 +75,6 @@ from genkit._core._typing import (
 
 __all__ = [
     'Agent',
-    'AgentConnection',
     # Agent Client APIs
     'AgentAPI',
     'AgentClient',

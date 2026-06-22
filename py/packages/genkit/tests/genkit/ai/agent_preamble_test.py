@@ -83,17 +83,13 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
         )
     )
 
-    conn = await agent.stream_bidi()
-    await conn.send_text('hello')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
-    await conn.close()
-    out = await conn.output()
+    async with agent.connect() as session:
+        turn = session.send('hello')
+        async for _chunk in turn.stream:
+            pass
+        await turn.output
 
-    assert out.state is not None
-    assert out.state.messages is not None
-    roles = [m.role for m in out.state.messages]
+    roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
     assert roles == [Role.USER, Role.MODEL]
 
@@ -117,21 +113,18 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
         ),
     ])
 
-    conn = await agent.stream_bidi()
-    await conn.send_text('hello')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
-    await conn.send_text('again')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
-    await conn.close()
-    out = await conn.output()
+    async with agent.connect() as session:
+        turn1 = session.send('hello')
+        async for _chunk in turn1.stream:
+            pass
+        await turn1.output
 
-    assert out.state is not None
-    assert out.state.messages is not None
-    roles = [m.role for m in out.state.messages]
+        turn2 = session.send('again')
+        async for _chunk in turn2.stream:
+            pass
+        await turn2.output
+
+    roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
     assert roles == [Role.USER, Role.MODEL, Role.USER, Role.MODEL]
 
@@ -174,14 +167,11 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
         )
     )
 
-    # Start a conversation; 'turn 1' represents history
-    conn = await agent.stream_bidi()
-    await conn.send_text('turn 1')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
-    await conn.close()
-    out = await conn.output()
+    async with agent.connect() as session:
+        turn = session.send('turn 1')
+        async for _chunk in turn.stream:
+            pass
+        await turn.output
 
     # Verify that the LLM received the prefix instructions, history, and suffix instructions
     assert pm.request_count == 1
@@ -196,13 +186,11 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     assert 'Suffix' in req_msgs[2].content[0].root.text
 
     # Verify that ONLY history and model response are stored (Prefix & Suffix are filtered out)
-    assert out.state is not None
-    assert out.state.messages is not None
-    roles = [m.role for m in out.state.messages]
+    roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
     assert roles == [Role.USER, Role.MODEL]
-    assert out.state.messages[0].content[0].root.text == 'turn 1'
-    assert out.state.messages[1].content[0].root.text == 'response'
+    assert session.messages[0].content[0].root.text == 'turn 1'
+    assert session.messages[1].content[0].root.text == 'response'
 
 
 @pytest.mark.asyncio
@@ -238,13 +226,11 @@ async def test_prompt_agent_few_shot_preamble() -> None:
         )
     )
 
-    conn = await agent.stream_bidi()
-    await conn.send_text('turn 1')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
-    await conn.close()
-    out = await conn.output()
+    async with agent.connect() as session:
+        turn = session.send('turn 1')
+        async for _chunk in turn.stream:
+            pass
+        await turn.output
 
     # Verify the LLM received the system prompt, few-shots, and user query
     assert pm.request_count == 1
@@ -255,12 +241,10 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     assert 'A: 2' in req_msgs[2].content[0].root.text
 
     # Verify few-shots are stripped, and only runtime history & response are saved
-    assert out.state is not None
-    assert out.state.messages is not None
-    assert len(out.state.messages) == 2
-    assert [m.role for m in out.state.messages] == [Role.USER, Role.MODEL]
-    assert out.state.messages[0].content[0].root.text == 'turn 1'
-    assert out.state.messages[1].content[0].root.text == 'response'
+    assert len(session.messages) == 2
+    assert [m.role for m in session.messages] == [Role.USER, Role.MODEL]
+    assert session.messages[0].content[0].root.text == 'turn 1'
+    assert session.messages[1].content[0].root.text == 'response'
 
 
 @pytest.mark.asyncio
@@ -300,13 +284,12 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
         tool_response_msg,
     ]
 
-    conn = await agent.stream_bidi(AgentInit(state=SessionState(messages=[MessageData.model_validate(m.model_dump()) for m in history])))
-    await conn.send_text('continue')
-    async for chunk in conn.receive():
-        if chunk.turn_end is not None:
-            break
-    await conn.close()
-    out = await conn.output()
+    init = AgentInit(state=SessionState(messages=[MessageData.model_validate(m.model_dump()) for m in history]))
+    async with agent.connect(init) as session:
+        turn = session.send('continue')
+        async for _chunk in turn.stream:
+            pass
+        await turn.output
 
     # Verify that LLM receives all history messages, including tool components
     assert pm.request_count == 1
@@ -318,12 +301,9 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     assert req_msgs[3].role == Role.TOOL
     assert req_msgs[4].role == Role.USER
 
-    # Verify that tool request/responses are saved back to session store verbatim
-    assert out.state is not None
-    assert out.state.messages is not None
-    assert len(out.state.messages) == 5
-    assert out.state.messages[1].role == Role.MODEL
-    assert isinstance(out.state.messages[1].content[0].root, ToolRequestPart)
-    assert out.state.messages[2].role == Role.TOOL
-    assert isinstance(out.state.messages[2].content[0].root, ToolResponsePart)
-
+    # Verify that tool request/responses are present in the session messages
+    assert len(session.messages) == 5
+    assert session.messages[1].role == Role.MODEL
+    assert isinstance(session.messages[1].content[0].root, ToolRequestPart)
+    assert session.messages[2].role == Role.TOOL
+    assert isinstance(session.messages[2].content[0].root, ToolResponsePart)
