@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import keyword
 import re
 import sys
 from datetime import datetime
@@ -280,6 +281,11 @@ def _emit_model(
         elif snake in ('schema_', 'schema'):
             field_name = 'schema' if name != 'OutputConfig' else 'schema_'
             alias_extra = ", alias='schema'" if name == 'OutputConfig' else ''
+        elif keyword.iskeyword(snake):
+            # Python reserved word (e.g. JsonPatchOperation.from): suffix with _ and
+            # alias back to the original schema key so JSON (de)serialization is unchanged.
+            field_name = snake + '_'
+            alias_extra = f", alias='{k}'"
         else:
             field_name = snake
             alias_extra = ''
@@ -299,7 +305,7 @@ def _emit_model(
         else:
             default_val = (
                 f'Field(default=None{desc_extra}{alias_extra})'
-                if '|' in py_type_str or py_type_str == 'Any'
+                if '|' in py_type_str or py_type_str == 'Any' or desc_extra or alias_extra
                 else 'None'
             )
             lines.append(f'    {field_name}: {py_type_str} | None = {default_val}')
