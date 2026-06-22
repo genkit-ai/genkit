@@ -34,15 +34,15 @@ agent = ai.define_agent(
 async def main() -> None:
     session = agent.connect()
     # Turn 1
-    print("--- SENDING TURN 1 ---")
+    print('--- SENDING TURN 1 ---')
     turn1 = session.send('My name is Ada. Remember it.')
     async for chunk in turn1.stream:
         print('turn1 chunk:', chunk)
-    out1 = await turn1.output
+    await turn1.output
     print('turn1 state:', session.state)
 
     # Turn 2
-    print("--- SENDING TURN 2 ---")
+    print('--- SENDING TURN 2 ---')
     turn2 = session.send('What is my name? One word.')
     async for chunk in turn2.stream:
         print('turn2 chunk:', chunk)

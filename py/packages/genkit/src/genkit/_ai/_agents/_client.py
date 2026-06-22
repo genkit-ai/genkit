@@ -1,12 +1,13 @@
 from __future__ import annotations
+
 import asyncio
 import inspect
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Generic, Protocol, TypeVar, runtime_checkable
+
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._typing import (
-    AgentFinishReason,
     AgentInit,
     AgentInput,
     AgentOutput,
@@ -16,7 +17,6 @@ from genkit._core._typing import (
     ModelResponseChunk,
     Part,
     Resume,
-    Role,
     SessionSnapshot,
     SessionState,
     SnapshotStatus,
@@ -57,9 +57,11 @@ class AgentTransport(Protocol, Generic[StateT, StreamT]):
         """Cleanly closes any persistent connections held by this transport."""
         ...
 
+
 @dataclass
 class AgentChunk(Generic[StreamT]):
     """Represents a structured stream chunk yielded during a turn."""
+
     text: str | None = None
     reasoning: str | None = None
     accumulated_text: str | None = None
@@ -155,29 +157,8 @@ class AgentTurn(Generic[StateT, StreamT]):
             pass
 
 
-@runtime_checkable
-class AgentAPI(Protocol, Generic[StateT, StreamT]):
-    """Unified Protocol representing any client or local factory for interacting with an agent."""
-
-    def connect(self, init: AgentInit[StateT] | None = None) -> AgentSession[StateT, StreamT]:
-        """Starts a new session, or attaches to one via init."""
-        ...
-
-    async def resume(self, snapshot_id: str) -> AgentSession[StateT, StreamT]:
-        """Loads a server snapshot and returns a session with history restored."""
-        ...
-
-    async def get_snapshot(self, snapshot_id: str) -> SessionSnapshot[StateT] | None:
-        """Reads a snapshot without starting a session."""
-        ...
-
-    async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
-        """Aborts a running snapshot on the server."""
-        ...
-
-
-class AgentClient(Generic[StateT, StreamT]):
-    """Concrete implementation of the AgentAPI protocol wrapping a transport."""
+class Agent(Generic[StateT, StreamT]):
+    """Transport-backed agent — call ``connect()`` for an ``AgentSession``."""
 
     def __init__(self, transport: AgentTransport[StateT, StreamT], info: Any = None) -> None:
         self._transport = transport
@@ -191,7 +172,7 @@ class AgentClient(Generic[StateT, StreamT]):
         """Loads a server snapshot and returns a session with history restored."""
         snapshot = await self._transport.get_snapshot(snapshot_id)
         if snapshot is None:
-            raise ValueError(f"Snapshot {snapshot_id} not found.")
+            raise ValueError(f'Snapshot {snapshot_id} not found.')
         session = AgentSession(self._transport)
         session._load_from_snapshot(snapshot)
         return session
@@ -282,17 +263,18 @@ class AgentSession(Generic[StateT, StreamT]):
         # Check for external abort_signal in opts
         external_signal = None
         if isinstance(opts, dict):
-            external_signal = opts.get("abort_signal")
-        elif opts and hasattr(opts, "abort_signal"):
-            external_signal = getattr(opts, "abort_signal")
+            external_signal = opts.get('abort_signal')
+        elif opts and hasattr(opts, 'abort_signal'):
+            external_signal = opts.abort_signal
 
         turn_output_future = asyncio.get_event_loop().create_future()
-        accumulated_text = ""
+        accumulated_text = ''
         accumulated_artifacts: list[Artifact] = []
 
         watch_sig_task = None
         if external_signal is not None:
-            async def _watch_external():
+
+            async def _watch_external() -> None:
                 try:
                     await external_signal.wait()
                     cancelled_event.set()
@@ -302,6 +284,7 @@ class AgentSession(Generic[StateT, StreamT]):
                         run_task.cancel()
                 except asyncio.CancelledError:
                     pass
+
             watch_sig_task = asyncio.create_task(_watch_external())
 
         async def _run() -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
@@ -312,9 +295,10 @@ class AgentSession(Generic[StateT, StreamT]):
 
         run_task = asyncio.create_task(_run())
 
-        def cleanup_sig_task(_):
+        def cleanup_sig_task(_) -> None:
             if watch_sig_task:
                 watch_sig_task.cancel()
+
         turn_output_future.add_done_callback(cleanup_sig_task)
 
         async def stream_generator() -> AsyncIterator[AgentChunk[StreamT]]:
@@ -331,10 +315,7 @@ class AgentSession(Generic[StateT, StreamT]):
                 try:
                     res = await output_awaitable
                     if not res.message and accumulated_text:
-                        res.message = MessageData(
-                            role="model",
-                            content=[Part(root=TextPart(text=accumulated_text))]
-                        )
+                        res.message = MessageData(role='model', content=[Part(root=TextPart(text=accumulated_text))])
                     if not res.artifacts and accumulated_artifacts:
                         res.artifacts = list(accumulated_artifacts)
                     self._apply_output(res)
@@ -357,8 +338,7 @@ class AgentSession(Generic[StateT, StreamT]):
                     wait_cancelled_task = asyncio.create_task(cancelled_event.wait())
 
                     done, pending = await asyncio.wait(
-                        {next_chunk_task, wait_cancelled_task},
-                        return_when=asyncio.FIRST_COMPLETED
+                        {next_chunk_task, wait_cancelled_task}, return_when=asyncio.FIRST_COMPLETED
                     )
 
                     # Cancel all pending tasks to prevent resource leaks
@@ -383,11 +363,11 @@ class AgentSession(Generic[StateT, StreamT]):
                             if chunk.custom_patch:
                                 self._apply_custom_patch(chunk.custom_patch)
 
-                            reasoning = getattr(chunk.model_chunk, "reasoning", None) if chunk.model_chunk else None
+                            reasoning = getattr(chunk.model_chunk, 'reasoning', None) if chunk.model_chunk else None
                             tool_request = _get_chunk_tool_request(chunk.model_chunk)
                             tool_response = _get_chunk_tool_response(chunk.model_chunk)
-                            artifact = getattr(chunk, "artifact", None)
-                            status = getattr(chunk, "status", None)
+                            artifact = getattr(chunk, 'artifact', None)
+                            status = getattr(chunk, 'status', None)
 
                             c = AgentChunk(
                                 text=text,
@@ -420,7 +400,7 @@ class AgentSession(Generic[StateT, StreamT]):
                 if cancelled_event.is_set():
                     watch_output_task.cancel()
 
-        def do_abort():
+        def do_abort() -> None:
             cancelled_event.set()
             if not turn_output_future.done():
                 turn_output_future.cancel()
@@ -465,7 +445,7 @@ class AgentSession(Generic[StateT, StreamT]):
         self._apply_output(raw_output)
 
         if not raw_output.snapshot_id:
-            raise ValueError("detach did not return a snapshot_id.")
+            raise ValueError('detach did not return a snapshot_id.')
         return DetachedTask(raw_output.snapshot_id, self._transport)
 
     async def abort(self) -> SnapshotStatus | None:
@@ -484,7 +464,7 @@ class AgentSession(Generic[StateT, StreamT]):
             self._apply_output(final)
 
     def _apply_custom_patch(self, patch: Any) -> None:
-        patch_list = patch.root if hasattr(patch, "root") else patch
+        patch_list = patch.root if hasattr(patch, 'root') else patch
         self.state = apply_json_patch(self.state, patch_list)
 
     def _apply_output(self, raw: AgentOutput[StateT]) -> None:
@@ -523,7 +503,7 @@ def _get_chunk_text(model_chunk: ModelResponseChunk | None) -> str | None:
         p = part if isinstance(part, Part) else Part.model_validate(part)
         if isinstance(p.root, TextPart):
             texts.append(p.root.text)
-    return "".join(texts) if texts else None
+    return ''.join(texts) if texts else None
 
 
 def _get_chunk_tool_request(model_chunk: ModelResponseChunk | None) -> ToolRequestPart | None:

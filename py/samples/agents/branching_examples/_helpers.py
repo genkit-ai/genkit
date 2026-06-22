@@ -23,6 +23,7 @@ from genkit._ai._agent import SessionRunner, TurnResult
 from genkit._core._action import ActionRunContext
 from genkit.agent import (
     Agent,
+    AgentAPI,
     AgentFinishReason,
     AgentInit,
     AgentInput,
@@ -30,7 +31,6 @@ from genkit.agent import (
     AgentResult,
     InMemoryBranchingSessionStore,
     InProcessAgentTransport,
-    AgentAPI,
 )
 
 
@@ -50,7 +50,7 @@ def model_text(out: AgentOutput) -> str:
 async def run_turn(agent: Agent, init: AgentInit, text: str) -> AgentOutput:
     transport = InProcessAgentTransport(agent, store_configured=True)
     api = AgentAPI(transport)
-    
+
     session_id = None
     if init.state and init.state.session_id:
         session_id = init.state.session_id

@@ -17,7 +17,6 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
-import logging
 import inspect
 import json
 import re
@@ -715,8 +714,6 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
         if not self._closed:
             self._closed = True
             await self._in_queue.put(_SENTINEL)
-
-
 
     async def receive(self) -> AsyncIterator[StreamOutT_co]:
         """Async iterator yielding server-side stream chunks.

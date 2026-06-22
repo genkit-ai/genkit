@@ -25,7 +25,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.agent import InMemoryLinearSessionStore, AgentInit
+from genkit.agent import AgentInit, InMemoryLinearSessionStore
 from genkit.plugins.google_genai import GoogleAI
 
 
@@ -64,7 +64,7 @@ async def main() -> None:
 
     session = agent.connect(AgentInit(session_id=session_id))
     # Turn 1
-    print("--- SENDING TURN 1 ---")
+    print('--- SENDING TURN 1 ---')
     turn1 = session.send('Weather in Paris?')
     async for chunk in turn1.stream:
         print('turn1 chunk:', chunk)
@@ -72,7 +72,7 @@ async def main() -> None:
     print('turn1 output:', out1)
 
     # Turn 2
-    print("--- SENDING TURN 2 ---")
+    print('--- SENDING TURN 2 ---')
     turn2 = session.send('What city did I ask about? One word.')
     async for chunk in turn2.stream:
         print('turn2 chunk:', chunk)

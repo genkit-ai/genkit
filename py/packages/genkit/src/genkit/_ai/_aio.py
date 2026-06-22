@@ -35,7 +35,6 @@ import uvicorn
 from pydantic import BaseModel
 
 from genkit._ai._agents._base import (
-    Agent,
     AgentFn,
     ClientTransform,
     StateTransform,
@@ -43,6 +42,8 @@ from genkit._ai._agents._base import (
     define_custom_agent,
     define_prompt_agent,
 )
+from genkit._ai._agents._client import Agent
+from genkit._ai._agents._transports.inprocess import InProcessAgentTransport
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -692,7 +693,7 @@ class Genkit:
                 status='NOT_FOUND',
                 message=f"Agent '{name}' not found in registry.",
             )
-        return Agent(cast(BidiAction, resolved))
+        return Agent(InProcessAgentTransport(cast(BidiAction, resolved), store_configured=False))
 
     def define_custom_agent(
         self,

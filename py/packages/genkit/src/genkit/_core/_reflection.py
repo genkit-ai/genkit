@@ -23,11 +23,11 @@ import json
 import os
 import signal
 import threading
-from uuid import uuid4
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 import uvicorn
 from pydantic import BaseModel
@@ -39,12 +39,12 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from genkit._core._action import Action, ActionResponse, BidiAction
-from genkit._core._typing import AgentInit, AgentInput
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
 from genkit._core._middleware import GenerateMiddleware
 from genkit._core._registry import Registry
+from genkit._core._typing import AgentInit, AgentInput
 
 logger = get_logger(__name__)
 
@@ -101,10 +101,7 @@ class ActionRunner:
                     init = AgentInit.model_validate(init_val)
                 else:
                     input_val = self.payload.get('input')
-                    if isinstance(input_val, dict) and (
-                        'sessionId' in input_val
-                        or 'snapshotId' in input_val
-                    ):
+                    if isinstance(input_val, dict) and ('sessionId' in input_val or 'snapshotId' in input_val):
                         init = AgentInit.model_validate(input_val)
                     else:
                         init = AgentInit()

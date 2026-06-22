@@ -23,7 +23,7 @@ import asyncio
 from uuid import uuid4
 
 from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemoryLatestStateStore, AgentInit
+from genkit.agent import AgentInit, InMemoryLatestStateStore
 from genkit.plugins.google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI()])
@@ -37,7 +37,7 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
             if ctx.abort_signal.is_set():
                 print('[slowWork] Abort signal detected!')
                 raise GenkitError(status='ABORTED', message='Task aborted')
-            print(f'[slowWork] working step {i+1}/30...')
+            print(f'[slowWork] working step {i + 1}/30...')
             await asyncio.sleep(0.5)
         return {'done': True}
     except asyncio.CancelledError:
@@ -56,13 +56,13 @@ agent = ai.define_agent(
 
 async def main() -> None:
     session = agent.connect(AgentInit(session_id=str(uuid4())))
-    print("--- SUBMITTING DETACHED TASK ---")
+    print('--- SUBMITTING DETACHED TASK ---')
     task = await session.detach('Please run a long task using slowWork.')
     print(f'Task detached! Snapshot ID: {task.snapshot_id}')
 
     await asyncio.sleep(2.0)
 
-    print("\n--- ABORTING TASK ---")
+    print('\n--- ABORTING TASK ---')
     status = await task.abort()
     print('abort returned status:', status)
 

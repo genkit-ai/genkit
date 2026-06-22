@@ -24,10 +24,10 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from genkit import Genkit, restart_tool
-from genkit.agent import InMemoryLinearSessionStore, Resume, AgentInit
+from genkit._core._typing import ToolRequest, ToolRequestPart
+from genkit.agent import AgentInit, InMemoryLinearSessionStore, Resume
 from genkit.plugins.google_genai import GoogleAI
 from genkit.plugins.middleware import Middleware, ToolApproval
-from genkit._core._typing import ToolRequestPart, ToolRequest
 
 
 class TransferInput(BaseModel):
@@ -87,7 +87,7 @@ async def main() -> None:
 
     session = agent.connect(AgentInit(session_id=session_id))
     # --- Turn 1: user message → stream until interrupted ---
-    print("--- SENDING TURN 1 ---")
+    print('--- SENDING TURN 1 ---')
     turn1 = session.send('Transfer $500 to account 12345 for rent and check the balance in account 12345.')
     async for chunk in turn1.stream:
         if chunk.content:
@@ -102,7 +102,7 @@ async def main() -> None:
     # Inspect the interrupt to approve
     if turn1.interrupt:
         print(f'client would show approval UI for: {turn1.interrupt.name}')
-        
+
         trp = ToolRequestPart(
             tool_request=ToolRequest(
                 name=turn1.interrupt.name,
@@ -113,7 +113,7 @@ async def main() -> None:
         restarts = [restart_tool(interrupt=trp, resumed_metadata={'tool_approved': True})]
 
         # --- Turn 2: resume within same session ---
-        print("\n--- SENDING TURN 2 (RESUME) ---")
+        print('\n--- SENDING TURN 2 (RESUME) ---')
         turn2 = session.resume(Resume(restart=restarts))
         async for chunk in turn2.stream:
             if chunk.content:

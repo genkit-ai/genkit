@@ -19,25 +19,26 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import json
+import os
 from abc import abstractmethod
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Generic, TypeVar
+from typing import TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel
 
+from genkit._ai._session import SessionStore, SnapshotAborter
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
-from genkit._ai._session import SessionStore, SnapshotAborter
 
 StateT = TypeVar('StateT')
 
 
 class LatestRecord(BaseModel):
     """Container for the latest state and optional pending slot of a session."""
+
     session_id: str
     last_good: SessionSnapshot | None = None
     pending: SessionSnapshot | None = None
@@ -150,7 +151,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
 
                 session_id = next_snap.state.session_id
                 if not session_id:
-                    raise ValueError("session_id must be populated on new snapshot")
+                    raise ValueError('session_id must be populated on new snapshot')
 
                 record = await self._read_record_by_session(session_id)
                 if record is None:
@@ -171,7 +172,7 @@ class LatestStateStore(SessionStore, SnapshotAborter):
             record = await self._read_record_by_snapshot(snapshot_id)
             if record is None:
                 return None
-            
+
             # Abort can only flip PENDING -> ABORTED
             if record.pending and record.pending.snapshot_id == snapshot_id:
                 if record.pending.status == SnapshotStatus.PENDING:
@@ -189,13 +190,13 @@ class LatestStateStore(SessionStore, SnapshotAborter):
             if record is None:
                 await q.put(None)
                 return q
-            
+
             status = None
             if record.last_good and record.last_good.snapshot_id == snapshot_id:
                 status = record.last_good.status
             elif record.pending and record.pending.snapshot_id == snapshot_id:
                 status = record.pending.status
-            
+
             await q.put(status)
             self._subs.setdefault(snapshot_id, []).append(q)
         return q
@@ -243,10 +244,10 @@ class FileLatestStateStore(LatestStateStore):
         os.makedirs(directory, exist_ok=True)
 
     def _session_path(self, session_id: str) -> str:
-        return os.path.join(self.directory, f"{session_id}.json")
+        return os.path.join(self.directory, f'{session_id}.json')
 
     def _pointer_path(self, snapshot_id: str) -> str:
-        return os.path.join(self.directory, f"{snapshot_id}.ptr")
+        return os.path.join(self.directory, f'{snapshot_id}.ptr')
 
     async def _put_record(self, record: LatestRecord) -> None:
         # Save pointer paths first, then write the main record
@@ -264,15 +265,15 @@ class FileLatestStateStore(LatestStateStore):
 
         # Write new pointer files
         if record.last_good:
-            with open(self._pointer_path(record.last_good.snapshot_id), "w", encoding="utf-8") as f:
+            with open(self._pointer_path(record.last_good.snapshot_id), 'w', encoding='utf-8') as f:
                 f.write(record.session_id)
         if record.pending:
-            with open(self._pointer_path(record.pending.snapshot_id), "w", encoding="utf-8") as f:
+            with open(self._pointer_path(record.pending.snapshot_id), 'w', encoding='utf-8') as f:
                 f.write(record.session_id)
 
         # Write JSON record
-        temp_path = self._session_path(record.session_id) + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
+        temp_path = self._session_path(record.session_id) + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(record.model_dump_json(indent=2))
         os.replace(temp_path, self._session_path(record.session_id))
 
@@ -280,7 +281,7 @@ class FileLatestStateStore(LatestStateStore):
         path = self._session_path(session_id)
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
         return LatestRecord.model_validate(data)
 
@@ -288,7 +289,7 @@ class FileLatestStateStore(LatestStateStore):
         ptr_path = self._pointer_path(snapshot_id)
         if not os.path.exists(ptr_path):
             return None
-        with open(ptr_path, "r", encoding="utf-8") as f:
+        with open(ptr_path, encoding='utf-8') as f:
             session_id = f.read().strip()
         return await self._read_record_by_session(session_id)
 

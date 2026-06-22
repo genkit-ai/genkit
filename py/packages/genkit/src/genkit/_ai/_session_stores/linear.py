@@ -19,9 +19,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import json
 import copy
+import json
+import os
 from abc import abstractmethod
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -30,16 +30,17 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from genkit._core._error import GenkitError
-from genkit._core._typing import SessionSnapshot, SnapshotStatus, SessionState, JsonPatchOperation, SnapshotEvent
+from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._ai._session import SessionStore, SnapshotAborter
-from genkit._ai._json_patch import diff_json, apply_json_patch
+from genkit._core._error import GenkitError
+from genkit._core._typing import JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
 
 StateT = TypeVar('StateT')
 
 
 class TurnRecord(BaseModel):
     """Storage model for a single sequence turn in a linear timeline."""
+
     session_id: str
     seq: int
     snapshot_id: str
@@ -95,7 +96,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
         for s in range(seq + 1):
             t = await self._read_turn(session_id, s)
             if t is None:
-                raise ValueError(f"Missing sequence {s} for session {session_id}")
+                raise ValueError(f'Missing sequence {s} for session {session_id}')
             turns.append(t)
 
         checkpoint_idx = -1
@@ -105,7 +106,7 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 break
 
         if checkpoint_idx == -1:
-            raise ValueError(f"No checkpoint found in history for sequence {seq}")
+            raise ValueError(f'No checkpoint found in history for sequence {seq}')
 
         state_dict = copy.deepcopy(turns[checkpoint_idx].state_or_patch)
 
@@ -214,11 +215,11 @@ class LinearSessionStore(SessionStore, SnapshotAborter):
                 else:
                     parent_rec = await self._read_turn_by_snapshot(parent_id)
                     if parent_rec is None:
-                        raise ValueError(f"Parent snapshot {parent_id} not found")
+                        raise ValueError(f'Parent snapshot {parent_id} not found')
                     session_id = parent_rec.session_id
                     parent_seq = parent_rec.seq
                     leaf_seq = await self._read_leaf_seq(session_id)
-                    
+
                     if leaf_seq is not None and parent_seq < leaf_seq:
                         # Rollback: Truncate history after parent_seq
                         await self._truncate_to(session_id, parent_seq)
@@ -330,30 +331,30 @@ class FileLinearSessionStore(LinearSessionStore):
         return os.path.join(self.directory, session_id)
 
     def _turn_path(self, session_id: str, seq: int) -> str:
-        return os.path.join(self._session_dir(session_id), f"{seq}.json")
+        return os.path.join(self._session_dir(session_id), f'{seq}.json')
 
     def _leaf_path(self, session_id: str) -> str:
-        return os.path.join(self._session_dir(session_id), "leaf.ptr")
+        return os.path.join(self._session_dir(session_id), 'leaf.ptr')
 
     def _pointer_path(self, snapshot_id: str) -> str:
-        return os.path.join(self.directory, f"{snapshot_id}.ptr")
+        return os.path.join(self.directory, f'{snapshot_id}.ptr')
 
     async def _append_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
         os.makedirs(self._session_dir(session_id), exist_ok=True)
-        
+
         # Write turn file
-        temp_path = self._turn_path(session_id, seq) + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
+        temp_path = self._turn_path(session_id, seq) + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(record.model_dump_json(indent=2))
         os.replace(temp_path, self._turn_path(session_id, seq))
 
         # Write index pointer snapshot_id -> session_id:seq
-        with open(self._pointer_path(record.snapshot_id), "w", encoding="utf-8") as f:
-            f.write(f"{session_id}:{seq}")
+        with open(self._pointer_path(record.snapshot_id), 'w', encoding='utf-8') as f:
+            f.write(f'{session_id}:{seq}')
 
         # Update leaf sequence pointer
-        leaf_temp = self._leaf_path(session_id) + ".tmp"
-        with open(leaf_temp, "w", encoding="utf-8") as f:
+        leaf_temp = self._leaf_path(session_id) + '.tmp'
+        with open(leaf_temp, 'w', encoding='utf-8') as f:
             f.write(str(seq))
         os.replace(leaf_temp, self._leaf_path(session_id))
 
@@ -361,26 +362,26 @@ class FileLinearSessionStore(LinearSessionStore):
         leaf_seq = await self._read_leaf_seq(session_id)
         if leaf_seq is None:
             return
-        
+
         # Delete turns and index pointers from seq + 1 to leaf_seq
         for s in range(seq + 1, leaf_seq + 1):
             t_path = self._turn_path(session_id, s)
             if os.path.exists(t_path):
                 # read snapshot_id to clean its pointer file
-                with open(t_path, "r", encoding="utf-8") as f:
+                with open(t_path, encoding='utf-8') as f:
                     rec = json.load(f)
-                ptr_path = self._pointer_path(rec["snapshot_id"])
+                ptr_path = self._pointer_path(rec['snapshot_id'])
                 if os.path.exists(ptr_path):
                     os.remove(ptr_path)
                 os.remove(t_path)
 
         # Update leaf pointer
-        with open(self._leaf_path(session_id), "w", encoding="utf-8") as f:
+        with open(self._leaf_path(session_id), 'w', encoding='utf-8') as f:
             f.write(str(seq))
 
     async def _update_turn(self, session_id: str, seq: int, record: TurnRecord) -> None:
-        temp_path = self._turn_path(session_id, seq) + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
+        temp_path = self._turn_path(session_id, seq) + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(record.model_dump_json(indent=2))
         os.replace(temp_path, self._turn_path(session_id, seq))
 
@@ -388,21 +389,21 @@ class FileLinearSessionStore(LinearSessionStore):
         path = self._leaf_path(session_id)
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding='utf-8') as f:
             return int(f.read().strip())
 
     async def _read_turn(self, session_id: str, seq: int) -> TurnRecord | None:
         path = self._turn_path(session_id, seq)
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding='utf-8') as f:
             return TurnRecord.model_validate(json.load(f))
 
     async def _read_turn_by_snapshot(self, snapshot_id: str) -> TurnRecord | None:
         ptr_path = self._pointer_path(snapshot_id)
         if not os.path.exists(ptr_path):
             return None
-        with open(ptr_path, "r", encoding="utf-8") as f:
+        with open(ptr_path, encoding='utf-8') as f:
             ref = f.read().strip()
-        session_id, seq_str = ref.split(":")
+        session_id, seq_str = ref.split(':')
         return await self._read_turn(session_id, int(seq_str))

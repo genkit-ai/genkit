@@ -118,7 +118,7 @@ def apply_json_patch(doc: Any, patch: list[JsonPatchOperation]) -> Any:
             elif isinstance(curr, list):
                 curr = curr[int(part)]
             else:
-                raise ValueError(f"Invalid path traversal: cannot index into non-container type {type(curr)}")
+                raise ValueError(f'Invalid path traversal: cannot index into non-container type {type(curr)}')
 
         if not parts:
             continue
@@ -143,4 +143,3 @@ def apply_json_patch(doc: Any, patch: list[JsonPatchOperation]) -> Any:
             elif isinstance(curr, list):
                 curr.pop(int(last_part))
     return doc
-

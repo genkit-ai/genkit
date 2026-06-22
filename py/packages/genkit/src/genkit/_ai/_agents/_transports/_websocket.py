@@ -1,14 +1,18 @@
 from __future__ import annotations
+
 import asyncio
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
-from typing import Any, Generic, TypeVar
+from typing import TypeVar
+
 import websockets
+
 from genkit._ai._agents._client import AgentTransport
-from genkit._core._typing import AgentInput, AgentInit, AgentStreamChunk, AgentOutput, SessionSnapshot, SnapshotStatus
+from genkit._core._typing import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot, SnapshotStatus
 
 StateT = TypeVar('StateT')
 StreamT = TypeVar('StreamT')
+
 
 class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
     """Client-side agent transport that talks to a remote agent over WebSockets."""
@@ -26,10 +30,12 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
             self._ws = await websockets.connect(self.url)
         ws = self._ws
 
-        await ws.send(json.dumps({
-            "init": init.model_dump(by_alias=True),
-            "input": input.model_dump(by_alias=True),
-        }))
+        await ws.send(
+            json.dumps({
+                'init': init.model_dump(by_alias=True),
+                'input': input.model_dump(by_alias=True),
+            })
+        )
 
         output_future = asyncio.get_event_loop().create_future()
 
@@ -37,11 +43,11 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
             try:
                 async for message in ws:
                     data = json.loads(message)
-                    if "chunk" in data:
-                        chunk = AgentStreamChunk.model_validate(data["chunk"])
+                    if 'chunk' in data:
+                        chunk = AgentStreamChunk.model_validate(data['chunk'])
                         yield chunk
-                    if "output" in data:
-                        output = AgentOutput.model_validate(data["output"])
+                    if 'output' in data:
+                        output = AgentOutput.model_validate(data['output'])
                         if not output_future.done():
                             output_future.set_result(output)
                         break

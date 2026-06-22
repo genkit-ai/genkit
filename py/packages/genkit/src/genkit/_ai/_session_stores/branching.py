@@ -19,9 +19,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import json
 import copy
+import json
+import os
 from abc import abstractmethod
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -30,16 +30,17 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from genkit._core._error import GenkitError
-from genkit._core._typing import SessionSnapshot, SnapshotStatus, SessionState, JsonPatchOperation, SnapshotEvent
+from genkit._ai._json_patch import apply_json_patch, diff_json
 from genkit._ai._session import SessionStore, SnapshotAborter
-from genkit._ai._json_patch import diff_json, apply_json_patch
+from genkit._core._error import GenkitError
+from genkit._core._typing import JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
 
 StateT = TypeVar('StateT')
 
 
 class BranchRecord(BaseModel):
     """Storage model for a single node in a branching conversation tree."""
+
     snapshot_id: str
     parent_id: str | None = None
     session_id: str
@@ -86,12 +87,12 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
         while curr.kind != 'checkpoint' and curr.parent_id:
             parent = await self._read_record(curr.parent_id)
             if parent is None:
-                raise ValueError(f"Missing parent record {curr.parent_id}")
+                raise ValueError(f'Missing parent record {curr.parent_id}')
             path.append(parent)
             curr = parent
 
         if curr.kind != 'checkpoint':
-            raise ValueError(f"No checkpoint found in history chain for snapshot {record.snapshot_id}")
+            raise ValueError(f'No checkpoint found in history chain for snapshot {record.snapshot_id}')
 
         state_dict = copy.deepcopy(curr.state_or_patch)
 
@@ -211,7 +212,7 @@ class BranchingSessionStore(SessionStore, SnapshotAborter):
                 else:
                     parent_rec = await self._read_record(parent_id)
                     if parent_rec is None:
-                        raise ValueError(f"Parent snapshot {parent_id} not found")
+                        raise ValueError(f'Parent snapshot {parent_id} not found')
                     session_id = parent_rec.session_id
                     depth = parent_rec.depth + 1
 
@@ -282,7 +283,7 @@ class InMemoryBranchingSessionStore(BranchingSessionStore):
 
     async def _append_child(self, session_id: str, parent_id: str | None, record: BranchRecord) -> None:
         self._records[record.snapshot_id] = record.model_copy(deep=True)
-        
+
         leaves = self._leaves.setdefault(session_id, [])
         if parent_id in leaves:
             leaves.remove(parent_id)
@@ -305,19 +306,19 @@ class FileBranchingSessionStore(BranchingSessionStore):
     def __init__(self, directory: str, checkpoint_interval: int = 10) -> None:
         super().__init__(checkpoint_interval)
         self.directory = directory
-        os.makedirs(os.path.join(directory, "snapshots"), exist_ok=True)
-        os.makedirs(os.path.join(directory, "sessions"), exist_ok=True)
+        os.makedirs(os.path.join(directory, 'snapshots'), exist_ok=True)
+        os.makedirs(os.path.join(directory, 'sessions'), exist_ok=True)
 
     def _snapshot_path(self, snapshot_id: str) -> str:
-        return os.path.join(self.directory, "snapshots", f"{snapshot_id}.json")
+        return os.path.join(self.directory, 'snapshots', f'{snapshot_id}.json')
 
     def _leaves_path(self, session_id: str) -> str:
-        return os.path.join(self.directory, "sessions", session_id, "leaves.json")
+        return os.path.join(self.directory, 'sessions', session_id, 'leaves.json')
 
     async def _append_child(self, session_id: str, parent_id: str | None, record: BranchRecord) -> None:
         # Write record
-        temp_path = self._snapshot_path(record.snapshot_id) + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
+        temp_path = self._snapshot_path(record.snapshot_id) + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(record.model_dump_json(indent=2))
         os.replace(temp_path, self._snapshot_path(record.snapshot_id))
 
@@ -328,14 +329,14 @@ class FileBranchingSessionStore(BranchingSessionStore):
             leaves.remove(parent_id)
         leaves.append(record.snapshot_id)
 
-        leaves_temp = self._leaves_path(session_id) + ".tmp"
-        with open(leaves_temp, "w", encoding="utf-8") as f:
+        leaves_temp = self._leaves_path(session_id) + '.tmp'
+        with open(leaves_temp, 'w', encoding='utf-8') as f:
             json.dump(leaves, f, indent=2)
         os.replace(leaves_temp, self._leaves_path(session_id))
 
     async def _update_record(self, snapshot_id: str, record: BranchRecord) -> None:
-        temp_path = self._snapshot_path(snapshot_id) + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
+        temp_path = self._snapshot_path(snapshot_id) + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(record.model_dump_json(indent=2))
         os.replace(temp_path, self._snapshot_path(snapshot_id))
 
@@ -343,12 +344,12 @@ class FileBranchingSessionStore(BranchingSessionStore):
         path = self._snapshot_path(snapshot_id)
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding='utf-8') as f:
             return BranchRecord.model_validate(json.load(f))
 
     async def _read_leaves(self, session_id: str) -> list[str]:
         path = self._leaves_path(session_id)
         if not os.path.exists(path):
             return []
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding='utf-8') as f:
             return list(json.load(f))

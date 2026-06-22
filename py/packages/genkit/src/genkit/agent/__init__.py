@@ -16,27 +16,25 @@
 
 """Agent types for defining and running bidirectional streaming agents."""
 
-from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
 from genkit._ai._agents._base import (
-    Agent,
     AgentFn,
     ChunkTransform,
     ClientTransform,
-    InProcessAgentTransport,
     SessionRunner,
     StateTransform,
     TurnResult,
 )
 from genkit._ai._agents._client import (
-    AgentAPI,
+    Agent,
     AgentChunk,
-    AgentClient,
     AgentInterrupt,
     AgentSession,
     AgentTransport,
     AgentTurn,
     DetachedTask,
 )
+from genkit._ai._agents._transports.inprocess import InProcessAgentTransport
+from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
 from genkit._ai._session import (
     InMemorySessionStore,
     Session,
@@ -46,15 +44,15 @@ from genkit._ai._session import (
     SnapshotContext,
 )
 from genkit._ai._session_stores import (
-    LatestStateStore,
-    InMemoryLatestStateStore,
-    FileLatestStateStore,
-    LinearSessionStore,
-    InMemoryLinearSessionStore,
-    FileLinearSessionStore,
     BranchingSessionStore,
-    InMemoryBranchingSessionStore,
     FileBranchingSessionStore,
+    FileLatestStateStore,
+    FileLinearSessionStore,
+    InMemoryBranchingSessionStore,
+    InMemoryLatestStateStore,
+    InMemoryLinearSessionStore,
+    LatestStateStore,
+    LinearSessionStore,
 )
 from genkit._core._action import ActionRunContext
 from genkit._core._typing import (
@@ -76,8 +74,6 @@ from genkit._core._typing import (
 __all__ = [
     'Agent',
     # Agent Client APIs
-    'AgentAPI',
-    'AgentClient',
     'AgentSession',
     'AgentTurn',
     'AgentChunk',
@@ -126,4 +122,3 @@ __all__ = [
     'SnapshotStatus',
     'TurnEnd',
 ]
-

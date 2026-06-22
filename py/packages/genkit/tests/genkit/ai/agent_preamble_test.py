@@ -275,7 +275,9 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     )
     tool_response_msg = Message(
         role=Role.TOOL,
-        content=[Part(root=ToolResponsePart(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'})))],
+        content=[
+            Part(root=ToolResponsePart(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'})))
+        ],
     )
 
     history = [
