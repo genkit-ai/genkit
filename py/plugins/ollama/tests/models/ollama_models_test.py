@@ -614,7 +614,17 @@ class TestOllamaModelGenerateOllamaResponse(unittest.IsolatedAsyncioTestCase):
     'input_schema, expected_output',
     [
         ({}, None),
-        ({'properties': {'name': {'type': 'string'}}}, None),
+        (
+            # Object schema inferred from ``properties`` when ``type`` is omitted.
+            {'properties': {'name': {'type': 'string'}}},
+            ollama_api.Tool.Function.Parameters(
+                type='object',
+                required=None,
+                properties={
+                    'name': ollama_api.Tool.Function.Parameters.Property(type='string', description=''),
+                },
+            ),
+        ),
         (
             {'type': 'object'},
             ollama_api.Tool.Function.Parameters(type='object', properties={}),

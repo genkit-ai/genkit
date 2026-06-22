@@ -581,28 +581,30 @@ class OllamaModel:
 
 def _convert_parameters(input_schema: dict[str, object]) -> ollama_api.Tool.Function.Parameters | None:
     """Sanitizes a schema to be compatible with Ollama API."""
-    if not input_schema or 'type' not in input_schema:
+    if not input_schema:
+        return None
+
+    schema_type = input_schema.get('type')
+    if schema_type is None and 'properties' in input_schema:
+        # Infer an object schema when properties are present but ``type`` is omitted.
+        schema_type = 'object'
+    if schema_type is None:
         return None
 
     schema = ollama_api.Tool.Function.Parameters()
-    if 'required' in input_schema:
-        required = input_schema['required']
-        if isinstance(required, list):
-            schema.required = cast(list[str], required)
+    required = input_schema.get('required')
+    if isinstance(required, list):
+        schema.required = cast(list[str], required)
 
-    if 'type' in input_schema:
-        schema_type = input_schema['type']
-        if schema_type == 'object':
-            schema.type = 'object'
-
-        if schema_type == 'object':
-            schema.properties = {}
-            properties_raw = input_schema.get('properties', {})
-            if isinstance(properties_raw, dict):
-                properties = cast(dict[str, dict[str, Any]], properties_raw)
-                for key in properties:
-                    schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
-                        type=properties[key]['type'], description=properties[key].get('description', '')
-                    )
+    if schema_type == 'object':
+        schema.type = 'object'
+        schema.properties = {}
+        properties_raw = input_schema.get('properties', {})
+        if isinstance(properties_raw, dict):
+            properties = cast(dict[str, dict[str, Any]], properties_raw)
+            for key in properties:
+                schema.properties[key] = ollama_api.Tool.Function.Parameters.Property(
+                    type=properties[key]['type'], description=properties[key].get('description', '')
+                )
 
     return schema
