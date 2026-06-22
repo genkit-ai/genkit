@@ -77,6 +77,7 @@ EMBEDDER_DIMENSIONS: dict[str, int] = {
     'gemini-embedding-2-preview': 3072,
     'gemini-embedding-2': 3072,
     'gemini-embedding-001': 3072,
+    'text-embedding-004': 768,
     # Vertex AI
     'text-embedding-005': 768,
     'text-multilingual-embedding-002': 768,
