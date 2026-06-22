@@ -293,15 +293,31 @@ func (b *BidiAction[In, Out, Stream, Init]) ConnectJSON(ctx context.Context, opt
 }
 
 // decodeInit decodes the JSON init payload from opts into the action's Init
-// type. Returns hasInit=false when opts is nil or the payload is empty or
-// JSON null, so transports can pass the request's init field through
-// unconditionally.
+// type through the same validate-and-normalize pipeline the unary input path
+// uses (base.UnmarshalAndNormalize against the resolved schema): the raw
+// payload is validated before it is unmarshaled, and JSON values are normalized
+// to the schema (e.g. number widening) exactly as input chunks are. Validating
+// the raw payload is what rejects a field the InitSchema does not declare;
+// decoding straight into a struct Init would drop it silently, leaving the
+// typed-value validateInit that follows nothing to catch (by then the unknown
+// field is already gone).
+//
+// Returns hasInit=false when opts is nil or the payload is empty or JSON null,
+// so transports can pass the request's init field through unconditionally. An
+// action with no InitSchema (e.g. a struct{} Init) resolves to a nil schema,
+// which UnmarshalAndNormalize accepts and normalizes structurally, matching the
+// input path's handling of a schemaless action.
 func (b *BidiAction[In, Out, Stream, Init]) decodeInit(opts *api.BidiJSONOptions) (Init, bool, error) {
 	var init Init
 	if opts == nil || !base.HasJSONValue(opts.Init) {
 		return init, false, nil
 	}
-	if err := json.Unmarshal(opts.Init, &init); err != nil {
+	schema, err := ResolveSchema(b.registry, b.desc.InitSchema)
+	if err != nil {
+		return init, false, NewError(INVALID_ARGUMENT, "invalid init schema for action %q: %v", b.desc.Key, err)
+	}
+	init, err = base.UnmarshalAndNormalize[Init](opts.Init, schema)
+	if err != nil {
 		return init, false, NewError(INVALID_ARGUMENT, "invalid init for action %q: %v", b.desc.Key, err)
 	}
 	return init, true, nil

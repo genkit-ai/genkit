@@ -18,6 +18,7 @@ package exp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -1134,6 +1135,63 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAgent_JSONInitRejectsUnknownFields verifies that the agent's JSON init
+// paths reject a payload carrying a field the inferred AgentInit schema does not
+// declare, surfacing INVALID_ARGUMENT rather than silently dropping it and
+// starting a fresh session as if nothing were wrong. This exercises the real
+// inferred init schema end to end (the core mechanism is covered by
+// TestBidiJSONInitRejectsUnknownFields).
+func TestAgent_JSONInitRejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	echo := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			return nil, nil
+		})
+	}
+	af := DefineCustomAgent(reg, "jsonInitUnknownFields", echo)
+
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
+		}
+		if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+			t.Errorf("status = %q, want %q (err: %v)", ge.Status, core.INVALID_ARGUMENT, err)
+		}
+	}
+
+	badInit := json.RawMessage(`{"bogus":true}`)
+
+	t.Run("ConnectJSON", func(t *testing.T) {
+		_, err := af.ConnectJSON(ctx, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	t.Run("RunBidiJSON", func(t *testing.T) {
+		input, err := json.Marshal(&AgentInput{Message: ai.NewUserTextMessage("hi")})
+		if err != nil {
+			t.Fatalf("marshal input: %v", err)
+		}
+		_, err = af.RunBidiJSON(ctx, input, nil, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	// An empty init object declares no fields, so it passes validation and
+	// starts a fresh session.
+	t.Run("empty init accepted", func(t *testing.T) {
+		conn, err := af.ConnectJSON(ctx, &api.BidiJSONOptions{Init: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatalf("ConnectJSON with empty init: %v", err)
+		}
+		conn.Close()
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
 }
 
 func TestAgent_SetMessages(t *testing.T) {
