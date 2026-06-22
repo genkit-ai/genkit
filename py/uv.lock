@@ -124,7 +124,6 @@ dependencies = [
     { name = "genkit-plugin-anthropic" },
     { name = "pydantic" },
     { name = "structlog" },
-    { name = "uvloop" },
 ]
 
 [package.metadata]
@@ -133,7 +132,6 @@ requires-dist = [
     { name = "genkit-plugin-anthropic", editable = "plugins/anthropic" },
     { name = "pydantic", specifier = ">=2.10.5" },
     { name = "structlog", specifier = ">=25.2.0" },
-    { name = "uvloop", specifier = ">=0.21.0" },
 ]
 
 [[package]]
