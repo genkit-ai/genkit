@@ -39,6 +39,8 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // --- Heartbeat ---
@@ -189,9 +191,11 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			s.onStartTurn()
 		}
 		spanMeta := &tracing.SpanMetadata{
-			Name:    fmt.Sprintf("agent/turn/%d", s.turnIndex),
-			Type:    "flowStep",
-			Subtype: "flowStep",
+			// Match the JS agent's turn span so cross-language traces line up:
+			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
+			// (JS's run() sets only genkit:type, no genkit:metadata:subtype).
+			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
+			Type: "flowStep",
 		}
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
@@ -806,6 +810,13 @@ type fnDoneResult[State any] struct {
 	err    error
 }
 
+// sessionIDSpanAttrKey is the full span-attribute key under which an agent's
+// root action span records its session ID. It is the "genkit:metadata:"-prefixed
+// form of the "agent:sessionId" custom-metadata key the JS agent sets via
+// setCustomMetadataAttributes; the prefix is inlined here because Go's tracing
+// package exposes no setCustomMetadataAttributes helper.
+const sessionIDSpanAttrKey = "genkit:metadata:agent:sessionId"
+
 func newAgentRuntime[State any](
 	ctx context.Context,
 	name string,
@@ -852,6 +863,15 @@ func newAgentRuntime[State any](
 		// client can round-trip it without tracking a separate field.
 		session.state.SessionID = uuid.New().String()
 	}
+
+	// Tag the agent's root action span (the current span here, before any turn
+	// span is opened) with the session ID so traces from the same conversation
+	// can be correlated. Mirrors the JS agent, which calls
+	// setCustomMetadataAttributes({'agent:sessionId': ...}) once at the start of
+	// the action body. trace.SpanFromContext never returns nil (it yields a
+	// no-op span when none is active), so the SetAttributes is always safe.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
 
 	rt := &agentRuntime[State]{
 		name:    name,

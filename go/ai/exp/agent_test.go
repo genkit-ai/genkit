@@ -31,7 +31,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type testState struct {
@@ -256,6 +258,122 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	// Final snapshot at invocation end.
 	if response.SnapshotID == "" {
 		t.Error("expected final snapshot ID")
+	}
+}
+
+// spanCollector is a minimal in-memory sdktrace.SpanExporter that records
+// finished spans so a test can assert on their attributes.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// byName returns the first recorded span with the given name, or nil.
+func (c *spanCollector) byName(name string) sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.spans {
+		if s.Name() == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// collectSpans registers an in-memory exporter on the global tracer provider
+// (the one tracing.RunInNewSpan writes through) for the duration of the test.
+// The SimpleSpanProcessor exports each span synchronously as it ends, so by
+// the time a turn completes its span is already recorded.
+func collectSpans(t *testing.T) *spanCollector {
+	t.Helper()
+	c := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(c)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	return c
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+// TestAgent_RootSpanCarriesSessionID verifies the agent's root action span is
+// stamped with the invocation's session ID under
+// "genkit:metadata:agent:sessionId", and that the per-turn spans are left
+// untagged. This matches the JS agent, which tags the action span once via
+// setCustomMetadataAttributes({'agent:sessionId': ...}) rather than each turn.
+func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	spans := collectSpans(t)
+
+	const agentName = "tracedCounterFlow"
+	af := defineCounterAgent(reg, agentName)
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	sendTurn(t, conn, "turn1")
+	sendTurn(t, conn, "turn2")
+	conn.Close()
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected a non-empty session ID on the output")
+	}
+
+	const attrKey = "genkit:metadata:agent:sessionId"
+
+	// The root action span (named for the agent) carries the session ID.
+	root := spans.byName(agentName)
+	if root == nil {
+		t.Fatalf("missing root action span %q", agentName)
+	}
+	got, ok := spanAttr(root, attrKey)
+	if !ok {
+		t.Fatalf("root span %q: missing attribute %q", agentName, attrKey)
+	}
+	if got != out.SessionID {
+		t.Errorf("root span %q: %s = %q, want %q", agentName, attrKey, got, out.SessionID)
+	}
+
+	// The per-turn spans are named "runTurn-N" (1-indexed) with type flowStep
+	// and no subtype, matching JS's run(); the session ID lives on the root
+	// span only.
+	for _, turn := range []string{"runTurn-1", "runTurn-2"} {
+		span := spans.byName(turn)
+		if span == nil {
+			t.Fatalf("missing span %q", turn)
+		}
+		if v, ok := spanAttr(span, attrKey); ok {
+			t.Errorf("turn span %q: unexpected attribute %q = %q (want it on the root span only)", turn, attrKey, v)
+		}
+		if v, _ := spanAttr(span, "genkit:type"); v != "flowStep" {
+			t.Errorf("turn span %q: genkit:type = %q, want %q", turn, v, "flowStep")
+		}
+		if v, ok := spanAttr(span, "genkit:metadata:subtype"); ok {
+			t.Errorf("turn span %q: unexpected genkit:metadata:subtype = %q (JS's run() sets no subtype)", turn, v)
+		}
 	}
 }
 
