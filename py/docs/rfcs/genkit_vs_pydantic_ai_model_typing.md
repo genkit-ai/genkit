@@ -19,7 +19,7 @@ agent = Agent(
 
 This approach has zero syntax friction: it requires no imports of configuration classes and no class instantiation boilerplate. 
 
-**Genkit Proposal:** We acknowledge the elegance of this approach and are adopting it. In our new design, Genkit core defines a base `CommonModelConfigDict` `TypedDict` so that passing a plain dictionary to a bare string model or a generic function is similarly autocompleted and type-safe by default.
+**Genkit Proposal:** We are adopting this idea as well. In our new design, Genkit core defines a base `CommonModelConfigDict` `TypedDict` so that passing a plain dictionary to a bare string model or a generic function is similarly autocompleted and type-safe by default.
 
 ---
 
