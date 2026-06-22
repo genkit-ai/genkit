@@ -227,6 +227,12 @@ def _list_genai_models(client: genai.Client, is_vertex: bool) -> GenaiModels:
         if is_vertex:
             lower_name = name.lower()
             if 'embedding' in lower_name:
+                # Vertex lists multimodalembedding without a version suffix, but
+                # the canonical model id (used by Google's docs, the JS plugin,
+                # and the :predict call) is 'multimodalembedding@001'. Pin it so
+                # the registered name and predict target are version-explicit.
+                if lower_name == 'multimodalembedding':
+                    name = 'multimodalembedding@001'
                 models.embedders.append(name)
             elif 'imagen' in lower_name:
                 models.imagen.append(name)
