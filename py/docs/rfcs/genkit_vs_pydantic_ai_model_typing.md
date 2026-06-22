@@ -116,8 +116,72 @@ await ai.generate(
 
 ---
 
-## 4. Conclusion
+## 4. Cross-Provider Type Contamination (Refactoring Safety)
 
-For developers building Google-native applications, Pydantic AI's monolithic, string-based architecture represents a major DX bottleneck. It forces developers to write verbose boilerplate just to safely access high-value features like **Google Search Grounding** and **Safety Settings**.
+A high-consequence failure mode in multi-model applications is **Cross-Provider Type Contamination**—for example, when a developer refactors an agent from OpenAI to Gemini, but mistakenly leaves OpenAI-specific settings in the configuration block.
 
-Genkit's generic handle architecture completely eliminates this friction. It delivers **automatic, inline, and zero-boilerplate type safety** for all Google-specific configuration parameters by default, ensuring a safer and faster development loop.
+### Pydantic AI: Silent Contamination and Discarded Settings
+If a developer passes OpenAI-specific settings to a Gemini agent in Pydantic AI, the type checker and the runtime both fail to protect them:
+
+```python
+# pydantic_ai_contamination.py
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModelSettings
+
+# 1. Developer defines OpenAI-specific settings
+settings: OpenAIChatModelSettings = {
+    'openai_reasoning_effort': 'high',
+    'temperature': 0.7
+}
+
+# 2. Developer passes these settings to a Gemini agent
+agent = Agent(
+    'google:gemini-2.5-flash',
+    model_settings=settings  
+    #
+    # 🔍 IDE Linter Output: "0 errors, 0 warnings" (Silent pass!)
+    # Why? OpenAIChatModelSettings is a valid subclass of the base ModelSettings.
+    # The type checker cannot detect that these settings are invalid for Gemini.
+)
+```
+
+#### The Runtime Consequence:
+At runtime, the Gemini model adapter receives the dictionary, parses the keys it recognizes, and **silently discards the unrecognized `openai_` keys.** The application does not crash. The developer believes the Gemini model is running with "high reasoning effort," but in reality, the setting is ignored and the model runs with standard defaults, leading to silent, hard-to-diagnose behavior and cost discrepancies in production.
+
+---
+
+### Genkit: Statically Blocked at the Boundary
+In Genkit, because the model handle strictly binds the configuration type via generics, this contamination is statically blocked in the editor before the code runs:
+
+```python
+# genkit_contamination.py
+from genkit.plugins.google_genai import GoogleAI
+from genkit.plugins.openai import OpenAIConfigDict
+
+# 1. Developer defines OpenAI-specific settings
+openai_config: OpenAIConfigDict = {
+    'openai_reasoning_effort': 'high',
+    'temperature': 0.7
+}
+
+# 2. Developer tries to pass these settings to a Gemini model handle
+await ai.generate(
+    model=GoogleAI.model('gemini-2.0-flash'),  # Expects GeminiConfigDict
+    config=openai_config
+    #
+    # 🔴 pyright: Argument of type "OpenAIConfigDict" cannot be assigned to parameter "config" of type "GeminiConfigDict"
+    # 🔍 IDE Linter Output: "Error: Type Mismatch" (Caught in editor instantly!)
+)
+```
+
+#### Why it is blocked:
+`GeminiConfigDict` and `OpenAIConfigDict` are sibling types that both inherit from `CommonModelConfigDict`, but they do not inherit from each other. The type checker detects the type mismatch and instantly flags it with a red underline, preventing the developer from shipping this bug to production.
+
+---
+
+## 5. Conclusion
+
+For developers building Google-native applications, Pydantic AI's monolithic, string-based architecture represents a major DX bottleneck. It forces developers to write verbose boilerplate just to safely access high-value features like **Google Search Grounding** and **Safety Settings**, and completely fails to protect them from silent **Cross-Provider Type Contamination** during refactoring.
+
+Genkit's generic handle architecture completely eliminates this friction. It delivers **automatic, inline, and zero-boilerplate type safety** for all Google-specific configuration parameters by default, while acting as a strict, static boundary that prevents configuration bugs and silent production failures.
+
