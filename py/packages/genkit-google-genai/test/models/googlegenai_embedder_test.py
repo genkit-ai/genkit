@@ -17,6 +17,7 @@
 """Test the Google-Genai embedder model."""
 
 import base64
+import json
 
 import pytest
 from genkit_google_genai.models.embedder import (
@@ -131,9 +132,53 @@ def test_get_embedder_options_multimodal_and_fallback() -> None:
     assert unknown_options.supports.input == ['text']
 
 
-def test_get_embedder_options_supports_are_backend_scoped() -> None:
-    """The same model advertises multimodal on Google AI but text-only on Vertex."""
-    vertex_options = get_embedder_options('gemini-embedding-2', 'Vertex AI - gemini-embedding-2', is_vertex=True)
-    assert vertex_options.supports is not None
-    assert vertex_options.supports.input == ['text']
-    assert vertex_options.dimensions == 3072
+@pytest.mark.parametrize('model_name', ['multimodalembedding', 'multimodalembedding@001'])
+def test_get_embedder_options_multimodalembedding_versioned_and_bare(model_name: str) -> None:
+    """The multimodalembedding model is multimodal with or without the '@001' suffix."""
+    options = get_embedder_options(model_name, f'Vertex AI - {model_name}')
+    assert options.dimensions == 1408
+    assert options.supports is not None
+    assert options.supports.input == ['text', 'image', 'video']
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_uses_predict(mocker: MockerFixture) -> None:
+    """Multimodal embedders hit the :predict endpoint and map image/video results."""
+    request = EmbedRequest(
+        input=[
+            Document.from_media('gs://bucket/cat.png', 'image/png'),
+            Document.from_media('gs://bucket/clip.mp4', 'video/mp4'),
+        ]
+    )
+    predict_body = {
+        'predictions': [
+            {'imageEmbedding': [0.1, 0.2, 0.3]},
+            {'videoEmbeddings': [{'startOffsetSec': 0, 'endOffsetSec': 5, 'embedding': [0.4, 0.5]}]},
+        ]
+    }
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock)
+    response = await embedder.generate(request)
+
+    # The text embed_content path must not be used for multimodal models.
+    client_mock.aio.models.embed_content.assert_not_called()
+
+    call = client_mock._api_client.async_request.call_args
+    assert call.kwargs['http_method'] == 'post'
+    assert call.kwargs['path'] == 'publishers/google/models/multimodalembedding:predict'
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {'image': {'gcsUri': 'gs://bucket/cat.png', 'mimeType': 'image/png'}}
+    assert instances[1] == {'video': {'gcsUri': 'gs://bucket/clip.mp4'}}
+
+    assert isinstance(response, EmbedResponse)
+    assert len(response.embeddings) == 2
+    assert response.embeddings[0].embedding == [0.1, 0.2, 0.3]
+    assert response.embeddings[0].metadata == {'embedType': 'imageEmbedding'}
+    assert response.embeddings[1].embedding == [0.4, 0.5]
+    assert response.embeddings[1].metadata is not None
+    assert response.embeddings[1].metadata['embedType'] == 'videoEmbedding'
+    assert response.embeddings[1].metadata['startOffsetSec'] == 0
