@@ -72,7 +72,7 @@ func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
 
 // WithSessionStore sets the store for persisting snapshots. The store must
 // implement [SnapshotReader] and [SnapshotWriter] at minimum. Detach
-// support also requires [SnapshotAborter]; detach attempts on a store
+// support also requires [SnapshotSubscriber]; detach attempts on a store
 // that lacks that interface are rejected at runtime.
 func WithSessionStore[State any](store SessionStore[State]) AgentOption[State] {
 	return &agentOptions[State]{store: store}
@@ -93,7 +93,7 @@ func WithDescription[State any](description string) AgentOption[State] {
 
 // --- InvocationOption ---
 
-// InvocationOption configures an agent invocation (StreamBidi, Run, or RunText).
+// InvocationOption configures an agent invocation (Connect, Run, or RunText).
 type InvocationOption[State any] interface {
 	applyInvocation(*invocationOptions[State]) error
 }

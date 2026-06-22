@@ -47,19 +47,20 @@ type SnapshotReader[State any] interface {
 	// GetSnapshot retrieves a snapshot by ID. Returns nil if not found.
 	GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error)
 
-	// GetLatestSnapshot returns the session's most recently updated
+	// GetLatestSnapshot returns the session's most recently created
 	// snapshot, whatever its status: a pending, failed, or aborted row is
 	// returned like any other, and the caller applies its own policy.
 	// Returns nil if the session has no rows, and an error if sessionID is
 	// empty.
 	//
-	// "Most recently updated" means the greatest [SessionSnapshot.UpdatedAt],
-	// falling back to CreatedAt on rows that lack one; break ties
-	// deterministically (e.g. by SnapshotID). This is a plain max-timestamp
-	// lookup, implementable as a single indexed query (e.g. WHERE sessionId = ?
-	// ORDER BY updatedAt DESC LIMIT 1). ParentID is informational lineage and
-	// plays no part in resolution: when history forks, the most recently
-	// updated branch wins.
+	// "Most recently created" means the greatest [SessionSnapshot.CreatedAt];
+	// break ties deterministically (e.g. by SnapshotID). This is a plain
+	// max-timestamp lookup, implementable as a single indexed query (e.g.
+	// WHERE sessionId = ? ORDER BY createdAt DESC LIMIT 1). A later rewrite of
+	// an older row (e.g. a detach finalize) does not move it ahead of a
+	// newer-created sibling, since CreatedAt is preserved across rewrites.
+	// ParentID is informational lineage and plays no part in resolution: when
+	// history forks, the most recently created branch wins.
 	GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error)
 }
 
@@ -67,8 +68,8 @@ type SnapshotReader[State any] interface {
 // implement to be used with [WithSessionStore].
 type SnapshotWriter[State any] interface {
 	// SaveSnapshot atomically reads the snapshot at id (if any), applies
-	// fn, and persists the result. The store owns identity and
-	// lifecycle-timestamp fields:
+	// fn, and persists the result largely verbatim. The store owns only
+	// identity; the caller (fn) owns the lifecycle timestamps and status:
 	//
 	//   - SnapshotID: if id is empty, the store generates a fresh ID;
 	//     otherwise the store uses id (any SnapshotID populated by fn is
@@ -77,9 +78,14 @@ type SnapshotWriter[State any] interface {
 	//     belongs to: preserved from the existing row on update (a row's
 	//     session never changes once set), otherwise taken from fn's row
 	//     as-is. Stores never mint or infer session IDs.
-	//   - CreatedAt: stamped to the wall clock on first write; preserved
-	//     from the existing row on update.
-	//   - UpdatedAt: stamped to the wall clock on every commit.
+	//   - CreatedAt / UpdatedAt: caller-managed. The store persists whatever fn
+	//     returns and never stamps them. fn sets CreatedAt and UpdatedAt to the
+	//     current time on a new row, preserves CreatedAt and advances UpdatedAt
+	//     on a state-changing rewrite, and preserves both on a non-state write
+	//     (e.g. a heartbeat refresh, which carries the existing snapshot through
+	//     unchanged but for HeartbeatAt). Keeping timestamps with the caller is
+	//     what lets a heartbeat advance liveness without registering as a state
+	//     change - the store has no special heartbeat path.
 	//   - Status: if the snapshot returned by fn has Status="", it is
 	//     defaulted to [SnapshotStatusCompleted] (the common case for
 	//     synchronous turn-end writes). Callers writing a pending row must
@@ -103,25 +109,17 @@ type SnapshotWriter[State any] interface {
 	) (*SessionSnapshot[State], error)
 }
 
-// SnapshotAborter is the optional capability layered on [SessionStore] that
-// lets an agent's invocations be aborted. The two methods work together:
-// [SnapshotAborter.AbortSnapshot] flips a pending snapshot's status to aborted,
-// and [SnapshotAborter.OnSnapshotStatusChange] lets the agent runtime observe
-// the flip without polling so it can promptly cancel the work context. A store
-// must implement both or neither.
-type SnapshotAborter interface {
-	// AbortSnapshot atomically transitions a snapshot from
-	// [SnapshotStatusPending] to [SnapshotStatusAborted] and returns the
-	// resulting status. If the snapshot is in any other status the
-	// operation is a no-op and the existing status is returned. Returns
-	// an empty status with a nil error if the snapshot is not found, so
-	// callers can distinguish "not found" from a real error.
-	//
-	// Implementations must perform the read-and-write atomically (e.g., a
-	// transaction or a compare-and-swap) so a racing terminal write cannot
-	// clobber the pending row.
-	AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error)
-
+// SnapshotSubscriber is the optional capability layered on [SessionStore] that
+// lets the agent runtime observe a snapshot's status changes without polling.
+// It is what makes a detached invocation abortable: aborting is an ordinary
+// [SnapshotWriter.SaveSnapshot] that flips a pending row to
+// [SnapshotStatusAborted], and the runtime reacts to that flip through this
+// subscription, promptly cancelling the background work context.
+//
+// A store that does not implement it cannot support detach (there is no way to
+// signal the background work to stop); see the runtime's detach precondition
+// check.
+type SnapshotSubscriber interface {
 	// OnSnapshotStatusChange returns a channel that yields the snapshot's
 	// status whenever it changes. The first value (if any) reflects the
 	// status at subscription time. The channel is closed when ctx is
@@ -134,10 +132,10 @@ type SnapshotAborter interface {
 }
 
 // SessionStore is the minimum store interface required by
-// [WithSessionStore]. The abort lifecycle is layered as the optional
-// [SnapshotAborter] capability and checked at runtime: a store wired
+// [WithSessionStore]. Status-change observation is layered as the optional
+// [SnapshotSubscriber] capability and checked at runtime: a store wired
 // into an agent that intends to support detach must also implement
-// [SnapshotAborter], or the runtime will reject detach attempts.
+// [SnapshotSubscriber], or the runtime will reject detach attempts.
 type SessionStore[State any] interface {
 	SnapshotReader[State]
 	SnapshotWriter[State]
@@ -185,9 +183,8 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 //     and non-Go clients. Local Go callers use the store reference directly.
 //
 //   - The agent's name under [api.ActionTypeAgentAbort] — abortSnapshot,
-//     created only when the store also implements [SnapshotAborter] (which
-//     bundles both the abort trigger and the status-change subscription
-//     needed for the runtime to react).
+//     created only when the store also implements [SnapshotSubscriber], so the
+//     runtime can react to the abort it writes via SaveSnapshot.
 //
 // When the agent is client-managed (no store configured), neither action
 // is created: there is no server-side snapshot to fetch or abort.
@@ -197,6 +194,86 @@ func cloneArtifacts(arts []*Artifact) []*Artifact {
 // The [Agent] retains the returned actions (an absent one is nil) and
 // registers them alongside its run action; see [Agent.Register],
 // [Agent.GetSnapshotAction], and [Agent.AbortSnapshotAction].
+// readSnapshot resolves a snapshot by ID, or by the session's latest when
+// snapshotID is empty, and returns a normalized copy shaped for a client:
+// the documented defaults are applied (empty status means completed, zero
+// UpdatedAt means CreatedAt), a pending row whose heartbeat has gone stale is
+// surfaced as [SnapshotStatusExpired] (computed on read, never written back),
+// and transform shapes the outbound state. It backs both the getSnapshot
+// companion action and the typed [Agent.GetSnapshot] / [Agent.GetLatestSnapshot],
+// so Go callers, the Dev UI, and non-Go clients all observe identically shaped
+// snapshots. At least one of snapshotID / sessionID must be non-empty; callers
+// validate that before calling.
+func readSnapshot[State any](
+	ctx context.Context,
+	store SnapshotReader[State],
+	transform StateTransform[State],
+	snapshotID, sessionID string,
+) (*SessionSnapshot[State], error) {
+	// Resolve the snapshot. A snapshot ID fetches that exact row; a session ID
+	// alone fetches the session's latest row (whatever its status). When both
+	// are present the snapshot ID picks the row and the session ID asserts it
+	// belongs to that session, mirroring AgentInit's combined-ID check.
+	var (
+		snap *SessionSnapshot[State]
+		err  error
+	)
+	if snapshotID != "" {
+		snap, err = store.GetSnapshot(ctx, snapshotID)
+		if err != nil {
+			return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+		}
+		if snap == nil {
+			return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", snapshotID)
+		}
+		if sessionID != "" && snap.SessionID != sessionID {
+			return nil, core.NewError(core.INVALID_ARGUMENT,
+				"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", snapshotID, sessionID, snap.SessionID)
+		}
+	} else {
+		snap, err = store.GetLatestSnapshot(ctx, sessionID)
+		if err != nil {
+			return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
+		}
+		if snap == nil {
+			return nil, core.NewError(core.NOT_FOUND, "getSnapshot: no snapshot found for session %q", sessionID)
+		}
+	}
+
+	// Return a normalized copy: the documented defaults (empty status means
+	// completed, zero UpdatedAt means CreatedAt) are resolved here so every
+	// caller sees the same shaping, and the state transform shapes what leaves
+	// the server. A failed snapshot's state is its last-good state, so it is
+	// returned like any other.
+	resp := *snap
+	// Surface a pending snapshot whose heartbeat has gone stale as expired: its
+	// detached background worker is presumed dead, so report the orphan rather
+	// than leaving it pending forever. Computed on read only, never written back
+	// to the store, so the raw row stays pending. Checked before the empty-status
+	// default below, which applies only to a row carrying no status at all.
+	if isHeartbeatExpired(snap, defaultHeartbeatTimeout) {
+		resp.Status = SnapshotStatusExpired
+	}
+	if resp.Status == "" {
+		resp.Status = SnapshotStatusCompleted
+	}
+	if resp.UpdatedAt.IsZero() {
+		resp.UpdatedAt = resp.CreatedAt
+	}
+	// Clone before transforming: the [StateTransform] contract promises a fresh
+	// deep copy the transform may mutate in place, and the store's row may share
+	// memory with its internal copy, which neither the transform nor the SessionID
+	// re-stamp below may write into.
+	resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
+	if resp.State != nil {
+		// SessionID is framework identity, not user data: re-stamp it from the
+		// row after the transform so outbound state always agrees with the
+		// snapshot it came from.
+		resp.State.SessionID = resp.SessionID
+	}
+	return &resp, nil
+}
+
 func newSnapshotActions[State any](
 	agentName string,
 	store SessionStore[State],
@@ -211,69 +288,12 @@ func newSnapshotActions[State any](
 				return nil, core.NewError(core.INVALID_ARGUMENT, "getSnapshot: snapshotId or sessionId is required")
 			}
 
-			// Resolve the snapshot. A snapshot ID fetches that exact row; a
-			// session ID alone fetches the session's latest row (whatever
-			// its status). When both are present the snapshot ID picks the
-			// row and the session ID asserts it belongs to that session,
-			// mirroring AgentInit's combined-ID check.
-			var (
-				snap *SessionSnapshot[State]
-				err  error
-			)
-			if req.SnapshotID != "" {
-				snap, err = store.GetSnapshot(ctx, req.SnapshotID)
-				if err != nil {
-					return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
-				}
-				if snap == nil {
-					return nil, core.NewError(core.NOT_FOUND, "getSnapshot: snapshot %q not found", req.SnapshotID)
-				}
-				if req.SessionID != "" && snap.SessionID != req.SessionID {
-					return nil, core.NewError(core.INVALID_ARGUMENT,
-						"getSnapshot: snapshot %q does not belong to session %q (snapshot's session: %q)", req.SnapshotID, req.SessionID, snap.SessionID)
-				}
-			} else {
-				snap, err = store.GetLatestSnapshot(ctx, req.SessionID)
-				if err != nil {
-					return nil, core.NewError(core.INTERNAL, "getSnapshot: %v", err)
-				}
-				if snap == nil {
-					return nil, core.NewError(core.NOT_FOUND, "getSnapshot: no snapshot found for session %q", req.SessionID)
-				}
-			}
-
-			// Return a normalized copy: the documented defaults (empty
-			// status means completed, zero UpdatedAt means CreatedAt) are
-			// resolved server-side so remote clients don't reimplement
-			// them, and the state transform shapes what leaves the server.
-			// A failed snapshot's state is its last-good state, so it is
-			// returned like any other.
-			resp := *snap
-			if resp.Status == "" {
-				resp.Status = SnapshotStatusCompleted
-			}
-			if resp.UpdatedAt.IsZero() {
-				resp.UpdatedAt = resp.CreatedAt
-			}
-			// Clone before transforming: the [StateTransform] contract
-			// promises a fresh deep copy the transform may mutate in
-			// place, and the store's row may share memory with its
-			// internal copy, which neither the transform nor the
-			// SessionID re-stamp below may write into.
-			resp.State = applyTransform(ctx, transform, jsonClone(snap.State))
-			if resp.State != nil {
-				// SessionID is framework identity, not user data: re-stamp
-				// it from the row after the transform so outbound state
-				// always agrees with the snapshot it came from.
-				resp.State.SessionID = resp.SessionID
-			}
-			return &resp, nil
+			return readSnapshot(ctx, store, transform, req.SnapshotID, req.SessionID)
 		})
 
-	aborter, ok := store.(SnapshotAborter)
-	if !ok {
-		// Store doesn't support the abort lifecycle. Don't surface the
-		// action.
+	if _, ok := store.(SnapshotSubscriber); !ok {
+		// Without a subscriber the runtime cannot react to an abort, so the
+		// abort lifecycle is unsupported; don't surface the action.
 		return getSnapshotAction, nil
 	}
 	abortSnapshotAction := core.NewAction(agentName, api.ActionTypeAgentAbort, nil, nil,
@@ -281,7 +301,9 @@ func newSnapshotActions[State any](
 			if req == nil || req.SnapshotID == "" {
 				return nil, core.NewError(core.INVALID_ARGUMENT, "abortSnapshot: snapshotId is required")
 			}
-			status, err := aborter.AbortSnapshot(ctx, req.SnapshotID)
+			// Aborting is an ordinary SaveSnapshot that flips a pending row to
+			// aborted; the store has no dedicated abort method.
+			status, err := abortPendingSnapshot(ctx, store, req.SnapshotID)
 			if err != nil {
 				return nil, core.NewError(core.INTERNAL, "abortSnapshot: %v", err)
 			}
@@ -465,8 +487,15 @@ func (s *Session[State]) copyStateLocked() SessionState[State] {
 var sessionCtxKey = base.NewContextKey[any]()
 
 // NewSessionContext returns a new context with the session attached.
+//
+// It also publishes a type-erased view of the session's custom state so prompt
+// rendering can inject it into templates as {{@state}}. go/ai cannot import this
+// package (this package imports go/ai), so the custom state is exposed through a
+// getter in internal/base, evaluated at render time so templates see the latest
+// values.
 func NewSessionContext[State any](ctx context.Context, s *Session[State]) context.Context {
-	return sessionCtxKey.NewContext(ctx, s)
+	ctx = sessionCtxKey.NewContext(ctx, s)
+	return base.WithPromptState(ctx, func() any { return s.customJSON() })
 }
 
 // SessionFromContext retrieves the current session from context.

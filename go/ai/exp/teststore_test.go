@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -79,8 +78,8 @@ func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID s
 		if snap.SessionID != sessionID {
 			continue
 		}
-		if latest == nil || snap.UpdatedAt.After(latest.UpdatedAt) ||
-			(snap.UpdatedAt.Equal(latest.UpdatedAt) && snap.SnapshotID > latest.SnapshotID) {
+		if latest == nil || snap.CreatedAt.After(latest.CreatedAt) ||
+			(snap.CreatedAt.Equal(latest.CreatedAt) && snap.SnapshotID > latest.SnapshotID) {
 			latest = snap
 		}
 	}
@@ -88,21 +87,6 @@ func (s *testInMemStore[State]) GetLatestSnapshot(_ context.Context, sessionID s
 		return nil, nil
 	}
 	return testCopySnapshot(latest)
-}
-
-func (s *testInMemStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (SnapshotStatus, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	snap, ok := s.snapshots[snapshotID]
-	if !ok {
-		return "", nil
-	}
-	if snap.Status == SnapshotStatusPending {
-		snap.Status = SnapshotStatusAborted
-		snap.UpdatedAt = time.Now()
-		s.notifyLocked(snapshotID, snap.Status)
-	}
-	return snap.Status, nil
 }
 
 func (s *testInMemStore[State]) SaveSnapshot(
@@ -135,16 +119,11 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	}
 
 	next.SnapshotID = id
-	now := time.Now()
-	if existing != nil {
-		next.CreatedAt = existing.CreatedAt
-		if existing.SessionID != "" {
-			next.SessionID = existing.SessionID // a row's session never changes
-		}
-	} else {
-		next.CreatedAt = now
+	// SessionID is preserved (a row's session never changes); CreatedAt,
+	// UpdatedAt, and HeartbeatAt are caller-managed and persisted verbatim.
+	if existing != nil && existing.SessionID != "" {
+		next.SessionID = existing.SessionID
 	}
-	next.UpdatedAt = now
 	if next.Status == "" {
 		next.Status = SnapshotStatusCompleted
 	}

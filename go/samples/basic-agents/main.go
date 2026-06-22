@@ -92,7 +92,7 @@ func main() {
 	// Each define function registers an agent and returns it, paired with
 	// the optional hooks the CLI needs to drive it (see agentEntry). The
 	// CLI drives all of them through the same surface: a.Name() and
-	// a.Desc().Description for the list view, a.StreamBidi(...) to chat,
+	// a.Desc().Description for the list view, a.Connect(...) to chat,
 	// and a.Store() for snapshot reads. Nothing the CLI does is tied to a
 	// concrete store type, so swapping in a different SessionStore would
 	// not touch a line of it.

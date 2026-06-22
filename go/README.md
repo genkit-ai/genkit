@@ -676,37 +676,6 @@ Clients receive a stream ID in the `X-Genkit-Stream-Id` header and can reconnect
 
 [See full example](samples/durable-streaming)
 
-### Sessions
-
-Maintain typed state across multiple requests and throughout generation including tools:
-
-```go
-import "github.com/firebase/genkit/go/core/x/session"
-
-type CartState struct {
-    Items []string `json:"items"`
-}
-
-store := session.NewInMemoryStore[CartState]()
-
-genkit.DefineFlow(g, "manageCart", func(ctx context.Context, input string) (string, error) {
-    sess, err := session.Load(ctx, store, "session-id")
-    if err != nil {
-        sess, _ = session.New(ctx,
-            session.WithID[CartState]("session-id"),
-            session.WithStore(store),
-            session.WithInitialState(CartState{}),
-        )
-    }
-    ctx = session.NewContext(ctx, sess)
-
-    // Tools can now access session state via session.FromContext[CartState](ctx)
-    return genkit.GenerateText(ctx, g, ai.WithPrompt(input), ai.WithTools(myTools...))
-})
-```
-
-[See full example](samples/session)
-
 ---
 
 ## Samples
@@ -724,7 +693,6 @@ Explore working examples to see Genkit in action:
 | [basic-middleware/skills](samples/basic-middleware/skills) | On-demand loadable `SKILL.md` personas |
 | [prompts-embed](samples/prompts-embed) | Embed prompts in your binary |
 | [durable-streaming](samples/durable-streaming) | Reconnectable streams with replay |
-| [session](samples/session) | Stateful flows with typed session data |
 
 ---
 

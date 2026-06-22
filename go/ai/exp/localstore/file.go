@@ -108,16 +108,11 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	}
 
 	next.SnapshotID = id
-	now := time.Now()
-	if existing != nil {
-		next.CreatedAt = existing.CreatedAt
-		if existing.SessionID != "" {
-			next.SessionID = existing.SessionID // a row's session never changes
-		}
-	} else {
-		next.CreatedAt = now
+	// SessionID is preserved (a row's session never changes); CreatedAt,
+	// UpdatedAt, and HeartbeatAt are caller-managed and persisted verbatim.
+	if existing != nil && existing.SessionID != "" {
+		next.SessionID = existing.SessionID
 	}
-	next.UpdatedAt = now
 	if next.Status == "" {
 		next.Status = exp.SnapshotStatusCompleted
 	}
@@ -131,29 +126,36 @@ func (s *FileSessionStore[State]) SaveSnapshot(
 	return next, nil
 }
 
-// snapshotHeader is the subset of snapshot fields needed to match a row to
-// a session during the latest-snapshot scan. Decoding only these avoids
-// materializing every row's full conversation state during the scan.
+// snapshotHeader is the subset of snapshot fields needed to pick a session's
+// latest row during the scan. Decoding only these avoids materializing every
+// row's full conversation state; only the winning row is fully decoded.
 type snapshotHeader struct {
-	SessionID string `json:"sessionId"`
+	SessionID string    `json:"sessionId"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
-// GetLatestSnapshot returns the session's most recently updated snapshot
+// GetLatestSnapshot returns the session's most recently created snapshot
 // regardless of status, per the [exp.SnapshotReader.GetLatestSnapshot]
 // contract.
 //
-// Recency is judged by file mtime, which for snapshots written by this package
-// advances with [exp.SessionSnapshot.UpdatedAt]; if a file is touched
-// externally, mtime wins. A file that fails to parse or vanishes mid-scan is
-// skipped, so one corrupted row cannot hide every other session.
+// Recency is judged by the [exp.SessionSnapshot.CreatedAt] field (not file
+// mtime), so a later rewrite of an older row - which preserves CreatedAt - does
+// not move it ahead of a newer-created sibling. Ties are broken by snapshot ID.
+// A file that fails to parse or vanishes mid-scan is skipped, so one corrupted
+// row cannot hide every other session.
 func (s *FileSessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("FileSessionStore: session ID is empty")
 	}
-	names, err := s.snapshotFilesNewestFirst()
+	names, err := s.snapshotFileNames()
 	if err != nil {
 		return nil, err
 	}
+	var (
+		bestName string
+		bestAt   time.Time
+		found    bool
+	)
 	for _, name := range names {
 		s.mu.Lock()
 		data, err := os.ReadFile(filepath.Join(s.dir, name))
@@ -168,24 +170,38 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(_ context.Context, sessionID
 		if h.SessionID != sessionID {
 			continue
 		}
-		var snap exp.SessionSnapshot[State]
-		if err := json.Unmarshal(data, &snap); err != nil {
-			continue
+		// Most recently created wins; the file name is "<snapshotId>.json", so
+		// a name compare is a deterministic SnapshotID tie-break.
+		if !found || h.CreatedAt.After(bestAt) ||
+			(h.CreatedAt.Equal(bestAt) && name > bestName) {
+			bestName, bestAt, found = name, h.CreatedAt, true
 		}
-		return &snap, nil
 	}
-	return nil, nil
+	if !found {
+		return nil, nil
+	}
+	// Fully decode only the winner. CreatedAt is preserved across rewrites, so a
+	// concurrent rewrite of this row between scan and read still yields the
+	// right snapshot (with possibly fresher state).
+	s.mu.Lock()
+	data, err := os.ReadFile(filepath.Join(s.dir, bestName))
+	s.mu.Unlock()
+	if err != nil {
+		return nil, nil
+	}
+	var snap exp.SessionSnapshot[State]
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, nil
+	}
+	return &snap, nil
 }
 
-// snapshotFilesNewestFirst returns the names of the directory's snapshot
-// files (non-directory *.json entries; writeLocked's "<id>.*.tmp" temp
-// files never match) sorted by modification time, newest first, with
-// name as a deterministic tie-break. Entries that vanish between the
-// directory read and the stat are skipped. Returns nil if the directory
-// does not exist. The listing is not atomic with respect to concurrent
-// writes; a snapshot that appears or disappears mid-scan may or may not
-// be observed.
-func (s *FileSessionStore[State]) snapshotFilesNewestFirst() ([]string, error) {
+// snapshotFileNames returns the names of the directory's snapshot files
+// (non-directory *.json entries; writeLocked's "<id>.*.tmp" temp files never
+// match). Returns nil if the directory does not exist. The listing is not
+// atomic with respect to concurrent writes; a snapshot that appears or
+// disappears mid-scan may or may not be observed.
+func (s *FileSessionStore[State]) snapshotFileNames() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -193,60 +209,14 @@ func (s *FileSessionStore[State]) snapshotFilesNewestFirst() ([]string, error) {
 		}
 		return nil, fmt.Errorf("FileSessionStore: list dir: %w", err)
 	}
-	type candidate struct {
-		name    string
-		modTime time.Time
-	}
-	var cands []candidate
+	var names []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		cands = append(cands, candidate{e.Name(), info.ModTime()})
-	}
-	slices.SortFunc(cands, func(a, b candidate) int {
-		if c := b.modTime.Compare(a.modTime); c != 0 { // newest first
-			return c
-		}
-		return strings.Compare(b.name, a.name)
-	})
-	names := make([]string, len(cands))
-	for i, c := range cands {
-		names[i] = c.name
+		names = append(names, e.Name())
 	}
 	return names, nil
-}
-
-// AbortSnapshot atomically flips a pending snapshot to aborted. If the
-// snapshot is already terminal the existing status is returned unchanged.
-// Returns an empty status if the snapshot is not found.
-func (s *FileSessionStore[State]) AbortSnapshot(_ context.Context, snapshotID string) (exp.SnapshotStatus, error) {
-	if err := validateSnapshotID(snapshotID); err != nil {
-		return "", err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	snap, err := s.readLocked(snapshotID)
-	if err != nil {
-		return "", err
-	}
-	if snap == nil {
-		return "", nil
-	}
-	if snap.Status == exp.SnapshotStatusPending {
-		snap.Status = exp.SnapshotStatusAborted
-		snap.UpdatedAt = time.Now()
-		if err := s.writeLocked(snap); err != nil {
-			return "", err
-		}
-		s.notifyLocked(snapshotID, snap.Status)
-	}
-	return snap.Status, nil
 }
 
 // OnSnapshotStatusChange subscribes to status changes for a snapshot. The

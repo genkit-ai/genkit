@@ -48,7 +48,7 @@ func TestBidiActionEcho(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestBidiActionWithConfig(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, Config{Prefix: "INFO"})
+	conn, err := action.Connect(ctx, Config{Prefix: "INFO"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,9 +128,9 @@ func TestBidiActionWithConfig(t *testing.T) {
 	}
 }
 
-// TestRunWithInit verifies the typed one-shot path: input is delivered as a
+// TestRunBidi verifies the typed one-shot path: input is delivered as a
 // single chunk and init configures the session.
-func TestRunWithInit(t *testing.T) {
+func TestRunBidi(t *testing.T) {
 	ctx := context.Background()
 
 	type Config struct{ Prefix string }
@@ -146,9 +146,9 @@ func TestRunWithInit(t *testing.T) {
 		},
 	)
 
-	got, err := action.RunWithInit(ctx, Config{Prefix: ">> "}, "hello", nil)
+	got, err := action.RunBidi(ctx, Config{Prefix: ">> "}, "hello", nil)
 	if err != nil {
-		t.Fatalf("RunWithInit: %v", err)
+		t.Fatalf("RunBidi: %v", err)
 	}
 	if got != ">> hello" {
 		t.Errorf("output = %q, want %q", got, ">> hello")
@@ -221,7 +221,7 @@ func TestRunBidiJSON(t *testing.T) {
 	}
 
 	r, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), cb,
-		&api.BidiSessionOptions{Init: json.RawMessage(`{"prefix":">> "}`)})
+		&api.BidiJSONOptions{Init: json.RawMessage(`{"prefix":">> "}`)})
 	if err != nil {
 		t.Fatalf("RunBidiJSON: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestRunBidiJSONInvalidInit(t *testing.T) {
 	)
 
 	_, err := action.RunBidiJSON(ctx, json.RawMessage(`"in"`), nil,
-		&api.BidiSessionOptions{Init: json.RawMessage(`{not json`)})
+		&api.BidiJSONOptions{Init: json.RawMessage(`{not json`)})
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -293,7 +293,7 @@ func TestRunBidiJSONRequiresInput(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := action.RunBidiJSON(ctx, input, nil,
-				&api.BidiSessionOptions{Init: json.RawMessage(`{"prefix":">> "}`)})
+				&api.BidiJSONOptions{Init: json.RawMessage(`{"prefix":">> "}`)})
 			if err == nil {
 				t.Fatal("expected error for absent input, got nil")
 			}
@@ -311,16 +311,16 @@ func TestRunBidiJSONRequiresInput(t *testing.T) {
 	}
 }
 
-// TestStreamBidiJSONNullInit verifies that nil options and a JSON-null init
+// TestConnectJSONNullInit verifies that nil options and a JSON-null init
 // payload are both treated as no init (the zero Init value).
-func TestStreamBidiJSONNullInit(t *testing.T) {
+func TestConnectJSONNullInit(t *testing.T) {
 	ctx := context.Background()
 
 	type Config struct {
 		Prefix string `json:"prefix"`
 	}
 
-	for _, opts := range []*api.BidiSessionOptions{nil, {Init: json.RawMessage(`null`)}} {
+	for _, opts := range []*api.BidiJSONOptions{nil, {Init: json.RawMessage(`null`)}} {
 		var sawInit Config
 		action := NewBidiAction(
 			"null-init", api.ActionTypeCustom, nil,
@@ -332,9 +332,9 @@ func TestStreamBidiJSONNullInit(t *testing.T) {
 			},
 		)
 
-		conn, err := action.StreamBidiJSON(ctx, opts)
+		conn, err := action.ConnectJSON(ctx, opts)
 		if err != nil {
-			t.Fatalf("StreamBidiJSON(%v): %v", opts, err)
+			t.Fatalf("ConnectJSON(%v): %v", opts, err)
 		}
 		conn.Close()
 		if _, err := conn.Output(); err != nil {
@@ -369,7 +369,7 @@ func TestInitSchemaValidationRejectsBadInit(t *testing.T) {
 	)
 
 	// Missing required "prefix" field.
-	_, err := action.StreamBidi(ctx, map[string]any{"other": 1})
+	_, err := action.Connect(ctx, map[string]any{"other": 1})
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -405,9 +405,9 @@ func TestInitSchemaValidationAcceptsGoodInit(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, map[string]any{"prefix": ">> "})
+	conn, err := action.Connect(ctx, map[string]any{"prefix": ">> "})
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	conn.Close()
 	out, err := conn.Output()
@@ -465,9 +465,9 @@ func TestBidiNilInitSkipsValidation(t *testing.T) {
 	})
 
 	t.Run("JSON session without init", func(t *testing.T) {
-		conn, err := action.StreamBidiJSON(ctx, nil)
+		conn, err := action.ConnectJSON(ctx, nil)
 		if err != nil {
-			t.Fatalf("StreamBidiJSON: %v", err)
+			t.Fatalf("ConnectJSON: %v", err)
 		}
 		if err := conn.Send(json.RawMessage(`"hello"`)); err != nil {
 			t.Fatalf("Send: %v", err)
@@ -488,9 +488,9 @@ func TestBidiNilInitSkipsValidation(t *testing.T) {
 	})
 
 	t.Run("typed session with explicit nil init", func(t *testing.T) {
-		conn, err := action.StreamBidi(ctx, nil)
+		conn, err := action.Connect(ctx, nil)
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		conn.Close()
 		for _, err := range conn.Receive() {
@@ -505,7 +505,7 @@ func TestBidiNilInitSkipsValidation(t *testing.T) {
 
 	t.Run("provided init still validates", func(t *testing.T) {
 		_, err := action.RunBidiJSON(ctx, json.RawMessage(`"hello"`), nil,
-			&api.BidiSessionOptions{Init: json.RawMessage(`{"Prefix": 42}`)})
+			&api.BidiJSONOptions{Init: json.RawMessage(`{"Prefix": 42}`)})
 		if err == nil {
 			t.Fatal("expected error for mistyped init, got nil")
 		}
@@ -549,9 +549,9 @@ func TestBidiZeroStructInitValidatedWithoutInit(t *testing.T) {
 		t.Errorf("err = %v, want INVALID_ARGUMENT GenkitError", err)
 	}
 
-	got, err := action.RunWithInit(ctx, Config{Prefix: ">> "}, "ignored", nil)
+	got, err := action.RunBidi(ctx, Config{Prefix: ">> "}, "ignored", nil)
 	if err != nil {
-		t.Fatalf("RunWithInit: %v", err)
+		t.Fatalf("RunBidi: %v", err)
 	}
 	if got != ">> " {
 		t.Errorf("output = %q, want %q", got, ">> ")
@@ -574,7 +574,7 @@ func TestBidiConnectionSendAfterClose(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +599,7 @@ func TestBidiConnectionContextCancellation(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +654,7 @@ func TestBidiActionDone(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +721,7 @@ func TestBidiActionPanicRecovered(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,7 +748,7 @@ func TestBidiActionClosingOutChIsError(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,7 +783,7 @@ func TestBidiReceiveBreakDoesNotCancelSession(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,7 +826,7 @@ func TestBidiConnectionCancel(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(context.Background(), struct{}{})
+	conn, err := action.Connect(context.Background(), struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -853,7 +853,7 @@ func TestBidiOutputAfterCompletionNotCancelled(t *testing.T) {
 				return "done", nil
 			},
 		)
-		conn, err := action.StreamBidi(ctx, struct{}{})
+		conn, err := action.Connect(ctx, struct{}{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -890,7 +890,7 @@ func TestBidiConnectionCompletionReleasesContext(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +923,7 @@ func TestBidiConnectionNoSpuriousErrorAfterCompletion(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -966,7 +966,7 @@ func TestBidiConnectionReceiveResumesAfterBreak(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1025,7 +1025,7 @@ func TestBidiJSONConnSendValidatesChunks(t *testing.T) {
 	)
 
 	t.Run("valid chunk delivered", func(t *testing.T) {
-		conn, err := action.StreamBidiJSON(ctx, nil)
+		conn, err := action.ConnectJSON(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1045,7 +1045,7 @@ func TestBidiJSONConnSendValidatesChunks(t *testing.T) {
 	})
 
 	t.Run("invalid chunk fails the session", func(t *testing.T) {
-		conn, err := action.StreamBidiJSON(ctx, nil)
+		conn, err := action.ConnectJSON(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1063,7 +1063,7 @@ func TestBidiJSONConnSendValidatesChunks(t *testing.T) {
 	})
 
 	t.Run("null chunk validated like any payload", func(t *testing.T) {
-		conn, err := action.StreamBidiJSON(ctx, nil)
+		conn, err := action.ConnectJSON(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1089,7 +1089,7 @@ func TestBidiOutputSchemaValidatedOnConnection(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(ctx, struct{}{})
+	conn, err := action.Connect(ctx, struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1120,7 +1120,7 @@ func TestBidiJSONConnReceiveMarshalErrorAbortsSession(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidiJSON(ctx, nil)
+	conn, err := action.ConnectJSON(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1161,7 +1161,7 @@ func TestBidiInvalidChunkFailsCtxObliviousSession(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidiJSON(ctx, nil)
+	conn, err := action.ConnectJSON(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1188,7 +1188,7 @@ func TestBidiSendAfterCompletionFails(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(context.Background(), struct{}{})
+	conn, err := action.Connect(context.Background(), struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1224,7 +1224,7 @@ func TestBidiSessionWrapperPanicNotMislabeled(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidi(context.Background(), struct{}{})
+	conn, err := action.Connect(context.Background(), struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1312,7 +1312,7 @@ func TestBidiJSONConnEmptyChunkValidated(t *testing.T) {
 		},
 	)
 
-	conn, err := action.StreamBidiJSON(ctx, nil)
+	conn, err := action.ConnectJSON(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1392,7 +1392,7 @@ func TestBidiEchoStress(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			conn, err := action.StreamBidi(ctx, struct{}{})
+			conn, err := action.Connect(ctx, struct{}{})
 			if err != nil {
 				t.Error(err)
 				return
@@ -1452,9 +1452,9 @@ func TestResolveBidiActionFor(t *testing.T) {
 	if resolved == nil {
 		t.Fatal("ResolveBidiActionFor returned nil")
 	}
-	got, err := resolved.RunWithInit(ctx, Config{Prefix: ">> "}, "hello", nil)
+	got, err := resolved.RunBidi(ctx, Config{Prefix: ">> "}, "hello", nil)
 	if err != nil {
-		t.Fatalf("RunWithInit: %v", err)
+		t.Fatalf("RunBidi: %v", err)
 	}
 	if got != ">> hello" {
 		t.Errorf("output = %q, want %q", got, ">> hello")
