@@ -448,10 +448,10 @@ def generate(schema_path: Path, _out: Path) -> str:
 
 
 def main() -> None:
-    # From py/tools/schema_to_typing/schema_to_typing.py -> repo root is parent.parent.parent.parent
-    top = Path(__file__).resolve().parent.parent.parent.parent
+    # py/bin/schema_to_typing.py -> repo root is parent.parent.parent
+    top = Path(__file__).resolve().parent.parent.parent
     schema = top / 'genkit-tools' / 'genkit-schema.json'
-    out = top / 'py' / 'packages' / 'genkit' / 'genkit' / '_core' / '_typing.py'
+    out = top / 'py' / 'packages' / 'genkit' / 'src' / 'genkit' / '_core' / '_typing.py'
     if len(sys.argv) >= 2:
         schema = Path(sys.argv[1]).resolve()
         out = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else schema.parent / '_typing.py'

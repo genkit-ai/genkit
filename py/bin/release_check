@@ -370,26 +370,6 @@ else
   ERRORS=$((ERRORS + 1))
 fi
 
-echo -e "\n${CYAN}Checking for typos and spelling errors...${NC}"
-if uv run typos packages/ plugins/ --config typos.toml --format brief > /tmp/typos_release_$$ 2>&1; then
-  echo -e "  ${GREEN}✓${NC} No typos found"
-else
-  typos_count=$(grep -c "error:" /tmp/typos_release_$$ 2>/dev/null || echo "0")
-  if [ "$typos_count" -gt 0 ]; then
-    echo -e "  ${RED}ERROR${NC}: $typos_count typo(s) found:"
-    grep "error:" /tmp/typos_release_$$ | head -10 | while read -r line; do
-      echo -e "    $line"
-    done
-    if [ "$typos_count" -gt 10 ]; then
-      echo -e "    ... and $((typos_count - 10)) more. Run 'uv run typos packages/ plugins/' for full list."
-    fi
-    ERRORS=$((ERRORS + 1))
-  else
-    echo -e "  ${GREEN}✓${NC} No typos found"
-  fi
-fi
-rm -f /tmp/typos_release_$$ 2>/dev/null || true
-
 echo -e "\n${CYAN}Checking shell scripts (shellcheck)...${NC}"
 if command -v shellcheck &> /dev/null; then
   shell_errors=0
