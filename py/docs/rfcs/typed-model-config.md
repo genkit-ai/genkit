@@ -140,16 +140,47 @@ family-specific" — never "can't call the model."
 
 ## Design
 
-Three pieces, in order: the handle type and the `generate` overloads that read it; how
-config types are grained; and how a per-plugin manifest generates the runtime and static
-halves from one source.
+Four pieces, in order:
+1. **The core `CommonModelConfigDict`** representing shared cross-provider configurations (solving the "horizontal type safety" problem and replacing the public `ModelConfig` class).
+2. **The generic `ModelRef` handle** and the `generate` overloads that read it.
+3. **Family-grained config types** that inherit from the common base.
+4. **A per-plugin manifest** that generates the runtime and static halves from one source.
 
-### 1. The handle and the `generate` overloads
+### 1. The core `CommonModelConfigDict`
 
-The core addition is a generic handle whose type parameter is the config shape:
+To support writing generic middleware, helper functions, or wrappers that need to read or modify configuration parameters (like `temperature` or `max_output_tokens`) across *any* model, Genkit core defines a single base `TypedDict`:
 
 ```python
-ConfigT = TypeVar('ConfigT', bound=Mapping[str, object], default=Mapping[str, object])
+# genkit/ai/types.py (Core)
+from typing import TypedDict
+
+class CommonModelConfigDict(TypedDict, total=False):
+    """Universal configuration options supported by almost all models."""
+    version: str | None
+    temperature: float | None
+    max_output_tokens: int | None
+    top_k: int | None
+    top_p: float | None
+    stop_sequences: list[str] | None
+```
+
+#### The Clean API Separation: TypedDict (Static DX) vs. Pydantic (Runtime Engine)
+
+In this design, we **completely remove the Pydantic `ModelConfig` class from `ai.generate`'s public signature.** 
+
+This eliminates the developer confusion of having two ways to configure a model (Pydantic objects vs. raw dicts). Now, there is only **one public way**: the clean, native, inline dictionary literal.
+
+However, **Pydantic remains the internal runtime backbone of the SDK.** The division of labor is cleanly split:
+*   **Compile-Time (IDE DX):** Driven by `TypedDict`s (`CommonModelConfigDict`, `GeminiConfigDict`). This gives developers (and AI agents) perfect autocomplete, typo-checking, and zero-import ergonomics inline.
+*   **Runtime (Framework Engine):** Driven by Pydantic schemas (`GeminiConfigSchema`, etc.). Inside `ai.generate()`, the engine takes the raw dictionary, validates it, coerces types (e.g. converting a string `'0.7'` to a float `0.7`), generates JSON schemas for the **Dev UI**, and handles telemetry serialization.
+
+### 2. The handle and the `generate` overloads
+
+The core addition is a generic handle whose type parameter `ConfigT` carries the static config type as a phantom type parameter. We bind `ConfigT` to `CommonModelConfigDict` so that even on loose/fallback paths, the common keys are still verified:
+
+```python
+# genkit/ai.py
+ConfigT = TypeVar('ConfigT', bound=CommonModelConfigDict, default=CommonModelConfigDict)
 
 @dataclass(frozen=True)
 class ModelRef(Generic[ConfigT]):
@@ -158,48 +189,53 @@ class ModelRef(Generic[ConfigT]):
     # inert — carries no registry; ai.generate(model=handle) does the resolution.
 ```
 
-`ai.generate` gains an overload for the handle path while the string path stays loose:
+`ai.generate` is overloaded to strictly accept the `TypedDict` hierarchy:
 
 ```python
+# genkit/ai.py
 @overload
 async def generate(self, *, model: ModelRef[ConfigT],
                     config: ConfigT | None = None, ...): ...
 @overload
 async def generate(self, *, model: str | None = None,
-                    config: Mapping[str, object] | ModelConfig | None = None, ...): ...
+                    config: CommonModelConfigDict | None = None, ...): ...
 ```
 
-On the handle path, a dict is checked against the family `TypedDict` (`ConfigT`) for
-autocomplete + typo flagging. Runtime `generate` just reads `model.name`; everything else is
-unchanged.
+*   **On the handle path:** `config` is checked against the family `TypedDict` (`ConfigT`) which inherits both common and model-specific keys.
+*   **On the string path:** `config` is checked against `CommonModelConfigDict`, giving developers autocomplete for the common keys (temperature, max_output_tokens, etc.) without requiring a `ModelRef`.
 
-### 2. Config types are grained by family
+---
 
-Config types are carved by **family**, mirroring the existing Pydantic schemas 1:1 — a
-different config shape *is* a different family, so there's no new taxonomy:
+### 3. Config types are grained by family and inherit from the common base
 
-| Family | Config type | Pydantic source |
-|---|---|---|
-| Gemini (text/multimodal) | `GeminiConfigDict` | `GeminiConfigSchema` |
-| Gemini TTS | `GeminiTtsConfigDict` | `GeminiTtsConfigSchema` |
-| Gemini image | `GeminiImageConfigDict` | `GeminiImageConfigSchema` |
-| Veo (video) | `VeoConfigDict` | `VeoConfigSchema` |
-| Imagen | `ImagenConfigDict` | `ImagenConfigSchema` |
+Config types are carved by **family**, mirroring the existing Pydantic schemas 1:1. However, to support structural subtyping, every family-specific `TypedDict` **inherits from the core `CommonModelConfigDict`** via standard Python `TypedDict` inheritance:
 
-This grain already exists at runtime today, in the resolver that picks a schema by name:
+| Family | Config type | Base Type | Pydantic source |
+|---|---|---|---|
+| Gemini (text/multimodal) | `GeminiConfigDict` | `CommonModelConfigDict` | `GeminiConfigSchema` |
+| Gemini TTS | `GeminiTtsConfigDict` | `CommonModelConfigDict` | `GeminiTtsConfigSchema` |
+| Gemini image | `GeminiImageConfigDict` | `CommonModelConfigDict` | `GeminiImageConfigSchema` |
+| Veo (video) | `VeoConfigDict` | `CommonModelConfigDict` | `VeoConfigSchema` |
+| Imagen | `ImagenConfigDict` | `CommonModelConfigDict` | `ImagenConfigSchema` |
+
+This inheritance is handled automatically by the code generator. The generated module imports `CommonModelConfigDict` and subclasses it, only generating the provider-specific fields:
 
 ```python
-# google-genai, get_model_config_schema(name) — already exists
-if is_tts_model(name):   return GeminiTtsConfigSchema
-if is_image_model(name): return GeminiImageConfigSchema
-if is_gemma_model(name): return GemmaConfigSchema
-return GeminiConfigSchema
+# _generated_models.py (generated — do not edit)
+from genkit.ai import CommonModelConfigDict
+
+class GeminiConfigDict(CommonModelConfigDict, total=False):
+    # Gemini-specific keys only! Common keys (temperature, etc.) are inherited.
+    google_safety_settings: list[SafetySettingDict]
+    google_thinking_config: ThinkingConfigDict
+    # ...
 ```
 
-### 3. One manifest generates both layers
+---
 
-The binding has two halves that must agree: a **runtime** resolver (name → Pydantic schema,
-to validate the dict) and a **static** surface (name → `*ConfigDict`, to drive autocomplete).
+### 4. One manifest generates both layers
+
+The binding has two halves that must agree: a **runtime** resolver (name → Pydantic schema, to validate the dict) and a **static** surface (name → `*ConfigDict`, to drive autocomplete).
 
 ```
                       name string  ─────►  config schema
@@ -208,15 +244,9 @@ to validate the dict) and a **static** surface (name → `*ConfigDict`, to drive
   STATIC    .model() overloads             → *ConfigDict     (drives autocomplete)
 ```
 
-Rather than hand-write both (and pay the "enumerate the names" tax twice), each plugin owns
-a **model manifest** — one declarative file a generator expands into both halves, so they
-can't drift.
+Rather than hand-write both (and pay the "enumerate the names" tax twice), each plugin owns a **model manifest** — one declarative file a generator expands into both halves, so they can't drift.
 
-**The manifest owns the full `ModelInfo`.** It's not just the name→family→config binding —
-it carries the complete per-model metadata (label, version, stage, `supports`) that's
-hand-written and scattered across `ModelInfo` entries today, so codegen *replaces* those
-entries rather than sitting beside them. One source for the runtime registry and the static
-typing both.
+**The manifest owns the full `ModelInfo`.** It's not just the name→family→config binding — it carries the complete per-model metadata (label, version, stage, `supports`) that's hand-written and scattered across `ModelInfo` entries today, so codegen *replaces* those entries rather than sitting beside them. One source for the runtime registry and the static typing both.
 
 ```yaml
 # plugins/google-genai/models.yaml
@@ -252,8 +282,7 @@ families:
         stage: preview
 ```
 
-A generator (extending the existing `schema_to_typing.py` machinery) reads the manifest and
-emits **one generated module per plugin**:
+A generator (extending the existing `schema_to_typing.py` machinery) reads the manifest and emits **one generated module per plugin**:
 
 ```
   models.yaml ──► generate_model_refs.py ──► _generated_models.py
@@ -263,14 +292,9 @@ emits **one generated module per plugin**:
                                               └─ GoogleAI.model() overloads → ModelRef[GeminiConfigDict]  (static)
 ```
 
-The `*ConfigDict` types come from the Pydantic schemas named in the manifest (the Tier-1
-`schema_to_typing` step), so the manifest only references a schema by name — it never
-restates the config shape.
+The `*ConfigDict` types come from the Pydantic schemas named in the manifest (the Tier-1 `schema_to_typing` step), so the manifest only references a schema by name — it never restates the config shape.
 
-**What the author writes by hand for model refs: nothing.** The whole `.model()` accessor
-— the typed `@overload` signatures *and* its uniform body — is generated, because the body
-doesn't branch per model (the plugin prefix comes from the manifest's `plugin:` field). The
-plugin class just inherits the generated mixin:
+**What the author writes by hand for model refs: nothing.** The whole `.model()` accessor — the typed `@overload` signatures *and* its uniform body — is generated, because the body doesn't branch per model (the plugin prefix comes from the manifest's `plugin:` field). The plugin class just inherits the generated mixin:
 
 ```python
 # _generated_models.py (generated — do not edit)
@@ -280,7 +304,7 @@ class GoogleAIGeneratedModels:
     def model(cls, name: GeminiModelName, /) -> ModelRef[GeminiConfigDict]: ...
     @overload
     @classmethod
-    def model(cls, name: str, /) -> ModelRef[Mapping[str, object]]: ...   # loose fallback
+    def model(cls, name: str, /) -> ModelRef[CommonModelConfigDict]: ...   # loose fallback with common config typing
     @classmethod
     def model(cls, name, /):
         return ModelRef(name=name if '/' in name else f'googleai/{name}')
@@ -290,23 +314,15 @@ class GoogleAI(Plugin, GoogleAIGeneratedModels):
     ...   # existing plugin setup (client, registration, …)
 ```
 
-So the author maintains exactly two things, both data: the **Pydantic config schema** (the
-config shape) and the **YAML manifest** (names, families, and full per-model `ModelInfo`).
-Both are written today — the manifest just consolidates the `ModelInfo` entries that are
-currently hand-coded and scattered. The hand-written `ModelInfo` table and the
-`is_tts_model`/`is_image_model` predicate chain **go away**; codegen owns them. Adding a
-model is a one-line YAML edit + regenerate.
+So the author maintains exactly two things, both data: the **Pydantic config schema** (the config shape) and the **YAML manifest** (names, families, and full per-model `ModelInfo`). Both are written today — the manifest just consolidates the `ModelInfo` entries that are currently hand-coded and scattered. The hand-written `ModelInfo` table and the `is_tts_model`/`is_image_model` predicate chain **go away**; codegen owns them. Adding a model is a one-line YAML edit + regenerate.
 
-**Drift is guarded, not trusted:** regeneration is wired into the build so **CI fails if
-`_generated_models.py` is stale** vs the manifest (the pattern `schema_to_typing.py` already
-uses for `_typing.py`), and a test asserts each generated `*ConfigDict` matches the fields of
-the Pydantic schema it came from.
+**Drift is guarded, not trusted:** regeneration is wired into the build so **CI fails if `_generated_models.py` is stale** vs the manifest (the pattern `schema_to_typing.py` already uses for `_typing.py`), and a test asserts each generated `*ConfigDict` matches the fields of the Pydantic schema it came from.
 
 ## What does NOT change
 
 - Plugin authors keep writing **Pydantic** config schemas (validation, Dev UI, aliases).
-- Dict passthrough + `extra='allow'` escape hatch stays exactly as-is — even inside a
-  typed family, an unlisted key validates at runtime and reaches the SDK.
-- Bare-string `ai.generate(model='...')` keeps working with loose config typing.
+- Dict passthrough + `extra='allow'` escape hatch stays exactly as-is — even inside a typed family, an unlisted key validates at runtime and reaches the SDK.
+- Bare-string `ai.generate(model='...')` keeps working and now benefits from static typing for the common config options.
 - No snake↔camel conversion layer (Pydantic aliases already handle it).
+- **Internal execution architecture:** Pydantic remains the internal runtime backbone of the SDK, handling all runtime validation, type coercion, dynamic Dev UI JSON-schema generation, and telemetry serialization.
 
