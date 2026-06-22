@@ -284,7 +284,7 @@ class OllamaModel:
             idx = 0
             async for chunk in chat_response:
                 idx += 1
-                role = Role.MODEL if chunk.message.role == 'assistant' else Role.TOOL
+                role = Role.TOOL if chunk.message.role == 'tool' else Role.MODEL
                 if ctx:
                     ctx.send_chunk(
                         chunk=ModelResponseChunk(

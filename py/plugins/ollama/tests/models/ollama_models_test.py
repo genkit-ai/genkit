@@ -417,6 +417,25 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         cast(MagicMock, self.ctx.send_chunk).assert_any_call(chunk=ANY)
         self.mock_build_multimodal_response.assert_any_call(chat_response=ANY)
 
+    async def test_streaming_chat_empty_role_maps_to_model(self) -> None:
+        """Streamed chunks with an empty role should be labeled MODEL, not TOOL."""
+        self.mock_is_streaming_request.return_value = True
+        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        cast(Any, self.ctx).send_chunk = MagicMock()
+
+        async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
+            # Ollama commonly sends an empty role on streamed deltas.
+            yield ollama_api.ChatResponse(message=ollama_api.Message(role='', content='delta'))
+
+        self.mock_ollama_client_instance.chat.return_value = mock_streaming_chunks()
+
+        await self.ollama_model._chat_with_ollama(self.request, self.ctx)
+
+        send_chunk = cast(MagicMock, self.ctx.send_chunk)
+        send_chunk.assert_called_once()
+        sent_chunk = send_chunk.call_args.kwargs['chunk']
+        self.assertEqual(cast(ModelResponseChunk, sent_chunk).role, Role.MODEL)
+
     async def test_chat_with_output_format_string(self) -> None:
         """Test _chat_with_ollama with request.output.format string."""
         self.request.output_format = 'json'
