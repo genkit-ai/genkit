@@ -37,9 +37,29 @@ func ClassifyModel(name string) ModelType {
 		return ModelTypeEmbedder
 	case strings.HasPrefix(name, "gemini"), strings.HasPrefix(name, "gemma"):
 		return ModelTypeGemini
+	case isTunedGeminiName(name):
+		// Vertex tuned Gemini models, addressed either by `endpoints/ID` or a
+		// full `projects/.../endpoints/ID` path. They speak the Gemini
+		// generateContent protocol, so dispatch them as Gemini.
+		return ModelTypeGemini
 	default:
 		return ModelTypeUnknown
 	}
+}
+
+// isTunedGeminiName reports whether name refers to a Vertex AI tuned Gemini
+// endpoint, either by its short form (`endpoints/ID`) or its fully qualified
+// resource path (`projects/PROJECT/locations/LOCATION/endpoints/ID`).
+func isTunedGeminiName(name string) bool {
+	if strings.HasPrefix(name, "endpoints/") {
+		return true
+	}
+	if strings.HasPrefix(name, "projects/") &&
+		strings.Contains(name, "/locations/") &&
+		strings.Contains(name, "/endpoints/") {
+		return true
+	}
+	return false
 }
 
 // ActionType returns the appropriate API action type for this model type.
