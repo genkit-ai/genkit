@@ -32,6 +32,7 @@ import {
   type SessionStoreOptions,
   type SnapshotMutator,
 } from 'genkit/beta';
+import { logger } from 'genkit/logging';
 
 /**
  * Default number of turns between full-state checkpoints.
@@ -558,11 +559,21 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     const ref = this.snapshotsCol(options).doc(snapshotId);
     return ref.onSnapshot(async (docSnap) => {
       if (!docSnap.exists) return;
-      const snapshot = await this.getSnapshot({
-        snapshotId,
-        context: options?.context,
-      });
-      if (snapshot) callback(snapshot);
+      try {
+        const snapshot = await this.getSnapshot({
+          snapshotId,
+          context: options?.context,
+        });
+        if (snapshot) callback(snapshot);
+      } catch (err) {
+        // Swallow errors so a transient read failure (network / permission)
+        // doesn't surface as an unhandled promise rejection and crash the
+        // process. The next snapshot event will retry.
+        logger.error(
+          `FirestoreSessionStore.watch failed to load snapshot ${snapshotId}`,
+          err
+        );
+      }
     });
   }
 
@@ -750,7 +761,12 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     const buf = Buffer.from(JSON.stringify(state ?? null), 'utf8');
     const count = Math.max(1, Math.ceil(buf.length / this.shardSize));
     for (let i = 0; i < count; i++) {
-      const chunk = buf.subarray(i * this.shardSize, (i + 1) * this.shardSize);
+      // Copy the slice into its own buffer. `subarray` returns a view sharing
+      // the parent's underlying ArrayBuffer, which the Firestore serializer can
+      // persist in full rather than just the sliced range.
+      const chunk = Buffer.from(
+        buf.subarray(i * this.shardSize, (i + 1) * this.shardSize)
+      );
       tx.set(shardsCol.doc(`${checkpointId}_${i}`), {
         chunk,
       } satisfies ShardDoc);
