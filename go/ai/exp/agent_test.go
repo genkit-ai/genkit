@@ -148,7 +148,7 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 // per-turn whole-document replace (the first patch of a turn re-bases the
 // client) followed by an incremental diff within the same turn, and that the
 // tracking carries across turns. The server-side patch emission is covered by
-// TestAgent_TurnSpanOutput_WithSnapshots; this is its client-side complement.
+// TestAgent_CustomPatchWholeDocumentReplace; this is its client-side complement.
 func TestAgentConnection_Custom_TracksStreamedPatches(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -1345,22 +1345,36 @@ func TestAgent_SetMessages(t *testing.T) {
 	}
 }
 
+// turnSpanState parses a turn span's genkit:output attribute, which the agent
+// records as {"state": <session state>} (see turnSpanOutput), and returns the
+// embedded state.
+func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testState] {
+	t.Helper()
+	raw, ok := spanAttr(span, "genkit:output")
+	if !ok {
+		t.Fatalf("span %q: missing genkit:output attribute", span.Name())
+	}
+	var out turnSpanOutput[testState]
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.Name(), raw, err)
+	}
+	if out.State == nil {
+		t.Fatalf("span %q: genkit:output %q carries no state", span.Name(), raw)
+	}
+	return out.State
+}
+
+// TestAgent_TurnSpanOutput verifies each turn span's output is the committed
+// session state at turn end, wrapped as {state: ...}. The agent is
+// client-managed (no store), so no turn-end snapshot is written and the
+// per-turn snapshot-ID attribute is absent.
 func TestAgent_TurnSpanOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-
-	var capturedOutputs []any
+	spans := collectSpans(t)
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			// Wrap collectTurnOutput to capture what each turn produces.
-			originalCollect := sess.collectTurnOutput
-			sess.collectTurnOutput = func() any {
-				output := originalCollect()
-				capturedOutputs = append(capturedOutputs, output)
-				return output
-			}
-
 			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
 				sess.UpdateCustom(func(s testState) testState {
 					s.Counter++
@@ -1390,59 +1404,51 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	}
 
 	conn.Close()
-	if _, err := conn.Output(); err != nil {
+	out, err := conn.Output()
+	if err != nil {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	// Should have captured output for each turn.
-	if len(capturedOutputs) != 2 {
-		t.Fatalf("expected 2 captured outputs, got %d", len(capturedOutputs))
-	}
-
-	for i, output := range capturedOutputs {
-		chunks, ok := output.([]*AgentStreamChunk)
-		if !ok {
-			t.Fatalf("turn %d: expected []*AgentStreamChunk, got %T", i, output)
+	// Each turn span's output carries the cumulative state through that turn:
+	// the running counter and one user message plus one reply per turn.
+	for turn := range 2 {
+		name := fmt.Sprintf("runTurn-%d", turn+1)
+		span := spans.byName(name)
+		if span == nil {
+			t.Fatalf("missing span %q", name)
 		}
-		// 3 content chunks per turn: customPatch + model chunk + artifact.
-		if len(chunks) != 3 {
-			t.Errorf("turn %d: expected 3 chunks, got %d", i, len(chunks))
+		state := turnSpanState(t, span)
+		if state.SessionID != out.SessionID {
+			t.Errorf("%s: state.sessionId = %q, want %q", name, state.SessionID, out.SessionID)
 		}
-		for j, chunk := range chunks {
-			if chunk.TurnEnd != nil {
-				t.Errorf("turn %d, chunk %d: TurnEnd should not be in turn output", i, j)
-			}
+		if want := turn + 1; state.Custom.Counter != want {
+			t.Errorf("%s: state.custom.counter = %d, want %d", name, state.Custom.Counter, want)
+		}
+		if got, want := len(state.Messages), 2*(turn+1); got != want {
+			t.Errorf("%s: len(state.messages) = %d, want %d", name, got, want)
+		}
+		// An artifact added during the turn rides the committed state too.
+		if got := len(state.Artifacts); got != 1 {
+			t.Errorf("%s: len(state.artifacts) = %d, want 1", name, got)
+		}
+		// Client-managed: no snapshot, so no snapshot-ID attribute.
+		if v, ok := spanAttr(span, snapshotIDSpanAttrKey); ok {
+			t.Errorf("%s: unexpected %s = %q (client-managed writes no snapshot)", name, snapshotIDSpanAttrKey, v)
 		}
 	}
 }
 
+// TestAgent_TurnSpanOutput_WithSnapshots verifies that for a server-managed
+// agent the turn span both carries the persisted snapshot's ID under
+// genkit:metadata:agent:snapshotId and records the committed state as its
+// {state: ...} output, agreeing with the snapshot the ID points to.
 func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
+	spans := collectSpans(t)
 
-	var capturedOutputs []any
-
-	af := DefineCustomAgent(reg, "turnOutputSnapshotFlow",
-		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-			originalCollect := sess.collectTurnOutput
-			sess.collectTurnOutput = func() any {
-				output := originalCollect()
-				capturedOutputs = append(capturedOutputs, output)
-				return output
-			}
-
-			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
-				sess.UpdateCustom(func(s testState) testState {
-					s.Counter++
-					return s
-				})
-				sess.AddMessages(ai.NewModelTextMessage("reply"))
-				return nil, nil
-			})
-		},
-		WithSessionStore(store),
-	)
+	af := defineCounterAgent(reg, "turnOutputSnapshotFlow", WithSessionStore(store))
 
 	conn, err := af.Connect(ctx)
 	if err != nil {
@@ -1450,28 +1456,80 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	}
 
 	sendText(t, conn, "hello")
-	var sawSnapshot bool
-	if nextTurnEnd(t, conn).SnapshotID != "" {
-		sawSnapshot = true
-	}
-	conn.Close()
-	conn.Output()
-
-	if !sawSnapshot {
+	te := nextTurnEnd(t, conn)
+	if te.SnapshotID == "" {
 		t.Fatal("expected a snapshot ID on the turn-end chunk")
 	}
+	conn.Close()
+	if _, err := conn.Output(); err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
 
-	// Turn output should contain only the customPatch chunk, not the TurnEnd signal.
-	if len(capturedOutputs) != 1 {
-		t.Fatalf("expected 1 captured output, got %d", len(capturedOutputs))
+	span := spans.byName("runTurn-1")
+	if span == nil {
+		t.Fatal("missing span runTurn-1")
 	}
-	chunks := capturedOutputs[0].([]*AgentStreamChunk)
-	if len(chunks) != 1 {
-		t.Errorf("expected 1 content chunk, got %d", len(chunks))
+
+	// The turn span is tagged with the turn-end snapshot's ID.
+	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	if !ok {
+		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
-	// The first (and only) patch of the turn is a whole-document replace.
-	if got := chunks[0].CustomPatch; len(got) != 1 || got[0].Op != JSONPatchOpReplace || got[0].Path != "" {
-		t.Errorf("expected a whole-document replace customPatch, got %+v", got)
+	if got != te.SnapshotID {
+		t.Errorf("turn span %s = %q, want %q (the turn-end snapshot)", snapshotIDSpanAttrKey, got, te.SnapshotID)
+	}
+
+	// Its output is the committed state, matching the persisted snapshot.
+	state := turnSpanState(t, span)
+	if state.Custom.Counter != 1 {
+		t.Errorf("turn span state.custom.counter = %d, want 1", state.Custom.Counter)
+	}
+	snap, err := store.GetSnapshot(ctx, te.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if state.SessionID != snap.SessionID {
+		t.Errorf("turn span state.sessionId = %q, want %q (snapshot's session)", state.SessionID, snap.SessionID)
+	}
+	if got, want := state.Custom.Counter, snap.State.Custom.Counter; got != want {
+		t.Errorf("turn span state.custom.counter = %d, want %d (snapshot's counter)", got, want)
+	}
+}
+
+// TestAgent_CustomPatchWholeDocumentReplace verifies the server emits the first
+// custom-state mutation of a turn as a whole-document replace: a single RFC 6902
+// replace at the root pointer, which re-bases a client that may not share the
+// server's baseline. The client-side effect of this re-basing across turns is
+// covered by TestAgentConnection_Custom_TracksStreamedPatches.
+func TestAgent_CustomPatchWholeDocumentReplace(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	af := defineCounterAgent(reg, "wholeDocReplaceFlow")
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	sendText(t, conn, "hello")
+
+	var patch JSONPatch
+	for chunk, err := range conn.Receive() {
+		if err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+		if chunk.CustomPatch != nil {
+			patch = chunk.CustomPatch
+			break
+		}
+		if chunk.TurnEnd != nil {
+			break
+		}
+	}
+	conn.Close()
+
+	if len(patch) != 1 || patch[0].Op != JSONPatchOpReplace || patch[0].Path != "" {
+		t.Errorf("first customPatch = %+v, want a single whole-document replace at root", patch)
 	}
 }
 

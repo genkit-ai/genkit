@@ -85,9 +85,8 @@ type SessionRunner[State any] struct {
 	// incremented by Run after each turn completes.
 	turnIndex int
 
-	onStartTurn       func()
-	onEndTurn         func(ctx context.Context)
-	collectTurnOutput func() any
+	onStartTurn func()
+	onEndTurn   func(ctx context.Context)
 
 	// snapMu serializes the turn-end snapshot write (snapshotTurnEnd)
 	// against the detach handler's suspend-and-capture (suspendSnapshots).
@@ -160,6 +159,16 @@ type TurnResult struct {
 	FinishReason AgentFinishReason
 }
 
+// turnSpanOutput is the value recorded as a turn span's genkit:output. It
+// wraps the committed session state captured at turn end under a "state" key,
+// so the span output serializes as {"state": <session state>}. The state is
+// raw: a configured [StateTransform] shapes only client-facing surfaces, not
+// telemetry or persisted state, so this matches what a server-managed turn
+// writes to its turn-end snapshot.
+type turnSpanOutput[State any] struct {
+	State *SessionState[State] `json:"state"`
+}
+
 // Run loops over the input channel, calling fn for each turn. Each turn is
 // wrapped in a trace span for observability. Input messages are automatically
 // added to the session before fn is called. After fn returns successfully, a
@@ -214,10 +223,9 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 					reason = tr.FinishReason
 				}
 				s.endTurn(ctx, reason, false)
-				if s.collectTurnOutput != nil {
-					return s.collectTurnOutput(), nil
-				}
-				return nil, nil
+				// The turn span's output is the committed session state at
+				// turn end, recorded as {state: ...} (see turnSpanOutput).
+				return turnSpanOutput[State]{State: s.State()}, nil
 			},
 		)
 		if err != nil {
@@ -363,8 +371,8 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 type Responder struct {
 	in  chan<- *AgentStreamChunk
 	ctx context.Context
-	// effects applies the chunk's in-process side effects (session
-	// artifact add, turn-chunk accumulation) synchronously in send, in
+	// effects applies the chunk's in-process side effects (adding an
+	// artifact chunk's artifact to the session) synchronously in send, in
 	// the sender's goroutine, so reads and snapshots that follow a Send
 	// cannot miss the chunk.
 	effects func(*AgentStreamChunk)
@@ -862,12 +870,17 @@ type fnDoneResult[State any] struct {
 	err    error
 }
 
-// sessionIDSpanAttrKey is the full span-attribute key under which an agent's
-// root action span records its session ID. It is the "genkit:metadata:"-prefixed
-// form of the "agent:sessionId" custom-metadata key the JS agent sets via
-// setCustomMetadataAttributes; the prefix is inlined here because Go's tracing
-// package exposes no setCustomMetadataAttributes helper.
-const sessionIDSpanAttrKey = "genkit:metadata:agent:sessionId"
+// sessionIDSpanAttrKey and snapshotIDSpanAttrKey are the full span-attribute
+// keys under which an agent records its identifiers: the session ID on the
+// root action span, and the turn-end snapshot ID on each server-managed turn
+// span. They are the "genkit:metadata:"-prefixed forms of the
+// "agent:sessionId" / "agent:snapshotId" custom-metadata keys the JS agent
+// sets via setCustomMetadataAttributes; the prefix is inlined here because
+// Go's tracing package exposes no setCustomMetadataAttributes helper.
+const (
+	sessionIDSpanAttrKey  = "genkit:metadata:agent:sessionId"
+	snapshotIDSpanAttrKey = "genkit:metadata:agent:snapshotId"
+)
 
 func newAgentRuntime[State any](
 	ctx context.Context,
@@ -943,7 +956,6 @@ func newAgentRuntime[State any](
 		// make it the resume point a first-turn failure falls back to.
 		rt.sess.lastSnapshotID = parent.SnapshotID
 	}
-	rt.sess.collectTurnOutput = func() any { return rt.router.collectTurnChunks() }
 	rt.sess.onEndTurn = rt.emitTurnEnd
 	// Stream custom-state mutations as customPatch chunks. beginTurn is armed
 	// per turn by the runner; the session's onCustomChange hook is wired in
@@ -983,6 +995,15 @@ func (rt *agentRuntime[State]) emitTurnEnd(ctx context.Context) {
 	if !rt.sess.lastTurnFailed {
 		snapshotID = rt.sess.snapshotTurnEnd(ctx, reason)
 	}
+	// Tag the turn span with the snapshot it persisted, so a server-managed
+	// turn's trace links to its snapshot. ctx is the turn span's context (this
+	// runs inside the runTurn-N span via onEndTurn). The ID is empty, and the
+	// attribute omitted, when client-managed, when the turn failed, or when a
+	// detach suspended snapshots.
+	if snapshotID != "" {
+		trace.SpanFromContext(ctx).SetAttributes(
+			attribute.String(snapshotIDSpanAttrKey, snapshotID))
+	}
 	rt.router.sendChunk(ctx, &AgentStreamChunk{TurnEnd: &TurnEnd{
 		SnapshotID:   snapshotID,
 		FinishReason: reason,
@@ -1003,9 +1024,9 @@ func (rt *agentRuntime[State]) run(
 
 	// Wire custom-state streaming now that the work context exists: every
 	// UpdateCustom mutation during the invocation emits a customPatch chunk
-	// through the same responder fn uses (so the chunk is accumulated for the
-	// turn span and forwarded on the wire, dropping post-detach like any
-	// other chunk). The session mutation itself still applies regardless.
+	// through the same responder fn uses (so the chunk is forwarded on the
+	// wire, dropping post-detach like any other chunk). The session mutation
+	// itself still applies regardless.
 	resp := rt.router.responder(workCtx)
 	rt.patcher.bind(workCtx, resp.send)
 	rt.session.onCustomChange = rt.patcher.onChange
@@ -1588,13 +1609,13 @@ func resumeSessionFrom[State any](s *Session[State], snap *SessionSnapshot[State
 // --- chunkRouter ---
 //
 // chunkRouter owns the intermediate stream channel that all chunks flow
-// through on their way to outCh. A chunk's in-process side effects
-// (adding artifacts to the session, accumulating turn chunks for span
-// output) are applied synchronously by Responder.send before the chunk
-// enters the router, so every chunk gets them in its sender's goroutine
-// regardless of whether detach has landed; the router owns only the wire
-// forward to outCh, which is the one thing detach suppresses, since the
-// bidi framework closes outCh shortly after bidiFn returns. The router
+// through on their way to outCh. A chunk's in-process side effect (adding
+// an artifact chunk's artifact to the session) is applied synchronously by
+// Responder.send before the chunk enters the router, so every chunk gets it
+// in its sender's goroutine regardless of whether detach has landed; the
+// router owns only the wire forward to outCh, which is the one thing detach
+// suppresses, since the bidi framework closes outCh shortly after bidiFn
+// returns. The router
 // commits to not writing before we return so that close is safe, and
 // keeps draining its input so the user fn never blocks on a responder
 // send.
@@ -1604,9 +1625,6 @@ type chunkRouter[State any] struct {
 	in      chan *AgentStreamChunk
 	out     chan<- *AgentStreamChunk
 	session *Session[State]
-
-	turnMu     sync.Mutex
-	turnChunks []*AgentStreamChunk
 
 	done          chan struct{}
 	stopWriting   chan struct{}
@@ -1646,22 +1664,17 @@ func (r *chunkRouter[State]) run() {
 	}
 }
 
-// applySideEffects records the chunk's effect on session state and turn
-// span output. Invoked synchronously from Responder.send, in the
-// sender's goroutine, so the effects are ordered before everything the
-// sender does after Send: a state read, a turn-end snapshot, or
-// [SessionRunner.Result] immediately after SendArtifact observes the
-// artifact. The artifact is deep-copied on its way into the session so
-// the sender's retained pointer (which also rides the wire chunk) cannot
-// alias live session state.
+// applySideEffects records the chunk's effect on session state: an artifact
+// chunk adds its artifact to the session. Invoked synchronously from
+// Responder.send, in the sender's goroutine, so the effect is ordered before
+// everything the sender does after Send: a state read, a turn-end snapshot, or
+// [SessionRunner.Result] immediately after SendArtifact observes the artifact.
+// The artifact is deep-copied on its way into the session so the sender's
+// retained pointer (which also rides the wire chunk) cannot alias live session
+// state.
 func (r *chunkRouter[State]) applySideEffects(chunk *AgentStreamChunk) {
 	if chunk.Artifact != nil {
 		r.session.AddArtifacts(jsonClone(chunk.Artifact))
-	}
-	if chunk.TurnEnd == nil {
-		r.turnMu.Lock()
-		r.turnChunks = append(r.turnChunks, chunk)
-		r.turnMu.Unlock()
 	}
 }
 
@@ -1703,23 +1716,13 @@ func (r *chunkRouter[State]) responder(ctx context.Context) Responder {
 // sendChunk delivers chunk to the router for producers other than the
 // user agent function (e.g. the runtime's emitTurnEnd). It skips the
 // in-process side effects (the only runtime-produced chunk is TurnEnd,
-// which has none: no artifact, and TurnEnd is excluded from turn-chunk
-// accumulation) and returns promptly if ctx is cancelled, dropping the
-// chunk.
+// which has none: no artifact) and returns promptly if ctx is cancelled,
+// dropping the chunk.
 func (r *chunkRouter[State]) sendChunk(ctx context.Context, chunk *AgentStreamChunk) {
 	select {
 	case r.in <- chunk:
 	case <-ctx.Done():
 	}
-}
-
-// collectTurnChunks returns and resets accumulated turn chunks.
-func (r *chunkRouter[State]) collectTurnChunks() []*AgentStreamChunk {
-	r.turnMu.Lock()
-	defer r.turnMu.Unlock()
-	result := r.turnChunks
-	r.turnChunks = nil
-	return result
 }
 
 // stopAndWait tells the router to stop writing to out and blocks until it
@@ -1754,7 +1757,7 @@ type customPatcher[State any] struct {
 	session   *Session[State]
 
 	ctx  context.Context         // invocation work context, for the transform
-	send func(*AgentStreamChunk) // forwards the chunk (accumulate + wire)
+	send func(*AgentStreamChunk) // forwards the chunk (side effects + wire)
 
 	mu          sync.Mutex
 	firstInTurn bool
