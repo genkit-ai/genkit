@@ -321,3 +321,36 @@ async def test_action_context_isolation_sequential_and_nested() -> None:
     assert parent_ctx == {'auth': 'parent_secret'}  # Permanent override check
 
     assert get_current_context() is None
+
+
+@pytest.mark.asyncio
+async def test_run_defaulted_input_arg_allows_none() -> None:
+    """A function with a Python default for its input should be callable with no input.
+
+    Otherwise `await my_flow()` on `async def my_flow(name: str = 'world')`
+    would surprise the caller with INVALID_ARGUMENT — typing accepts the
+    call but the runtime would reject it.
+    """
+
+    async def greet(name: str = 'world') -> str:
+        return f'hi {name}'
+
+    action = Action(name='greet', kind=ActionKind.CUSTOM, fn=greet)
+
+    assert (await action.run(input='Alice')).response == 'hi Alice'
+    assert (await action.run(input=None)).response == 'hi world'
+    assert (await action.run()).response == 'hi world'
+
+
+@pytest.mark.asyncio
+async def test_run_defaulted_input_arg_allows_none_with_ctx() -> None:
+    """Same as above but for 2-arg (input + ctx) actions."""
+
+    async def greet(name: str = 'world', ctx: ActionRunContext | None = None) -> str:
+        return f'hi {name}'
+
+    action = Action(name='greet_ctx', kind=ActionKind.CUSTOM, fn=greet)
+
+    assert (await action.run(input='Bob')).response == 'hi Bob'
+    assert (await action.run(input=None)).response == 'hi world'
+    assert (await action.run()).response == 'hi world'
