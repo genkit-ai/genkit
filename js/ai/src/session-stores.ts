@@ -213,6 +213,12 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
 }
 
 /**
+ * Default interval (ms) for the polling fallback used by
+ * {@link FileSessionStore.onSnapshotStateChange}.
+ */
+const DEFAULT_SNAPSHOT_WATCH_POLL_INTERVAL_MS = 2000;
+
+/**
  * A Node.js file-system backed session snapshot store.
  *
  * Snapshots are stored as flat JSON files keyed by their `snapshotId`, under an
@@ -229,6 +235,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
   private maxPersistedChainLength?: number;
   private snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
   private rejectBranchingSessions: boolean;
+  private snapshotWatchPollIntervalMs: number;
 
   /**
    * @param dirPath Directory where snapshot JSON files are stored.
@@ -243,6 +250,10 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
    *   that resolves to a branched history (more than one leaf) throws
    *   `FAILED_PRECONDITION` instead of returning the latest leaf. Defaults to
    *   `false`; opt in (e.g. in dev) to surface accidental branching early.
+   * @param options.snapshotWatchPollIntervalMs Polling interval (ms) for the
+   *   {@link FileSessionStore.onSnapshotStateChange} fallback that backstops
+   *   `fs.watch` (which can miss events on some filesystems, e.g. network
+   *   mounts). Defaults to {@link DEFAULT_SNAPSHOT_WATCH_POLL_INTERVAL_MS}.
    */
   constructor(
     dirPath: string,
@@ -250,6 +261,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
       maxPersistedChainLength?: number;
       snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
       rejectBranchingSessions?: boolean;
+      snapshotWatchPollIntervalMs?: number;
     }
   ) {
     this.dirPath = path.resolve(dirPath);
@@ -257,6 +269,9 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     this.maxPersistedChainLength = options?.maxPersistedChainLength;
     this.snapshotPathPrefix = options?.snapshotPathPrefix;
     this.rejectBranchingSessions = options?.rejectBranchingSessions ?? false;
+    this.snapshotWatchPollIntervalMs =
+      options?.snapshotWatchPollIntervalMs ??
+      DEFAULT_SNAPSHOT_WATCH_POLL_INTERVAL_MS;
   }
 
   private async ensureDir(dir: string): Promise<void> {
@@ -410,5 +425,98 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     }
 
     return id;
+  }
+
+  /**
+   * Watches a single snapshot file for changes and invokes `callback` with the
+   * parsed snapshot whenever it changes.
+   *
+   * Unlike {@link InMemorySessionStore}, file-backed snapshots are frequently
+   * mutated by a *different* process (e.g. the request handler that received an
+   * abort writes `status: 'aborted'`, while a detached background worker is the
+   * one watching). Detecting that requires observing the filesystem rather than
+   * in-process `saveSnapshot` calls.
+   *
+   * Reliability comes from two layers:
+   * - `fs.watch` on the (per-tenant) prefix directory, filtered to the target
+   *   `<snapshotId>.json`. This is low latency but can miss events on some
+   *   filesystems (network mounts, certain container volumes).
+   * - A polling fallback (`snapshotWatchPollIntervalMs`) that re-reads the file
+   *   on an interval, backstopping any events `fs.watch` drops. Its timer is
+   *   `unref`'d so it never keeps the process alive on its own.
+   *
+   * Callbacks are de-duplicated by serialized content, so the noisy/duplicate
+   * events `fs.watch` emits collapse into one callback per real change.
+   * Transient read errors (e.g. a partially written file mid-rewrite, or a
+   * not-yet-created file) are swallowed; the next event/poll re-reads.
+   *
+   * @returns An unsubscribe function that stops watching and polling.
+   */
+  onSnapshotStateChange(
+    snapshotId: string,
+    callback: (snapshot: SessionSnapshot<S>) => void,
+    options?: SessionStoreOptions
+  ): void | (() => void) {
+    const dir = this.prefixDir(options);
+    fs.mkdirSync(dir, { recursive: true });
+    const fileName = `${snapshotId}.json`;
+    const filePath = path.join(dir, fileName);
+
+    let closed = false;
+    let lastSerialized: string | undefined;
+
+    // Re-read the file and fire the callback only when the content actually
+    // changed. `fs.watch` fires multiple events per write, so dedupe by
+    // serialized content.
+    const emitIfChanged = async () => {
+      if (closed) return;
+      let contents: string;
+      try {
+        contents = await fsp.readFile(filePath, 'utf-8');
+      } catch (e: unknown) {
+        // Missing file (not yet created) or a transient read error during a
+        // concurrent rewrite: ignore and wait for the next event/poll.
+        return;
+      }
+      if (closed || contents === lastSerialized) return;
+      let snapshot: SessionSnapshot<S>;
+      try {
+        snapshot = JSON.parse(contents) as SessionSnapshot<S>;
+      } catch {
+        // Partially written file mid-rewrite: skip without updating
+        // lastSerialized so the next event/poll re-reads the complete file.
+        return;
+      }
+      lastSerialized = contents;
+      callback(snapshot);
+    };
+
+    // Watch the directory (not the file) so this still works before the file
+    // exists and survives atomic rename-replace writes that swap the inode.
+    let watcher: fs.FSWatcher | undefined;
+    try {
+      watcher = fs.watch(dir, (_event, changed) => {
+        // `changed` can be null on some platforms; re-check in that case.
+        if (!changed || changed === fileName) void emitIfChanged();
+      });
+    } catch {
+      // Some environments disallow fs.watch; the polling fallback covers us.
+    }
+
+    // Polling fallback: backstops events fs.watch may drop. `unref` so the
+    // timer never keeps the process alive on its own.
+    const pollTimer = setInterval(() => {
+      void emitIfChanged();
+    }, this.snapshotWatchPollIntervalMs);
+    pollTimer.unref?.();
+
+    // Surface the current state immediately (if the file already exists).
+    void emitIfChanged();
+
+    return () => {
+      closed = true;
+      watcher?.close();
+      clearInterval(pollTimer);
+    };
   }
 }
