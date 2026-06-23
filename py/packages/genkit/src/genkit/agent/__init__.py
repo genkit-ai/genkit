@@ -37,7 +37,7 @@ from genkit._ai._agents._client import (
     DetachedTask,
 )
 from genkit._ai._agents._transports._websocket import WebSocketAgentTransport
-from genkit._ai._session import (
+from genkit._ai._agents._session import (
     InMemorySessionStore,
     Session,
     SessionStore,
@@ -45,7 +45,7 @@ from genkit._ai._session import (
     SnapshotCallback,
     SnapshotContext,
 )
-from genkit._ai._session_stores import (
+from genkit._ai._agents._session_stores import (
     BranchingSessionStore,
     FileBranchingSessionStore,
     FileLatestStateStore,

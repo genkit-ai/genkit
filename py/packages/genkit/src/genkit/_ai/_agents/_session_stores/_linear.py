@@ -30,8 +30,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._ai._json_patch import apply_json_patch, diff_json
-from genkit._ai._session import SessionStore, SnapshotAborter
 from genkit._core._error import GenkitError
 from genkit._core._typing import JsonPatchOperation, SessionSnapshot, SessionState, SnapshotEvent, SnapshotStatus
 

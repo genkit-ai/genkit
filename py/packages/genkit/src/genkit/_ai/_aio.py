@@ -43,6 +43,7 @@ from genkit._ai._agents._base import (
     define_custom_agent,
     define_prompt_agent,
 )
+from genkit._ai._agents._session import SessionStore, SnapshotCallback
 from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluatorFn,
@@ -83,7 +84,6 @@ from genkit._ai._resource import (
     ResourceOptions,
     define_resource,
 )
-from genkit._ai._session import SessionStore, SnapshotCallback
 from genkit._ai._tools import Tool, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, get_current_context
 from genkit._core._background import (

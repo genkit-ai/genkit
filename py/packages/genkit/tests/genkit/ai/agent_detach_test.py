@@ -21,7 +21,7 @@ import pytest
 from genkit._ai._agents._base import SessionRunner, _agent_input_has_payload, AgentRuntime
 from genkit._ai._aio import Genkit
 from genkit._ai._generate import generate_action
-from genkit._ai._session import InMemorySessionStore, Session
+from genkit._ai._agents._session import InMemorySessionStore, Session
 from genkit._ai._testing import define_programmable_model
 from genkit._ai._tools import ToolRunContext
 from genkit._core._action import _SENTINEL as _BIDI_SENTINEL, ActionRunContext
@@ -255,11 +255,16 @@ async def test_generate_tool_respects_abort_signal() -> None:
 
     @ai.tool(name='slowWork')
     async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
-        for _i in range(200):
+        try:
+            for _i in range(200):
+                if ctx.abort_signal.is_set():
+                    tool_saw_abort.set()
+                    raise GenkitError(status='ABORTED', message='Task aborted')
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
             if ctx.abort_signal.is_set():
                 tool_saw_abort.set()
-                raise GenkitError(status='ABORTED', message='Task aborted')
-            await asyncio.sleep(0.01)
+            raise
         return {'done': True}
 
     pm.responses.append(

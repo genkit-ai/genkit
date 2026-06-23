@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable
 from typing import Any, TypeVar
 
-from genkit._ai._session import SessionStore
+from genkit._ai._agents._session import SessionStore
 from genkit._core._action import BidiAction, BidiConnection
 from genkit._core._typing import (
     AgentInit,
@@ -44,6 +44,7 @@ class InProcessTransport:
         self,
         input: AgentInput,  # noqa: A002
         init: AgentInit[StateT],
+        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
         """Run a single turn and return the stream and output awaitables."""
         if self._conn is None:
@@ -53,6 +54,21 @@ class InProcessTransport:
         await conn.send(input)
 
         output_future = asyncio.get_event_loop().create_future()
+
+        async def watch_abort() -> None:
+            if abort_event is not None:
+                await abort_event.wait()
+                await conn.close()
+                self._conn = None
+                try:
+                    await conn.output()
+                except asyncio.CancelledError:
+                    pass
+                if not output_future.done():
+                    output_future.set_exception(asyncio.CancelledError())
+
+        abort_task = asyncio.create_task(watch_abort())
+        output_future.add_done_callback(lambda _: abort_task.cancel())
 
         async def stream_generator() -> AsyncIterator[AgentStreamChunk]:
             try:
@@ -84,6 +100,10 @@ class InProcessTransport:
                     yield chunk
                     if chunk.turn_end:
                         break
+
+                if not output_future.done():
+                    out = await conn.output()
+                    output_future.set_result(out)
             except BaseException as e:
                 if not output_future.done():
                     output_future.set_exception(e)
@@ -112,4 +132,3 @@ class InProcessTransport:
             except Exception:  # noqa: BLE001
                 self._final_output = None
             self._conn = None
-

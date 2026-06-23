@@ -16,19 +16,19 @@
 
 """Session store variants package."""
 
-from genkit._ai._session_stores.branching import (
+from genkit._ai._agents._session_stores._branching import (
     BranchingSessionStore,
     BranchRecord,
     FileBranchingSessionStore,
     InMemoryBranchingSessionStore,
 )
-from genkit._ai._session_stores.latest_state import (
+from genkit._ai._agents._session_stores._latest_state import (
     FileLatestStateStore,
     InMemoryLatestStateStore,
     LatestRecord,
     LatestStateStore,
 )
-from genkit._ai._session_stores.linear import (
+from genkit._ai._agents._session_stores._linear import (
     FileLinearSessionStore,
     InMemoryLinearSessionStore,
     LinearSessionStore,

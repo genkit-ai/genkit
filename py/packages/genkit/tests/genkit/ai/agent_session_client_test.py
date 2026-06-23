@@ -99,6 +99,7 @@ class MockAgentTransport(AgentTransport[dict[str, Any], str]):
         self,
         input: AgentInput,
         init: AgentInit[dict[str, Any]],
+        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[dict[str, Any]]]]:
         self.connect_init = init
         self.send_payloads.append(input)
@@ -324,7 +325,7 @@ async def test_attached_turn_abort() -> None:
             message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='Slow response finished'))]),
         )
 
-    pm.handle_generate = slow_response
+    pm.response_cb = slow_response
 
     async with agent.connect() as session:
         turn = session.send('Hello')
@@ -340,7 +341,7 @@ async def test_attached_turn_abort() -> None:
             await turn.output
 
         # Restore normal fast response for the second turn
-        pm.handle_generate = None
+        pm.response_cb = None
         pm.responses.append(
             ModelResponse(
                 finish_reason=FinishReason.STOP,
@@ -377,6 +378,7 @@ async def test_session_abort() -> None:
             tool_cancelled = True
             raise
 
+    # Define a simple agent that uses this tool
     ai.define_prompt(
         name='sessionAbortAgent', model='programmableModel', system='Use the slow tool.', tools=[slow_tool]
     )
@@ -389,12 +391,8 @@ async def test_session_abort() -> None:
                 role=Role.MODEL,
                 content=[
                     Part(
-                        ToolRequestPart(
-                            tool_request=ToolRequest(
-                                name='slow_tool',
-                                ref='call_1',
-                                input='blocking',
-                            )
+                        root=ToolRequestPart(
+                            tool_request=ToolRequest(name='slow_tool', ref='call_1', input='blocking')
                         )
                     )
                 ],

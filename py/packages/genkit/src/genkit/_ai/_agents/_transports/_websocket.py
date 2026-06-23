@@ -25,6 +25,7 @@ class WebSocketAgentTransport(AgentTransport[StateT, StreamT]):
         self,
         input: AgentInput,
         init: AgentInit[StateT],
+        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
         if self._ws is None:
             self._ws = await websockets.connect(self.url)

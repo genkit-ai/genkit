@@ -29,7 +29,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from genkit._ai._session import SessionStore, SnapshotAborter
+from genkit._ai._agents._session import SessionStore, SnapshotAborter
 from genkit._core._error import GenkitError
 from genkit._core._typing import SessionSnapshot, SnapshotStatus
 

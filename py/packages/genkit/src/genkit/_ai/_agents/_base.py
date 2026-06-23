@@ -21,12 +21,22 @@ import copy
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Generic, TypedDict, TypeVar
+from typing import Any, Generic, TypedDict, TypeVar
 
 from opentelemetry import trace as trace_api
 
 from genkit._ai._agents._client import AgentSession
-from genkit._ai._agents._transports.inprocess import InProcessTransport
+from genkit._ai._agents._session import (
+    Session,
+    SessionStore,
+    SnapshotAborter,
+    SnapshotCallback,
+    SnapshotContext,
+    StateT,
+    _assert_valid_session_id,
+    run_with_session,
+)
+from genkit._ai._agents._transports._inprocess import InProcessTransport
 from genkit._ai._generate import generate_action
 from genkit._ai._json_patch import _deep_equal, diff_json
 from genkit._ai._model import ModelResponseChunk as StreamModelResponseChunk
@@ -36,16 +46,6 @@ from genkit._ai._prompt import (
     _prepare,
     lookup_prompt,
     register_prompt_actions,
-)
-from genkit._ai._session import (
-    Session,
-    SessionStore,
-    SnapshotAborter,
-    SnapshotCallback,
-    SnapshotContext,
-    StateT,
-    _assert_valid_session_id,
-    run_with_session,
 )
 from genkit._ai._tools import Tool
 from genkit._core._action import (

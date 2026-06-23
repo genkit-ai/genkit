@@ -20,7 +20,7 @@ import pytest
 
 from genkit._ai._agents._base import AgentRuntime
 from genkit._ai._json_patch import diff_json
-from genkit._ai._session import Session
+from genkit._ai._agents._session import Session
 from genkit._core._typing import AgentStreamChunk, ModelResponseChunk, Part, SessionState, TextPart
 
 

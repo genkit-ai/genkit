@@ -36,12 +36,13 @@ OutputT = TypeVar('OutputT')
 
 @runtime_checkable
 class AgentTransport(Protocol, Generic[StateT, StreamT]):
-    """Protocol for executing agent interactions over a specific transport."""
+    """Interface implemented by the transport layer (local or websocket)."""
 
     async def run_turn(
         self,
         input: AgentInput,
         init: AgentInit[StateT],
+        abort_event: asyncio.Event | None = None,
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput[StateT]]]:
         """Runs a single turn and returns the stream and output awaitables."""
         ...
@@ -365,6 +366,7 @@ class AgentSession(Generic[StateT, StreamT]):
             return await self._transport.run_turn(
                 inp,
                 init,
+                abort_event=cancelled_event,
             )
 
         run_task = asyncio.create_task(_run())
@@ -375,15 +377,18 @@ class AgentSession(Generic[StateT, StreamT]):
 
         turn_output_future.add_done_callback(cleanup_sig_task)
 
-        async def stream_generator() -> AsyncIterator[AgentChunk[StreamT]]:
+        stream_queue = asyncio.Queue()
+
+        async def drive_turn() -> None:
             try:
                 stream, output_awaitable = await run_task
             except BaseException as e:
                 if not turn_output_future.done():
                     turn_output_future.set_exception(e)
+                stream_queue.put_nowait(e)
                 if watch_sig_task:
                     watch_sig_task.cancel()
-                raise e
+                return
 
             async def watch_output() -> None:
                 try:
@@ -413,7 +418,6 @@ class AgentSession(Generic[StateT, StreamT]):
                 stream_iter = stream.__aiter__()
 
                 while not cancelled_event.is_set():
-                    # Wait for either the next chunk OR the cancelled_event to fire
                     next_chunk_task = asyncio.create_task(stream_iter.__anext__())
                     wait_cancelled_task = asyncio.create_task(cancelled_event.wait())
 
@@ -421,7 +425,6 @@ class AgentSession(Generic[StateT, StreamT]):
                         {next_chunk_task, wait_cancelled_task}, return_when=asyncio.FIRST_COMPLETED
                     )
 
-                    # Cancel all pending tasks to prevent resource leaks
                     for t in pending:
                         t.cancel()
 
@@ -466,7 +469,7 @@ class AgentSession(Generic[StateT, StreamT]):
                                     session=self,
                                 )
 
-                            yield c
+                            stream_queue.put_nowait(c)
                             if chunk.turn_end:
                                 break
                         except StopAsyncIteration:
@@ -474,10 +477,23 @@ class AgentSession(Generic[StateT, StreamT]):
                         except BaseException as e:
                             if not turn_output_future.done():
                                 turn_output_future.set_exception(e)
+                            stream_queue.put_nowait(e)
                             raise e
             finally:
-                if cancelled_event.is_set():
+                stream_queue.put_nowait(None)
+                if 'watch_output_task' in locals() and not watch_output_task.done():
                     watch_output_task.cancel()
+
+        driver_task = asyncio.create_task(drive_turn())
+
+        async def stream_generator() -> AsyncIterator[AgentChunk[StreamT]]:
+            while True:
+                item = await stream_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
 
         def do_abort() -> None:
             cancelled_event.set()
@@ -485,6 +501,8 @@ class AgentSession(Generic[StateT, StreamT]):
                 turn_output_future.cancel()
             if not run_task.done():
                 run_task.cancel()
+            if not driver_task.done():
+                driver_task.cancel()
 
         turn = AgentTurn(
             stream=stream_generator(),
@@ -519,8 +537,21 @@ class AgentSession(Generic[StateT, StreamT]):
         inp.detach = True
         init = self._build_init()
 
-        _, output_awaitable = await self._transport.run_turn(inp, init)
-        raw_output = await output_awaitable
+        stream, output_awaitable = await self._transport.run_turn(inp, init)
+
+        async def drive_stream() -> None:
+            try:
+                async for _ in stream:
+                    pass
+            except Exception:  # noqa: BLE001
+                pass
+
+        drive_task = asyncio.create_task(drive_stream())
+        try:
+            raw_output = await output_awaitable
+        finally:
+            drive_task.cancel()
+
         self._apply_output(raw_output)
 
         if not raw_output.snapshot_id:

@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 
 from genkit import ModelRequest, ModelResponse
-from genkit._ai._session import Session
+from genkit._ai._agents._session import Session
 from genkit._core._model import GenerateActionOptions
 from genkit._core._typing import Artifact, Part, Role, SessionState, TextPart
 from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
