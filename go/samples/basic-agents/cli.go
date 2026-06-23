@@ -311,7 +311,7 @@ func runChat(ctx context.Context, inputCh <-chan string, a *aix.Agent[any], resu
 	if resume != nil {
 		opts = append(opts, resumeOption(ctx, a, resume))
 	}
-	conn, err := a.StreamBidi(ctx, opts...)
+	conn, err := a.Connect(ctx, opts...)
 	if err != nil {
 		return prevSessionID, fmt.Errorf("open agent %q: %w", a.Name(), err)
 	}
@@ -459,18 +459,18 @@ func summarizeLatest(ctx context.Context, a *aix.Agent[any], sessionID string) s
 // status first, so a snapshot that finalized just before the
 // subscription is observed immediately.
 //
-// The status subscription is the optional SnapshotAborter half of the
-// store contract. A store without it cannot stream background progress,
+// The status subscription is the optional SnapshotSubscriber capability of
+// the store contract. A store without it cannot stream background progress,
 // so we fall back to reading the snapshot once and returning it as-is.
 func waitForFinalize(ctx context.Context, a *aix.Agent[any], snapshotID string) (*aix.SessionSnapshot[any], error) {
 	store := a.Store()
-	aborter, ok := store.(aix.SnapshotAborter)
+	subscriber, ok := store.(aix.SnapshotSubscriber)
 	if !ok {
 		return store.GetSnapshot(ctx, snapshotID)
 	}
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	statusCh := aborter.OnSnapshotStatusChange(subCtx, snapshotID)
+	statusCh := subscriber.OnSnapshotStatusChange(subCtx, snapshotID)
 	for {
 		select {
 		case <-ctx.Done():

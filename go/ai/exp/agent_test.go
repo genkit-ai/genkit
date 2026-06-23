@@ -18,6 +18,7 @@ package exp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -30,7 +31,9 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type testState struct {
@@ -99,9 +102,9 @@ func TestAgent_BasicMultiTurn(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Turn 1.
@@ -168,9 +171,9 @@ func TestAgentConnection_Custom_TracksStreamedPatches(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Before any patch arrives, Custom() is the zero value.
@@ -217,9 +220,9 @@ func TestAgent_WithSessionStore(t *testing.T) {
 
 	af := defineCounterAgent(reg, "snapshotFlow", WithSessionStore(store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "turn1")
@@ -258,6 +261,122 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	}
 }
 
+// spanCollector is a minimal in-memory sdktrace.SpanExporter that records
+// finished spans so a test can assert on their attributes.
+type spanCollector struct {
+	mu    sync.Mutex
+	spans []sdktrace.ReadOnlySpan
+}
+
+func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spans = append(c.spans, spans...)
+	return nil
+}
+
+func (c *spanCollector) Shutdown(context.Context) error { return nil }
+
+// byName returns the first recorded span with the given name, or nil.
+func (c *spanCollector) byName(name string) sdktrace.ReadOnlySpan {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.spans {
+		if s.Name() == name {
+			return s
+		}
+	}
+	return nil
+}
+
+// collectSpans registers an in-memory exporter on the global tracer provider
+// (the one tracing.RunInNewSpan writes through) for the duration of the test.
+// The SimpleSpanProcessor exports each span synchronously as it ends, so by
+// the time a turn completes its span is already recorded.
+func collectSpans(t *testing.T) *spanCollector {
+	t.Helper()
+	c := &spanCollector{}
+	sp := sdktrace.NewSimpleSpanProcessor(c)
+	tp := tracing.TracerProvider()
+	tp.RegisterSpanProcessor(sp)
+	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	return c
+}
+
+// spanAttr returns the string value of the named span attribute, if present.
+func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
+// TestAgent_RootSpanCarriesSessionID verifies the agent's root action span is
+// stamped with the invocation's session ID under
+// "genkit:metadata:agent:sessionId", and that the per-turn spans are left
+// untagged. This matches the JS agent, which tags the action span once via
+// setCustomMetadataAttributes({'agent:sessionId': ...}) rather than each turn.
+func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+	spans := collectSpans(t)
+
+	const agentName = "tracedCounterFlow"
+	af := defineCounterAgent(reg, agentName)
+
+	conn, err := af.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	sendTurn(t, conn, "turn1")
+	sendTurn(t, conn, "turn2")
+	conn.Close()
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output failed: %v", err)
+	}
+	if out.SessionID == "" {
+		t.Fatal("expected a non-empty session ID on the output")
+	}
+
+	const attrKey = "genkit:metadata:agent:sessionId"
+
+	// The root action span (named for the agent) carries the session ID.
+	root := spans.byName(agentName)
+	if root == nil {
+		t.Fatalf("missing root action span %q", agentName)
+	}
+	got, ok := spanAttr(root, attrKey)
+	if !ok {
+		t.Fatalf("root span %q: missing attribute %q", agentName, attrKey)
+	}
+	if got != out.SessionID {
+		t.Errorf("root span %q: %s = %q, want %q", agentName, attrKey, got, out.SessionID)
+	}
+
+	// The per-turn spans are named "runTurn-N" (1-indexed) with type flowStep
+	// and no subtype, matching JS's run(); the session ID lives on the root
+	// span only.
+	for _, turn := range []string{"runTurn-1", "runTurn-2"} {
+		span := spans.byName(turn)
+		if span == nil {
+			t.Fatalf("missing span %q", turn)
+		}
+		if v, ok := spanAttr(span, attrKey); ok {
+			t.Errorf("turn span %q: unexpected attribute %q = %q (want it on the root span only)", turn, attrKey, v)
+		}
+		if v, _ := spanAttr(span, "genkit:type"); v != "flowStep" {
+			t.Errorf("turn span %q: genkit:type = %q, want %q", turn, v, "flowStep")
+		}
+		if v, ok := spanAttr(span, "genkit:metadata:subtype"); ok {
+			t.Errorf("turn span %q: unexpected genkit:metadata:subtype = %q (JS's run() sets no subtype)", turn, v)
+		}
+	}
+}
+
 func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -266,9 +385,9 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	af := defineCounterAgent(reg, "resumeFlow", WithSessionStore(store))
 
 	// First invocation: create a snapshot.
-	conn1, err := af.StreamBidi(ctx)
+	conn1, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 	sendText(t, conn1, "first message")
 	for chunk, err := range conn1.Receive() {
@@ -289,9 +408,9 @@ func TestAgent_ResumeFromSnapshot(t *testing.T) {
 	}
 
 	// Second invocation: resume from snapshot.
-	conn2, err := af.StreamBidi(ctx, WithSnapshotID[testState](resp1.SnapshotID))
+	conn2, err := af.Connect(ctx, WithSnapshotID[testState](resp1.SnapshotID))
 	if err != nil {
-		t.Fatalf("StreamBidi with snapshot failed: %v", err)
+		t.Fatalf("Connect with snapshot failed: %v", err)
 	}
 	sendTurn(t, conn2, "continued message")
 	conn2.Close()
@@ -341,9 +460,9 @@ func TestAgent_ClientManagedState(t *testing.T) {
 		Custom: testState{Counter: 5},
 	}
 
-	conn, err := af.StreamBidi(ctx, WithState(clientState))
+	conn, err := af.Connect(ctx, WithState(clientState))
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "new message")
@@ -403,9 +522,9 @@ func TestAgent_Artifacts(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "generate code")
@@ -512,9 +631,9 @@ func TestAgent_InputMessageCloned(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sent := ai.NewUserTextMessage("original")
@@ -638,9 +757,9 @@ func TestAgent_SendMessage(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Send a message via SendMessage.
@@ -686,9 +805,9 @@ func TestAgent_SessionContext(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "test")
@@ -712,9 +831,9 @@ func TestAgent_ErrorInTurn(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "trigger error")
@@ -802,9 +921,9 @@ func TestAgent_FailedTurn_ClientManagedReturnsLastGoodState(t *testing.T) {
 
 	af := defineLastGoodTestAgent(reg, "lastGoodClient")
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	for _, text := range []string{"one", "two", "boom"} {
 		sendText(t, conn, text)
@@ -899,9 +1018,9 @@ func TestAgent_FailedTurn_ServerManagedReturnsLastTurnSnapshot(t *testing.T) {
 
 	af := defineLastGoodTestAgent(reg, "recoveryDedup", WithSessionStore[testState](store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turn0 := sendTurn(t, conn, "one")
 	if turn0.SnapshotID == "" {
@@ -989,9 +1108,9 @@ func TestAgent_FailedTurn_EmitsFailedTurnEnd(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 
@@ -1040,9 +1159,9 @@ func TestAgent_CustomAgentContinuesAfterFailedTurn(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	for _, text := range []string{"one", "boom", "two"} {
 		sendText(t, conn, text)
@@ -1136,6 +1255,63 @@ func TestAgent_InitFailure_FailsActionWithStatus(t *testing.T) {
 	}
 }
 
+// TestAgent_JSONInitRejectsUnknownFields verifies that the agent's JSON init
+// paths reject a payload carrying a field the inferred AgentInit schema does not
+// declare, surfacing INVALID_ARGUMENT rather than silently dropping it and
+// starting a fresh session as if nothing were wrong. This exercises the real
+// inferred init schema end to end (the core mechanism is covered by
+// TestBidiJSONInitRejectsUnknownFields).
+func TestAgent_JSONInitRejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+	reg := newTestRegistry(t)
+
+	echo := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+			return nil, nil
+		})
+	}
+	af := DefineCustomAgent(reg, "jsonInitUnknownFields", echo)
+
+	assertRejected := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected INVALID_ARGUMENT for unknown init field, got nil")
+		}
+		if ge := core.AsGenkitError(err); ge.Status != core.INVALID_ARGUMENT {
+			t.Errorf("status = %q, want %q (err: %v)", ge.Status, core.INVALID_ARGUMENT, err)
+		}
+	}
+
+	badInit := json.RawMessage(`{"bogus":true}`)
+
+	t.Run("ConnectJSON", func(t *testing.T) {
+		_, err := af.ConnectJSON(ctx, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	t.Run("RunBidiJSON", func(t *testing.T) {
+		input, err := json.Marshal(&AgentInput{Message: ai.NewUserTextMessage("hi")})
+		if err != nil {
+			t.Fatalf("marshal input: %v", err)
+		}
+		_, err = af.RunBidiJSON(ctx, input, nil, &api.BidiJSONOptions{Init: badInit})
+		assertRejected(t, err)
+	})
+
+	// An empty init object declares no fields, so it passes validation and
+	// starts a fresh session.
+	t.Run("empty init accepted", func(t *testing.T) {
+		conn, err := af.ConnectJSON(ctx, &api.BidiJSONOptions{Init: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatalf("ConnectJSON with empty init: %v", err)
+		}
+		conn.Close()
+		if _, err := conn.Output(); err != nil {
+			t.Fatalf("Output: %v", err)
+		}
+	})
+}
+
 func TestAgent_SetMessages(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
@@ -1150,9 +1326,9 @@ func TestAgent_SetMessages(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "original")
@@ -1203,9 +1379,9 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Two turns.
@@ -1268,9 +1444,9 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendText(t, conn, "hello")
@@ -1351,9 +1527,9 @@ func TestPromptAgent_Basic(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "testPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Turn 1.
@@ -1426,9 +1602,9 @@ func TestPromptAgent_MultiTurnHistory(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "historyPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	// Turn 1.
@@ -1502,9 +1678,9 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "hello")
@@ -1518,9 +1694,9 @@ func TestPromptAgent_SnapshotResumePreservesHistory(t *testing.T) {
 		t.Fatal("expected snapshot ID")
 	}
 
-	conn2, err := af.StreamBidi(ctx, WithSnapshotID[testState](resp.SnapshotID))
+	conn2, err := af.Connect(ctx, WithSnapshotID[testState](resp.SnapshotID))
 	if err != nil {
-		t.Fatalf("StreamBidi with snapshot failed: %v", err)
+		t.Fatalf("Connect with snapshot failed: %v", err)
 	}
 
 	sendTurn(t, conn2, "continued")
@@ -1625,9 +1801,9 @@ func TestPromptAgent_ToolLoopMessages(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "toolPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	sendTurn(t, conn, "go")
@@ -2014,9 +2190,9 @@ func TestPromptAgent_RejectsResumeForUnrequestedTool(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "plainPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Turn 1: a plain text reply, so no tool request lands in history.
@@ -2092,9 +2268,9 @@ func TestAgent_MultiTurnSnapshot(t *testing.T) {
 	af := defineCounterAgent(reg, "multiDedupFlow", WithSessionStore(store))
 
 	// Multi-turn: one snapshot per turn; the output reuses the last one.
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	var snapshotIDs []string
@@ -2199,9 +2375,9 @@ func TestAgent_FnPanicResolvesAsFailedOutput(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "trigger")
 
@@ -2252,9 +2428,9 @@ func TestAgent_CancelDuringStreamReleasesGoroutine(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "go")
 
@@ -2354,9 +2530,9 @@ func TestAgent_TurnEnd_CarriesSnapshotID(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	var observed []TurnEnd
@@ -2416,9 +2592,9 @@ func TestAgent_Detach_SuspendsTurnSnapshotsAndProcessesQueue(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Drain stream chunks in the background.
@@ -2501,9 +2677,9 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Background drainer.
@@ -2563,9 +2739,9 @@ func TestAgent_Detach_RequiresStore(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	if err := conn.Detach(); err != nil {
 		t.Fatalf("Detach send: %v", err)
@@ -2615,9 +2791,9 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Drain chunks so the responder isn't blocked.
@@ -2672,6 +2848,257 @@ func TestAgent_Detach_PendingThenComplete(t *testing.T) {
 	}
 }
 
+// getSnapshotViaAction invokes the agent's getSnapshot companion action the
+// way a remote client (or the Dev UI) would. Unlike a direct store read it
+// resolves compute-on-read status such as expired.
+func getSnapshotViaAction[State any](t *testing.T, reg *registry.Registry, agentName, snapshotID string) *SessionSnapshot[State] {
+	t.Helper()
+	action := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[State], struct{}](
+		reg, api.ActionTypeAgentSnapshot, agentName)
+	if action == nil {
+		t.Fatalf("getSnapshot action not registered for %q", agentName)
+	}
+	resp, err := action.Run(context.Background(), &GetSnapshotRequest{SnapshotID: snapshotID}, nil)
+	if err != nil {
+		t.Fatalf("getSnapshot action: %v", err)
+	}
+	return resp
+}
+
+// savePendingWithHeartbeat writes a pending snapshot carrying the given
+// heartbeat (nil for none) directly into the store, returning its ID. It
+// stands in for an orphaned detached invocation whose worker died without
+// finalizing the row.
+func savePendingWithHeartbeat(t *testing.T, store *testInMemStore[testState], sessionID string, heartbeat *time.Time) string {
+	t.Helper()
+	now := time.Now()
+	saved, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Status:      SnapshotStatusPending,
+				HeartbeatAt: heartbeat,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				State:       &SessionState[testState]{SessionID: sessionID, Custom: testState{Counter: 7}},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot pending: %v", err)
+	}
+	return saved.SnapshotID
+}
+
+// defineNoopHeartbeatAgent registers a trivial server-managed agent so its
+// getSnapshot companion action exists; the heartbeat compute-on-read tests
+// drive that action against snapshots they write into the store directly.
+func defineNoopHeartbeatAgent(t *testing.T, reg *registry.Registry, name string, store *testInMemStore[testState]) {
+	t.Helper()
+	DefineCustomAgent(reg, name,
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+}
+
+func TestAgent_Detach_StampsHeartbeatOnPendingSnapshot(t *testing.T) {
+	// A detached invocation's pending snapshot carries an initial heartbeat,
+	// which the background refresh loop later advances and a reader uses to
+	// tell a live worker from a dead one.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+
+	af := DefineCustomAgent(reg, "heartbeatStamp",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				select {
+				case entered <- struct{}{}:
+				case <-ctx.Done():
+				}
+				<-release
+				sess.AddMessages(ai.NewModelTextMessage("done"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+	)
+
+	conn, err := af.Connect(context.Background())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	drainInBackground(conn)
+
+	sendText(t, conn, "go")
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flow did not enter work phase")
+	}
+
+	out, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected snapshot ID after detach")
+	}
+
+	pending, err := store.GetSnapshot(context.Background(), out.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot pending: %v", err)
+	}
+	if pending == nil {
+		t.Fatal("pending snapshot not written")
+	}
+	if pending.Status != SnapshotStatusPending {
+		t.Errorf("status = %q, want %q", pending.Status, SnapshotStatusPending)
+	}
+	if pending.HeartbeatAt == nil {
+		t.Error("pending detached snapshot should carry a heartbeatAt")
+	}
+
+	// Release; the finalizer stops the heartbeat and rewrites the row.
+	close(release)
+	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
+}
+
+func TestAgent_GetSnapshotAction_StaleHeartbeatReportsExpired(t *testing.T) {
+	// An orphaned pending snapshot (heartbeat older than the expiry timeout) is
+	// surfaced as expired on read, while the raw store row stays pending:
+	// compute-on-read never writes the expired status back.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineNoopHeartbeatAgent(t, reg, "heartbeatExpired", store)
+
+	stale := time.Now().Add(-2 * defaultHeartbeatTimeout)
+	id := savePendingWithHeartbeat(t, store, "sess-expired", &stale)
+
+	raw, err := store.GetSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if raw.Status != SnapshotStatusPending {
+		t.Errorf("raw store status = %q, want %q (compute-on-read must not write back)", raw.Status, SnapshotStatusPending)
+	}
+
+	viaAction := getSnapshotViaAction[testState](t, reg, "heartbeatExpired", id)
+	if viaAction.Status != SnapshotStatusExpired {
+		t.Errorf("getSnapshot status = %q, want %q", viaAction.Status, SnapshotStatusExpired)
+	}
+}
+
+func TestAgent_GetSnapshotAction_FreshHeartbeatStaysPending(t *testing.T) {
+	// A pending snapshot whose heartbeat is fresh is reported as pending: its
+	// worker is presumed alive.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineNoopHeartbeatAgent(t, reg, "heartbeatFresh", store)
+
+	fresh := time.Now()
+	id := savePendingWithHeartbeat(t, store, "sess-fresh", &fresh)
+
+	viaAction := getSnapshotViaAction[testState](t, reg, "heartbeatFresh", id)
+	if viaAction.Status != SnapshotStatusPending {
+		t.Errorf("getSnapshot status = %q, want %q", viaAction.Status, SnapshotStatusPending)
+	}
+}
+
+func TestAgent_GetSnapshotAction_NoHeartbeatStaysPending(t *testing.T) {
+	// A pending snapshot that has not written a first heartbeat yet is not
+	// expired: the beat may simply not have fired.
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	defineNoopHeartbeatAgent(t, reg, "heartbeatNone", store)
+
+	id := savePendingWithHeartbeat(t, store, "sess-noheartbeat", nil)
+
+	viaAction := getSnapshotViaAction[testState](t, reg, "heartbeatNone", id)
+	if viaAction.Status != SnapshotStatusPending {
+		t.Errorf("getSnapshot status = %q, want %q", viaAction.Status, SnapshotStatusPending)
+	}
+}
+
+func TestAgent_Heartbeat_BeatAdvancesHeartbeatNotUpdatedAt(t *testing.T) {
+	// A beat advances the liveness timestamp but must NOT advance UpdatedAt: a
+	// heartbeat is not a state change, which is the whole reason HeartbeatAt is
+	// a field of its own rather than reusing UpdatedAt.
+	store := newTestInMemStore[testState]()
+	old := time.Now().Add(-time.Hour)
+	id := savePendingWithHeartbeat(t, store, "sess", &old)
+	before, err := store.GetSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+
+	if err := beatHeartbeat(context.Background(), store, id); err != nil {
+		t.Fatalf("beatHeartbeat: %v", err)
+	}
+
+	after, err := store.GetSnapshot(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if after.HeartbeatAt == nil || !after.HeartbeatAt.After(*before.HeartbeatAt) {
+		t.Errorf("HeartbeatAt did not advance: before=%v after=%v", before.HeartbeatAt, after.HeartbeatAt)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("UpdatedAt changed on heartbeat: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+	}
+	if after.Status != SnapshotStatusPending {
+		t.Errorf("status = %q, want %q", after.Status, SnapshotStatusPending)
+	}
+}
+
+func TestAgent_Heartbeat_BeatIsNoopOnTerminalSnapshot(t *testing.T) {
+	// A stray beat against a settled snapshot must never resurrect or mutate
+	// it: the mutator's pending-guard returns nil, so no write happens.
+	store := newTestInMemStore[testState]()
+	saved, err := store.SaveSnapshot(context.Background(), "",
+		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+			return &SessionSnapshot[testState]{
+				Status: SnapshotStatusCompleted,
+				State:  &SessionState[testState]{SessionID: "sess"},
+			}, nil
+		})
+	if err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	before, err := store.GetSnapshot(context.Background(), saved.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+
+	if err := beatHeartbeat(context.Background(), store, saved.SnapshotID); err != nil {
+		t.Fatalf("beatHeartbeat: %v", err)
+	}
+
+	after, err := store.GetSnapshot(context.Background(), saved.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if after.Status != SnapshotStatusCompleted {
+		t.Errorf("status = %q, want %q (beat must not change it)", after.Status, SnapshotStatusCompleted)
+	}
+	if after.HeartbeatAt != nil {
+		t.Errorf("beat stamped a heartbeat on a terminal snapshot: %v", after.HeartbeatAt)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("beat bumped UpdatedAt on a terminal snapshot: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
 func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 	// SendArtifact must behave the same way regardless of whether detach
 	// has landed: the artifact is added to the session and shows up in
@@ -2706,9 +3133,9 @@ func TestAgent_Detach_SendArtifactPostDetachLandsInSnapshot(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -2766,9 +3193,9 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -2807,7 +3234,7 @@ func TestAgent_Detach_FlowErrorsBecomesError(t *testing.T) {
 }
 
 func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
-	// Client detaches, then calls AbortSnapshot. The store's status
+	// Client detaches, then calls abortPendingSnapshot. The store's status
 	// subscriber notifies the runtime, which cancels the work context, and
 	// the finalizer rewrites the snapshot with status=aborted.
 	reg := newTestRegistry(t)
@@ -2829,9 +3256,9 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -2851,12 +3278,12 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 
 	// Abort via the store. The local caller already has the store
 	// reference from WithSessionStore.
-	status, err := store.AbortSnapshot(context.Background(), out.SnapshotID)
+	status, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID)
 	if err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 	if status != SnapshotStatusAborted {
-		t.Errorf("AbortSnapshot status = %q, want aborted", status)
+		t.Errorf("abortPendingSnapshot status = %q, want aborted", status)
 	}
 
 	// The subscriber wakes the runtime, cancels work, and the finalizer
@@ -2865,7 +3292,7 @@ func TestAgent_Detach_AbortSnapshotStopsFlow(t *testing.T) {
 		return s.Status == SnapshotStatusAborted && s.UpdatedAt.After(s.CreatedAt)
 	})
 	// The flow only blocked on ctx — no state mutation expected. State
-	// may be nil (when AbortSnapshot landed before the finalizer's write
+	// may be nil (when abortPendingSnapshot landed before the finalizer's write
 	// could populate it) or a populated zero-value struct.
 	if finalSnap.State != nil && finalSnap.State.Custom.Counter != 0 {
 		t.Errorf("unexpected counter value in aborted snapshot: %d", finalSnap.State.Custom.Counter)
@@ -2888,9 +3315,9 @@ func TestAgent_Detach_NormalCompletionStillEmitsTurnEnd(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 
@@ -2940,9 +3367,9 @@ func TestAgent_Detach_ClientDisconnectBeforeDetachCancels(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -3088,6 +3515,161 @@ func TestAgent_GetSnapshotAction_ReturnsTransformedState(t *testing.T) {
 	}
 }
 
+// assertGenkitStatus fails the test unless err is a *core.GenkitError with the
+// given status.
+func assertGenkitStatus(t *testing.T, err error, want core.StatusName, label string) {
+	t.Helper()
+	var ge *core.GenkitError
+	if !errors.As(err, &ge) {
+		t.Errorf("%s: expected *core.GenkitError, got %v", label, err)
+		return
+	}
+	if ge.Status != want {
+		t.Errorf("%s: status = %q, want %q", label, ge.Status, want)
+	}
+}
+
+// TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot is the crux of the
+// agent-as-facade design: reads through the agent apply the configured
+// [WithStateTransform], while a direct store read returns raw state. A caller
+// that reaches past the agent into the store therefore sees unredacted data,
+// which is exactly why GetSnapshot/GetLatestSnapshot live on the agent.
+func TestAgent_GetSnapshot_FacadeTransformsRawStoreDoesNot(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+
+	transform := func(_ context.Context, s *SessionState[testState]) *SessionState[testState] {
+		for _, msg := range s.Messages {
+			for _, p := range msg.Content {
+				if p.Text != "" {
+					p.Text = strings.ReplaceAll(p.Text, "secret", "[REDACTED]")
+				}
+			}
+		}
+		return s
+	}
+
+	af := DefineCustomAgent(reg, "facadeTransform",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			return nil, sess.Run(ctx, func(ctx context.Context, input *AgentInput) (*TurnResult, error) {
+				sess.AddMessages(ai.NewModelTextMessage("the secret is out"))
+				return nil, nil
+			})
+		},
+		WithSessionStore(store),
+		WithStateTransform[testState](transform),
+	)
+
+	ctx := context.Background()
+	out, err := af.RunText(ctx, "tell me the secret")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+
+	hasSecret := func(snap *SessionSnapshot[testState]) bool {
+		for _, msg := range snap.State.Messages {
+			for _, p := range msg.Content {
+				if strings.Contains(p.Text, "secret") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	// Through the agent: transformed (redacted).
+	viaAgent, err := af.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("agent.GetSnapshot: %v", err)
+	}
+	if hasSecret(viaAgent) {
+		t.Error("agent.GetSnapshot returned untransformed state (found 'secret')")
+	}
+
+	// GetLatestSnapshot resolves the same row by session and also transforms.
+	viaLatest, err := af.GetLatestSnapshot(ctx, out.SessionID)
+	if err != nil {
+		t.Fatalf("agent.GetLatestSnapshot: %v", err)
+	}
+	if viaLatest.SnapshotID != out.SnapshotID {
+		t.Errorf("GetLatestSnapshot id = %q, want %q", viaLatest.SnapshotID, out.SnapshotID)
+	}
+	if hasSecret(viaLatest) {
+		t.Error("agent.GetLatestSnapshot returned untransformed state (found 'secret')")
+	}
+
+	// Directly via the store: raw, untransformed. This contrast is the point.
+	raw, err := store.GetSnapshot(ctx, out.SnapshotID)
+	if err != nil {
+		t.Fatalf("store.GetSnapshot: %v", err)
+	}
+	if !hasSecret(raw) {
+		t.Error("raw store.GetSnapshot should retain the original 'secret' text")
+	}
+}
+
+// TestAgent_SnapshotFacade_Errors covers the guard rails on the agent facade:
+// a client-managed agent has no store, and empty IDs / missing rows are
+// rejected before touching the store.
+func TestAgent_SnapshotFacade_Errors(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+
+	// Client-managed agent (no store): every facade method is FAILED_PRECONDITION.
+	client := defineCounterAgent(reg, "facadeClient")
+	_, e1 := client.GetSnapshot(ctx, "x")
+	assertGenkitStatus(t, e1, core.FAILED_PRECONDITION, "client GetSnapshot")
+	_, e2 := client.GetLatestSnapshot(ctx, "x")
+	assertGenkitStatus(t, e2, core.FAILED_PRECONDITION, "client GetLatestSnapshot")
+	_, e3 := client.AbortSnapshot(ctx, "x")
+	assertGenkitStatus(t, e3, core.FAILED_PRECONDITION, "client abortPendingSnapshot")
+
+	// Server-managed agent: empty IDs are INVALID_ARGUMENT, missing rows NOT_FOUND.
+	store := newTestInMemStore[testState]()
+	server := defineCounterAgent(reg, "facadeServer", WithSessionStore(store))
+	_, e4 := server.GetSnapshot(ctx, "")
+	assertGenkitStatus(t, e4, core.INVALID_ARGUMENT, "empty GetSnapshot")
+	_, e5 := server.GetLatestSnapshot(ctx, "")
+	assertGenkitStatus(t, e5, core.INVALID_ARGUMENT, "empty GetLatestSnapshot")
+	_, e6 := server.AbortSnapshot(ctx, "")
+	assertGenkitStatus(t, e6, core.INVALID_ARGUMENT, "empty abortPendingSnapshot")
+	_, e7 := server.GetSnapshot(ctx, "missing")
+	assertGenkitStatus(t, e7, core.NOT_FOUND, "missing GetSnapshot")
+}
+
+// TestAgent_AbortSnapshot_Method verifies the in-process convenience flips a
+// pending row to aborted through the store, mirroring the package-level
+// [abortPendingSnapshot] and the abortSnapshot companion action.
+func TestAgent_AbortSnapshot_Method(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+	store := newTestInMemStore[testState]()
+	af := defineCounterAgent(reg, "facadeAbort", WithSessionStore(store))
+
+	// Seed a pending row the way a detached turn would.
+	pending, err := store.SaveSnapshot(ctx, "", func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{SessionID: "s1", Status: SnapshotStatusPending}, nil
+	})
+	if err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+
+	status, err := af.AbortSnapshot(ctx, pending.SnapshotID)
+	if err != nil {
+		t.Fatalf("agent.AbortSnapshot: %v", err)
+	}
+	if status != SnapshotStatusAborted {
+		t.Errorf("returned status = %q, want aborted", status)
+	}
+	got, err := store.GetSnapshot(ctx, pending.SnapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if got.Status != SnapshotStatusAborted {
+		t.Errorf("stored status = %q, want aborted", got.Status)
+	}
+}
+
 // TestAgent_GetSnapshotAction_ReturnsFinishReason verifies the remote
 // getSnapshot companion action surfaces the persisted finish reason, so a
 // non-Go client or the Dev UI polling a detached/background invocation can
@@ -3194,12 +3776,15 @@ func TestAgent_GetSnapshotAction_BySessionID(t *testing.T) {
 	// The session-ID lookup returns the latest row whatever its status, so a
 	// reconnecting client can observe a failed/pending tip (unlike resume,
 	// which rejects it).
+	failedAt := time.Now()
 	failed, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID:    out1.SessionID,
 			ParentID:     out2.SnapshotID,
 			Status:       SnapshotStatusFailed,
 			FinishReason: AgentFinishReasonFailed,
+			CreatedAt:    failedAt,
+			UpdatedAt:    failedAt,
 		}, nil
 	})
 	if err != nil {
@@ -3423,7 +4008,7 @@ func (s wrongSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	return s.SessionStore.GetSnapshot(ctx, s.snapshotID)
 }
 
-// minimalStore is a SessionStore that does NOT implement SnapshotAborter.
+// minimalStore is a SessionStore that does NOT implement SnapshotSubscriber.
 // Used to verify the abort action stays unregistered for stores that
 // lack the capability.
 type minimalStore[State any] struct{}
@@ -3570,11 +4155,11 @@ func TestAgent_AgentMetadata_StateSchema(t *testing.T) {
 
 func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 	// Verify the abort companion action is only registered when the
-	// store implements SnapshotAborter. The getSnapshot action is
+	// store implements SnapshotSubscriber. The getSnapshot action is
 	// registered regardless.
 	t.Run("aborter capability → both registered", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		store := newTestInMemStore[testState]() // implements SnapshotAborter
+		store := newTestInMemStore[testState]() // implements SnapshotSubscriber
 		DefineCustomAgent(reg, "fullCaps",
 			func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
 				return nil, nil
@@ -3589,7 +4174,7 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "fullCaps")
 		if abortAction == nil {
-			t.Error("abortSnapshot action should be registered when store implements SnapshotAborter")
+			t.Error("abortSnapshot action should be registered when store implements SnapshotSubscriber")
 		}
 	})
 
@@ -3604,12 +4189,12 @@ func TestAgent_AbortAction_GatedOnCapabilities(t *testing.T) {
 		getAction := core.ResolveActionFor[*GetSnapshotRequest, *SessionSnapshot[testState], struct{}](
 			reg, api.ActionTypeAgentSnapshot, "minCaps")
 		if getAction == nil {
-			t.Error("getSnapshot action should be registered even when store lacks SnapshotAborter")
+			t.Error("getSnapshot action should be registered even when store lacks SnapshotSubscriber")
 		}
 		abortAction := core.ResolveActionFor[*AbortSnapshotRequest, *AbortSnapshotResponse, struct{}](
 			reg, api.ActionTypeAgentAbort, "minCaps")
 		if abortAction != nil {
-			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotAborter")
+			t.Error("abortSnapshot action should NOT be registered when store lacks SnapshotSubscriber")
 		}
 	})
 }
@@ -3677,8 +4262,8 @@ func TestAgent_Store(t *testing.T) {
 		}
 		// The returned store is usable directly, and store-specific
 		// capabilities are reachable by type assertion.
-		if _, ok := af.Store().(SnapshotAborter); !ok {
-			t.Error("expected the configured store to satisfy SnapshotAborter")
+		if _, ok := af.Store().(SnapshotSubscriber); !ok {
+			t.Error("expected the configured store to satisfy SnapshotSubscriber")
 		}
 	})
 
@@ -3891,9 +4476,9 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 
 	// First invocation: detach to write a pending snapshot, then wait
 	// for finalize.
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "turn 1")
@@ -3926,29 +4511,34 @@ func TestAgent_ResumeFromFinalizedDetachedSnapshot(t *testing.T) {
 	}
 }
 
-func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
+func TestAbortPendingSnapshot_AtomicAndIdempotent(t *testing.T) {
+	// Aborting is an ordinary SaveSnapshot flip (abortPendingSnapshot); this
+	// exercises its CAS semantics against the store's atomic read-mutate-write.
 	ctx := context.Background()
 	store := newTestInMemStore[testState]()
 
 	// Abort on missing snapshot returns empty status, no error.
-	if status, err := store.AbortSnapshot(ctx, "nope"); err != nil || status != "" {
-		t.Fatalf("AbortSnapshot(missing) = %q, %v; want \"\", nil", status, err)
+	if status, err := abortPendingSnapshot(ctx, store, "nope"); err != nil || status != "" {
+		t.Fatalf("abort(missing) = %q, %v; want \"\", nil", status, err)
 	}
 
 	// Pending → aborted, UpdatedAt advances (verified via GetSnapshot).
+	seedNow := time.Now()
 	pending, err := store.SaveSnapshot(ctx, "snap-cas",
 		func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 			return &SessionSnapshot[testState]{
-				Status: SnapshotStatusPending,
+				Status:    SnapshotStatusPending,
+				CreatedAt: seedNow,
+				UpdatedAt: seedNow,
 			}, nil
 		})
 	if err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 	time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
-	status, err := store.AbortSnapshot(ctx, "snap-cas")
+	status, err := abortPendingSnapshot(ctx, store, "snap-cas")
 	if err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abort: %v", err)
 	}
 	if status != SnapshotStatusAborted {
 		t.Errorf("status after first abort = %q, want aborted", status)
@@ -3963,9 +4553,9 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 
 	// Idempotent: second abort returns aborted, no error, no further mutation.
 	firstUpdate := afterFirst.UpdatedAt
-	status2, err := store.AbortSnapshot(ctx, "snap-cas")
+	status2, err := abortPendingSnapshot(ctx, store, "snap-cas")
 	if err != nil {
-		t.Fatalf("AbortSnapshot (second): %v", err)
+		t.Fatalf("abort (second): %v", err)
 	}
 	if status2 != SnapshotStatusAborted {
 		t.Errorf("status after second abort = %q, want aborted", status2)
@@ -3987,9 +4577,9 @@ func TestInMemorySessionStore_AbortSnapshot_AtomicAndIdempotent(t *testing.T) {
 		}); err != nil {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
-	status3, err := store.AbortSnapshot(ctx, "snap-complete")
+	status3, err := abortPendingSnapshot(ctx, store, "snap-complete")
 	if err != nil {
-		t.Fatalf("AbortSnapshot on complete: %v", err)
+		t.Fatalf("abort on complete: %v", err)
 	}
 	if status3 != SnapshotStatusCompleted {
 		t.Errorf("abort on complete returned status=%q, want completed", status3)
@@ -4025,9 +4615,9 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 
@@ -4043,8 +4633,8 @@ func TestAgent_Detach_FinalizeRespectsConcurrentAbort(t *testing.T) {
 	}
 
 	// Externally abort before releasing fn.
-	if _, err := store.AbortSnapshot(context.Background(), out.SnapshotID); err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+	if _, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID); err != nil {
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 
 	close(fnRelease)
@@ -4098,8 +4688,8 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 	}
 
 	// Abort flips status; subscriber observes aborted.
-	if _, err := store.AbortSnapshot(ctx, "snap-sub"); err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+	if _, err := abortPendingSnapshot(ctx, store, "snap-sub"); err != nil {
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 	select {
 	case status, ok := <-statusCh:
@@ -4126,7 +4716,7 @@ func TestInMemorySessionStore_OnSnapshotStatusChange(t *testing.T) {
 }
 
 func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
-	// Calling AbortSnapshot on an already-terminal snapshot is a no-op
+	// Calling abortPendingSnapshot on an already-terminal snapshot is a no-op
 	// that returns the existing status.
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
@@ -4147,9 +4737,9 @@ func TestAgent_AbortSnapshot_NoOpOnTerminal(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 
-	status, err := store.AbortSnapshot(ctx, out.SnapshotID)
+	status, err := abortPendingSnapshot(ctx, store, out.SnapshotID)
 	if err != nil {
-		t.Fatalf("AbortSnapshot: %v", err)
+		t.Fatalf("abortPendingSnapshot: %v", err)
 	}
 	if status != SnapshotStatusCompleted {
 		t.Errorf("expected status=%q (existing terminal), got %q", SnapshotStatusCompleted, status)
@@ -4285,9 +4875,9 @@ func TestAgent_FinishReason_TurnAndInvocation(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 
@@ -4332,9 +4922,9 @@ func TestAgent_FinishReason_OmittedWhenNil(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != "" {
@@ -4370,9 +4960,9 @@ func TestAgent_FinishReason_InvocationOverride(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != AgentFinishReasonStop {
@@ -4409,9 +4999,9 @@ func TestAgent_FinishReason_MultiTurnDistinct(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	var got []AgentFinishReason
@@ -4454,9 +5044,9 @@ func TestPromptAgent_ForwardsFinishReason(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "lengthPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	turnEnd := sendTurn(t, conn, "hi")
 	if turnEnd.FinishReason != AgentFinishReasonLength {
@@ -4505,9 +5095,9 @@ func TestAgent_Detach_BackgroundWorkSurvivesActionReturn(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(ctx)
+		conn, err := af.Connect(ctx)
 		if err != nil {
-			t.Fatalf("iteration %d: StreamBidi: %v", i, err)
+			t.Fatalf("iteration %d: Connect: %v", i, err)
 		}
 		drainInBackground(conn)
 		if err := conn.SendText("go"); err != nil {
@@ -4562,9 +5152,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(context.Background())
+		conn, err := af.Connect(context.Background())
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		drainInBackground(conn)
 		sendText(t, conn, "go")
@@ -4610,9 +5200,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(context.Background())
+		conn, err := af.Connect(context.Background())
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		drainInBackground(conn)
 		sendText(t, conn, "go")
@@ -4657,9 +5247,9 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 			WithSessionStore(store),
 		)
 
-		conn, err := af.StreamBidi(context.Background())
+		conn, err := af.Connect(context.Background())
 		if err != nil {
-			t.Fatalf("StreamBidi: %v", err)
+			t.Fatalf("Connect: %v", err)
 		}
 		drainInBackground(conn)
 		sendText(t, conn, "go")
@@ -4672,10 +5262,10 @@ func TestAgent_Detach_FinishReasons(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Output: %v", err)
 		}
-		if _, err := store.AbortSnapshot(context.Background(), out.SnapshotID); err != nil {
-			t.Fatalf("AbortSnapshot: %v", err)
+		if _, err := abortPendingSnapshot(context.Background(), store, out.SnapshotID); err != nil {
+			t.Fatalf("abortPendingSnapshot: %v", err)
 		}
-		// AbortSnapshot flips status=aborted (finishReason still empty); the
+		// abortPendingSnapshot flips status=aborted (finishReason still empty); the
 		// finalizer then annotates the row with finishReason=aborted. Wait
 		// for that second write rather than the bare status flip.
 		snap := waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
@@ -4757,9 +5347,9 @@ func TestAgent_FinishReason_MultiTurnDistinct_Persisted(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	var ids []string
 	for i := 0; i < len(reasons); i++ {
@@ -4805,9 +5395,9 @@ func TestAgent_FinishReason_OmittedPersisted(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "hi")
 	snapID := nextTurnEnd(t, conn).SnapshotID
@@ -4857,9 +5447,9 @@ func TestPromptAgent_ForwardsInterruptedFinishReason(t *testing.T) {
 
 	af := DefineAgent[testState](reg, "interruptPrompt", FromPrompt())
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendText(t, conn, "do it")
 	var (
@@ -4925,9 +5515,9 @@ func TestAgent_Detach_CompletedHonorsResultOverride(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "go")
@@ -4963,9 +5553,9 @@ func TestAgent_SessionID_AssignedAndStable(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "sessionAssignFlow", WithSessionStore(store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	var snapshotIDs []string
@@ -5195,13 +5785,17 @@ func TestAgent_ResumeFromSessionID_FailedTipRejected(t *testing.T) {
 		t.Fatalf("RunText: %v", err)
 	}
 	// A failed detach-style row chained off the tip, as a background
-	// invocation that failed would leave behind.
+	// invocation that failed would leave behind. Created after out1, so it is
+	// the session's latest by CreatedAt.
+	failedAt := time.Now()
 	if _, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID:    out1.SessionID,
 			ParentID:     out1.SnapshotID,
 			Status:       SnapshotStatusFailed,
 			FinishReason: AgentFinishReasonFailed,
+			CreatedAt:    failedAt,
+			UpdatedAt:    failedAt,
 		}, nil
 	}); err != nil {
 		t.Fatalf("SaveSnapshot failed row: %v", err)
@@ -5292,9 +5886,9 @@ func TestAgent_ResumeFromSessionID_AfterFailureResumesLastTurn(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "sessionRecoveryFlow", WithSessionStore[testState](store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	for _, text := range []string{"one", "two", "boom"} {
 		sendText(t, conn, text)
@@ -5353,11 +5947,15 @@ func TestAgent_ResumeFromSessionID_PendingTipRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
+	// Chained off the tip and created later, so it is the session's latest.
+	pendingAt := time.Now()
 	if _, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID: out1.SessionID,
 			ParentID:  out1.SnapshotID,
 			Status:    SnapshotStatusPending,
+			CreatedAt: pendingAt,
+			UpdatedAt: pendingAt,
 		}, nil
 	}); err != nil {
 		t.Fatalf("SaveSnapshot pending row: %v", err)
@@ -5533,9 +6131,9 @@ func TestAgent_Detach_AssignsSessionID(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "go")
@@ -5606,9 +6204,9 @@ func TestAgent_Detach_WaitsForInFlightTurnSnapshot(t *testing.T) {
 	}
 	af := defineLastGoodTestAgent(reg, "detachMidWrite", WithSessionStore[testState](store))
 
-	conn, err := af.StreamBidi(context.Background())
+	conn, err := af.Connect(context.Background())
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	drainInBackground(conn)
 	sendText(t, conn, "one")
@@ -5671,9 +6269,9 @@ func TestAgent_FailedTurn_OutputCarriesSessionID(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "failedSessionFlow", WithSessionStore(store))
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	sendTurn(t, conn, "turn one")
 	if err := conn.SendText("boom"); err != nil && !errors.Is(err, core.ErrActionCompleted) {
@@ -5751,24 +6349,24 @@ func TestAgent_WithSessionID_OptionValidation(t *testing.T) {
 	store := newTestInMemStore[testState]()
 	af := defineLastGoodTestAgent(reg, "sessionOptFlow", WithSessionStore(store))
 
-	if _, err := af.StreamBidi(ctx, WithState(&SessionState[testState]{}), WithSnapshotID[testState]("x")); err == nil ||
+	if _, err := af.Connect(ctx, WithState(&SessionState[testState]{}), WithSnapshotID[testState]("x")); err == nil ||
 		!strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("WithState+WithSnapshotID: expected mutual-exclusion error, got %v", err)
 	}
-	if _, err := af.StreamBidi(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
+	if _, err := af.Connect(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
 		!strings.Contains(err.Error(), "more than once") {
 		t.Errorf("WithSessionID twice: expected duplicate-option error, got %v", err)
 	}
 	// An empty session ID is an explicit error, not a silent no-op: a
 	// pipelined AgentOutput.SessionID from a storeless invocation must not
 	// quietly start a fresh conversation.
-	if _, err := af.StreamBidi(ctx, WithSessionID[testState]("")); err == nil ||
+	if _, err := af.Connect(ctx, WithSessionID[testState]("")); err == nil ||
 		!strings.Contains(err.Error(), "session ID is empty") {
 		t.Errorf("WithSessionID(\"\"): expected empty-ID error, got %v", err)
 	}
 	// WithSessionID composes with WithSnapshotID: the option layer accepts
 	// the pair and the init-level checks (here: unknown snapshot) decide.
-	conn, err := af.StreamBidi(ctx, WithSessionID[testState]("s"), WithSnapshotID[testState]("x"))
+	conn, err := af.Connect(ctx, WithSessionID[testState]("s"), WithSnapshotID[testState]("x"))
 	if err != nil {
 		t.Fatalf("WithSessionID+WithSnapshotID: expected option layer to accept, got %v", err)
 	}
@@ -5886,9 +6484,9 @@ func TestAgent_SendNilInput_Rejected(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 
 	if err := conn.Send(nil); err == nil {
@@ -5984,9 +6582,9 @@ func TestAgent_ClientCancelMidStream(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			conn, err := af.StreamBidi(ctx)
+			conn, err := af.Connect(ctx)
 			if err != nil {
-				t.Fatalf("StreamBidi failed: %v", err)
+				t.Fatalf("Connect failed: %v", err)
 			}
 			sendText(t, conn, "hello")
 			// Close the input side so sess.Run ends cleanly and fn returns
@@ -6045,9 +6643,9 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi failed: %v", err)
+		t.Fatalf("Connect failed: %v", err)
 	}
 	cancel()
 

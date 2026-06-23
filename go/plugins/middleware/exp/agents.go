@@ -312,7 +312,7 @@ func runSubAgent(ctx context.Context, agent api.BidiAction, task string, history
 		}
 	}
 
-	res, err := agent.RunBidiJSON(ctx, inputJSON, nil, &api.BidiSessionOptions{Init: initJSON})
+	res, err := agent.RunBidiJSON(ctx, inputJSON, nil, &api.BidiJSONOptions{Init: initJSON})
 	if err != nil {
 		return nil, err
 	}

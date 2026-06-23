@@ -63,9 +63,9 @@ func TestCustomPatch_PerTurnRebaseAndIncremental(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	defer conn.Output()
 
@@ -117,9 +117,9 @@ func TestCustomPatch_ClientTracksLiveCustom(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	// Before any patch, Custom is the zero value.
@@ -179,9 +179,9 @@ func TestCustomPatch_HonorsStateTransform(t *testing.T) {
 		}),
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	defer conn.Output()
 
@@ -227,9 +227,9 @@ func TestCustomPatch_ConcurrentMutations(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 
 	conn.SendText("go")
@@ -268,9 +268,9 @@ func TestCustomPatch_NoMutationNoPatch(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	defer conn.Output()
 
@@ -297,9 +297,9 @@ func TestCustomPatch_EmptyDiffEmitsNothing(t *testing.T) {
 		},
 	)
 
-	conn, err := af.StreamBidi(ctx)
+	conn, err := af.Connect(ctx)
 	if err != nil {
-		t.Fatalf("StreamBidi: %v", err)
+		t.Fatalf("Connect: %v", err)
 	}
 	defer conn.Output()
 

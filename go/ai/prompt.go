@@ -32,7 +32,6 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
-	"github.com/firebase/genkit/go/core/x/session"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/dotprompt/go/dotprompt"
 	"github.com/invopop/jsonschema"
@@ -631,7 +630,7 @@ func renderDotpromptToMessages(ctx context.Context, promptFn dotprompt.PromptFun
 	maps.Copy(templateContext, actionCtx)
 
 	// Inject session state if available (accessible via {{@state.field}} in templates)
-	if state := session.StateFromContext(ctx); state != nil {
+	if state := base.PromptStateFromContext(ctx); state != nil {
 		templateContext["state"] = state
 	}
 

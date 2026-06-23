@@ -39,6 +39,8 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 
 	saveRow := func(t *testing.T, store exp.SessionStore[testState], id, sessionID, parentID string, status exp.SnapshotStatus) *exp.SessionSnapshot[testState] {
 		t.Helper()
+		// Timestamps are caller-managed; a fresh row is created now.
+		now := time.Now()
 		saved, err := store.SaveSnapshot(ctx, id,
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				return &exp.SessionSnapshot[testState]{
@@ -46,6 +48,8 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 					ParentID:  parentID,
 					Status:    status,
 					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					CreatedAt: now,
+					UpdatedAt: now,
 				}, nil
 			})
 		if err != nil {
@@ -54,9 +58,8 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		return saved
 	}
 
-	// tick spaces consecutive writes far enough apart that UpdatedAt (and
-	// the file store's mtimes) order them unambiguously even on coarse
-	// clocks.
+	// tick spaces consecutive writes far enough apart that CreatedAt orders
+	// them unambiguously even on coarse clocks.
 	tick := func() { time.Sleep(2 * time.Millisecond) }
 
 	t.Run("SessionIDKeptWhenProvided", func(t *testing.T) {
@@ -140,10 +143,10 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		}
 	})
 
-	t.Run("GetLatestSnapshotUpdateWins", func(t *testing.T) {
-		// Recency is judged by UpdatedAt, not creation order: rewriting a
-		// row (e.g. a detach finalize landing after other branches were
-		// written) moves it to the front.
+	t.Run("GetLatestSnapshotByCreatedAt", func(t *testing.T) {
+		// Recency is judged by CreatedAt: the newest-created leaf wins, and a
+		// later rewrite of an older row (e.g. a detach finalize) does not move
+		// it ahead, because the rewrite preserves CreatedAt.
 		store := newStore(t)
 		saveRow(t, store, "root", "sess-1", "", exp.SnapshotStatusCompleted)
 		tick()
@@ -151,11 +154,13 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		tick()
 		saveRow(t, store, "b2", "sess-1", "root", exp.SnapshotStatusCompleted)
 		tick()
+		// Finalize the older row b1; the copy preserves its CreatedAt.
 		if _, err := store.SaveSnapshot(ctx, "b1",
 			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				rewritten := *existing
 				rewritten.Status = exp.SnapshotStatusCompleted
 				rewritten.State = &exp.SessionState[testState]{Custom: testState{Counter: 2}}
+				rewritten.UpdatedAt = time.Now()
 				return &rewritten, nil
 			}); err != nil {
 			t.Fatalf("SaveSnapshot finalize: %v", err)
@@ -165,8 +170,8 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		if err != nil {
 			t.Fatalf("GetLatestSnapshot: %v", err)
 		}
-		if latest == nil || latest.SnapshotID != "b1" {
-			t.Errorf("latest = %+v, want freshly finalized snapshot b1", latest)
+		if latest == nil || latest.SnapshotID != "b2" {
+			t.Errorf("latest = %+v, want newest-created snapshot b2 (finalize must not move b1 ahead)", latest)
 		}
 	})
 
@@ -225,6 +230,154 @@ func runSessionIDStoreTests(t *testing.T, newStore func(t *testing.T) exp.Sessio
 		store := newStore(t)
 		if _, err := store.GetLatestSnapshot(ctx, ""); err == nil {
 			t.Error("expected error for empty session ID")
+		}
+	})
+}
+
+// abortViaSave flips a pending snapshot to aborted via SaveSnapshot, mirroring
+// the agent runtime's abort (the store has no dedicated abort method). Returns
+// the resulting status: aborted when it was pending, the existing terminal
+// status when already settled, or "" when the snapshot does not exist.
+func abortViaSave(t *testing.T, store exp.SessionStore[testState], id string) exp.SnapshotStatus {
+	t.Helper()
+	now := time.Now()
+	saved, err := store.SaveSnapshot(context.Background(), id,
+		func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			if existing == nil {
+				return nil, nil
+			}
+			if existing.Status != exp.SnapshotStatusPending {
+				return existing, nil
+			}
+			updated := *existing
+			updated.Status = exp.SnapshotStatusAborted
+			updated.UpdatedAt = now
+			return &updated, nil
+		})
+	if err != nil {
+		t.Fatalf("abortViaSave(%q): %v", id, err)
+	}
+	if saved == nil {
+		return ""
+	}
+	return saved.Status
+}
+
+// runHeartbeatStoreTests exercises a heartbeat refresh - an ordinary
+// SaveSnapshot that touches only HeartbeatAt on a still-pending row - against
+// any store, so the in-memory and file stores stay behaviorally aligned. The
+// central property: a heartbeat is a liveness signal, not a state change, so it
+// advances HeartbeatAt but touches neither UpdatedAt nor the store's recency
+// ordering.
+func runHeartbeatStoreTests(t *testing.T, newStore func(t *testing.T) exp.SessionStore[testState]) {
+	ctx := context.Background()
+	tick := func() { time.Sleep(2 * time.Millisecond) }
+
+	// beat refreshes a pending snapshot's heartbeat the way the agent runtime
+	// does: an ordinary SaveSnapshot carrying the existing row through unchanged
+	// but for HeartbeatAt (so caller-managed timestamps are preserved), touching
+	// only a still-pending row.
+	beat := func(t *testing.T, store exp.SessionStore[testState], id string) {
+		t.Helper()
+		now := time.Now()
+		if _, err := store.SaveSnapshot(ctx, id,
+			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				if existing == nil || existing.Status != exp.SnapshotStatusPending {
+					return nil, nil
+				}
+				updated := *existing
+				updated.HeartbeatAt = &now
+				return &updated, nil
+			}); err != nil {
+			t.Fatalf("heartbeat SaveSnapshot: %v", err)
+		}
+	}
+	savePending := func(t *testing.T, store exp.SessionStore[testState], id, sessionID, parentID string) {
+		t.Helper()
+		now := time.Now()
+		if _, err := store.SaveSnapshot(ctx, id,
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{SessionID: sessionID, ParentID: parentID, Status: exp.SnapshotStatusPending, CreatedAt: now, UpdatedAt: now}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot(%q): %v", id, err)
+		}
+	}
+
+	t.Run("AdvancesHeartbeatNotUpdatedAt", func(t *testing.T) {
+		store := newStore(t)
+		savePending(t, store, "p", "sess", "")
+		before, err := store.GetSnapshot(ctx, "p")
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		tick()
+		beat(t, store, "p")
+		after, err := store.GetSnapshot(ctx, "p")
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if after.HeartbeatAt == nil {
+			t.Error("HeartbeatAt was not stamped")
+		}
+		if !after.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Errorf("heartbeat advanced UpdatedAt: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+		}
+		if after.Status != exp.SnapshotStatusPending {
+			t.Errorf("status = %q, want pending", after.Status)
+		}
+	})
+
+	t.Run("NoopOnTerminal", func(t *testing.T) {
+		store := newStore(t)
+		now := time.Now()
+		if _, err := store.SaveSnapshot(ctx, "c",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{SessionID: "sess", Status: exp.SnapshotStatusCompleted, CreatedAt: now, UpdatedAt: now}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+		before, err := store.GetSnapshot(ctx, "c")
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		beat(t, store, "c")
+		after, err := store.GetSnapshot(ctx, "c")
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		if after.HeartbeatAt != nil {
+			t.Errorf("beat stamped a heartbeat on a terminal row: %v", after.HeartbeatAt)
+		}
+		if !after.UpdatedAt.Equal(before.UpdatedAt) {
+			t.Errorf("beat bumped UpdatedAt on a terminal row: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+		}
+	})
+
+	t.Run("DoesNotChangeRecency", func(t *testing.T) {
+		// A heartbeat must not move a pending row ahead of a newer row in
+		// GetLatestSnapshot: recency is by CreatedAt, and a beat must not touch
+		// it (nor anything else but HeartbeatAt).
+		store := newStore(t)
+		savePending(t, store, "old", "sess", "")
+		tick()
+		now := time.Now()
+		if _, err := store.SaveSnapshot(ctx, "new",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{SessionID: "sess", ParentID: "old", Status: exp.SnapshotStatusCompleted, State: &exp.SessionState[testState]{Custom: testState{Counter: 9}}, CreatedAt: now, UpdatedAt: now}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot(new): %v", err)
+		}
+		tick()
+		for i := 0; i < 3; i++ {
+			beat(t, store, "old")
+			tick()
+		}
+		latest, err := store.GetLatestSnapshot(ctx, "sess")
+		if err != nil {
+			t.Fatalf("GetLatestSnapshot: %v", err)
+		}
+		if latest == nil || latest.SnapshotID != "new" {
+			t.Errorf("latest = %+v, want \"new\" (a heartbeat must not affect recency)", latest)
 		}
 	})
 }

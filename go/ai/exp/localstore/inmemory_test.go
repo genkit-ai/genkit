@@ -38,14 +38,17 @@ func TestInMemorySessionStore(t *testing.T) {
 
 	t.Run("SaveWithFixedID", func(t *testing.T) {
 		store := NewInMemorySessionStore[testState]()
+		now := time.Now()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				if existing != nil {
 					t.Errorf("expected nil existing on first save, got %+v", existing)
 				}
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 1}},
+					CreatedAt: now,
+					UpdatedAt: now,
 				}, nil
 			})
 		if err != nil {
@@ -54,9 +57,10 @@ func TestInMemorySessionStore(t *testing.T) {
 		if saved.SnapshotID != "snap-1" {
 			t.Errorf("saved SnapshotID = %q, want %q", saved.SnapshotID, "snap-1")
 		}
-		if saved.CreatedAt.IsZero() || saved.UpdatedAt.IsZero() {
-			t.Errorf("expected CreatedAt/UpdatedAt stamped, got created=%v updated=%v",
-				saved.CreatedAt, saved.UpdatedAt)
+		// Timestamps are caller-managed: the store persists them verbatim.
+		if !saved.CreatedAt.Equal(now) || !saved.UpdatedAt.Equal(now) {
+			t.Errorf("expected caller-set timestamps persisted, got created=%v updated=%v want %v",
+				saved.CreatedAt, saved.UpdatedAt, now)
 		}
 	})
 
@@ -121,24 +125,31 @@ func TestInMemorySessionStore(t *testing.T) {
 		}
 	})
 
-	t.Run("PreservesCreatedAtOnUpdate", func(t *testing.T) {
+	t.Run("PersistsCallerTimestamps", func(t *testing.T) {
+		// Timestamps are caller-managed: the store round-trips them verbatim
+		// (it does not stamp). The caller preserves CreatedAt and advances
+		// UpdatedAt across a rewrite.
 		store := NewInMemorySessionStore[testState]()
+		created := time.Now()
 		saved, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
-				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted}, nil
+				return &exp.SessionSnapshot[testState]{Status: exp.SnapshotStatusCompleted, CreatedAt: created, UpdatedAt: created}, nil
 			})
 		if err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 		time.Sleep(time.Millisecond) // ensure measurable UpdatedAt delta
+		later := time.Now()
 		updated, err := store.SaveSnapshot(context.Background(), "snap-1",
 			func(existing *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
 				if existing == nil {
 					t.Fatal("expected non-nil existing on update")
 				}
 				return &exp.SessionSnapshot[testState]{
-					Status: exp.SnapshotStatusCompleted,
-					State:  &exp.SessionState[testState]{Custom: testState{Counter: 2}},
+					Status:    exp.SnapshotStatusCompleted,
+					State:     &exp.SessionState[testState]{Custom: testState{Counter: 2}},
+					CreatedAt: existing.CreatedAt,
+					UpdatedAt: later,
 				}, nil
 			})
 		if err != nil {
@@ -152,9 +163,15 @@ func TestInMemorySessionStore(t *testing.T) {
 		}
 	})
 
-	t.Run("ImplementsSessionStoreAndAborter", func(t *testing.T) {
+	t.Run("ImplementsSessionStoreAndSubscriber", func(t *testing.T) {
 		var _ exp.SessionStore[testState] = (*InMemorySessionStore[testState])(nil)
-		var _ exp.SnapshotAborter = (*InMemorySessionStore[testState])(nil)
+		var _ exp.SnapshotSubscriber = (*InMemorySessionStore[testState])(nil)
+	})
+}
+
+func TestInMemorySessionStore_Heartbeat(t *testing.T) {
+	runHeartbeatStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		return NewInMemorySessionStore[testState]()
 	})
 }
 

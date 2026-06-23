@@ -31,6 +31,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
@@ -38,7 +39,38 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// --- Heartbeat ---
+
+// A detached (background) turn refreshes its pending snapshot's heartbeat on an
+// interval so a reader can tell a live background worker from a dead one. Each
+// beat is a store write; if the beats stop (the worker died) the heartbeat goes
+// stale and reads surface the pending snapshot as [SnapshotStatusExpired]
+// rather than leaving it pending forever.
+const (
+	// defaultHeartbeatInterval is how often a detached turn refreshes its
+	// pending snapshot's heartbeat.
+	defaultHeartbeatInterval = 30 * time.Second
+	// defaultHeartbeatTimeout is the staleness threshold after which a pending
+	// snapshot whose heartbeat has not advanced is reported as expired on read.
+	// It is comfortably larger than defaultHeartbeatInterval so a single missed
+	// beat does not trip expiry.
+	defaultHeartbeatTimeout = 60 * time.Second
+)
+
+// isHeartbeatExpired reports whether snap is a pending (detached, in-flight)
+// snapshot whose heartbeat is older than timeout, i.e. its background worker is
+// presumed dead. A pending snapshot that has not yet written a first heartbeat
+// is not considered expired (the beat may simply not have fired yet).
+func isHeartbeatExpired[State any](snap *SessionSnapshot[State], timeout time.Duration) bool {
+	if snap.Status != SnapshotStatusPending || snap.HeartbeatAt == nil {
+		return false
+	}
+	return time.Since(*snap.HeartbeatAt) > timeout
+}
 
 // --- SessionRunner ---
 
@@ -159,9 +191,11 @@ func (s *SessionRunner[State]) Run(ctx context.Context, fn func(ctx context.Cont
 			s.onStartTurn()
 		}
 		spanMeta := &tracing.SpanMetadata{
-			Name:    fmt.Sprintf("agent/turn/%d", s.turnIndex),
-			Type:    "flowStep",
-			Subtype: "flowStep",
+			// Match the JS agent's turn span so cross-language traces line up:
+			// name "runTurn-N" (1-indexed) and type flowStep with no subtype
+			// (JS's run() sets only genkit:type, no genkit:metadata:subtype).
+			Name: fmt.Sprintf("runTurn-%d", s.turnIndex+1),
+			Type: "flowStep",
 		}
 		_, err := tracing.RunInNewSpan(ctx, spanMeta, input,
 			func(ctx context.Context, input *AgentInput) (any, error) {
@@ -289,6 +323,9 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 
 	parentID := s.lastSnapshotID
 	sessionID := s.SessionID()
+	// Timestamps are caller-managed (the store persists them verbatim); a fresh
+	// turn-end snapshot is created now, so CreatedAt and UpdatedAt are equal.
+	now := time.Now()
 	saved, err := s.store.SaveSnapshot(ctx, "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
@@ -297,6 +334,8 @@ func (s *SessionRunner[State]) snapshotTurnEnd(ctx context.Context, finishReason
 				Status:       SnapshotStatusCompleted,
 				FinishReason: finishReason,
 				State:        &state,
+				CreatedAt:    now,
+				UpdatedAt:    now,
 			}, nil
 		})
 	if err != nil {
@@ -376,7 +415,7 @@ type AgentFunc[State any] = func(ctx context.Context, resp Responder, sess *Sess
 //
 // Agent implements [api.BidiAction], so generic transports accept it directly
 // (e.g. pass it to genkit.Handler to serve it over HTTP, one turn per request).
-// [Agent.Run], [Agent.RunText], and [Agent.StreamBidi] are typed conveniences
+// [Agent.Run], [Agent.RunText], and [Agent.Connect] are typed conveniences
 // over the same underlying action.
 //
 // Server-managed agents (those with a [SessionStore] configured) also
@@ -394,6 +433,11 @@ type Agent[State any] struct {
 	// agent. Retained so callers can reach it via Store without threading
 	// a separate reference.
 	store SessionStore[State]
+	// transform shapes session state on the way out to a client; see
+	// [WithStateTransform]. Retained so the typed read facade ([Agent.GetSnapshot],
+	// [Agent.GetLatestSnapshot]) applies it, matching the getSnapshot companion
+	// action. Nil when none was configured.
+	transform StateTransform[State]
 }
 
 // Name returns the agent's registered name. This is also the name under
@@ -410,8 +454,8 @@ func (a *Agent[State]) Name() string {
 // snapshot to fetch.
 //
 // Use it to expose snapshot polling over a transport (e.g. mount it with
-// genkit.Handler next to the agent itself); local Go code should read
-// from the store directly.
+// genkit.Handler next to the agent itself); local Go code should use
+// [Agent.GetSnapshot], which applies the configured state transform.
 func (a *Agent[State]) GetSnapshotAction() api.Action {
 	return a.getSnapshot
 }
@@ -420,25 +464,84 @@ func (a *Agent[State]) GetSnapshotAction() api.Action {
 // which asks the background work behind a pending snapshot (e.g. a
 // detached invocation) to stop (input [AbortSnapshotRequest], output
 // [AbortSnapshotResponse]). It returns nil when the agent has no
-// [SessionStore] or the store does not implement [SnapshotAborter].
+// [SessionStore] or the store does not implement [SnapshotSubscriber].
 //
 // Use it to expose aborting over a transport (e.g. mount it with
-// genkit.Handler next to the agent itself); local Go code should call the
-// store's [SnapshotAborter.AbortSnapshot] directly.
+// genkit.Handler next to the agent itself); local Go code aborts with
+// [Agent.AbortSnapshot]; a store-only caller uses this companion action.
 func (a *Agent[State]) AbortSnapshotAction() api.Action {
 	return a.abortSnapshot
 }
 
 // Store returns the [SessionStore] the agent was configured with via
 // [WithSessionStore], or nil when the agent is client-managed (no store).
-// It lets local Go code read and write snapshots directly given an agent
-// reference, without threading a separate store variable.
+//
+// For reads and aborts prefer the typed facade [Agent.GetSnapshot],
+// [Agent.GetLatestSnapshot], and [Agent.AbortSnapshot]: they apply the
+// configured [WithStateTransform] and read-time shaping. Store exposes the raw
+// backend for advanced use; a direct [SnapshotReader.GetSnapshot] returns
+// untransformed state.
 //
 // The store is returned as the [SessionStore] interface, not its concrete
 // type; a caller needing a store-specific capability (e.g.
-// [SnapshotAborter]) type-asserts for it.
+// [SnapshotSubscriber]) type-asserts for it.
 func (a *Agent[State]) Store() SessionStore[State] {
 	return a.store
+}
+
+// GetSnapshot fetches a session snapshot by ID through the agent, applying the
+// configured [WithStateTransform] and the same read-time shaping the getSnapshot
+// companion action performs (a stale-heartbeat pending row is surfaced as
+// [SnapshotStatusExpired]; an empty status or zero UpdatedAt is defaulted).
+// Prefer it to reading [Agent.Store] directly, which returns raw, untransformed
+// state.
+//
+// It returns FAILED_PRECONDITION on a client-managed agent (no store) and
+// INVALID_ARGUMENT when snapshotID is empty; a missing snapshot is NOT_FOUND.
+func (a *Agent[State]) GetSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[State], error) {
+	if a.store == nil {
+		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetSnapshot requires a session store", a.Name())
+	}
+	if snapshotID == "" {
+		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetSnapshot: snapshotID is required", a.Name())
+	}
+	return readSnapshot(ctx, a.store, a.transform, snapshotID, "")
+}
+
+// GetLatestSnapshot fetches a session's most recently created snapshot (whatever
+// its status) through the agent, with the same transform and shaping as
+// [Agent.GetSnapshot]. It is the transform-applying counterpart to
+// [SnapshotReader.GetLatestSnapshot] and backs resume-by-session lookups.
+//
+// It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
+// when sessionID is empty; an unknown session is NOT_FOUND.
+func (a *Agent[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*SessionSnapshot[State], error) {
+	if a.store == nil {
+		return nil, core.NewError(core.FAILED_PRECONDITION, "agent %q: GetLatestSnapshot requires a session store", a.Name())
+	}
+	if sessionID == "" {
+		return nil, core.NewError(core.INVALID_ARGUMENT, "agent %q: GetLatestSnapshot: sessionID is required", a.Name())
+	}
+	return readSnapshot(ctx, a.store, a.transform, "", sessionID)
+}
+
+// AbortSnapshot aborts the detached invocation behind a pending snapshot by
+// flipping it to [SnapshotStatusAborted]; the runtime observes the flip and
+// cancels the background work. A caller that has only a store (no agent) aborts
+// through the abortSnapshot companion action instead. It is a no-op on a missing
+// snapshot (returns
+// "") or an already-terminal one (returns the existing status).
+//
+// It returns FAILED_PRECONDITION on a client-managed agent and INVALID_ARGUMENT
+// when snapshotID is empty.
+func (a *Agent[State]) AbortSnapshot(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+	if a.store == nil {
+		return "", core.NewError(core.FAILED_PRECONDITION, "agent %q: AbortSnapshot requires a session store", a.Name())
+	}
+	if snapshotID == "" {
+		return "", core.NewError(core.INVALID_ARGUMENT, "agent %q: AbortSnapshot: snapshotID is required", a.Name())
+	}
+	return abortPendingSnapshot(ctx, a.store, snapshotID)
 }
 
 // --- api.BidiAction implementation ---
@@ -498,15 +601,15 @@ func (a *Agent[State]) RunJSONWithTelemetry(ctx context.Context, input json.RawM
 // counterpart of the [InvocationOption] values) rides in opts: input is
 // delivered as the only chunk on the input stream and outgoing chunks are
 // forwarded to cb.
-func (a *Agent[State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiSessionOptions) (*api.ActionRunResult[json.RawMessage], error) {
+func (a *Agent[State]) RunBidiJSON(ctx context.Context, input json.RawMessage, cb func(context.Context, json.RawMessage) error, opts *api.BidiJSONOptions) (*api.ActionRunResult[json.RawMessage], error) {
 	return a.action.RunBidiJSON(ctx, input, cb, opts)
 }
 
-// StreamBidiJSON starts a bidirectional streaming session using
+// ConnectJSON starts a bidirectional streaming session using
 // JSON-encoded messages. Local Go callers should prefer the typed
-// [Agent.StreamBidi].
-func (a *Agent[State]) StreamBidiJSON(ctx context.Context, opts *api.BidiSessionOptions) (api.BidiJSONConnection, error) {
-	return a.action.StreamBidiJSON(ctx, opts)
+// [Agent.Connect].
+func (a *Agent[State]) ConnectJSON(ctx context.Context, opts *api.BidiJSONOptions) (api.BidiJSONConnection, error) {
+	return a.action.ConnectJSON(ctx, opts)
 }
 
 // DefineAgent defines a prompt-backed agent and registers it. Each turn
@@ -629,6 +732,7 @@ func NewCustomAgent[State any](
 		getSnapshot:   getSnapshot,
 		abortSnapshot: abortSnapshot,
 		store:         cfg.store,
+		transform:     cfg.transform,
 	}
 }
 
@@ -662,7 +766,9 @@ func agentMetadataFor[State any](store SessionStore[State]) AgentMetadata {
 	abortable := false
 	if store != nil {
 		mgmt = AgentStateManagementServer
-		_, abortable = store.(SnapshotAborter)
+		// Abortable iff the runtime can observe the abort it writes via
+		// SaveSnapshot, i.e. the store can subscribe to status changes.
+		_, abortable = store.(SnapshotSubscriber)
 	}
 	return AgentMetadata{
 		StateManagement: mgmt,
@@ -710,6 +816,13 @@ type fnDoneResult[State any] struct {
 	err    error
 }
 
+// sessionIDSpanAttrKey is the full span-attribute key under which an agent's
+// root action span records its session ID. It is the "genkit:metadata:"-prefixed
+// form of the "agent:sessionId" custom-metadata key the JS agent sets via
+// setCustomMetadataAttributes; the prefix is inlined here because Go's tracing
+// package exposes no setCustomMetadataAttributes helper.
+const sessionIDSpanAttrKey = "genkit:metadata:agent:sessionId"
+
 func newAgentRuntime[State any](
 	ctx context.Context,
 	name string,
@@ -756,6 +869,15 @@ func newAgentRuntime[State any](
 		// client can round-trip it without tracking a separate field.
 		session.state.SessionID = uuid.New().String()
 	}
+
+	// Tag the agent's root action span (the current span here, before any turn
+	// span is opened) with the session ID so traces from the same conversation
+	// can be correlated. Mirrors the JS agent, which calls
+	// setCustomMetadataAttributes({'agent:sessionId': ...}) once at the start of
+	// the action body. trace.SpanFromContext never returns nil (it yields a
+	// no-op span when none is active), so the SetAttributes is always safe.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String(sessionIDSpanAttrKey, session.state.SessionID))
 
 	rt := &agentRuntime[State]{
 		name:    name,
@@ -907,17 +1029,17 @@ func (rt *agentRuntime[State]) run(
 
 // checkDetachCapabilities reports whether the configured store is capable
 // of supporting detach. Detach requires a writable store (to persist the
-// pending snapshot) and a [SnapshotAborter] (which bundles both abort
-// triggering and status-change subscription so the runtime can react to
-// the abort without polling).
+// pending snapshot, and to abort it and refresh its heartbeat via ordinary
+// SaveSnapshot writes) and a [SnapshotSubscriber] (so the runtime can observe
+// the abort flip and promptly cancel the background work without polling).
 func (rt *agentRuntime[State]) checkDetachCapabilities() error {
 	if rt.cfg.store == nil {
 		return core.NewError(core.FAILED_PRECONDITION,
 			"agent %q: detach requires a session store", rt.name)
 	}
-	if _, ok := rt.cfg.store.(SnapshotAborter); !ok {
+	if _, ok := rt.cfg.store.(SnapshotSubscriber); !ok {
 		return core.NewError(core.FAILED_PRECONDITION,
-			"agent %q: detach requires a session store implementing SnapshotAborter", rt.name)
+			"agent %q: detach requires a session store implementing SnapshotSubscriber", rt.name)
 	}
 	return nil
 }
@@ -1066,12 +1188,25 @@ func (rt *agentRuntime[State]) handleDetach(
 	// Detach intends to outlive the client connection. If clientCtx was
 	// already cancelled (or cancels mid-write), we still want the pending
 	// row durable so observers can find it later. Decouple this write.
+	//
+	// checkDetachCapabilities (run before detach is honored) guarantees the
+	// store is a SnapshotSubscriber, so the runtime can observe the abort flip.
+	subscriber := rt.cfg.store.(SnapshotSubscriber)
+
+	// Stamp the pending row's timestamps and an initial heartbeat (refreshed on
+	// an interval below). Timestamps are caller-managed; a reader treats a
+	// pending snapshot whose heartbeat has gone stale as expired (its background
+	// worker is presumed dead).
+	now := time.Now()
 	pending, err := rt.cfg.store.SaveSnapshot(context.WithoutCancel(clientCtx), "",
 		func(_ *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			return &SessionSnapshot[State]{
-				SessionID: sessionID,
-				ParentID:  parentID,
-				Status:    SnapshotStatusPending,
+				SessionID:   sessionID,
+				ParentID:    parentID,
+				Status:      SnapshotStatusPending,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				HeartbeatAt: &now,
 			}, nil
 		})
 	if err != nil {
@@ -1084,14 +1219,20 @@ func (rt *agentRuntime[State]) handleDetach(
 	// trashes any further chunks.
 	rt.router.stopAndWait()
 
+	// Refresh the heartbeat on an interval, decoupled from clientCtx (the work
+	// outlives the client connection); stopped when the turn settles or an abort
+	// lands, both below.
+	hbCtx, stopHeartbeat := context.WithCancel(context.WithoutCancel(clientCtx))
+	go rt.runHeartbeat(hbCtx, pending.SnapshotID)
+
 	abortedByUser := &atomic.Bool{}
 	subCtx, stopSub := context.WithCancel(workCtx)
-	aborter := rt.cfg.store.(SnapshotAborter) // safe: checkDetachCapabilities ran already
-	statusCh := aborter.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
+	statusCh := subscriber.OnSnapshotStatusChange(subCtx, pending.SnapshotID)
 	go func() {
 		for status := range statusCh {
 			if status == SnapshotStatusAborted {
 				abortedByUser.Store(true)
+				stopHeartbeat()
 				cancelWork()
 				return
 			}
@@ -1102,6 +1243,10 @@ func (rt *agentRuntime[State]) handleDetach(
 	go func() {
 		res := <-rt.fnDone
 		stopSub()
+		// The turn has settled; stop refreshing the heartbeat before the
+		// finalize write so no beat races it. (A stray beat would be a no-op
+		// anyway: the mutator only touches a still-pending row.)
+		stopHeartbeat()
 		rt.intake.stopAndWait()
 		rt.router.close()
 		rt.finalizePendingSnapshot(finalizeCtx, pending, res.result, res.err, abortedByUser.Load())
@@ -1116,6 +1261,81 @@ func (rt *agentRuntime[State]) handleDetach(
 		SnapshotID:   pending.SnapshotID,
 		FinishReason: AgentFinishReasonDetached,
 	}, nil
+}
+
+// runHeartbeat refreshes the detached pending snapshot's heartbeat every
+// defaultHeartbeatInterval until ctx is cancelled (the turn settled or an abort
+// landed). A transient store error is logged and the loop continues; a
+// persistently failing worker simply stops beating, which is exactly the
+// staleness a reader detects as expired.
+func (rt *agentRuntime[State]) runHeartbeat(ctx context.Context, snapshotID string) {
+	ticker := time.NewTicker(defaultHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := beatHeartbeat(ctx, rt.cfg.store, snapshotID); err != nil {
+				logger.FromContext(ctx).Debug("agent: heartbeat refresh failed",
+					"snapshotId", snapshotID, "err", err)
+			}
+		}
+	}
+}
+
+// beatHeartbeat refreshes a pending snapshot's HeartbeatAt via an ordinary
+// SaveSnapshot: the mutator carries the existing row through unchanged but for
+// HeartbeatAt, so the caller-managed CreatedAt/UpdatedAt are preserved and a
+// beat does not register as a state change - no dedicated store method needed.
+// It only touches a still-pending row (returning nil otherwise), so a beat
+// never resurrects a terminal snapshot or clobbers a concurrent abort/finalize.
+// Shared by runHeartbeat and exercised directly in tests.
+func beatHeartbeat[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) error {
+	now := time.Now()
+	_, err := store.SaveSnapshot(ctx, snapshotID,
+		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			if existing == nil || existing.Status != SnapshotStatusPending {
+				return nil, nil
+			}
+			updated := *existing
+			updated.HeartbeatAt = &now
+			return &updated, nil
+		})
+	return err
+}
+
+// abortPendingSnapshot flips a pending snapshot to aborted via an ordinary
+// SaveSnapshot and returns the resulting status: aborted when the row was
+// pending, the existing terminal status when it was already settled (a no-op
+// verbatim rewrite), or "" when the snapshot does not exist. SaveSnapshot's
+// atomic read-mutate-write makes the flip safe against a racing terminal write,
+// and the status change drives the runtime's
+// [SnapshotSubscriber.OnSnapshotStatusChange] subscription, so the store needs
+// no dedicated abort method. It backs [Agent.AbortSnapshot] and the abortSnapshot
+// companion action.
+func abortPendingSnapshot[State any](ctx context.Context, store SnapshotWriter[State], snapshotID string) (SnapshotStatus, error) {
+	now := time.Now()
+	saved, err := store.SaveSnapshot(ctx, snapshotID,
+		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
+			if existing == nil {
+				return nil, nil // not found
+			}
+			if existing.Status != SnapshotStatusPending {
+				return existing, nil // already terminal: re-persist so the return carries its status
+			}
+			updated := *existing
+			updated.Status = SnapshotStatusAborted
+			updated.UpdatedAt = now
+			return &updated, nil
+		})
+	if err != nil {
+		return "", err
+	}
+	if saved == nil {
+		return "", nil
+	}
+	return saved.Status, nil
 }
 
 // finalizePendingSnapshot rewrites the pending snapshot row with the
@@ -1134,16 +1354,17 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 ) {
 	finalState := *rt.session.State()
 	// Captured outside the SaveSnapshot callback (which must stay pure): the
-	// finalizer runs after fn returned, so this is stable. The abort/error
+	// finalizer runs after fn returned, so these are stable. The abort/error
 	// branches below own their reasons and ignore this clean-success default.
 	completedReason := rt.sess.invocationReason(result)
+	now := time.Now()
 
 	_, err := rt.cfg.store.SaveSnapshot(ctx, pending.SnapshotID,
 		func(existing *SessionSnapshot[State]) (*SessionSnapshot[State], error) {
 			// Late abort wins over the terminal we were about to land: keep
 			// the aborted status and whatever state the abort left, but
 			// stamp the aborted finish reason so the snapshot is
-			// self-describing. (AbortSnapshot only flips status; the runtime
+			// self-describing. (The abort write only flips status; the runtime
 			// owns the semantic reason.) Skip the write once already stamped.
 			if existing != nil && existing.Status == SnapshotStatusAborted {
 				if existing.FinishReason == AgentFinishReasonAborted {
@@ -1151,6 +1372,11 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				}
 				annotated := *existing
 				annotated.FinishReason = AgentFinishReasonAborted
+				annotated.UpdatedAt = now
+				// The row is terminal now; drop the liveness heartbeat so it
+				// does not linger on a settled snapshot. CreatedAt is preserved
+				// from the copy, so recency ordering is unaffected.
+				annotated.HeartbeatAt = nil
 				return &annotated, nil
 			}
 
@@ -1173,6 +1399,9 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				snapErr = core.AsGenkitError(fnErr)
 			}
 
+			// Preserve the pending row's CreatedAt (so the finalize does not
+			// move it ahead of newer rows in createdAt-ordered resolution) and
+			// advance UpdatedAt: this rewrite is a real state change.
 			return &SessionSnapshot[State]{
 				SessionID:    pending.SessionID,
 				ParentID:     pending.ParentID,
@@ -1180,6 +1409,8 @@ func (rt *agentRuntime[State]) finalizePendingSnapshot(
 				FinishReason: finishReason,
 				Error:        snapErr,
 				State:        &finalState,
+				CreatedAt:    pending.CreatedAt,
+				UpdatedAt:    now,
 			}, nil
 		})
 	if err != nil {
@@ -2026,10 +2257,10 @@ func agentLoop[State any](r api.Registry, prompt ai.Prompt, defaultInput any) Ag
 
 // --- Agent client API ---
 
-// StreamBidi starts a new agent invocation with bidirectional streaming.
+// Connect starts a new agent invocation with bidirectional streaming.
 // Use this for multi-turn interactions where you need to send multiple inputs
 // and receive streaming chunks. For single-turn usage, see Run and RunText.
-func (a *Agent[State]) StreamBidi(
+func (a *Agent[State]) Connect(
 	ctx context.Context,
 	opts ...InvocationOption[State],
 ) (*AgentConnection[State], error) {
@@ -2037,7 +2268,7 @@ func (a *Agent[State]) StreamBidi(
 	if err != nil {
 		return nil, err
 	}
-	conn, err := a.action.StreamBidi(ctx, init)
+	conn, err := a.action.Connect(ctx, init)
 	if err != nil {
 		return nil, err
 	}
@@ -2046,7 +2277,7 @@ func (a *Agent[State]) StreamBidi(
 
 // Run starts a single-turn agent invocation with the given input.
 // It sends the input, waits for the agent to complete, and returns the output.
-// For multi-turn interactions or streaming, use StreamBidi instead.
+// For multi-turn interactions or streaming, use Connect instead.
 //
 // In-band failures (e.g. a failed turn) resolve as a failed [AgentOutput]
 // rather than an error; a rejected init payload fails with an error, since
@@ -2056,7 +2287,7 @@ func (a *Agent[State]) Run(
 	input *AgentInput,
 	opts ...InvocationOption[State],
 ) (*AgentOutput[State], error) {
-	conn, err := a.StreamBidi(ctx, opts...)
+	conn, err := a.Connect(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2186,7 +2417,7 @@ func (c *AgentConnection[State]) Close() error {
 // of the iterator does not cancel the connection; multi-turn callers
 // routinely break on [TurnEnd], send the next input, then call Receive
 // again to consume the next batch. Call [AgentConnection.Output] to
-// finish the invocation, or cancel the ctx passed to StreamBidi to
+// finish the invocation, or cancel the ctx passed to Connect to
 // abort it.
 //
 // Each yielded chunk's [AgentStreamChunk.CustomPatch] is applied to the
