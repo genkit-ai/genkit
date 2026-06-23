@@ -21,7 +21,7 @@ from functools import partial
 import structlog
 
 import ollama as ollama_api
-from genkit import ModelConfig
+from genkit import Constrained, ModelInfo, Supports
 from genkit.embedder import EmbedderOptions, EmbedderSupports, embedder_action_metadata
 from genkit.model import model_action_metadata
 from genkit.plugin_api import (
@@ -42,11 +42,20 @@ from genkit.plugins.ollama.embedders import (
 )
 from genkit.plugins.ollama.models import (
     ModelDefinition,
+    OllamaConfig,
     OllamaModel,
+    OllamaSupports,
 )
 
 OLLAMA_PLUGIN_NAME = 'ollama'
 logger = structlog.get_logger(__name__)
+
+# Models that are dynamically discovered (``list_actions``) or resolved on
+# demand can't be capability-probed, so we advertise the full generic
+# capability set. This mirrors the JS plugin's ``GENERIC_MODEL_INFO`` and the
+# Go plugin's ``defaultOllamaSupports``, which both enable every capability for
+# models that weren't explicitly pre-configured.
+_DYNAMIC_MODEL_SUPPORTS = OllamaSupports(tools=True, media=True)
 
 
 def ollama_name(name: str) -> str:
@@ -59,6 +68,37 @@ def ollama_name(name: str) -> str:
         The name of the Ollama model.
     """
     return f'{OLLAMA_PLUGIN_NAME}/{name}'
+
+
+def ollama_model_info(model_ref: ModelDefinition, label: str) -> dict[str, object]:
+    """Build Dev UI capability metadata for an Ollama model.
+
+    Capabilities are gated on the model's API type so the Dev UI advertises
+    only what the endpoint actually supports: the ``chat`` endpoint is
+    multiturn and can use tools/media, whereas the ``generate`` endpoint is
+    single-turn text-in/text-out.
+
+    Args:
+        model_ref: The model definition describing its API type and supports.
+        label: The human-readable label to show in the Dev UI.
+
+    Returns:
+        The serialized :class:`ModelInfo` metadata (camelCase aliases, no
+        ``None`` values) ready to embed under ``metadata['model']``.
+    """
+    is_chat = model_ref.api_type == OllamaAPITypes.CHAT
+    return ModelInfo(
+        label=label,
+        supports=Supports(
+            multiturn=is_chat,
+            media=is_chat and model_ref.supports.media,
+            tools=is_chat and model_ref.supports.tools,
+            system_role=True,
+            # Deliberate JS/Go deviation. we match other Python plugins for Dev UI consistency.
+            output=['text', 'json'],
+            constrained=Constrained.ALL,
+        ),
+    ).model_dump(by_alias=True, exclude_none=True)
 
 
 class Ollama(Plugin):
@@ -154,31 +194,35 @@ class Ollama(Plugin):
                 model_ref = model_def
                 break
 
-        # If not found in pre-configured models, create a default one
+        # If not found in pre-configured models, create a generic one. Dynamically
+        # resolved models advertise the full capability set (see JS/Go parity note
+        # on _DYNAMIC_MODEL_SUPPORTS).
         if model_ref is None:
-            model_ref = ModelDefinition(name=clean_name)
+            model_ref = ModelDefinition(name=clean_name, supports=_DYNAMIC_MODEL_SUPPORTS)
 
         model = OllamaModel(
             client=self.client,
             model_definition=model_ref,
         )
 
-        return Action(
+        action_metadata = model_action_metadata(
+            name=name,
+            config_schema=OllamaConfig,
+            info=ollama_model_info(model_ref, f'Ollama - {clean_name}'),
+        )
+
+        action = Action(
             kind=ActionKind.MODEL,
             name=name,
             fn=model.generate,
-            metadata={
-                'model': {
-                    'label': f'Ollama - {clean_name}',
-                    'multiturn': model_ref.api_type == OllamaAPITypes.CHAT,
-                    'system_role': True,
-                    'tools': model_ref.supports.tools,
-                    'output': ['text', 'json'],
-                    'constrained': 'all',
-                    'customOptions': to_json_schema(ModelConfig),
-                },
-            },
+            metadata=action_metadata.metadata,
         )
+
+        # Explicitly set schemas (always present in the action metadata).
+        action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]
+        action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
+
+        return action
 
     def _create_embedder_action(self, name: str) -> Action:
         """Create an Action object for an Ollama embedder.
@@ -245,15 +289,11 @@ class Ollama(Plugin):
                 actions.append(
                     model_action_metadata(
                         name=ollama_name(name),
-                        config_schema=ModelConfig,
-                        info={
-                            'label': f'Ollama - {name}',
-                            'multiturn': True,
-                            'system_role': True,
-                            'tools': True,
-                            'output': ['text', 'json'],
-                            'constrained': 'all',
-                        },
+                        config_schema=OllamaConfig,
+                        info=ollama_model_info(
+                            ModelDefinition(name=name, supports=_DYNAMIC_MODEL_SUPPORTS),
+                            f'Ollama - {name}',
+                        ),
                     )
                 )
         return actions

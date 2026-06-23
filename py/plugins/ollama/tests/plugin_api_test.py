@@ -24,9 +24,11 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import ActionKind
+from genkit.plugin_api import to_json_schema
 from genkit.plugins.ollama import Ollama, ollama_name
+from genkit.plugins.ollama.constants import OllamaAPITypes
 from genkit.plugins.ollama.embedders import EmbeddingDefinition
-from genkit.plugins.ollama.models import ModelDefinition
+from genkit.plugins.ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 
 
 class TestOllamaInit(unittest.TestCase):
@@ -107,12 +109,69 @@ async def test_resolve_action(kind: ActionKind, name: str, ollama_plugin_instanc
     if kind == ActionKind.MODEL:
         model_meta = cast(dict[str, Any], metadata['model'])
         assert model_meta['label'] == f'Ollama - {name}'
-        assert model_meta['multiturn']
-        assert model_meta['system_role']
+        supports = cast(dict[str, Any], model_meta['supports'])
+        # Default model is CHAT → multiturn, and always advertises system role.
+        assert supports['multiturn']
+        assert supports['systemRole']
     else:
         embedder_meta = cast(dict[str, Any], metadata['embedder'])
         assert embedder_meta['label'] == f'Ollama Embedding - {name}'
         assert embedder_meta['supports'] == {'input': ['text']}
+
+
+@pytest.mark.asyncio
+async def test_create_model_action_chat_with_media() -> None:
+    """A CHAT model with media support advertises multiturn/tools/media."""
+    plugin = Ollama(
+        models=[ModelDefinition(name='llava', api_type=OllamaAPITypes.CHAT, supports=OllamaSupports(media=True))]
+    )
+    action = plugin._create_model_action(ollama_name('llava'))
+
+    supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
+    assert supports['multiturn'] is True
+    assert supports['tools'] is True
+    assert supports['media'] is True
+
+
+@pytest.mark.asyncio
+async def test_create_model_action_generate_gates_capabilities() -> None:
+    """A GENERATE model reports multiturn/tools/media all False."""
+    plugin = Ollama(models=[ModelDefinition(name='gen', api_type=OllamaAPITypes.GENERATE)])
+    action = plugin._create_model_action(ollama_name('gen'))
+
+    supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
+    assert supports['multiturn'] is False
+    assert supports['tools'] is False
+    assert supports['media'] is False
+    assert supports['systemRole'] is True
+
+
+@pytest.mark.asyncio
+async def test_dynamic_model_advertises_generic_capabilities() -> None:
+    """A dynamically-resolved model (not pre-configured) advertises the full
+    generic capability set, matching the JS GENERIC_MODEL_INFO and the Go
+    defaultOllamaSupports for un-probed models."""
+    plugin = Ollama()
+    action = plugin._create_model_action(ollama_name('some-unconfigured-model'))
+
+    supports = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model']['supports'])
+    assert supports['multiturn'] is True
+    assert supports['tools'] is True
+    assert supports['media'] is True
+    assert supports['systemRole'] is True
+
+
+@pytest.mark.asyncio
+async def test_create_model_action_custom_options_is_ollama_config() -> None:
+    """The model action advertises OllamaConfig (with Ollama-only knobs) as its schema."""
+    plugin = Ollama(models=[ModelDefinition(name='m')])
+    action = plugin._create_model_action(ollama_name('m'))
+
+    model_meta = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model'])
+    assert model_meta['customOptions'] == to_json_schema(OllamaConfig)
+    props = cast(dict[str, Any], model_meta['customOptions']['properties'])
+    assert 'think' in props
+    assert 'keepAlive' in props
 
 
 # _define_ollama_model and _define_ollama_embedder methods no longer exist in new plugin architecture

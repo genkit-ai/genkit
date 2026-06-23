@@ -155,6 +155,7 @@ See Also:
     - Genkit documentation: https://genkit.dev/
 """
 
+from genkit.plugins.ollama.models import ModelDefinition, OllamaConfig, OllamaSupports
 from genkit.plugins.ollama.plugin_api import Ollama, ollama_name
 
 
@@ -168,7 +169,10 @@ def package_name() -> str:
 
 
 __all__ = [
+    'ModelDefinition',
     'Ollama',
+    'OllamaConfig',
+    'OllamaSupports',
     'ollama_name',
     'package_name',
 ]
